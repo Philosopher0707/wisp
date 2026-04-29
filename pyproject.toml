@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wisp"
+version = "0.1.0"
+description = "A local Ollama-powered coding agent — compatible with Warp's Skill ecosystem"
+authors = [{ name = "Wisp Contributors" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.28",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+wisp = "wisp.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["wisp*"]

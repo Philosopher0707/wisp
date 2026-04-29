@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- Wisp: a stylized "W" with a terminal cursor accent -->
+  <path d="M3 4L9 12L3 20" stroke="#6366F1" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M11 4L17 12L11 20" stroke="#818CF8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M19 4L21 12L19 20" stroke="#A5B4FC" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Terminal cursor blink -->
+  <rect x="21" y="16" width="2" height="4" rx="1" fill="#6366F1" opacity="0.6"/>
+</svg>

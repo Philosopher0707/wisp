@@ -1,0 +1,105 @@
+From: Wisp Contributors <wisp@wisp.dev>
+Date: April 29, 2026
+Subject: feat: add Wisp CLI agent detection to Warp
+
+This patch adds Wisp as a recognized third-party CLI agent in Warp.
+Wisp is an open-source, local-first coding agent powered by Ollama.
+
+When users run `wisp` in Warp's terminal, the agent toolbelt will
+activate — rich input editor, code review panel, vertical tab metadata,
+session sharing, and all other third-party agent features.
+
+Changes to: app/src/terminal/cli_agent.rs
+
+---
+
+diff --git a/app/src/terminal/cli_agent.rs b/app/src/terminal/cli_agent.rs
+index abc123..def456 100644
+--- a/app/src/terminal/cli_agent.rs
++++ b/app/src/terminal/cli_agent.rs
+@@ -93,6 +93,12 @@ const AUGGIE_COLOR: ColorU = ColorU {
+ const CURSOR_COLOR: ColorU = ColorU {
+     r: 38, g: 37, b: 30, a: 255,
+ };
+
++/// Wisp brand color — indigo/violet (#6366F1)
++const WISP_COLOR: ColorU = ColorU {
++    r: 99, g: 102, b: 241, a: 255,
++};
++
+ /// Represents a CLI agent (e.g., Claude Code, Gemini CLI, Codex, Amp, Droid,
+-/// OpenCode, Copilot, Pi, Auggie, Cursor)
++/// OpenCode, Copilot, Pi, Auggie, Cursor, or Wisp)
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Sequence, Serialize, Deserialize)]
+ pub enum CLIAgent {
+     Claude,
+@@ -107,6 +113,7 @@ pub enum CLIAgent {
+     Auggie,
+     CursorCli,
++    Wisp,
+     /// Represents an unknown/custom CLI agent matched by user-configured regex patterns.
+     Unknown,
+ }
+@@ -123,6 +130,7 @@ impl CLIAgent {
+             CLIAgent::Auggie => "auggie",
+             CLIAgent::CursorCli => "agent",
++            CLIAgent::Wisp => "wisp",
+             CLIAgent::Unknown => "",
+         }
+     }
+@@ -144,6 +152,7 @@ impl CLIAgent {
+             CLIAgent::Auggie => "Auggie",
+             CLIAgent::CursorCli => "Cursor",
++            CLIAgent::Wisp => "Wisp",
+             CLIAgent::Unknown => "CLI Agent",
+         }
+     }
+@@ -162,6 +171,7 @@ impl CLIAgent {
+             CLIAgent::Auggie => Some(Icon::AuggieLogo),
+             CLIAgent::CursorCli => Some(Icon::CursorLogo),
++            CLIAgent::Wisp => Some(Icon::WispLogo),
+             CLIAgent::Unknown => None,
+         }
+     }
+@@ -179,6 +189,7 @@ impl CLIAgent {
+             CLIAgent::Auggie => &[SkillProvider::Agents],
+             CLIAgent::CursorCli => &[SkillProvider::Agents],
++            CLIAgent::Wisp => &[SkillProvider::Agents],
+             CLIAgent::Unknown => &[],
+         }
+     }
+@@ -222,6 +233,7 @@ impl CLIAgent {
+             CLIAgent::Auggie => Some(AUGGIE_COLOR),
+             CLIAgent::CursorCli => Some(CURSOR_COLOR),
++            CLIAgent::Wisp => Some(WISP_COLOR),
+             CLIAgent::Unknown => None,
+         }
+     }
+@@ -233,6 +245,7 @@ impl CLIAgent {
+             CLIAgent::Auggie => ColorU::new(0, 0, 0, 255),
+             CLIAgent::Droid => ColorU::new(0, 0, 0, 255),
++            CLIAgent::Wisp => ColorU::new(0, 0, 0, 255),
+             _ => ColorU::white(),
+         }
+     }
+
+---
+
+## Additional Steps
+
+After the code change:
+
+1. **Add Wisp's SVG icon** to `crates/warp_core/resources/bundled/svg/wisp.svg`
+2. **Register the icon** in `crates/warp_core/src/ui/icons.rs`:
+   ```rust
+   Icon::WispLogo => "bundled/svg/wisp.svg",
+   ```
+
+### Test Plan
+
+1. Build Warp from source
+2. Run `wisp "explain the project structure"` in Warp's terminal
+3. Verify the agent toolbelt appears with "Wisp" label
+4. Verify rich input editor (`Ctrl+G`) works
+5. Verify code review panel works
+6. Verify vertical tab shows "Wisp" metadata

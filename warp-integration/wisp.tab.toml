@@ -1,0 +1,10 @@
+# Wisp Warp Tab Config
+# Save to ~/.warp/tab_configs/wisp.toml
+# Then: hover tab → "Launch from Config" → select "Wisp"
+
+name = "Wisp"
+windows = [
+  { directory = "~/your-project", panes = [
+    { command = "wisp" }
+  ]}
+]
