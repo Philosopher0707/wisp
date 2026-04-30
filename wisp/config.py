@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
-DEFAULT_MODEL = "deepseek-v4-flash:cloud"
+DEFAULT_MODEL = "kimi-k2.6:cloud"
 WISP_CONFIG_DIR = Path.home() / ".config" / "wisp"
 
 

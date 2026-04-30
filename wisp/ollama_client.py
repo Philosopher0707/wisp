@@ -390,7 +390,7 @@ class OllamaClient:
         parsed JSON dicts for each event.
 
         Retries once on connection/timeout errors before any data arrives.
-        Errors mid-stream are raised immediately (cannot safely retry).
+        Handles KeyboardInterrupt gracefully for clean Ctrl+C handling.
         """
         url = f"{self.base_url}/api/{endpoint}"
         conn_retry = True
@@ -400,9 +400,14 @@ class OllamaClient:
             try:
                 with self._session.post(url, json=payload, timeout=timeout, stream=True) as resp:
                     resp.raise_for_status()
-                    for event in parse_stream(resp):
-                        yield event
-                    return  # stream exhausted normally
+                    try:
+                        for event in parse_stream(resp):
+                            yield event
+                    except KeyboardInterrupt:
+                        # Gracefully handle Ctrl+C during streaming
+                        logger.debug("KeyboardInterrupt during stream, terminating gracefully")
+                        return  # Stop yielding, stream ends
+                return  # stream exhausted normally
             except requests.exceptions.ConnectionError:
                 if conn_retry:
                     conn_retry = False
