@@ -51,6 +51,7 @@ You have access to tools that let you read, write, and edit files, run bash comm
 - edit_file: Targeted text replacement (surgical edits)
 - run_bash: Execute shell commands
 - list_files: Explore directory structure
+- web_fetch: Fetch content from URLs (web pages, APIs, documentation)
 """
 
 # ── Signal handling ──────────────────────────────────────────────────
@@ -144,14 +145,18 @@ def _remove_oldest_turn(messages: list):
     
     Safety: never removes the last user message (preserves at least one turn).
     """
-    # Find the first user message
-    start = None
-    for i, m in enumerate(messages):
-        if m.get("role") == "user":
-            start = i
-            break
-    if start is None:
-        return  # No user message to remove
+    if not messages:
+        return
+
+    # Strip any orphaned non-user messages from the start first
+    # (these shouldn't exist in normal operation, but guard against corruption)
+    while messages and messages[0].get("role") != "user":
+        del messages[0]
+    if not messages:
+        return
+
+    # Find the first user message (now guaranteed to be at index 0)
+    start = 0
 
     # Find the next user message (start of next turn) or end of list
     end = len(messages)
@@ -167,10 +172,6 @@ def _remove_oldest_turn(messages: list):
 
     # Remove [start, end) — the entire oldest turn
     del messages[start:end]
-    
-    # Safety net: ensure we don't leave orphaned non-user messages at the start
-    while messages and messages[0].get("role") != "user":
-        del messages[0]
 
 
 # ── Agent ────────────────────────────────────────────────────────────
@@ -225,11 +226,19 @@ class WispAgent:
         Messages form logical turns: user → assistant (+ tool_results).
         We pop the oldest user message and everything that follows it
         until the start of the next turn (next user message).
+
+        Safety: never removes the last user turn (preserves at least one).
         """
         budget = self.config.max_context_tokens
         overhead = self._estimate_tokens([{"content": system_prompt}])
-        while len(self.messages) > 2 and self._estimate_tokens(self.messages) + overhead > budget:
+
+        # Count user messages to know how many we can safely remove
+        user_count = sum(1 for m in self.messages if m.get("role") == "user")
+
+        while user_count > 1 and self._estimate_tokens(self.messages) + overhead > budget:
             _remove_oldest_turn(self.messages)
+            # Re-count after removal
+            user_count = sum(1 for m in self.messages if m.get("role") == "user")
 
     def _save_session(self):
         """Persist the current session to disk."""
@@ -565,7 +574,8 @@ class WispAgent:
                 if not tool_calls:
                     if content:
                         self._add_message("assistant", content, thinking)
-                        self._save_session()
+                    # Always save, even if content is empty (preserves conversation state)
+                    self._save_session()
                     break
 
                 # Tool call turn - use _add_message for consistency, then attach tool_calls

@@ -55,11 +55,6 @@ def _resolve_path(path: str, workspace: str) -> Path:
     return resolved
 
 
-def _check_workspace(path: str, workspace: str):
-    """Legacy wrapper — ensure the given path is within the workspace."""
-    _resolve_path(path, workspace)
-
-
 def _validate_string(value: Any, name: str, max_len: int = 4096, allow_empty: bool = False) -> str:
     """Validate that a value is a string within length limits."""
     if not isinstance(value, str):
@@ -123,9 +118,7 @@ def tool_write_file(path: str, workspace: str, content: str) -> str:
     """Write content to a file (creates or overwrites)."""
     _validate_string(path, "path")
     _validate_string(content, "content", _MAX_WRITE_SIZE, allow_empty=True)
-    _check_workspace(path, workspace)
-
-    full_path = Path(workspace) / path if not Path(path).is_absolute() else Path(path)
+    full_path = _resolve_path(path, workspace)
 
     # Size check
     if len(content) > _MAX_WRITE_SIZE:
@@ -149,9 +142,7 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str) -> s
     _validate_string(path, "path")
     _validate_string(old_text, "old_text")
     _validate_string(new_text, "new_text", _MAX_WRITE_SIZE, allow_empty=True)
-    _check_workspace(path, workspace)
-
-    full_path = Path(workspace) / path if not Path(path).is_absolute() else Path(path)
+    full_path = _resolve_path(path, workspace)
     if not full_path.exists():
         raise ToolError(f"File not found: {path}")
 
@@ -322,9 +313,7 @@ def tool_list_files(path: str, workspace: str, pattern: str = "*") -> str:
     """List files and directories, optionally matching a pattern."""
     _validate_string(path, "path")
     _validate_string(pattern, "pattern", 200)
-    _check_workspace(path, workspace)
-
-    full_path = Path(workspace) / path if not Path(path).is_absolute() else Path(path)
+    full_path = _resolve_path(path, workspace)
     if not full_path.exists():
         raise ToolError(f"Path not found: {path}")
     if not full_path.is_dir():
