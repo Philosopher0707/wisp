@@ -6,9 +6,12 @@ Supports the same SKILL.md format Warp uses:
   (and others: .claude, .codex, .cursor, .gemini, etc.)
 """
 
+import logging
 import yaml
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 SKILL_DIR_NAMES = [
@@ -100,10 +103,11 @@ def discover_skills(workspace: str) -> list[Skill]:
     """Discover all skills in the workspace and home directory.
 
     Scans:
-      1. Global dirs: ~/.agents/skills/, ~/.warp/skills/, etc.
-      2. Project dirs: <workspace>/.agents/skills/, etc.
+      1. Project dirs: <workspace>/.agents/skills/, etc. (higher priority)
+      2. Global dirs: ~/.agents/skills/, ~/.warp/skills/, etc. (lower priority)
 
-    Returns skills sorted by: global first (lower priority), then project.
+    Returns skills sorted by: project first (higher priority), then global.
+    Project skills shadow global skills with the same name.
     """
     discovered: list[Skill] = []
     seen_names: set[str] = set()
@@ -125,7 +129,12 @@ def discover_skills(workspace: str) -> list[Skill]:
 
 def _scan_skill_dir(skill_dir: Path, result: list[Skill], seen: set[str]):
     """Scan a skill directory for SKILL.md files."""
-    for entry in sorted(skill_dir.iterdir()):
+    try:
+        entries = sorted(skill_dir.iterdir())
+    except (PermissionError, OSError) as e:
+        logger.warning("Cannot read skill directory %s: %s", skill_dir, e)
+        return
+    for entry in entries:
         if entry.is_dir():
             skill_file = entry / "SKILL.md"
             if skill_file.exists():

@@ -125,9 +125,12 @@ class EventStreamParser:
             # If we still don't know the mode (empty first chunk), buffer it
             if self._mode is None:
                 self._bytes_buffer += raw_bytes
-                return  # Make this a generator
-            # Reset buffer since we consumed it for detection
-            self._bytes_buffer = b""
+                return
+            # Prepend any previously buffered bytes to the current chunk
+            # so they get parsed too (e.g., leading newlines before first event)
+            if self._bytes_buffer:
+                raw_bytes = self._bytes_buffer + raw_bytes
+                self._bytes_buffer = b""
 
         if self._mode == "sse":
             yield from self._parse_sse(raw_bytes)
@@ -185,5 +188,11 @@ def parse_stream(response) -> Iterator[dict]:
             except UnicodeDecodeError as e:
                 logger.warning("Decode error in stream chunk: %s", e)
                 continue
+            except (json.JSONDecodeError, EventStreamError) as e:
+                logger.warning("Parse error in stream chunk: %s", e)
+                continue
     # Flush remaining buffered data
-    yield from parser.finalize()
+    try:
+        yield from parser.finalize()
+    except (json.JSONDecodeError, EventStreamError) as e:
+        logger.warning("Parse error during stream finalize: %s", e)

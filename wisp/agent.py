@@ -108,10 +108,10 @@ def _prompt_approve(func_name: str) -> bool:
     if not _is_interactive():
         return True
     try:
-        print(f"     Enter to approve, 's' to skip: ", end="", flush=True)
-        choice = sys.stdin.readline().strip().lower()
+        choice = input(f"     Enter to approve, 's' to skip: ").strip().lower()
         return choice != "s"
     except KeyboardInterrupt:
+        print()
         return False
     except (EOFError, OSError):
         logger.warning("Stdin unavailable, auto-approving")
@@ -141,6 +141,8 @@ def _remove_oldest_turn(messages: list):
     
     After removal, ensures the list still starts with a user message
     (or is empty) to maintain conversation integrity.
+    
+    Safety: never removes the last user message (preserves at least one turn).
     """
     # Find the first user message
     start = None
@@ -158,10 +160,15 @@ def _remove_oldest_turn(messages: list):
             end = i
             break
 
+    # SAFETY: Don't remove if this is the last user turn (preserve at least one)
+    remaining_user_count = sum(1 for m in messages if m.get("role") == "user")
+    if remaining_user_count <= 1:
+        return
+
     # Remove [start, end) — the entire oldest turn
     del messages[start:end]
     
-    # Ensure we don't leave orphaned non-user messages at the start
+    # Safety net: ensure we don't leave orphaned non-user messages at the start
     while messages and messages[0].get("role") != "user":
         del messages[0]
 
@@ -241,8 +248,20 @@ class WispAgent:
         return None
 
     def _build_system_prompt(self, skill_name: Optional[str] = None, workspace: Optional[str] = None) -> str:
-        """Build the fully assembled system prompt (cached for REPL reuse)."""
+        """Build the fully assembled system prompt (cached for REPL reuse).
+
+        The result is cached in ``self._system_prompt_cache`` keyed by
+        ``(skill_name, workspace)`` so REPL turns don't rebuild it every time.
+        """
         ws = workspace or self.config.workspace or "."
+        cache_key = (skill_name, ws)
+
+        # Return cached version if still valid
+        if hasattr(self, "_system_prompt_cache"):
+            cached_key, cached_value = self._system_prompt_cache
+            if cached_key == cache_key:
+                return cached_value
+
         system = DEFAULT_SYSTEM
         system += _build_skills_block(ws)
 
@@ -252,6 +271,8 @@ class WispAgent:
             if skill:
                 system += f"\n\n## Active Skill: {skill.name}\n{skill.description}\n\n{skill.instructions}"
 
+        # Cache for subsequent calls (e.g., REPL turns)
+        self._system_prompt_cache = (cache_key, system)
         return system
 
     def _run_turn_streaming(self, system: str) -> dict:
@@ -313,7 +334,8 @@ class WispAgent:
         msg = response.get("message", {})
         if isinstance(msg, dict):
             content = msg.get("content", "") or ""
-            if content and not content.rstrip("\n").endswith("\n"):
+            # Only add trailing newline if content doesn't already end with one
+            if content and not content.endswith("\n"):
                 print()
         return response
 
@@ -416,9 +438,10 @@ class WispAgent:
             )
             self.messages = []
 
-        system = self._build_system_prompt(skill_name)
+        system = self._build_system_prompt(skill_name, workspace=self.config.workspace)
 
         if skill_name:
+            # Skill was already loaded in _build_system_prompt, just report status
             from wisp.skills import find_skill
             skill = find_skill(skill_name, self.config.workspace or ".")
             if skill:
@@ -514,49 +537,48 @@ class WispAgent:
 
     def _execute_loop(self, system: str, workspace: str, auto_approve: bool) -> list[dict]:
         """Execute the agent loop for one user turn."""
-        for iteration in range(1, self.max_iterations + 1):
-            if self._interrupted:
-                break
+        try:
+            for iteration in range(1, self.max_iterations + 1):
+                if self._interrupted:
+                    break
 
-            # ── Generate with streaming ──────────────────────────
-            response = self._run_turn_streaming(system)
+                # ── Generate with streaming ──────────────────────────
+                response = self._run_turn_streaming(system)
 
-            if not response:
-                break
+                if not response:
+                    break
 
-            # Validate response
-            if not isinstance(response, dict):
-                logger.error("Expected dict from turn, got %s", type(response))
-                break
+                # Validate response
+                if not isinstance(response, dict):
+                    logger.error("Expected dict from turn, got %s", type(response))
+                    break
 
-            content = ""
-            thinking = ""
-            msg = response.get("message", {})
-            if isinstance(msg, dict):
-                content = msg.get("content", "") or ""
-                thinking = msg.get("thinking", "") or ""
-            tool_calls = _parse_tool_call(response)
+                content = ""
+                thinking = ""
+                msg = response.get("message", {})
+                if isinstance(msg, dict):
+                    content = msg.get("content", "") or ""
+                    thinking = msg.get("thinking", "") or ""
+                tool_calls = _parse_tool_call(response)
 
-            # If no tool calls, just a text response — done for this turn
-            if not tool_calls:
-                if content:
-                    self._add_message("assistant", content, thinking)
-                    self._save_session()
-                break
+                # If no tool calls, just a text response — done for this turn
+                if not tool_calls:
+                    if content:
+                        self._add_message("assistant", content, thinking)
+                        self._save_session()
+                    break
 
-            # Tool call turn - only add assistant message once
-            assistant_msg = {
-                "role": "assistant",
-                "content": content or "",
-                "thinking": thinking,
-            }
-            if tool_calls:
-                assistant_msg["tool_calls"] = tool_calls
-            self.messages.append(assistant_msg)
-            
-            print()  # blank line before tool calls
-            results = self._run_tool_calls(tool_calls, workspace, auto_approve)
-            self.messages.extend(results)
+                # Tool call turn - use _add_message for consistency, then attach tool_calls
+                self._add_message("assistant", content or "", thinking)
+                if tool_calls:
+                    self.messages[-1]["tool_calls"] = tool_calls
+                
+                print()  # blank line before tool calls
+                results = self._run_tool_calls(tool_calls, workspace, auto_approve)
+                self.messages.extend(results)
+                self._save_session()
+        finally:
+            # Always save session on exit, even if interrupted mid-tool-call
             self._save_session()
 
         return self.messages

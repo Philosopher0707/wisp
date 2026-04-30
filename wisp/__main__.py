@@ -71,7 +71,6 @@ def cmd_config(set_kv=None):
         key, value = set_kv.split("=", 1)
         config = load_config()
         config[key.strip()] = value.strip()
-        from wisp.config import save_config
         save_config(config)
         print(f"✓ Set {key.strip()} = {value.strip()}")
 
@@ -187,7 +186,15 @@ def cmd_session_delete(session_id: str):
 
 
 def cmd_session_trim(session_id: str, keep: int = 10):
-    """Trim a session to the last N exchanges (for context window management)."""
+    """Trim a session to the last N exchanges (for context window management).
+
+    Trims intelligently by counting complete user turns (user → assistant exchanges),
+    preserving the last N turns regardless of how many tool messages they contain.
+    """
+    if keep < 1:
+        print(f"✗ keep must be at least 1, got {keep}")
+        return
+
     mgr = SessionManager()
     session = mgr.load(session_id)
     if session is None:
@@ -198,16 +205,20 @@ def cmd_session_trim(session_id: str, keep: int = 10):
         print(f"✗ Session '{session_id}' not found.")
         return
 
-    if len(session.messages) <= keep * 2:
-        print(f"Session only has {len(session.messages)} messages, nothing to trim.")
+    # Count complete user turns
+    user_msg_indices = [i for i, m in enumerate(session.messages) if m.get("role") == "user"]
+    if len(user_msg_indices) <= keep:
+        print(f"Session only has {len(user_msg_indices)} turn(s), nothing to trim.")
         return
 
     original = len(session.messages)
-    # Keep system + last N user/assistant pairs
-    # We trim from the front, keeping the most recent messages
-    session.messages = session.messages[-keep * 2:]
+    # Find the start index of the (last N)th user turn
+    # We keep everything from that user message onwards
+    keep_from = user_msg_indices[-keep]
+    session.messages = session.messages[keep_from:]
     mgr.save(session)
-    print(f"✓ Trimmed session {session.id}: {original} → {len(session.messages)} messages")
+    print(f"✓ Trimmed session {session.id}: {original} → {len(session.messages)} messages "
+          f"({keep} turn(s) preserved)")
 
 
 # ── Help ─────────────────────────────────────────────────────────────

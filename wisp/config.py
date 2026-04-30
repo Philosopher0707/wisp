@@ -51,7 +51,7 @@ class WispConfig:
         self.max_tokens: Optional[int] = (
             int(get_setting("max_tokens")) if get_setting("max_tokens") else None
         )
-        self.skill_dirs: list[str] = get_setting(
+        raw_skill_dirs = get_setting(
             "skill_dirs",
             [
                 ".agents/skills",
@@ -59,6 +59,13 @@ class WispConfig:
                 ".claude/skills",
             ],
         )
+        # Ensure it's a list (env vars come as strings, config file may have list)
+        if isinstance(raw_skill_dirs, str):
+            self.skill_dirs = [d.strip() for d in raw_skill_dirs.split(",") if d.strip()]
+        elif isinstance(raw_skill_dirs, list):
+            self.skill_dirs = raw_skill_dirs
+        else:
+            self.skill_dirs = [".agents/skills", ".warp/skills", ".claude/skills"]
         self.workspace: Optional[str] = get_setting("workspace", os.getcwd())
         # Auto-approve tool calls by default (coding agent should flow)
         self.auto_approve: bool = get_setting("auto_approve", "true").lower() == "true"

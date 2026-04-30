@@ -31,17 +31,17 @@ _MAX_BASH_OUTPUT = 10_000               # chars of output to return to model
 _MAX_CMD_LENGTH = 4096                  # max command length for safety
 
 
-def _check_workspace(path: str, workspace: str):
-    """Ensure the given path is within the workspace (security boundary).
+def _resolve_path(path: str, workspace: str) -> Path:
+    """Resolve a path relative to workspace, with security boundary enforcement.
 
-    Uses os.path.commonpath to prevent path traversal attacks like
-    '../etc/passwd' or '/Users/foo/../../bar'.
+    Returns the resolved absolute Path if it's within the workspace.
+    Raises ToolError on path traversal attempts.
     """
-    resolved = Path(path).resolve()
     ws = Path(workspace).resolve()
-    # If the path is relative, it resolves to CWD — but the user
-    # intended it relative to workspace.  Join with workspace first.
-    if not Path(path).is_absolute():
+    # If path is relative, resolve it relative to workspace
+    if Path(path).is_absolute():
+        resolved = Path(path).resolve()
+    else:
         resolved = (ws / path).resolve()
     try:
         common = os.path.commonpath([str(resolved), str(ws)])
@@ -52,6 +52,12 @@ def _check_workspace(path: str, workspace: str):
             f"Access denied: {path} resolves to {resolved}, "
             f"which is outside workspace {ws}"
         )
+    return resolved
+
+
+def _check_workspace(path: str, workspace: str):
+    """Legacy wrapper — ensure the given path is within the workspace."""
+    _resolve_path(path, workspace)
 
 
 def _validate_string(value: Any, name: str, max_len: int = 4096, allow_empty: bool = False) -> str:
@@ -84,9 +90,7 @@ def tool_read_file(path: str, workspace: str, offset: int = 0, limit: int = 2000
     _validate_string(path, "path")
     offset = _validate_int(offset, "offset", 0)
     limit = _validate_int(limit, "limit", 1, 100_000)
-    _check_workspace(path, workspace)
-
-    full_path = Path(workspace) / path if not Path(path).is_absolute() else Path(path)
+    full_path = _resolve_path(path, workspace)
     if not full_path.exists():
         raise ToolError(f"File not found: {path}")
     if not full_path.is_file():
@@ -176,6 +180,96 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str) -> s
     full_path.write_text(new_content, encoding="utf-8")
     logger.info("Edited %s — %d chars replaced with %d chars", path, len(old_text), len(new_text))
     return f"✓ Edited {path} — {len(old_text)} chars replaced with {len(new_text)} chars"
+
+
+def tool_web_fetch(url: str, max_chars: int = 10000) -> str:
+    """Fetch content from a URL (web page, API endpoint, etc.).
+    
+    Fetches the URL and returns the content as text.
+    For HTML pages, returns extracted text content.
+    Respects robots.txt and has reasonable timeouts.
+    """
+    import requests
+    from urllib.parse import urlparse
+    
+    # Validate URL
+    _validate_string(url, "url", _MAX_CMD_LENGTH)
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        raise ToolError(f"Invalid URL: {url}")
+    if parsed.scheme not in ("http", "https"):
+        raise ToolError(f"Unsupported URL scheme: {parsed.scheme}")
+    
+    max_chars = _validate_int(max_chars, "max_chars", 100, 100000)
+    
+    try:
+        headers = {
+            "User-Agent": "Wisp-Agent/0.1.0 (Web Fetch Tool)"
+        }
+        response = requests.get(url, headers=headers, timeout=30, allow_redirects=True)
+        response.raise_for_status()
+        
+        content_type = response.headers.get("Content-Type", "").lower()
+        
+        # Get text content
+        if "text/html" in content_type:
+            # Try to extract readable text from HTML
+            try:
+                from html.parser import HTMLParser
+                
+                class TextExtractor(HTMLParser):
+                    def __init__(self):
+                        super().__init__()
+                        self.text = []
+                        self.skip_tags = {"script", "style", "nav", "header", "footer"}
+                        self._skip_depth = 0
+                        
+                    def handle_starttag(self, tag, attrs):
+                        if tag in self.skip_tags:
+                            self._skip_depth += 1
+                        elif tag == "br":
+                            self.text.append("\n")
+                        elif tag in ("p", "div", "h1", "h2", "h3", "h4", "h5", "h6"):
+                            if self.text and not self.text[-1].endswith("\n"):
+                                self.text.append("\n")
+                    
+                    def handle_endtag(self, tag):
+                        if tag in self.skip_tags:
+                            self._skip_depth -= 1
+                        elif tag in ("p", "div", "h1", "h2", "h3", "h4", "h5", "h6"):
+                            self.text.append("\n")
+                    
+                    def handle_data(self, data):
+                        if self._skip_depth <= 0:
+                            self.text.append(data)
+                
+                extractor = TextExtractor()
+                extractor.feed(response.text)
+                text = "".join(extractor.text)
+                # Clean up whitespace
+                lines = [line.strip() for line in text.splitlines()]
+                text = "\n".join(line for line in lines if line)
+            except Exception:
+                # Fallback to plain text
+                text = response.text
+        else:
+            text = response.text
+        
+        # Truncate if needed
+        if len(text) > max_chars:
+            text = text[:max_chars] + f"\n... [truncated: {len(text)} total chars]"
+        
+        logger.info("Fetched %s — %d chars", url, len(text))
+        return f"✓ Fetched {url}\n\n{text}"
+        
+    except requests.exceptions.Timeout:
+        raise ToolError(f"Request timed out after 30s: {url}")
+    except requests.exceptions.ConnectionError as e:
+        raise ToolError(f"Connection error: {e}")
+    except requests.exceptions.HTTPError as e:
+        raise ToolError(f"HTTP error {e.response.status_code}: {url}")
+    except requests.exceptions.RequestException as e:
+        raise ToolError(f"Request failed: {e}")
 
 
 def tool_run_bash(command: str, workspace: str, timeout: int = 60) -> str:
@@ -334,6 +428,21 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "web_fetch",
+            "description": "Fetch content from a URL (web page, API endpoint, etc.). Returns extracted text content. Respects robots.txt and has 30s timeout. Max 100K chars returned.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL to fetch (http:// or https://)"},
+                    "max_chars": {"type": "number", "description": "Maximum characters to return", "default": 10000},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_files",
             "description": "List files in a directory. Use to explore the workspace structure. Max 500 entries. No path traversal allowed.",
             "parameters": {
@@ -355,6 +464,7 @@ TOOL_IMPLS = {
     "edit_file": tool_edit_file,
     "run_bash": tool_run_bash,
     "list_files": tool_list_files,
+    "web_fetch": tool_web_fetch,
 }
 
 

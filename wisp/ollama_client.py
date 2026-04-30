@@ -171,13 +171,14 @@ class OllamaClient:
         if not messages:
             raise ValueError("Cannot generate: messages list is empty")
 
+        options = {"temperature": self.temperature}
+        if self.max_tokens is not None:
+            options["num_predict"] = self.max_tokens
         payload = {
             "model": self.model,
             "system": system_prompt,
             "messages": messages,
-            "options": {
-                "temperature": self.temperature,
-            },
+            "options": options,
             "stream": False,
         }
         if tools:
