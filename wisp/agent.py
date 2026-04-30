@@ -432,6 +432,9 @@ class WispAgent:
         except OllamaError as e:
             print(f"\n✗ Ollama Error: {e}")
             return {}
+        except KeyboardInterrupt:
+            print("\n⏹  Interrupted by user.")
+            return {}
         except Exception as e:
             logger.error("Unexpected error in streaming turn: %s", e, exc_info=True)
             print(f"\n✗ Unexpected error: {e}")
@@ -508,6 +511,7 @@ class WispAgent:
         _install_signal_handler()
 
         if not self.client.check_health():
+            _restore_signal_handler()
             return
 
         # ── Session setup ──────────────────────────────────────────
@@ -557,19 +561,23 @@ class WispAgent:
         print(f"🔮 Wisp (model: {self.config.model})")
         print()
 
-        self._add_message("user", prompt)
-        self._execute_loop(system, self.config.workspace or ".", self.config.auto_approve)
-
-        # ── Done ───────────────────────────────────────────────────
-        if self.session and self.session.id and not self._interrupted:
-            print(f"\n📋 Session: {self.session.id}")
-        _restore_signal_handler()
+        try:
+            self._add_message("user", prompt)
+            self._execute_loop(system, self.config.workspace or ".", self.config.auto_approve)
+        except KeyboardInterrupt:
+            print("\n⏹  Interrupted.")
+        finally:
+            # ── Done ───────────────────────────────────────────────────
+            if self.session and self.session.id and not self._interrupted:
+                print(f"\n📋 Session: {self.session.id}")
+            _restore_signal_handler()
 
     def repl(self, skill_name: Optional[str] = None, session_id: Optional[str] = None):
         """Interactive REPL — continuous conversation until the user exits."""
         _install_signal_handler()
 
         if not self.client.check_health():
+            _restore_signal_handler()
             return
 
         # ── Session setup ──────────────────────────────────────────
@@ -603,48 +611,55 @@ class WispAgent:
         print("Type 'exit', 'quit', or press Ctrl+C to end.")
         print()
 
-        while not self._interrupted:
-            try:
-                user_input = _input_line("➜ ")
-            except KeyboardInterrupt:
-                print("\n⏹  Exiting.")
-                break
-
-            cmd = user_input.strip()
-            if not cmd:
-                if not _is_interactive():
+        try:
+            while not self._interrupted:
+                try:
+                    user_input = _input_line("➜ ")
+                except KeyboardInterrupt:
+                    print("\n⏹  Exiting.")
                     break
-                continue
-            if cmd in ("exit", "quit", "/exit", "/quit"):
-                print("👋 Goodbye.")
-                break
-            if cmd in ("help", "/help", "?"):
-                print("  Commands: help / exit / quit")
-                print("  Type any prompt to chat with Wisp.")
-                continue
 
-            # Update session title on first meaningful prompt
-            if self.session and (
-                not self.session.title
-                or self.session.title in ("REPL session", "(untitled)")
-            ):
-                self.session.title = cmd[:60].strip()
+                cmd = user_input.strip()
+                if not cmd:
+                    if not _is_interactive():
+                        break
+                    continue
+                if cmd in ("exit", "quit", "/exit", "/quit"):
+                    print("👋 Goodbye.")
+                    break
+                if cmd in ("help", "/help", "?"):
+                    print("  Commands: help / exit / quit")
+                    print("  Type any prompt to chat with Wisp.")
+                    continue
 
-            # Print blank line so response breathes after the prompt
+                # Update session title on first meaningful prompt
+                if self.session and (
+                    not self.session.title
+                    or self.session.title in ("REPL session", "(untitled)")
+                ):
+                    self.session.title = cmd[:60].strip()
+
+                # Print blank line so response breathes after the prompt
+                print()
+
+                try:
+                    self._add_message("user", cmd)
+                    self._execute_loop(system, ws, self.config.auto_approve)
+                except KeyboardInterrupt:
+                    print("\n⏹  Turn interrupted. Type 'exit' to quit or continue chatting.")
+                    # Session was saved by _execute_loop's finally block
+                    continue
+
+                # Visual turn separator (only if not empty turn)
+                if not self._interrupted:
+                    _print_separator()
+
             print()
-
-            self._add_message("user", cmd)
-            self._execute_loop(system, ws, self.config.auto_approve)
-
-            # Visual turn separator (only if not empty turn)
-            if not self._interrupted:
-                _print_separator()
-
-        print()
-        if self.session:
-            print(f"📋 Session {self.session.id} saved.")
-            print(f"   Continue with: wisp repl -S {self.session.id}")
-        _restore_signal_handler()
+            if self.session:
+                print(f"📋 Session {self.session.id} saved.")
+                print(f"   Continue with: wisp repl -S {self.session.id}")
+        finally:
+            _restore_signal_handler()
 
     def _execute_loop(self, system: str, workspace: str, auto_approve: bool) -> None:
         """Execute the agent loop for one user turn."""
@@ -688,6 +703,9 @@ class WispAgent:
                 print()  # blank line before tool calls
                 results = self._run_tool_calls(tool_calls, workspace, auto_approve)
                 self.messages.extend(results)
+        except KeyboardInterrupt:
+            print("\n⏹  Turn interrupted by user.")
+            # Let finally block save session, then return gracefully
         finally:
             # Always save session on exit (single save point), even if interrupted mid-tool-call
             self._save_session()
