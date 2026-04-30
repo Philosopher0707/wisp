@@ -25,6 +25,13 @@ except ImportError:
 
 from wisp.config import WispConfig
 from wisp.ollama_client import OllamaClient, OllamaError
+from wisp.stream_events import (
+    TokenBatch,
+    ToolCallBatch,
+    Checkpoint,
+    StreamComplete,
+    StreamError,
+)
 from wisp.tools import TOOL_SCHEMAS, execute_tool, ToolError
 from wisp.skills import discover_skills
 from wisp.session import Session, SessionManager, format_session_preview
@@ -286,51 +293,99 @@ class WispAgent:
         return system
 
     def _run_turn_streaming(self, system: str) -> dict:
-        """Run one agent turn with streaming text output.
+        """Run one agent turn with streaming text output using batched events.
 
-        Consumes (text, kind) tuples from generate_stream.
-        Default: hides reasoning trace, shows compact indicator only.
-        With show_thinking=True: shows full trace in a dim section.
+        Consumes typed events from generate_stream_events:
+        - TokenBatch: Batched thinking/content (stdout only)
+        - ToolCallBatch: Tool calls with checksum validation
+        - Checkpoint: Periodic integrity checkpoints (logged, not shown)
+        - StreamComplete: Success with validation hash
+        - StreamError: Error occurred
+
         Returns the assembled response dict for message history.
         """
         self._trim_context_if_needed(system)
+
         _in_thinking = False
+        _last_checkpoint_hash: str | None = None
+
         try:
-            for text, kind in self.client.generate_stream(
+            for event in self.client.generate_stream_events(
                 system_prompt=system,
                 messages=self.messages,
                 tools=TOOL_SCHEMAS,
+                checkpoint_every=50,
             ):
                 if self._interrupted:
                     print()
                     break
-                if not text:
-                    continue
 
-                if kind == "thinking":
-                    if _in_thinking:
-                        # Already showing indicator / trace — just print thinking text
-                        if self.config.show_thinking:
-                            print(text, end="", flush=True)
-                        # In default mode: no spinner, just silence (already showing indicator)
-                    else:
-                        # First thinking token → show indicator
-                        _in_thinking = True
-                        if self.config.show_thinking:
-                            print("⏳ Thinking:", end=" ", flush=True)
-                            print(text, end="", flush=True)
+                # Handle TokenBatch (thinking/content) - stdout only
+                if isinstance(event, TokenBatch):
+                    if event.phase == "thinking":
+                        if _in_thinking:
+                            if self.config.show_thinking:
+                                print(event.text, end="", flush=True)
                         else:
-                            print("⏳ Thinking...", end="", flush=True)
+                            _in_thinking = True
+                            if self.config.show_thinking:
+                                print("⏳ Thinking:", end=" ", flush=True)
+                                print(event.text, end="", flush=True)
+                            else:
+                                print("⏳ Thinking...", end="", flush=True)
+                    else:  # content
+                        if _in_thinking:
+                            _in_thinking = False
+                            if self.config.show_thinking:
+                                print()
+                            else:
+                                print()
+                            print("   ", end="", flush=True)
+                        print(event.text, end="", flush=True)
 
-                else:  # content
+                # Handle ToolCallBatch - metadata (not stdout)
+                elif isinstance(event, ToolCallBatch):
+                    # Tool calls are handled by _execute_loop, just close thinking if open
                     if _in_thinking:
                         _in_thinking = False
-                        if self.config.show_thinking:
-                            print()  # close the thinking block
-                        else:
-                            print()
-                        print("   ", end="", flush=True)
-                    print(text, end="", flush=True)
+                        print()
+                    # Store checksum for validation
+                    logger.debug("Tool calls received with checksum: %s", event.checksum)
+
+                # Handle Checkpoint - metadata (logged, not shown)
+                elif isinstance(event, Checkpoint):
+                    _last_checkpoint_hash = event.checkpoint_hash
+                    logger.debug(
+                        "Checkpoint: thinking=%d chars, content=%d chars, tokens=%d",
+                        len(event.accumulated_thinking),
+                        len(event.accumulated_content),
+                        event.token_count,
+                    )
+
+                # Handle StreamComplete - validate and finish
+                elif isinstance(event, StreamComplete):
+                    if _in_thinking:
+                        _in_thinking = False
+                        print()
+                    # Log checkpoint info for debugging
+                    logger.debug(
+                        "Stream complete: thinking=%d chars, content=%d chars, hash=%s",
+                        len(event.final_thinking),
+                        len(event.final_content),
+                        event.validation_hash,
+                    )
+                    # Add trailing newline if needed
+                    if event.final_content and not event.final_content.endswith("\n"):
+                        print()
+                    break
+
+                # Handle StreamError
+                elif isinstance(event, StreamError):
+                    if _in_thinking:
+                        _in_thinking = False
+                        print()
+                    print(f"\n✗ Stream error ({event.error_type}): {event.message}")
+                    return {}
 
         except OllamaError as e:
             print(f"\n✗ Ollama Error: {e}")
@@ -341,16 +396,10 @@ class WispAgent:
             return {}
 
         if _in_thinking:
-            print()  # close any open thinking indicator
+            print()
 
-        # Retrieve the assembled response (contains full content + thinking)
+        # Retrieve the assembled response
         response = getattr(self.client, "stream_response", None) or {}
-        msg = response.get("message", {})
-        if isinstance(msg, dict):
-            content = msg.get("content", "") or ""
-            # Only add trailing newline if content doesn't already end with one
-            if content and not content.endswith("\n"):
-                print()
         return response
 
     def _run_tool_calls(self, tool_calls: list, workspace: str, auto_approve: bool) -> list[dict]:

@@ -51,7 +51,8 @@ class TestGenerateStreamDeltas:
         with patch.object(client, '_post_stream', return_value=chunks):
             results = list(client.generate_stream("sys", [{"role": "user", "content": "hi"}]))
             texts = [t for t, k in results]
-            assert texts == ["hel", "lo", " world"]
+            # Final accumulated content should be complete (batches may combine tokens)
+            assert "".join(texts) == "hello world"
             assert client.stream_response["message"]["content"] == "hello world"
 
     def test_cumulative_thinking_mode(self, client):
@@ -67,8 +68,9 @@ class TestGenerateStreamDeltas:
             results = list(client.generate_stream("sys", [{"role": "user", "content": "q"}]))
             thinking_texts = [t for t, k in results if k == "thinking"]
             content_texts = [t for t, k in results if k == "content"]
-            assert thinking_texts == ["Let", " me", " think"]
-            assert content_texts == ["Here's the answer."]
+            # With batching, we get batched text
+            assert "Let me think" in "".join(thinking_texts)
+            assert "Here's the answer." in "".join(content_texts)
             assert client.stream_response["message"]["thinking"] == "Let me think"
             assert client.stream_response["message"]["content"] == "Here's the answer."
 
@@ -84,7 +86,8 @@ class TestGenerateStreamDeltas:
         with patch.object(client, '_post_stream', return_value=chunks):
             results = list(client.generate_stream("sys", [{"role": "user", "content": "hi"}]))
             texts = [t for t, k in results]
-            assert texts == ["Hel", "lo", " world"]
+            # Final accumulated content should be correct (batches may vary)
+            assert "".join(texts) == "Hello world"
             assert client.stream_response["message"]["content"] == "Hello world"
 
     def test_token_delta_thinking_mode(self, client):
@@ -100,8 +103,9 @@ class TestGenerateStreamDeltas:
             results = list(client.generate_stream("sys", [{"role": "user", "content": "q"}]))
             thinking_texts = [t for t, k in results if k == "thinking"]
             content_texts = [t for t, k in results if k == "content"]
-            assert thinking_texts == ["Let", " me", " think"]
-            assert content_texts == ["Answer"]
+            # Final accumulated text should be correct
+            assert "".join(thinking_texts) == "Let me think"
+            assert "".join(content_texts) == "Answer"
             assert client.stream_response["message"]["thinking"] == "Let me think"
             assert client.stream_response["message"]["content"] == "Answer"
 
@@ -117,7 +121,8 @@ class TestGenerateStreamDeltas:
         with patch.object(client, '_post_stream', return_value=chunks):
             results = list(client.generate_stream("sys", [{"role": "user", "content": "hi"}]))
             texts = [t for t, k in results]
-            assert texts == ["Hel", "lo", " world"]
+            # Content should be complete regardless of mode switching
+            assert "".join(texts) == "Hello world"
             assert client.stream_response["message"]["content"] == "Hello world"
 
     def test_no_text_chunks(self, client):
