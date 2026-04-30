@@ -17,6 +17,12 @@ import sys
 import weakref
 from typing import Optional
 
+# Enable readline for line-editing and history in REPL
+try:
+    import readline  # noqa: F401
+except ImportError:
+    pass
+
 from wisp.config import WispConfig
 from wisp.ollama_client import OllamaClient, OllamaError
 from wisp.tools import TOOL_SCHEMAS, execute_tool, ToolError
@@ -114,15 +120,14 @@ def _prompt_approve(func_name: str) -> bool:
 
 def _input_line(prompt: str) -> str:
     """Read a line from the user with a prompt. Returns '' on EOF/Error."""
-    # Only use ANSI bold if stdout is a real terminal
-    if sys.stdout.isatty() and not prompt.startswith('\033'):
+    if sys.stdout.isatty():
         prompt = f"\033[1m{prompt}\033[0m"
     try:
         return input(prompt)
-    except (EOFError, KeyboardInterrupt):
+    except KeyboardInterrupt:
         print()
-        return ""
-    except OSError:
+        raise
+    except (EOFError, OSError):
         return ""
 
 
@@ -378,7 +383,7 @@ class WispAgent:
         print()
 
         self._add_message("user", prompt)
-        result = self._execute_loop(system, self.config.workspace or ".", self.config.auto_approve)
+        self._execute_loop(system, self.config.workspace or ".", self.config.auto_approve)
 
         # ── Done ───────────────────────────────────────────────────
         if self.session and self.session.id and not self._interrupted:
@@ -410,9 +415,6 @@ class WispAgent:
 
         system = self._build_system_prompt(skill_name)
         ws = self.config.workspace or "."
-
-        # In REPL mode, auto-approve tool calls for smooth flow
-        auto_approve = True
 
         print(f"🔮 Wisp interactive mode (model: {self.config.model})")
         print(f"   Session: {self.session.id}")
@@ -450,7 +452,7 @@ class WispAgent:
             print()
 
             self._add_message("user", cmd)
-            self._execute_loop(system, ws, auto_approve)
+            self._execute_loop(system, ws, self.config.auto_approve)
 
             # Visual turn separator (only if not empty turn)
             if not self._interrupted:
