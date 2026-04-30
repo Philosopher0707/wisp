@@ -35,7 +35,7 @@ def cmd_run(prompt, model=None, skill=None, workspace=None, auto_approve=False, 
     agent.run(prompt, skill_name=skill, session_id=session_id)
 
 
-def cmd_repl(model=None, skill=None, workspace=None, session_id=None, show_thinking=False):
+def cmd_repl(model=None, skill=None, workspace=None, session_id=None, show_thinking=False, auto_approve=False):
     """Run Wisp in interactive REPL mode."""
     config = WispConfig()
     if model:
@@ -44,6 +44,8 @@ def cmd_repl(model=None, skill=None, workspace=None, session_id=None, show_think
         config.workspace = workspace
     if show_thinking:
         config.show_thinking = True
+    if auto_approve:
+        config.auto_approve = True
 
     agent = WispAgent(config)
     agent.repl(skill_name=skill, session_id=session_id)
@@ -148,16 +150,20 @@ def cmd_session_list():
         print()
 
 
-def cmd_session_show(session_id: str):
-    """Show details of a specific session."""
-    mgr = SessionManager()
-    # Try exact match first
+def _resolve_session_or_fragment(mgr: SessionManager, session_id: str):
+    """Resolve a session ID, trying exact match then prefix fragment match."""
     session = mgr.load(session_id)
     if session is None:
-        # Try prefix match
         resolved = mgr.get_session_id_from_fragment(session_id)
         if resolved:
             session = mgr.load(resolved)
+    return session
+
+
+def cmd_session_show(session_id: str):
+    """Show details of a specific session."""
+    mgr = SessionManager()
+    session = _resolve_session_or_fragment(mgr, session_id)
     if session is None:
         print(f"✗ Session '{session_id}' not found.")
         print("  Run 'wisp session list' to see available sessions.")
@@ -171,18 +177,13 @@ def cmd_session_show(session_id: str):
 def cmd_session_delete(session_id: str):
     """Delete a session."""
     mgr = SessionManager()
-    # Try exact match first
-    if not mgr.delete(session_id):
-        # Try prefix match
-        resolved = mgr.get_session_id_from_fragment(session_id)
-        if resolved:
-            mgr.delete(resolved)
-            print(f"✓ Deleted session {resolved}")
-        else:
-            print(f"✗ Session '{session_id}' not found.")
-            print("  Run 'wisp session list' to see available sessions.")
-    else:
-        print(f"✓ Deleted session {session_id}")
+    session = _resolve_session_or_fragment(mgr, session_id)
+    if session is None:
+        print(f"✗ Session '{session_id}' not found.")
+        print("  Run 'wisp session list' to see available sessions.")
+        return
+    mgr.delete(session.id)
+    print(f"✓ Deleted session {session.id}")
 
 
 def cmd_session_trim(session_id: str, keep: int = 10):
@@ -196,11 +197,7 @@ def cmd_session_trim(session_id: str, keep: int = 10):
         return
 
     mgr = SessionManager()
-    session = mgr.load(session_id)
-    if session is None:
-        resolved = mgr.get_session_id_from_fragment(session_id)
-        if resolved:
-            session = mgr.load(resolved)
+    session = _resolve_session_or_fragment(mgr, session_id)
     if session is None:
         print(f"✗ Session '{session_id}' not found.")
         return

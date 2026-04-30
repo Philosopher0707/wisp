@@ -333,10 +333,11 @@ def tool_list_files(path: str, workspace: str, pattern: str = "*") -> str:
 
     result = []
     max_entries = 500  # prevent huge directories from blowing context
+    ws_path = Path(workspace).resolve()
     for e in sorted(entries)[:max_entries]:
         kind = "📁" if e.is_dir() else "📄"
         size = e.stat().st_size if e.is_file() else 0
-        name = str(e.relative_to(Path(workspace)))
+        name = str(e.relative_to(ws_path))
         if e.is_dir():
             result.append(f"{kind} {name}/")
         else:

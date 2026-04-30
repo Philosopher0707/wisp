@@ -121,7 +121,7 @@ def _prompt_approve(func_name: str) -> bool:
 
 def _input_line(prompt: str) -> str:
     """Read a line from the user with a prompt. Returns '' on EOF/Error."""
-    if sys.stdout.isatty():
+    if sys.stdin.isatty():
         prompt = f"\033[1m{prompt}\033[0m"
     try:
         return input(prompt)
@@ -266,10 +266,11 @@ class WispAgent:
         cache_key = (skill_name, ws)
 
         # Return cached version if still valid
-        if hasattr(self, "_system_prompt_cache"):
-            cached_key, cached_value = self._system_prompt_cache
-            if cached_key == cache_key:
-                return cached_value
+        if not hasattr(self, "_system_prompt_cache"):
+            self._system_prompt_cache = {}
+        cached = self._system_prompt_cache.get(cache_key)
+        if cached is not None:
+            return cached
 
         system = DEFAULT_SYSTEM
         system += _build_skills_block(ws)
@@ -281,7 +282,7 @@ class WispAgent:
                 system += f"\n\n## Active Skill: {skill.name}\n{skill.description}\n\n{skill.instructions}"
 
         # Cache for subsequent calls (e.g., REPL turns)
-        self._system_prompt_cache = (cache_key, system)
+        self._system_prompt_cache[cache_key] = system
         return system
 
     def _run_turn_streaming(self, system: str) -> dict:
@@ -332,7 +333,11 @@ class WispAgent:
                     print(text, end="", flush=True)
 
         except OllamaError as e:
-            print(f"\n✗ Error: {e}")
+            print(f"\n✗ Ollama Error: {e}")
+            return {}
+        except Exception as e:
+            logger.error("Unexpected error in streaming turn: %s", e, exc_info=True)
+            print(f"\n✗ Unexpected error: {e}")
             return {}
 
         if _in_thinking:
@@ -544,7 +549,7 @@ class WispAgent:
         print(f"📋 Session {self.session.id} saved.")
         print(f"   Continue with: wisp repl -S {self.session.id}")
 
-    def _execute_loop(self, system: str, workspace: str, auto_approve: bool) -> list[dict]:
+    def _execute_loop(self, system: str, workspace: str, auto_approve: bool) -> None:
         """Execute the agent loop for one user turn."""
         try:
             for iteration in range(1, self.max_iterations + 1):
@@ -590,8 +595,6 @@ class WispAgent:
         finally:
             # Always save session on exit, even if interrupted mid-tool-call
             self._save_session()
-
-        return self.messages
 
 
 def _args_preview(args: dict) -> str:

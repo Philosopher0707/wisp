@@ -133,7 +133,7 @@ class OllamaClient:
             models = resp.json().get("models", [])
             available = [m["name"] for m in models]
             model_available = any(
-                self.model in m or m.startswith(self.model.split(":")[0])
+                m == self.model or m.startswith(self.model.split(":")[0] + ":")
                 for m in available
             )
             if not model_available:
