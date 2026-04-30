@@ -173,7 +173,7 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str) -> s
     return f"✓ Edited {path} — {len(old_text)} chars replaced with {len(new_text)} chars"
 
 
-def tool_web_fetch(url: str, max_chars: int = 10000) -> str:
+def tool_web_fetch(url: str, workspace: str = ".", max_chars: int = 10000) -> str:
     """Fetch content from a URL (web page, API endpoint, etc.).
     
     Fetches the URL and returns the content as text.
