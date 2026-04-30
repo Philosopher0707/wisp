@@ -532,20 +532,14 @@ class WispAgent:
                     self._save_session()
                 break
 
-            # Tool call turn
-            if content:
-                self._add_message("assistant", content, thinking)
-
-            print()  # blank line before tool calls
-            results = self._run_tool_calls(tool_calls, workspace, auto_approve)
-
-            # Feed results back (include thinking for reasoning models)
+            # Tool call turn - only add assistant message once
             assistant_msg = {
                 "role": "assistant",
                 "content": content or "",
                 "thinking": thinking,
-                "tool_calls": tool_calls,
             }
+            if tool_calls:
+                assistant_msg["tool_calls"] = tool_calls
             self.messages.append(assistant_msg)
             self.messages.extend(results)
             self._save_session()

@@ -109,16 +109,16 @@ def discover_skills(workspace: str) -> list[Skill]:
     seen_names: set[str] = set()
     ws_path = Path(workspace).resolve()
 
-    # Scan global dirs (lower priority)
-    for skill_dir in GLOBAL_SKILL_DIRS:
-        if skill_dir.exists():
-            _scan_skill_dir(skill_dir, discovered, seen_names)
-
-    # Scan project dirs
+    # Scan project dirs FIRST (higher priority)
     for dir_name in SKILL_DIR_NAMES:
         project_dir = ws_path / dir_name
         if project_dir.exists():
             _scan_skill_dir(project_dir, discovered, seen_names)
+
+    # Scan global dirs (lower priority - only if not already seen)
+    for skill_dir in GLOBAL_SKILL_DIRS:
+        if skill_dir.exists():
+            _scan_skill_dir(skill_dir, discovered, seen_names)
 
     return discovered
 

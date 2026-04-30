@@ -125,8 +125,7 @@ class EventStreamParser:
             # If we still don't know the mode (empty first chunk), buffer it
             if self._mode is None:
                 self._bytes_buffer += raw_bytes
-                return
-                yield  # Make this a generator
+                return  # Make this a generator
             # Reset buffer since we consumed it for detection
             self._bytes_buffer = b""
 

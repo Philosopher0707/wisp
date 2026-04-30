@@ -158,7 +158,7 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str) -> s
             f"(max edit: {_MAX_READ_SIZE / 1024 / 1024:.0f} MB)."
         )
 
-    content = full_path.read_text(encoding="utf-8")
+    content = full_path.read_text(encoding="utf-8", errors="replace")
 
     if old_text not in content:
         raise ToolError(
