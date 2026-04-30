@@ -93,20 +93,37 @@ class OllamaClient:
 
         Auto-detects format (NDJSON vs text/event-stream) and yields
         parsed JSON dicts for each event.
+
+        Retries once on connection/timeout errors before any data arrives.
+        Errors mid-stream are raised immediately (cannot safely retry).
         """
         url = f"{self.base_url}/api/{endpoint}"
-        try:
-            with self._session.post(url, json=payload, timeout=timeout, stream=True) as resp:
-                resp.raise_for_status()
-                yield from parse_stream(resp)
-        except requests.exceptions.ConnectionError:
-            raise OllamaError(
-                f"Cannot connect to Ollama at {self.base_url}. Is Ollama running?"
-            )
-        except requests.exceptions.Timeout:
-            raise OllamaError(f"Ollama streaming request timed out after {timeout}s.")
-        except requests.exceptions.RequestException as e:
-            raise OllamaError(f"Ollama streaming error: {e}")
+        first_attempt = True
+        while True:
+            try:
+                with self._session.post(url, json=payload, timeout=timeout, stream=True) as resp:
+                    resp.raise_for_status()
+                    for event in parse_stream(resp):
+                        yield event
+                    return  # stream exhausted normally
+            except requests.exceptions.ConnectionError:
+                if first_attempt:
+                    first_attempt = False
+                    logger.warning("Stream connection failed, retrying once...")
+                    time.sleep(1)
+                    continue
+                raise OllamaError(
+                    f"Cannot connect to Ollama at {self.base_url}. Is Ollama running?"
+                )
+            except requests.exceptions.Timeout:
+                if first_attempt:
+                    first_attempt = False
+                    logger.warning("Stream timed out, retrying once...")
+                    time.sleep(1)
+                    continue
+                raise OllamaError(f"Ollama streaming request timed out after {timeout}s.")
+            except requests.exceptions.RequestException as e:
+                raise OllamaError(f"Ollama streaming error: {e}")
 
     def check_health(self) -> bool:
         """Check if Ollama is running and the model is available."""
@@ -216,8 +233,16 @@ class OllamaClient:
         )
 
         # ------------------------------------------------------------------
-        # Cumulative fields — Ollama sends the current total in *every* chunk.
-        # We track lengths to extract only the new tokens (deltas) each round.
+        # Ollama can return text in two modes:
+        #
+        # 1. Cumulative (local Ollama): each chunk contains the full text so far.
+        #    Delta = new[len(prev):]
+        #
+        # 2. Token-delta (Ollama cloud / provider proxy): each chunk contains
+        #    only the new token.  The chunk IS the delta.
+        #
+        # We auto-detect: if the new text does not start with the previous text,
+        # we assume token-delta mode and yield the text directly.
         # ------------------------------------------------------------------
         prev_thinking = ""
         prev_content = ""
@@ -235,17 +260,33 @@ class OllamaClient:
 
                 # ── Thinking / reasoning ────────────────────────────
                 thinking = msg.get("thinking", "") or ""
-                if thinking and len(thinking) > len(prev_thinking):
-                    delta = thinking[len(prev_thinking):]
-                    prev_thinking = thinking
-                    yield (delta, "thinking")
+                if thinking:
+                    if not prev_thinking:
+                        prev_thinking = thinking
+                        yield (thinking, "thinking")
+                    elif thinking.startswith(prev_thinking):
+                        if len(thinking) > len(prev_thinking):
+                            delta = thinking[len(prev_thinking):]
+                            prev_thinking = thinking
+                            yield (delta, "thinking")
+                    else:
+                        yield (thinking, "thinking")
+                        prev_thinking += thinking
 
                 # ── Content / final answer ──────────────────────────
                 content = msg.get("content", "") or ""
-                if content and len(content) > len(prev_content):
-                    delta = content[len(prev_content):]
-                    prev_content = content
-                    yield (delta, "content")
+                if content:
+                    if not prev_content:
+                        prev_content = content
+                        yield (content, "content")
+                    elif content.startswith(prev_content):
+                        if len(content) > len(prev_content):
+                            delta = content[len(prev_content):]
+                            prev_content = content
+                            yield (delta, "content")
+                    else:
+                        yield (content, "content")
+                        prev_content += content
 
                 # ── Tool calls ──────────────────────────────────────
                 tc = msg.get("tool_calls")

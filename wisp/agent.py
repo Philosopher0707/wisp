@@ -14,6 +14,7 @@ import json
 import logging
 import signal
 import sys
+import weakref
 from typing import Optional
 
 from wisp.config import WispConfig
@@ -48,19 +49,19 @@ You have access to tools that let you read, write, and edit files, run bash comm
 
 # ── Signal handling ──────────────────────────────────────────────────
 
-_interrupted = False
+_agent_instances: weakref.WeakSet = weakref.WeakSet()
 
 def _handle_sigint(signum, frame):
-    """Mark interruption flag so the agent loop can exit gracefully."""
-    global _interrupted
-    _interrupted = True
+    """Mark interruption on all live agent instances so loops exit gracefully."""
+    for inst in _agent_instances:
+        inst._interrupted = True
     print("\n\n⏹  Interrupted. Finishing current step... (Ctrl+C again to force quit)")
     signal.signal(signal.SIGINT, signal.default_int_handler)
 
-
 def _install_signal_handler():
-    global _interrupted
-    _interrupted = False
+    """Register interrupt handler and reset interrupt state on all instances."""
+    for inst in _agent_instances:
+        inst._interrupted = False
     signal.signal(signal.SIGINT, _handle_sigint)
 
 
@@ -143,7 +144,9 @@ class WispAgent:
         self.session = session
         self.messages: list[dict] = []
         self.max_iterations = 30
-        self._system_prompt = ""  # Built once in run(), cached for repl
+        self._interrupted = False
+        self._system_prompt = ""
+        _agent_instances.add(self)
 
     def _add_message(self, role: str, content: str, thinking: str = ""):
         """Add a message to the conversation history."""
@@ -152,11 +155,38 @@ class WispAgent:
             msg["thinking"] = thinking
         self.messages.append(msg)
 
+    def _estimate_tokens(self, messages: list[dict]) -> int:
+        """Rough token estimate (chars / chars_per_token) for context budget."""
+        total = 0
+        for msg in messages:
+            for key in ("content", "thinking"):
+                val = msg.get(key, "") or ""
+                total += len(val)
+        return total // self.config.chars_per_token
+
+    def _trim_context_if_needed(self):
+        """Trim oldest messages when estimated context exceeds budget."""
+        budget = self.config.max_context_tokens
+        overhead = self._estimate_tokens([{"content": DEFAULT_SYSTEM}])
+        while len(self.messages) > 2 and self._estimate_tokens(self.messages) + overhead > budget:
+            removed = self.messages.pop(0)
+            logger.info("Trimmed message (role=%s) to stay within context budget", removed.get("role"))
+
     def _save_session(self):
         """Persist the current session to disk."""
         if self.session is not None:
             self.session.messages = self.messages
             self.session_mgr.save(self.session)
+
+    def _resolve_session(self, session_id: str):
+        """Load a session by exact ID or prefix fragment."""
+        loaded = self.session_mgr.load(session_id)
+        if loaded is not None:
+            return loaded
+        resolved = self.session_mgr.get_session_id_from_fragment(session_id)
+        if resolved:
+            return self.session_mgr.load(resolved)
+        return None
 
     def _build_system_prompt(self, skill_name: Optional[str] = None, workspace: Optional[str] = None) -> str:
         """Build the fully assembled system prompt (cached for REPL reuse)."""
@@ -180,6 +210,7 @@ class WispAgent:
         With show_thinking=True: shows full trace in a dim section.
         Returns the assembled response dict for message history.
         """
+        self._trim_context_if_needed()
         _in_thinking = False
         try:
             for text, kind in self.client.generate_stream(
@@ -187,7 +218,7 @@ class WispAgent:
                 messages=self.messages,
                 tools=TOOL_SCHEMAS,
             ):
-                if _interrupted:
+                if self._interrupted:
                     print()
                     break
                 if not text:
@@ -234,24 +265,11 @@ class WispAgent:
                 print()
         return response
 
-    def _run_turn_nonstreaming(self, system: str) -> dict:
-        """Run one agent turn without streaming (fallback)."""
-        try:
-            response = self.client.generate(
-                system_prompt=system,
-                messages=self.messages,
-                tools=TOOL_SCHEMAS,
-            )
-        except OllamaError as e:
-            print(f"✗ Error: {e}")
-            return {}
-        return response
-
     def _run_tool_calls(self, tool_calls: list, workspace: str, auto_approve: bool) -> list[dict]:
         """Execute a batch of tool calls, return result messages for the model."""
         all_results = []
         for tc in tool_calls:
-            if _interrupted:
+            if self._interrupted:
                 break
 
             func = tc.get("function", {})
@@ -313,14 +331,15 @@ class WispAgent:
 
         # ── Session setup ──────────────────────────────────────────
         if session_id:
-            loaded = self.session_mgr.load(session_id)
+            loaded = self._resolve_session(session_id)
             if loaded is None:
                 print(f"✗ Session '{session_id}' not found.")
                 print(f"  Run 'wisp session list' to see available sessions.")
                 return
             self.session = loaded
             self.messages = list(loaded.messages)
-            print(f"📋 Continuing session: {loaded.id}")
+            session_id = self.session.id
+            print(f"📋 Continuing session: {self.session.id}")
             if loaded.title:
                 print(f"   Title: {loaded.title}")
             print(f"   Messages so far: {len(self.messages)}")
@@ -360,7 +379,7 @@ class WispAgent:
         result = self._execute_loop(system, self.config.workspace or ".", self.config.auto_approve)
 
         # ── Done ───────────────────────────────────────────────────
-        if self.session and self.session.id and not _interrupted:
+        if self.session and self.session.id and not self._interrupted:
             print(f"\n📋 Session: {self.session.id}")
 
     def repl(self, skill_name: Optional[str] = None, session_id: Optional[str] = None):
@@ -372,12 +391,13 @@ class WispAgent:
 
         # ── Session setup ──────────────────────────────────────────
         if session_id:
-            loaded = self.session_mgr.load(session_id)
+            loaded = self._resolve_session(session_id)
             if loaded is None:
                 print(f"✗ Session '{session_id}' not found.")
                 return
             self.session = loaded
             self.messages = list(loaded.messages)
+            session_id = self.session.id
         else:
             self.session = Session.create(
                 model=self.config.model,
@@ -400,7 +420,7 @@ class WispAgent:
         print("Type 'exit', 'quit', or press Ctrl+C to end.")
         print()
 
-        while not _interrupted:
+        while not self._interrupted:
             try:
                 user_input = _input_line("➜ ")
             except KeyboardInterrupt:
@@ -428,7 +448,7 @@ class WispAgent:
             self._save_session()
 
             # Visual turn separator (only if not empty turn)
-            if not _interrupted:
+            if not self._interrupted:
                 _print_separator()
 
         print()
@@ -438,7 +458,7 @@ class WispAgent:
     def _execute_loop(self, system: str, workspace: str, auto_approve: bool) -> list[dict]:
         """Execute the agent loop for one user turn."""
         for iteration in range(1, self.max_iterations + 1):
-            if _interrupted:
+            if self._interrupted:
                 break
 
             # ── Generate with streaming ──────────────────────────

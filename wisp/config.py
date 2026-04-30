@@ -62,6 +62,10 @@ class WispConfig:
         self.auto_approve: bool = get_setting("auto_approve", "true").lower() == "true"
         # Show reasoning trace inline (default: false — most users want the answer only)
         self.show_thinking: bool = get_setting("show_thinking", "false").lower() == "true"
+        # Context window guard: trim oldest messages when estimated tokens exceed this
+        self.max_context_tokens: int = int(get_setting("max_context_tokens", "128000"))
+        # Tokens per character estimate for context budget (4 is conservative for code/text)
+        self.chars_per_token: int = int(get_setting("chars_per_token", "4"))
 
     def __repr__(self):
         return (
