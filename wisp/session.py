@@ -34,9 +34,9 @@ def _slugify(text: str, max_len: int = 40) -> str:
 
 
 def _timestamp_id() -> str:
-    """Generate a sortable session ID: YYYYMMDD-HHMMSS-<slug>."""
+    """Generate a sortable session ID: YYYYMMDD-HHMMSS-ffffff-<rand>."""
     now = datetime.now(timezone.utc)
-    return now.strftime("%Y%m%d-%H%M%S")
+    return now.strftime("%Y%m%d-%H%M%S-%f")
 
 
 def _session_path(session_id: str) -> Path:

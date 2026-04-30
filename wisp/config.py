@@ -62,6 +62,8 @@ class WispConfig:
         self.auto_approve: bool = get_setting("auto_approve", "true").lower() == "true"
         # Show reasoning trace inline (default: false — most users want the answer only)
         self.show_thinking: bool = get_setting("show_thinking", "false").lower() == "true"
+        # Max agent loop iterations per user turn
+        self.max_iterations: int = int(get_setting("max_iterations", "30"))
         # Context window guard: trim oldest messages when estimated tokens exceed this
         self.max_context_tokens: int = int(get_setting("max_context_tokens", "128000"))
         # Tokens per character estimate for context budget (4 is conservative for code/text)

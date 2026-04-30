@@ -143,7 +143,7 @@ class WispAgent:
         self.session_mgr = SessionManager()
         self.session = session
         self.messages: list[dict] = []
-        self.max_iterations = 30
+        self.max_iterations = self.config.max_iterations
         self._interrupted = False
         self._system_prompt = ""
         _agent_instances.add(self)
@@ -164,13 +164,13 @@ class WispAgent:
                 total += len(val)
         return total // self.config.chars_per_token
 
-    def _trim_context_if_needed(self):
+    def _trim_context_if_needed(self, system_prompt: str = ""):
         """Trim oldest messages when estimated context exceeds budget."""
         budget = self.config.max_context_tokens
-        overhead = self._estimate_tokens([{"content": DEFAULT_SYSTEM}])
+        overhead = self._estimate_tokens([{"content": system_prompt}])
         while len(self.messages) > 2 and self._estimate_tokens(self.messages) + overhead > budget:
-            removed = self.messages.pop(0)
-            logger.info("Trimmed message (role=%s) to stay within context budget", removed.get("role"))
+            self.messages.pop(0)
+            logger.info("Trimmed oldest message to stay within context budget")
 
     def _save_session(self):
         """Persist the current session to disk."""
@@ -210,7 +210,7 @@ class WispAgent:
         With show_thinking=True: shows full trace in a dim section.
         Returns the assembled response dict for message history.
         """
-        self._trim_context_if_needed()
+        self._trim_context_if_needed(system)
         _in_thinking = False
         try:
             for text, kind in self.client.generate_stream(
@@ -287,8 +287,10 @@ class WispAgent:
                 try:
                     func_args = json.loads(func_args)
                 except json.JSONDecodeError:
+                    logger.warning("Malformed tool arguments for %s: %.200s", func_name, func_args)
                     func_args = {}
             if not isinstance(func_args, dict):
+                logger.warning("Tool arguments for %s are not a dict: %s", func_name, type(func_args).__name__)
                 func_args = {}
 
             print(f"  🛠  {func_name}({_args_preview(func_args)})")
@@ -429,6 +431,8 @@ class WispAgent:
 
             cmd = user_input.strip()
             if not cmd:
+                if not sys.stdin.isatty():
+                    break
                 continue
             if cmd in ("exit", "quit", "/exit", "/quit"):
                 print("👋 Goodbye.")
@@ -438,14 +442,15 @@ class WispAgent:
                 print("  Type any prompt to chat with Wisp.")
                 continue
 
+            # Update session title from first meaningful prompt
+            if self.session and self.session.title in ("REPL session", "(untitled)"):
+                self.session.title = cmd[:60].strip()
+
             # Print blank line so response breathes after the prompt
             print()
 
             self._add_message("user", cmd)
             self._execute_loop(system, ws, auto_approve)
-
-            # Save after each exchange in REPL
-            self._save_session()
 
             # Visual turn separator (only if not empty turn)
             if not self._interrupted:
