@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import patch, MagicMock
-from wisp.agent import _parse_tool_call, _build_skills_block, _is_interactive, _args_preview
+from wisp.agent import _parse_tool_call, _build_skills_block, _is_interactive, _args_preview, _input_line
 from wisp.config import WispConfig
 
 
@@ -62,6 +62,40 @@ class TestIsInteractive:
     def test_stdin_is_tty(self):
         with patch("wisp.agent.sys.stdin.isatty", return_value=True):
             assert _is_interactive() is True
+
+
+class TestInputLine:
+
+    def test_tty_reads_input(self):
+        with patch("wisp.agent.sys.stdin.isatty", return_value=True):
+            with patch("builtins.input", return_value="hello"):
+                assert _input_line("➜ ") == "hello"
+
+    def test_tty_unicode_error_returns_empty(self):
+        with patch("wisp.agent.sys.stdin.isatty", return_value=True):
+            with patch("builtins.input", side_effect=UnicodeDecodeError("utf-8", b"\x9f", 0, 1, "invalid start byte")):
+                assert _input_line("➜ ") == ""
+
+    def test_non_tty_reads_bytes(self):
+        mock_stdin = MagicMock()
+        mock_stdin.isatty.return_value = False
+        mock_stdin.buffer.readline.return_value = b"hello\n"
+        with patch("wisp.agent.sys.stdin", mock_stdin):
+            assert _input_line("➜ ") == "hello"
+
+    def test_non_tty_invalid_utf8_replaced(self):
+        mock_stdin = MagicMock()
+        mock_stdin.isatty.return_value = False
+        mock_stdin.buffer.readline.return_value = b"hi \x9f world\n"
+        with patch("wisp.agent.sys.stdin", mock_stdin):
+            assert _input_line("➜ ") == "hi � world"
+
+    def test_non_tty_eof_returns_empty(self):
+        mock_stdin = MagicMock()
+        mock_stdin.isatty.return_value = False
+        mock_stdin.buffer.readline.return_value = b""
+        with patch("wisp.agent.sys.stdin", mock_stdin):
+            assert _input_line("➜ ") == ""
 
 
 # ── _args_preview ─────────────────────────────────────────────────────

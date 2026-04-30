@@ -144,13 +144,21 @@ def _input_line(prompt: str) -> str:
     """Read a line from the user with a prompt. Returns '' on EOF/Error."""
     if sys.stdin.isatty():
         prompt = f"\033[1m{prompt}\033[0m"
+        try:
+            return input(prompt)
+        except KeyboardInterrupt:
+            print()
+            raise
+        except (EOFError, OSError, UnicodeDecodeError):
+            return ""
+    # Non-interactive: read raw bytes to survive invalid UTF-8 in piped input
     try:
-        return input(prompt)
-    except KeyboardInterrupt:
-        print()
-        raise
+        data = sys.stdin.buffer.readline()
     except (EOFError, OSError):
         return ""
+    if not data:
+        return ""
+    return data.decode("utf-8", errors="replace").rstrip("\n")
 
 
 def _print_separator():
