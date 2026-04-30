@@ -64,6 +64,7 @@ You have access to tools that let you read, write, and edit files, run bash comm
 # ── Signal handling ──────────────────────────────────────────────────
 
 _agent_instances: weakref.WeakSet = weakref.WeakSet()
+_old_sigint_handler = None
 
 def _handle_sigint(signum, frame):
     """Mark interruption on all live agent instances so loops exit gracefully."""
@@ -74,9 +75,17 @@ def _handle_sigint(signum, frame):
 
 def _install_signal_handler():
     """Register interrupt handler and reset interrupt state on all instances."""
+    global _old_sigint_handler
     for inst in _agent_instances:
         inst._interrupted = False
-    signal.signal(signal.SIGINT, _handle_sigint)
+    _old_sigint_handler = signal.signal(signal.SIGINT, _handle_sigint)
+
+def _restore_signal_handler():
+    """Restore the previous SIGINT handler."""
+    global _old_sigint_handler
+    if _old_sigint_handler is not None:
+        signal.signal(signal.SIGINT, _old_sigint_handler)
+        _old_sigint_handler = None
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -94,8 +103,13 @@ def _parse_tool_call(response: dict) -> Optional[list[dict]]:
 
 
 def _build_skills_block(workspace: str) -> str:
-    """Build a system prompt block listing available skills."""
+    """Build a system prompt block listing available skills (discovers skills internally)."""
     skills = discover_skills(workspace)
+    return _build_skills_block_from_skills(skills)
+
+
+def _build_skills_block_from_skills(skills: list) -> str:
+    """Build a system prompt block from an already-discovered skills list."""
     if not skills:
         return ""
 
@@ -189,6 +203,18 @@ class WispAgent:
     def __init__(self, config: Optional[WispConfig] = None, session: Optional[Session] = None):
         self.config = config or WispConfig()
         self.client = OllamaClient(self.config)
+        # Auto-detect context window unless user explicitly configured it
+        if not self.config._context_tokens_explicit:
+            try:
+                detected = self.client.get_context_length()
+                if detected != self.config.max_context_tokens:
+                    logger.info(
+                        "Auto-detected context window for %s: %d tokens",
+                        self.config.model, detected,
+                    )
+                    self.config.max_context_tokens = detected
+            except OllamaError:
+                pass  # Health check will report the real problem later
         self.session_mgr = SessionManager()
         self.session = session
         self.messages: list[dict] = []
@@ -280,13 +306,17 @@ class WispAgent:
             return cached
 
         system = DEFAULT_SYSTEM
-        system += _build_skills_block(ws)
+
+        # Discover skills ONCE and reuse for both the skills block and the active skill
+        skills = discover_skills(ws)
+        system += _build_skills_block_from_skills(skills)
 
         if skill_name:
-            from wisp.skills import find_skill
-            skill = find_skill(skill_name, ws)
+            skill = next((s for s in skills if s.name == skill_name), None)
             if skill:
                 system += f"\n\n## Active Skill: {skill.name}\n{skill.description}\n\n{skill.instructions}"
+            else:
+                logger.warning("Skill '%s' not found in discovered skills", skill_name)
 
         # Cache for subsequent calls (e.g., REPL turns)
         self._system_prompt_cache[cache_key] = system
@@ -338,9 +368,9 @@ class WispAgent:
                             _in_thinking = False
                             if self.config.show_thinking:
                                 print()
-                            else:
-                                print()
-                            print("   ", end="", flush=True)
+                            # When thinking was hidden, just print newline to separate
+                            # from the "⏳ Thinking..." indicator, no extra spaces
+                            print()
                         print(event.text, end="", flush=True)
 
                 # Handle ToolCallBatch - metadata (not stdout)
@@ -367,6 +397,10 @@ class WispAgent:
                     if _in_thinking:
                         _in_thinking = False
                         print()
+                    # Validate final hash against our own recomputation
+                    expected = Checkpoint.compute_hash(event.final_thinking, event.final_content)
+                    if event.validation_hash != expected:
+                        logger.warning("StreamComplete hash mismatch — text may be corrupted")
                     # Log checkpoint info for debugging
                     logger.debug(
                         "Stream complete: thinking=%d chars, content=%d chars, hash=%s",
@@ -521,6 +555,7 @@ class WispAgent:
         # ── Done ───────────────────────────────────────────────────
         if self.session and self.session.id and not self._interrupted:
             print(f"\n📋 Session: {self.session.id}")
+        _restore_signal_handler()
 
     def repl(self, skill_name: Optional[str] = None, session_id: Optional[str] = None):
         """Interactive REPL — continuous conversation until the user exits."""
@@ -569,7 +604,7 @@ class WispAgent:
 
             cmd = user_input.strip()
             if not cmd:
-                if not sys.stdin.isatty():
+                if not _is_interactive():
                     break
                 continue
             if cmd in ("exit", "quit", "/exit", "/quit"):
@@ -580,8 +615,11 @@ class WispAgent:
                 print("  Type any prompt to chat with Wisp.")
                 continue
 
-            # Update session title BEFORE executing, so it's saved correctly
-            if self.session and self.session.title in ("REPL session", "(untitled)"):
+            # Update session title on first meaningful prompt
+            if self.session and (
+                not self.session.title
+                or self.session.title in ("REPL session", "(untitled)")
+            ):
                 self.session.title = cmd[:60].strip()
 
             # Print blank line so response breathes after the prompt
@@ -595,8 +633,10 @@ class WispAgent:
                 _print_separator()
 
         print()
-        print(f"📋 Session {self.session.id} saved.")
-        print(f"   Continue with: wisp repl -S {self.session.id}")
+        if self.session:
+            print(f"📋 Session {self.session.id} saved.")
+            print(f"   Continue with: wisp repl -S {self.session.id}")
+        _restore_signal_handler()
 
     def _execute_loop(self, system: str, workspace: str, auto_approve: bool) -> None:
         """Execute the agent loop for one user turn."""
@@ -640,9 +680,8 @@ class WispAgent:
                 print()  # blank line before tool calls
                 results = self._run_tool_calls(tool_calls, workspace, auto_approve)
                 self.messages.extend(results)
-                self._save_session()
         finally:
-            # Always save session on exit, even if interrupted mid-tool-call
+            # Always save session on exit (single save point), even if interrupted mid-tool-call
             self._save_session()
 
 

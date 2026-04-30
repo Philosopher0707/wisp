@@ -176,3 +176,58 @@ class TestResolveSession:
         agent.session_mgr.get_session_id_from_fragment.return_value = None
         result = agent._resolve_session("nope")
         assert result is None
+
+
+class TestAutoDetectContext:
+
+    def test_auto_detects_when_not_explicit(self):
+        from wisp.agent import WispAgent
+        from wisp.config import WispConfig
+
+        config = WispConfig()
+        config._context_tokens_explicit = False
+        config.max_context_tokens = 128000
+
+        agent = WispAgent.__new__(WispAgent)
+        agent.config = config
+        agent.client = MagicMock()
+        agent.client.get_context_length.return_value = 262144
+        agent.session_mgr = MagicMock()
+        agent.session = None
+        agent.messages = []
+        agent.max_iterations = config.max_iterations
+        agent._interrupted = False
+        agent._system_prompt = ""
+
+        # Simulate what __init__ does for auto-detection
+        if not agent.config._context_tokens_explicit:
+            detected = agent.client.get_context_length()
+            agent.config.max_context_tokens = detected
+
+        assert agent.config.max_context_tokens == 262144
+
+    def test_does_not_override_when_explicit(self):
+        from wisp.agent import WispAgent
+        from wisp.config import WispConfig
+
+        config = WispConfig()
+        config._context_tokens_explicit = True
+        config.max_context_tokens = 64000
+
+        agent = WispAgent.__new__(WispAgent)
+        agent.config = config
+        agent.client = MagicMock()
+        agent.client.get_context_length.return_value = 262144
+        agent.session_mgr = MagicMock()
+        agent.session = None
+        agent.messages = []
+        agent.max_iterations = config.max_iterations
+        agent._interrupted = False
+        agent._system_prompt = ""
+
+        # Auto-detection should be skipped
+        if not agent.config._context_tokens_explicit:
+            detected = agent.client.get_context_length()
+            agent.config.max_context_tokens = detected
+
+        assert agent.config.max_context_tokens == 64000

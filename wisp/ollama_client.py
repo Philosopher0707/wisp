@@ -85,6 +85,39 @@ class OllamaClient:
             logger.error("Failed to list models: %s", e)
             return []
 
+    def get_model_info(self) -> dict:
+        """Fetch detailed model info via /api/show.
+
+        Returns the raw response dict. Raises OllamaError on failure.
+        """
+        try:
+            resp = self._session.post(
+                f"{self.base_url}/api/show",
+                json={"model": self.model},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise OllamaError(f"Failed to get model info: {e}")
+
+    def get_context_length(self) -> int:
+        """Auto-detect the model's context window length.
+
+        Queries /api/show and scans model_info for any key ending in
+        '.context_length'. Falls back to 128000 if not found.
+        """
+        try:
+            info = self.get_model_info()
+            model_info = info.get("model_info", {})
+            for key, value in model_info.items():
+                if key.endswith(".context_length") and isinstance(value, int):
+                    logger.debug("Detected context length for %s: %d", self.model, value)
+                    return value
+        except OllamaError as e:
+            logger.warning("Could not auto-detect context length: %s", e)
+        return 128000  # conservative default
+
     def _post_with_retry(self, endpoint: str, payload: dict, timeout: int = 300):
         """Make a POST request with exponential backoff retry.
 
@@ -239,52 +272,94 @@ class OllamaClient:
                 thinking = msg.get("thinking", "") or ""
                 if thinking:
                     # Detect mode: cumulative if new text starts with old, else token-delta
+                    # Defer mode detection until we have a previous chunk to compare against
                     if thinking_mode is None:
-                        if prev_thinking and thinking.startswith(prev_thinking):
-                            thinking_mode = "cumulative"
-                        else:
-                            thinking_mode = "token-delta"
+                        if prev_thinking:
+                            # Second+ chunk — can detect mode
+                            if thinking.startswith(prev_thinking):
+                                thinking_mode = "cumulative"
+                            else:
+                                thinking_mode = "token-delta"
+                        # else: first chunk, leave mode as None (will treat as token-delta)
 
                     if thinking_mode == "cumulative":
-                        if len(thinking) > len(prev_thinking):
-                            delta = thinking[len(prev_thinking):]
-                            prev_thinking = thinking
+                        if thinking.startswith(prev_thinking):
+                            # Still cumulative — extract delta
+                            if len(thinking) > len(prev_thinking):
+                                delta = thinking[len(prev_thinking):]
+                                prev_thinking = thinking
+                                accumulated_thinking += delta
+                                token_counter += len(delta)
+                                for event in batcher.add_thinking(delta):
+                                    yield event
+                        else:
+                            # Model switched to token-delta mid-stream
+                            thinking_mode = "token-delta"
+                            delta = thinking
                             accumulated_thinking += delta
                             token_counter += len(delta)
-                            # Batch tokens to reduce I/O
                             for event in batcher.add_thinking(delta):
                                 yield event
-                    else:  # token-delta
+                            prev_thinking = accumulated_thinking
+                    elif thinking_mode == "token-delta":
                         accumulated_thinking += thinking
                         token_counter += len(thinking)
                         for event in batcher.add_thinking(thinking):
                             yield event
                         prev_thinking = accumulated_thinking
+                    else:
+                        # First chunk — treat as token-delta (safe default)
+                        accumulated_thinking += thinking
+                        token_counter += len(thinking)
+                        for event in batcher.add_thinking(thinking):
+                            yield event
+                        prev_thinking = thinking
 
                 # ── Content / final answer ──────────────────────────
                 content = msg.get("content", "") or ""
                 if content:
-                    # Detect mode on first chunk
+                    # Detect mode: defer until we have a previous chunk to compare
                     if content_mode is None:
-                        content_mode = (
-                            "cumulative" if content.startswith(prev_content)
-                            else "token-delta"
-                        )
+                        if prev_content:
+                            # Second+ chunk — can detect mode
+                            if content.startswith(prev_content):
+                                content_mode = "cumulative"
+                            else:
+                                content_mode = "token-delta"
+                        # else: first chunk, leave mode as None
 
                     if content_mode == "cumulative":
-                        if len(content) > len(prev_content):
-                            delta = content[len(prev_content):]
-                            prev_content = content
+                        if content.startswith(prev_content):
+                            # Still cumulative — extract delta
+                            if len(content) > len(prev_content):
+                                delta = content[len(prev_content):]
+                                prev_content = content
+                                accumulated_content += delta
+                                token_counter += len(delta)
+                                for event in batcher.add_content(delta):
+                                    yield event
+                        else:
+                            # Model switched to token-delta mid-stream
+                            content_mode = "token-delta"
+                            delta = content
                             accumulated_content += delta
                             token_counter += len(delta)
                             for event in batcher.add_content(delta):
                                 yield event
-                    else:  # token-delta
+                            prev_content = accumulated_content
+                    elif content_mode == "token-delta":
                         accumulated_content += content
                         token_counter += len(content)
                         for event in batcher.add_content(content):
                             yield event
                         prev_content = accumulated_content
+                    else:
+                        # First chunk — treat as token-delta (safe default)
+                        accumulated_content += content
+                        token_counter += len(content)
+                        for event in batcher.add_content(content):
+                            yield event
+                        prev_content = content
 
                 # ── Tool calls ──────────────────────────────────────
                 tc = msg.get("tool_calls")
@@ -329,6 +404,11 @@ class OllamaClient:
                 accumulated_content
             )
 
+            # Self-validate: recompute hash and ensure consistency
+            recomputed = Checkpoint.compute_hash(accumulated_thinking, accumulated_content)
+            if final_hash != recomputed:
+                logger.warning("StreamComplete hash mismatch — accumulated text may be corrupted")
+
             # Build response for message history
             response_msg = {
                 "role": "assistant",
@@ -348,6 +428,17 @@ class OllamaClient:
                 validation_hash=final_hash
             )
 
+        except KeyboardInterrupt:
+            # Flush any pending batches
+            for event in batcher.flush_all():
+                yield event
+            yield StreamError(
+                phase="error",
+                error_type="KeyboardInterrupt",
+                message="Stream interrupted by user",
+                partial_thinking=accumulated_thinking,
+                partial_content=accumulated_content
+            )
         except Exception as e:
             logger.error("Stream error: %s", e, exc_info=True)
             # Flush any pending batches
@@ -389,39 +480,49 @@ class OllamaClient:
         Auto-detects format (NDJSON vs text/event-stream) and yields
         parsed JSON dicts for each event.
 
-        Retries once on connection/timeout errors before any data arrives.
+        Retries with exponential backoff on transient failures (connection errors,
+        timeouts, 5xx server errors) before any data arrives.
+        Errors mid-stream are raised immediately (cannot safely retry).
         Handles KeyboardInterrupt gracefully for clean Ctrl+C handling.
         """
         url = f"{self.base_url}/api/{endpoint}"
-        conn_retry = True
-        timeout_retry = True
+        max_retries = 3
+        base_delay = 1
 
-        while True:
+        for attempt in range(max_retries):
+            events_yielded = False
             try:
                 with self._session.post(url, json=payload, timeout=timeout, stream=True) as resp:
                     resp.raise_for_status()
                     try:
                         for event in parse_stream(resp):
+                            events_yielded = True
                             yield event
                     except KeyboardInterrupt:
-                        # Gracefully handle Ctrl+C during streaming
-                        logger.debug("KeyboardInterrupt during stream, terminating gracefully")
-                        return  # Stop yielding, stream ends
+                        # Re-raise so caller knows stream was interrupted
+                        raise
                 return  # stream exhausted normally
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code >= 500 and attempt < max_retries - 1 and not events_yielded:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning("Server error %d, retrying in %ds...", e.response.status_code, delay)
+                    time.sleep(delay)
+                    continue
+                raise OllamaError(f"Ollama HTTP error: {e}")
             except requests.exceptions.ConnectionError:
-                if conn_retry:
-                    conn_retry = False
-                    logger.warning("Stream connection failed, retrying once...")
-                    time.sleep(1)
+                if attempt < max_retries - 1 and not events_yielded:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning("Stream connection failed, retrying in %ds...", delay)
+                    time.sleep(delay)
                     continue
                 raise OllamaError(
                     f"Cannot connect to Ollama at {self.base_url}. Is Ollama running?"
                 )
             except requests.exceptions.Timeout:
-                if timeout_retry:
-                    timeout_retry = False
-                    logger.warning("Stream timed out, retrying once...")
-                    time.sleep(1)
+                if attempt < max_retries - 1 and not events_yielded:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning("Stream timed out, retrying in %ds...", delay)
+                    time.sleep(delay)
                     continue
                 raise OllamaError(f"Ollama streaming request timed out after {timeout}s.")
             except requests.exceptions.RequestException as e:

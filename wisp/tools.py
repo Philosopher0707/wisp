@@ -12,8 +12,11 @@ import os
 import shlex
 import subprocess
 import tempfile
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
+
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +24,40 @@ logger = logging.getLogger(__name__)
 class ToolError(Exception):
     """Raised when a tool execution fails."""
     pass
+
+
+class _TextExtractor(HTMLParser):
+    """HTML text extractor for web_fetch tool. Defined at module level to avoid redefinition on every call."""
+
+    def __init__(self):
+        super().__init__()
+        self.text = []
+        self.skip_tags = {"script", "style", "nav", "header", "footer"}
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.skip_tags:
+            self._skip_depth += 1
+        elif tag == "br":
+            self.text.append("\n")
+        elif tag in ("p", "div", "h1", "h2", "h3", "h4", "h5", "h6"):
+            if self.text and not self.text[-1].endswith("\n"):
+                self.text.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in self.skip_tags:
+            self._skip_depth = max(0, self._skip_depth - 1)
+        elif tag in ("p", "div", "h1", "h2", "h3", "h4", "h5", "h6"):
+            self.text.append("\n")
+
+    def handle_data(self, data):
+        if self._skip_depth <= 0:
+            self.text.append(data)
+
+    def get_text(self) -> str:
+        text = "".join(self.text)
+        lines = [line.strip() for line in text.splitlines()]
+        return "\n".join(line for line in lines if line)
 
 
 # ── Security constants ───────────────────────────────────────────────
@@ -180,7 +217,6 @@ def tool_web_fetch(url: str, workspace: str = ".", max_chars: int = 10000) -> st
     For HTML pages, returns extracted text content.
     Respects robots.txt and has reasonable timeouts.
     """
-    import requests
     from urllib.parse import urlparse
     
     # Validate URL
@@ -204,42 +240,11 @@ def tool_web_fetch(url: str, workspace: str = ".", max_chars: int = 10000) -> st
         
         # Get text content
         if "text/html" in content_type:
-            # Try to extract readable text from HTML
+            # Try to extract readable text from HTML using module-level extractor
             try:
-                from html.parser import HTMLParser
-                
-                class TextExtractor(HTMLParser):
-                    def __init__(self):
-                        super().__init__()
-                        self.text = []
-                        self.skip_tags = {"script", "style", "nav", "header", "footer"}
-                        self._skip_depth = 0
-                        
-                    def handle_starttag(self, tag, attrs):
-                        if tag in self.skip_tags:
-                            self._skip_depth += 1
-                        elif tag == "br":
-                            self.text.append("\n")
-                        elif tag in ("p", "div", "h1", "h2", "h3", "h4", "h5", "h6"):
-                            if self.text and not self.text[-1].endswith("\n"):
-                                self.text.append("\n")
-                    
-                    def handle_endtag(self, tag):
-                        if tag in self.skip_tags:
-                            self._skip_depth -= 1
-                        elif tag in ("p", "div", "h1", "h2", "h3", "h4", "h5", "h6"):
-                            self.text.append("\n")
-                    
-                    def handle_data(self, data):
-                        if self._skip_depth <= 0:
-                            self.text.append(data)
-                
-                extractor = TextExtractor()
+                extractor = _TextExtractor()
                 extractor.feed(response.text)
-                text = "".join(extractor.text)
-                # Clean up whitespace
-                lines = [line.strip() for line in text.splitlines()]
-                text = "\n".join(line for line in lines if line)
+                text = extractor.get_text()
             except Exception:
                 # Fallback to plain text
                 text = response.text
@@ -320,7 +325,7 @@ def tool_list_files(path: str, workspace: str, pattern: str = "*") -> str:
         return f"(not a directory) {path}"
 
     # Prevent glob traversal with '..' or absolute patterns
-    if pattern.startswith("/") or ".." in pattern:
+    if pattern.startswith("/") or ".." in Path(pattern).parts:
         raise ToolError(f"Invalid pattern: '{pattern}' — path traversal not allowed")
 
     try:

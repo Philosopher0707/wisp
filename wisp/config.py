@@ -34,11 +34,13 @@ def save_config(config: dict):
 
 
 def get_setting(key: str, default=None):
-    """Resolve a setting: config file > env var > default."""
+    """Resolve a setting: env var > config file > default."""
     config = load_config()
     env_key = f"WISP_{key.upper()}"
     env_val = os.environ.get(env_key)
-    return env_val or config.get(key, default)
+    if env_val is not None:
+        return env_val
+    return config.get(key, default)
 
 
 class WispConfig:
@@ -48,8 +50,9 @@ class WispConfig:
         self.ollama_url: str = get_setting("ollama_url", DEFAULT_OLLAMA_URL)
         self.model: str = get_setting("model", DEFAULT_MODEL)
         self.temperature: float = float(get_setting("temperature", "0.2"))
+        raw_max_tokens = get_setting("max_tokens")
         self.max_tokens: Optional[int] = (
-            int(get_setting("max_tokens")) if get_setting("max_tokens") else None
+            int(raw_max_tokens) if raw_max_tokens is not None else None
         )
         raw_skill_dirs = get_setting(
             "skill_dirs",
@@ -68,13 +71,16 @@ class WispConfig:
             self.skill_dirs = [".agents/skills", ".warp/skills", ".claude/skills"]
         self.workspace: Optional[str] = get_setting("workspace", os.getcwd())
         # Auto-approve tool calls by default (coding agent should flow)
-        self.auto_approve: bool = get_setting("auto_approve", "true").lower() == "true"
+        self.auto_approve: bool = str(get_setting("auto_approve", "true")).lower() == "true"
         # Show reasoning trace inline (default: false — most users want the answer only)
-        self.show_thinking: bool = get_setting("show_thinking", "false").lower() == "true"
+        self.show_thinking: bool = str(get_setting("show_thinking", "false")).lower() == "true"
         # Max agent loop iterations per user turn
         self.max_iterations: int = int(get_setting("max_iterations", "30"))
         # Context window guard: trim oldest messages when estimated tokens exceed this
-        self.max_context_tokens: int = int(get_setting("max_context_tokens", "128000"))
+        raw_ctx = get_setting("max_context_tokens")
+        self.max_context_tokens: int = int(raw_ctx) if raw_ctx is not None else 128000
+        # Track whether user explicitly set context window (disables auto-detection)
+        self._context_tokens_explicit: bool = raw_ctx is not None
         # Tokens per character estimate for context budget (4 is conservative for code/text)
         self.chars_per_token: int = int(get_setting("chars_per_token", "4"))
 

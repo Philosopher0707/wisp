@@ -224,7 +224,7 @@ _SHORT_HELP = """Usage: wisp [options] 'prompt'
    or:  wisp <subcommand> [args]
 
 Options:
-  --model, -m <name>       Ollama model to use (default: deepseek-v4-flash:cloud)
+  --model, -m <name>       Ollama model to use (default: kimi-k2.6:cloud)
   --skill, -s <name>       Load a skill to guide the agent
   --session, -S <id>       Continue an existing session
   --workspace, -w <dir>    Working directory (default: current dir)
@@ -323,7 +323,7 @@ def main():
             cmd_run(" ".join(rest), flags_model, flags_skill, flags_workspace, flags_auto, flags_session, flags_show_thinking)
 
         elif first == "repl":
-            cmd_repl(flags_model, flags_skill, flags_workspace, flags_session, flags_show_thinking)
+            cmd_repl(flags_model, flags_skill, flags_workspace, flags_session, flags_show_thinking, flags_auto)
 
         elif first == "session":
             if not rest:

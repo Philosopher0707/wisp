@@ -179,3 +179,28 @@ class TestCheckHealth:
 
         with patch.object(client._session, 'get', side_effect=ConnectionError()):
             assert client.check_health() is False
+
+
+class TestGetContextLength:
+
+    def test_detects_from_model_info(self, client):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "model_info": {
+                "deepseek4.context_length": 1048576,
+                "deepseek4.embedding_length": 4096,
+            }
+        }
+        with patch.object(client._session, 'post', return_value=mock_resp):
+            assert client.get_context_length() == 1048576
+
+    def test_falls_back_when_no_context_length(self, client):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"model_info": {"general.architecture": "test"}}
+        with patch.object(client._session, 'post', return_value=mock_resp):
+            assert client.get_context_length() == 128000
+
+    def test_falls_back_on_api_error(self, client):
+        from requests.exceptions import ConnectionError
+        with patch.object(client._session, 'post', side_effect=ConnectionError()):
+            assert client.get_context_length() == 128000

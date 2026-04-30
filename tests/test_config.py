@@ -52,6 +52,17 @@ class TestWispConfig:
         monkeypatch.setenv("WISP_OLLAMA_URL", "http://other:11434")
         assert WispConfig().ollama_url == "http://other:11434"
 
+    def test_context_tokens_explicit_when_env_set(self, monkeypatch):
+        monkeypatch.setenv("WISP_MAX_CONTEXT_TOKENS", "64000")
+        cfg = WispConfig()
+        assert cfg._context_tokens_explicit is True
+        assert cfg.max_context_tokens == 64000
+
+    def test_context_tokens_not_explicit_by_default(self):
+        cfg = WispConfig()
+        assert cfg._context_tokens_explicit is False
+        assert cfg.max_context_tokens == 128000
+
 
 class TestConfigFile:
 
