@@ -151,6 +151,13 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str) -> s
     if not full_path.exists():
         raise ToolError(f"File not found: {path}")
 
+    size = full_path.stat().st_size
+    if size > _MAX_READ_SIZE:
+        raise ToolError(
+            f"File too large: {path} is {size / 1024 / 1024:.1f} MB "
+            f"(max edit: {_MAX_READ_SIZE / 1024 / 1024:.0f} MB)."
+        )
+
     content = full_path.read_text(encoding="utf-8")
 
     if old_text not in content:

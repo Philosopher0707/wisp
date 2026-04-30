@@ -235,14 +235,15 @@ class OllamaClient:
         # ------------------------------------------------------------------
         # Ollama can return text in two modes:
         #
-        # 1. Cumulative (local Ollama): each chunk contains the full text so far.
-        #    Delta = new[len(prev):]
+        # 1. Cumulative (local Ollama): each chunk contains the full text so
+        #    far.  Delta = new[len(prev):].
         #
         # 2. Token-delta (Ollama cloud / provider proxy): each chunk contains
         #    only the new token.  The chunk IS the delta.
         #
-        # We auto-detect: if the new text does not start with the previous text,
-        # we assume token-delta mode and yield the text directly.
+        # We handle both transparently: if the new text starts with the previous
+        # and is longer → cumulative (extract delta). Otherwise → token-delta
+        # (yield directly, accumulate via +=).
         # ------------------------------------------------------------------
         prev_thinking = ""
         prev_content = ""

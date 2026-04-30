@@ -136,6 +136,13 @@ def _print_separator():
     print("─" * 50)
 
 
+def _remove_oldest_turn(messages: list):
+    """Remove the oldest logical turn (user + response + tool results)."""
+    for i, m in enumerate(messages):
+        if m.get("role") == "user":
+            del messages[i]
+            return
+
 
 # ── Agent ────────────────────────────────────────────────────────────
 
@@ -167,15 +174,29 @@ class WispAgent:
             for key in ("content", "thinking"):
                 val = msg.get(key, "") or ""
                 total += len(val)
+            for tc in msg.get("tool_calls", []) or []:
+                func = tc.get("function", {})
+                total += len(func.get("name", ""))
+                args = func.get("arguments", {})
+                if isinstance(args, str):
+                    total += len(args)
+                elif isinstance(args, dict):
+                    total += len(str(args))
+            if msg.get("role") == "tool":
+                total += len(msg.get("content", "") or "")
         return total // self.config.chars_per_token
 
     def _trim_context_if_needed(self, system_prompt: str = ""):
-        """Trim oldest messages when estimated context exceeds budget."""
+        """Trim oldest messages when estimated context exceeds budget.
+
+        Messages form logical turns: user → assistant (+ tool_results).
+        We pop the oldest user message and everything that follows it
+        until the start of the next turn (next user message).
+        """
         budget = self.config.max_context_tokens
         overhead = self._estimate_tokens([{"content": system_prompt}])
         while len(self.messages) > 2 and self._estimate_tokens(self.messages) + overhead > budget:
-            self.messages.pop(0)
-            logger.info("Trimmed oldest message to stay within context budget")
+            _remove_oldest_turn(self.messages)
 
     def _save_session(self):
         """Persist the current session to disk."""
@@ -416,8 +437,11 @@ class WispAgent:
         system = self._build_system_prompt(skill_name)
         ws = self.config.workspace or "."
 
-        print(f"🔮 Wisp interactive mode (model: {self.config.model})")
+        msg_count = len(self.messages)
+        print(f"🔮 Wisp (model: {self.config.model})")
         print(f"   Session: {self.session.id}")
+        if msg_count:
+            print(f"   History: {msg_count} messages so far")
         if skill_name:
             print(f"   Skill: {skill_name}")
         print()
