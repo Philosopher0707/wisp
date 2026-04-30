@@ -541,6 +541,9 @@ class WispAgent:
             if tool_calls:
                 assistant_msg["tool_calls"] = tool_calls
             self.messages.append(assistant_msg)
+            
+            print()  # blank line before tool calls
+            results = self._run_tool_calls(tool_calls, workspace, auto_approve)
             self.messages.extend(results)
             self._save_session()
 
