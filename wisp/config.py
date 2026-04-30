@@ -48,7 +48,9 @@ class WispConfig:
         self.ollama_url: str = get_setting("ollama_url", DEFAULT_OLLAMA_URL)
         self.model: str = get_setting("model", DEFAULT_MODEL)
         self.temperature: float = float(get_setting("temperature", "0.2"))
-        self.max_tokens: int = int(get_setting("max_tokens", "16384"))
+        self.max_tokens: Optional[int] = (
+            int(get_setting("max_tokens")) if get_setting("max_tokens") else None
+        )
         self.skill_dirs: list[str] = get_setting(
             "skill_dirs",
             [

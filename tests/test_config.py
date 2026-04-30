@@ -30,7 +30,7 @@ class TestWispConfig:
         cfg = WispConfig()
         assert cfg.ollama_url == "http://localhost:11434"
         assert cfg.temperature == 0.2
-        assert cfg.max_tokens == 16384
+        assert cfg.max_tokens is None  # No default limit
         assert cfg.max_context_tokens == 128000
         assert cfg.chars_per_token == 4
         assert cfg.auto_approve is True

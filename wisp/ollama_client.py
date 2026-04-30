@@ -30,7 +30,7 @@ class OllamaClient:
         self.base_url = config.ollama_url.rstrip("/")
         self.model = config.model
         self.temperature = config.temperature
-        self.max_tokens = config.max_tokens
+        self.max_tokens = config.max_tokens  # None means no limit
 
         # Reusable session for connection pooling
         self._session = requests.Session()
@@ -177,7 +177,6 @@ class OllamaClient:
             "messages": messages,
             "options": {
                 "temperature": self.temperature,
-                "num_predict": self.max_tokens,
             },
             "stream": False,
         }
@@ -214,14 +213,14 @@ class OllamaClient:
         if not messages:
             raise ValueError("Cannot generate: messages list is empty")
 
+        options = {"temperature": self.temperature}
+        if self.max_tokens is not None:
+            options["num_predict"] = self.max_tokens
         payload = {
             "model": self.model,
             "system": system_prompt,
             "messages": messages,
-            "options": {
-                "temperature": self.temperature,
-                "num_predict": self.max_tokens,
-            },
+            "options": options,
             "stream": True,
         }
         if tools:

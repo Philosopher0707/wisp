@@ -137,7 +137,11 @@ def _print_separator():
 
 
 def _remove_oldest_turn(messages: list):
-    """Remove the oldest logical turn (user + response + tool results)."""
+    """Remove the oldest logical turn (user + response + tool results).
+    
+    After removal, ensures the list still starts with a user message
+    (or is empty) to maintain conversation integrity.
+    """
     # Find the first user message
     start = None
     for i, m in enumerate(messages):
@@ -156,6 +160,10 @@ def _remove_oldest_turn(messages: list):
 
     # Remove [start, end) — the entire oldest turn
     del messages[start:end]
+    
+    # Ensure we don't leave orphaned non-user messages at the start
+    while messages and messages[0].get("role") != "user":
+        del messages[0]
 
 
 # ── Agent ────────────────────────────────────────────────────────────
@@ -185,9 +193,12 @@ class WispAgent:
         """Rough token estimate (chars / chars_per_token) for context budget."""
         total = 0
         for msg in messages:
-            for key in ("content", "thinking"):
-                val = msg.get(key, "") or ""
-                total += len(val)
+            # Count content/thinking, but tool messages count content separately below
+            if msg.get("role") != "tool":
+                for key in ("content", "thinking"):
+                    val = msg.get(key, "") or ""
+                    total += len(val)
+            # Tool call definitions
             for tc in msg.get("tool_calls", []) or []:
                 func = tc.get("function", {})
                 total += len(func.get("name", ""))
@@ -196,6 +207,7 @@ class WispAgent:
                     total += len(args)
                 elif isinstance(args, dict):
                     total += len(str(args))
+            # Tool results (only count once, here)
             if msg.get("role") == "tool":
                 total += len(msg.get("content", "") or "")
         return total // self.config.chars_per_token
