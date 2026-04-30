@@ -138,10 +138,24 @@ def _print_separator():
 
 def _remove_oldest_turn(messages: list):
     """Remove the oldest logical turn (user + response + tool results)."""
+    # Find the first user message
+    start = None
     for i, m in enumerate(messages):
         if m.get("role") == "user":
-            del messages[i]
-            return
+            start = i
+            break
+    if start is None:
+        return  # No user message to remove
+
+    # Find the next user message (start of next turn) or end of list
+    end = len(messages)
+    for i in range(start + 1, len(messages)):
+        if messages[i].get("role") == "user":
+            end = i
+            break
+
+    # Remove [start, end) — the entire oldest turn
+    del messages[start:end]
 
 
 # ── Agent ────────────────────────────────────────────────────────────
@@ -468,7 +482,7 @@ class WispAgent:
                 print("  Type any prompt to chat with Wisp.")
                 continue
 
-            # Update session title from first meaningful prompt
+            # Update session title BEFORE executing, so it's saved correctly
             if self.session and self.session.title in ("REPL session", "(untitled)"):
                 self.session.title = cmd[:60].strip()
 
