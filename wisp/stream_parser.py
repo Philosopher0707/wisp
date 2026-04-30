@@ -38,9 +38,8 @@ class EventStreamParser:
     def _detect_mode(self, line: str) -> str:
         """Detect stream format from a line (called once on first non-empty line)."""
         stripped = line.lstrip()
-        if stripped.startswith("data:"):
+        if stripped.startswith("data:") or stripped.startswith("event:") or stripped.startswith(":") or stripped.startswith("retry:") or stripped.startswith("id:"):
             return "sse"
-        # NDJSON lines start with '{' or '[' or a digit (for JSON numbers)
         return "ndjson"
 
     def _parse_ndjson(self, raw_bytes: bytes) -> Iterator[dict]:
@@ -151,13 +150,14 @@ class EventStreamParser:
                     logger.warning("Final NDJSON parse error on line: %.80s — %s", line, e)
             self._bytes_buffer = b""
 
-        # For SSE: any remaining data in the buffer
-        elif self._mode == "sse" and self._bytes_buffer:
-            decoded = self._bytes_buffer.decode("utf-8", errors="replace")
-            for raw_line in decoded.split("\n"):
-                line = raw_line.strip()
-                if line.startswith("data:"):
-                    self._sse_buffer.append(line[len("data:"):].strip())
+        # For SSE: flush any data remaining in the SSE buffer or bytes_buffer
+        elif self._mode == "sse":
+            if self._bytes_buffer:
+                decoded = self._bytes_buffer.decode("utf-8", errors="replace")
+                for raw_line in decoded.split("\n"):
+                    line = raw_line.strip()
+                    if line.startswith("data:"):
+                        self._sse_buffer.append(line[len("data:"):].strip())
 
             if self._sse_buffer:
                 data = "\n".join(self._sse_buffer)

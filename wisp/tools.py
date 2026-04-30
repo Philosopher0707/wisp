@@ -39,6 +39,10 @@ def _check_workspace(path: str, workspace: str):
     """
     resolved = Path(path).resolve()
     ws = Path(workspace).resolve()
+    # If the path is relative, it resolves to CWD — but the user
+    # intended it relative to workspace.  Join with workspace first.
+    if not Path(path).is_absolute():
+        resolved = (ws / path).resolve()
     try:
         common = os.path.commonpath([str(resolved), str(ws)])
     except ValueError:
@@ -50,11 +54,11 @@ def _check_workspace(path: str, workspace: str):
         )
 
 
-def _validate_string(value: Any, name: str, max_len: int = 4096) -> str:
-    """Validate that a value is a non-empty string within length limits."""
+def _validate_string(value: Any, name: str, max_len: int = 4096, allow_empty: bool = False) -> str:
+    """Validate that a value is a string within length limits."""
     if not isinstance(value, str):
         raise ToolError(f"{name} must be a string, got {type(value).__name__}")
-    if not value.strip():
+    if not allow_empty and not value.strip():
         raise ToolError(f"{name} cannot be empty")
     if len(value) > max_len:
         raise ToolError(f"{name} too long ({len(value)} > {max_len} chars)")
@@ -114,7 +118,7 @@ def tool_read_file(path: str, workspace: str, offset: int = 0, limit: int = 2000
 def tool_write_file(path: str, workspace: str, content: str) -> str:
     """Write content to a file (creates or overwrites)."""
     _validate_string(path, "path")
-    _validate_string(content, "content", _MAX_WRITE_SIZE)
+    _validate_string(content, "content", _MAX_WRITE_SIZE, allow_empty=True)
     _check_workspace(path, workspace)
 
     full_path = Path(workspace) / path if not Path(path).is_absolute() else Path(path)
@@ -140,7 +144,7 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str) -> s
     """Replace exact text in a file (surgical edit)."""
     _validate_string(path, "path")
     _validate_string(old_text, "old_text")
-    _validate_string(new_text, "new_text", _MAX_WRITE_SIZE)
+    _validate_string(new_text, "new_text", _MAX_WRITE_SIZE, allow_empty=True)
     _check_workspace(path, workspace)
 
     full_path = Path(workspace) / path if not Path(path).is_absolute() else Path(path)
