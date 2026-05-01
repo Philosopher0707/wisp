@@ -7,6 +7,7 @@ from typing import Optional
 
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_MODEL = "kimi-k2.6:cloud"
+DEFAULT_MAX_CONTEXT_TOKENS = 256000
 WISP_CONFIG_DIR = Path.home() / ".config" / "wisp"
 
 
@@ -78,7 +79,7 @@ class WispConfig:
         self.max_iterations: int = int(get_setting("max_iterations", "30"))
         # Context window guard: trim oldest messages when estimated tokens exceed this
         raw_ctx = get_setting("max_context_tokens")
-        self.max_context_tokens: int = int(raw_ctx) if raw_ctx is not None else 128000
+        self.max_context_tokens: int = int(raw_ctx) if raw_ctx is not None else DEFAULT_MAX_CONTEXT_TOKENS
         # Track whether user explicitly set context window (disables auto-detection)
         self._context_tokens_explicit: bool = raw_ctx is not None
         # Tokens per character estimate for context budget (4 is conservative for code/text)

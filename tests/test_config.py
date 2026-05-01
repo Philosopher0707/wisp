@@ -31,7 +31,7 @@ class TestWispConfig:
         assert cfg.ollama_url == "http://localhost:11434"
         assert cfg.temperature == 0.2
         assert cfg.max_tokens is None  # No default limit
-        assert cfg.max_context_tokens == 128000
+        assert cfg.max_context_tokens == 256000
         assert cfg.chars_per_token == 4
         assert cfg.auto_approve is True
         assert cfg.show_thinking is False
@@ -61,7 +61,7 @@ class TestWispConfig:
     def test_context_tokens_not_explicit_by_default(self):
         cfg = WispConfig()
         assert cfg._context_tokens_explicit is False
-        assert cfg.max_context_tokens == 128000
+        assert cfg.max_context_tokens == 256000
 
 
 class TestConfigFile:
