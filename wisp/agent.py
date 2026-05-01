@@ -12,6 +12,8 @@ Supports:
 
 import json
 import logging
+import os
+import shutil
 import signal
 import sys
 import weakref
@@ -19,9 +21,9 @@ from typing import Optional
 
 # Enable readline for line-editing and history in REPL
 try:
-    import readline  # noqa: F401
+    import readline
 except ImportError:
-    pass
+    readline = None
 
 from wisp.config import WispConfig
 from wisp.ollama_client import OllamaClient, OllamaError
@@ -140,17 +142,55 @@ def _prompt_approve(func_name: str) -> bool:
         return True
 
 
-def _input_line(prompt: str) -> str:
-    """Read a line from the user with a prompt. Returns '' on EOF/Error."""
+def _setup_readline_history():
+    """Load readline history from disk for REPL arrow-key recall."""
+    if readline is None:
+        return
+    histfile = os.path.expanduser("~/.config/wisp/history")
+    try:
+        os.makedirs(os.path.dirname(histfile), exist_ok=True)
+        readline.read_history_file(histfile)
+    except (OSError, FileNotFoundError):
+        pass
+    # Auto-save on exit
+    import atexit
+    atexit.register(lambda: readline.write_history_file(histfile))
+
+
+def _input_line(prompt: str, allow_multiline: bool = True) -> str:
+    """Read input from the user with a prompt.
+
+    Interactive mode:
+      - Uses readline for arrow-key editing and history.
+      - Supports multi-line input: if a line ends with '\\',
+        the next line is appended (like bash continuation).
+      - Returns '' on EOF/Error.
+
+    Non-interactive mode:
+      - Reads raw bytes to survive invalid UTF-8 in piped input.
+    """
     if sys.stdin.isatty():
         prompt = f"\033[1m{prompt}\033[0m"
-        try:
-            return input(prompt)
-        except KeyboardInterrupt:
-            print()
-            raise
-        except (EOFError, OSError, UnicodeDecodeError):
-            return ""
+        lines = []
+        while True:
+            try:
+                current_prompt = prompt if not lines else "... "
+                line = input(current_prompt)
+            except KeyboardInterrupt:
+                print()
+                raise
+            except (EOFError, OSError, UnicodeDecodeError):
+                return ""
+
+            stripped = line.rstrip()
+            if allow_multiline and stripped.endswith("\\"):
+                # Continuation mode: drop the backslash, keep reading
+                lines.append(stripped[:-1])
+                continue
+            lines.append(line)
+            break
+        return "\n".join(lines)
+
     # Non-interactive: read raw bytes to survive invalid UTF-8 in piped input
     try:
         data = sys.stdin.buffer.readline()
@@ -163,7 +203,11 @@ def _input_line(prompt: str) -> str:
 
 def _print_separator():
     """Print a visual separator between turns."""
-    print("─" * 50)
+    try:
+        width = shutil.get_terminal_size().columns
+    except OSError:
+        width = 50
+    print("─" * max(20, min(width, 80)))
 
 
 def _remove_oldest_turn(messages: list):
@@ -600,6 +644,8 @@ class WispAgent:
         system = self._build_system_prompt(skill_name)
         ws = self.config.workspace or "."
 
+        _setup_readline_history()
+
         msg_count = len(self.messages)
         print(f"🔮 Wisp (model: {self.config.model})")
         print(f"   Session: {self.session.id}")
@@ -609,8 +655,10 @@ class WispAgent:
             print(f"   Skill: {skill_name}")
         print()
         print("Type 'exit', 'quit', or press Ctrl+C to end.")
+        print("Tip: end a line with \\ to continue on the next line.")
         print()
 
+        self._interrupted = False
         try:
             while not self._interrupted:
                 try:
@@ -663,6 +711,7 @@ class WispAgent:
 
     def _execute_loop(self, system: str, workspace: str, auto_approve: bool) -> None:
         """Execute the agent loop for one user turn."""
+        self._interrupted = False  # Reset for each new turn
         try:
             for iteration in range(1, self.max_iterations + 1):
                 if self._interrupted:
