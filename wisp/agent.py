@@ -696,6 +696,8 @@ class WispAgent:
                 except KeyboardInterrupt:
                     print("\n⏹  Turn interrupted. Type 'exit' to quit or continue chatting.")
                     # Session was saved by _execute_loop's finally block
+                    # Reset interrupt flag so REPL loop continues
+                    self._interrupted = False
                     continue
 
                 # Visual turn separator (only if not empty turn)
