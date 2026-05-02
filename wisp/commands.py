@@ -336,6 +336,29 @@ def cmd_drop(agent, args: str):
     print(f"✓ Dropped last message ({role}): {preview}...")
 
 
+@register("spawn", "Spawn a subagent for a scoped task", aliases=("sub", "delegate"), usage="/spawn <task description>")
+def cmd_spawn(agent, args: str):
+    if not args:
+        print("Usage: /spawn <task description>")
+        print("Example: /spawn research the best Python HTTP client library")
+        return
+    from wisp.subagent import SubagentRunner, SubagentContract
+    contract = SubagentContract(
+        task=args,
+        timeout_seconds=120,
+        max_iterations=15,
+    )
+    runner = SubagentRunner(agent)
+    print(f"🧬 Spawning subagent: {args[:60]}...")
+    result = runner.spawn(contract)
+    status = "✓" if result.success else "✗"
+    if result.timed_out:
+        status = "⏱"
+    print(f"\n{status} Subagent done ({result.elapsed_seconds:.1f}s, {result.iterations_used} iterations)")
+    print("─" * 40)
+    print(result.output)
+
+
 @register("exit", "Exit Wisp", aliases=("quit", "q", "bye"), usage="/exit")
 def cmd_exit(agent, args: str):
     raise ExitREPL

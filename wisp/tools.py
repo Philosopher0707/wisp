@@ -515,6 +515,24 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "spawn_subagent",
+            "description": "Spawn a specialist subagent to handle a scoped task (research, coding, testing) with its own iteration budget and timeout. The subagent runs in parallel and returns a structured result. Use when a task can be decomposed into an independent work unit.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "Specific instruction for the subagent. Be precise about what to produce."},
+                    "tools": {"type": "array", "items": {"type": "string"}, "description": "Tool names the subagent may use. Omit or use ['all'] for full toolset.", "default": ["all"]},
+                    "max_iterations": {"type": "number", "description": "Max agent loop iterations", "default": 15},
+                    "timeout_seconds": {"type": "number", "description": "Hard timeout in seconds", "default": 120},
+                    "output_format": {"type": "string", "description": "text | json | markdown | report", "default": "text"},
+                },
+                "required": ["task"],
+            },
+        },
+    },
 ]
 
 # Map tool names to their implementations

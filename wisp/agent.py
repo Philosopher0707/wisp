@@ -583,14 +583,18 @@ class WispAgent:
                 })
                 continue
 
-            try:
-                result = execute_tool(func_name, func_args, workspace)
-            except ToolError as e:
-                result = f"Error: {e}"
-                logger.warning("Tool %s failed: %s", func_name, e)
-            except Exception as e:
-                result = f"Unexpected error: {e}"
-                logger.error("Unexpected error in tool %s: %s", func_name, e, exc_info=True)
+            # Subagent spawn: handled specially (needs parent agent reference)
+            if func_name == "spawn_subagent":
+                result = self._spawn_subagent(func_args, workspace)
+            else:
+                try:
+                    result = execute_tool(func_name, func_args, workspace)
+                except ToolError as e:
+                    result = f"Error: {e}"
+                    logger.warning("Tool %s failed: %s", func_name, e)
+                except Exception as e:
+                    result = f"Unexpected error: {e}"
+                    logger.error("Unexpected error in tool %s: %s", func_name, e, exc_info=True)
 
             if len(result) > 8000:
                 result = result[:8000] + f"\n... [truncated {len(result)} total chars]"
@@ -602,6 +606,39 @@ class WispAgent:
             print(f"     → {preview}")
 
         return all_results
+
+    def _spawn_subagent(self, args: dict, workspace: str) -> str:
+        """Handle the spawn_subagent tool by delegating to SubagentRunner."""
+        from wisp.subagent import SubagentRunner, SubagentContract
+
+        # Prevent infinite recursion
+        depth = getattr(self, "_subagent_depth", 0)
+        if depth >= 1:
+            return "[Error: subagents cannot spawn subagents (max depth = 1)]"
+
+        contract = SubagentContract(
+            task=args.get("task", ""),
+            tools=args.get("tools", ["all"]),
+            max_iterations=int(args.get("max_iterations", 15)),
+            timeout_seconds=int(args.get("timeout_seconds", 120)),
+            output_format=args.get("output_format", "text"),
+            workspace=workspace,
+        )
+
+        runner = SubagentRunner(self)
+        print(f"  🧬 Spawning subagent (timeout={contract.timeout_seconds}s, iterations={contract.max_iterations})")
+        result = runner.spawn(contract)
+
+        status = "✓" if result.success else "✗"
+        if result.timed_out:
+            status = "⏱"
+
+        lines = [
+            f"{status} Subagent result (elapsed={result.elapsed_seconds:.1f}s, iterations={result.iterations_used})",
+            "",
+            result.output,
+        ]
+        return "\n".join(lines)
 
     def run(self, prompt: str, skill_name: Optional[str] = None, session_id: Optional[str] = None):
         """Execute the agent (single-shot mode) with streaming output."""
