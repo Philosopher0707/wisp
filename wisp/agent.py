@@ -623,6 +623,7 @@ class WispAgent:
             timeout_seconds=int(args.get("timeout_seconds", 120)),
             output_format=args.get("output_format", "text"),
             workspace=workspace,
+            auto_approve=self.config.auto_approve,
         )
 
         runner = SubagentRunner(self)

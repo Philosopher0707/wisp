@@ -6,7 +6,7 @@ Subagents run in-process (threaded) with hard timeout enforcement.
 
 Safety:
 - Subagents cannot spawn subagents (max depth = 1)
-- Subagents inherit the parent's dangerous-command guard
+- Dangerous commands are ALWAYS blocked in subagents (no interactive user to confirm)
 - Subagent edits happen in the same workspace (parent can review)
 """
 
@@ -262,19 +262,18 @@ class SubagentRunner:
                     print(f"  [sub] ⚠️  blocked nested spawn_subagent")
                     continue
 
-                # Dangerous command guard (same as parent)
+                # Dangerous command guard: always block in subagents because there is
+                # no interactive user present to confirm with "yes".
                 danger_reason = None
                 if func_name == "run_bash":
                     from wisp.tools import check_dangerous_command
                     danger_reason = check_dangerous_command(func_args.get("command", ""))
 
                 if danger_reason:
-                    if not contract.auto_approve:
-                        result = f"[Blocked: dangerous command — {danger_reason}]"
-                        print(f"  [sub] ⚠️  {func_name} blocked ({danger_reason})")
-                        child.messages.append({"role": "tool", "content": result, "name": func_name})
-                        continue
-                    print(f"  [sub] ⚠️  DANGEROUS: {danger_reason} — executing anyway (auto_approve=True)")
+                    result = f"[Blocked: dangerous command — {danger_reason}]"
+                    print(f"  [sub] ⚠️  {func_name} blocked ({danger_reason})")
+                    child.messages.append({"role": "tool", "content": result, "name": func_name})
+                    continue
 
                 # Print tool call for visibility
                 arg_preview = self._args_preview(func_args)

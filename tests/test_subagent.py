@@ -154,7 +154,7 @@ def test_runner_no_filter_when_all():
 
 @pytest.fixture
 def mock_wisp_agent(monkeypatch):
-    """Patch WispAgent in subagent module so it doesn't hit real Ollama."""
+    """Patch WispAgent and execute_tool in subagent module so it doesn't hit real Ollama or run real commands."""
     class FakeWispAgent:
         _shared_responses = []
         _shared_generate = None
@@ -184,7 +184,25 @@ def mock_wisp_agent(monkeypatch):
         def _save_session(self):
             pass
 
+    # Also mock execute_tool so dangerous commands don't actually run
+    def fake_execute_tool(name, args, workspace):
+        if name == "run_bash":
+            cmd = args.get("command", "")
+            if "sudo" in cmd or "rm -rf" in cmd:
+                return "(simulated output)"
+            return "(simulated output)"
+        if name == "read_file":
+            return "file content here"
+        if name == "list_files":
+            return "file1.py\nfile2.py"
+        if name == "write_file":
+            return "Wrote file"
+        if name == "edit_file":
+            return "Edited file"
+        return "(output)"
+
     monkeypatch.setattr("wisp.subagent.WispAgent", FakeWispAgent)
+    monkeypatch.setattr("wisp.subagent.execute_tool", fake_execute_tool)
     FakeWispAgent._shared_responses = []
     FakeWispAgent._shared_generate = None
     yield FakeWispAgent
@@ -337,8 +355,8 @@ def test_auto_approve_false_blocks_dangerous_command(mock_wisp_agent, capsys):
     assert "blocked" in captured.out.lower() or "DANGEROUS" in captured.out
 
 
-def test_auto_approve_true_allows_dangerous_but_warns(mock_wisp_agent, capsys):
-    """When auto_approve=True, dangerous commands execute but print a warning."""
+def test_auto_approve_true_blocks_dangerous(mock_wisp_agent, capsys):
+    """Dangerous commands are always blocked in subagents regardless of auto_approve."""
     mock_wisp_agent._shared_responses = [
         {"message": {"content": "", "tool_calls": [
             {"function": {"name": "run_bash", "arguments": '{"command": "sudo ls"}'}}
@@ -356,9 +374,12 @@ def test_auto_approve_true_allows_dangerous_but_warns(mock_wisp_agent, capsys):
     result = runner.spawn(contract)
     captured = capsys.readouterr()
     assert result.success is True
-    # Should warn but still execute
-    assert "DANGEROUS" in captured.out
-    assert "executing anyway" in captured.out
+    # Should be blocked, not executed
+    tool_msgs = [m for m in result.messages if m.get("role") == "tool"]
+    blocked = [m for m in tool_msgs if "Blocked" in m.get("content", "")]
+    assert len(blocked) >= 1
+    assert "privilege escalation" in blocked[0]["content"]
+    assert "blocked" in captured.out.lower()
 
 
 def test_max_output_chars_truncation(mock_wisp_agent):
