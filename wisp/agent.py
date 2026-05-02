@@ -142,6 +142,22 @@ def _prompt_approve(func_name: str) -> bool:
         return True
 
 
+def _prompt_dangerous(func_name: str, reason: str) -> bool:
+    """Prompt user to approve a dangerous tool call. Requires typing 'yes'."""
+    if not _is_interactive():
+        return False
+    try:
+        print(f"     ⚠️  DANGEROUS: {reason}")
+        choice = input(f"     Type 'yes' to approve {func_name}: ").strip().lower()
+        return choice == "yes"
+    except KeyboardInterrupt:
+        print()
+        return False
+    except (EOFError, OSError):
+        logger.warning("Stdin unavailable, auto-declining dangerous command")
+        return False
+
+
 def _setup_readline_history():
     """Load readline history from disk for REPL arrow-key recall."""
     if readline is None:
@@ -155,6 +171,21 @@ def _setup_readline_history():
     # Auto-save on exit
     import atexit
     atexit.register(lambda: readline.write_history_file(histfile))
+
+    # Tab completion for slash commands
+    def _completer(text, state):
+        if not text.startswith("/"):
+            return None
+        from wisp.commands import all_commands
+        names = sorted(
+            {f"/{c.name}" for c in all_commands()}
+            | {f"/{a}" for c in all_commands() for a in c.aliases}
+        )
+        matches = [n for n in names if n.startswith(text)]
+        return matches[state] if state < len(matches) else None
+
+    readline.set_completer(_completer)
+    readline.parse_and_bind("tab: complete")
 
 
 def _input_line(prompt: str, allow_multiline: bool = True) -> str:
@@ -273,6 +304,7 @@ class WispAgent:
         self.max_iterations = self.config.max_iterations
         self._interrupted = False
         self._system_prompt = ""
+        self._active_skill: Optional[str] = None
         _agent_instances.add(self)
 
     def _add_message(self, role: str, content: str, thinking: str = ""):
@@ -348,7 +380,9 @@ class WispAgent:
         ``(skill_name, workspace)`` so REPL turns don't rebuild it every time.
         """
         ws = workspace or self.config.workspace or "."
-        cache_key = (skill_name, ws)
+        # Allow runtime override from /skill command
+        effective_skill = skill_name or self._active_skill
+        cache_key = (effective_skill, ws)
 
         # Return cached version if still valid
         if not hasattr(self, "_system_prompt_cache"):
@@ -521,7 +555,26 @@ class WispAgent:
 
             print(f"  🛠  {func_name}({_args_preview(func_args)})")
 
-            if not auto_approve and not _prompt_approve(func_name):
+            # Dangerous command guard: always prompt, even with auto_approve
+            danger_reason = None
+            if func_name == "run_bash":
+                from wisp.tools import check_dangerous_command
+                danger_reason = check_dangerous_command(func_args.get("command", ""))
+
+            if danger_reason:
+                if not _is_interactive():
+                    print(f"  ⚠️  Blocked dangerous command ({danger_reason})")
+                    all_results.append({
+                        "role": "tool",
+                        "content": f"[Blocked: dangerous command — {danger_reason}]",
+                        "name": func_name,
+                    })
+                    continue
+                approved = _prompt_dangerous(func_name, danger_reason)
+            else:
+                approved = auto_approve or _prompt_approve(func_name)
+
+            if not approved:
                 print(f"  ⏭  Skipped {func_name}")
                 all_results.append({
                     "role": "tool",
@@ -591,6 +644,15 @@ class WispAgent:
             )
             self.messages = []
 
+        # Handle slash commands even in single-shot mode
+        if prompt.strip().startswith("/"):
+            from wisp.commands import dispatch, ExitREPL
+            try:
+                if dispatch(prompt.strip(), self):
+                    return
+            except ExitREPL:
+                return
+
         system = self._build_system_prompt(skill_name, workspace=self.config.workspace)
 
         if skill_name:
@@ -641,7 +703,6 @@ class WispAgent:
             )
             self.messages = []
 
-        system = self._build_system_prompt(skill_name)
         ws = self.config.workspace or "."
 
         _setup_readline_history()
@@ -654,7 +715,7 @@ class WispAgent:
         if skill_name:
             print(f"   Skill: {skill_name}")
         print()
-        print("Type 'exit', 'quit', or press Ctrl+C to end.")
+        print("Type /help for commands, 'exit', or press Ctrl+C to end.")
         print("Tip: end a line with \\ to continue on the next line.")
         print()
 
@@ -672,12 +733,23 @@ class WispAgent:
                     if not _is_interactive():
                         break
                     continue
-                if cmd in ("exit", "quit", "/exit", "/quit"):
+
+                # ── Slash commands (local directives, never sent to LLM) ──
+                from wisp.commands import dispatch, ExitREPL
+                try:
+                    if dispatch(cmd, self):
+                        # Known or unknown /command consumed; continue loop
+                        continue
+                except ExitREPL:
                     print("👋 Goodbye.")
                     break
-                if cmd in ("help", "/help", "?"):
-                    print("  Commands: help / exit / quit")
-                    print("  Type any prompt to chat with Wisp.")
+
+                # Legacy non-slash commands (backward compatibility)
+                if cmd in ("exit", "quit"):
+                    print("👋 Goodbye.")
+                    break
+                if cmd in ("help", "?"):
+                    dispatch("/help", self)
                     continue
 
                 # Update session title on first meaningful prompt
@@ -691,6 +763,8 @@ class WispAgent:
                 print()
 
                 try:
+                    # Rebuild system prompt each turn so /skill and /model take effect immediately
+                    system = self._build_system_prompt(skill_name)
                     self._add_message("user", cmd)
                     self._execute_loop(system, ws, self.config.auto_approve)
                 except KeyboardInterrupt:

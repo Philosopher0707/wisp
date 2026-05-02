@@ -9,12 +9,13 @@ Production-hardened with:
 
 import logging
 import os
+import re
 import shlex
 import subprocess
 import tempfile
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import requests
 
@@ -66,6 +67,70 @@ _MAX_READ_SIZE = 50 * 1024 * 1024       # 50 MB
 _MAX_WRITE_SIZE = 100 * 1024 * 1024     # 100 MB
 _MAX_BASH_OUTPUT = 10_000               # chars of output to return to model
 _MAX_CMD_LENGTH = 4096                  # max command length for safety
+
+
+def check_dangerous_command(command: str) -> Optional[str]:
+    """Check if a shell command is potentially dangerous.
+
+    Returns a human-readable reason string if dangerous, None if safe.
+    This is a surface-level heuristic; it cannot catch obfuscated commands.
+    """
+    if not command or not isinstance(command, str):
+        return None
+    cmd_lower = command.lower().strip()
+
+    # sudo: any privilege escalation
+    if re.search(r'\bsudo\b', cmd_lower):
+        return "privilege escalation (sudo)"
+
+    # rm with recursive flag (-r, -R, --recursive)
+    tokens = cmd_lower.split()
+    if tokens and tokens[0] == 'rm':
+        for t in tokens[1:]:
+            if t.startswith('-') and 'r' in t:
+                return "recursive deletion"
+            if t == '--recursive':
+                return "recursive deletion"
+
+    # dd to block device
+    if re.search(r'\bdd\b', cmd_lower) and re.search(r'\bof\s*=\s*/dev/', cmd_lower):
+        return "direct disk write (dd)"
+
+    # mkfs / fdisk / parted
+    if re.search(r'\bmkfs\.?\w*\b', cmd_lower):
+        return "filesystem formatting"
+    if re.search(r'\bfdisk\b', cmd_lower):
+        return "disk partitioning"
+    if re.search(r'\bparted\b', cmd_lower):
+        return "disk partitioning"
+
+    # curl/wget piped to shell
+    if re.search(r'\b(curl|wget)\b.*\|\s*(sh|bash|zsh)\b', cmd_lower):
+        return "remote code execution (pipe to shell)"
+
+    # redirect to block device
+    if re.search(r'[>]\s*/dev/(sd|nvme|hd|xvd|loop)', cmd_lower):
+        return "redirect to block device"
+
+    # chmod 777 on system paths
+    if re.search(r'\bchmod\s+(-[rR]+\s*)*777\s*/', cmd_lower):
+        return "recursive world-writable system path"
+
+    # git destructive
+    if re.search(r'\bgit\s+reset\s+--hard\b', cmd_lower):
+        return "destructive git reset"
+    if re.search(r'\bgit\s+clean\s+-[fd]*[fd]', cmd_lower):
+        return "destructive git clean"
+
+    # docker prune
+    if re.search(r'\bdocker\s+system\s+prune\b', cmd_lower):
+        return "docker system prune"
+
+    # shutdown/reboot
+    if re.search(r'\b(shutdown|reboot|halt|poweroff|init\s+0)\b', cmd_lower):
+        return "system shutdown/reboot"
+
+    return None
 
 
 def _resolve_path(path: str, workspace: str) -> Path:
