@@ -397,12 +397,12 @@ class WispAgent:
         skills = discover_skills(ws)
         system += _build_skills_block_from_skills(skills)
 
-        if skill_name:
-            skill = next((s for s in skills if s.name == skill_name), None)
+        if effective_skill:
+            skill = next((s for s in skills if s.name == effective_skill), None)
             if skill:
                 system += f"\n\n## Active Skill: {skill.name}\n{skill.description}\n\n{skill.instructions}"
             else:
-                logger.warning("Skill '%s' not found in discovered skills", skill_name)
+                logger.warning("Skill '%s' not found in discovered skills", effective_skill)
 
         # Cache for subsequent calls (e.g., REPL turns)
         self._system_prompt_cache[cache_key] = system
