@@ -273,19 +273,17 @@ def test_spawn_hits_iteration_limit(mock_wisp_agent):
 def test_extract_partial_output():
     parent = MockAgent()
     runner = SubagentRunner(parent)
-    child = MockAgent()
-    child.messages = [
+    messages = [
         {"role": "user", "content": "task"},
         {"role": "assistant", "content": "partial result here"},
     ]
-    assert runner._extract_partial_output(child) == "partial result here"
+    assert runner._extract_partial_output_from_snapshot(messages) == "partial result here"
 
 
 def test_extract_partial_output_empty():
     parent = MockAgent()
     runner = SubagentRunner(parent)
-    child = MockAgent()
-    assert runner._extract_partial_output(child) == "(no output captured)"
+    assert runner._extract_partial_output_from_snapshot([]) == "(no output captured)"
 
 
 # ── Depth guard ──────────────────────────────────────────────────────

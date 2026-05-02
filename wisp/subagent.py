@@ -51,6 +51,12 @@ class SubagentContract:
     system_prompt_extra: str = ""
     """Additional system prompt text appended after the default."""
 
+    auto_approve: bool = True
+    """If False, dangerous commands (sudo, rm -rf, etc.) are blocked instead of executed."""
+
+    max_output_chars: int = 8000
+    """Truncate subagent output to this length before returning to parent."""
+
 
 @dataclass
 class SubagentResult:
@@ -125,6 +131,9 @@ class SubagentRunner:
             try:
                 final_output, iterations = future.result(timeout=contract.timeout_seconds)
                 elapsed = time.monotonic() - start
+                # Truncate output if too large
+                if len(final_output) > contract.max_output_chars:
+                    final_output = final_output[:contract.max_output_chars] + f"\n... [truncated: {len(final_output)} total chars]"
                 return SubagentResult(
                     success=True,
                     output=final_output,
@@ -137,12 +146,14 @@ class SubagentRunner:
             except FutureTimeoutError:
                 elapsed = time.monotonic() - start
                 logger.warning("Subagent timed out after %.1fs", elapsed)
-                # Try to grab whatever the child produced so far
-                partial = self._extract_partial_output(child)
+                # Snapshot messages before the thread modifies them further
+                # (ThreadPoolExecutor doesn't kill threads on timeout)
+                messages_snapshot = list(child.messages)
+                partial = self._extract_partial_output_from_snapshot(messages_snapshot)
                 return SubagentResult(
                     success=False,
                     output=f"[TIMED OUT after {elapsed:.1f}s]\n\nPartial result:\n{partial}",
-                    messages=list(child.messages),
+                    messages=messages_snapshot,
                     elapsed_seconds=elapsed,
                     iterations_used=getattr(child, "_iteration_count", 0),
                     timed_out=True,
@@ -155,12 +166,15 @@ class SubagentRunner:
         child = WispConfig()
         child.model = contract.model or parent_cfg.model
         child.workspace = contract.workspace or parent_cfg.workspace
-        child.auto_approve = parent_cfg.auto_approve
+        child.auto_approve = contract.auto_approve
         child.show_thinking = parent_cfg.show_thinking
         child.max_context_tokens = parent_cfg.max_context_tokens
         child.chars_per_token = parent_cfg.chars_per_token
         child.ollama_url = parent_cfg.ollama_url
         child.temperature = parent_cfg.temperature
+        # Skip extra Ollama calls on init — inherit parent's context window
+        child._context_tokens_explicit = True
+        child.max_context_tokens = parent_cfg.max_context_tokens
         return child
 
     def _build_subagent_system(self, contract: SubagentContract, child: WispAgent) -> str:
@@ -227,7 +241,7 @@ class SubagentRunner:
             for tc in tool_calls:
                 func = tc.get("function", {})
                 func_name = func.get("name", "")
-                func_args = func.get("arguments", {})
+                func_args = func.get("arguments", "")
 
                 if isinstance(func_args, str):
                     import json
@@ -235,6 +249,8 @@ class SubagentRunner:
                         func_args = json.loads(func_args)
                     except json.JSONDecodeError:
                         func_args = {}
+                if not isinstance(func_args, dict):
+                    func_args = {}
 
                 # Block subagent-from-subagent
                 if func_name == "spawn_subagent":
@@ -243,14 +259,44 @@ class SubagentRunner:
                         "content": "[Error: subagents cannot spawn subagents]",
                         "name": func_name,
                     })
+                    print(f"  [sub] ⚠️  blocked nested spawn_subagent")
                     continue
+
+                # Dangerous command guard (same as parent)
+                danger_reason = None
+                if func_name == "run_bash":
+                    from wisp.tools import check_dangerous_command
+                    danger_reason = check_dangerous_command(func_args.get("command", ""))
+
+                if danger_reason:
+                    if not contract.auto_approve:
+                        result = f"[Blocked: dangerous command — {danger_reason}]"
+                        print(f"  [sub] ⚠️  {func_name} blocked ({danger_reason})")
+                        child.messages.append({"role": "tool", "content": result, "name": func_name})
+                        continue
+                    print(f"  [sub] ⚠️  DANGEROUS: {danger_reason} — executing anyway (auto_approve=True)")
+
+                # Print tool call for visibility
+                arg_preview = self._args_preview(func_args)
+                print(f"  [sub] 🛠  {func_name}({arg_preview})")
 
                 try:
                     result = execute_tool(func_name, func_args, workspace)
                 except ToolError as e:
                     result = f"Error: {e}"
+                    logger.warning("Subagent tool %s failed: %s", func_name, e)
                 except Exception as e:
                     result = f"Unexpected error: {e}"
+                    logger.error("Unexpected error in subagent tool %s: %s", func_name, e, exc_info=True)
+
+                # Truncate large results
+                if len(result) > 4000:
+                    result = result[:4000] + f"\n... [truncated {len(result)} chars]"
+
+                preview = result[:120].replace("\n", " ")
+                if len(result) > 120:
+                    preview += "..."
+                print(f"  [sub]    → {preview}")
 
                 child.messages.append({"role": "tool", "content": result, "name": func_name})
 
@@ -265,9 +311,21 @@ class SubagentRunner:
         allowed = set(contract.tools)
         return [t for t in TOOL_SCHEMAS if t["function"]["name"] in allowed]
 
-    def _extract_partial_output(self, child: WispAgent) -> str:
-        """Best-effort extraction of whatever the child produced before timeout."""
-        for m in reversed(child.messages):
+    def _extract_partial_output_from_snapshot(self, messages: list[dict]) -> str:
+        """Best-effort extraction from a snapshot of messages (thread-safe)."""
+        for m in reversed(messages):
             if m.get("role") == "assistant" and m.get("content"):
                 return m["content"]
         return "(no output captured)"
+
+    def _args_preview(self, args: dict) -> str:
+        """Short one-line preview of tool arguments (same as parent)."""
+        parts = []
+        path = args.get("path", args.get("command", ""))
+        if path:
+            s = str(path)
+            parts.append(s[:60])
+        content = args.get("content", "")
+        if content:
+            parts.append(f"({len(content)} chars)")
+        return ", ".join(parts) if parts else "..."
