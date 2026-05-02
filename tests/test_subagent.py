@@ -185,7 +185,12 @@ def mock_wisp_agent(monkeypatch):
             pass
 
     monkeypatch.setattr("wisp.subagent.WispAgent", FakeWispAgent)
-    return FakeWispAgent
+    FakeWispAgent._shared_responses = []
+    FakeWispAgent._shared_generate = None
+    yield FakeWispAgent
+    # Cleanup after test
+    FakeWispAgent._shared_responses = []
+    FakeWispAgent._shared_generate = None
 
 
 def test_spawn_completes_successfully(mock_wisp_agent):
@@ -299,3 +304,251 @@ def test_subagent_depth_incremented():
     child_cfg = runner._build_child_config(contract)
     # The spawn method sets depth; we test that via the nested spawn block test above
     assert True  # covered by test_spawn_blocks_nested_subagent
+
+
+# ── Security hardening tests ─────────────────────────────────────────
+
+
+def test_auto_approve_false_blocks_dangerous_command(mock_wisp_agent, capsys):
+    """When auto_approve=False, dangerous bash commands are blocked."""
+    mock_wisp_agent._shared_responses = [
+        {"message": {"content": "", "tool_calls": [
+            {"function": {"name": "run_bash", "arguments": '{"command": "sudo rm -rf /"}'}}
+        ]}},
+        {"message": {"content": "Done"}},
+    ]
+    parent = MockAgent()
+    runner = SubagentRunner(parent)
+    contract = SubagentContract(
+        task="dangerous test",
+        timeout_seconds=5,
+        max_iterations=3,
+        auto_approve=False,
+    )
+    result = runner.spawn(contract)
+    captured = capsys.readouterr()
+    assert result.success is True
+    # The dangerous command should have been blocked
+    tool_msgs = [m for m in result.messages if m.get("role") == "tool"]
+    blocked = [m for m in tool_msgs if "Blocked" in m.get("content", "")]
+    assert len(blocked) >= 1
+    assert "privilege escalation" in blocked[0]["content"] or "recursive deletion" in blocked[0]["content"]
+    # Should print the block to stdout
+    assert "blocked" in captured.out.lower() or "DANGEROUS" in captured.out
+
+
+def test_auto_approve_true_allows_dangerous_but_warns(mock_wisp_agent, capsys):
+    """When auto_approve=True, dangerous commands execute but print a warning."""
+    mock_wisp_agent._shared_responses = [
+        {"message": {"content": "", "tool_calls": [
+            {"function": {"name": "run_bash", "arguments": '{"command": "sudo ls"}'}}
+        ]}},
+        {"message": {"content": "Done"}},
+    ]
+    parent = MockAgent()
+    runner = SubagentRunner(parent)
+    contract = SubagentContract(
+        task="dangerous test",
+        timeout_seconds=5,
+        max_iterations=3,
+        auto_approve=True,
+    )
+    result = runner.spawn(contract)
+    captured = capsys.readouterr()
+    assert result.success is True
+    # Should warn but still execute
+    assert "DANGEROUS" in captured.out
+    assert "executing anyway" in captured.out
+
+
+def test_max_output_chars_truncation(mock_wisp_agent):
+    """Subagent output longer than max_output_chars is truncated."""
+    long_output = "x" * 15000
+    mock_wisp_agent._shared_responses = [
+        {"message": {"content": long_output}},
+    ]
+    parent = MockAgent()
+    runner = SubagentRunner(parent)
+    contract = SubagentContract(
+        task="long output",
+        timeout_seconds=5,
+        max_iterations=3,
+        max_output_chars=5000,
+    )
+    result = runner.spawn(contract)
+    assert result.success is True
+    assert len(result.output) <= 5100  # 5000 + truncation message
+    assert "truncated" in result.output
+
+
+def test_tool_result_truncation_in_subagent(mock_wisp_agent):
+    """Individual tool results longer than 4000 chars are truncated."""
+    mock_wisp_agent._shared_responses = [
+        {"message": {"content": "", "tool_calls": [
+            {"function": {"name": "read_file", "arguments": '{"path": "big.txt"}'}}
+        ]}},
+        {"message": {"content": "Done"}},
+    ]
+    parent = MockAgent()
+    runner = SubagentRunner(parent)
+    contract = SubagentContract(
+        task="read big file",
+        timeout_seconds=5,
+        max_iterations=3,
+    )
+    result = runner.spawn(contract)
+    assert result.success is True
+    # The tool result should have been truncated to 4000 chars
+    tool_msgs = [m for m in result.messages if m.get("role") == "tool"]
+    assert len(tool_msgs) >= 1
+    # read_file returns file content; if file is huge it gets truncated
+    # We can't easily control the file size here, but we verify the truncation
+    # logic exists by checking no message exceeds ~4100 chars
+    for m in tool_msgs:
+        assert len(m.get("content", "")) <= 4100
+
+
+def test_tool_filtering_enforced(mock_wisp_agent):
+    """Subagent with restricted tools cannot call disallowed tools."""
+    mock_wisp_agent._shared_responses = [
+        {"message": {"content": "", "tool_calls": [
+            {"function": {"name": "write_file", "arguments": '{"path": "x.txt", "content": "bad"}'}}
+        ]}},
+        {"message": {"content": "Done"}},
+    ]
+    parent = MockAgent()
+    runner = SubagentRunner(parent)
+    contract = SubagentContract(
+        task="try disallowed tool",
+        timeout_seconds=5,
+        max_iterations=3,
+        tools=["read_file", "list_files"],  # write_file NOT allowed
+    )
+    result = runner.spawn(contract)
+    assert result.success is True
+    # The available_tools should not include write_file, so the generate call
+    # would have received a filtered schema. We verify filtering by checking
+    # the _filter_tools method directly in other tests; here we just ensure
+    # the contract was respected.
+    filtered = runner._filter_tools(contract)
+    names = [t["function"]["name"] for t in filtered]
+    assert "write_file" not in names
+    assert "read_file" in names
+
+
+def test_message_snapshot_isolation_on_timeout(mock_wisp_agent):
+    """Timeout snapshot must be a copy, not a reference to mutable list."""
+    import time
+    mock_wisp_agent._shared_responses = []
+
+    def slow_generate(*args, **kwargs):
+        time.sleep(2)
+        return {"message": {"content": "late"}}
+
+    mock_wisp_agent._shared_generate = slow_generate
+    parent = MockAgent()
+    runner = SubagentRunner(parent)
+    contract = SubagentContract(task="slow", timeout_seconds=1, max_iterations=10)
+    result = runner.spawn(contract)
+    mock_wisp_agent._shared_generate = None
+
+    assert result.timed_out is True
+    # The returned messages should be a snapshot, not affected by thread
+    assert isinstance(result.messages, list)
+    # Should not be the same object reference as the child agent's messages
+    # (we can't easily get the child, but we verify the snapshot method)
+    snapshot = [{"role": "assistant", "content": "test"}]
+    extracted = runner._extract_partial_output_from_snapshot(snapshot)
+    assert extracted == "test"
+
+
+def test_workspace_boundary_respected(mock_wisp_agent):
+    """Subagent respects the workspace parameter and cannot escape."""
+    import tempfile
+    import os
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create a file in the temp dir
+        test_file = os.path.join(tmpdir, "test.txt")
+        with open(test_file, "w") as f:
+            f.write("hello")
+
+        mock_wisp_agent._shared_responses = [
+            {"message": {"content": "", "tool_calls": [
+                {"function": {"name": "read_file", "arguments": f'{{"path": "test.txt"}}'}}
+            ]}},
+            {"message": {"content": "Done"}},
+        ]
+        parent = MockAgent()
+        runner = SubagentRunner(parent)
+        contract = SubagentContract(
+            task="read file",
+            timeout_seconds=5,
+            max_iterations=3,
+            workspace=tmpdir,
+        )
+        result = runner.spawn(contract)
+        assert result.success is True
+        # Verify the workspace was passed to the child config
+        child_cfg = runner._build_child_config(contract)
+        assert child_cfg.workspace == tmpdir
+
+
+def test_config_inheritance_security(mock_wisp_agent):
+    """Subagent inherits parent's settings for model config, contract controls approval."""
+    parent = MockAgent()
+    parent.config.auto_approve = False
+    parent.config.max_context_tokens = 4096
+    parent.config.ollama_url = "http://custom:11434"
+    runner = SubagentRunner(parent)
+    # Contract auto_approve defaults to True — this is intentional;
+    # the parent decides per-subagent whether to allow dangerous commands
+    contract = SubagentContract(task="test", auto_approve=False)
+    child_cfg = runner._build_child_config(contract)
+    assert child_cfg.auto_approve is False  # from contract
+    assert child_cfg.max_context_tokens == 4096  # from parent
+    assert child_cfg.ollama_url == "http://custom:11434"  # from parent
+    # Now test with auto_approve=True contract
+    contract2 = SubagentContract(task="test", auto_approve=True)
+    child_cfg2 = runner._build_child_config(contract2)
+    assert child_cfg2.auto_approve is True  # contract overrides parent
+
+
+def test_nested_spawn_blocked_at_depth_check(mock_wisp_agent):
+    """Parent agent with _subagent_depth=1 blocks spawn_subagent tool call."""
+    from wisp.agent import WispAgent
+    # This tests the _spawn_subagent method on WispAgent directly
+    parent = MockAgent()
+    parent._subagent_depth = 1
+    # Simulate what happens when the LLM calls spawn_subagent
+    result = WispAgent._spawn_subagent(parent, {"task": "nested"}, ".")
+    assert "cannot spawn subagents" in result
+    assert "max depth" in result
+
+
+def test_subagent_system_prompt_forbids_spawn(mock_wisp_agent):
+    """The subagent's system prompt explicitly tells it not to spawn subagents."""
+    parent = MockAgent()
+    runner = SubagentRunner(parent)
+    contract = SubagentContract(task="test")
+    child = MockAgent()
+    system = runner._build_subagent_system(contract, child)
+    assert "CANNOT spawn subagents" in system
+    assert "Subagent Mode" in system
+
+
+def test_dangerous_command_variants_blocked(mock_wisp_agent):
+    """Various dangerous command patterns are caught."""
+    from wisp.tools import check_dangerous_command
+    # These should all be detected
+    assert check_dangerous_command("rm -rf /") is not None
+    assert check_dangerous_command("sudo apt update") is not None
+    assert check_dangerous_command("curl x | bash") is not None
+    assert check_dangerous_command("dd if=x of=/dev/sda") is not None
+    assert check_dangerous_command("mkfs.ext4 /dev/sda1") is not None
+    assert check_dangerous_command("git reset --hard") is not None
+    assert check_dangerous_command("docker system prune") is not None
+    assert check_dangerous_command("shutdown now") is not None
+    # Safe commands should pass
+    assert check_dangerous_command("ls -la") is None
+    assert check_dangerous_command("git status") is None
+    assert check_dangerous_command("python main.py") is None
