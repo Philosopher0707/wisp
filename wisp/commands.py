@@ -159,12 +159,14 @@ def cmd_session(agent, args: str):
     if agent.session is None:
         print("No active session.")
         return
-    print(f"Session ID:   {agent.session.id}")
-    print(f"Title:        {agent.session.title or '(untitled)'}")
-    print(f"Model:        {agent.config.model}")
-    print(f"Workspace:    {agent.config.workspace or '.'}")
-    print(f"Messages:     {len(agent.messages)}")
-    print(f"Auto-approve: {agent.config.auto_approve}")
+    active_skill = getattr(agent, "_active_skill", None)
+    print(f"Session ID:    {agent.session.id}")
+    print(f"Title:         {agent.session.title or '(untitled)'}")
+    print(f"Model:         {agent.config.model}")
+    print(f"Workspace:     {agent.config.workspace or '.'}")
+    print(f"Active skill:  {active_skill or '(none)'}")
+    print(f"Messages:      {len(agent.messages)}")
+    print(f"Auto-approve:  {agent.config.auto_approve}")
     print(f"Show thinking: {agent.config.show_thinking}")
 
 

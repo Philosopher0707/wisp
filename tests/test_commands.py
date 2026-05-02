@@ -160,6 +160,8 @@ def test_cmd_session(agent, capsys):
     captured = capsys.readouterr()
     assert "test-session-123" in captured.out
     assert "test-model" in captured.out
+    assert "Active skill:" in captured.out
+    assert "(none)" in captured.out
 
 
 def test_cmd_save(agent, capsys):
