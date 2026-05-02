@@ -21,6 +21,7 @@ class MockClient:
         self.model = "test-model"
         self._responses = []
         self._call_count = 0
+        self._session = None  # SubagentRunner.spawn may set this
 
     def generate(self, system, messages, tools=None):
         self._call_count += 1
@@ -61,8 +62,8 @@ def test_contract_defaults():
     c = SubagentContract(task="do something")
     assert c.task == "do something"
     assert c.tools == ["all"]
-    assert c.max_iterations == 15
-    assert c.timeout_seconds == 120
+    assert c.max_iterations == 5
+    assert c.timeout_seconds == 30
     assert c.output_format == "text"
     assert c.model is None
     assert c.workspace is None
@@ -123,7 +124,7 @@ def test_runner_builds_subagent_system():
     contract = SubagentContract(task="test", output_format="json", max_iterations=10)
     child = MockAgent()
     system = runner._build_subagent_system(contract, child)
-    assert "Subagent Mode" in system
+    assert "specialist coding subagent" in system
     assert "json" in system
     assert "10" in system
     assert "CANNOT spawn subagents" in system
@@ -146,7 +147,10 @@ def test_runner_no_filter_when_all():
     contract = SubagentContract(task="test", tools=["all"])
     from wisp.tools import TOOL_SCHEMAS
     filtered = runner._filter_tools(contract)
-    assert len(filtered) == len(TOOL_SCHEMAS)
+    # spawn_subagent is always removed from subagent tools
+    assert len(filtered) == len(TOOL_SCHEMAS) - 1
+    names = [t["function"]["name"] for t in filtered]
+    assert "spawn_subagent" not in names
 
 
 # ── Integration-style tests (with mocked generate) ───────────────────
@@ -526,7 +530,8 @@ def test_config_inheritance_security(mock_wisp_agent):
     contract = SubagentContract(task="test", auto_approve=False)
     child_cfg = runner._build_child_config(contract)
     assert child_cfg.auto_approve is False  # from contract
-    assert child_cfg.max_context_tokens == 4096  # from parent
+    # Subagents use a fixed 32K context window regardless of parent
+    assert child_cfg.max_context_tokens == 32000
     assert child_cfg.ollama_url == "http://custom:11434"  # from parent
     # Now test with auto_approve=True contract
     contract2 = SubagentContract(task="test", auto_approve=True)
@@ -554,7 +559,7 @@ def test_subagent_system_prompt_forbids_spawn(mock_wisp_agent):
     child = MockAgent()
     system = runner._build_subagent_system(contract, child)
     assert "CANNOT spawn subagents" in system
-    assert "Subagent Mode" in system
+    assert "specialist coding subagent" in system
 
 
 def test_dangerous_command_variants_blocked(mock_wisp_agent):

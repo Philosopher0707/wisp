@@ -33,10 +33,10 @@ class SubagentContract:
     tools: list[str] = field(default_factory=lambda: ["all"])
     """Tool names the subagent may use. ["all"] means inherit parent's full toolset."""
 
-    max_iterations: int = 15
+    max_iterations: int = 5
     """Maximum agent loop iterations before forced stop."""
 
-    timeout_seconds: int = 120
+    timeout_seconds: int = 30
     """Hard wall-clock timeout. Subagent is killed after this."""
 
     output_format: str = "text"
@@ -107,6 +107,9 @@ class SubagentRunner:
 
         # Create child agent (no session, fresh messages)
         child = WispAgent(config=child_config)
+        # Reuse parent's HTTP session for connection pooling — avoids
+        # creating a new TCP connection to Ollama for every subagent.
+        child.client._session = self.parent.client._session
         child.max_iterations = contract.max_iterations
 
         # Prevent infinite recursion: subagents cannot spawn subagents
@@ -125,75 +128,86 @@ class SubagentRunner:
             contract.max_iterations,
         )
 
-        # Run in thread pool with timeout
-        with ThreadPoolExecutor(max_workers=1) as executor:
+        # Run in thread pool with timeout.
+        # NOTE: We do NOT use `with ThreadPoolExecutor` because its __exit__
+        # calls shutdown(wait=True), which blocks until the worker thread
+        # finishes. If the worker is stuck on a slow HTTP request to Ollama,
+        # the parent agent would hang for minutes after the timeout fires.
+        executor = ThreadPoolExecutor(max_workers=1)
+        try:
             future = executor.submit(self._run_child, child, system, contract)
-            try:
-                final_output, iterations = future.result(timeout=contract.timeout_seconds)
-                elapsed = time.monotonic() - start
-                # Truncate output if too large
-                if len(final_output) > contract.max_output_chars:
-                    final_output = final_output[:contract.max_output_chars] + f"\n... [truncated: {len(final_output)} total chars]"
-                return SubagentResult(
-                    success=True,
-                    output=final_output,
-                    messages=list(child.messages),
-                    elapsed_seconds=elapsed,
-                    iterations_used=iterations,
-                    timed_out=False,
-                    hit_iteration_limit=iterations >= contract.max_iterations,
-                )
-            except FutureTimeoutError:
-                elapsed = time.monotonic() - start
-                logger.warning("Subagent timed out after %.1fs", elapsed)
-                # Snapshot messages before the thread modifies them further
-                # (ThreadPoolExecutor doesn't kill threads on timeout)
-                messages_snapshot = list(child.messages)
-                partial = self._extract_partial_output_from_snapshot(messages_snapshot)
-                return SubagentResult(
-                    success=False,
-                    output=f"[TIMED OUT after {elapsed:.1f}s]\n\nPartial result:\n{partial}",
-                    messages=messages_snapshot,
-                    elapsed_seconds=elapsed,
-                    iterations_used=getattr(child, "_iteration_count", 0),
-                    timed_out=True,
-                    hit_iteration_limit=False,
-                )
+            final_output, iterations = future.result(timeout=contract.timeout_seconds)
+            elapsed = time.monotonic() - start
+            # Truncate output if too large
+            if len(final_output) > contract.max_output_chars:
+                final_output = final_output[:contract.max_output_chars] + f"\n... [truncated: {len(final_output)} total chars]"
+            return SubagentResult(
+                success=True,
+                output=final_output,
+                messages=list(child.messages),
+                elapsed_seconds=elapsed,
+                iterations_used=iterations,
+                timed_out=False,
+                hit_iteration_limit=iterations >= contract.max_iterations,
+            )
+        except FutureTimeoutError:
+            elapsed = time.monotonic() - start
+            logger.warning("Subagent timed out after %.1fs", elapsed)
+            # Snapshot messages before the thread modifies them further
+            # (ThreadPoolExecutor doesn't kill threads on timeout)
+            messages_snapshot = list(child.messages)
+            partial = self._extract_partial_output_from_snapshot(messages_snapshot)
+            return SubagentResult(
+                success=False,
+                output=f"[TIMED OUT after {elapsed:.1f}s]\n\nPartial result:\n{partial}",
+                messages=messages_snapshot,
+                elapsed_seconds=elapsed,
+                iterations_used=getattr(child, "_iteration_count", 0),
+                timed_out=True,
+                hit_iteration_limit=False,
+            )
+        finally:
+            # Shutdown WITHOUT waiting — the worker thread may be stuck on an
+            # HTTP request and we must not block the parent agent.
+            executor.shutdown(wait=False)
 
     def _build_child_config(self, contract: SubagentContract) -> WispConfig:
-        """Clone parent config, optionally overriding model/workspace."""
+        """Clone parent config, optionally overriding model/workspace.
+
+        Uses a reduced context window (32K) for subagents since they handle
+        small scoped tasks and don't need the full parent context.
+        """
         parent_cfg = self.parent.config
         child = WispConfig()
         child.model = contract.model or parent_cfg.model
         child.workspace = contract.workspace or parent_cfg.workspace
         child.auto_approve = contract.auto_approve
         child.show_thinking = parent_cfg.show_thinking
-        child.max_context_tokens = parent_cfg.max_context_tokens
         child.chars_per_token = parent_cfg.chars_per_token
         child.ollama_url = parent_cfg.ollama_url
         child.temperature = parent_cfg.temperature
-        # Skip extra Ollama calls on init — inherit parent's context window
+        # Subagents handle small scoped tasks — 32K context is plenty
+        child.max_context_tokens = 32000
         child._context_tokens_explicit = True
-        child.max_context_tokens = parent_cfg.max_context_tokens
         return child
 
     def _build_subagent_system(self, contract: SubagentContract, child: WispAgent) -> str:
-        """Assemble a system prompt tailored to the subagent's task."""
-        from wisp.agent import DEFAULT_SYSTEM
+        """Assemble a concise system prompt tailored to the subagent's task.
 
-        lines = [DEFAULT_SYSTEM]
-        lines.append("")
-        lines.append("## Subagent Mode")
-        lines.append("You are a specialist subagent working on a scoped task.")
-        lines.append(f"Output format: {contract.output_format}")
-        lines.append(f"Iteration budget: {contract.max_iterations}")
-        lines.append("")
-        lines.append("## Rules")
-        lines.append("1. Focus ONLY on the given task. Do not drift.")
-        lines.append("2. Return a concise, actionable result.")
-        lines.append("3. If you edit files, list the changed paths in your final answer.")
-        lines.append("4. You CANNOT spawn subagents.")
-        lines.append("5. If stuck, summarize what you learned and stop.")
+        Uses a shorter prompt than the parent agent to minimize inference time.
+        """
+        lines = [
+            "You are a specialist coding subagent. You have tools to read, write, and edit files,",
+            "run bash commands, list directories, and fetch URLs.",
+            "",
+            "## Rules",
+            f"1. Focus ONLY on the given task. Do not drift.",
+            f"2. Output format: {contract.output_format}",
+            f"3. Iteration budget: {contract.max_iterations} — be efficient.",
+            "4. You CANNOT spawn subagents.",
+            "5. If you edit files, list the changed paths in your final answer.",
+            "6. If stuck, summarize what you learned and stop.",
+        ]
 
         if contract.tools != ["all"]:
             lines.append("")
@@ -218,12 +232,15 @@ class SubagentRunner:
         for iteration in range(1, contract.max_iterations + 1):
             child._iteration_count = iteration
 
-            # Generate response
+            # Generate response with progress dots (non-streaming = no feedback)
+            print(f"  [sub] ⏳ thinking...", end="", flush=True)
             try:
                 response = child.client.generate(system, child.messages, tools=available_tools)
             except Exception as e:
+                print()
                 logger.error("Subagent generation failed: %s", e)
                 return f"[Error: generation failed — {e}]", iteration
+            print("\r", end="", flush=True)  # clear the thinking line
 
             msg = response.get("message", {})
             content = msg.get("content", "") or ""
@@ -303,12 +320,15 @@ class SubagentRunner:
         return "[Hit iteration limit — returning best effort]", contract.max_iterations
 
     def _filter_tools(self, contract: SubagentContract):
-        """Return full tool schemas or a filtered subset."""
+        """Return full tool schemas or a filtered subset.
+
+        Always removes spawn_subagent since subagents cannot spawn subagents.
+        """
         from wisp.tools import TOOL_SCHEMAS
         if contract.tools == ["all"]:
-            return TOOL_SCHEMAS
+            return [t for t in TOOL_SCHEMAS if t["function"]["name"] != "spawn_subagent"]
         allowed = set(contract.tools)
-        return [t for t in TOOL_SCHEMAS if t["function"]["name"] in allowed]
+        return [t for t in TOOL_SCHEMAS if t["function"]["name"] in allowed and t["function"]["name"] != "spawn_subagent"]
 
     def _extract_partial_output_from_snapshot(self, messages: list[dict]) -> str:
         """Best-effort extraction from a snapshot of messages (thread-safe)."""

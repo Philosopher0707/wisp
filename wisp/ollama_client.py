@@ -38,12 +38,12 @@ class OllamaError(Exception):
 class OllamaClient:
     """Minimal client for Ollama's API, optimized for tool-calling models."""
 
-    def __init__(self, config: WispConfig):
+    def __init__(self, config: WispConfig, session: Optional[requests.Session] = None):
         self.base_url = config.ollama_url.rstrip("/")
         self.model = config.model
         self.temperature = config.temperature
         self.max_tokens = config.max_tokens
-        self._session = requests.Session()
+        self._session = session or requests.Session()
         self.stream_response: Optional[dict] = None
 
     def check_health(self) -> bool:
