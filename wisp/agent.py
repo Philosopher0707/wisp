@@ -38,6 +38,7 @@ from wisp.tools import TOOL_SCHEMAS, execute_tool, ToolError
 from wisp.skills import discover_skills
 from wisp.session import Session, SessionManager, format_session_preview
 from wisp.project_context import detect_project_context, format_context
+from wisp.code_index import build_index, format_index_summary
 
 logger = logging.getLogger(__name__)
 
@@ -403,6 +404,14 @@ class WispAgent:
         ctx_block = format_context(project_ctx)
         if ctx_block:
             system += f"\n\n{ctx_block}"
+
+        # Build and inject code index summary (symbols found in source files)
+        code_index = build_index(ws)
+        index_summary = format_index_summary(code_index)
+        if index_summary:
+            system += f"\n\n{index_summary}"
+        # Store index on the agent so search_symbols tool can use it
+        self._code_index = code_index
 
         if effective_skill:
             skill = next((s for s in skills if s.name == effective_skill), None)

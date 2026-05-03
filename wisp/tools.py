@@ -420,6 +420,40 @@ def tool_list_files(path: str, workspace: str, pattern: str = "*") -> str:
     return "\n".join(result)
 
 
+def tool_search_symbols(query: str, workspace: str = ".", max_results: int = 20) -> str:
+    """Search the code index for symbols matching a query.
+
+    Builds a lightweight index of function/class/struct definitions in the
+    workspace and searches it for the given query. Results include file path,
+    line number, and symbol kind.
+    """
+    _validate_string(query, "query", 200)
+    max_results = _validate_int(max_results, "max_results", 1, 100)
+
+    from wisp.code_index import build_index, search_symbols
+
+    index = build_index(workspace)
+    if index.total_symbols == 0:
+        return "(no symbols found — no source files indexed)"
+
+    results = search_symbols(index, query, max_results=max_results)
+
+    if not results:
+        return f"(no symbols matching '{query}' — {index.total_symbols} symbols indexed)"
+
+    lines = [f"Found {len(results)} symbol(s) matching '{query}':", ""]
+    for sym in results:
+        parent_info = f" (in {sym.parent})" if sym.parent else ""
+        lines.append(f"  {sym.kind:12s} {sym.name}{parent_info}")
+        lines.append(f"  {'':12s} 📍 {sym.file}:{sym.line}")
+        lines.append("")
+
+    if len(results) == max_results:
+        lines.append(f"... and more (showing top {max_results})")
+
+    return "\n".join(lines)
+
+
 # ── Tool schema definitions (Ollama tool-calling format) ──
 
 TOOL_SCHEMAS = [
@@ -518,6 +552,21 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "search_symbols",
+            "description": "Search the code index for symbols (functions, classes, structs, traits, etc.) matching a query. Use to find where things are defined without reading every file. Returns file path, line number, and symbol kind.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search term — matches against symbol names, kinds, and file paths (case-insensitive)"},
+                    "max_results": {"type": "number", "description": "Maximum results to return", "default": 20},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "spawn_subagent",
             "description": "Spawn a specialist subagent to handle a scoped task (research, coding, testing) with its own iteration budget and timeout. The subagent runs in parallel and returns a structured result. Use when a task can be decomposed into an independent work unit.",
             "parameters": {
@@ -543,6 +592,7 @@ TOOL_IMPLS = {
     "run_bash": tool_run_bash,
     "list_files": tool_list_files,
     "web_fetch": tool_web_fetch,
+    "search_symbols": tool_search_symbols,
 }
 
 
