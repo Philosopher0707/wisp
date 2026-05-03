@@ -226,6 +226,113 @@ def cmd_memory(args: list[str]):
         print("  wisp memory clear              Clear all facts")
 
 
+# ── MCP server commands ──────────────────────────────────────────────
+
+def cmd_mcp(args: list[str]):
+    """Manage MCP server configurations."""
+    if not args or args[0] == "list":
+        from wisp.mcp import discover_mcp_configs
+        configs = discover_mcp_configs(".")
+        if configs:
+            print("Configured MCP servers:")
+            for c in configs:
+                status = "✓" if not c.disabled else "✗"
+                source = c.command or c.url or "(unknown)"
+                print(f"  {status} {c.name:20s} {source}")
+        else:
+            print("No MCP servers configured.")
+            print("  Add a server: wisp mcp add <name> <command> [args...]")
+            print("  Add VS Code:  wisp mcp add-vscode")
+        return
+
+    sub = args[0]
+
+    if sub == "add-vscode":
+        _setup_vscode_mcp()
+    elif sub == "add" and len(args) >= 3:
+        _add_mcp_server(args[1], args[2:])
+    else:
+        print("Usage:")
+        print("  wisp mcp                      List MCP servers")
+        print("  wisp mcp add-vscode           Add VS Code MCP server")
+        print("  wisp mcp add <name> <cmd>     Add a custom MCP server")
+
+
+def _setup_vscode_mcp():
+    """Configure VS Code MCP server in .wisp/mcp.json."""
+    import json
+    from pathlib import Path
+
+    ws_mcp_dir = Path(".wisp")
+    ws_mcp_dir.mkdir(exist_ok=True)
+    config_file = ws_mcp_dir / "mcp.json"
+
+    vscode_config = {
+        "name": "vscode",
+        "command": sys.executable or "python",
+        "args": ["-m", "wisp.mcp_servers.vscode_server"],
+        "description": "VS Code editor integration - open files, run commands, show messages",
+    }
+
+    if config_file.exists():
+        try:
+            configs = json.loads(config_file.read_text())
+            if isinstance(configs, dict):
+                configs = configs.get("mcpServers", configs.get("servers", []))
+        except (json.JSONDecodeError, OSError):
+            configs = []
+    else:
+        configs = []
+
+    # Check if vscode already exists
+    for c in configs:
+        if c.get("name") == "vscode":
+            print("✓ VS Code MCP server already configured.")
+            return
+
+    configs.append(vscode_config)
+    config_file.write_text(json.dumps(configs, indent=2) + "\n")
+    print(f"✓ VS Code MCP server added to {config_file}")
+    print()
+    print("  Tools available:")
+    print("    vscode_open_file     - Open a file at a specific line")
+    print("    vscode_run_command   - Run any VS Code command")
+    print("    vscode_show_message  - Show a notification in VS Code")
+    print("    vscode_get_editor_state - Get current editor state")
+    print()
+    print("  Next time you run wisp, these tools will be available to the LLM.")
+
+
+def _add_mcp_server(name: str, cmd_args: list[str]):
+    """Add a custom MCP server to .wisp/mcp.json."""
+    import json
+    from pathlib import Path
+
+    ws_mcp_dir = Path(".wisp")
+    ws_mcp_dir.mkdir(exist_ok=True)
+    config_file = ws_mcp_dir / "mcp.json"
+
+    config = {
+        "name": name,
+        "command": cmd_args[0],
+        "args": cmd_args[1:],
+    }
+
+    if config_file.exists():
+        try:
+            configs = json.loads(config_file.read_text())
+            if isinstance(configs, dict):
+                configs = configs.get("mcpServers", configs.get("servers", []))
+        except (json.JSONDecodeError, OSError):
+            configs = []
+    else:
+        configs = []
+
+    configs.append(config)
+    config_file.write_text(json.dumps(configs, indent=2) + "\n")
+    print(f"✓ MCP server '{name}' added to {config_file}")
+
+
 # ── Session commands ─────────────────────────────────────────────────
 
 def cmd_session_list():
@@ -484,6 +591,8 @@ def main():
             cmd_models()
         elif first == "memory":
             cmd_memory(rest)
+        elif first == "mcp":
+            cmd_mcp(rest)
 
     else:
         # Implicit mode: wisp [flags] 'prompt'
