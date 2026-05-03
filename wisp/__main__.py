@@ -67,24 +67,56 @@ def cmd_skills(workspace=None):
         print()
 
 
-def cmd_config(set_kv=None):
+def cmd_config(set_kv=None, validate=False):
     """View or set configuration."""
+    from wisp.config import load_config, save_config, validate_config, get_schema
+
     if set_kv:
         key, value = set_kv.split("=", 1)
         config = load_config()
         config[key.strip()] = value.strip()
-        save_config(config)
-        print(f"✓ Set {key.strip()} = {value.strip()}")
+        try:
+            save_config(config)
+            print(f"✓ Set {key.strip()} = {value.strip()}")
+        except ValueError as e:
+            print(f"✗ {e}")
+            return
+
+    if validate:
+        config = load_config()
+        if not config:
+            print("✓ No custom configuration to validate.")
+            return
+        errors = validate_config(config)
+        if errors:
+            print(f"Found {len(errors)} issue(s):\n")
+            for err in errors:
+                print(f"  ✗ {err}")
+        else:
+            print("✓ Configuration is valid.")
+        return
 
     config = load_config()
     if not config:
         print("No custom configuration. Using defaults.")
         print()
+
+    schema = get_schema()
     print("Current configuration:")
     for key, value in sorted(config.items()):
+        desc = schema.get(key, {}).get("description", "")
         print(f"  {key}: {value}")
+        if desc:
+            print(f"     {desc}")
     print()
-    print("Default values (not shown) are used for unset keys.")
+    print("Available settings:")
+    for key, info in sorted(schema.items()):
+        default = info["default"]
+        type_name = info["type"].__name__ if not isinstance(info["type"], tuple) else " or ".join(t.__name__ for t in info["type"] if t is not type(None)) + " or None"
+        print(f"  {key:20s}  ({type_name:8s})  default: {default!r}")
+    print()
+    print("Set a value:  wisp config --set key=value")
+    print("Validate:     wisp config --validate")
 
 
 def cmd_check():
@@ -363,9 +395,18 @@ def main():
             cmd_skills(flags_workspace)
         elif first == "config":
             set_kv = None
-            if len(rest) >= 2 and rest[0] == "--set":
-                set_kv = rest[1]
-            cmd_config(set_kv)
+            validate = False
+            i = 0
+            while i < len(rest):
+                if rest[i] == "--set" and i + 1 < len(rest):
+                    set_kv = rest[i + 1]
+                    i += 2
+                elif rest[i] == "--validate":
+                    validate = True
+                    i += 1
+                else:
+                    i += 1
+            cmd_config(set_kv, validate=validate)
         elif first == "check":
             cmd_check()
         elif first == "models":
