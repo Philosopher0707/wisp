@@ -211,12 +211,17 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
       - Reads raw bytes to survive invalid UTF-8 in piped input.
     """
     if sys.stdin.isatty():
-        prompt = f"\033[1m{prompt}\033[0m"
         lines = []
         while True:
             try:
-                current_prompt = prompt if not lines else "... "
-                line = input(current_prompt)
+                # Print colored prompt manually so readline doesn't get confused
+                # by ANSI escape codes (which would cause cursor jump/wrap bugs).
+                if not lines:
+                    sys.stdout.write(f"\033[1m{prompt}\033[0m")
+                else:
+                    sys.stdout.write("... ")
+                sys.stdout.flush()
+                line = input("")
             except KeyboardInterrupt:
                 print()
                 raise
