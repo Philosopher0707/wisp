@@ -555,6 +555,27 @@ def tool_remember(fact: str, workspace: str = ".") -> str:
         return f"(Already remembered: {fact})"
 
 
+def tool_git_status(workspace: str = ".") -> str:
+    """Show git status for the workspace."""
+    from wisp.git_context import format_git_context
+    result = format_git_context(workspace)
+    if not result:
+        return "Not a git repository (or git not available)."
+    return result
+
+
+def tool_git_diff(path: str = "", staged: bool = False, workspace: str = ".") -> str:
+    """Show git diff for a file or the entire workspace."""
+    from wisp.git_context import get_file_diff, get_workspace_diff
+    if path:
+        result = get_file_diff(path, workspace, staged=staged)
+    else:
+        result = get_workspace_diff(workspace, staged=staged)
+    if not result:
+        return "No diff available (not a git repo, file not tracked, or no changes)."
+    return result
+
+
 # ── Tool schema definitions (Ollama tool-calling format) ──
 
 TOOL_SCHEMAS = [
@@ -697,6 +718,33 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_status",
+            "description": "Show git status for the workspace: current branch, uncommitted files (staged, modified, untracked, deleted, conflicted), and recent commits. Returns empty string if not a git repository.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_diff",
+            "description": "Show git diff for a file or the entire workspace. Use to review uncommitted changes before editing. Returns empty string if not a git repository or no changes.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File to diff (omit for entire workspace)", "default": ""},
+                    "staged": {"type": "boolean", "description": "Show staged changes instead of unstaged", "default": False},
+                },
+                "required": [],
+            },
+        },
+    },
 ]
 
 # Map tool names to their implementations
@@ -709,6 +757,8 @@ TOOL_IMPLS = {
     "web_fetch": tool_web_fetch,
     "search_symbols": tool_search_symbols,
     "remember": tool_remember,
+    "git_status": tool_git_status,
+    "git_diff": tool_git_diff,
 }
 
 

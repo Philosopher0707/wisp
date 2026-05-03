@@ -491,6 +491,12 @@ class WispAgent:
             if summary_block:
                 system += f"\n\n{summary_block}"
 
+        # Inject git context
+        from wisp.git_context import format_git_context
+        git_block = format_git_context(ws)
+        if git_block:
+            system += f"\n\n{git_block}"
+
         if effective_skill:
             skill = next((s for s in skills if s.name == effective_skill), None)
             if skill:

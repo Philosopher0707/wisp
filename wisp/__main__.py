@@ -402,6 +402,45 @@ def _add_mcp_server(name: str, cmd_args: list[str]):
     print(f"✓ MCP server '{name}' added to {config_file}")
 
 
+# ── Git commands ──────────────────────────────────────────────────────
+
+def cmd_git(args: list[str]):
+    """Show git context for the workspace."""
+    from wisp.git_context import format_git_context, get_git_state
+
+    if not args or args[0] in ("status", "st"):
+        ctx = format_git_context(".")
+        if ctx:
+            print(ctx)
+        else:
+            print("Not a git repository.")
+        return
+
+    if args[0] in ("diff", "d"):
+        from wisp.git_context import get_workspace_diff
+        diff = get_workspace_diff(".")
+        if diff:
+            print(diff)
+        else:
+            print("No diff available.")
+        return
+
+    if args[0] == "log":
+        state = get_git_state(".")
+        if state and state.recent_commits:
+            for commit in state.recent_commits:
+                print(f"  {commit}")
+        else:
+            print("No commits available.")
+        return
+
+    print("Usage:")
+    print("  wisp git              Show git status")
+    print("  wisp git status       Show git status")
+    print("  wisp git diff         Show unstaged diff")
+    print("  wisp git log          Show recent commits")
+
+
 # ── Session commands ─────────────────────────────────────────────────
 
 def cmd_session_list():
@@ -551,7 +590,7 @@ def main():
         print_help()
         return
 
-    _SUBCOMMANDS = {"run", "repl", "skills", "config", "check", "models", "session", "memory", "mcp"}
+    _SUBCOMMANDS = {"run", "repl", "skills", "config", "check", "models", "session", "memory", "mcp", "git"}
     first = argv[0]
 
     # Global flags
@@ -662,6 +701,8 @@ def main():
             cmd_memory(rest)
         elif first == "mcp":
             cmd_mcp(rest)
+        elif first == "git":
+            cmd_git(rest)
 
     else:
         # Implicit mode: wisp [flags] 'prompt'
