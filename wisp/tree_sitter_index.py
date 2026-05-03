@@ -27,17 +27,21 @@ except ImportError:
 # Try to import language grammars
 _LANGUAGE_PARSERS: dict[str, object] = {}
 if _HAVE_TREE_SITTER:
-    for lang_name, module_name in [
-        ("python", "tree_sitter_python"),
-        ("rust", "tree_sitter_rust"),
-        ("javascript", "tree_sitter_javascript"),
-        ("typescript", "tree_sitter_typescript"),
-        ("go", "tree_sitter_go"),
-        ("ruby", "tree_sitter_ruby"),
-    ]:
+    _TS_LANG_MODULES = {
+        "python": ("tree_sitter_python", "language"),
+        "rust": ("tree_sitter_rust", "language"),
+        "javascript": ("tree_sitter_javascript", "language"),
+        "typescript": ("tree_sitter_typescript", "language_typescript"),
+        "go": ("tree_sitter_go", "language"),
+        "ruby": ("tree_sitter_ruby", "language"),
+    }
+    for lang_name, (module_name, attr_name) in _TS_LANG_MODULES.items():
         try:
             mod = __import__(module_name)
-            _LANGUAGE_PARSERS[lang_name] = mod.language()
+            lang_func = getattr(mod, attr_name)
+            # Wrap the PyCapsule in a tree_sitter.Language object
+            lang_capsule = lang_func()
+            _LANGUAGE_PARSERS[lang_name] = tree_sitter.Language(lang_capsule)
             logger.debug("Loaded tree-sitter grammar for %s", lang_name)
         except ImportError:
             logger.debug("tree-sitter grammar for %s not available", lang_name)
@@ -60,15 +64,13 @@ _TS_QUERIES: dict[str, str] = {
     "python": """
         (function_definition name: (identifier) @name) @function
         (class_definition name: (identifier) @name) @class
-        (decorated_definition (function_definition name: (identifier) @name) @method)
     """,
     "rust": """
         (function_item name: (identifier) @name) @function
         (struct_item name: (type_identifier) @name) @struct
         (enum_item name: (type_identifier) @name) @enum
         (trait_item name: (type_identifier) @name) @trait
-        (impl_item trait: (type_identifier) @name) @impl
-        (impl_item type: (type_identifier) @name) @impl
+        (impl_item) @impl
         (type_item name: (type_identifier) @name) @type
         (const_item name: (identifier) @name) @const
     """,
@@ -76,7 +78,13 @@ _TS_QUERIES: dict[str, str] = {
         (function_declaration name: (identifier) @name) @function
         (class_declaration name: (identifier) @name) @class
         (method_definition name: (property_identifier) @name) @method
-        (arrow_function) @function
+    """,
+    "typescript": """
+        (function_declaration name: (identifier) @name) @function
+        (class_declaration name: (type_identifier) @name) @class
+        (method_definition name: (property_identifier) @name) @method
+        (interface_declaration name: (type_identifier) @name) @interface
+        (type_alias_declaration name: (type_identifier) @name) @type
     """,
     "go": """
         (function_declaration name: (identifier) @name) @function
@@ -194,7 +202,7 @@ def _extract_symbols_ts(content: str, lang: str, file_path: str) -> list[Symbol]
         return _extract_symbols(content.splitlines(), lang.capitalize(), file_path)
 
     try:
-        ts_parser = tree_sitter.Parser(parser_lang)  # type: ignore
+        ts_parser = tree_sitter.Parser(language=parser_lang)  # type: ignore
         tree = ts_parser.parse(bytes(content, "utf-8"))
     except Exception as e:
         logger.warning("Tree-sitter parse failed for %s: %s", file_path, e)
@@ -206,38 +214,34 @@ def _extract_symbols_ts(content: str, lang: str, file_path: str) -> list[Symbol]
 
     try:
         query = tree_sitter.Query(parser_lang, query_str)  # type: ignore
-        captures = query.captures(tree.root_node)
+        cursor = tree_sitter.QueryCursor(query)
+        captures = cursor.captures(tree.root_node)
     except Exception as e:
         logger.warning("Tree-sitter query failed for %s: %s", file_path, e)
         return []
 
-    # Process captures: group by node, extract name and kind
-    # captures returns list of (node, capture_name) tuples
-    current_kind = None
-    current_name = None
-
-    for node, capture_name in captures:
-        if capture_name in ("function", "class", "method", "struct", "enum", "trait", "impl", "type", "const", "module"):
-            # Previous capture pair is complete
-            if current_name and current_kind:
-                symbols.append(Symbol(
-                    name=current_name,
-                    kind=current_kind,
-                    file=file_path,
-                    line=node.start_point[0] + 1,
-                ))
-            current_kind = capture_name
-            current_name = None
-        elif capture_name == "name" and current_kind:
-            current_name = node.text.decode("utf-8") if hasattr(node, 'text') else content[node.start_byte:node.end_byte]
-
-    # Don't forget the last one
-    if current_name and current_kind:
-        symbols.append(Symbol(
-            name=current_name,
-            kind=current_kind,
-            file=file_path,
-            line=node.start_point[0] + 1 if 'node' in dir() else 0,
-        ))
+    # captures is a dict: capture_name -> list of nodes
+    symbols: list[Symbol] = []
+    for cap_name, nodes in captures.items():
+        for node in nodes:
+            if cap_name == "name":
+                continue  # handled by the parent capture group
+            kind = cap_name
+            # Find the name child within this node
+            name_node = None
+            for child in node.children:
+                if child.type == "identifier" or child.type == "type_identifier" or child.type == "property_identifier":
+                    name_node = child
+                    break
+            if name_node is None:
+                # Try to get name from captures dict
+                continue
+            name = name_node.text.decode("utf-8")
+            symbols.append(Symbol(
+                name=name,
+                kind=kind,
+                file=file_path,
+                line=node.start_point[0] + 1,
+            ))
 
     return symbols
