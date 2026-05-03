@@ -39,6 +39,7 @@ from wisp.skills import discover_skills
 from wisp.session import Session, SessionManager, format_session_preview
 from wisp.project_context import detect_project_context, format_context
 from wisp.code_index import build_index, format_index_summary
+from wisp.mcp import MCPManager
 
 logger = logging.getLogger(__name__)
 
@@ -307,6 +308,9 @@ class WispAgent:
         self._interrupted = False
         self._system_prompt = ""
         self._active_skill: Optional[str] = None
+        # Initialize MCP (connects to configured servers)
+        self.mcp = MCPManager(self.config.workspace or ".")
+        self._mcp_initialized = False
         _agent_instances.add(self)
 
     def _add_message(self, role: str, content: str, thinking: str = ""):
@@ -424,6 +428,33 @@ class WispAgent:
         self._system_prompt_cache[cache_key] = system
         return system
 
+    def _get_tool_schemas(self) -> list[dict]:
+        """Get combined tool schemas including built-in tools and MCP tools."""
+        # Initialize MCP lazily (first call triggers connection)
+        if not self._mcp_initialized:
+            try:
+                self.mcp.initialize()
+            except Exception as e:
+                logger.warning("MCP initialization failed: %s", e)
+            self._mcp_initialized = True
+
+        schemas = list(TOOL_SCHEMAS)
+        try:
+            mcp_schemas = self.mcp.get_tool_schemas()
+            schemas.extend(mcp_schemas)
+        except Exception as e:
+            logger.warning("Failed to get MCP tool schemas: %s", e)
+        return schemas
+
+    def _is_mcp_tool(self, name: str) -> bool:
+        """Check if a tool name belongs to an MCP server."""
+        if not self._mcp_initialized:
+            return False
+        for tool in self.mcp.get_all_tools():
+            if tool.name == name:
+                return True
+        return False
+
     def _run_turn_streaming(self, system: str) -> dict:
         """Run one agent turn with streaming text output using batched events.
 
@@ -445,7 +476,7 @@ class WispAgent:
             for event in self.client.generate_stream_events(
                 system_prompt=system,
                 messages=self.messages,
-                tools=TOOL_SCHEMAS,
+                tools=self._get_tool_schemas(),
                 checkpoint_every=50,
             ):
                 if self._interrupted:
@@ -602,6 +633,14 @@ class WispAgent:
             # Subagent spawn: handled specially (needs parent agent reference)
             if func_name == "spawn_subagent":
                 result = self._spawn_subagent(func_args, workspace)
+            elif self._is_mcp_tool(func_name):
+                try:
+                    result = self.mcp.call_tool(func_name, func_args)
+                    if len(result) > 8000:
+                        result = result[:8000] + f"\n... [truncated {len(result)} total chars]"
+                except Exception as e:
+                    result = f"MCP error: {e}"
+                    logger.warning("MCP tool %s failed: %s", func_name, e)
             else:
                 try:
                     result = execute_tool(func_name, func_args, workspace, max_data_chars=8000)
@@ -735,6 +774,7 @@ class WispAgent:
             # ── Done ───────────────────────────────────────────────────
             if self.session and self.session.id and not self._interrupted:
                 print(f"\n📋 Session: {self.session.id}")
+            self.mcp.shutdown()
             _restore_signal_handler()
 
     def repl(self, skill_name: Optional[str] = None, session_id: Optional[str] = None):
@@ -842,6 +882,7 @@ class WispAgent:
                 print(f"📋 Session {self.session.id} saved.")
                 print(f"   Continue with: wisp repl -S {self.session.id}")
         finally:
+            self.mcp.shutdown()
             _restore_signal_handler()
 
     def _execute_loop(self, system: str, workspace: str, auto_approve: bool) -> None:
