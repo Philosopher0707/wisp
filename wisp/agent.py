@@ -38,7 +38,8 @@ from wisp.tools import TOOL_SCHEMAS, execute_tool, ToolError
 from wisp.skills import discover_skills
 from wisp.session import Session, SessionManager, format_session_preview
 from wisp.project_context import detect_project_context, format_context
-from wisp.code_index import build_index, format_index_summary
+from wisp.code_index import build_index as build_regex_index, format_index_summary
+from wisp.tree_sitter_index import build_index as build_ts_index, is_tree_sitter_available
 from wisp.mcp import MCPManager
 
 logger = logging.getLogger(__name__)
@@ -410,7 +411,11 @@ class WispAgent:
             system += f"\n\n{ctx_block}"
 
         # Build and inject code index summary (symbols found in source files)
-        code_index = build_index(ws)
+        # Use tree-sitter for accurate parsing when available, fall back to regex
+        if is_tree_sitter_available():
+            code_index = build_ts_index(ws)
+        else:
+            code_index = build_regex_index(ws)
         index_summary = format_index_summary(code_index)
         if index_summary:
             system += f"\n\n{index_summary}"
