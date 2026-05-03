@@ -37,6 +37,7 @@ from wisp.stream_events import (
 from wisp.tools import TOOL_SCHEMAS, execute_tool, ToolError
 from wisp.skills import discover_skills
 from wisp.session import Session, SessionManager, format_session_preview
+from wisp.project_context import detect_project_context, format_context
 
 logger = logging.getLogger(__name__)
 
@@ -396,6 +397,12 @@ class WispAgent:
         # Discover skills ONCE and reuse for both the skills block and the active skill
         skills = discover_skills(ws)
         system += _build_skills_block_from_skills(skills)
+
+        # Detect and inject project context (language, framework, dependencies)
+        project_ctx = detect_project_context(ws)
+        ctx_block = format_context(project_ctx)
+        if ctx_block:
+            system += f"\n\n{ctx_block}"
 
         if effective_skill:
             skill = next((s for s in skills if s.name == effective_skill), None)
