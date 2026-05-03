@@ -499,6 +499,27 @@ def cmd_progress(args: list[str]):
         print("No active plan. Run 'wisp plan' to see plans or create one in the REPL.")
 
 
+# ── Diagnose commands ────────────────────────────────────────────────
+
+def cmd_diagnose(args: list[str]):
+    """Diagnose an error from file or stdin."""
+    from wisp.error_diagnosis import diagnose
+
+    if not args:
+        print("Usage: wisp diagnose <error_message_or_file>")
+        print("  wisp diagnose 'Traceback (most recent call last): ...'")
+        print("  cat error.log | wisp diagnose -")
+        return
+
+    error_text = " ".join(args)
+    if error_text == "-":
+        import sys
+        error_text = sys.stdin.read()
+
+    diag = diagnose(error_text, ".")
+    print(diag.format())
+
+
 # ── Session commands ─────────────────────────────────────────────────
 
 def cmd_session_list():
@@ -648,7 +669,7 @@ def main():
         print_help()
         return
 
-    _SUBCOMMANDS = {"run", "repl", "skills", "config", "check", "models", "session", "memory", "mcp", "git", "plan", "progress"}
+    _SUBCOMMANDS = {"run", "repl", "skills", "config", "check", "models", "session", "memory", "mcp", "git", "plan", "progress", "diagnose"}
     first = argv[0]
 
     # Global flags
@@ -765,6 +786,8 @@ def main():
             cmd_plan(rest)
         elif first == "progress":
             cmd_progress(rest)
+        elif first == "diagnose":
+            cmd_diagnose(rest)
 
     else:
         # Implicit mode: wisp [flags] 'prompt'

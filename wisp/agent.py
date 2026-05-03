@@ -738,6 +738,17 @@ class WispAgent:
                     result = f"Unexpected error: {e}"
                     logger.error("Unexpected error in tool %s: %s", func_name, e, exc_info=True)
 
+            # ── Auto-diagnose errors ─────────────────────────────
+            if isinstance(result, str) and ("Error" in result or "FAILED" in result or "Traceback" in result):
+                from wisp.error_diagnosis import diagnose_tool_error
+                diag = diagnose_tool_error(func_name, func_args, result, workspace)
+                if diag.error_type != "None":
+                    print(f"\n{diag.format()}")
+                    # Store diagnosis for potential injection into context
+                    if not hasattr(self, "_pending_diagnoses"):
+                        self._pending_diagnoses = []
+                    self._pending_diagnoses.append(diag)
+
             # Extract preview from structured result (or use raw string for subagent/spawn)
             preview = result[:200].replace("\n", " ")
             if func_name != "spawn_subagent" and result.startswith("{"):

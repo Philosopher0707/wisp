@@ -576,6 +576,17 @@ def tool_git_diff(path: str = "", staged: bool = False, workspace: str = ".") ->
     return result
 
 
+def tool_diagnose(error_output: str, workspace: str = ".") -> str:
+    """Diagnose an error from test output, traceback, or command output.
+
+    Use when tests fail, code crashes, or tools return errors.
+    Returns a structured diagnosis with error type, location, cause, and fix suggestion.
+    """
+    from wisp.error_diagnosis import diagnose
+    diag = diagnose(error_output, workspace)
+    return diag.format()
+
+
 def tool_plan_task(goal: str, tasks: str, workspace: str = ".") -> str:
     """Create a structured plan with subtasks.
 
@@ -820,6 +831,20 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "diagnose",
+            "description": "Diagnose an error from test output, traceback, or command output. Returns error type, location, root cause, and fix suggestion. Use when tests fail, code crashes, or tools return errors.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "error_output": {"type": "string", "description": "The error output, traceback, or test failure message to analyze"},
+                },
+                "required": ["error_output"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "plan_task",
             "description": "Create a structured plan with subtasks. Break down a complex goal into numbered steps with complexity estimates, file targets, and dependencies. Use when the user asks to implement, refactor, or build something multi-step.",
             "parameters": {
@@ -877,6 +902,7 @@ TOOL_IMPLS = {
     "remember": tool_remember,
     "git_status": tool_git_status,
     "git_diff": tool_git_diff,
+    "diagnose": tool_diagnose,
     "plan_task": tool_plan_task,
     "mark_step_done": tool_mark_step_done,
     "update_plan": tool_update_plan,
