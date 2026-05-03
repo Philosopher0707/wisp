@@ -203,6 +203,8 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
       - Uses readline for arrow-key editing and history.
       - Supports multi-line input: if a line ends with '\\',
         the next line is appended (like bash continuation).
+      - Auto-detects paste: if multiple lines arrive rapidly,
+        they are combined into a single multi-line input.
       - Returns '' on EOF/Error.
 
     Non-interactive mode:
@@ -227,6 +229,33 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
                 lines.append(stripped[:-1])
                 continue
             lines.append(line)
+
+            # ── Paste detection ──────────────────────────────────────
+            # If the user pasted multiple lines, there will be more data
+            # in stdin immediately. Use select to check with a short timeout.
+            # This allows pasting large code blocks without each line
+            # being treated as a separate command.
+            if allow_multiline and lines:
+                try:
+                    import select
+                    # Check if more data is available within 100ms
+                    ready, _, _ = select.select([sys.stdin], [], [], 0.1)
+                    if ready:
+                        # More data available — likely a paste. Read all.
+                        while True:
+                            try:
+                                # Check again with zero timeout
+                                ready2, _, _ = select.select([sys.stdin], [], [], 0)
+                                if not ready2:
+                                    break
+                                extra_line = input()
+                                lines.append(extra_line)
+                            except (EOFError, OSError):
+                                break
+                        return "\n".join(lines)
+                except (ImportError, OSError):
+                    pass  # select not available (e.g., Windows), fall through
+
             break
         return "\n".join(lines)
 
