@@ -63,7 +63,7 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
     },
     "show_thinking": {
         "type": bool,
-        "default": False,
+        "default": True,
         "description": "Show model reasoning trace inline",
         "env_var": "WISP_SHOW_THINKING",
     },
@@ -223,7 +223,7 @@ class WispConfig:
         # Auto-approve tool calls by default (coding agent should flow)
         self.auto_approve: bool = str(get_setting("auto_approve", "true")).lower() == "true"
         # Show reasoning trace inline (default: false — most users want the answer only)
-        self.show_thinking: bool = str(get_setting("show_thinking", "false")).lower() == "true"
+        self.show_thinking: bool = str(get_setting("show_thinking", "true")).lower() == "true"
         # Max agent loop iterations per user turn
         self.max_iterations: int = int(get_setting("max_iterations", "30"))
         # Context window guard: trim oldest messages when estimated tokens exceed this

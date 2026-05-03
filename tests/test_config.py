@@ -34,7 +34,7 @@ class TestWispConfig:
         assert cfg.max_context_tokens == 256000
         assert cfg.chars_per_token == 4
         assert cfg.auto_approve is True
-        assert cfg.show_thinking is False
+        assert cfg.show_thinking is True
 
     def test_auto_approve_respects_env(self, monkeypatch):
         monkeypatch.setenv("WISP_AUTO_APPROVE", "false")
