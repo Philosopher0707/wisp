@@ -357,6 +357,14 @@ class WispAgent:
             workspace=self.config.workspace or ".",
             limit=3,
         )
+        # Initialize collaborative editing tools
+        from wisp.file_lock import FileLock
+        from wisp.change_tracker import ChangeTracker
+        self.file_lock = FileLock(self.config.workspace or ".")
+        self.change_tracker = ChangeTracker(self.config.workspace or ".", self.file_lock.agent_id)
+        # Register with tools module
+        from wisp import tools as tools_module
+        tools_module.set_collaboration_tools(self.file_lock, self.change_tracker)
         _agent_instances.add(self)
 
     def _add_message(self, role: str, content: str, thinking: str = ""):
@@ -874,6 +882,9 @@ class WispAgent:
                 print(f"\n📋 Session: {self.session.id}")
             # Save session summary
             self._save_session_summary()
+            # Release all file locks
+            if hasattr(self, "file_lock"):
+                self.file_lock.release_all()
             self.mcp.shutdown()
             _restore_signal_handler()
 
@@ -984,6 +995,9 @@ class WispAgent:
         finally:
             # Save session summary before cleanup
             self._save_session_summary()
+            # Release all file locks
+            if hasattr(self, "file_lock"):
+                self.file_lock.release_all()
             self.mcp.shutdown()
             _restore_signal_handler()
 

@@ -22,10 +22,21 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+# Module-level references for collaborative editing (set by agent)
+_file_lock = None
+_change_tracker = None
+
 
 class ToolError(Exception):
     """Raised when a tool execution fails."""
     pass
+
+
+def set_collaboration_tools(file_lock=None, change_tracker=None):
+    """Set file lock and change tracker for collaborative editing."""
+    global _file_lock, _change_tracker
+    _file_lock = file_lock
+    _change_tracker = change_tracker
 
 
 class _TextExtractor(HTMLParser):
@@ -230,6 +241,12 @@ def tool_write_file(path: str, workspace: str, content: str) -> str:
             f"(max write: {_MAX_WRITE_SIZE / 1024 / 1024:.0f} MB)"
         )
 
+    # ── Collaborative editing: check lock ──
+    if _file_lock and not _file_lock.acquire(path):
+        lock_info = _file_lock.lock_info(path)
+        holder = lock_info.get("agent", "unknown") if lock_info else "unknown"
+        raise ToolError(f"File {path} is locked by {holder}. Wait or coordinate before editing.")
+
     # Warn if overwriting an existing file
     if full_path.exists():
         logger.warning("Overwriting existing file: %s (%d bytes)", path, full_path.stat().st_size)
@@ -237,6 +254,15 @@ def tool_write_file(path: str, workspace: str, content: str) -> str:
     full_path.parent.mkdir(parents=True, exist_ok=True)
     full_path.write_text(content, encoding="utf-8")
     logger.info("Wrote %d bytes to %s", len(content), path)
+
+    # ── Collaborative editing: record change ──
+    if _change_tracker:
+        _change_tracker.record_write(path, content)
+
+    # Release lock after write
+    if _file_lock:
+        _file_lock.release(path)
+
     return f"✓ Wrote {len(content)} bytes to {path}"
 
 
@@ -323,12 +349,20 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str) -> s
             f"(max edit: {_MAX_READ_SIZE / 1024 / 1024:.0f} MB)."
         )
 
+    # ── Collaborative editing: check lock ──
+    if _file_lock and not _file_lock.acquire(path):
+        lock_info = _file_lock.lock_info(path)
+        holder = lock_info.get("agent", "unknown") if lock_info else "unknown"
+        raise ToolError(f"File {path} is locked by {holder}. Wait or coordinate before editing.")
+
     content = full_path.read_text(encoding="utf-8", errors="replace")
 
     # ── Exact match (fast path) ──────────────────────────────────
     if old_text in content:
         count = content.count(old_text)
         if count > 1:
+            if _file_lock:
+                _file_lock.release(path)
             raise ToolError(
                 f"old_text appears {count} times in {path}. "
                 "Edit must target a unique match."
@@ -336,11 +370,21 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str) -> s
         new_content = content.replace(old_text, new_text, 1)
         full_path.write_text(new_content, encoding="utf-8")
         logger.info("Edited %s — %d chars replaced with %d chars", path, len(old_text), len(new_text))
+
+        # ── Collaborative editing: record change ──
+        if _change_tracker:
+            _change_tracker.record_edit(path, old_text, new_text)
+
+        if _file_lock:
+            _file_lock.release(path)
+
         return f"✓ Edited {path} — {len(old_text)} chars replaced with {len(new_text)} chars"
 
     # ── Fuzzy match (fallback) ───────────────────────────────────
     match_start, actual_old, similarity = _fuzzy_find_text(content, old_text)
     if match_start is None or actual_old is None:
+        if _file_lock:
+            _file_lock.release(path)
         raise ToolError(
             f"old_text not found in {path} "
             f"(best fuzzy similarity: {similarity:.0%}). "
@@ -353,6 +397,14 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str) -> s
         "Edited %s (fuzzy, %.0%% similar) — %d chars replaced with %d chars",
         path, similarity * 100, len(actual_old), len(new_text),
     )
+
+    # ── Collaborative editing: record change ──
+    if _change_tracker:
+        _change_tracker.record_edit(path, actual_old, new_text)
+
+    if _file_lock:
+        _file_lock.release(path)
+
     return (
         f"✓ Edited {path} (fuzzy match, {similarity:.0%} similar) — "
         f"{len(actual_old)} chars replaced with {len(new_text)} chars"

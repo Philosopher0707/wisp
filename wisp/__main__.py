@@ -520,6 +520,34 @@ def cmd_diagnose(args: list[str]):
     print(diag.format())
 
 
+# ── Collaborative editing commands ───────────────────────────────────
+
+def cmd_locks(args: list[str]):
+    """Show active file locks in the workspace."""
+    from wisp.file_lock import FileLock
+    fl = FileLock(".")
+    locks = fl.list_active_locks()
+    if not locks:
+        print("No active file locks.")
+        return
+    print(f"Active locks ({len(locks)}):")
+    for lock in locks:
+        agent = lock.get("agent", "unknown")
+        since = lock.get("since", "?")[:19]
+        expires = lock.get("expires", "?")[:19]
+        file = lock.get("_file", "?")
+        print(f"  {file:<40} {agent:<20} expires {expires}")
+
+
+def cmd_changes(args: list[str]):
+    """Show changes made in this session."""
+    from wisp.change_tracker import ChangeTracker
+    from wisp.file_lock import FileLock
+    fl = FileLock(".")
+    ct = ChangeTracker(".", fl.agent_id)
+    print(ct.summary())
+
+
 # ── Session commands ─────────────────────────────────────────────────
 
 def cmd_session_list():
@@ -669,7 +697,7 @@ def main():
         print_help()
         return
 
-    _SUBCOMMANDS = {"run", "repl", "skills", "config", "check", "models", "session", "memory", "mcp", "git", "plan", "progress", "diagnose"}
+    _SUBCOMMANDS = {"run", "repl", "skills", "config", "check", "models", "session", "memory", "mcp", "git", "plan", "progress", "diagnose", "locks", "changes"}
     first = argv[0]
 
     # Global flags
@@ -788,6 +816,10 @@ def main():
             cmd_progress(rest)
         elif first == "diagnose":
             cmd_diagnose(rest)
+        elif first == "locks":
+            cmd_locks(rest)
+        elif first == "changes":
+            cmd_changes(rest)
 
     else:
         # Implicit mode: wisp [flags] 'prompt'
