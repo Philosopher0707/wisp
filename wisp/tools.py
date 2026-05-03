@@ -240,8 +240,75 @@ def tool_write_file(path: str, workspace: str, content: str) -> str:
     return f"✓ Wrote {len(content)} bytes to {path}"
 
 
+def _fuzzy_find_text(content: str, old_text: str, threshold: float = 0.85) -> tuple[Optional[int], Optional[str], float]:
+    """Find the best fuzzy match of old_text in content.
+
+    Uses character-level similarity (Dice coefficient on bigrams) to find
+    the closest match when exact matching fails.
+
+    Args:
+        content: The full file content.
+        old_text: The text to search for.
+        threshold: Minimum similarity ratio (0.0–1.0) to consider a match.
+
+    Returns:
+        Tuple of (start_index, actual_matched_text, similarity) if a match
+        above threshold is found, or (None, None, best_similarity) if no
+        match meets the threshold.
+    """
+    if not old_text or not content:
+        return None, None, 0.0
+
+    # Compute bigram similarity between two strings
+    def _bigram_sim(a: str, b: str) -> float:
+        if not a or not b:
+            return 0.0
+        # Build bigram sets
+        bigrams_a = {a[i:i+2] for i in range(len(a) - 1)}
+        bigrams_b = {b[i:i+2] for i in range(len(b) - 1)}
+        if not bigrams_a or not bigrams_b:
+            return 0.0
+        intersection = bigrams_a & bigrams_b
+        # Dice coefficient
+        return 2.0 * len(intersection) / (len(bigrams_a) + len(bigrams_b))
+
+    old_lines = old_text.splitlines(keepends=True)
+    content_lines = content.splitlines(keepends=True)
+
+    best_score = 0.0
+    best_start = None
+    best_match = None
+
+    # Slide a window of the same line count over content
+    window_size = len(old_lines)
+    if window_size == 0:
+        return None, None, 0.0
+
+    for start in range(len(content_lines) - window_size + 1):
+        candidate = "".join(content_lines[start:start + window_size])
+
+        # Quick length check — skip wildly different lengths
+        len_ratio = len(candidate) / len(old_text) if old_text else 0
+        if len_ratio < 0.5 or len_ratio > 2.0:
+            continue
+
+        sim = _bigram_sim(candidate, old_text)
+        if sim > best_score:
+            best_score = sim
+            best_start = len("".join(content_lines[:start]))
+            best_match = candidate
+
+    if best_score >= threshold and best_start is not None and best_match is not None:
+        return best_start, best_match, best_score
+    return None, None, best_score
+
+
 def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str) -> str:
-    """Replace exact text in a file (surgical edit)."""
+    """Replace exact text in a file (surgical edit).
+
+    First tries exact match. If that fails, falls back to fuzzy matching
+    using character-level similarity (Dice coefficient on bigrams).
+    """
     _validate_string(path, "path")
     _validate_string(old_text, "old_text")
     _validate_string(new_text, "new_text", _MAX_WRITE_SIZE, allow_empty=True)
@@ -258,22 +325,38 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str) -> s
 
     content = full_path.read_text(encoding="utf-8", errors="replace")
 
-    if old_text not in content:
+    # ── Exact match (fast path) ──────────────────────────────────
+    if old_text in content:
+        count = content.count(old_text)
+        if count > 1:
+            raise ToolError(
+                f"old_text appears {count} times in {path}. "
+                "Edit must target a unique match."
+            )
+        new_content = content.replace(old_text, new_text, 1)
+        full_path.write_text(new_content, encoding="utf-8")
+        logger.info("Edited %s — %d chars replaced with %d chars", path, len(old_text), len(new_text))
+        return f"✓ Edited {path} — {len(old_text)} chars replaced with {len(new_text)} chars"
+
+    # ── Fuzzy match (fallback) ───────────────────────────────────
+    match_start, actual_old, similarity = _fuzzy_find_text(content, old_text)
+    if match_start is None or actual_old is None:
         raise ToolError(
-            f"old_text not found in {path}. "
+            f"old_text not found in {path} "
+            f"(best fuzzy similarity: {similarity:.0%}). "
             "Make sure the exact text exists (including whitespace)."
         )
-    count = content.count(old_text)
-    if count > 1:
-        raise ToolError(
-            f"old_text appears {count} times in {path}. "
-            "Edit must target a unique match."
-        )
 
-    new_content = content.replace(old_text, new_text, 1)
+    new_content = content[:match_start] + new_text + content[match_start + len(actual_old):]
     full_path.write_text(new_content, encoding="utf-8")
-    logger.info("Edited %s — %d chars replaced with %d chars", path, len(old_text), len(new_text))
-    return f"✓ Edited {path} — {len(old_text)} chars replaced with {len(new_text)} chars"
+    logger.info(
+        "Edited %s (fuzzy, %.0%% similar) — %d chars replaced with %d chars",
+        path, similarity * 100, len(actual_old), len(new_text),
+    )
+    return (
+        f"✓ Edited {path} (fuzzy match, {similarity:.0%} similar) — "
+        f"{len(actual_old)} chars replaced with {len(new_text)} chars"
+    )
 
 
 def tool_web_fetch(url: str, workspace: str = ".", max_chars: int = 10000) -> str:

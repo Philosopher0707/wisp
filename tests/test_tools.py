@@ -99,6 +99,83 @@ class TestToolEditFile:
             tool_edit_file("/etc/passwd", str(temp_workspace), "x", "y")
 
 
+class TestToolEditFileFuzzy:
+
+    def test_fuzzy_match_whitespace_diff(self, temp_workspace):
+        """Fuzzy match handles whitespace differences (tabs vs spaces)."""
+        f = temp_workspace / "main.py"
+        f.write_text("def hello():\n\tprint('world')\n\treturn True\n")
+        # old_text uses spaces instead of tabs
+        result = tool_edit_file(
+            "main.py", str(temp_workspace),
+            old_text="    print('world')",
+            new_text="    print('universe')",
+        )
+        assert "fuzzy" in result
+        content = f.read_text()
+        assert "print('universe')" in content
+
+    def test_fuzzy_match_slight_wording(self, temp_workspace):
+        """Fuzzy match handles slight wording differences."""
+        f = temp_workspace / "greeting.py"
+        f.write_text("def greet(name):\n    message = f'Hello, {name}!'\n    return message\n")
+        # old_text uses slightly different variable name
+        result = tool_edit_file(
+            "greeting.py", str(temp_workspace),
+            old_text="    msg = f'Hello, {name}!'\n    return msg",
+            new_text="    greeting = f'Hello, {name}!'\n    return greeting",
+        )
+        assert "fuzzy" in result
+        content = f.read_text()
+        assert "greeting" in content
+
+    def test_fuzzy_match_multiline(self, temp_workspace):
+        """Fuzzy match works with multi-line blocks."""
+        f = temp_workspace / "block.py"
+        f.write_text(
+            "def process(data):\n"
+            "    result = data.strip()\n"
+            "    result = result.upper()\n"
+            "    return result\n"
+        )
+        # old_text has slightly different variable name and missing type hint
+        result = tool_edit_file(
+            "block.py", str(temp_workspace),
+            old_text="    res = data.strip()\n    res = res.upper()\n    return res",
+            new_text="    cleaned = data.strip()\n    cleaned = cleaned.upper()\n    return cleaned",
+        )
+        assert "fuzzy" in result
+        content = f.read_text()
+        assert "cleaned = data.strip()" in content
+        assert "cleaned = cleaned.upper()" in content
+        assert "return cleaned" in content
+
+    def test_fuzzy_match_low_similarity_still_fails(self, temp_workspace):
+        """Very different text should still fail."""
+        f = temp_workspace / "different.py"
+        f.write_text("x = 1\ny = 2\nz = 3\n")
+        with pytest.raises(ToolError, match="old_text not found"):
+            tool_edit_file(
+                "different.py", str(temp_workspace),
+                old_text="class UserModel:\n    pass",
+                new_text="class AdminModel:\n    pass",
+            )
+
+    def test_exact_match_still_works(self, temp_workspace):
+        """Exact match is still used when available (no 'fuzzy' in result)."""
+        f = temp_workspace / "exact.py"
+        f.write_text("original text here\n")
+        result = tool_edit_file(
+            "exact.py", str(temp_workspace),
+            old_text="original text here",
+            new_text="replaced text here",
+        )
+        assert "fuzzy" not in result
+        assert "Edited" in result
+        content = f.read_text()
+        assert "replaced text here" in content
+
+
 class TestToolRunBash:
 
     def test_simple_command(self, temp_workspace):
