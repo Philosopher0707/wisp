@@ -538,6 +538,23 @@ def tool_search_symbols(query: str, workspace: str = ".", max_results: int = 20)
     return "\n".join(lines)
 
 
+def tool_remember(fact: str, workspace: str = ".") -> str:
+    """Store a fact in cross-session memory.
+
+    The fact will be remembered across conversations and injected into
+    the system prompt in future sessions.
+    """
+    _validate_string(fact, "fact", 500)
+
+    from wisp.memory import add_fact
+
+    added = add_fact(fact, workspace=workspace)
+    if added:
+        return f"✓ Remembered: {fact}"
+    else:
+        return f"(Already remembered: {fact})"
+
+
 # ── Tool schema definitions (Ollama tool-calling format) ──
 
 TOOL_SCHEMAS = [
@@ -651,6 +668,20 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "remember",
+            "description": "Store a fact in cross-session memory so you remember it across conversations. Use for user preferences, project conventions, decisions made, or anything worth remembering long-term.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "fact": {"type": "string", "description": "The fact to remember. Be specific and concise."},
+                },
+                "required": ["fact"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "spawn_subagent",
             "description": "Spawn a specialist subagent to handle a scoped task (research, coding, testing) with its own iteration budget and timeout. The subagent runs in parallel and returns a structured result. Use when a task can be decomposed into an independent work unit.",
             "parameters": {
@@ -677,6 +708,7 @@ TOOL_IMPLS = {
     "list_files": tool_list_files,
     "web_fetch": tool_web_fetch,
     "search_symbols": tool_search_symbols,
+    "remember": tool_remember,
 }
 
 
@@ -734,6 +766,9 @@ def _build_tool_metadata(name: str, args: dict, result: str) -> dict:
         m = re.search(r"Found (\d+) symbol", result)
         if m:
             meta["results_count"] = int(m.group(1))
+
+    elif name == "remember":
+        meta["fact"] = (args.get("fact", "") or "")[:80]
 
     return meta
 

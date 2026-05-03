@@ -155,6 +155,77 @@ def cmd_models():
         sys.exit(1)
 
 
+# ── Memory commands ──────────────────────────────────────────────────
+
+def cmd_memory(args: list[str]):
+    """Manage cross-session memory (learned preferences, project facts)."""
+    from wisp.memory import add_fact, remove_fact, list_facts, clear_memory, load_memory
+
+    if not args:
+        # Show all facts
+        facts = list_facts()
+        memory = load_memory()
+        ws_facts = memory.get("workspace_facts", {})
+
+        if not facts and not ws_facts:
+            print("No facts stored in memory.")
+            print("  Use: wisp memory add \"<fact>\"")
+            print("  Or the LLM can use the `remember` tool during conversations.")
+            return
+
+        if facts:
+            print("Global facts:")
+            for f in facts:
+                print(f"  • {f}")
+            print()
+
+        for ws_path, ws_fs in ws_facts.items():
+            print(f"Workspace ({ws_path}):")
+            for f in ws_fs:
+                print(f"  • {f}")
+            print()
+
+        print(f"Total: {len(facts) + sum(len(v) for v in ws_facts.values())} fact(s)")
+        return
+
+    sub = args[0]
+
+    if sub == "add" and len(args) >= 2:
+        fact = " ".join(args[1:])
+        if add_fact(fact):
+            print(f"✓ Added: {fact}")
+        else:
+            print(f"(Already exists or at capacity)")
+
+    elif sub == "remove" and len(args) >= 2:
+        fact = " ".join(args[1:])
+        if remove_fact(fact):
+            print(f"✓ Removed: {fact}")
+        else:
+            print(f"✗ Not found: {fact}")
+
+    elif sub == "clear":
+        clear_memory()
+        print("✓ Memory cleared.")
+
+    elif sub == "list":
+        facts = list_facts()
+        if facts:
+            print("Facts:")
+            for f in facts:
+                print(f"  • {f}")
+        else:
+            print("No facts stored.")
+
+    else:
+        print("Usage:")
+        print("  wisp memory                    List all facts")
+        print("  wisp memory add \"<fact>\"       Add a fact")
+        print("  wisp memory remove \"<fact>\"    Remove a fact")
+        print("  wisp memory list               List global facts")
+        print("  wisp memory clear              Clear all facts")
+
+
 # ── Session commands ─────────────────────────────────────────────────
 
 def cmd_session_list():
@@ -411,6 +482,8 @@ def main():
             cmd_check()
         elif first == "models":
             cmd_models()
+        elif first == "memory":
+            cmd_memory(rest)
 
     else:
         # Implicit mode: wisp [flags] 'prompt'

@@ -41,6 +41,7 @@ from wisp.project_context import detect_project_context, format_context
 from wisp.code_index import build_index as build_regex_index, format_index_summary
 from wisp.tree_sitter_index import build_index as build_ts_index, is_tree_sitter_available
 from wisp.mcp import MCPManager
+from wisp.memory import format_memory_block
 
 logger = logging.getLogger(__name__)
 
@@ -421,6 +422,11 @@ class WispAgent:
             system += f"\n\n{index_summary}"
         # Store index on the agent so search_symbols tool can use it
         self._code_index = code_index
+
+        # Inject cross-session memory (learned preferences, project facts)
+        memory_block = format_memory_block(ws)
+        if memory_block:
+            system += f"\n\n{memory_block}"
 
         if effective_skill:
             skill = next((s for s in skills if s.name == effective_skill), None)
