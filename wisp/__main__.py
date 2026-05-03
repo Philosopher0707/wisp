@@ -441,6 +441,64 @@ def cmd_git(args: list[str]):
     print("  wisp git log          Show recent commits")
 
 
+# ── Plan commands ────────────────────────────────────────────────────
+
+def cmd_plan(args: list[str]):
+    """Manage structured plans."""
+    from wisp.planner import PlanStore, parse_plan_from_text
+    from wisp.progress import format_progress, list_plans
+
+    if not args:
+        # Show active plan
+        store = PlanStore()
+        plan = store.load_active(".")
+        if plan:
+            print(format_progress(plan))
+        else:
+            print("No active plan.")
+            print("  Create one: wisp plan \"implement feature X\"")
+        return
+
+    if args[0] == "list":
+        print(list_plans("."))
+        return
+
+    if args[0] == "abort":
+        store = PlanStore()
+        plan = store.load_active(".")
+        if plan:
+            plan.abort()
+            store.save(plan)
+            print(f"✓ Aborted plan: {plan.id}")
+        else:
+            print("No active plan to abort.")
+        return
+
+    if args[0] == "clear":
+        store = PlanStore()
+        store.clear()
+        print("✓ All plans cleared.")
+        return
+
+    # Create a plan from the goal string
+    goal = " ".join(args)
+    print(f"Creating plan for: {goal}")
+    print("(Use the REPL with 'plan_task' tool to generate a structured plan)")
+
+
+def cmd_progress(args: list[str]):
+    """Show current plan progress."""
+    from wisp.planner import PlanStore
+    from wisp.progress import format_progress
+
+    store = PlanStore()
+    plan = store.load_active(".")
+    if plan:
+        print(format_progress(plan))
+    else:
+        print("No active plan. Run 'wisp plan' to see plans or create one in the REPL.")
+
+
 # ── Session commands ─────────────────────────────────────────────────
 
 def cmd_session_list():
@@ -590,7 +648,7 @@ def main():
         print_help()
         return
 
-    _SUBCOMMANDS = {"run", "repl", "skills", "config", "check", "models", "session", "memory", "mcp", "git"}
+    _SUBCOMMANDS = {"run", "repl", "skills", "config", "check", "models", "session", "memory", "mcp", "git", "plan", "progress"}
     first = argv[0]
 
     # Global flags
@@ -703,6 +761,10 @@ def main():
             cmd_mcp(rest)
         elif first == "git":
             cmd_git(rest)
+        elif first == "plan":
+            cmd_plan(rest)
+        elif first == "progress":
+            cmd_progress(rest)
 
     else:
         # Implicit mode: wisp [flags] 'prompt'

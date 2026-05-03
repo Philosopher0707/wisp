@@ -497,6 +497,13 @@ class WispAgent:
         if git_block:
             system += f"\n\n{git_block}"
 
+        # Inject active plan
+        from wisp.planner import PlanStore
+        plan_store = PlanStore()
+        active_plan = plan_store.load_active(ws)
+        if active_plan:
+            system += f"\n\n{active_plan.format_for_prompt()}"
+
         if effective_skill:
             skill = next((s for s in skills if s.name == effective_skill), None)
             if skill:
