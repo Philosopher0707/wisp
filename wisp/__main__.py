@@ -208,6 +208,9 @@ def cmd_memory(args: list[str]):
         clear_memory()
         print("✓ Memory cleared.")
 
+    elif sub == "summaries":
+        _cmd_memory_summaries(args[1:])
+
     elif sub == "list":
         facts = list_facts()
         if facts:
@@ -224,6 +227,72 @@ def cmd_memory(args: list[str]):
         print("  wisp memory remove \"<fact>\"    Remove a fact")
         print("  wisp memory list               List global facts")
         print("  wisp memory clear              Clear all facts")
+        print("  wisp memory summaries          List session summaries")
+        print("  wisp memory summaries --show <id>  Show full summary")
+        print("  wisp memory summaries --clear  Clear session summaries")
+        print("  wisp memory summaries --stats  Show summary stats")
+
+
+def _cmd_memory_summaries(args: list[str]):
+    """Handle agent memory (session summaries) subcommands."""
+    from wisp.agent_memory import AgentMemory
+    import json
+
+    mem = AgentMemory()
+
+    # Parse flags
+    show_id = None
+    do_clear = False
+    do_stats = False
+    i = 0
+    while i < len(args):
+        if args[i] in ("--show", "-s") and i + 1 < len(args):
+            show_id = args[i + 1]
+            i += 2
+        elif args[i] in ("--clear", "-c"):
+            do_clear = True
+            i += 1
+        elif args[i] in ("--stats", "-S"):
+            do_stats = True
+            i += 1
+        else:
+            i += 1
+
+    if do_clear:
+        mem.clear()
+        print("✓ Agent memory (session summaries) cleared.")
+        return
+
+    if do_stats:
+        summaries = mem.load_all()
+        print(f"Total summaries: {len(summaries)}")
+        if summaries:
+            print(f"Oldest: {summaries[0].timestamp[:19]}")
+            print(f"Newest: {summaries[-1].timestamp[:19]}")
+        return
+
+    if show_id:
+        summaries = mem.load_all()
+        for s in summaries:
+            if s.session_id.startswith(show_id):
+                print(json.dumps(s.to_dict(), indent=2, ensure_ascii=False))
+                return
+        print(f"✗ Session '{show_id}' not found.")
+        return
+
+    # Default: list
+    summaries = mem.load_all()
+    if not summaries:
+        print("No session summaries stored.")
+        print("  Summaries are generated automatically when a session ends.")
+        return
+
+    print(f"{'Session ID':<30} {'Date':<12} {'Workspace':<30} {'Summary'}")
+    print("-" * 120)
+    for s in summaries:
+        ws = s.workspace[:28]
+        sm = s.summary[:50] + "..." if len(s.summary) > 50 else s.summary
+        print(f"{s.session_id:<30} {s.timestamp[:10]:<12} {ws:<30} {sm}")
 
 
 # ── MCP server commands ──────────────────────────────────────────────
@@ -482,7 +551,7 @@ def main():
         print_help()
         return
 
-    _SUBCOMMANDS = {"run", "repl", "skills", "config", "check", "models", "session"}
+    _SUBCOMMANDS = {"run", "repl", "skills", "config", "check", "models", "session", "memory", "mcp"}
     first = argv[0]
 
     # Global flags

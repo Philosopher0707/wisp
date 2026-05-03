@@ -350,6 +350,13 @@ class WispAgent:
         # Initialize MCP (connects to configured servers)
         self.mcp = MCPManager(self.config.workspace or ".")
         self._mcp_initialized = False
+        # Initialize agent memory (loads recent summaries for this workspace)
+        from wisp.agent_memory import AgentMemory
+        self.agent_memory = AgentMemory()
+        self._recent_summaries = self.agent_memory.load_recent(
+            workspace=self.config.workspace or ".",
+            limit=3,
+        )
         _agent_instances.add(self)
 
     def _add_message(self, role: str, content: str, thinking: str = ""):
@@ -418,6 +425,18 @@ class WispAgent:
             return self.session_mgr.load(resolved)
         return None
 
+    def _save_session_summary(self) -> None:
+        """Summarize the current session and persist to agent memory."""
+        if self.session is None or not self.messages:
+            return
+        try:
+            summary = self.session.summarize()
+            if summary:
+                self.agent_memory.save(summary)
+                logger.info("Saved session summary for %s", self.session.id)
+        except Exception as e:
+            logger.warning("Failed to save session summary: %s", e)
+
     def _build_system_prompt(self, skill_name: Optional[str] = None, workspace: Optional[str] = None) -> str:
         """Build the fully assembled system prompt (cached for REPL reuse).
 
@@ -464,6 +483,13 @@ class WispAgent:
         memory_block = format_memory_block(ws)
         if memory_block:
             system += f"\n\n{memory_block}"
+
+        # Inject previous session summaries
+        if hasattr(self, "_recent_summaries") and self._recent_summaries:
+            from wisp.agent_memory import AgentMemory
+            summary_block = AgentMemory().format_for_prompt(self._recent_summaries)
+            if summary_block:
+                system += f"\n\n{summary_block}"
 
         if effective_skill:
             skill = next((s for s in skills if s.name == effective_skill), None)
@@ -822,6 +848,8 @@ class WispAgent:
             # ── Done ───────────────────────────────────────────────────
             if self.session and self.session.id and not self._interrupted:
                 print(f"\n📋 Session: {self.session.id}")
+            # Save session summary
+            self._save_session_summary()
             self.mcp.shutdown()
             _restore_signal_handler()
 
@@ -930,6 +958,8 @@ class WispAgent:
                 print(f"📋 Session {self.session.id} saved.")
                 print(f"   Continue with: wisp repl -S {self.session.id}")
         finally:
+            # Save session summary before cleanup
+            self._save_session_summary()
             self.mcp.shutdown()
             _restore_signal_handler()
 

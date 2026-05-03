@@ -106,6 +106,18 @@ class Session:
         """Update the updated_at timestamp."""
         self.updated_at = _now_iso()
 
+    def summarize(self):
+        """Generate a summary of this session's conversation."""
+        from wisp.summarizer import ExtractiveSummarizer
+        if not self.messages:
+            return None
+        summarizer = ExtractiveSummarizer()
+        return summarizer.summarize(
+            messages=self.messages,
+            session_id=self.id,
+            workspace=self.workspace,
+        )
+
 
 # ── Session Manager ──────────────────────────────────────────────────
 
