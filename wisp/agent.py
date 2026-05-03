@@ -604,7 +604,7 @@ class WispAgent:
                 result = self._spawn_subagent(func_args, workspace)
             else:
                 try:
-                    result = execute_tool(func_name, func_args, workspace)
+                    result = execute_tool(func_name, func_args, workspace, max_data_chars=8000)
                 except ToolError as e:
                     result = f"Error: {e}"
                     logger.warning("Tool %s failed: %s", func_name, e)
@@ -612,12 +612,17 @@ class WispAgent:
                     result = f"Unexpected error: {e}"
                     logger.error("Unexpected error in tool %s: %s", func_name, e, exc_info=True)
 
-            if len(result) > 8000:
-                result = result[:8000] + f"\n... [truncated {len(result)} total chars]"
+            # Extract preview from structured result (or use raw string for subagent/spawn)
+            preview = result[:200].replace("\n", " ")
+            if func_name != "spawn_subagent" and result.startswith("{"):
+                try:
+                    parsed = json.loads(result)
+                    preview = parsed.get("data", result)[:200].replace("\n", " ")
+                except (json.JSONDecodeError, KeyError):
+                    pass
 
             all_results.append({"role": "tool", "content": result, "name": func_name})
-            preview = result[:200].replace("\n", " ")
-            if len(result) > 200:
+            if len(preview) > 200:
                 preview += "..."
             print(f"     → {preview}")
 

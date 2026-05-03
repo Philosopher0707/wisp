@@ -297,7 +297,7 @@ class SubagentRunner:
                 print(f"  [sub] 🛠  {func_name}({arg_preview})")
 
                 try:
-                    result = execute_tool(func_name, func_args, workspace)
+                    result = execute_tool(func_name, func_args, workspace, max_data_chars=4000)
                 except ToolError as e:
                     result = f"Error: {e}"
                     logger.warning("Subagent tool %s failed: %s", func_name, e)
@@ -305,12 +305,16 @@ class SubagentRunner:
                     result = f"Unexpected error: {e}"
                     logger.error("Unexpected error in subagent tool %s: %s", func_name, e, exc_info=True)
 
-                # Truncate large results
-                if len(result) > 4000:
-                    result = result[:4000] + f"\n... [truncated {len(result)} chars]"
-
+                # Extract preview from structured result
                 preview = result[:120].replace("\n", " ")
-                if len(result) > 120:
+                if result.startswith("{"):
+                    try:
+                        import json
+                        parsed = json.loads(result)
+                        preview = parsed.get("data", result)[:120].replace("\n", " ")
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+                if len(preview) > 120:
                     preview += "..."
                 print(f"  [sub]    → {preview}")
 

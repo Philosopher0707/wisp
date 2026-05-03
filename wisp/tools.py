@@ -7,6 +7,7 @@ Production-hardened with:
 - Timeout enforcement on bash commands
 """
 
+import json
 import logging
 import os
 import re
@@ -596,8 +597,73 @@ TOOL_IMPLS = {
 }
 
 
-def execute_tool(name: str, args: dict, workspace: str) -> str:
-    """Execute a tool by name with given arguments."""
+def _build_tool_metadata(name: str, args: dict, result: str) -> dict:
+    """Build structured metadata for a tool result based on the tool name and arguments."""
+    meta: dict[str, Any] = {}
+
+    if name == "read_file":
+        meta["path"] = args.get("path", "")
+        meta["offset"] = args.get("offset", 0)
+        meta["limit"] = args.get("limit", 2000)
+        # Try to extract line info from the result footer
+        m = re.search(r"--- \[showing lines (\d+)-(\d+) of (\d+)\] ---", result)
+        if m:
+            meta["lines_shown"] = f"{m.group(1)}-{m.group(2)}"
+            meta["total_lines"] = int(m.group(3))
+
+    elif name == "write_file":
+        meta["path"] = args.get("path", "")
+        meta["bytes_written"] = len(args.get("content", ""))
+
+    elif name == "edit_file":
+        meta["path"] = args.get("path", "")
+        meta["old_text_preview"] = (args.get("old_text", "") or "")[:80]
+        meta["new_text_preview"] = (args.get("new_text", "") or "")[:80]
+
+    elif name == "run_bash":
+        meta["command"] = (args.get("command", "") or "")[:120]
+        meta["timeout"] = args.get("timeout", 60)
+        # Extract exit code from result
+        m = re.search(r"\[exit code: (\d+)\]", result)
+        if m:
+            meta["exit_code"] = int(m.group(1))
+        else:
+            meta["exit_code"] = 0
+        if "[output truncated]" in result:
+            meta["truncated"] = True
+
+    elif name == "list_files":
+        meta["path"] = args.get("path", ".")
+        meta["pattern"] = args.get("pattern", "*")
+        # Count entries from result
+        lines = [l for l in result.split("\n") if l.strip() and not l.startswith("(")]
+        meta["entry_count"] = len(lines)
+
+    elif name == "web_fetch":
+        meta["url"] = args.get("url", "")
+        meta["max_chars"] = args.get("max_chars", 10000)
+        if "[truncated" in result:
+            meta["truncated"] = True
+
+    elif name == "search_symbols":
+        meta["query"] = args.get("query", "")
+        meta["max_results"] = args.get("max_results", 20)
+        m = re.search(r"Found (\d+) symbol", result)
+        if m:
+            meta["results_count"] = int(m.group(1))
+
+    return meta
+
+
+def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0) -> str:
+    """Execute a tool by name with given arguments.
+
+    Returns a structured JSON string with status, data, and metadata
+    so the LLM can parse results programmatically.
+
+    If max_data_chars > 0, the data field is truncated to that length
+    and a 'truncated' flag is added to metadata.
+    """
     impl = TOOL_IMPLS.get(name)
     if not impl:
         raise ToolError(f"Unknown tool: {name}")
@@ -611,9 +677,38 @@ def execute_tool(name: str, args: dict, workspace: str) -> str:
     try:
         result = impl(**filtered)
         logger.debug("Tool %s returned %d chars", name, len(result))
-        return result
-    except ToolError:
-        raise
+
+        # Build structured result with optional truncation
+        metadata = _build_tool_metadata(name, args, result)
+        data = result
+        if max_data_chars > 0 and len(data) > max_data_chars:
+            data = data[:max_data_chars] + f"\n... [truncated {len(result)} total chars]"
+            metadata["truncated"] = True
+
+        structured = {
+            "status": "ok",
+            "tool": name,
+            "data": data,
+            "metadata": metadata,
+        }
+        return json.dumps(structured, ensure_ascii=False)
+
+    except ToolError as e:
+        logger.warning("Tool %s failed: %s", name, e)
+        structured = {
+            "status": "error",
+            "tool": name,
+            "data": str(e),
+            "metadata": _build_tool_metadata(name, args, ""),
+        }
+        return json.dumps(structured, ensure_ascii=False)
+
     except Exception as e:
         logger.error("Unexpected error in tool %s: %s", name, e, exc_info=True)
-        raise ToolError(f"{name} failed: {e}")
+        structured = {
+            "status": "error",
+            "tool": name,
+            "data": f"Unexpected error: {e}",
+            "metadata": _build_tool_metadata(name, args, ""),
+        }
+        return json.dumps(structured, ensure_ascii=False)
