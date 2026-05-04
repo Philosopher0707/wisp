@@ -72,6 +72,11 @@ data class PongMessage(
 ) : WispMessage()
 
 @Serializable
+data class InterruptMessage(
+    override val type: String = "interrupt"
+) : WispMessage()
+
+@Serializable
 data class StatusMessage(
     override val type: String = "status",
     val message: String

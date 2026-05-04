@@ -93,11 +93,19 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CORS: restrict to known origins. Override via env var for development.
+CORS_ORIGINS = os.environ.get("WISP_CORS_ORIGINS", "")
+if CORS_ORIGINS:
+    _origins = [o.strip() for o in CORS_ORIGINS.split(",") if o.strip()]
+else:
+    # Default: same-origin only (no web browser access from other domains)
+    _origins = []
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict in production
+    allow_origins=_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -110,7 +118,7 @@ class Connection:
         self.ws = websocket
         self.client_id = client_id
         self.agent: Optional[ServerAgent] = None
-        self.agent_thread: Optional[threading.Thread] = None
+        self.agent_task: Optional[asyncio.Task] = None
         self._closed = False
 
     async def send(self, msg: dict):
@@ -124,8 +132,12 @@ class Connection:
         self._closed = True
         if self.agent:
             self.agent._interrupted = True
-        if self.agent_thread and self.agent_thread.is_alive():
-            self.agent_thread.join(timeout=5)
+        if self.agent_task and not self.agent_task.done():
+            self.agent_task.cancel()
+            try:
+                await asyncio.wait_for(self.agent_task, timeout=5)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
         try:
             await self.ws.close()
         except Exception:
@@ -334,10 +346,14 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(...)):
                     continue
 
                 # Stop any existing agent run
-                if conn.agent_thread and conn.agent_thread.is_alive():
+                if conn.agent_task and not conn.agent_task.done():
                     if conn.agent:
                         conn.agent._interrupted = True
-                    conn.agent_thread.join(timeout=2)
+                    conn.agent_task.cancel()
+                    try:
+                        await asyncio.wait_for(conn.agent_task, timeout=2)
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                        pass
 
                 config = WispConfig()
                 if msg.get("model"):
@@ -349,11 +365,10 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(...)):
                 conn.agent = ServerAgent(config, conn.send, loop)
                 session_id = msg.get("session_id")
 
-                def _run():
-                    conn.agent.run_server(prompt, session_id=session_id)
-
-                conn.agent_thread = threading.Thread(target=_run, daemon=True)
-                conn.agent_thread.start()
+                # Run agent in a background thread to avoid blocking the event loop
+                conn.agent_task = asyncio.create_task(
+                    asyncio.to_thread(conn.agent.run_server, prompt, session_id=session_id)
+                )
 
             elif msg_type == "tool_approval":
                 call_id = msg.get("id")

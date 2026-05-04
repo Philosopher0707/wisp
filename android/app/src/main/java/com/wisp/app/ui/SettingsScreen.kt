@@ -92,7 +92,10 @@ fun SettingsScreen(viewModel: WispViewModel) {
                         text = when (connectionState) {
                             is com.wisp.app.WispWebSocketClient.ConnectionState.Connected -> "Connected"
                             is com.wisp.app.WispWebSocketClient.ConnectionState.Connecting -> "Connecting..."
-                            is com.wisp.app.WispWebSocketClient.ConnectionState.Error -> "Error: ${(connectionState as com.wisp.app.WispWebSocketClient.ConnectionState.Error).message}"
+                            is com.wisp.app.WispWebSocketClient.ConnectionState.Error -> {
+                            val err = connectionState as com.wisp.app.WispWebSocketClient.ConnectionState.Error
+                            if (err.willRetry) "Reconnecting… (${err.message})" else "Error: ${err.message}"
+                        }
                             else -> "Disconnected"
                         },
                         modifier = Modifier.weight(1f)

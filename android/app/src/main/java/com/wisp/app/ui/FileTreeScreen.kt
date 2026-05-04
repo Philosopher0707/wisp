@@ -23,6 +23,15 @@ fun FileTreeScreen(viewModel: WispViewModel) {
     var selectedFile by remember { mutableStateOf<String?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    val errorMessage by viewModel.errorMessage.collectAsState()
+
+    // Show errors
+    LaunchedEffect(errorMessage) {
+        errorMessage?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.clearError()
+        }
+    }
 
     // Load root on first launch
     LaunchedEffect(Unit) {

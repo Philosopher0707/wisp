@@ -151,7 +151,7 @@ class WispViewModel(context: Context) : ViewModel() {
             _errorMessage.value = "Please configure server URL and API key"
             return
         }
-        wsClient.connect(url, key)
+        wsClient.connect(url, key, enableAutoReconnect = true)
     }
 
     fun disconnect() {
@@ -178,10 +178,9 @@ class WispViewModel(context: Context) : ViewModel() {
     }
 
     fun interrupt() {
-        wsClient.sendPrompt("")  // Empty to trigger interrupt handling
-        // Actually, let's send an interrupt message
-        // For now, just set loading false
+        wsClient.sendInterrupt()
         isLoading.value = false
+        currentThinking.value = ""
     }
 
     // Settings

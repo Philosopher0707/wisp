@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.mikepenz.markdown.compose.Markdown
 import com.wisp.app.WispViewModel
 import kotlinx.coroutines.launch
 
@@ -23,8 +24,18 @@ fun ChatScreen(viewModel: WispViewModel) {
     val messages = viewModel.messages
     val isLoading by viewModel.isLoading
     val currentThinking by viewModel.currentThinking
+    val errorMessage by viewModel.errorMessage.collectAsState()
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // Show errors as snackbar
+    LaunchedEffect(errorMessage) {
+        errorMessage?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.clearError()
+        }
+    }
 
     // Auto-scroll to bottom
     LaunchedEffect(messages.size, isLoading) {
@@ -35,41 +46,49 @@ fun ChatScreen(viewModel: WispViewModel) {
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        // Messages list
-        LazyColumn(
-            state = listState,
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) }
+    ) { padding ->
+        Column(
             modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .fillMaxSize()
+                .padding(padding)
         ) {
-            items(messages, key = { it.id }) { msg ->
-                when (msg.role) {
-                    "user" -> UserMessageBubble(msg.text)
-                    "assistant" -> AssistantMessageBubble(msg, viewModel)
+            // Messages list
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(messages, key = { it.id }) { msg ->
+                    when (msg.role) {
+                        "user" -> UserMessageBubble(msg.text)
+                        "assistant" -> AssistantMessageBubble(msg, viewModel)
+                    }
+                }
+
+                // Show thinking indicator
+                if (isLoading && currentThinking.isNotBlank()) {
+                    item {
+                        ThinkingIndicator(currentThinking)
+                    }
                 }
             }
 
-            // Show thinking indicator
-            if (isLoading && currentThinking.isNotBlank()) {
-                item {
-                    ThinkingIndicator(currentThinking)
+            // Input area
+            ChatInputBar(
+                isLoading = isLoading,
+                onSend = { prompt ->
+                    viewModel.sendPrompt(prompt)
+                },
+                onInterrupt = {
+                    viewModel.interrupt()
                 }
-            }
+            )
         }
-
-        // Input area
-        ChatInputBar(
-            isLoading = isLoading,
-            onSend = { prompt ->
-                viewModel.sendPrompt(prompt)
-            },
-            onInterrupt = {
-                viewModel.interrupt()
-            }
-        )
     }
 }
 
@@ -110,9 +129,9 @@ fun AssistantMessageBubble(
             Column(modifier = Modifier.padding(12.dp)) {
                 // Main text
                 if (msg.text.isNotBlank()) {
-                    Text(
-                        text = msg.text,
-                        style = MaterialTheme.typography.bodyLarge
+                    Markdown(
+                        content = msg.text,
+                        modifier = Modifier.padding(vertical = 4.dp)
                     )
                 }
 

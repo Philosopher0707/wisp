@@ -31,7 +31,7 @@ private val LightColorScheme = lightColorScheme(
 
 @Composable
 fun WispTheme(
-    darkTheme: Boolean = true, // Default to dark theme
+    darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit
 ) {
     val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
