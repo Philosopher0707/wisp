@@ -548,6 +548,17 @@ def cmd_changes(args: list[str]):
     print(ct.summary())
 
 
+# ── ACP adapter command ────────────────────────────────────────────────
+
+def cmd_acp(args: list[str]):
+    """Run Wisp as an ACP external agent for Zed."""
+    from wisp.acp_adapter import main as acp_main
+    import sys
+    # Pass through any args
+    sys.argv = ["wisp", "acp"] + args
+    acp_main()
+
+
 # ── Session commands ─────────────────────────────────────────────────
 
 def cmd_session_list():
@@ -697,7 +708,7 @@ def main():
         print_help()
         return
 
-    _SUBCOMMANDS = {"run", "repl", "skills", "config", "check", "models", "session", "memory", "mcp", "git", "plan", "progress", "diagnose", "locks", "changes"}
+    _SUBCOMMANDS = {"run", "repl", "skills", "config", "check", "models", "session", "memory", "mcp", "git", "plan", "progress", "diagnose", "locks", "changes", "acp"}
     first = argv[0]
 
     # Global flags
@@ -820,6 +831,8 @@ def main():
             cmd_locks(rest)
         elif first == "changes":
             cmd_changes(rest)
+        elif first == "acp":
+            cmd_acp(rest)
 
     else:
         # Implicit mode: wisp [flags] 'prompt'
