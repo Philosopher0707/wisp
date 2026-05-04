@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -91,9 +93,12 @@ class AcpSession:
         # Add user message to agent
         self._ensure_agent()._add_message("user", user_content)
 
-        # Run one turn with streaming
+        # Run one turn with streaming — suppress stdout to avoid corrupting JSON-RPC
+        captured_output = io.StringIO()
         try:
-            response = self._ensure_agent()._run_turn_streaming(system)
+            with contextlib.redirect_stdout(captured_output):
+                response = self._ensure_agent()._run_turn_streaming(system)
+
             if not response:
                 yield TextContent(text="(No response)")
                 return
