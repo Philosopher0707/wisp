@@ -130,3 +130,65 @@ class TestFormatSessionPreview:
         assert "hello" in preview
         assert "world" in preview
         assert s.id in preview
+
+
+class TestSessionCompact:
+
+    def test_compact_reduces_messages(self):
+        s = Session.create("m", ".", "compact test")
+        # Create 10 messages
+        for i in range(5):
+            s.messages.append({"role": "user", "content": f"prompt {i}"})
+            s.messages.append({"role": "assistant", "content": f"response {i}"})
+        assert len(s.messages) == 10
+
+        result = s.compact(keep_recent=4)
+        assert result["compacted"] is True
+        assert result["before_count"] == 10
+        assert result["after_count"] == 5  # 1 summary + 4 kept
+        assert len(s.messages) == 5
+        assert s.messages[0]["role"] == "system"
+        assert s.messages[0].get("compacted") is True
+        assert len(s.compaction_history) == 1
+
+    def test_compact_skips_when_too_few(self):
+        s = Session.create("m", ".", "small")
+        s.messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+        ]
+        result = s.compact(keep_recent=6)
+        assert result["compacted"] is False
+        assert len(s.messages) == 2
+        assert s.compaction_history == []
+
+    def test_estimate_tokens(self):
+        s = Session.create("m", ".", "token test")
+        s.messages = [
+            {"role": "user", "content": "a" * 400},
+            {"role": "assistant", "content": "b" * 400},
+        ]
+        tokens = s.estimate_tokens(chars_per_token=4)
+        assert tokens == 200  # 800 chars / 4
+
+    def test_compact_roundtrip(self):
+        s = Session.create("m", ".", "roundtrip")
+        for i in range(10):
+            s.messages.append({"role": "user", "content": f"msg {i}"})
+        s.compact(keep_recent=4)
+        d = s.to_dict()
+        s2 = Session.from_dict(d)
+        assert len(s2.compaction_history) == 1
+        assert s2.compaction_history[0]["before_count"] == 10
+        assert len(s2.messages) == 5
+
+    def test_compact_preserves_recent(self):
+        s = Session.create("m", ".", "preserve")
+        for i in range(8):
+            s.messages.append({"role": "user", "content": f"message {i}"})
+        result = s.compact(keep_recent=3)
+        assert result["compacted"] is True
+        # Last 3 messages should be preserved verbatim
+        assert s.messages[-3]["content"] == "message 5"
+        assert s.messages[-2]["content"] == "message 6"
+        assert s.messages[-1]["content"] == "message 7"

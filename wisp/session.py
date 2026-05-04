@@ -60,6 +60,7 @@ class Session:
     workspace: str
     messages: list[dict] = field(default_factory=list)
     title: str = ""
+    compaction_history: list[dict] = field(default_factory=list)
 
     @classmethod
     def create(cls, model: str, workspace: str, first_prompt: str) -> "Session":
@@ -87,6 +88,7 @@ class Session:
             "workspace": self.workspace,
             "messages": self.messages,
             "title": self.title,
+            "compaction_history": self.compaction_history,
         }
 
     @classmethod
@@ -100,6 +102,7 @@ class Session:
             workspace=data.get("workspace", ""),
             messages=data.get("messages", []),
             title=data.get("title", ""),
+            compaction_history=data.get("compaction_history", []),
         )
 
     def touch(self):
@@ -117,6 +120,95 @@ class Session:
             session_id=self.id,
             workspace=self.workspace,
         )
+
+    def estimate_tokens(self, chars_per_token: int = 4) -> int:
+        """Rough token estimate for context budgeting."""
+        total = 0
+        for msg in self.messages:
+            for key in ("content", "thinking"):
+                val = msg.get(key, "") or ""
+                total += len(val)
+            for tc in msg.get("tool_calls", []) or []:
+                func = tc.get("function", {})
+                total += len(func.get("name", ""))
+                args = func.get("arguments", {})
+                total += len(args) if isinstance(args, str) else len(str(args))
+            if msg.get("role") == "tool":
+                total += len(msg.get("content", "") or "")
+        return total // chars_per_token
+
+    def compact(self, keep_recent: int = 6, chars_per_token: int = 4) -> dict:
+        """Compact the session by summarizing old messages and keeping recent ones.
+
+        Returns a dict with compaction metadata (before_count, after_count, summary).
+        """
+        if len(self.messages) <= keep_recent:
+            return {"compacted": False, "reason": "not enough messages"}
+
+        from wisp.summarizer import ExtractiveSummarizer
+
+        before_count = len(self.messages)
+        old_messages = self.messages[:-keep_recent]
+        recent_messages = self.messages[-keep_recent:]
+
+        # Generate summary of old messages
+        summarizer = ExtractiveSummarizer()
+        summary_obj = summarizer.summarize(
+            messages=old_messages,
+            session_id=self.id,
+            workspace=self.workspace,
+        )
+
+        # Build compacted context message
+        summary_parts = ["## Previous conversation summary"]
+        if summary_obj and summary_obj.summary:
+            summary_parts.append(summary_obj.summary)
+        if summary_obj and summary_obj.key_decisions:
+            summary_parts.append("\n### Key decisions")
+            for d in summary_obj.key_decisions:
+                summary_parts.append(f"- {d}")
+        if summary_obj and summary_obj.user_preferences:
+            summary_parts.append("\n### User preferences")
+            for p in summary_obj.user_preferences:
+                summary_parts.append(f"- {p}")
+        if summary_obj and summary_obj.open_tasks:
+            summary_parts.append("\n### Open tasks")
+            for t in summary_obj.open_tasks:
+                summary_parts.append(f"- {t}")
+        if summary_obj and summary_obj.files_touched:
+            summary_parts.append("\n### Files touched")
+            for f in summary_obj.files_touched:
+                summary_parts.append(f"- {f}")
+
+        compacted_content = "\n".join(summary_parts)
+        compacted_msg = {
+            "role": "system",
+            "content": compacted_content,
+            "compacted": True,
+            "original_count": before_count - keep_recent,
+        }
+
+        # Replace messages
+        self.messages = [compacted_msg] + recent_messages
+
+        # Record compaction event
+        event = {
+            "timestamp": _now_iso(),
+            "before_count": before_count,
+            "after_count": len(self.messages),
+            "keep_recent": keep_recent,
+            "summary": summary_obj.summary if summary_obj else "",
+        }
+        self.compaction_history.append(event)
+        self.touch()
+
+        return {
+            "compacted": True,
+            "before_count": before_count,
+            "after_count": len(self.messages),
+            "tokens_saved": (before_count - len(self.messages)) * chars_per_token * 50,  # rough estimate
+            "summary": summary_obj.summary if summary_obj else "",
+        }
 
 
 # ── Session Manager ──────────────────────────────────────────────────
@@ -185,6 +277,7 @@ class SessionManager:
                     "created_at": data.get("created_at", ""),
                     "updated_at": data.get("updated_at", ""),
                     "msg_count": len(data.get("messages", [])),
+                    "compactions": len(data.get("compaction_history", [])),
                     "file": str(path),
                 })
             except (json.JSONDecodeError, OSError):
@@ -221,6 +314,10 @@ def format_session_preview(session: Session, max_messages: int = 6) -> str:
         f"  Updated:  {session.updated_at[:19]}",
         f"  Messages: {len(session.messages)}",
     ]
+    if session.compaction_history:
+        lines.append(f"  Compactions: {len(session.compaction_history)}")
+        last = session.compaction_history[-1]
+        lines.append(f"  Last compact: {last['before_count']} → {last['after_count']} msgs ({last['timestamp'][:19]})")
     # Show last few messages as context
     recent = [m for m in session.messages if m.get("role") in ("user", "assistant")]
     if recent:

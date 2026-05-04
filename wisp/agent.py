@@ -418,11 +418,48 @@ class WispAgent:
             # Re-count after removal
             user_count = sum(1 for m in self.messages if m.get("role") == "user")
 
-    def _save_session(self):
-        """Persist the current session to disk."""
-        if self.session is not None:
-            self.session.messages = self.messages
-            self.session_mgr.save(self.session)
+    def _maybe_compact_session(self):
+        """Auto-compact the session if it exceeds configured thresholds.
+
+        Called before each agent turn. Preserves recent messages and
+        replaces older ones with a summary. Logs compaction events.
+        """
+        if not self.config.auto_compact:
+            return
+        if not self.session or len(self.messages) < self.config.compact_threshold_msgs:
+            return
+
+        # Check token threshold
+        system = self._build_system_prompt()
+        overhead = self._estimate_tokens([{"content": system}])
+        msg_tokens = self._estimate_tokens(self.messages)
+        budget = self.config.max_context_tokens
+        token_pct = (msg_tokens + overhead) / budget * 100 if budget else 0
+
+        if len(self.messages) < self.config.compact_threshold_msgs and token_pct < self.config.compact_threshold_tokens:
+            return
+
+        from wisp.colors import info, success, dim
+        print(info(f"\n📦 Session growing large ({len(self.messages)} msgs, ~{token_pct:.0f}% context). Compacting..."))
+
+        result = self.session.compact(
+            keep_recent=self.config.compact_keep_recent,
+            chars_per_token=self.config.chars_per_token,
+        )
+
+        if result.get("compacted"):
+            # Sync agent messages with compacted session
+            self.messages = list(self.session.messages)
+            saved = result["before_count"] - result["after_count"]
+            print(success(f"✓ Compacted: {result['before_count']} → {result['after_count']} messages saved"))
+            if result.get("summary"):
+                print(dim(f"  Summary: {result['summary'][:120]}..."))
+            logger.info(
+                "Auto-compacted session %s: %d → %d messages",
+                self.session.id, result["before_count"], result["after_count"],
+            )
+        else:
+            print(dim("  Compaction skipped: not enough messages to summarize."))
 
     def _resolve_session(self, session_id: str):
         """Load a session by exact ID or prefix fragment."""
@@ -1009,6 +1046,9 @@ class WispAgent:
         """Execute the agent loop for one user turn."""
         self._interrupted = False  # Reset for each new turn
         try:
+            # Auto-compact if session is getting large
+            self._maybe_compact_session()
+
             for iteration in range(1, self.max_iterations + 1):
                 if self._interrupted:
                     break

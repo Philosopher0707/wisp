@@ -276,6 +276,49 @@ class ServerAgent(WispAgent):
             pending.event.set()
             return True
 
+    def _maybe_compact_session(self):
+        """Override to notify the remote client when auto-compaction happens."""
+        if not self.config.auto_compact:
+            return
+        if not self.session or len(self.messages) < self.config.compact_threshold_msgs:
+            return
+
+        system = self._build_system_prompt()
+        overhead = self._estimate_tokens([{"content": system}])
+        msg_tokens = self._estimate_tokens(self.messages)
+        budget = self.config.max_context_tokens
+        token_pct = (msg_tokens + overhead) / budget * 100 if budget else 0
+
+        if len(self.messages) < self.config.compact_threshold_msgs and token_pct < self.config.compact_threshold_tokens:
+            return
+
+        self._send({
+            "type": "status",
+            "message": f"Compacting session ({len(self.messages)} msgs, ~{token_pct:.0f}% context)...",
+        })
+
+        result = self.session.compact(
+            keep_recent=self.config.compact_keep_recent,
+            chars_per_token=self.config.chars_per_token,
+        )
+
+        if result.get("compacted"):
+            self.messages = list(self.session.messages)
+            saved = result["before_count"] - result["after_count"]
+            self._send({
+                "type": "status",
+                "message": f"Compacted: {result['before_count']} → {result['after_count']} messages ({saved} removed)",
+            })
+            logger.info(
+                "Server auto-compacted session %s: %d → %d messages",
+                self.session.id, result["before_count"], result["after_count"],
+            )
+        else:
+            self._send({
+                "type": "status",
+                "message": "Compaction skipped: not enough messages to summarize.",
+            })
+
     def run_server(self, prompt: str, session_id: Optional[str] = None):
         """Run the agent in server mode (single-shot)."""
         if not self.client.check_health():

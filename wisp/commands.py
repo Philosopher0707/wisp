@@ -199,6 +199,31 @@ def cmd_tokens(agent, args: str):
     print(f"  {dim('Messages:')}        ~{msg_tokens:,} tokens")
 
 
+@register("compact", "Compact session history to save context", aliases=("c",), usage="/compact")
+def cmd_compact(agent, args: str):
+    if agent.session is None:
+        print(warning("⚠ No active session to compact."))
+        return
+    if len(agent.messages) <= agent.config.compact_keep_recent:
+        print(dim(f"Session has only {len(agent.messages)} messages — not enough to compact."))
+        return
+
+    print(info(f"Compacting session ({len(agent.messages)} messages, keeping last {agent.config.compact_keep_recent})..."))
+    result = agent.session.compact(
+        keep_recent=agent.config.compact_keep_recent,
+        chars_per_token=agent.config.chars_per_token,
+    )
+
+    if result.get("compacted"):
+        agent.messages = list(agent.session.messages)
+        saved = result["before_count"] - result["after_count"]
+        print(success(f"✓ Compacted: {result['before_count']} → {result['after_count']} messages ({saved} removed)"))
+        if result.get("summary"):
+            print(dim(f"  Summary: {result['summary'][:120]}..."))
+    else:
+        print(dim("Compaction skipped: not enough messages to summarize."))
+
+
 @register("approve", "Toggle auto-approve for tool calls", aliases=("y",), usage="/approve")
 def cmd_approve(agent, args: str):
     agent.config.auto_approve = not agent.config.auto_approve

@@ -90,6 +90,36 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Estimated chars per token for context budgeting",
         "env_var": "WISP_CHARS_PER_TOKEN",
     },
+    "auto_compact": {
+        "type": bool,
+        "default": True,
+        "description": "Automatically compact sessions when they grow too long",
+        "env_var": "WISP_AUTO_COMPACT",
+    },
+    "compact_threshold_msgs": {
+        "type": int,
+        "default": 40,
+        "min": 4,
+        "max": 500,
+        "description": "Message count threshold to trigger auto-compaction",
+        "env_var": "WISP_COMPACT_THRESHOLD_MSGS",
+    },
+    "compact_threshold_tokens": {
+        "type": int,
+        "default": 75,
+        "min": 10,
+        "max": 95,
+        "description": "Token usage percentage (0-100) to trigger auto-compaction",
+        "env_var": "WISP_COMPACT_THRESHOLD_TOKENS",
+    },
+    "compact_keep_recent": {
+        "type": int,
+        "default": 6,
+        "min": 2,
+        "max": 50,
+        "description": "Number of recent messages to preserve during compaction",
+        "env_var": "WISP_COMPACT_KEEP_RECENT",
+    },
 }
 
 
@@ -233,6 +263,11 @@ class WispConfig:
         self._context_tokens_explicit: bool = raw_ctx is not None
         # Tokens per character estimate for context budget (4 is conservative for code/text)
         self.chars_per_token: int = int(get_setting("chars_per_token", "4"))
+        # Auto-compaction settings
+        self.auto_compact: bool = str(get_setting("auto_compact", "true")).lower() == "true"
+        self.compact_threshold_msgs: int = int(get_setting("compact_threshold_msgs", "40"))
+        self.compact_threshold_tokens: int = int(get_setting("compact_threshold_tokens", "75"))
+        self.compact_keep_recent: int = int(get_setting("compact_keep_recent", "6"))
 
     def __repr__(self):
         return (

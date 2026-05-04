@@ -625,7 +625,29 @@ def cmd_session_delete(session_id: str):
     print(success(f"✓ Deleted session {session.id}"))
 
 
-def cmd_session_trim(session_id: str, keep: int = 10):
+def cmd_session_compact(session_id: str, keep: int = 6):
+    """Compact a session by summarizing old messages and keeping recent ones."""
+    mgr = SessionManager()
+    session = _resolve_session_or_fragment(mgr, session_id)
+    if session is None:
+        print(error(f"✗ Session '{session_id}' not found."))
+        return
+
+    if len(session.messages) <= keep:
+        print(dim(f"Session only has {len(session.messages)} message(s), nothing to compact."))
+        return
+
+    print(info(f"Compacting session {session.id} ({len(session.messages)} messages, keeping last {keep})..."))
+    result = session.compact(keep_recent=keep)
+
+    if result.get("compacted"):
+        mgr.save(session)
+        saved = result["before_count"] - result["after_count"]
+        print(success(f"✓ Compacted: {result['before_count']} → {result['after_count']} messages ({saved} removed)"))
+        if result.get("summary"):
+            print(dim(f"  Summary: {result['summary'][:120]}..."))
+    else:
+        print(dim("Compaction skipped: not enough messages to summarize."))
     """Trim a session to the last N exchanges (for context window management).
 
     Trims intelligently by counting complete user turns (user → assistant exchanges),
@@ -679,6 +701,7 @@ Subcommands:
   session show <id>        Show session details and recent messages
   session delete <id>      Delete a session
   session trim <id> [n]    Trim session to last N exchanges (default: 10)
+  session compact <id> [n] Summarize old messages, keep last N (default: 6)
   skills                   List discovered skills
   config [--set k=v]       View or set configuration
   check                    Verify Ollama connectivity
@@ -712,7 +735,7 @@ def main():
         print_help()
         return
 
-    _SUBCOMMANDS = {"run", "repl", "skills", "config", "check", "models", "session", "memory", "mcp", "git", "plan", "progress", "diagnose", "locks", "changes", "acp", "server"}
+    _SUBCOMMANDS = {"run", "repl", "skills", "config", "check", "models", "session", "memory", "mcp", "git", "plan", "progress", "diagnose", "locks", "changes", "acp", "server", "compact"}
     first = argv[0]
 
     # Global flags
@@ -767,11 +790,12 @@ def main():
 
         elif first == "session":
             if not rest:
-                print(info("Usage: wisp session (list|show|delete|trim) [args]"))
+                print(info("Usage: wisp session (list|show|delete|trim|compact) [args]"))
                 print(dim("  wisp session list              List all sessions"))
                 print(dim("  wisp session show <id>         Show session details"))
                 print(dim("  wisp session delete <id>       Delete a session"))
                 print(dim("  wisp session trim <id> [n]     Trim to last N exchanges"))
+                print(dim("  wisp session compact <id> [n]  Compact old messages, keep last N"))
                 return
 
             sub = rest[0]
@@ -795,9 +819,23 @@ def main():
                     return
                 keep = int(args[1]) if len(args) > 1 else 10
                 cmd_session_trim(args[0], keep)
+            elif sub == "compact":
+                if not args:
+                    print(error("✗ Usage: wisp session compact <id> [n]"))
+                    return
+                keep = int(args[1]) if len(args) > 1 else 6
+                cmd_session_compact(args[0], keep)
             else:
                 print(error(f"✗ Unknown session subcommand: {sub}"))
-                print(dim("  Try: list, show <id>, delete <id>, trim <id> [n]"))
+                print(dim("  Try: list, show <id>, delete <id>, trim <id> [n], compact <id> [n]"))
+
+        elif first == "compact":
+            if not rest:
+                print(error("✗ Usage: wisp compact <session-id> [keep-n]"))
+                print(dim("  wisp compact 20260430-123456-abcdef 6"))
+                return
+            keep = int(rest[1]) if len(rest) > 1 else 6
+            cmd_session_compact(rest[0], keep)
 
         elif first == "skills":
             cmd_skills(flags_workspace)
