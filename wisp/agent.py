@@ -523,7 +523,10 @@ class WispAgent:
         self._system_prompt_cache[cache_key] = system
         return system
 
-    def _get_tool_schemas(self) -> list[dict]:
+    def _invalidate_system_prompt_cache(self):
+        """Clear the system prompt cache so it rebuilds on next turn."""
+        if hasattr(self, "_system_prompt_cache"):
+            self._system_prompt_cache.clear()
         """Get combined tool schemas including built-in tools and MCP tools."""
         # Initialize MCP lazily (first call triggers connection)
         if not self._mcp_initialized:
@@ -746,16 +749,20 @@ class WispAgent:
                     result = f"Unexpected error: {e}"
                     logger.error("Unexpected error in tool %s: %s", func_name, e, exc_info=True)
 
-            # ── Auto-diagnose errors ─────────────────────────────
+            # ── Auto-diagnose errors (logged, not printed to chat) ──
             if isinstance(result, str) and ("Error" in result or "FAILED" in result or "Traceback" in result):
                 from wisp.error_diagnosis import diagnose_tool_error
                 diag = diagnose_tool_error(func_name, func_args, result, workspace)
                 if diag.error_type != "None":
-                    print(f"\n{diag.format()}")
+                    logger.debug("Diagnosis for %s: %s", func_name, diag.format())
                     # Store diagnosis for potential injection into context
                     if not hasattr(self, "_pending_diagnoses"):
                         self._pending_diagnoses = []
                     self._pending_diagnoses.append(diag)
+
+            # Invalidate system prompt cache if memory changed
+            if func_name == "remember":
+                self._invalidate_system_prompt_cache()
 
             # Extract preview from structured result (or use raw string for subagent/spawn)
             preview = result[:200].replace("\n", " ")
@@ -882,9 +889,6 @@ class WispAgent:
                 print(f"\n📋 Session: {self.session.id}")
             # Save session summary
             self._save_session_summary()
-            # Release all file locks
-            if hasattr(self, "file_lock"):
-                self.file_lock.release_all()
             self.mcp.shutdown()
             _restore_signal_handler()
 
@@ -995,9 +999,6 @@ class WispAgent:
         finally:
             # Save session summary before cleanup
             self._save_session_summary()
-            # Release all file locks
-            if hasattr(self, "file_lock"):
-                self.file_lock.release_all()
             self.mcp.shutdown()
             _restore_signal_handler()
 

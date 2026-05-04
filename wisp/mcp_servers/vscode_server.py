@@ -216,15 +216,6 @@ def _get_editor_state() -> dict:
 
 def main():
     """Run the VS Code MCP server on stdin/stdout."""
-    # Send initialized notification
-    response = {
-        "jsonrpc": "2.0",
-        "id": 0,
-        "result": handle_initialize({}),
-    }
-    sys.stdout.write(json.dumps(response) + "\n")
-    sys.stdout.flush()
-
     for line in sys.stdin:
         line = line.strip()
         if not line:
