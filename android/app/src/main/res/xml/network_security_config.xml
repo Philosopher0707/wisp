@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Allow cleartext traffic for local development -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <!-- For production, pin your certificate here -->
+    <!--
+    <domain-config>
+        <domain includeSubdomains="true">your-domain.com</domain>
+        <pin-set>
+            <pin digest="SHA-256">...your cert pin...</pin>
+        </pin-set>
+    </domain-config>
+    -->
+</network-security-config>

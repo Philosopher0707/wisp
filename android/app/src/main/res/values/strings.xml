@@ -1,0 +1,18 @@
+<resources>
+    <string name="app_name">Wisp</string>
+    <string name="settings_title">Settings</string>
+    <string name="chat_title">Chat</string>
+    <string name="files_title">Files</string>
+    <string name="hint_server_url">Server URL (e.g. wss://your-server.com)</string>
+    <string name="hint_api_key">API Key</string>
+    <string name="hint_prompt">Ask Wisp to do something...</string>
+    <string name="btn_connect">Connect</string>
+    <string name="btn_save">Save</string>
+    <string name="status_connecting">Connecting...</string>
+    <string name="status_connected">Connected</string>
+    <string name="status_disconnected">Disconnected</string>
+    <string name="approve">Approve</string>
+    <string name="deny">Deny</string>
+    <string name="thinking">Thinking...</string>
+    <string name="tool_call_request">Tool call request</string>
+</resources>

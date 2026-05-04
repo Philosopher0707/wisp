@@ -1,0 +1,60 @@
+version: "3.8"
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: wisp-ollama
+    volumes:
+      - ollama-data:/root/.ollama
+    # Expose Ollama only internally (not to the internet)
+    expose:
+      - "11434"
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+    restart: unless-stopped
+    # For GPU support (NVIDIA), uncomment:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  wisp:
+    build: .
+    container_name: wisp-server
+    ports:
+      - "8000:8000"
+    environment:
+      - WISP_API_KEY=${WISP_API_KEY:-change-me-in-production}
+      - WISP_WORKSPACE=/workspace
+      - OLLAMA_HOST=http://ollama:11434
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - wisp-workspace:/workspace
+      - wisp-sessions:/root/.config/wisp/sessions
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+  # Optional: Nginx reverse proxy with TLS
+  # Uncomment and configure for production
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: wisp-nginx
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
+  #     - ./certbot/conf:/etc/letsencrypt:ro
+  #     - ./certbot/www:/var/www/certbot:ro
+  #   depends_on:
+  #     - wisp
+  #   restart: unless-stopped
+
+volumes:
+  ollama-data:
+  wisp-workspace:
+  wisp-sessions:

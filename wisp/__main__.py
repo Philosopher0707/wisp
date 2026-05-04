@@ -20,6 +20,12 @@ def _setup_logging(verbose: bool = False):
     )
 
 
+def cmd_server(host="0.0.0.0", port=8000):
+    """Run Wisp Cloud Server."""
+    from wisp.server import main as server_main
+    server_main(host=host, port=port)
+
+
 def cmd_run(prompt, model=None, skill=None, workspace=None, auto_approve=False, session_id=None, show_thinking=False):
     """Run Wisp with a prompt."""
     config = WispConfig()
@@ -668,6 +674,7 @@ Options:
 Subcommands:
   run <prompt>             Single-shot agent with a prompt
   repl                     Interactive REPL mode (continuous chat)
+  server                   Start cloud server for remote clients
   session list             List all saved sessions
   session show <id>        Show session details and recent messages
   session delete <id>      Delete a session
@@ -705,7 +712,7 @@ def main():
         print_help()
         return
 
-    _SUBCOMMANDS = {"run", "repl", "skills", "config", "check", "models", "session", "memory", "mcp", "git", "plan", "progress", "diagnose", "locks", "changes", "acp"}
+    _SUBCOMMANDS = {"run", "repl", "skills", "config", "check", "models", "session", "memory", "mcp", "git", "plan", "progress", "diagnose", "locks", "changes", "acp", "server"}
     first = argv[0]
 
     # Global flags
@@ -830,6 +837,21 @@ def main():
             cmd_changes(rest)
         elif first == "acp":
             cmd_acp(rest)
+
+        elif first == "server":
+            host = "0.0.0.0"
+            port = 8000
+            i = 0
+            while i < len(rest):
+                if rest[i] == "--host" and i + 1 < len(rest):
+                    host = rest[i + 1]
+                    i += 2
+                elif rest[i] == "--port" and i + 1 < len(rest):
+                    port = int(rest[i + 1])
+                    i += 2
+                else:
+                    i += 1
+            cmd_server(host=host, port=port)
 
     else:
         # Implicit mode: wisp [flags] 'prompt'
