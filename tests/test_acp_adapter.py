@@ -239,7 +239,8 @@ class TestAcpAdapterCancel:
     def test_cancel(self):
         adapter = AcpAdapter()
         session = adapter.session_mgr.create("/tmp", MagicMock())
-        session.agent._interrupted = False
+        agent = session._ensure_agent()
+        agent._interrupted = False
 
         with patch.object(adapter, "_send_response") as mock_send:
             adapter._handle_request({
@@ -250,7 +251,7 @@ class TestAcpAdapterCancel:
             })
 
             mock_send.assert_called_once()
-            assert session.agent._interrupted is True
+            assert agent._interrupted is True
 
 
 class TestAcpAdapterPermission:

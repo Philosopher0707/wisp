@@ -56,8 +56,9 @@ class TestAcpSession:
                 "thinking": "",
             }
         }
-        session.agent._run_turn_streaming = MagicMock(return_value=mock_response)
-        session.agent._add_message = MagicMock()
+        agent = session._ensure_agent()
+        agent._run_turn_streaming = MagicMock(return_value=mock_response)
+        agent._add_message = MagicMock()
 
         blocks = list(session.run_turn())
         assert len(blocks) == 1
@@ -74,8 +75,9 @@ class TestAcpSession:
                 "thinking": "Let me think...",
             }
         }
-        session.agent._run_turn_streaming = MagicMock(return_value=mock_response)
-        session.agent._add_message = MagicMock()
+        agent = session._ensure_agent()
+        agent._run_turn_streaming = MagicMock(return_value=mock_response)
+        agent._add_message = MagicMock()
 
         blocks = list(session.run_turn())
         assert len(blocks) == 2

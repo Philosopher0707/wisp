@@ -30,7 +30,7 @@ class AcpSession:
         self.session_id = session_id
         self.workspace = workspace
         self.config = config
-        self.agent = WispAgent(config)
+        self.agent: Optional[WispAgent] = None  # Lazy init
         self.messages: list[dict] = []
         self.title: str = ""
         self.created_at = _now_iso()
@@ -38,6 +38,13 @@ class AcpSession:
         self.mode: str = "default"
         self._pending_tool_calls: dict[str, ToolCallContent] = {}
         self._waiting_for_tool_result: bool = False
+
+    def _ensure_agent(self) -> WispAgent:
+        """Lazy initialization of WispAgent."""
+        if self.agent is None:
+            logger.info("Lazy-init WispAgent for session %s", self.session_id)
+            self.agent = WispAgent(self.config)
+        return self.agent
 
     def add_user_message(self, content: str) -> None:
         """Add a user message to the session."""
@@ -72,7 +79,7 @@ class AcpSession:
             return
 
         # Build system prompt
-        system = self.agent._build_system_prompt()
+        system = self._ensure_agent()._build_system_prompt()
 
         # Get the last user message
         last_user_msg = self.messages[-1]
@@ -82,11 +89,11 @@ class AcpSession:
         user_content = last_user_msg.get("content", "")
 
         # Add user message to agent
-        self.agent._add_message("user", user_content)
+        self._ensure_agent()._add_message("user", user_content)
 
         # Run one turn with streaming
         try:
-            response = self.agent._run_turn_streaming(system)
+            response = self._ensure_agent()._run_turn_streaming(system)
             if not response:
                 yield TextContent(text="(No response)")
                 return
@@ -123,7 +130,7 @@ class AcpSession:
                 # Just text response
                 if content:
                     yield TextContent(text=content)
-                self.agent._add_message("assistant", content, thinking)
+                self._ensure_agent()._add_message("assistant", content, thinking)
 
         except Exception as e:
             logger.exception("Error in agent turn")
