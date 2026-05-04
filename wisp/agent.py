@@ -528,6 +528,8 @@ class WispAgent:
         """Clear the system prompt cache so it rebuilds on next turn."""
         if hasattr(self, "_system_prompt_cache"):
             self._system_prompt_cache.clear()
+
+    def _get_tool_schemas(self) -> list[dict]:
         """Get combined tool schemas including built-in tools and MCP tools."""
         # Initialize MCP lazily (first call triggers connection)
         if not self._mcp_initialized:
