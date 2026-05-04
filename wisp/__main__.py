@@ -553,10 +553,7 @@ def cmd_changes(args: list[str]):
 def cmd_acp(args: list[str]):
     """Run Wisp as an ACP external agent for Zed."""
     from wisp.acp_adapter import main as acp_main
-    import sys
-    # Pass through any args
-    sys.argv = ["wisp", "acp"] + args
-    acp_main()
+    acp_main(args)
 
 
 # ── Session commands ─────────────────────────────────────────────────

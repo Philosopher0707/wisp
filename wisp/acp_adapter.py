@@ -340,22 +340,22 @@ class AcpAdapter:
         return False
 
 
-def main():
+def main(args=None):
     """Entry point for `python -m wisp acp`."""
     import argparse
 
     parser = argparse.ArgumentParser(description="Wisp ACP adapter for Zed")
     parser.add_argument("--workspace", "-w", default=".", help="Workspace directory")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose logging")
-    args = parser.parse_args()
+    parsed = parser.parse_args(args)
 
     logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
+        level=logging.DEBUG if parsed.verbose else logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
 
-    adapter = AcpAdapter(workspace=args.workspace)
+    adapter = AcpAdapter(workspace=parsed.workspace)
     adapter.run()
 
 
