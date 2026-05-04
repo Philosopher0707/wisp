@@ -33,6 +33,7 @@ from wisp.acp_protocol import (
     PromptRequest,
     SessionInfoUpdate,
     TextContent,
+    ThinkingContent,
     ToolResultContent,
     ToolResultRequest,
     content_block_to_dict,
@@ -207,9 +208,17 @@ class AcpAdapter:
             logger.exception("Error in prompt turn")
             content_blocks.append(TextContent(text=f"Error: {e}"))
 
-        # Convert to response format
+        # Build response text from content blocks
+        response_text = ""
+        for block in content_blocks:
+            if isinstance(block, TextContent):
+                response_text += block.text
+            elif isinstance(block, ThinkingContent):
+                response_text += block.text
+
+        # Return simple text response — Zed expects content as string, not blocks
         return {
-            "content": [content_block_to_dict(b) for b in content_blocks],
+            "content": response_text,
             "stop_reason": "end_turn",
         }
 
