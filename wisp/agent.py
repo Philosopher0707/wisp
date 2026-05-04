@@ -42,6 +42,7 @@ from wisp.code_index import build_index as build_regex_index, format_index_summa
 from wisp.tree_sitter_index import build_index as build_ts_index, is_tree_sitter_available
 from wisp.mcp import MCPManager
 from wisp.memory import format_memory_block
+from wisp.colors import success, error, warning, info, dim, accent
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,7 @@ def _handle_sigint(signum, frame):
     """Mark interruption on all live agent instances so loops exit gracefully."""
     for inst in _agent_instances:
         inst._interrupted = True
-    print("\n\n⏹  Interrupted. Finishing current step... (Ctrl+C again to force quit)")
+    print(error("\n\n⏹  Interrupted. Finishing current step... (Ctrl+C again to force quit)"))
     signal.signal(signal.SIGINT, signal.default_int_handler)
 
 def _install_signal_handler():
@@ -155,7 +156,7 @@ def _prompt_dangerous(func_name: str, reason: str) -> bool:
     if not _is_interactive():
         return False
     try:
-        print(f"     ⚠️  DANGEROUS: {reason}")
+        print(warning(f"     ⚠️  DANGEROUS: {reason}"))
         choice = input(f"     Type 'yes' to approve {func_name}: ").strip().lower()
         return choice == "yes"
     except KeyboardInterrupt:
@@ -590,10 +591,10 @@ class WispAgent:
                         else:
                             _in_thinking = True
                             if self.config.show_thinking:
-                                print("⏳ Thinking:", end=" ", flush=True)
+                                print(dim("⏳ Thinking:"), end=" ", flush=True)
                                 print(event.text, end="", flush=True)
                             else:
-                                print("⏳ Thinking...", end="", flush=True)
+                                print(dim("⏳ Thinking..."), end="", flush=True)
                     else:  # content
                         if _in_thinking:
                             _in_thinking = False
@@ -649,18 +650,18 @@ class WispAgent:
                     if _in_thinking:
                         _in_thinking = False
                         print()
-                    print(f"\n✗ Stream error ({event.error_type}): {event.message}")
+                    print(error(f"\n✗ Stream error ({event.error_type}): {event.message}"))
                     return {}
 
         except OllamaError as e:
-            print(f"\n✗ Ollama Error: {e}")
+            print(error(f"\n✗ Ollama Error: {e}"))
             return {}
         except KeyboardInterrupt:
-            print("\n⏹  Interrupted by user.")
+            print(error("\n⏹  Interrupted by user."))
             return {}
         except Exception as e:
             logger.error("Unexpected error in streaming turn: %s", e, exc_info=True)
-            print(f"\n✗ Unexpected error: {e}")
+            print(error(f"\n✗ Unexpected error: {e}"))
             return {}
 
         if _in_thinking:
@@ -698,7 +699,7 @@ class WispAgent:
                 logger.warning("Tool arguments for %s are not a dict: %s", func_name, type(func_args).__name__)
                 func_args = {}
 
-            print(f"  🛠  {func_name}({_args_preview(func_args)})")
+            print(dim(f"  🛠  {func_name}({_args_preview(func_args)})"))
 
             # Dangerous command guard: always prompt, even with auto_approve
             danger_reason = None
@@ -708,7 +709,7 @@ class WispAgent:
 
             if danger_reason:
                 if not _is_interactive():
-                    print(f"  ⚠️  Blocked dangerous command ({danger_reason})")
+                    print(warning(f"  ⚠️  Blocked dangerous command ({danger_reason})"))
                     all_results.append({
                         "role": "tool",
                         "content": f"[Blocked: dangerous command — {danger_reason}]",
@@ -720,7 +721,7 @@ class WispAgent:
                 approved = auto_approve or _prompt_approve(func_name)
 
             if not approved:
-                print(f"  ⏭  Skipped {func_name}")
+                print(dim(f"  ⏭  Skipped {func_name}"))
                 all_results.append({
                     "role": "tool",
                     "content": f"[User skipped {func_name}]",
@@ -776,7 +777,7 @@ class WispAgent:
             all_results.append({"role": "tool", "content": result, "name": func_name})
             if len(preview) > 200:
                 preview += "..."
-            print(f"     → {preview}")
+            print(dim(f"     → {preview}"))
 
         return all_results
 
@@ -800,12 +801,12 @@ class WispAgent:
         )
 
         runner = SubagentRunner(self)
-        print(f"  🧬 Spawning subagent (timeout={contract.timeout_seconds}s, iterations={contract.max_iterations})")
+        print(accent(f"  🧬 Spawning subagent (timeout={contract.timeout_seconds}s, iterations={contract.max_iterations})"))
         result = runner.spawn(contract)
 
-        status = "✓" if result.success else "✗"
+        status = success("✓") if result.success else error("✗")
         if result.timed_out:
-            status = "⏱"
+            status = warning("⏱")
 
         lines = [
             f"{status} Subagent result (elapsed={result.elapsed_seconds:.1f}s, iterations={result.iterations_used})",
@@ -826,16 +827,16 @@ class WispAgent:
         if session_id:
             loaded = self._resolve_session(session_id)
             if loaded is None:
-                print(f"✗ Session '{session_id}' not found.")
-                print(f"  Run 'wisp session list' to see available sessions.")
+                print(error(f"✗ Session '{session_id}' not found."))
+                print(dim("  Run 'wisp session list' to see available sessions."))
                 return
             self.session = loaded
             self.messages = list(loaded.messages)
             session_id = self.session.id
-            print(f"📋 Continuing session: {self.session.id}")
+            print(info(f"📋 Continuing session: {self.session.id}"))
             if loaded.title:
-                print(f"   Title: {loaded.title}")
-            print(f"   Messages so far: {len(self.messages)}")
+                print(f"   {dim('Title:')} {loaded.title}")
+            print(f"   {dim('Messages so far:')} {len(self.messages)}")
             last_user = None
             for m in reversed(self.messages):
                 if m.get("role") == "user" and m.get("content", "").strip():
@@ -845,7 +846,7 @@ class WispAgent:
                 preview = last_user[:100].replace("\n", " ")
                 if len(last_user) > 100:
                     preview += "..."
-                print(f"   Last prompt: {preview}")
+                print(f"   {dim('Last prompt:')} {preview}")
             print()
         else:
             self.session = Session.create(
@@ -871,22 +872,22 @@ class WispAgent:
             from wisp.skills import find_skill
             skill = find_skill(skill_name, self.config.workspace or ".")
             if skill:
-                print(f"🧠 Loaded skill: {skill.name} — {skill.description}")
+                print(accent(f"🧠 Loaded skill: {skill.name} — {skill.description}"))
             else:
-                print(f"⚠ Skill '{skill_name}' not found. Running without it.")
+                print(warning(f"⚠ Skill '{skill_name}' not found. Running without it."))
 
-        print(f"🔮 Wisp (model: {self.config.model})")
+        print(info(f"🔮 Wisp (model: {self.config.model})"))
         print()
 
         try:
             self._add_message("user", prompt)
             self._execute_loop(system, self.config.workspace or ".", self.config.auto_approve)
         except KeyboardInterrupt:
-            print("\n⏹  Interrupted.")
+            print(error("\n⏹  Interrupted."))
         finally:
             # ── Done ───────────────────────────────────────────────────
             if self.session and self.session.id and not self._interrupted:
-                print(f"\n📋 Session: {self.session.id}")
+                print(info(f"\n📋 Session: {self.session.id}"))
             # Save session summary
             self._save_session_summary()
             self.mcp.shutdown()
@@ -904,7 +905,7 @@ class WispAgent:
         if session_id:
             loaded = self._resolve_session(session_id)
             if loaded is None:
-                print(f"✗ Session '{session_id}' not found.")
+                print(error(f"✗ Session '{session_id}' not found."))
                 return
             self.session = loaded
             self.messages = list(loaded.messages)
@@ -922,24 +923,24 @@ class WispAgent:
         _setup_readline_history()
 
         msg_count = len(self.messages)
-        print(f"🔮 Wisp (model: {self.config.model})")
-        print(f"   Session: {self.session.id}")
+        print(info(f"🔮 Wisp (model: {self.config.model})"))
+        print(f"   {dim('Session:')} {self.session.id}")
         if msg_count:
-            print(f"   History: {msg_count} messages so far")
+            print(f"   {dim('History:')} {msg_count} messages so far")
         if skill_name:
-            print(f"   Skill: {skill_name}")
+            print(f"   {dim('Skill:')} {skill_name}")
         print()
-        print("Type /help for commands, 'exit', or press Ctrl+C to end.")
-        print("Tip: end a line with \\ to continue on the next line.")
+        print(dim("Type /help for commands, 'exit', or press Ctrl+C to end."))
+        print(dim("Tip: end a line with \\ to continue on the next line."))
         print()
 
         self._interrupted = False
         try:
             while not self._interrupted:
                 try:
-                    user_input = _input_line("➜ ")
+                    user_input = _input_line(info("➜ "))
                 except KeyboardInterrupt:
-                    print("\n⏹  Exiting.")
+                    print(error("\n⏹  Exiting."))
                     break
 
                 cmd = user_input.strip()
@@ -955,12 +956,12 @@ class WispAgent:
                         # Known or unknown /command consumed; continue loop
                         continue
                 except ExitREPL:
-                    print("👋 Goodbye.")
+                    print(success("👋 Goodbye."))
                     break
 
                 # Legacy non-slash commands (backward compatibility)
                 if cmd in ("exit", "quit"):
-                    print("👋 Goodbye.")
+                    print(success("👋 Goodbye."))
                     break
                 if cmd in ("help", "?"):
                     dispatch("/help", self)
@@ -982,7 +983,7 @@ class WispAgent:
                     self._add_message("user", cmd)
                     self._execute_loop(system, ws, self.config.auto_approve)
                 except KeyboardInterrupt:
-                    print("\n⏹  Turn interrupted. Type 'exit' to quit or continue chatting.")
+                    print(error("\n⏹  Turn interrupted. Type 'exit' to quit or continue chatting."))
                     # Session was saved by _execute_loop's finally block
                     # Reset interrupt flag so REPL loop continues
                     self._interrupted = False
@@ -994,8 +995,8 @@ class WispAgent:
 
             print()
             if self.session:
-                print(f"📋 Session {self.session.id} saved.")
-                print(f"   Continue with: wisp repl -S {self.session.id}")
+                print(success(f"📋 Session {self.session.id} saved."))
+                print(dim(f"   Continue with: wisp repl -S {self.session.id}"))
         finally:
             # Save session summary before cleanup
             self._save_session_summary()
@@ -1046,7 +1047,7 @@ class WispAgent:
                 results = self._run_tool_calls(tool_calls, workspace, auto_approve)
                 self.messages.extend(results)
         except KeyboardInterrupt:
-            print("\n⏹  Turn interrupted by user.")
+            print(error("\n⏹  Turn interrupted by user."))
             # Let finally block save session, then return gracefully
         finally:
             # Always save session on exit (single save point), even if interrupted mid-tool-call

@@ -19,6 +19,7 @@ from typing import Optional
 from wisp.agent import WispAgent
 from wisp.config import WispConfig
 from wisp.tools import execute_tool, ToolError
+from wisp.colors import success, error, warning, info, dim, accent
 
 logger = logging.getLogger(__name__)
 
@@ -233,7 +234,7 @@ class SubagentRunner:
             child._iteration_count = iteration
 
             # Generate response with progress dots (non-streaming = no feedback)
-            print(f"  [sub] ⏳ thinking...", end="", flush=True)
+            print(dim("  [sub] ⏳ thinking..."), end="", flush=True)
             try:
                 response = child.client.generate(system, child.messages, tools=available_tools)
             except Exception as e:
@@ -276,7 +277,7 @@ class SubagentRunner:
                         "content": "[Error: subagents cannot spawn subagents]",
                         "name": func_name,
                     })
-                    print(f"  [sub] ⚠️  blocked nested spawn_subagent")
+                    print(warning("  [sub] ⚠️  blocked nested spawn_subagent"))
                     continue
 
                 # Dangerous command guard: always block in subagents because there is
@@ -288,13 +289,13 @@ class SubagentRunner:
 
                 if danger_reason:
                     result = f"[Blocked: dangerous command — {danger_reason}]"
-                    print(f"  [sub] ⚠️  {func_name} blocked ({danger_reason})")
+                    print(warning(f"  [sub] ⚠️  {func_name} blocked ({danger_reason})"))
                     child.messages.append({"role": "tool", "content": result, "name": func_name})
                     continue
 
                 # Print tool call for visibility
                 arg_preview = self._args_preview(func_args)
-                print(f"  [sub] 🛠  {func_name}({arg_preview})")
+                print(dim(f"  [sub] 🛠  {func_name}({arg_preview})"))
 
                 try:
                     result = execute_tool(func_name, func_args, workspace, max_data_chars=4000)
@@ -316,7 +317,7 @@ class SubagentRunner:
                         pass
                 if len(preview) > 120:
                     preview += "..."
-                print(f"  [sub]    → {preview}")
+                print(dim(f"  [sub]    → {preview}"))
 
                 child.messages.append({"role": "tool", "content": result, "name": func_name})
 

@@ -7,6 +7,7 @@ from wisp.config import WispConfig, load_config, save_config
 from wisp.agent import WispAgent
 from wisp.skills import discover_skills
 from wisp.session import SessionManager, format_session_preview
+from wisp.colors import success, error, warning, info, dim, accent
 
 
 def _setup_logging(verbose: bool = False):
@@ -56,14 +57,14 @@ def cmd_skills(workspace=None):
     ws = workspace or "."
     skills = discover_skills(ws)
     if not skills:
-        print("No skills found.")
-        print(f"Searched in: {ws}/.agents/skills/, ~/.agents/skills/, etc.")
+        print(error("No skills found."))
+        print(dim(f"Searched in: {ws}/.agents/skills/, ~/.agents/skills/, etc."))
         return
 
-    print(f"Found {len(skills)} skill(s):\n")
+    print(info(f"Found {len(skills)} skill(s):\n"))
     for s in skills:
-        print(f"  {s.name:30s}  {s.description}")
-        print(f"  {'':30s}  📍 {s.file_path}")
+        print(f"  {accent(s.name):30s}  {s.description}")
+        print(f"  {'':30s}  {dim('📍 ' + str(s.file_path))}")
         print()
 
 
@@ -77,46 +78,46 @@ def cmd_config(set_kv=None, validate=False):
         config[key.strip()] = value.strip()
         try:
             save_config(config)
-            print(f"✓ Set {key.strip()} = {value.strip()}")
+            print(success(f"✓ Set {key.strip()} = {value.strip()}"))
         except ValueError as e:
-            print(f"✗ {e}")
+            print(error(f"✗ {e}"))
             return
 
     if validate:
         config = load_config()
         if not config:
-            print("✓ No custom configuration to validate.")
+            print(success("✓ No custom configuration to validate."))
             return
         errors = validate_config(config)
         if errors:
-            print(f"Found {len(errors)} issue(s):\n")
+            print(warning(f"Found {len(errors)} issue(s):\n"))
             for err in errors:
-                print(f"  ✗ {err}")
+                print(error(f"  ✗ {err}"))
         else:
-            print("✓ Configuration is valid.")
+            print(success("✓ Configuration is valid."))
         return
 
     config = load_config()
     if not config:
-        print("No custom configuration. Using defaults.")
+        print(dim("No custom configuration. Using defaults."))
         print()
 
     schema = get_schema()
-    print("Current configuration:")
+    print(info("Current configuration:"))
     for key, value in sorted(config.items()):
         desc = schema.get(key, {}).get("description", "")
-        print(f"  {key}: {value}")
+        print(f"  {accent(key)}: {value}")
         if desc:
-            print(f"     {desc}")
+            print(dim(f"     {desc}"))
     print()
-    print("Available settings:")
-    for key, info in sorted(schema.items()):
-        default = info["default"]
-        type_name = info["type"].__name__ if not isinstance(info["type"], tuple) else " or ".join(t.__name__ for t in info["type"] if t is not type(None)) + " or None"
-        print(f"  {key:20s}  ({type_name:8s})  default: {default!r}")
+    print(dim("Available settings:"))
+    for key, info_item in sorted(schema.items()):
+        default = info_item["default"]
+        type_name = info_item["type"].__name__ if not isinstance(info_item["type"], tuple) else " or ".join(t.__name__ for t in info_item["type"] if t is not type(None)) + " or None"
+        print(f"  {accent(key):20s}  ({type_name:8s})  default: {default!r}")
     print()
-    print("Set a value:  wisp config --set key=value")
-    print("Validate:     wisp config --validate")
+    print(dim("Set a value:  wisp config --set key=value"))
+    print(dim("Validate:     wisp config --validate"))
 
 
 def cmd_check():
@@ -126,8 +127,8 @@ def cmd_check():
     client = OllamaClient(config)
     ok = client.check_health()
     if ok:
-        print(f"✓ Ollama is running at {config.ollama_url}")
-        print(f"✓ Model '{config.model}' is available")
+        print(success(f"✓ Ollama is running at {config.ollama_url}"))
+        print(success(f"✓ Model '{config.model}' is available"))
     else:
         sys.exit(1)
 
@@ -140,18 +141,18 @@ def cmd_models():
     try:
         models = client.list_models()
         if not models:
-            print("No models found. Pull one with: ollama pull <model>")
+            print(warning("No models found. Pull one with: ollama pull <model>"))
             return
-        print(f"Available models ({len(models)}):\n")
+        print(info(f"Available models ({len(models)}):\n"))
         for m in models:
             name = m["name"]
             size_raw = m.get("size", 0)
             size_gb = size_raw / 1e9 if size_raw and size_raw > 0 else 0
             modified = m.get("modified_at", "")[:10]
             size_str = f"{size_gb:6.1f}GB" if size_gb > 0.01 else "   cloud"
-            print(f"  {name:30s}  {size_str}  modified {modified}")
+            print(f"  {accent(name):30s}  {size_str}  modified {modified}")
     except Exception as e:
-        print(f"✗ Could not list models: {e}")
+        print(error(f"✗ Could not list models: {e}"))
         sys.exit(1)
 
 
@@ -168,24 +169,24 @@ def cmd_memory(args: list[str]):
         ws_facts = memory.get("workspace_facts", {})
 
         if not facts and not ws_facts:
-            print("No facts stored in memory.")
-            print("  Use: wisp memory add \"<fact>\"")
-            print("  Or the LLM can use the `remember` tool during conversations.")
+            print(dim("No facts stored in memory."))
+            print(dim("  Use: wisp memory add \"<fact>\""))
+            print(dim("  Or the LLM can use the `remember` tool during conversations."))
             return
 
         if facts:
-            print("Global facts:")
+            print(info("Global facts:"))
             for f in facts:
                 print(f"  • {f}")
             print()
 
         for ws_path, ws_fs in ws_facts.items():
-            print(f"Workspace ({ws_path}):")
+            print(info(f"Workspace ({ws_path}):"))
             for f in ws_fs:
                 print(f"  • {f}")
             print()
 
-        print(f"Total: {len(facts) + sum(len(v) for v in ws_facts.values())} fact(s)")
+        print(dim(f"Total: {len(facts) + sum(len(v) for v in ws_facts.values())} fact(s)"))
         return
 
     sub = args[0]
@@ -193,20 +194,20 @@ def cmd_memory(args: list[str]):
     if sub == "add" and len(args) >= 2:
         fact = " ".join(args[1:])
         if add_fact(fact):
-            print(f"✓ Added: {fact}")
+            print(success(f"✓ Added: {fact}"))
         else:
-            print(f"(Already exists or at capacity)")
+            print(warning("(Already exists or at capacity)"))
 
     elif sub == "remove" and len(args) >= 2:
         fact = " ".join(args[1:])
         if remove_fact(fact):
-            print(f"✓ Removed: {fact}")
+            print(success(f"✓ Removed: {fact}"))
         else:
-            print(f"✗ Not found: {fact}")
+            print(error(f"✗ Not found: {fact}"))
 
     elif sub == "clear":
         clear_memory()
-        print("✓ Memory cleared.")
+        print(success("✓ Memory cleared."))
 
     elif sub == "summaries":
         _cmd_memory_summaries(args[1:])
@@ -214,23 +215,23 @@ def cmd_memory(args: list[str]):
     elif sub == "list":
         facts = list_facts()
         if facts:
-            print("Facts:")
+            print(info("Facts:"))
             for f in facts:
                 print(f"  • {f}")
         else:
-            print("No facts stored.")
+            print(dim("No facts stored."))
 
     else:
-        print("Usage:")
-        print("  wisp memory                    List all facts")
-        print("  wisp memory add \"<fact>\"       Add a fact")
-        print("  wisp memory remove \"<fact>\"    Remove a fact")
-        print("  wisp memory list               List global facts")
-        print("  wisp memory clear              Clear all facts")
-        print("  wisp memory summaries          List session summaries")
-        print("  wisp memory summaries --show <id>  Show full summary")
-        print("  wisp memory summaries --clear  Clear session summaries")
-        print("  wisp memory summaries --stats  Show summary stats")
+        print(info("Usage:"))
+        print(dim("  wisp memory                    List all facts"))
+        print(dim("  wisp memory add \"<fact>\"       Add a fact"))
+        print(dim("  wisp memory remove \"<fact>\"    Remove a fact"))
+        print(dim("  wisp memory list               List global facts"))
+        print(dim("  wisp memory clear              Clear all facts"))
+        print(dim("  wisp memory summaries          List session summaries"))
+        print(dim("  wisp memory summaries --show <id>  Show full summary"))
+        print(dim("  wisp memory summaries --clear  Clear session summaries"))
+        print(dim("  wisp memory summaries --stats  Show summary stats"))
 
 
 def _cmd_memory_summaries(args: list[str]):
@@ -303,15 +304,15 @@ def cmd_mcp(args: list[str]):
         from wisp.mcp import discover_mcp_configs
         configs = discover_mcp_configs(".")
         if configs:
-            print("Configured MCP servers:")
+            print(info("Configured MCP servers:"))
             for c in configs:
-                status = "✓" if not c.disabled else "✗"
+                status = success("✓") if not c.disabled else error("✗")
                 source = c.command or c.url or "(unknown)"
-                print(f"  {status} {c.name:20s} {source}")
+                print(f"  {status} {accent(c.name):20s} {dim(source)}")
         else:
-            print("No MCP servers configured.")
-            print("  Add a server: wisp mcp add <name> <command> [args...]")
-            print("  Add VS Code:  wisp mcp add-vscode")
+            print(dim("No MCP servers configured."))
+            print(dim("  Add a server: wisp mcp add <name> <command> [args...]"))
+            print(dim("  Add VS Code:  wisp mcp add-vscode"))
         return
 
     sub = args[0]
@@ -356,20 +357,20 @@ def _setup_vscode_mcp():
     # Check if vscode already exists
     for c in configs:
         if c.get("name") == "vscode":
-            print("✓ VS Code MCP server already configured.")
+            print(success("✓ VS Code MCP server already configured."))
             return
 
     configs.append(vscode_config)
     config_file.write_text(json.dumps(configs, indent=2) + "\n")
-    print(f"✓ VS Code MCP server added to {config_file}")
+    print(success(f"✓ VS Code MCP server added to {config_file}"))
     print()
-    print("  Tools available:")
-    print("    vscode_open_file     - Open a file at a specific line")
-    print("    vscode_run_command   - Run any VS Code command")
-    print("    vscode_show_message  - Show a notification in VS Code")
-    print("    vscode_get_editor_state - Get current editor state")
+    print(info("  Tools available:"))
+    print(dim("    vscode_open_file     - Open a file at a specific line"))
+    print(dim("    vscode_run_command   - Run any VS Code command"))
+    print(dim("    vscode_show_message  - Show a notification in VS Code"))
+    print(dim("    vscode_get_editor_state - Get current editor state"))
     print()
-    print("  Next time you run wisp, these tools will be available to the LLM.")
+    print(dim("  Next time you run wisp, these tools will be available to the LLM."))
 
 
 def _add_mcp_server(name: str, cmd_args: list[str]):
@@ -399,7 +400,7 @@ def _add_mcp_server(name: str, cmd_args: list[str]):
 
     configs.append(config)
     config_file.write_text(json.dumps(configs, indent=2) + "\n")
-    print(f"✓ MCP server '{name}' added to {config_file}")
+    print(success(f"✓ MCP server '{name}' added to {config_file}"))
 
 
 # ── Git commands ──────────────────────────────────────────────────────
@@ -413,7 +414,7 @@ def cmd_git(args: list[str]):
         if ctx:
             print(ctx)
         else:
-            print("Not a git repository.")
+            print(dim("Not a git repository."))
         return
 
     if args[0] in ("diff", "d"):
@@ -422,7 +423,7 @@ def cmd_git(args: list[str]):
         if diff:
             print(diff)
         else:
-            print("No diff available.")
+            print(dim("No diff available."))
         return
 
     if args[0] == "log":
@@ -431,14 +432,14 @@ def cmd_git(args: list[str]):
             for commit in state.recent_commits:
                 print(f"  {commit}")
         else:
-            print("No commits available.")
+            print(dim("No commits available."))
         return
 
-    print("Usage:")
-    print("  wisp git              Show git status")
-    print("  wisp git status       Show git status")
-    print("  wisp git diff         Show unstaged diff")
-    print("  wisp git log          Show recent commits")
+    print(info("Usage:"))
+    print(dim("  wisp git              Show git status"))
+    print(dim("  wisp git status       Show git status"))
+    print(dim("  wisp git diff         Show unstaged diff"))
+    print(dim("  wisp git log          Show recent commits"))
 
 
 # ── Plan commands ────────────────────────────────────────────────────
@@ -455,8 +456,8 @@ def cmd_plan(args: list[str]):
         if plan:
             print(format_progress(plan))
         else:
-            print("No active plan.")
-            print("  Create one: wisp plan \"implement feature X\"")
+            print(dim("No active plan."))
+            print(dim("  Create one: wisp plan \"implement feature X\""))
         return
 
     if args[0] == "list":
@@ -469,22 +470,21 @@ def cmd_plan(args: list[str]):
         if plan:
             plan.abort()
             store.save(plan)
-            print(f"✓ Aborted plan: {plan.id}")
+            print(success(f"✓ Aborted plan: {plan.id}"))
         else:
-            print("No active plan to abort.")
+            print(error("No active plan to abort."))
         return
 
     if args[0] == "clear":
         store = PlanStore()
         store.clear()
-        print("✓ All plans cleared.")
+        print(success("✓ All plans cleared."))
         return
 
     # Create a plan from the goal string
     goal = " ".join(args)
-    print(f"Creating plan for: {goal}")
-    print("(Use the REPL with 'plan_task' tool to generate a structured plan)")
-
+    print(info(f"Creating plan for: {goal}"))
+    print(dim("(Use the REPL with 'plan_task' tool to generate a structured plan)"))
 
 def cmd_progress(args: list[str]):
     """Show current plan progress."""
@@ -496,7 +496,7 @@ def cmd_progress(args: list[str]):
     if plan:
         print(format_progress(plan))
     else:
-        print("No active plan. Run 'wisp plan' to see plans or create one in the REPL.")
+        print(dim("No active plan. Run 'wisp plan' to see plans or create one in the REPL."))
 
 
 # ── Diagnose commands ────────────────────────────────────────────────
@@ -506,9 +506,9 @@ def cmd_diagnose(args: list[str]):
     from wisp.error_diagnosis import diagnose
 
     if not args:
-        print("Usage: wisp diagnose <error_message_or_file>")
-        print("  wisp diagnose 'Traceback (most recent call last): ...'")
-        print("  cat error.log | wisp diagnose -")
+        print(info("Usage: wisp diagnose <error_message_or_file>"))
+        print(dim("  wisp diagnose 'Traceback (most recent call last): ...'"))
+        print(dim("  cat error.log | wisp diagnose -"))
         return
 
     error_text = " ".join(args)
@@ -528,15 +528,15 @@ def cmd_locks(args: list[str]):
     fl = FileLock(".")
     locks = fl.list_active_locks()
     if not locks:
-        print("No active file locks.")
+        print(dim("No active file locks."))
         return
-    print(f"Active locks ({len(locks)}):")
+    print(info(f"Active locks ({len(locks)}):"))
     for lock in locks:
         agent = lock.get("agent", "unknown")
         since = lock.get("since", "?")[:19]
         expires = lock.get("expires", "?")[:19]
         file = lock.get("_file", "?")
-        print(f"  {file:<40} {agent:<20} expires {expires}")
+        print(f"  {accent(file):<40} {dim(agent):<20} expires {expires}")
 
 
 def cmd_changes(args: list[str]):
@@ -563,23 +563,23 @@ def cmd_session_list():
     mgr = SessionManager()
     sessions = mgr.list_sessions()
     if not sessions:
-        print("No saved sessions.")
-        print("Run 'wisp \"your prompt\"' to start a new session.")
+        print(dim("No saved sessions."))
+        print(dim("Run 'wisp \"your prompt\"' to start a new session."))
         return
 
-    print(f"Saved sessions ({len(sessions)}):\n")
+    print(info(f"Saved sessions ({len(sessions)}):\n"))
     for s in sessions:
         # Show title or first prompt
         title = (s["title"] or "(untitled)")[:60]
         created = s["created_at"][:19] if s["created_at"] else "?"
         updated = s["updated_at"][:19] if s["updated_at"] else "?"
-        print(f"  {s['id']}")
-        print(f"    Title:    {title}")
-        print(f"    Model:    {s['model']}")
-        print(f"    Started:  {created}")
-        print(f"    Updated:  {updated}")
-        print(f"    Messages: {s['msg_count']}")
-        print(f"    Continue: wisp -S {s['id']} \"your next question\"")
+        print(f"  {accent(s['id'])}")
+        print(f"    {dim('Title:')}    {title}")
+        print(f"    {dim('Model:')}    {s['model']}")
+        print(f"    {dim('Started:')}  {created}")
+        print(f"    {dim('Updated:')}  {updated}")
+        print(f"    {dim('Messages:')} {s['msg_count']}")
+        print(f"    {dim('Continue:')} wisp -S {s['id']} \"your next question\"")
         print()
 
 
@@ -598,13 +598,13 @@ def cmd_session_show(session_id: str):
     mgr = SessionManager()
     session = _resolve_session_or_fragment(mgr, session_id)
     if session is None:
-        print(f"✗ Session '{session_id}' not found.")
-        print("  Run 'wisp session list' to see available sessions.")
+        print(error(f"✗ Session '{session_id}' not found."))
+        print(dim("  Run 'wisp session list' to see available sessions."))
         return
 
     print(format_session_preview(session))
     print()
-    print(f"  Continue: wisp -S {session.id} \"your next question\"")
+    print(dim(f"  Continue: wisp -S {session.id} \"your next question\""))
 
 
 def cmd_session_delete(session_id: str):
@@ -612,11 +612,11 @@ def cmd_session_delete(session_id: str):
     mgr = SessionManager()
     session = _resolve_session_or_fragment(mgr, session_id)
     if session is None:
-        print(f"✗ Session '{session_id}' not found.")
-        print("  Run 'wisp session list' to see available sessions.")
+        print(error(f"✗ Session '{session_id}' not found."))
+        print(dim("  Run 'wisp session list' to see available sessions."))
         return
     mgr.delete(session.id)
-    print(f"✓ Deleted session {session.id}")
+    print(success(f"✓ Deleted session {session.id}"))
 
 
 def cmd_session_trim(session_id: str, keep: int = 10):
@@ -626,19 +626,19 @@ def cmd_session_trim(session_id: str, keep: int = 10):
     preserving the last N turns regardless of how many tool messages they contain.
     """
     if keep < 1:
-        print(f"✗ keep must be at least 1, got {keep}")
+        print(error(f"✗ keep must be at least 1, got {keep}"))
         return
 
     mgr = SessionManager()
     session = _resolve_session_or_fragment(mgr, session_id)
     if session is None:
-        print(f"✗ Session '{session_id}' not found.")
+        print(error(f"✗ Session '{session_id}' not found."))
         return
 
     # Count complete user turns
     user_msg_indices = [i for i, m in enumerate(session.messages) if m.get("role") == "user"]
     if len(user_msg_indices) <= keep:
-        print(f"Session only has {len(user_msg_indices)} turn(s), nothing to trim.")
+        print(dim(f"Session only has {len(user_msg_indices)} turn(s), nothing to trim."))
         return
 
     original = len(session.messages)
@@ -647,8 +647,8 @@ def cmd_session_trim(session_id: str, keep: int = 10):
     keep_from = user_msg_indices[-keep]
     session.messages = session.messages[keep_from:]
     mgr.save(session)
-    print(f"✓ Trimmed session {session.id}: {original} → {len(session.messages)} messages "
-          f"({keep} turn(s) preserved)")
+    print(success(f"✓ Trimmed session {session.id}: {original} → {len(session.messages)} messages "
+          f"({keep} turn(s) preserved)"))
 
 
 # ── Help ─────────────────────────────────────────────────────────────
@@ -760,11 +760,11 @@ def main():
 
         elif first == "session":
             if not rest:
-                print("Usage: wisp session (list|show|delete|trim) [args]")
-                print("  wisp session list              List all sessions")
-                print("  wisp session show <id>         Show session details")
-                print("  wisp session delete <id>       Delete a session")
-                print("  wisp session trim <id> [n]     Trim to last N exchanges")
+                print(info("Usage: wisp session (list|show|delete|trim) [args]"))
+                print(dim("  wisp session list              List all sessions"))
+                print(dim("  wisp session show <id>         Show session details"))
+                print(dim("  wisp session delete <id>       Delete a session"))
+                print(dim("  wisp session trim <id> [n]     Trim to last N exchanges"))
                 return
 
             sub = rest[0]
@@ -774,23 +774,23 @@ def main():
                 cmd_session_list()
             elif sub == "show":
                 if not args:
-                    print("✗ Usage: wisp session show <id>")
+                    print(error("✗ Usage: wisp session show <id>"))
                     return
                 cmd_session_show(args[0])
             elif sub == "delete":
                 if not args:
-                    print("✗ Usage: wisp session delete <id>")
+                    print(error("✗ Usage: wisp session delete <id>"))
                     return
                 cmd_session_delete(args[0])
             elif sub == "trim":
                 if not args:
-                    print("✗ Usage: wisp session trim <id> [n]")
+                    print(error("✗ Usage: wisp session trim <id> [n]"))
                     return
                 keep = int(args[1]) if len(args) > 1 else 10
                 cmd_session_trim(args[0], keep)
             else:
-                print(f"✗ Unknown session subcommand: {sub}")
-                print("  Try: list, show <id>, delete <id>, trim <id> [n]")
+                print(error(f"✗ Unknown session subcommand: {sub}"))
+                print(dim("  Try: list, show <id>, delete <id>, trim <id> [n]"))
 
         elif first == "skills":
             cmd_skills(flags_workspace)
@@ -835,7 +835,7 @@ def main():
         # Implicit mode: wisp [flags] 'prompt'
         rest = extract_global_flags(argv)
         if not rest:
-            print("✗ Please provide a prompt.")
+            print(error("✗ Please provide a prompt."))
             print_help()
             return
         cmd_run(" ".join(rest), flags_model, flags_skill, flags_workspace, flags_auto, flags_session, flags_show_thinking)
