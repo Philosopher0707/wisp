@@ -940,7 +940,7 @@ class WispAgent:
         try:
             while not self._interrupted:
                 try:
-                    user_input = _input_line(info("➜ "))
+                    user_input = _input_line("➜ ")
                 except KeyboardInterrupt:
                     print(error("\n⏹  Exiting."))
                     break
