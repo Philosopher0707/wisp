@@ -128,16 +128,24 @@ def cmd_model(agent, args: str):
 
     model_names = [m.get("name", "") for m in models if m.get("name")]
 
+    # Helper: strip :cloud suffix for display (all are cloud models)
+    def _display_name(name: str) -> str:
+        return name.removesuffix(":cloud")
+
+    # Build display name -> full name map for resolution
+    display_map = {_display_name(n): n for n in model_names}
+
     if not args:
         # Show current model + numbered list
-        print(f"Current model: {accent(agent.config.model)}")
+        print(f"Current model: {accent(_display_name(agent.config.model))} {dim('(cloud)')}")
         if not model_names:
             print(dim("  (Could not fetch model list from Ollama)"))
             return
         print(info(f"\nAvailable models ({len(model_names)}):"))
         for i, name in enumerate(model_names, 1):
+            display = _display_name(name)
             marker = accent("→") if name == agent.config.model else " "
-            print(f"  {marker} {i:2}. {name}")
+            print(f"  {marker} {i:2}. {display} {dim('(cloud)')}")
         print(dim("\nType /model <number> or /model <name> to switch."))
         return
 
@@ -152,23 +160,40 @@ def cmd_model(agent, args: str):
             print(error(f"✗ Invalid model number: {arg}. Use /model to see the list."))
             return
     else:
-        # Name-based selection with fuzzy/prefix matching
-        new_model = arg
-        # If exact match exists, use it; otherwise warn but still allow
-        exact = [n for n in model_names if n == new_model]
-        if not exact and model_names:
-            # Try prefix match
-            prefixes = [n for n in model_names if n.startswith(new_model)]
+        # Name-based selection
+        # 1. Exact match on full name
+        exact = [n for n in model_names if n == arg]
+        if exact:
+            new_model = exact[0]
+        # 2. Exact match on display name (without :cloud)
+        elif arg in display_map:
+            new_model = display_map[arg]
+            print(dim(f"  (resolved to {new_model})"))
+        # 3. Prefix match on full name
+        else:
+            prefixes = [n for n in model_names if n.startswith(arg)]
             if len(prefixes) == 1:
                 new_model = prefixes[0]
                 print(dim(f"  (resolved to {new_model})"))
             elif len(prefixes) > 1:
-                print(warning(f"⚠ Ambiguous prefix '{new_model}'. Matches:"))
+                print(warning(f"⚠ Ambiguous prefix '{arg}'. Matches:"))
                 for p in prefixes:
-                    print(f"    - {p}")
+                    print(f"    - {_display_name(p)} {dim('(cloud)')}")
                 return
             else:
-                print(warning(f"⚠ Model '{new_model}' not found in Ollama. It may need to be pulled."))
+                # 4. Prefix match on display name
+                disp_prefixes = [n for n in model_names if _display_name(n).startswith(arg)]
+                if len(disp_prefixes) == 1:
+                    new_model = disp_prefixes[0]
+                    print(dim(f"  (resolved to {new_model})"))
+                elif len(disp_prefixes) > 1:
+                    print(warning(f"⚠ Ambiguous prefix '{arg}'. Matches:"))
+                    for p in disp_prefixes:
+                        print(f"    - {_display_name(p)} {dim('(cloud)')}")
+                    return
+                else:
+                    print(warning(f"⚠ Model '{arg}' not found in Ollama. It may need to be pulled."))
+                    return
 
     # Apply the switch
     agent.config.model = new_model
@@ -176,7 +201,7 @@ def cmd_model(agent, args: str):
         agent.client.model = new_model
     if hasattr(agent, "_system_prompt_cache"):
         agent._system_prompt_cache.clear()
-    print(success(f"✓ Model set to: {new_model}"))
+    print(success(f"✓ Model set to: {_display_name(new_model)} {dim('(cloud)')}"))
 
 
 @register("skill", "Load or list skills", aliases=("s",), usage="/skill [name]")

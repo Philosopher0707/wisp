@@ -141,8 +141,13 @@ def test_cmd_model_show(agent, capsys):
     commands_module.cmd_model(agent, "")
     captured = capsys.readouterr()
     assert "test-model" in captured.out
+def test_cmd_model_show(agent, capsys):
+    commands_module.cmd_model(agent, "")
+    captured = capsys.readouterr()
+    assert "test-model" in captured.out
     assert "Available models" in captured.out
     assert "qwen2.5-coder" in captured.out
+    assert "(cloud)" in captured.out
 
 
 def test_cmd_model_switch(agent):
@@ -163,6 +168,13 @@ def test_cmd_model_switch_by_prefix(agent, capsys):
     assert agent.config.model == "deepseek-v4-flash"
 
 
+def test_cmd_model_switch_by_display_name(agent, capsys):
+    """Switching by name without :cloud suffix should resolve."""
+    commands_module.cmd_model(agent, "qwen2.5-coder")
+    captured = capsys.readouterr()
+    assert agent.config.model == "qwen2.5-coder"
+
+
 def test_cmd_model_invalid_number(agent, capsys):
     commands_module.cmd_model(agent, "99")
     captured = capsys.readouterr()
@@ -170,26 +182,16 @@ def test_cmd_model_invalid_number(agent, capsys):
 
 
 def test_cmd_model_ambiguous_prefix(agent, capsys):
+    """Prefix that matches multiple models should warn."""
+    # Patch list_models to return ambiguous set
+    original = agent.client.list_models
+    agent.client.list_models = lambda: [
+        {"name": "test-model"},
+        {"name": "test-v2"},
+    ]
     commands_module.cmd_model(agent, "test")
     captured = capsys.readouterr()
-    # "test" matches both "test-model" and potentially others
-    # In our mock data it only matches "test-model" exactly so this is fine
-    # Let's test with a prefix that matches multiple
-    commands_module.cmd_model(agent, "q")
-    captured = capsys.readouterr()
-    # "q" matches "qwen2.5-coder" only in our mock data, so no ambiguity
-    # Let's add another model starting with q to test ambiguity
-    agent.client._models = [
-        {"name": "test-model"},
-        {"name": "qwen2.5-coder"},
-        {"name": "qwen2.5-instruct"},
-    ]
-    # Need to patch list_models temporarily
-    original = agent.client.list_models
-    agent.client.list_models = lambda: agent.client._models
-    commands_module.cmd_model(agent, "qwen")
-    captured = capsys.readouterr()
-    assert "Ambiguous" in captured.out or "resolved to" in captured.out
+    assert "Ambiguous" in captured.out
     agent.client.list_models = original
 
 
@@ -284,8 +286,8 @@ def test_dispatch_clear(agent):
 
 def test_dispatch_with_args(agent, capsys):
     """/model with an argument should switch model."""
-    assert dispatch("/model my-model", agent) is True
-    assert agent.config.model == "my-model"
+    assert dispatch("/model qwen2.5-coder", agent) is True
+    assert agent.config.model == "qwen2.5-coder"
 
 
 def test_dispatch_alias(agent):
