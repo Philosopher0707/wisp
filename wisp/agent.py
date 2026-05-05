@@ -1,14 +1,11 @@
-"""Agent loop — the core planning-acting-observing loop with Ollama tool calling.
+"""Backward-compatible WispAgent — thin wrapper around WispAgentCore + CLITransport.
 
-Supports:
-- Session persistence (save/load across invocations)
-- Streaming text output (tokens appear in real-time)
-- Interactive REPL mode
-- Signal handling (graceful Ctrl+C)
-- Non-interactive stdin detection
-- Structured logging
-- Malformed response guards
+All I/O-specific code (printing, input, colors, signals) lives in
+wisp.transport.cli. This module re-exports the helpers that other parts
+of the codebase depend on and adds the synchronous run()/repl() APIs.
 """
+
+from __future__ import annotations
 
 import json
 import logging
@@ -20,64 +17,38 @@ import uuid
 import weakref
 from typing import Optional
 
-# Enable readline for line-editing and history in REPL
-try:
-    import readline
-except ImportError:
-    readline = None
-
-from wisp.config import WispConfig
-from wisp.ollama_client import OllamaClient, OllamaError
-from wisp.stream_events import (
-    TokenBatch,
-    ToolCallBatch,
-    Checkpoint,
-    StreamComplete,
-    StreamError,
+# Re-export helpers from transport layer for backward compatibility
+from wisp.transport.cli import (
+    _is_interactive,
+    _prompt_approve,
+    _prompt_dangerous,
+    _setup_readline_history,
+    _input_line,
+    _print_separator,
+    _args_preview,
 )
-from wisp.tools import TOOL_SCHEMAS, execute_tool, ToolError
-from wisp.skills import discover_skills
-from wisp.session import Session, SessionManager, format_session_preview
-from wisp.project_context import detect_project_context, format_context
-from wisp.code_index import build_index as build_regex_index, format_index_summary
-from wisp.tree_sitter_index import build_index as build_ts_index, is_tree_sitter_available
-from wisp.mcp import MCPManager
-from wisp.memory import format_memory_block
+
+# Core logic (pure, no I/O)
+from wisp.core.agent import (
+    WispAgentCore,
+    _remove_oldest_turn,
+    _generate_agent_id,
+    DEFAULT_SYSTEM,
+)
+
+from wisp.transport.cli import CLITransport
 from wisp.colors import success, error, warning, info, dim, accent
+from wisp.session import Session, SessionManager
+from wisp.skills import discover_skills, find_skill
+from wisp.tools import execute_tool, ToolError
 
 logger = logging.getLogger(__name__)
 
-
-DEFAULT_SYSTEM = """You are Wisp, a helpful coding agent that works in the user's terminal.
-
-You have access to tools that let you read, write, and edit files, run bash commands, and list directories.
-
-## Guidelines
-1. Always think step by step. Analyze the problem before writing code.
-2. Prefer targeted edits (edit_file) over rewriting entire files.
-3. Run tests after making changes to verify correctness.
-4. For git operations, use run_bash with appropriate git commands.
-5. If a command fails, diagnose the error and try a different approach.
-6. Keep explanations concise but clear. Show the user what you're doing.
-7. When you're done, summarize what was accomplished.
-
-## Tools available
-- read_file: Read file contents (supports offset/limit for large files)
-- write_file: Create or overwrite a file
-- edit_file: Targeted text replacement (surgical edits, with fuzzy fallback)
-- run_bash: Execute shell commands
-- list_files: Explore directory structure
-- web_fetch: Fetch content from URLs (web pages, APIs, documentation)
-- search_symbols: Search code for functions, classes, structs by name
-- remember: Store a fact in cross-session memory (preferences, decisions)
-- recall: Search cross-session memory and past summaries for relevant facts
-- spawn_subagent: Delegate a scoped task to a child agent
-"""
-
-# ── Signal handling ──────────────────────────────────────────────────
+# ── Signal handling (kept here for backward compat) ──────────────────
 
 _agent_instances: weakref.WeakSet = weakref.WeakSet()
 _old_sigint_handler = None
+
 
 def _handle_sigint(signum, frame):
     """Mark interruption on all live agent instances so loops exit gracefully."""
@@ -86,12 +57,14 @@ def _handle_sigint(signum, frame):
     print(error("\n\n⏹  Interrupted. Finishing current step... (Ctrl+C again to force quit)"))
     signal.signal(signal.SIGINT, signal.default_int_handler)
 
+
 def _install_signal_handler():
     """Register interrupt handler and reset interrupt state on all instances."""
     global _old_sigint_handler
     for inst in _agent_instances:
         inst._interrupted = False
     _old_sigint_handler = signal.signal(signal.SIGINT, _handle_sigint)
+
 
 def _restore_signal_handler():
     """Restore the previous SIGINT handler."""
@@ -101,7 +74,7 @@ def _restore_signal_handler():
         _old_sigint_handler = None
 
 
-# ── Helpers ──────────────────────────────────────────────────────────
+# ── Standalone helpers (re-exported for tests & other modules) ─────
 
 def _parse_tool_call(response: dict) -> Optional[list[dict]]:
     """Extract tool calls from an Ollama chat response."""
@@ -125,7 +98,6 @@ def _build_skills_block_from_skills(skills: list) -> str:
     """Build a system prompt block from an already-discovered skills list."""
     if not skills:
         return ""
-
     lines = ["\n## Available Skills", "You can invoke any of these skills when relevant:"]
     for s in skills:
         lines.append(f"- {s.name}: {s.description}")
@@ -133,1003 +105,26 @@ def _build_skills_block_from_skills(skills: list) -> str:
     return "\n".join(lines)
 
 
-def _is_interactive() -> bool:
-    """Detect if stdin is a real terminal (vs pipe/redirect)."""
-    return sys.stdin.isatty()
+# ── WispAgent (backward-compatible wrapper) ──────────────────────────
 
+class WispAgent(WispAgentCore):
+    """The main agent — synchronous API, backward compatible with all existing code.
 
-def _prompt_approve(func_name: str) -> bool:
-    """Prompt user to approve a tool call. Returns True if approved."""
-    if not _is_interactive():
-        return True
-    try:
-        choice = input(f"     Enter to approve, 's' to skip: ").strip().lower()
-        return choice != "s"
-    except KeyboardInterrupt:
-        print()
-        return False
-    except (EOFError, OSError):
-        logger.warning("Stdin unavailable, auto-approving")
-        return True
-
-
-def _prompt_dangerous(func_name: str, reason: str) -> bool:
-    """Prompt user to approve a dangerous tool call. Requires typing 'yes'."""
-    if not _is_interactive():
-        return False
-    try:
-        print(warning(f"     ⚠️  DANGEROUS: {reason}"))
-        choice = input(f"     Type 'yes' to approve {func_name}: ").strip().lower()
-        return choice == "yes"
-    except KeyboardInterrupt:
-        print()
-        return False
-    except (EOFError, OSError):
-        logger.warning("Stdin unavailable, auto-declining dangerous command")
-        return False
-
-
-def _setup_readline_history():
-    """Load readline history from disk for REPL arrow-key recall.
-
-    Sets up:
-    - Tab completion for slash commands (e.g. /mod<Tab> → /model)
-    - Up/Down arrow prefix search (type "/" then Up to cycle /commands)
-    - Pre-populated history with all slash commands
+    Internally delegates logic to WispAgentCore and I/O to CLITransport.
+    ServerAgent and SubagentRunner subclass this.
     """
-    if readline is None:
-        return
-    histfile = os.path.expanduser("~/.config/wisp/history")
-    try:
-        os.makedirs(os.path.dirname(histfile), exist_ok=True)
-        readline.read_history_file(histfile)
-    except (OSError, FileNotFoundError):
-        pass
-    # Auto-save on exit
-    import atexit
-    atexit.register(lambda: readline.write_history_file(histfile))
-
-    # ── Detect readline flavour ────────────────────────────────────
-    _doc = (readline.__doc__ or "").lower()
-    _is_libedit = "libedit" in _doc
-    _is_gnu = "gnu" in _doc or not _is_libedit
-
-    # ── Tab completion for slash commands ──────────────────────────
-    # Remove '/' from word delimiters so the completer sees "/model" not "model"
-    try:
-        readline.set_completer_delims(" \t\n`~!@#$%^&*()-=+[{]}\\|;'\",<>")
-    except Exception:
-        pass
-
-    def _completer(text, state):
-        """Complete slash commands when text starts with '/'."""
-        if not text.startswith("/"):
-            return None
-        from wisp.commands import all_commands
-        names = sorted(
-            {f"/{c.name}" for c in all_commands()}
-            | {f"/{a}" for c in all_commands() for a in c.aliases}
-        )
-        matches = [n for n in names if n.startswith(text)]
-        return matches[state] if state < len(matches) else None
-
-    readline.set_completer(_completer)
-
-    # Enable tab completion
-    if _is_libedit:
-        readline.parse_and_bind("bind ^I rl_complete")
-    else:
-        readline.parse_and_bind("tab: complete")
-
-    # ── Up/Down arrow: prefix-based history search ─────────────────
-    # After typing "/", Up arrow cycles only through entries starting with "/"
-    if _is_libedit:
-        # libedit (macOS default) uses different syntax
-        readline.parse_and_bind("bind ^[[A ed-search-prev-history")
-        readline.parse_and_bind("bind ^[[B ed-search-next-history")
-    else:
-        # GNU readline
-        readline.parse_and_bind(r'"\e[A": history-search-backward')
-        readline.parse_and_bind(r'"\e[B": history-search-forward')
-
-    # ── Pre-populate history with slash commands ───────────────────
-    from wisp.commands import all_commands
-    for cmd in all_commands():
-        readline.add_history(f"/{cmd.name}")
-    readline.add_history("/")
-
-    # Re-save so they persist
-    try:
-        readline.write_history_file(histfile)
-    except OSError:
-        pass
-
-
-def _input_line(prompt: str, allow_multiline: bool = True) -> str:
-    """Read input from the user with a prompt.
-
-    Interactive mode:
-      - Uses readline for arrow-key editing and history.
-      - Supports multi-line input: if a line ends with '\\',
-        the next line is appended (like bash continuation).
-      - Auto-detects paste: if multiple lines arrive rapidly,
-        they are combined into a single multi-line input.
-      - Returns '' on EOF/Error.
-
-    Non-interactive mode:
-      - Reads raw bytes to survive invalid UTF-8 in piped input.
-    """
-    if sys.stdin.isatty():
-        lines = []
-        while True:
-            try:
-                # Wrap ANSI codes in \001/\002 so readline knows they're
-                # non-printing and doesn't get confused about cursor position.
-                # This is required for tab completion and history to work.
-                if not lines:
-                    rl_prompt = f"\001\033[1m\002{prompt}\001\033[0m\002"
-                else:
-                    rl_prompt = "... "
-                line = input(rl_prompt)
-            except KeyboardInterrupt:
-                print()
-                raise
-            except (EOFError, OSError, UnicodeDecodeError):
-                return ""
-
-            stripped = line.rstrip()
-            if allow_multiline and stripped.endswith("\\"):
-                # Continuation mode: drop the backslash, keep reading
-                lines.append(stripped[:-1])
-                continue
-            lines.append(line)
-
-            # ── Paste detection ──────────────────────────────────────
-            # If the user pasted multiple lines, there will be more data
-            # in stdin immediately. Use select to check with a short timeout.
-            # This allows pasting large code blocks without each line
-            # being treated as a separate command.
-            if allow_multiline and lines:
-                try:
-                    import select
-                    # Check if more data is available within 100ms
-                    ready, _, _ = select.select([sys.stdin], [], [], 0.1)
-                    if ready:
-                        # More data available — likely a paste. Read all.
-                        while True:
-                            try:
-                                # Check again with zero timeout
-                                ready2, _, _ = select.select([sys.stdin], [], [], 0)
-                                if not ready2:
-                                    break
-                                extra_line = input()
-                                lines.append(extra_line)
-                            except (EOFError, OSError):
-                                break
-                        return "\n".join(lines)
-                except (ImportError, OSError):
-                    pass  # select not available (e.g., Windows), fall through
-
-            break
-        return "\n".join(lines)
-
-    # Non-interactive: read raw bytes to survive invalid UTF-8 in piped input
-    try:
-        data = sys.stdin.buffer.readline()
-    except (EOFError, OSError):
-        return ""
-    if not data:
-        return ""
-    return data.decode("utf-8", errors="replace").rstrip("\n")
-
-
-def _print_separator():
-    """Print a visual separator between turns."""
-    try:
-        width = shutil.get_terminal_size().columns
-    except OSError:
-        width = 50
-    print("─" * max(20, min(width, 80)))
-
-
-def _remove_oldest_turn(messages: list):
-    """Remove the oldest logical turn (user + response + tool results).
-    
-    After removal, ensures the list still starts with a user message
-    (or is empty) to maintain conversation integrity.
-    
-    Safety: never removes the last user message (preserves at least one turn).
-    """
-    if not messages:
-        return
-
-    # Strip any orphaned non-user messages from the start first
-    # (these shouldn't exist in normal operation, but guard against corruption)
-    while messages and messages[0].get("role") != "user":
-        del messages[0]
-    if not messages:
-        return
-
-    # Find the first user message (now guaranteed to be at index 0)
-    start = 0
-
-    # Find the next user message (start of next turn) or end of list
-    end = len(messages)
-    for i in range(start + 1, len(messages)):
-        if messages[i].get("role") == "user":
-            end = i
-            break
-
-    # SAFETY: Don't remove if this is the last user turn (preserve at least one)
-    remaining_user_count = sum(1 for m in messages if m.get("role") == "user")
-    if remaining_user_count <= 1:
-        return
-
-    # Remove [start, end) — the entire oldest turn
-    del messages[start:end]
-
-
-def _generate_agent_id() -> str:
-    """Generate a unique agent identifier."""
-    return f"wisp-{uuid.uuid4().hex[:8]}"
-
-
-# ── Agent ────────────────────────────────────────────────────────────
-
-class WispAgent:
-    """The main agent loop — orchestrates planning, tool calls, and response generation."""
 
     def __init__(
         self,
-        config: Optional[WispConfig] = None,
-        session: Optional[Session] = None,
+        config: Optional[object] = None,
+        session: Optional[object] = None,
         agent_id: Optional[str] = None,
         role: Optional[str] = None,
     ):
-        self.config = config or WispConfig()
-        self.client = OllamaClient(self.config)
-        # Auto-detect context window unless user explicitly configured it
-        if not self.config._context_tokens_explicit:
-            try:
-                detected = self.client.get_context_length()
-                if detected != self.config.max_context_tokens:
-                    logger.info(
-                        "Auto-detected context window for %s: %d tokens",
-                        self.config.model, detected,
-                    )
-                    self.config.max_context_tokens = detected
-            except OllamaError:
-                pass  # Health check will report the real problem later
-        self.session_mgr = SessionManager()
-        self.session = session
-        self.messages: list[dict] = []
-        self.max_iterations = self.config.max_iterations
-        self._interrupted = False
-        self._system_prompt = ""
-        self._active_skill: Optional[str] = None
-        # Swarm / multi-agent attributes
-        self.agent_id = agent_id or _generate_agent_id()
-        self.role = role or "agent"
-        self._role_system_extra = ""
-        self._allowed_tools: Optional[set[str]] = None
-        # Initialize MCP (connects to configured servers)
-        self.mcp = MCPManager(self.config.workspace or ".")
-        self._mcp_initialized = False
-        # Initialize agent memory (loads recent summaries for this workspace)
-        from wisp.agent_memory import AgentMemory
-        self.agent_memory = AgentMemory()
-        self._recent_summaries = self.agent_memory.load_recent(
-            workspace=self.config.workspace or ".",
-            limit=3,
-        )
-        # Initialize collaborative editing tools
-        from wisp.file_lock import FileLock
-        from wisp.change_tracker import ChangeTracker
-        self.file_lock = FileLock(self.config.workspace or ".", self.agent_id)
-        self.change_tracker = ChangeTracker(self.config.workspace or ".", self.file_lock.agent_id)
-        # Register with tools module
-        from wisp import tools as tools_module
-        tools_module.set_collaboration_tools(self.file_lock, self.change_tracker)
+        super().__init__(config=config, session=session, agent_id=agent_id, role=role)
         _agent_instances.add(self)
 
-    def _add_message(self, role: str, content: str, thinking: str = ""):
-        """Add a message to the conversation history."""
-        msg = {"role": role, "content": content}
-        if thinking:
-            msg["thinking"] = thinking
-        self.messages.append(msg)
-
-    # ── Continuation expansion ───────────────────────────────────────
-
-    _CONTINUATION_TRIGGERS = frozenset({
-        "continue", "go on", "more", "and?", "keep going", "next", "proceed",
-        "finish", "tell me more", "expand on that", "elaborate", "what else",
-    })
-
-    def _expand_continuation(self, user_text: str) -> str:
-        """Rewrite bare continuation words into explicit, anaphora-free prompts.
-
-        After compaction the model may have lost the exact last assistant message.
-        This hook disambiguates 'continue' by injecting the topic from the
-        compacted summary or the last verbatim assistant message.
-        """
-        lowered = user_text.strip().lower().rstrip("?.!")
-        # Only rewrite if the message is a bare continuation trigger
-        if lowered not in self._CONTINUATION_TRIGGERS:
-            return user_text
-
-        parts: list[str] = [user_text]
-
-        # 1. Try to grab the last verbatim assistant message in hot context
-        last_assistant = ""
-        for m in reversed(self.messages):
-            if m.get("role") == "assistant":
-                last_assistant = m.get("content", "") or ""
-                break
-
-        if last_assistant:
-            tail = last_assistant[-200:].replace("\n", " ")
-            parts.append(
-                f"\n[Context: Continue your previous response. "
-                f"Do NOT repeat anything already said. "
-                f"Pick up exactly after: {tail}]"
-            )
-        else:
-            # 2. No verbatim assistant in hot context — look at compacted summary
-            compacted_summary = ""
-            if (
-                self.messages
-                and self.messages[0].get("role") == "system"
-                and self.messages[0].get("compacted")
-            ):
-                compacted_summary = self.messages[0].get("content", "")
-
-            if compacted_summary:
-                # Extract the INCOMPLETE thread marker from the summary
-                m = re.search(
-                    r"→ When the user says .continue., resume from: (.+)",
-                    compacted_summary,
-                )
-                if m:
-                    topic = m.group(1).strip()
-                    parts.append(
-                        f"\n[Context: Resume the discussion about: {topic}. "
-                        f"Do not repeat prior points. Continue from where you left off.]"
-                    )
-
-        return "\n".join(parts)
-
-    def _estimate_tokens(self, messages: list[dict]) -> int:
-        """Rough token estimate (chars / chars_per_token) for context budget."""
-        total = 0
-        for msg in messages:
-            # Count content/thinking, but tool messages count content separately below
-            if msg.get("role") != "tool":
-                for key in ("content", "thinking"):
-                    val = msg.get(key, "") or ""
-                    total += len(val)
-            # Tool call definitions
-            for tc in msg.get("tool_calls", []) or []:
-                func = tc.get("function", {})
-                total += len(func.get("name", ""))
-                args = func.get("arguments", {})
-                if isinstance(args, str):
-                    total += len(args)
-                elif isinstance(args, dict):
-                    total += len(str(args))
-            # Tool results (only count once, here)
-            if msg.get("role") == "tool":
-                total += len(msg.get("content", "") or "")
-        return total // self.config.chars_per_token
-
-    def _trim_context_if_needed(self, system_prompt: str = ""):
-        """Trim oldest messages when estimated context exceeds budget.
-
-        Messages form logical turns: user → assistant (+ tool_results).
-        We pop the oldest user message and everything that follows it
-        until the start of the next turn (next user message).
-
-        Safety: never removes the last user turn (preserves at least one).
-        """
-        budget = self.config.max_context_tokens
-        overhead = self._estimate_tokens([{"content": system_prompt}])
-
-        # Count user messages to know how many we can safely remove
-        user_count = sum(1 for m in self.messages if m.get("role") == "user")
-
-        while user_count > 1 and self._estimate_tokens(self.messages) + overhead > budget:
-            _remove_oldest_turn(self.messages)
-            # Re-count after removal
-            user_count = sum(1 for m in self.messages if m.get("role") == "user")
-
-    def _maybe_compact_session(self):
-        """Auto-compact the session when token usage exceeds the threshold.
-
-        Called before each agent turn. Compaction now triggers purely on
-        context-window token percentage (message-count gate removed).
-        On the 2nd compaction, warns the user that accuracy may degrade
-        and offers to start a fresh session.
-        """
-        if not self.config.auto_compact:
-            return
-        if not self.session:
-            return
-
-        # ── Mid-turn guard: don't compact if the last turn looks incomplete ──
-        if self.messages:
-            last = self.messages[-1]
-            last_role = last.get("role")
-            # If we're in the middle of a tool round (tool result waiting for assistant,
-            # or assistant just emitted tool_calls and hasn't seen results yet)
-            if last_role == "tool":
-                print(dim("  ⏳ Tool round in progress; delaying compaction."))
-                return
-            if last_role == "assistant" and last.get("tool_calls"):
-                print(dim("  ⏳ Assistant emitted tool calls; delaying compaction."))
-                return
-            # If the last assistant message looks cut off, delay compaction
-            if last_role == "assistant":
-                content = last.get("content", "") or ""
-                if content and not re.search(r"[.!?```}\])]$", content[-5:]):
-                    print(dim("  ⏳ Last assistant turn looks incomplete; delaying compaction."))
-                    return
-
-        # Check token threshold only (message-count gate removed)
-        system = self._build_system_prompt()
-        overhead = self._estimate_tokens([{"content": system}])
-        msg_tokens = self._estimate_tokens(self.messages)
-        budget = self.config.max_context_tokens
-        token_pct = (msg_tokens + overhead) / budget * 100 if budget else 0
-
-        if token_pct < self.config.compact_threshold_tokens:
-            return
-
-        compaction_count = len(self.session.compaction_history)
-
-        # Warn on 2nd+ compaction and offer a fresh session
-        if compaction_count >= 1:
-            print(warning("\n⚠️  WARNING: This session has already been compacted once."))
-            print(warning("    Accuracy may degrade with repeated compaction."))
-
-            if _is_interactive():
-                try:
-                    choice = input("    Continue with compaction? [Y/n/new] ").strip().lower()
-                    if choice in ("n", "no"):
-                        print(dim("    Skipping compaction."))
-                        return
-                    if choice in ("new", "/new"):
-                        self._start_new_session()
-                        return
-                except (KeyboardInterrupt, EOFError, OSError):
-                    print()
-                    return
-            else:
-                print(dim("    Tip: Type /new to start a fresh session if accuracy degrades."))
-
-        from wisp.colors import info, success, dim
-        print(info(f"\n📦 Session growing large (~{token_pct:.0f}% context). Compacting..."))
-
-        result = self.session.compact(
-            keep_recent=self.config.compact_keep_recent,
-            chars_per_token=self.config.chars_per_token,
-        )
-
-        if result.get("compacted"):
-            # Sync agent messages with compacted session
-            self.messages = list(self.session.messages)
-            saved = result["before_count"] - result["after_count"]
-            print(success(f"✓ Compacted: {result['before_count']} → {result['after_count']} messages saved"))
-            if result.get("summary"):
-                print(dim(f"  Summary: {result['summary'][:120]}..."))
-            logger.info(
-                "Auto-compacted session %s: %d → %d messages",
-                self.session.id, result["before_count"], result["after_count"],
-            )
-        else:
-            print(dim("  Compaction skipped: not enough messages to summarize."))
-
-    def _start_new_session(self):
-        """Start a fresh session, preserving the most recent user message."""
-        # Save old session first
-        self._save_session()
-
-        # Find the last user message (the current prompt)
-        last_user_msg = None
-        for m in reversed(self.messages):
-            if m.get("role") == "user":
-                last_user_msg = dict(m)
-                break
-
-        prompt_text = last_user_msg.get("content", "") if last_user_msg else "New session"
-        self.session = Session.create(
-            model=self.config.model,
-            workspace=self.config.workspace or ".",
-            first_prompt=prompt_text,
-        )
-        self.messages = [last_user_msg] if last_user_msg else []
-
-        print(success(f"\n✓ Started new session: {self.session.id}"))
-        if last_user_msg:
-            print(dim("  Preserved your current prompt."))
-
-    def _save_session(self):
-        """Persist the current session to disk."""
-        if self.session is not None:
-            self.session.messages = self.messages
-            self.session_mgr.save(self.session)
-
-    def _resolve_session(self, session_id: str):
-        """Load a session by exact ID or prefix fragment."""
-        loaded = self.session_mgr.load(session_id)
-        if loaded is not None:
-            return loaded
-        resolved = self.session_mgr.get_session_id_from_fragment(session_id)
-        if resolved:
-            return self.session_mgr.load(resolved)
-        return None
-
-    def _save_session_summary(self) -> None:
-        """Summarize the current session and persist to agent memory."""
-        if self.session is None or not self.messages:
-            return
-        try:
-            summary = self.session.summarize()
-            if summary:
-                self.agent_memory.save(summary)
-                logger.info("Saved session summary for %s", self.session.id)
-        except Exception as e:
-            logger.warning("Failed to save session summary: %s", e)
-
-    def _build_system_prompt(self, skill_name: Optional[str] = None, workspace: Optional[str] = None) -> str:
-        """Build the fully assembled system prompt (cached for REPL reuse).
-
-        The result is cached in ``self._system_prompt_cache`` keyed by
-        ``(skill_name, workspace)`` so REPL turns don't rebuild it every time.
-        """
-        ws = workspace or self.config.workspace or "."
-        # Allow runtime override from /skill command
-        effective_skill = skill_name or self._active_skill
-        cache_key = (effective_skill, ws)
-
-        # Return cached version if still valid
-        if not hasattr(self, "_system_prompt_cache"):
-            self._system_prompt_cache = {}
-        cached = self._system_prompt_cache.get(cache_key)
-        if cached is not None:
-            return cached
-
-        system = DEFAULT_SYSTEM
-
-        # Inject role-specific system prompt (from multi-agent swarm)
-        if hasattr(self, "_role_system_extra") and self._role_system_extra:
-            system += f"\n\n{self._role_system_extra}"
-
-        # Discover skills ONCE and reuse for both the skills block and the active skill
-        skills = discover_skills(ws)
-        system += _build_skills_block_from_skills(skills)
-
-        # Detect and inject project context (language, framework, dependencies)
-        project_ctx = detect_project_context(ws)
-        ctx_block = format_context(project_ctx)
-        if ctx_block:
-            system += f"\n\n{ctx_block}"
-
-        # Build and inject code index summary (symbols found in source files)
-        # Use tree-sitter for accurate parsing when available, fall back to regex
-        if is_tree_sitter_available():
-            code_index = build_ts_index(ws)
-        else:
-            code_index = build_regex_index(ws)
-        index_summary = format_index_summary(code_index)
-        if index_summary:
-            system += f"\n\n{index_summary}"
-        # Store index on the agent so search_symbols tool can use it
-        self._code_index = code_index
-
-        # Inject cross-session memory (learned preferences, project facts)
-        memory_block = format_memory_block(ws)
-        if memory_block:
-            system += f"\n\n{memory_block}"
-
-        # Inject previous session summaries
-        if hasattr(self, "_recent_summaries") and self._recent_summaries:
-            from wisp.agent_memory import AgentMemory
-            summary_block = AgentMemory().format_for_prompt(self._recent_summaries)
-            if summary_block:
-                system += f"\n\n{summary_block}"
-
-        # Inject git context
-        from wisp.git_context import format_git_context
-        git_block = format_git_context(ws)
-        if git_block:
-            system += f"\n\n{git_block}"
-
-        # Inject active plan
-        from wisp.planner import PlanStore
-        plan_store = PlanStore()
-        active_plan = plan_store.load_active(ws)
-        if active_plan:
-            system += f"\n\n{active_plan.format_for_prompt()}"
-
-        if effective_skill:
-            skill = next((s for s in skills if s.name == effective_skill), None)
-            if skill:
-                system += f"\n\n## Active Skill: {skill.name}\n{skill.description}\n\n{skill.instructions}"
-            else:
-                logger.warning("Skill '%s' not found in discovered skills", effective_skill)
-
-        # Cache for subsequent calls (e.g., REPL turns)
-        self._system_prompt_cache[cache_key] = system
-        return system
-
-    def _invalidate_system_prompt_cache(self):
-        """Clear the system prompt cache so it rebuilds on next turn."""
-        if hasattr(self, "_system_prompt_cache"):
-            self._system_prompt_cache.clear()
-
-    def _get_tool_schemas(self) -> list[dict]:
-        """Get combined tool schemas including built-in tools and MCP tools."""
-        # Initialize MCP lazily (first call triggers connection)
-        if not self._mcp_initialized:
-            try:
-                self.mcp.initialize()
-            except Exception as e:
-                logger.warning("MCP initialization failed: %s", e)
-            self._mcp_initialized = True
-
-        schemas = list(TOOL_SCHEMAS)
-        try:
-            mcp_schemas = self.mcp.get_tool_schemas()
-            schemas.extend(mcp_schemas)
-        except Exception as e:
-            logger.warning("Failed to get MCP tool schemas: %s", e)
-
-        # Apply role-based tool filtering (multi-agent swarm)
-        if hasattr(self, "_allowed_tools") and self._allowed_tools is not None:
-            allowed = self._allowed_tools
-            schemas = [
-                s for s in schemas
-                if s.get("function", {}).get("name") in allowed
-            ]
-
-        return schemas
-
-    def _is_mcp_tool(self, name: str) -> bool:
-        """Check if a tool name belongs to an MCP server."""
-        if not self._mcp_initialized:
-            return False
-        for tool in self.mcp.get_all_tools():
-            if tool.name == name:
-                return True
-        return False
-
-    def run_task(self, task_description: str, workspace: str = ".", max_iterations: int = 10, timeout_seconds: float = 120.0) -> dict:
-        """Run a full agent loop for a single task, non-interactively.
-
-        Used by the orchestrator to execute subtasks without user interaction.
-        Returns a dict with ``success`` (bool) and ``output`` (str) keys.
-        """
-        self._add_message("user", self._expand_continuation(task_description))
-        system = self._build_system_prompt(workspace)
-        self._trim_context_if_needed(system)
-
-        start = time.monotonic()
-        iteration = 0
-        final_content = ""
-
-        while iteration < max_iterations:
-            if time.monotonic() - start > timeout_seconds:
-                return {"success": False, "output": f"[Task timed out after {timeout_seconds:.0f}s]"}
-
-            try:
-                response = self._run_turn(system)
-            except Exception as e:
-                return {"success": False, "output": f"[Error during task execution: {e}]"}
-
-            if not response:
-                return {"success": False, "output": "[No response from model]"}
-
-            msg = response.get("message", {})
-            content = msg.get("content", "") or "" if isinstance(msg, dict) else ""
-            thinking = msg.get("thinking", "") or "" if isinstance(msg, dict) else ""
-            tool_calls = _parse_tool_call(response)
-
-            self._add_message("assistant", content or "", thinking)
-            if tool_calls:
-                self.messages[-1]["tool_calls"] = tool_calls
-                results = self._run_tool_calls(tool_calls, workspace, auto_approve=True, quiet=True)
-                self.messages.extend(results)
-                iteration += 1
-                continue
-
-            final_content = content
-            break
-        else:
-            final_content = f"[Task reached max iterations ({max_iterations}) without completion]"
-            return {"success": False, "output": final_content}
-
-        return {"success": True, "output": final_content}
-
-    def _run_turn(self, system: str) -> dict:
-        """Run one agent turn (non-streaming) and return the response dict."""
-        self._trim_context_if_needed(system)
-        try:
-            response = self.client.generate(
-                system_prompt=system,
-                messages=self.messages,
-                tools=self._get_tool_schemas(),
-            )
-            return response or {}
-        except OllamaError:
-            return {}
-        except Exception as e:
-            logger.error("Unexpected error in turn: %s", e, exc_info=True)
-            return {}
-
-    def _run_turn_streaming(self, system: str) -> dict:
-        """Run one agent turn with streaming text output using batched events.
-
-        Consumes typed events from generate_stream_events:
-        - TokenBatch: Batched thinking/content (stdout only)
-        - ToolCallBatch: Tool calls with checksum validation
-        - Checkpoint: Periodic integrity checkpoints (logged, not shown)
-        - StreamComplete: Success with validation hash
-        - StreamError: Error occurred
-
-        Returns the assembled response dict for message history.
-        """
-        self._trim_context_if_needed(system)
-
-        _in_thinking = False
-        _last_checkpoint_hash: str | None = None
-
-        try:
-            for event in self.client.generate_stream_events(
-                system_prompt=system,
-                messages=self.messages,
-                tools=self._get_tool_schemas(),
-                checkpoint_every=50,
-            ):
-                if self._interrupted:
-                    print()
-                    break
-
-                # Handle TokenBatch (thinking/content) - stdout only
-                if isinstance(event, TokenBatch):
-                    if event.phase == "thinking":
-                        if _in_thinking:
-                            if self.config.show_thinking:
-                                print(event.text, end="", flush=True)
-                        else:
-                            _in_thinking = True
-                            if self.config.show_thinking:
-                                print(dim("⏳ Thinking:"), end=" ", flush=True)
-                                print(event.text, end="", flush=True)
-                            else:
-                                print(dim("⏳ Thinking..."), end="", flush=True)
-                    else:  # content
-                        if _in_thinking:
-                            _in_thinking = False
-                            if self.config.show_thinking:
-                                print()
-                            # When thinking was hidden, just print newline to separate
-                            # from the "⏳ Thinking..." indicator, no extra spaces
-                            print()
-                        print(event.text, end="", flush=True)
-
-                # Handle ToolCallBatch - metadata (not stdout)
-                elif isinstance(event, ToolCallBatch):
-                    # Tool calls are handled by _execute_loop, just close thinking if open
-                    if _in_thinking:
-                        _in_thinking = False
-                        print()
-                    # Store checksum for validation
-                    logger.debug("Tool calls received with checksum: %s", event.checksum)
-
-                # Handle Checkpoint - metadata (logged, not shown)
-                elif isinstance(event, Checkpoint):
-                    _last_checkpoint_hash = event.checkpoint_hash
-                    logger.debug(
-                        "Checkpoint: thinking=%d chars, content=%d chars, tokens=%d",
-                        len(event.accumulated_thinking),
-                        len(event.accumulated_content),
-                        event.token_count,
-                    )
-
-                # Handle StreamComplete - validate and finish
-                elif isinstance(event, StreamComplete):
-                    if _in_thinking:
-                        _in_thinking = False
-                        print()
-                    # Validate final hash against our own recomputation
-                    expected = Checkpoint.compute_hash(event.final_thinking, event.final_content)
-                    if event.validation_hash != expected:
-                        logger.warning("StreamComplete hash mismatch — text may be corrupted")
-                    # Log checkpoint info for debugging
-                    logger.debug(
-                        "Stream complete: thinking=%d chars, content=%d chars, hash=%s",
-                        len(event.final_thinking),
-                        len(event.final_content),
-                        event.validation_hash,
-                    )
-                    # Add trailing newline if needed
-                    if event.final_content and not event.final_content.endswith("\n"):
-                        print()
-                    break
-
-                # Handle StreamError
-                elif isinstance(event, StreamError):
-                    if _in_thinking:
-                        _in_thinking = False
-                        print()
-                    print(error(f"\n✗ Stream error ({event.error_type}): {event.message}"))
-                    return {}
-
-        except OllamaError as e:
-            print(error(f"\n✗ Ollama Error: {e}"))
-            return {}
-        except KeyboardInterrupt:
-            print(error("\n⏹  Interrupted by user."))
-            return {}
-        except Exception as e:
-            logger.error("Unexpected error in streaming turn: %s", e, exc_info=True)
-            print(error(f"\n✗ Unexpected error: {e}"))
-            return {}
-
-        if _in_thinking:
-            print()
-
-        # Retrieve the assembled response
-        response = getattr(self.client, "stream_response", None) or {}
-        return response
-
-    def _run_tool_calls(self, tool_calls: list, workspace: str, auto_approve: bool, quiet: bool = False) -> list[dict]:
-        """Execute a batch of tool calls, return result messages for the model."""
-        all_results = []
-        for tc in tool_calls:
-            if self._interrupted:
-                break
-
-            func = tc.get("function", {})
-            if not isinstance(func, dict):
-                logger.warning("Malformed tool call: %s", tc)
-                continue
-
-            func_name = func.get("name", "")
-            func_args = func.get("arguments", {})
-
-            if not func_name:
-                continue
-
-            if isinstance(func_args, str):
-                try:
-                    func_args = json.loads(func_args)
-                except json.JSONDecodeError:
-                    logger.warning("Malformed tool arguments for %s: %.200s", func_name, func_args)
-                    func_args = {}
-            if not isinstance(func_args, dict):
-                logger.warning("Tool arguments for %s are not a dict: %s", func_name, type(func_args).__name__)
-                func_args = {}
-
-            if not quiet:
-                print(dim(f"  🛠  {func_name}({_args_preview(func_args)})"))
-
-            # Dangerous command guard: always prompt, even with auto_approve
-            danger_reason = None
-            if func_name == "run_bash":
-                from wisp.tools import check_dangerous_command
-                danger_reason = check_dangerous_command(func_args.get("command", ""))
-
-            if danger_reason:
-                if quiet or not _is_interactive():
-                    if not quiet:
-                        print(warning(f"  ⚠️  Blocked dangerous command ({danger_reason})"))
-                    all_results.append({
-                        "role": "tool",
-                        "content": f"[Blocked: dangerous command — {danger_reason}]",
-                        "name": func_name,
-                    })
-                    continue
-                approved = _prompt_dangerous(func_name, danger_reason)
-            else:
-                approved = auto_approve or (not quiet and _prompt_approve(func_name))
-
-            if not approved:
-                if not quiet:
-                    print(dim(f"  ⏭  Skipped {func_name}"))
-                all_results.append({
-                    "role": "tool",
-                    "content": f"[User skipped {func_name}]",
-                    "name": func_name,
-                })
-                continue
-
-            # Subagent spawn: handled specially (needs parent agent reference)
-            if func_name == "spawn_subagent":
-                result = self._spawn_subagent(func_args, workspace)
-            elif self._is_mcp_tool(func_name):
-                try:
-                    result = self.mcp.call_tool(func_name, func_args)
-                    if len(result) > 8000:
-                        result = result[:8000] + f"\n... [truncated {len(result)} total chars]"
-                except Exception as e:
-                    result = f"MCP error: {e}"
-                    logger.warning("MCP tool %s failed: %s", func_name, e)
-            else:
-                try:
-                    result = execute_tool(func_name, func_args, workspace, max_data_chars=8000, file_lock=self.file_lock)
-                except ToolError as e:
-                    result = f"Error: {e}"
-                    logger.warning("Tool %s failed: %s", func_name, e)
-                except Exception as e:
-                    result = f"Unexpected error: {e}"
-                    logger.error("Unexpected error in tool %s: %s", func_name, e, exc_info=True)
-
-            # ── Auto-diagnose errors (logged, not printed to chat) ──
-            if isinstance(result, str) and ("Error" in result or "FAILED" in result or "Traceback" in result):
-                from wisp.error_diagnosis import diagnose_tool_error
-                diag = diagnose_tool_error(func_name, func_args, result, workspace)
-                if diag.error_type != "None":
-                    logger.debug("Diagnosis for %s: %s", func_name, diag.format())
-                    # Store diagnosis for potential injection into context
-                    if not hasattr(self, "_pending_diagnoses"):
-                        self._pending_diagnoses = []
-                    self._pending_diagnoses.append(diag)
-
-            # Invalidate system prompt cache if memory changed
-            if func_name == "remember":
-                self._invalidate_system_prompt_cache()
-
-            # Extract preview from structured result (or use raw string for subagent/spawn)
-            preview = result[:200].replace("\n", " ")
-            if func_name != "spawn_subagent" and result.startswith("{"):
-                try:
-                    parsed = json.loads(result)
-                    preview = parsed.get("data", result)[:200].replace("\n", " ")
-                except (json.JSONDecodeError, KeyError):
-                    pass
-
-            all_results.append({"role": "tool", "content": result, "name": func_name})
-            if len(preview) > 200:
-                preview += "..."
-            if not quiet:
-                print(dim(f"     → {preview}"))
-
-        return all_results
-
-    def _spawn_subagent(self, args: dict, workspace: str) -> str:
-        """Handle the spawn_subagent tool by delegating to SubagentRunner."""
-        from wisp.subagent import SubagentRunner, SubagentContract
-
-        # Prevent infinite recursion
-        depth = getattr(self, "_subagent_depth", 0)
-        if depth >= 1:
-            return "[Error: subagents cannot spawn subagents (max depth = 1)]"
-
-        contract = SubagentContract(
-            task=args.get("task", ""),
-            tools=args.get("tools", ["all"]),
-            max_iterations=int(args.get("max_iterations", 15)),
-            timeout_seconds=int(args.get("timeout_seconds", 120)),
-            output_format=args.get("output_format", "text"),
-            workspace=workspace,
-            auto_approve=self.config.auto_approve,
-        )
-
-        runner = SubagentRunner(self)
-        print(accent(f"  🧬 Spawning subagent (timeout={contract.timeout_seconds}s, iterations={contract.max_iterations})"))
-        result = runner.spawn(contract)
-
-        status = success("✓") if result.success else error("✗")
-        if result.timed_out:
-            status = warning("⏱")
-
-        lines = [
-            f"{status} Subagent result (elapsed={result.elapsed_seconds:.1f}s, iterations={result.iterations_used})",
-            "",
-            result.output,
-        ]
-        return "\n".join(lines)
+    # ── Synchronous public API ─────────────────────────────────────
 
     def run(self, prompt: str, skill_name: Optional[str] = None, session_id: Optional[str] = None):
         """Execute the agent (single-shot mode) with streaming output."""
@@ -1184,8 +179,6 @@ class WispAgent:
         system = self._build_system_prompt(skill_name, workspace=self.config.workspace)
 
         if skill_name:
-            # Skill was already loaded in _build_system_prompt, just report status
-            from wisp.skills import find_skill
             skill = find_skill(skill_name, self.config.workspace or ".")
             if skill:
                 print(accent(f"🧠 Loaded skill: {skill.name} — {skill.description}"))
@@ -1198,133 +191,27 @@ class WispAgent:
         try:
             self._add_message("user", self._expand_continuation(prompt))
             self._execute_loop(system, self.config.workspace or ".", self.config.auto_approve)
-        except KeyboardInterrupt:
-            print(error("\n⏹  Interrupted."))
         finally:
-            # ── Done ───────────────────────────────────────────────────
-            if self.session and self.session.id and not self._interrupted:
-                print(info(f"\n📋 Session: {self.session.id}"))
-            # Save session summary
             self._save_session_summary()
             self.mcp.shutdown()
             _restore_signal_handler()
 
     def repl(self, skill_name: Optional[str] = None, session_id: Optional[str] = None):
         """Interactive REPL — continuous conversation until the user exits."""
-        _install_signal_handler()
+        transport = CLITransport(self)
+        transport.repl(skill_name, session_id)
 
-        if not self.client.check_health():
-            _restore_signal_handler()
-            return
-
-        # ── Session setup ──────────────────────────────────────────
-        if session_id:
-            loaded = self._resolve_session(session_id)
-            if loaded is None:
-                print(error(f"✗ Session '{session_id}' not found."))
-                return
-            self.session = loaded
-            self.messages = list(loaded.messages)
-            session_id = self.session.id
-        else:
-            self.session = Session.create(
-                model=self.config.model,
-                workspace=self.config.workspace or ".",
-                first_prompt="REPL session",
-            )
-            self.messages = []
-
-        ws = self.config.workspace or "."
-
-        _setup_readline_history()
-
-        msg_count = len(self.messages)
-        print(info(f"🔮 Wisp (model: {self.config.model})"))
-        print(f"   {dim('Session:')} {self.session.id}")
-        if msg_count:
-            print(f"   {dim('History:')} {msg_count} messages so far")
-        if skill_name:
-            print(f"   {dim('Skill:')} {skill_name}")
-        print()
-        print(dim("Type /help for commands, 'exit', or press Ctrl+C to end."))
-        print(dim("Tip: end a line with \\ to continue on the next line."))
-        print()
-
-        self._interrupted = False
-        try:
-            while not self._interrupted:
-                try:
-                    user_input = _input_line("➜ ")
-                except KeyboardInterrupt:
-                    print(error("\n⏹  Exiting."))
-                    break
-
-                cmd = user_input.strip()
-                if not cmd:
-                    if not _is_interactive():
-                        break
-                    continue
-
-                # ── Slash commands (local directives, never sent to LLM) ──
-                from wisp.commands import dispatch, ExitREPL
-                try:
-                    if dispatch(cmd, self):
-                        # Known or unknown /command consumed; continue loop
-                        continue
-                except ExitREPL:
-                    print(success("👋 Goodbye."))
-                    break
-
-                # Legacy non-slash commands (backward compatibility)
-                if cmd in ("exit", "quit"):
-                    print(success("👋 Goodbye."))
-                    break
-                if cmd in ("help", "?"):
-                    dispatch("/help", self)
-                    continue
-
-                # Update session title on first meaningful prompt
-                if self.session and (
-                    not self.session.title
-                    or self.session.title in ("REPL session", "(untitled)")
-                ):
-                    self.session.title = cmd[:60].strip()
-
-                # Print blank line so response breathes after the prompt
-                print()
-
-                try:
-                    # Rebuild system prompt each turn so /skill and /model take effect immediately
-                    system = self._build_system_prompt(skill_name)
-                    self._add_message("user", self._expand_continuation(cmd))
-                    self._execute_loop(system, ws, self.config.auto_approve)
-                except KeyboardInterrupt:
-                    print(error("\n⏹  Turn interrupted. Type 'exit' to quit or continue chatting."))
-                    # Session was saved by _execute_loop's finally block
-                    # Reset interrupt flag so REPL loop continues
-                    self._interrupted = False
-                    continue
-
-                # Visual turn separator (only if not empty turn)
-                if not self._interrupted:
-                    _print_separator()
-
-            print()
-            if self.session:
-                print(success(f"📋 Session {self.session.id} saved."))
-                print(dim(f"   Continue with: wisp repl -S {self.session.id}"))
-        finally:
-            # Save session summary before cleanup
-            self._save_session_summary()
-            self.mcp.shutdown()
-            _restore_signal_handler()
+    # ── Internal sync execution loop ───────────────────────────────
 
     def _execute_loop(self, system: str, workspace: str, auto_approve: bool) -> None:
         """Execute the agent loop for one user turn."""
-        self._interrupted = False  # Reset for each new turn
+        self._interrupted = False
         try:
             # Auto-compact if session is getting large
-            self._maybe_compact_session()
+            compact_event = self._maybe_compact_session()
+            if compact_event is not None:
+                # In backward-compat mode, just log compaction events
+                logger.info("Session compaction: %s", compact_event.data.get("message", ""))
 
             for iteration in range(1, self.max_iterations + 1):
                 if self._interrupted:
@@ -1353,34 +240,135 @@ class WispAgent:
                 if not tool_calls:
                     if content:
                         self._add_message("assistant", content, thinking)
-                    # Always save, even if content is empty (preserves conversation state)
+                    # Always save, even if content is empty
                     self._save_session()
                     break
 
-                # Tool call turn - use _add_message for consistency, then attach tool_calls
+                # Tool call turn
                 self._add_message("assistant", content or "", thinking)
                 if tool_calls:
                     self.messages[-1]["tool_calls"] = tool_calls
-                
+
                 print()  # blank line before tool calls
                 results = self._run_tool_calls(tool_calls, workspace, auto_approve)
                 self.messages.extend(results)
         except KeyboardInterrupt:
             print(error("\n⏹  Turn interrupted by user."))
-            # Let finally block save session, then return gracefully
         finally:
-            # Always save session on exit (single save point), even if interrupted mid-tool-call
+            # Always save session on exit
             self._save_session()
 
+    # ── Sync tool execution (backward compat) ──────────────────────
 
-def _args_preview(args: dict) -> str:
-    """Short one-line preview of tool arguments."""
-    parts = []
-    path = args.get("path", args.get("command", ""))
-    if path:
-        s = str(path)
-        parts.append(s[:60])
-    content = args.get("content", "")
-    if content:
-        parts.append(f"({len(content)} chars)")
-    return ", ".join(parts) if parts else "..."
+    def _run_tool_calls(self, tool_calls: list, workspace: str, auto_approve: bool, quiet: bool = False) -> list[dict]:
+        """Execute a batch of tool calls, return result messages for the model."""
+        all_results = []
+        for tc in tool_calls:
+            if self._interrupted:
+                break
+
+            func = tc.get("function", {})
+            if not isinstance(func, dict):
+                logger.warning("Malformed tool call: %s", tc)
+                continue
+
+            func_name = func.get("name", "")
+            func_args = func.get("arguments", {})
+
+            if not func_name:
+                continue
+
+            if isinstance(func_args, str):
+                try:
+                    func_args = json.loads(func_args)
+                except json.JSONDecodeError:
+                    logger.warning("Malformed tool arguments for %s: %.200s", func_name, func_args)
+                    func_args = {}
+            if not isinstance(func_args, dict):
+                logger.warning("Tool arguments for %s are not a dict: %s", func_name, type(func_args).__name__)
+                func_args = {}
+
+            if not quiet:
+                print(dim(f"  🛠  {func_name}({_args_preview(func_args)})"))
+
+            # Dangerous command guard
+            danger_reason = None
+            if func_name == "run_bash":
+                from wisp.tools import check_dangerous_command
+                danger_reason = check_dangerous_command(func_args.get("command", ""))
+
+            if danger_reason:
+                if quiet or not _is_interactive():
+                    if not quiet:
+                        print(warning(f"  ⚠️  Blocked dangerous command ({danger_reason})"))
+                    all_results.append({
+                        "role": "tool",
+                        "content": f"[Blocked: dangerous command — {danger_reason}]",
+                        "name": func_name,
+                    })
+                    continue
+                approved = _prompt_dangerous(func_name, danger_reason)
+            else:
+                approved = auto_approve or (not quiet and _prompt_approve(func_name))
+
+            if not approved:
+                if not quiet:
+                    print(dim(f"  ⏭  Skipped {func_name}"))
+                all_results.append({
+                    "role": "tool",
+                    "content": f"[User skipped {func_name}]",
+                    "name": func_name,
+                })
+                continue
+
+            # Execute tool
+            if func_name == "spawn_subagent":
+                result = self._spawn_subagent(func_args, workspace)
+            elif self._is_mcp_tool(func_name):
+                try:
+                    result = self.mcp.call_tool(func_name, func_args)
+                    if len(result) > 8000:
+                        result = result[:8000] + f"\n... [truncated {len(result)} total chars]"
+                except Exception as e:
+                    result = f"MCP error: {e}"
+                    logger.warning("MCP tool %s failed: %s", func_name, e)
+            else:
+                try:
+                    result = execute_tool(func_name, func_args, workspace, max_data_chars=8000, file_lock=self.file_lock)
+                except ToolError as e:
+                    result = f"Error: {e}"
+                    logger.warning("Tool %s failed: %s", func_name, e)
+                except Exception as e:
+                    result = f"Unexpected error: {e}"
+                    logger.error("Unexpected error in tool %s: %s", func_name, e, exc_info=True)
+
+            # Auto-diagnose errors
+            if isinstance(result, str) and ("Error" in result or "FAILED" in result or "Traceback" in result):
+                from wisp.error_diagnosis import diagnose_tool_error
+                diag = diagnose_tool_error(func_name, func_args, result, workspace)
+                if diag.error_type != "None":
+                    logger.debug("Diagnosis for %s: %s", func_name, diag.format())
+                    if not hasattr(self, "_pending_diagnoses"):
+                        self._pending_diagnoses = []
+                    self._pending_diagnoses.append(diag)
+
+            # Invalidate system prompt cache if memory changed
+            if func_name == "remember":
+                self._invalidate_system_prompt_cache()
+
+            # Extract preview
+            preview = result[:200].replace("\n", " ")
+            if func_name != "spawn_subagent" and result.startswith("{"):
+                try:
+                    parsed = json.loads(result)
+                    preview = parsed.get("data", result)[:200].replace("\n", " ")
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
+            all_results.append({"role": "tool", "content": result, "name": func_name})
+            if len(preview) > 200:
+                preview += "..."
+            if not quiet:
+                print(dim(f"     → {preview}"))
+
+        return all_results

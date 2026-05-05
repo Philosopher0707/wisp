@@ -442,25 +442,18 @@ class CLITransport:
         system = self.core._build_system_prompt(skill_name)
         self.core._add_message("user", self.core._expand_continuation(prompt))
         await self._execute_turn(system, self.core.config.workspace or ".")
-
     async def _execute_turn(self, system: str, workspace: str) -> None:
-        """Execute one user turn by consuming events from core.run()."""
+        """Execute one user turn by consuming events from core._arun()."""
         self._interrupted = False
 
-        # We need to manually drive the core since run() expects a prompt
-        # But we already added the user message. So we need a different approach.
-        # Actually, let's use core.run() but we need to handle the fact that
-        # it adds the user message itself.
-        # For now, let's clear the last user message and let run() add it.
-        # This is a bit awkward — in a real refactor, core.run() should accept
-        # an already-added message or we should use a different method.
-        # For now, we'll pop the last user message and pass the raw prompt.
+        # _arun() adds the user message internally, so we pass the raw prompt.
+        # Extract the last user message content before _arun() clears/re-adds it.
         prompt = ""
         if self.core.messages and self.core.messages[-1].get("role") == "user":
             prompt = self.core.messages[-1].get("content", "")
             self.core.messages.pop()
 
-        async for event in self.core.run(prompt):
+        async for event in self.core._arun(prompt):
             if self._interrupted:
                 break
             rendered = _render_event(event, self.show_thinking)
@@ -472,10 +465,10 @@ class CLITransport:
                 func_name = event.data.get("name", "")
                 reason = event.data.get("reason", "")
                 approved = _prompt_dangerous(func_name, reason)
-                # The core already yielded a blocked result, so we don't need
-                # to do anything special here. The transport just informs the user.
                 if approved:
                     print(info("  ℹ Approval not yet wired for re-execution in SDK mode."))
 
+            if event.type == TYPE_DONE:
+                print()
             if event.type == TYPE_DONE:
                 print()

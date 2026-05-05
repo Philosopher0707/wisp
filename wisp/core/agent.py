@@ -444,12 +444,8 @@ class WispAgentCore:
 
     # ── Turn execution ───────────────────────────────────────────────
 
-    async def run(self, prompt: str) -> AsyncIterator[AgentEvent]:
-        """Execute one user turn and yield all events.
-
-        This is the primary SDK entry point. Transports consume the yielded
-        events and decide how to present them (print, WebSocket, etc.).
-        """
+    async def _arun(self, prompt: str) -> AsyncIterator[AgentEvent]:
+        """Execute one user turn and yield all events (internal async implementation)."""
         self._add_message("user", self._expand_continuation(prompt))
         system = self._build_system_prompt()
         self._trim_context_if_needed(system)
@@ -510,6 +506,15 @@ class WispAgentCore:
                 yield event
 
         self._save_session()
+
+    async def run(self, prompt: str) -> AsyncIterator[AgentEvent]:
+        """Execute one user turn and yield all events.
+
+        This is the primary SDK entry point. Transports consume the yielded
+        events and decide how to present them (print, WebSocket, etc.).
+        """
+        async for event in self._arun(prompt):
+            yield event
 
     async def _run_turn_streaming(self, system: str) -> dict:
         """Run one streaming turn and yield thinking/content events.
