@@ -42,6 +42,27 @@ class AgentEvent:
         """True if this event signals the end of a turn."""
         return self.type in (TYPE_DONE, TYPE_ERROR)
 
+    def to_dict(self) -> dict:
+        """Serialize to a JSON-friendly dict.
+
+        Useful for custom transports that need to send events over
+        WebSocket, HTTP, or other protocols.
+        """
+        return {
+            "type": self.type,
+            "data": self.data,
+            "timestamp": self.timestamp,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> AgentEvent:
+        """Deserialize from a dict (round-trips with to_dict)."""
+        return cls(
+            type=data["type"],
+            data=data.get("data", {}),
+            timestamp=data.get("timestamp", 0.0),
+        )
+
 
 # ── Event type constants ─────────────────────────────────────────────
 
