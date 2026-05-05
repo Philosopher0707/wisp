@@ -257,6 +257,58 @@ wisp/
 
 ---
 
+## SDK Architecture
+
+Wisp is now built as a layered SDK:
+
+```
+┌─────────────────────────────────────────┐
+│  Transports (I/O layer)                 │
+│  - CLITransport      → terminal         │
+│  - ServerTransport   → WebSocket        │
+├─────────────────────────────────────────┤
+│  Core (pure logic, zero I/O)            │
+│  - WispAgentCore     → event-driven     │
+│  - AgentEvent        → structured events│
+├─────────────────────────────────────────┤
+│  Config & Tools                         │
+│  - WispConfig, TOOL_SCHEMAS, etc.       │
+└─────────────────────────────────────────┘
+```
+
+### High-level API (sync)
+
+```python
+from wisp import Wisp
+
+agent = Wisp(model="llama3.2", workspace=".")
+for event in agent.run("refactor auth.py"):
+    print(f"[{event.type}] {event.text}")
+```
+
+### Low-level API (async)
+
+```python
+from wisp import WispAgentCore, CLITransport
+
+core = WispAgentCore()
+transport = CLITransport(core)
+transport.repl()
+```
+
+### Custom transport
+
+```python
+from wisp import WispAgentCore
+
+core = WispAgentCore()
+async for event in core.run("prompt"):
+    # Handle events however you want
+    print(event.to_dict())
+```
+
+See `examples/` for more: `sdk_basic.py`, `custom_transport.py`, `webhook_server.py`.
+
 ## License
 
 MIT — free for any use, including commercial.
