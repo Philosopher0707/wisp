@@ -1,16 +1,20 @@
-# Wisp
+# Wisp 🤖
 
-**A local-first coding agent powered by Ollama — Warp-compatible, fully open-source.**
-
-Wisp provides an open-source alternative to Warp's Oz cloud agent. It uses Ollama for model inference, supports Warp's Skill format, and integrates with Warp's "bring your own agent" ecosystem.
+**A local-first coding agent powered by Ollama — now with a native Android app for remote control.**
 
 ```
 wisp "refactor the auth module to use async/await"
 ```
 
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://python.org)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Android](https://img.shields.io/badge/Android-API%2026%2B-brightgreen)](android/)
+
+---
+
 ## Why Wisp?
 
-Warp (github.com/warpdotdev/warp) open-sourced its client under AGPL, but its agent orchestration platform **Oz** remains a commercial cloud product using GPT/Claude. Wisp fills the gap: a local/cloud-agnostic agent that works with whatever models your Ollama instance provides — no per-request API fees, no vendor lock-in.
+Warp (github.com/warpdotdev/warp) open-sourced its client under AGPL, but its agent orchestration platform **Oz** remains a commercial cloud product using GPT/Claude. Wisp fills the gap: a **local/cloud-agnostic** agent that works with whatever models your Ollama instance provides — no per-request API fees, no vendor lock-in.
 
 | Feature | Warp Oz | Wisp |
 |---------|---------|------|
@@ -19,74 +23,244 @@ Warp (github.com/warpdotdev/warp) open-sourced its client under AGPL, but its ag
 | File read/write/edit | ✅ | ✅ |
 | Bash execution | ✅ | ✅ |
 | Skill support | ✅ | ✅ (same format) |
+| **Android remote control** | ❌ | ✅ |
+| **Session compaction** | ❌ | ✅ |
+| **Cross-session memory** | ❌ | ✅ |
 | Data leaves your machine | To OpenAI/Anthropic | To your Ollama host |
-| Per-request cost | Credits / subscription | Free (Ollama cloud or local) |
+| Per-request cost | Credits / subscription | Free |
 | Open source | Server is closed | ✅ MIT |
 
+---
+
+## What's New
+
+### 🎉 Session Compaction
+Sessions auto-compact when they grow too long — old messages get summarized into a structured memory block, preserving recent context. Keeps conversations flowing without hitting context limits.
+
+### 🧠 Active Memory (`remember` + `recall`)
+- **`remember`** — Store facts across sessions (preferences, decisions, conventions)
+- **`recall`** — Actively search memory and past session summaries for relevant context
+
+### 📱 Native Android App
+Control your coding agent from anywhere. Features:
+- **Real-time chat** with thinking stream
+- **Tool approve/deny** cards
+- **File browser** — view workspace contents
+- **Auto-reconnect** with exponential backoff
+- **Markdown rendering** for assistant responses
+- **Connection status** indicator
+
+---
+
 ## Quick Start
+
+### CLI (Local)
 
 ```bash
 # Install
 cd wisp && pip install -e .
 
 # Check Ollama
-ollama ls   # should show models like deepseek-v4-flash:cloud
+ollama ls
 
 # Run
 wisp "list all files and describe the project structure"
 
-# With a specific model
-wisp --model kimi-k2.5:cloud "add error handling to main.py"
+# Interactive REPL
+wisp repl
+
+# Continue a session
+wisp -S 20260504-120000-abc123 "next task"
 ```
+
+### Cloud Server + Android
+
+```bash
+# Deploy to VPS (Hetzner/DigitalOcean/etc)
+git clone https://github.com/your-username/wisp.git
+cd wisp
+export WISP_API_KEY="your-secure-key"
+docker-compose up -d
+
+# Pull a model
+docker exec -it wisp-ollama ollama pull deepseek-v4-flash:cloud
+```
+
+Then install the Android APK and connect to `wss://your-domain.com`.
+
+**Full guides:**
+- [Cloud Deployment Guide](CLOUD_DEPLOYMENT_GUIDE.md) — VPS setup, TLS, Docker
+- [Android Usage Guide](ANDROID_USAGE_GUIDE.md) — Build, install, configure
+
+---
+
+## Architecture
+
+```
+┌─────────────────┐      WebSocket/HTTPS      ┌─────────────────────────────┐
+│   Android App   │  ◄──────────────────────►  │   Cloud VPS                 │
+│  (Jetpack       │                           │  ┌─────────────────────┐    │
+│   Compose)      │                           │  │  Wisp Server        │    │
+│                 │                           │  │  (FastAPI + Agent)  │    │
+│  • Chat UI      │                           │  └──────────┬──────────┘    │
+│  • File tree    │                           │             │               │
+│  • Tool         │                           │  ┌──────────▼──────────┐    │
+│    approvals    │                           │  │  Ollama / External  │    │
+│  • Settings     │                           │  │  LLM API            │    │
+└─────────────────┘                           │  └─────────────────────┘    │
+                                              └─────────────────────────────┘
+```
+
+---
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
 | `wisp "prompt"` | Run with a prompt |
-| `wisp run "prompt"` | Same, explicit |
-| `wisp --model <name> "prompt"` | Use a specific model |
+| `wisp repl` | Interactive REPL mode |
+| `wisp -S <id> "prompt"` | Continue session |
+| `wisp --model <name> "prompt"` | Use specific model |
 | `wisp --skill <name> "prompt"` | Load a skill |
-| `wisp check` | Verify Ollama is running |
-| `wisp models` | List available Ollama models |
-| `wisp skills` | List discovered skills |
-| `wisp config --set model=<name>` | Change default model |
+| `wisp compact <id>` | Compact session history |
+| `wisp session list` | List saved sessions |
+| `wisp session show <id>` | Show session details |
+| `wisp memory list` | View remembered facts |
+| `wisp check` | Verify Ollama connectivity |
+| `wisp models` | List available models |
+| `wisp server` | Start cloud server |
 
-## Available Models
+### REPL Slash Commands
 
-Run `ollama ls` to see what's available on your system. Examples:
-- `deepseek-v4-flash:cloud` — Fast, good for code (default)
-- `kimi-k2.5:cloud` — Strong reasoning
-- `kimi-k2.6:cloud` — Latest Kimi
-- `glm-5.1:cloud` — General purpose
-- `minimax-m2.7:cloud` — Lightweight
+| Command | Description |
+|---------|-------------|
+| `/help` | Show commands |
+| `/clear` | Clear conversation |
+| `/model <name>` | Switch model |
+| `/skill <name>` | Load skill |
+| `/compact` | Compact session now |
+| `/tokens` | Show context usage |
+| `/approve` | Toggle auto-approve |
+| `/bash <cmd>` | Run shell command |
+| `/save` | Force-save session |
+| `/exit` | Quit REPL |
 
-## Warp Integration
+---
 
-See [WARP_INTEGRATION.md](./WARP_INTEGRATION.md) for the full guide.
+## Tools Available to the Agent
 
-**Three tiers of integration:**
-1. **Works now:** Run `wisp` in any Warp terminal tab
-2. **Shared skills:** Same `.agents/skills/` and `.warp/skills/` directories
-3. **Full toolbelt:** Submit a small PR to Warp to add `wisp` to their agent detection list
+| Tool | Purpose |
+|------|---------|
+| `read_file` | Read file contents (with offset/limit) |
+| `write_file` | Create or overwrite a file |
+| `edit_file` | Targeted text replacement (surgical edits) |
+| `run_bash` | Execute shell commands (dangerous commands blocked) |
+| `list_files` | Explore directory structure |
+| `web_fetch` | Fetch content from URLs |
+| `search_symbols` | Search code for functions, classes, structs |
+| `remember` | Store a fact in cross-session memory |
+| `recall` | Search memory and past summaries |
+| `spawn_subagent` | Delegate scoped tasks to child agents |
+| `git_status` | Show git status |
+| `git_diff` | Show uncommitted changes |
 
-## Architecture
+---
+
+## Configuration
+
+Settings are resolved: **env vars > config file > defaults**
+
+```bash
+# ~/.config/wisp/config.json
+{
+  "model": "deepseek-v4-flash:cloud",
+  "auto_approve": true,
+  "show_thinking": true,
+  "auto_compact": true,
+  "compact_threshold_msgs": 40,
+  "compact_threshold_tokens": 75,
+  "max_context_tokens": 256000
+}
+```
+
+Or use env vars: `WISP_MODEL`, `WISP_AUTO_APPROVE`, `WISP_AUTO_COMPACT`, etc.
+
+---
+
+## Android App
+
+### Build
+
+```bash
+cd android
+./gradlew assembleDebug
+# APK: app/build/outputs/apk/debug/app-debug.apk
+```
+
+### Features
+- **Jetpack Compose** UI with Material 3
+- **WebSocket** real-time connection to server
+- **Auto-reconnect** with exponential backoff (max 30s, 10 attempts)
+- **Tool approval/denial** cards
+- **Markdown rendering** for assistant messages
+- **File browser** — navigate workspace, view file contents
+- **DataStore** encrypted preferences for settings
+- **Connection status** badge in top bar
+
+### Configure
+
+| Setting | Example |
+|---------|---------|
+| Server URL | `wss://wisp.yourdomain.com` |
+| API Key | `wisp-a1b2c3d4...` |
+| Model | `deepseek-v4-flash:cloud` |
+
+---
+
+## Project Structure
 
 ```
-wisp/                    pip install -e .
-├── wisp/
-│   ├── __main__.py      CLI entry point
-│   ├── config.py        ~/.config/wisp/config.json + env vars
-│   ├── ollama_client.py Ollama API wrapper
-│   ├── tools.py         5 tools: read/write/edit file, bash, list dirs
-│   ├── skills.py        Warp-compatible SKILL.md discovery
-│   └── agent.py         Plan → Act → Observe loop with tool calling
-├── warp-integration/    Warp-specific integration files
-│   ├── wisp-cli-agent.patch  PR to add Wisp to Warp's detection
-│   └── wisp.tab.toml    Warp Tab Config
-└── skills/              Shared skill files
+wisp/
+├── wisp/                    # Core agent
+│   ├── __main__.py          # CLI entry point
+│   ├── agent.py             # Plan → Act → Observe loop
+│   ├── server.py            # FastAPI + WebSocket cloud server
+│   ├── server_agent.py      # Server-aware agent variant
+│   ├── session.py           # Session persistence + compaction
+│   ├── memory.py            # Cross-session memory (remember/recall)
+│   ├── agent_memory.py      # Session summary storage
+│   ├── summarizer.py        # Extractive summarization
+│   ├── tools.py             # 15 tools for the agent
+│   ├── ollama_client.py     # Ollama API wrapper
+│   ├── config.py            # Settings schema + resolution
+│   ├── commands.py          # REPL slash commands
+│   └── ...
+├── android/                 # Android app
+│   └── app/src/main/java/   # Jetpack Compose UI
+├── tests/                   # 30+ test files
+├── skills/                  # Warp-compatible skill files
+├── docker-compose.yml       # One-command cloud deploy
+├── CLOUD_DEPLOYMENT_GUIDE.md
+└── ANDROID_USAGE_GUIDE.md
 ```
+
+---
+
+## Security
+
+- 🔒 **Dangerous commands blocked** — `rm -rf /`, `mkfs`, etc. blocked at API + agent layers
+- 🔒 **Path sandboxing** — File access restricted to `WISP_WORKSPACE`
+- 🔒 **Bash timeout** — Commands killed after 60 seconds
+- 🔒 **CORS restricted** — Same-origin by default, configurable via `WISP_CORS_ORIGINS`
+- 🔒 **API key required** — Pre-shared key for all client connections
+- 🔒 **TLS recommended** — Use `wss://` in production (Let's Encrypt / Cloudflare)
+
+---
 
 ## License
 
 MIT — free for any use, including commercial.
+
+---
+
+*Built with Python, FastAPI, Jetpack Compose, and Ollama.*
