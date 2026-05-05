@@ -116,17 +116,64 @@ def cmd_clear(agent, args: str):
     print(success(f"✓ Cleared {count} messages."))
 
 
-@register("model", "Switch Ollama model", aliases=("m",), usage="/model <name>")
+@register("model", "Switch Ollama model", aliases=("m",), usage="/model [name|number]")
 def cmd_model(agent, args: str):
+    # Fetch available models from Ollama
+    models: list[dict] = []
+    if hasattr(agent, "client") and agent.client:
+        try:
+            models = agent.client.list_models()
+        except Exception as e:
+            logger.warning("Failed to list models: %s", e)
+
+    model_names = [m.get("name", "") for m in models if m.get("name")]
+
     if not args:
+        # Show current model + numbered list
         print(f"Current model: {accent(agent.config.model)}")
+        if not model_names:
+            print(dim("  (Could not fetch model list from Ollama)"))
+            return
+        print(info(f"\nAvailable models ({len(model_names)}):"))
+        for i, name in enumerate(model_names, 1):
+            marker = accent("→") if name == agent.config.model else " "
+            print(f"  {marker} {i:2}. {name}")
+        print(dim("\nType /model <number> or /model <name> to switch."))
         return
-    new_model = args.strip()
+
+    arg = args.strip()
+
+    # Try numeric selection first
+    if arg.isdigit():
+        idx = int(arg) - 1
+        if 0 <= idx < len(model_names):
+            new_model = model_names[idx]
+        else:
+            print(error(f"✗ Invalid model number: {arg}. Use /model to see the list."))
+            return
+    else:
+        # Name-based selection with fuzzy/prefix matching
+        new_model = arg
+        # If exact match exists, use it; otherwise warn but still allow
+        exact = [n for n in model_names if n == new_model]
+        if not exact and model_names:
+            # Try prefix match
+            prefixes = [n for n in model_names if n.startswith(new_model)]
+            if len(prefixes) == 1:
+                new_model = prefixes[0]
+                print(dim(f"  (resolved to {new_model})"))
+            elif len(prefixes) > 1:
+                print(warning(f"⚠ Ambiguous prefix '{new_model}'. Matches:"))
+                for p in prefixes:
+                    print(f"    - {p}")
+                return
+            else:
+                print(warning(f"⚠ Model '{new_model}' not found in Ollama. It may need to be pulled."))
+
+    # Apply the switch
     agent.config.model = new_model
-    # Update the client model as well
     if hasattr(agent, "client") and agent.client:
         agent.client.model = new_model
-    # Invalidate system prompt cache so next turn uses new model
     if hasattr(agent, "_system_prompt_cache"):
         agent._system_prompt_cache.clear()
     print(success(f"✓ Model set to: {new_model}"))
