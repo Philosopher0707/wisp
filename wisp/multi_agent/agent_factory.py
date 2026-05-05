@@ -9,6 +9,7 @@ from wisp.agent import WispAgent
 from wisp.config import WispConfig
 
 from .roles import AgentRole, RoleConfig, ROLE_CONFIGS
+from .workspace_lock import WorkspaceLock, SwarmFileLock
 
 logger = logging.getLogger(__name__)
 
@@ -20,11 +21,18 @@ class AgentFactory:
     - A role-specific system prompt
     - A constrained toolset
     - Shared Ollama HTTP session (for connection pooling)
+    - Shared workspace lock (prevents file collisions across agents)
     """
 
-    def __init__(self, base_config: WispConfig, parent_agent: Optional[WispAgent] = None):
+    def __init__(
+        self,
+        base_config: WispConfig,
+        parent_agent: Optional[WispAgent] = None,
+        workspace_lock: Optional[WorkspaceLock] = None,
+    ):
         self.base_config = base_config
         self.parent_agent = parent_agent
+        self.workspace_lock = workspace_lock
 
     def create(self, role: str, agent_id: str, model: Optional[str] = None) -> WispAgent:
         """Create a new agent for the given role.
@@ -59,6 +67,10 @@ class AgentFactory:
         # Constrain tools by filtering schemas
         if config.allowed_tools != ["all"]:
             agent._allowed_tools = set(config.allowed_tools)
+
+        # Wire swarm workspace lock so file edits are coordinated
+        if self.workspace_lock is not None:
+            agent.file_lock = SwarmFileLock(self.workspace_lock, agent_id)
 
         logger.info("Created %s agent: %s (model=%s)", role, agent_id, child_cfg.model)
         return agent

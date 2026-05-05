@@ -143,3 +143,34 @@ class WorkspaceLock:
                 pass
 
         return removed
+
+
+class SwarmFileLock:
+    """Adapter that makes WorkspaceLock look like FileLock for the tools layer.
+
+    Each swarm agent gets its own SwarmFileLock instance wrapping the shared
+    WorkspaceLock, so the tools layer can call acquire(path) / release(path)
+    without knowing about the swarm infrastructure.
+    """
+
+    def __init__(self, workspace_lock: WorkspaceLock, agent_id: str):
+        self._lock = workspace_lock
+        self.agent_id = agent_id
+
+    def acquire(self, filepath: str, timeout_sec: int = 300) -> bool:
+        return self._lock.acquire(self.agent_id, filepath, timeout=timeout_sec)
+
+    def release(self, filepath: str) -> None:
+        self._lock.release(self.agent_id, filepath)
+
+    def release_all(self) -> None:
+        self._lock.release_all(self.agent_id)
+
+    def is_locked(self, filepath: str) -> bool:
+        return self._lock.is_locked(filepath)
+
+    def lock_info(self, filepath: str) -> Optional[dict]:
+        owner = self._lock.owner(filepath)
+        if owner:
+            return {"agent": owner}
+        return None

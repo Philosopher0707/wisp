@@ -298,7 +298,7 @@ class SubagentRunner:
                 print(dim(f"  [sub] 🛠  {func_name}({arg_preview})"))
 
                 try:
-                    result = execute_tool(func_name, func_args, workspace, max_data_chars=4000)
+                    result = execute_tool(func_name, func_args, workspace, max_data_chars=4000, file_lock=child.file_lock)
                 except ToolError as e:
                     result = f"Error: {e}"
                     logger.warning("Subagent tool %s failed: %s", func_name, e)

@@ -244,7 +244,7 @@ class ServerAgent(WispAgent):
                     result = f"MCP error: {e}"
             else:
                 try:
-                    result = execute_tool(func_name, func_args, workspace, max_data_chars=8000)
+                    result = execute_tool(func_name, func_args, workspace, max_data_chars=8000, file_lock=self.file_lock)
                 except ToolError as e:
                     result = f"Error: {e}"
 

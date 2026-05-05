@@ -157,6 +157,7 @@ class AcpSession:
                 tool_call.arguments,
                 self.workspace,
                 max_data_chars=8000,
+                file_lock=getattr(self, 'file_lock', None),
             )
             return ToolResultContent(id=tool_call_id, content=result)
         except ToolError as e:

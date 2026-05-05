@@ -607,3 +607,22 @@ class TestSwarmOrchestrator:
         assert "Swarm Result: Goal" in out
         assert "a.py" in out
         assert "bug" in out
+
+
+def test_file_lock_prevents_collision(tmp_path):
+    """Two agents cannot claim the same file simultaneously."""
+    from wisp.file_lock import FileLock
+
+    workspace = str(tmp_path)
+    lock1 = FileLock(workspace, agent_id="agent-1")
+    lock2 = FileLock(workspace, agent_id="agent-2")
+
+    assert lock1.acquire("shared.py") is True
+    assert lock2.acquire("shared.py") is False
+    lock_info = lock2.lock_info("shared.py")
+    assert lock_info is not None
+    assert lock_info["agent"] == "agent-1"
+
+    lock1.release("shared.py")
+    assert lock2.acquire("shared.py") is True
+    lock2.release("shared.py")

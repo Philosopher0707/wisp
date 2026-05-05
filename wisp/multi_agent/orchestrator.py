@@ -70,9 +70,9 @@ class SwarmOrchestrator:
         self.max_parallel = max_parallel
 
         self.registry = AgentRegistry()
-        self.bus = MessageBus()
-        self.factory = AgentFactory(config, parent_agent)
         self.workspace_lock = WorkspaceLock(config.workspace, self.registry)
+        self.bus = MessageBus()
+        self.factory = AgentFactory(config, parent_agent, workspace_lock=self.workspace_lock)
 
         self._agents: dict[str, WispAgent] = {}
         self._shutdown = False

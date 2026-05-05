@@ -228,7 +228,7 @@ def tool_read_file(path: str, workspace: str, offset: int = 0, limit: int = 2000
     return result
 
 
-def tool_write_file(path: str, workspace: str, content: str) -> str:
+def tool_write_file(path: str, workspace: str, content: str, file_lock=None) -> str:
     """Write content to a file (creates or overwrites)."""
     _validate_string(path, "path")
     _validate_string(content, "content", _MAX_WRITE_SIZE, allow_empty=True)
@@ -242,8 +242,9 @@ def tool_write_file(path: str, workspace: str, content: str) -> str:
         )
 
     # ── Collaborative editing: check lock ──
-    if _file_lock and not _file_lock.acquire(path):
-        lock_info = _file_lock.lock_info(path)
+    lock = file_lock or _file_lock
+    if lock and not lock.acquire(path):
+        lock_info = lock.lock_info(path)
         holder = lock_info.get("agent", "unknown") if lock_info else "unknown"
         raise ToolError(f"File {path} is locked by {holder}. Wait or coordinate before editing.")
 
@@ -260,8 +261,8 @@ def tool_write_file(path: str, workspace: str, content: str) -> str:
         _change_tracker.record_write(path, content)
 
     # Release lock after write
-    if _file_lock:
-        _file_lock.release(path)
+    if lock:
+        lock.release(path)
 
     return f"✓ Wrote {len(content)} bytes to {path}"
 
@@ -329,7 +330,7 @@ def _fuzzy_find_text(content: str, old_text: str, threshold: float = 0.85) -> tu
     return None, None, best_score
 
 
-def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str) -> str:
+def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str, file_lock=None) -> str:
     """Replace exact text in a file (surgical edit).
 
     First tries exact match. If that fails, falls back to fuzzy matching
@@ -350,8 +351,9 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str) -> s
         )
 
     # ── Collaborative editing: check lock ──
-    if _file_lock and not _file_lock.acquire(path):
-        lock_info = _file_lock.lock_info(path)
+    lock = file_lock or _file_lock
+    if lock and not lock.acquire(path):
+        lock_info = lock.lock_info(path)
         holder = lock_info.get("agent", "unknown") if lock_info else "unknown"
         raise ToolError(f"File {path} is locked by {holder}. Wait or coordinate before editing.")
 
@@ -361,8 +363,8 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str) -> s
     if old_text in content:
         count = content.count(old_text)
         if count > 1:
-            if _file_lock:
-                _file_lock.release(path)
+            if lock:
+                lock.release(path)
             raise ToolError(
                 f"old_text appears {count} times in {path}. "
                 "Edit must target a unique match."
@@ -375,16 +377,16 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str) -> s
         if _change_tracker:
             _change_tracker.record_edit(path, old_text, new_text)
 
-        if _file_lock:
-            _file_lock.release(path)
+        if lock:
+            lock.release(path)
 
         return f"✓ Edited {path} — {len(old_text)} chars replaced with {len(new_text)} chars"
 
     # ── Fuzzy match (fallback) ───────────────────────────────────
     match_start, actual_old, similarity = _fuzzy_find_text(content, old_text)
     if match_start is None or actual_old is None:
-        if _file_lock:
-            _file_lock.release(path)
+        if lock:
+            lock.release(path)
         raise ToolError(
             f"old_text not found in {path} "
             f"(best fuzzy similarity: {similarity:.0%}). "
@@ -402,8 +404,8 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str) -> s
     if _change_tracker:
         _change_tracker.record_edit(path, actual_old, new_text)
 
-    if _file_lock:
-        _file_lock.release(path)
+    if lock:
+        lock.release(path)
 
     return (
         f"✓ Edited {path} (fuzzy match, {similarity:.0%} similar) — "
@@ -1157,7 +1159,7 @@ def _build_tool_metadata(name: str, args: dict, result: str) -> dict:
 # ── Tool schemas ────────────────────────────────────────────────────
 
 
-def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0) -> str:
+def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0, file_lock=None) -> str:
     """Execute a tool by name with given arguments.
 
     Returns a structured JSON string with status, data, and metadata
@@ -1165,6 +1167,12 @@ def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0)
 
     If max_data_chars > 0, the data field is truncated to that length
     and a 'truncated' flag is added to metadata.
+
+    Args:
+        file_lock: Optional file lock instance (for multi-agent swarm).
+                   If provided, write/edit tools use this lock instead of
+                   the module-level global. Prevents collision when multiple
+                   agents run in parallel threads.
     """
     impl = TOOL_IMPLS.get(name)
     if not impl:
@@ -1175,6 +1183,9 @@ def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0)
     sig = inspect.signature(impl)
     filtered = {k: v for k, v in args.items() if k in sig.parameters}
     filtered["workspace"] = workspace
+    # Thread the caller's file lock to tools that support it (write_file, edit_file)
+    if "file_lock" in sig.parameters:
+        filtered["file_lock"] = file_lock
 
     try:
         result = impl(**filtered)
