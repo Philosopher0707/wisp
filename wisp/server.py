@@ -1,4 +1,6 @@
-"""Wisp Cloud Server — FastAPI + WebSocket for remote Android clients.
+"""Wisp Cloud Server — FastAPI + WebSocket for remote clients.
+
+Uses WispAgentCore + ServerTransport for event-driven agent execution.
 
 Run:
     wisp server --host 0.0.0.0 --port 8000
@@ -17,7 +19,6 @@ import logging
 import os
 import secrets
 import shutil
-import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -28,7 +29,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from wisp.config import WispConfig
-from wisp.server_agent import ServerAgent
+from wisp.core.agent import WispAgentCore
+from wisp.transport.server import ServerTransport
 from wisp.session import SessionManager
 
 logger = logging.getLogger(__name__)
@@ -80,124 +82,93 @@ async def verify_api_key(x_api_key: str = Query(..., alias="api-key")):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Wisp Cloud Server starting")
-    logger.info("Workspace: %s", WORKSPACE_ROOT)
-    logger.info("API key: %s...%s", API_KEY[:4], API_KEY[-4:])
+    logger.info("Wisp Cloud Server starting...")
     yield
-    logger.info("Wisp Cloud Server shutting down")
+    logger.info("Wisp Cloud Server shutting down...")
 
-app = FastAPI(
-    title="Wisp Cloud",
-    description="Remote coding agent server for Wisp",
-    version="0.1.0",
-    lifespan=lifespan,
-)
-
-# CORS: restrict to known origins. Override via env var for development.
-CORS_ORIGINS = os.environ.get("WISP_CORS_ORIGINS", "")
-if CORS_ORIGINS:
-    _origins = [o.strip() for o in CORS_ORIGINS.split(",") if o.strip()]
-else:
-    # Default: same-origin only (no web browser access from other domains)
-    _origins = []
+app = FastAPI(title="Wisp Cloud", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_origins,
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # ── Connection manager ───────────────────────────────────────────────
 
 class Connection:
-    """Represents one WebSocket client connection."""
+    """Represents a single WebSocket connection."""
 
     def __init__(self, websocket: WebSocket, client_id: str):
-        self.ws = websocket
+        self.websocket = websocket
         self.client_id = client_id
-        self.agent: Optional[ServerAgent] = None
         self.agent_task: Optional[asyncio.Task] = None
-        self._closed = False
+        self.transport: Optional[ServerTransport] = None
 
     async def send(self, msg: dict):
-        if not self._closed:
-            try:
-                await self.ws.send_json(msg)
-            except Exception as e:
-                logger.debug("Send failed to %s: %s", self.client_id, e)
-
-    async def close(self):
-        self._closed = True
-        if self.agent:
-            self.agent._interrupted = True
-        if self.agent_task and not self.agent_task.done():
-            self.agent_task.cancel()
-            try:
-                await asyncio.wait_for(self.agent_task, timeout=5)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                pass
         try:
-            await self.ws.close()
-        except Exception:
-            pass
+            await self.websocket.send_text(json.dumps(msg))
+        except Exception as e:
+            logger.warning("Failed to send to %s: %s", self.client_id, e)
 
 
 class ConnectionManager:
     def __init__(self):
         self._connections: dict[str, Connection] = {}
-        self._lock = asyncio.Lock()
 
     async def connect(self, websocket: WebSocket, client_id: str) -> Connection:
         await websocket.accept()
         conn = Connection(websocket, client_id)
-        async with self._lock:
-            self._connections[client_id] = conn
+        self._connections[client_id] = conn
+        logger.info("Client %s connected", client_id)
         return conn
 
     async def disconnect(self, client_id: str):
-        async with self._lock:
-            conn = self._connections.pop(client_id, None)
-        if conn:
-            await conn.close()
+        conn = self._connections.pop(client_id, None)
+        if conn and conn.agent_task and not conn.agent_task.done():
+            conn.agent_task.cancel()
+            try:
+                await asyncio.wait_for(conn.agent_task, timeout=2)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+        logger.info("Client %s disconnected", client_id)
 
-    async def broadcast(self, msg: dict):
-        async with self._lock:
-            conns = list(self._connections.values())
-        for conn in conns:
+    async def send(self, client_id: str, msg: dict):
+        conn = self._connections.get(client_id)
+        if conn:
             await conn.send(msg)
 
 
 manager = ConnectionManager()
 
-# ── Helpers ────────────────────────────────────────────────────────
+# ── Helpers ──────────────────────────────────────────────────────────
 
 def _resolve_path(path: str) -> Path:
-    """Resolve a user-provided path safely inside WORKSPACE_ROOT."""
-    target = (WORKSPACE_ROOT / path).resolve()
-    # Prevent path traversal
+    target = WORKSPACE_ROOT / path
     try:
         target.relative_to(WORKSPACE_ROOT)
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid path")
+        raise HTTPException(status_code=400, detail="Path traversal blocked")
     return target
 
+# ── HTTP Routes ──────────────────────────────────────────────────────
 
-# ── REST API ─────────────────────────────────────────────────────────
-
-@app.get("/")
-async def root():
-    return {"service": "wisp-cloud", "version": "0.1.0"}
+@app.get("/api/health")
+async def health():
+    return {"status": "ok", "version": "0.1.0"}
 
 
 @app.get("/api/models", dependencies=[Depends(verify_api_key)])
 async def list_models():
-    config = WispConfig()
-    from wisp.ollama_client import OllamaClient
-    client = OllamaClient(config)
+    """List available Ollama models."""
+    import requests
     try:
-        models = client.list_models()
+        resp = requests.get("http://localhost:11434/api/tags", timeout=5)
+        resp.raise_for_status()
+        data = resp.json()
+        models = [m.get("name", "") for m in data.get("models", [])]
         return {"models": models}
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Ollama error: {e}")
@@ -283,7 +254,6 @@ async def run_bash(req: BashRequest):
     """Run a bash command inside the workspace. Restricted for safety."""
     import subprocess
 
-    # Block dangerous commands at the API layer too
     from wisp.tools import check_dangerous_command
     danger = check_dangerous_command(req.command)
     if danger:
@@ -326,7 +296,6 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(...)):
 
     client_id = f"{websocket.client.host}:{websocket.client.port}"
     conn = await manager.connect(websocket, client_id)
-    loop = asyncio.get_running_loop()
 
     try:
         while True:
@@ -347,8 +316,8 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(...)):
 
                 # Stop any existing agent run
                 if conn.agent_task and not conn.agent_task.done():
-                    if conn.agent:
-                        conn.agent._interrupted = True
+                    if conn.transport:
+                        conn.transport.interrupt()
                     conn.agent_task.cancel()
                     try:
                         await asyncio.wait_for(conn.agent_task, timeout=2)
@@ -362,26 +331,36 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(...)):
                 config.auto_approve = False
                 config.show_thinking = msg.get("show_thinking", True)
 
-                conn.agent = ServerAgent(config, conn.send, loop)
+                core = WispAgentCore(config=config)
+                conn.transport = ServerTransport(core, conn.send)
                 session_id = msg.get("session_id")
 
-                # Run agent in a background thread to avoid blocking the event loop
-                conn.agent_task = asyncio.create_task(
-                    asyncio.to_thread(conn.agent.run_server, prompt, session_id=session_id)
-                )
+                # Run agent as async task
+                async def _run():
+                    try:
+                        await conn.transport.run(prompt)
+                    except Exception as e:
+                        logger.error("Agent error for %s: %s", client_id, e)
+                        await conn.send({"type": "error", "message": str(e)})
+                    finally:
+                        await conn.send({"type": "complete", "session_id": session_id or ""})
+
+                conn.agent_task = asyncio.create_task(_run())
 
             elif msg_type == "tool_approval":
                 call_id = msg.get("id")
                 approved = msg.get("approved", False)
                 reason = msg.get("reason")
-                if conn.agent:
-                    conn.agent.approve_tool(call_id, approved, reason)
+                if conn.transport:
+                    await conn.transport.approve_tool(call_id, approved, reason)
                 else:
                     await conn.send({"type": "error", "message": "No active agent"})
 
             elif msg_type == "interrupt":
-                if conn.agent:
-                    conn.agent._interrupted = True
+                if conn.transport:
+                    conn.transport.interrupt()
+                if conn.agent_task and not conn.agent_task.done():
+                    conn.agent_task.cancel()
                 await conn.send({"type": "status", "message": "Interrupted"})
 
             elif msg_type == "ping":

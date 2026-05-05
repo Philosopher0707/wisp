@@ -1,7 +1,7 @@
-"""Server transport for Wisp — bridges WispAgentCore to WebSocket clients.
+"""Async server transport for Wisp — bridges WispAgentCore to WebSocket clients.
 
 Consumes AgentEvent instances and serializes them to JSON for remote clients.
-Handles tool approval by sending requests to the client and awaiting responses.
+Handles async tool approval by sending requests to the client and awaiting responses.
 """
 
 from __future__ import annotations
@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import threading
 import time
 from typing import Optional
 
@@ -30,40 +29,40 @@ logger = logging.getLogger(__name__)
 
 
 class PendingApproval:
-    """Represents a tool call waiting for client approval."""
+    """Represents a tool call waiting for client approval (async-aware)."""
 
     def __init__(self, call_id: str, name: str, arguments: dict):
         self.call_id = call_id
         self.name = name
         self.arguments = arguments
-        self.event = threading.Event()
+        self.event = asyncio.Event()
         self.approved: bool = False
         self.denied_reason: Optional[str] = None
 
 
 class ServerTransport:
-    """WebSocket transport for WispAgentCore.
+    """Async WebSocket transport for WispAgentCore.
 
     Streams events as JSON messages to a remote client and handles
     asynchronous tool approval.
     """
 
-    def __init__(self, core: WispAgentCore, send_callback, loop: asyncio.AbstractEventLoop):
+    def __init__(self, core: WispAgentCore, send_callback):
         self.core = core
         self._send_callback = send_callback
-        self._loop = loop
         self._pending_approvals: dict[str, PendingApproval] = {}
-        self._approval_lock = threading.Lock()
+        self._approval_lock = asyncio.Lock()
         self._call_counter = 0
+        self._interrupted = False
 
     def _next_call_id(self) -> str:
         self._call_counter += 1
         return f"tc-{self._call_counter}"
 
-    def _send(self, msg: dict):
-        """Thread-safe send to the async callback."""
+    async def _send(self, msg: dict):
+        """Send a message to the client via the async callback."""
         try:
-            asyncio.run_coroutine_threadsafe(self._send_callback(msg), self._loop)
+            await self._send_callback(msg)
         except Exception as e:
             logger.warning("Failed to send message to client: %s", e)
 
@@ -95,7 +94,7 @@ class ServerTransport:
         if etype == TYPE_ERROR:
             return {
                 "type": "error",
-                "message": event.text,
+                "message": event.data.get("message", ""),
                 "recoverable": event.data.get("recoverable", True),
             }
 
@@ -124,39 +123,55 @@ class ServerTransport:
     async def run(self, prompt: str) -> None:
         """Run one prompt and stream all events to the WebSocket client."""
         async for event in self.core.run(prompt):
+            if self._interrupted:
+                break
             msg = self._event_to_json(event)
             if msg is not None:
-                self._send(msg)
+                await self._send(msg)
 
             if event.type == TYPE_APPROVAL_REQUEST:
-                # In server mode, we need to wait for client approval.
-                # However, the current core design blocks dangerous commands
-                # and yields approval_request + blocked result.
-                # For a full server implementation, we'd need to re-execute
-                # the tool after approval. This is a simplified version.
-                call_id = self._next_call_id()
+                call_id = msg["call_id"] if msg else self._next_call_id()
                 pa = PendingApproval(call_id, event.data.get("name", ""), event.data.get("arguments", {}))
-                with self._approval_lock:
+                async with self._approval_lock:
                     self._pending_approvals[call_id] = pa
-                self._send({
-                    "type": "tool_approval_request",
-                    "call_id": call_id,
-                    "name": event.data.get("name", ""),
-                    "arguments": event.data.get("arguments", {}),
-                    "reason": event.data.get("reason", ""),
-                })
 
-    def approve_tool(self, call_id: str, approved: bool, reason: Optional[str] = None) -> None:
-        """Called by the server when a client approves or denies a tool."""
-        with self._approval_lock:
+                # Wait for client approval (with 5-minute timeout)
+                try:
+                    await asyncio.wait_for(pa.event.wait(), timeout=300)
+                except asyncio.TimeoutError:
+                    await self._send({
+                        "type": "tool_result",
+                        "call_id": call_id,
+                        "output": "[Approval timed out after 5 minutes]",
+                        "error": "timeout",
+                    })
+                    continue
+
+                async with self._approval_lock:
+                    self._pending_approvals.pop(call_id, None)
+
+                if not pa.approved:
+                    reason = pa.denied_reason or "User denied"
+                    await self._send({
+                        "type": "tool_result",
+                        "call_id": call_id,
+                        "output": f"[{reason}]",
+                        "error": "denied",
+                    })
+
+    async def approve_tool(self, call_id: str, approved: bool, reason: Optional[str] = None) -> bool:
+        """Called by the WebSocket handler when a client approves/denies a tool."""
+        async with self._approval_lock:
             pa = self._pending_approvals.get(call_id)
             if pa is None:
                 logger.warning("Approval for unknown call_id: %s", call_id)
-                return
+                return False
             pa.approved = approved
             pa.denied_reason = reason
             pa.event.set()
+            return True
 
-    def run_sync(self, prompt: str) -> None:
-        """Synchronous wrapper for use in background threads."""
-        asyncio.run(self.run(prompt))
+    def interrupt(self) -> None:
+        """Interrupt the current run."""
+        self._interrupted = True
+        self.core._interrupted = True
