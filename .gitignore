@@ -41,3 +41,9 @@ sessions/
 *.log
 .env
 warp-source/
+
+# Android build artifacts
+android/.gradle/
+android/local.properties
+android/app/build/
+android/build/
