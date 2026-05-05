@@ -172,9 +172,10 @@ def _prompt_dangerous(func_name: str, reason: str) -> bool:
 def _setup_readline_history():
     """Load readline history from disk for REPL arrow-key recall.
 
-    Also sets up tab-completion for slash commands and pre-populates
-    history so that pressing Up/Down after typing ``/`` cycles through
-    available commands.
+    Sets up:
+    - Tab completion for slash commands (e.g. /mod<Tab> → /model)
+    - Up/Down arrow prefix search (type "/" then Up to cycle /commands)
+    - Pre-populated history with all slash commands
     """
     if readline is None:
         return
@@ -188,7 +189,18 @@ def _setup_readline_history():
     import atexit
     atexit.register(lambda: readline.write_history_file(histfile))
 
+    # ── Detect readline flavour ────────────────────────────────────
+    _doc = (readline.__doc__ or "").lower()
+    _is_libedit = "libedit" in _doc
+    _is_gnu = "gnu" in _doc or not _is_libedit
+
     # ── Tab completion for slash commands ──────────────────────────
+    # Remove '/' from word delimiters so the completer sees "/model" not "model"
+    try:
+        readline.set_completer_delims(" \t\n`~!@#$%^&*()-=+[{]}\\|;'\",<>")
+    except Exception:
+        pass
+
     def _completer(text, state):
         """Complete slash commands when text starts with '/'."""
         if not text.startswith("/"):
@@ -203,28 +215,27 @@ def _setup_readline_history():
 
     readline.set_completer(_completer)
 
-    # Enable tab completion — try GNU readline syntax first, then libedit fallback
-    try:
+    # Enable tab completion
+    if _is_libedit:
+        readline.parse_and_bind("bind ^I rl_complete")
+    else:
         readline.parse_and_bind("tab: complete")
-    except Exception:
-        try:
-            readline.parse_and_bind("bind ^I rl_complete")
-        except Exception:
-            pass
+
+    # ── Up/Down arrow: prefix-based history search ─────────────────
+    # After typing "/", Up arrow cycles only through entries starting with "/"
+    if _is_libedit:
+        # libedit (macOS default) uses different syntax
+        readline.parse_and_bind("bind ^[[A ed-search-prev-history")
+        readline.parse_and_bind("bind ^[[B ed-search-next-history")
+    else:
+        # GNU readline
+        readline.parse_and_bind(r'"\e[A": history-search-backward')
+        readline.parse_and_bind(r'"\e[B": history-search-forward')
 
     # ── Pre-populate history with slash commands ───────────────────
-    # This lets the user type "/" and hit Up arrow to cycle through commands.
-    # We add them unconditionally so they're always available for prefix search.
-    try:
-        current_len = readline.get_current_history_length()
-    except Exception:
-        current_len = 0
-
     from wisp.commands import all_commands
     for cmd in all_commands():
-        entry = f"/{cmd.name}"
-        readline.add_history(entry)
-    # Add bare "/" as the last entry so Up after "/" cycles through commands
+        readline.add_history(f"/{cmd.name}")
     readline.add_history("/")
 
     # Re-save so they persist
