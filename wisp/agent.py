@@ -69,6 +69,7 @@ You have access to tools that let you read, write, and edit files, run bash comm
 - web_fetch: Fetch content from URLs (web pages, APIs, documentation)
 - search_symbols: Search code for functions, classes, structs by name
 - remember: Store a fact in cross-session memory (preferences, decisions)
+- recall: Search cross-session memory and past summaries for relevant facts
 - spawn_subagent: Delegate a scoped task to a child agent
 """
 

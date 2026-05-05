@@ -607,6 +607,104 @@ def tool_remember(fact: str, workspace: str = ".") -> str:
         return f"(Already remembered: {fact})"
 
 
+def tool_recall(query: str, workspace: str = ".", limit: int = 10) -> str:
+    """Search cross-session memory and past session summaries for relevant facts.
+
+    Use this when you need to actively recall something you may have learned
+    in previous conversations, rather than relying only on what's in the
+    current context window.
+    """
+    _validate_string(query, "query", 200)
+    if limit < 1 or limit > 50:
+        limit = 10
+
+    from wisp.memory import list_facts, load_memory
+    from wisp.agent_memory import AgentMemory
+    from wisp.summarizer import SessionSummary
+
+    query_lower = query.lower()
+    query_words = [w for w in query_lower.split() if len(w) > 2]
+
+    results: list[tuple[float, str]] = []
+
+    # ── Search memory facts ──
+    facts = list_facts(workspace)
+    for fact in facts:
+        score = _relevance_score(fact, query_lower, query_words)
+        if score > 0:
+            results.append((score, f"[Memory] {fact}"))
+
+    # ── Search session summaries ──
+    agent_mem = AgentMemory()
+    summaries = agent_mem.load_recent(workspace=workspace, limit=20)
+    for summary in summaries:
+        # Score each field
+        texts = [
+            summary.summary,
+            " ".join(summary.key_decisions),
+            " ".join(summary.user_preferences),
+            " ".join(summary.open_tasks),
+            " ".join(summary.files_touched),
+        ]
+        for text in texts:
+            if text:
+                score = _relevance_score(text, query_lower, query_words)
+                if score > 0.5:
+                    results.append((score, f"[Session {summary.session_id[:20]}] {text[:200]}"))
+
+    # ── Search global memory (if workspace-specific didn't find much) ──
+    if len(results) < 3:
+        global_facts = list_facts(None)
+        for fact in global_facts:
+            if fact not in facts:  # avoid duplicates
+                score = _relevance_score(fact, query_lower, query_words)
+                if score > 0:
+                    results.append((score, f"[Global] {fact}"))
+
+    if not results:
+        return "No relevant memories found for this query."
+
+    # Sort by score descending, deduplicate, limit
+    results.sort(key=lambda x: x[0], reverse=True)
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for score, text in results:
+        key = text.lower()[:80]
+        if key not in seen:
+            seen.add(key)
+            deduped.append(f"({score:.1f}) {text}")
+            if len(deduped) >= limit:
+                break
+
+    return "\n".join(deduped)
+
+
+def _relevance_score(text: str, query_lower: str, query_words: list[str]) -> float:
+    """Simple relevance score: exact match bonus + word overlap."""
+    text_lower = text.lower()
+    score = 0.0
+
+    # Exact substring match gets high score
+    if query_lower in text_lower:
+        score += 3.0
+
+    # Word overlap
+    text_words = set(text_lower.split())
+    for word in query_words:
+        if word in text_words:
+            score += 1.0
+        # Partial match
+        for tw in text_words:
+            if word in tw or tw in word:
+                score += 0.3
+
+    # Length normalization (prefer concise matches)
+    if len(text) > 500:
+        score *= 0.8
+
+    return score
+
+
 def tool_git_status(workspace: str = ".") -> str:
     """Show git status for the workspace."""
     from wisp.git_context import format_git_context
@@ -838,6 +936,21 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "recall",
+            "description": "Search cross-session memory and past session summaries for relevant facts. Use when you need to actively recall something learned in previous conversations — user preferences, past decisions, files touched, open tasks, etc. Returns ranked results with relevance scores.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "What to search for. Be specific — e.g. 'user preference for indentation', 'auth module decisions', 'files touched in API refactor'"},
+                    "limit": {"type": "number", "description": "Max results to return (1-50)", "default": 10},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "spawn_subagent",
             "description": "Spawn a specialist subagent to handle a scoped task (research, coding, testing) with its own iteration budget and timeout. The subagent runs in parallel and returns a structured result. Use when a task can be decomposed into an independent work unit.",
             "parameters": {
@@ -952,6 +1065,7 @@ TOOL_IMPLS = {
     "web_fetch": tool_web_fetch,
     "search_symbols": tool_search_symbols,
     "remember": tool_remember,
+    "recall": tool_recall,
     "git_status": tool_git_status,
     "git_diff": tool_git_diff,
     "diagnose": tool_diagnose,
@@ -1015,11 +1129,14 @@ def _build_tool_metadata(name: str, args: dict, result: str) -> dict:
         m = re.search(r"Found (\d+) symbol", result)
         if m:
             meta["results_count"] = int(m.group(1))
-
     elif name == "remember":
         meta["fact"] = (args.get("fact", "") or "")[:80]
 
-    return meta
+    elif name == "recall":
+        meta["query"] = (args.get("query", "") or "")[:80]
+        meta["limit"] = args.get("limit", 10)
+
+    elif name == "git_status":    return meta
 
 
 def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0) -> str:
