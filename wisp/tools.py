@@ -638,18 +638,19 @@ def tool_recall(query: str, workspace: str = ".", limit: int = 10) -> str:
     agent_mem = AgentMemory()
     summaries = agent_mem.load_recent(workspace=workspace, limit=20)
     for summary in summaries:
-        # Score each field
         texts = [
-            summary.summary,
-            " ".join(summary.key_decisions),
-            " ".join(summary.user_preferences),
-            " ".join(summary.open_tasks),
-            " ".join(summary.files_touched),
+            (summary.summary, 1.0),
+            (" ".join(summary.key_decisions), 1.5),
+            (" ".join(summary.user_preferences), 1.5),
+            (" ".join(summary.open_tasks), 1.2),
+            (" ".join(summary.files_touched), 1.0),
         ]
-        for text in texts:
+        for text, field_boost in texts:
             if text:
                 score = _relevance_score(text, query_lower, query_words)
-                if score > 0.5:
+                # Session summaries need higher bar to avoid noise
+                if score >= 2.0:
+                    score *= field_boost
                     results.append((score, f"[Session {summary.session_id[:20]}] {text[:200]}"))
 
     # ── Search global memory (if workspace-specific didn't find much) ──
@@ -680,27 +681,40 @@ def tool_recall(query: str, workspace: str = ".", limit: int = 10) -> str:
 
 
 def _relevance_score(text: str, query_lower: str, query_words: list[str]) -> float:
-    """Simple relevance score: exact match bonus + word overlap."""
+    """Relevance score for memory retrieval. Exact matches score highest.
+    Partial word matches score lower to avoid generic text pollution.
+    """
     text_lower = text.lower()
     score = 0.0
 
-    # Exact substring match gets high score
+    # Exact substring match = very high signal
     if query_lower in text_lower:
-        score += 3.0
+        score += 5.0
+        # Bonus for shorter exact matches (more precise)
+        score += max(0, 3.0 - len(text) / 200)
 
-    # Word overlap
-    text_words = set(text_lower.split())
-    for word in query_words:
+    # Word overlap — require meaningful words only
+    text_words = set(w for w in text_lower.split() if len(w) > 2)
+    meaningful_query = [w for w in query_words if len(w) > 2]
+    for word in meaningful_query:
         if word in text_words:
-            score += 1.0
-        # Partial match
-        for tw in text_words:
-            if word in tw or tw in word:
-                score += 0.3
+            score += 2.0
+        # Partial match only for longer words (avoid "the" matching "then")
+        elif len(word) >= 4:
+            for tw in text_words:
+                if word in tw or tw in word:
+                    score += 0.5
+                    break
 
-    # Length normalization (prefer concise matches)
-    if len(text) > 500:
+    # Penalize very long generic text (session summaries can be noisy)
+    if len(text) > 300:
+        score *= 0.6
+    elif len(text) > 150:
         score *= 0.8
+
+    # Boost concise memory facts (they're usually high signal)
+    if len(text) < 100 and score > 0:
+        score *= 1.3
 
     return score
 
