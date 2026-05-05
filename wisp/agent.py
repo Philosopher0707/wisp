@@ -263,14 +263,14 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
         lines = []
         while True:
             try:
-                # Print colored prompt manually so readline doesn't get confused
-                # by ANSI escape codes (which would cause cursor jump/wrap bugs).
+                # Wrap ANSI codes in \001/\002 so readline knows they're
+                # non-printing and doesn't get confused about cursor position.
+                # This is required for tab completion and history to work.
                 if not lines:
-                    sys.stdout.write(f"\033[1m{prompt}\033[0m")
+                    rl_prompt = f"\001\033[1m\002{prompt}\001\033[0m\002"
                 else:
-                    sys.stdout.write("... ")
-                sys.stdout.flush()
-                line = input("")
+                    rl_prompt = "... "
+                line = input(rl_prompt)
             except KeyboardInterrupt:
                 print()
                 raise
