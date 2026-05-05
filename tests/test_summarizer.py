@@ -129,9 +129,41 @@ class TestSessionSummary:
             user_preferences=["Prefer Y"],
             open_tasks=["Do Z"],
             files_touched=["a.py"],
+            thread_stack=[{"topic": "auth refactor", "status": "INCOMPLETE"}],
         )
         d = summary.to_dict()
         restored = SessionSummary.from_dict(d)
         assert restored.session_id == "test-id"
         assert restored.summary == "Did some work."
         assert restored.key_decisions == ["Use X"]
+        assert restored.thread_stack == [{"topic": "auth refactor", "status": "INCOMPLETE"}]
+
+    def test_extract_thread_stack_complete(self):
+        summarizer = ExtractiveSummarizer()
+        messages = [
+            {"role": "user", "content": "Explain Python decorators."},
+            {"role": "assistant", "content": "Python decorators are functions that wrap other functions to extend their behavior. They use the @ syntax."},
+        ]
+        stack = summarizer._extract_thread_stack(messages)
+        assert len(stack) == 1
+        assert stack[0]["status"] == "COMPLETE"
+        assert "decorators" in stack[0]["topic"].lower()
+
+    def test_extract_thread_stack_incomplete(self):
+        summarizer = ExtractiveSummarizer()
+        messages = [
+            {"role": "user", "content": "Explain Python decorators."},
+            {"role": "assistant", "content": "Here are the steps: first, we define a wrapper function"},
+        ]
+        stack = summarizer._extract_thread_stack(messages)
+        assert len(stack) == 1
+        assert stack[0]["status"] == "INCOMPLETE"
+        assert "steps" in stack[0]["topic"].lower()
+
+    def test_extract_thread_stack_no_assistant(self):
+        summarizer = ExtractiveSummarizer()
+        messages = [
+            {"role": "user", "content": "Hello?"},
+        ]
+        stack = summarizer._extract_thread_stack(messages)
+        assert stack == []

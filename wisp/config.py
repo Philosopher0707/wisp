@@ -114,10 +114,10 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
     },
     "compact_keep_recent": {
         "type": int,
-        "default": 6,
-        "min": 2,
+        "default": 10,
+        "min": 4,
         "max": 50,
-        "description": "Number of recent messages to preserve during compaction",
+        "description": "Number of recent messages to preserve during compaction (must be even to preserve turn symmetry)",
         "env_var": "WISP_COMPACT_KEEP_RECENT",
     },
 }

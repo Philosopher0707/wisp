@@ -111,10 +111,11 @@ def test_dispatch_unknown_command(agent, capsys):
     assert "Unknown command" in captured.out
 
 
-def test_dispatch_empty_slash(agent):
-    """Bare '/' should be ignored (return False-ish, but technically consumed)."""
-    # dispatch strips and checks body; bare '/' has empty body so returns False
-    assert dispatch("/", agent) is False
+def test_dispatch_empty_slash(agent, capsys):
+    """Bare '/' should show help and be consumed."""
+    assert dispatch("/", agent) is True
+    captured = capsys.readouterr()
+    assert "Available commands" in captured.out
 
 
 # ── Built-in command tests (after they are imported) ─────────────────

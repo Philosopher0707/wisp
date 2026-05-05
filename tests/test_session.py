@@ -184,11 +184,46 @@ class TestSessionCompact:
 
     def test_compact_preserves_recent(self):
         s = Session.create("m", ".", "preserve")
+        # Build realistic turns: user → assistant
         for i in range(8):
             s.messages.append({"role": "user", "content": f"message {i}"})
+            s.messages.append({"role": "assistant", "content": f"reply {i}"})
         result = s.compact(keep_recent=3)
         assert result["compacted"] is True
-        # Last 3 messages should be preserved verbatim
-        assert s.messages[-3]["content"] == "message 5"
-        assert s.messages[-2]["content"] == "message 6"
-        assert s.messages[-1]["content"] == "message 7"
+        # Turn-symmetry guard expands keep_recent=3 → 4 so window ends with assistant
+        assert result["keep_recent"] == 4
+        # Last 4 messages should be preserved verbatim
+        assert s.messages[-4]["content"] == "message 6"
+        assert s.messages[-3]["content"] == "reply 6"
+        assert s.messages[-2]["content"] == "message 7"
+        assert s.messages[-1]["content"] == "reply 7"
+
+    def test_compact_symmetry_guard_with_tools(self):
+        s = Session.create("m", ".", "tool test")
+        s.messages.append({"role": "user", "content": "run test"})
+        s.messages.append({"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "run_bash", "arguments": {"command": "echo hi"}}}]})
+        s.messages.append({"role": "tool", "content": "hi", "name": "run_bash"})
+        s.messages.append({"role": "assistant", "content": "Done."})
+        s.messages.append({"role": "user", "content": "next"})
+        s.messages.append({"role": "assistant", "content": "Sure."})
+        result = s.compact(keep_recent=2)
+        assert result["compacted"] is True
+        # keep_recent=2 starts with user("next") + assistant("Sure.") → valid
+        assert result["keep_recent"] == 2
+        assert s.messages[-2]["content"] == "next"
+        assert s.messages[-1]["content"] == "Sure."
+
+    def test_compact_symmetry_guard_adjusts_odd_window(self):
+        s = Session.create("m", ".", "odd window")
+        for i in range(6):
+            s.messages.append({"role": "user", "content": f"u{i}"})
+            s.messages.append({"role": "assistant", "content": f"a{i}"})
+        # Ask to keep 3: would give [user, assistant, user] — bad symmetry
+        result = s.compact(keep_recent=3)
+        assert result["compacted"] is True
+        # Guard expands to 4 so window is [user, assistant, user, assistant]
+        assert result["keep_recent"] == 4
+        assert s.messages[-4]["content"] == "u4"
+        assert s.messages[-3]["content"] == "a4"
+        assert s.messages[-2]["content"] == "u5"
+        assert s.messages[-1]["content"] == "a5"

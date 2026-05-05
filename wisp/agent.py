@@ -170,7 +170,12 @@ def _prompt_dangerous(func_name: str, reason: str) -> bool:
 
 
 def _setup_readline_history():
-    """Load readline history from disk for REPL arrow-key recall."""
+    """Load readline history from disk for REPL arrow-key recall.
+
+    Also sets up tab-completion for slash commands and pre-populates
+    history so that pressing Up/Down after typing ``/`` cycles through
+    available commands.
+    """
     if readline is None:
         return
     histfile = os.path.expanduser("~/.config/wisp/history")
@@ -182,6 +187,40 @@ def _setup_readline_history():
     # Auto-save on exit
     import atexit
     atexit.register(lambda: readline.write_history_file(histfile))
+
+    # ── Completion menu display ──────────────────────────────────────
+    def _display_matches(substitution, matches, longest_match_length):
+        """Print a clean multi-column menu of slash commands."""
+        print()
+        from wisp.commands import all_commands
+        # Build a map of name -> description for the matches
+        cmd_map = {}
+        for cmd in all_commands():
+            cmd_map[f"/{cmd.name}"] = cmd.description
+            for alias in cmd.aliases:
+                cmd_map[f"/{alias}"] = f"alias for /{cmd.name}"
+
+        # Print in columns
+        cols = max(1, shutil.get_terminal_size().columns // 22)
+        lines: list[str] = []
+        current: list[str] = []
+        for m in matches:
+            desc = cmd_map.get(m, "")
+            line = f"  {m:<14} {desc}"
+            current.append(line[:50])
+            if len(current) >= cols:
+                lines.append("".join(current))
+                current = []
+        if current:
+            lines.append("".join(current))
+        for line in lines[:20]:
+            print(dim(line))
+        if len(matches) > 20:
+            print(dim(f"  … and {len(matches) - 20} more"))
+        # Redraw the prompt cleanly
+        print(end="")
+
+    readline.set_completion_display_matches_hook(_display_matches)
 
     # Tab completion for slash commands
     def _completer(text, state):
@@ -197,6 +236,28 @@ def _setup_readline_history():
 
     readline.set_completer(_completer)
     readline.parse_and_bind("tab: complete")
+
+    # ── Pre-populate history with slash commands ───────────────────
+    # This lets the user type "/" and hit Up arrow to cycle through commands.
+    # We only add them if the history file is empty or doesn't exist yet.
+    try:
+        current_len = readline.get_current_history_length()
+    except Exception:
+        current_len = 0
+
+    if current_len == 0:
+        from wisp.commands import all_commands
+        for cmd in all_commands():
+            readline.add_history(f"/{cmd.name}")
+            for alias in cmd.aliases:
+                readline.add_history(f"/{alias}")
+        # Also add the bare "/" so hitting Enter after "/" is in history
+        readline.add_history("/")
+        # Re-save so they persist
+        try:
+            readline.write_history_file(histfile)
+        except OSError:
+            pass
 
 
 def _input_line(prompt: str, allow_multiline: bool = True) -> str:
@@ -393,6 +454,66 @@ class WispAgent:
             msg["thinking"] = thinking
         self.messages.append(msg)
 
+    # ── Continuation expansion ───────────────────────────────────────
+
+    _CONTINUATION_TRIGGERS = frozenset({
+        "continue", "go on", "more", "and?", "keep going", "next", "proceed",
+        "finish", "tell me more", "expand on that", "elaborate", "what else",
+    })
+
+    def _expand_continuation(self, user_text: str) -> str:
+        """Rewrite bare continuation words into explicit, anaphora-free prompts.
+
+        After compaction the model may have lost the exact last assistant message.
+        This hook disambiguates 'continue' by injecting the topic from the
+        compacted summary or the last verbatim assistant message.
+        """
+        lowered = user_text.strip().lower().rstrip("?.!")
+        # Only rewrite if the message is a bare continuation trigger
+        if lowered not in self._CONTINUATION_TRIGGERS:
+            return user_text
+
+        parts: list[str] = [user_text]
+
+        # 1. Try to grab the last verbatim assistant message in hot context
+        last_assistant = ""
+        for m in reversed(self.messages):
+            if m.get("role") == "assistant":
+                last_assistant = m.get("content", "") or ""
+                break
+
+        if last_assistant:
+            tail = last_assistant[-200:].replace("\n", " ")
+            parts.append(
+                f"\n[Context: Continue your previous response. "
+                f"Do NOT repeat anything already said. "
+                f"Pick up exactly after: {tail}]"
+            )
+        else:
+            # 2. No verbatim assistant in hot context — look at compacted summary
+            compacted_summary = ""
+            if (
+                self.messages
+                and self.messages[0].get("role") == "system"
+                and self.messages[0].get("compacted")
+            ):
+                compacted_summary = self.messages[0].get("content", "")
+
+            if compacted_summary:
+                # Extract the INCOMPLETE thread marker from the summary
+                m = re.search(
+                    r"→ When the user says .continue., resume from: (.+)",
+                    compacted_summary,
+                )
+                if m:
+                    topic = m.group(1).strip()
+                    parts.append(
+                        f"\n[Context: Resume the discussion about: {topic}. "
+                        f"Do not repeat prior points. Continue from where you left off.]"
+                    )
+
+        return "\n".join(parts)
+
     def _estimate_tokens(self, messages: list[dict]) -> int:
         """Rough token estimate (chars / chars_per_token) for context budget."""
         total = 0
@@ -448,6 +569,25 @@ class WispAgent:
             return
         if not self.session:
             return
+
+        # ── Mid-turn guard: don't compact if the last turn looks incomplete ──
+        if self.messages:
+            last = self.messages[-1]
+            last_role = last.get("role")
+            # If we're in the middle of a tool round (tool result waiting for assistant,
+            # or assistant just emitted tool_calls and hasn't seen results yet)
+            if last_role == "tool":
+                print(dim("  ⏳ Tool round in progress; delaying compaction."))
+                return
+            if last_role == "assistant" and last.get("tool_calls"):
+                print(dim("  ⏳ Assistant emitted tool calls; delaying compaction."))
+                return
+            # If the last assistant message looks cut off, delay compaction
+            if last_role == "assistant":
+                content = last.get("content", "") or ""
+                if content and not re.search(r"[.!?```}\])]$", content[-5:]):
+                    print(dim("  ⏳ Last assistant turn looks incomplete; delaying compaction."))
+                    return
 
         # Check token threshold only (message-count gate removed)
         system = self._build_system_prompt()
@@ -684,7 +824,7 @@ class WispAgent:
         Used by the orchestrator to execute subtasks without user interaction.
         Returns a dict with ``success`` (bool) and ``output`` (str) keys.
         """
-        self._add_message("user", task_description)
+        self._add_message("user", self._expand_continuation(task_description))
         system = self._build_system_prompt(workspace)
         self._trim_context_if_needed(system)
 
@@ -1071,7 +1211,7 @@ class WispAgent:
         print()
 
         try:
-            self._add_message("user", prompt)
+            self._add_message("user", self._expand_continuation(prompt))
             self._execute_loop(system, self.config.workspace or ".", self.config.auto_approve)
         except KeyboardInterrupt:
             print(error("\n⏹  Interrupted."))
@@ -1171,7 +1311,7 @@ class WispAgent:
                 try:
                     # Rebuild system prompt each turn so /skill and /model take effect immediately
                     system = self._build_system_prompt(skill_name)
-                    self._add_message("user", cmd)
+                    self._add_message("user", self._expand_continuation(cmd))
                     self._execute_loop(system, ws, self.config.auto_approve)
                 except KeyboardInterrupt:
                     print(error("\n⏹  Turn interrupted. Type 'exit' to quit or continue chatting."))

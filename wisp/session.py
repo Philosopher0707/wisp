@@ -137,10 +137,15 @@ class Session:
                 total += len(msg.get("content", "") or "")
         return total // chars_per_token
 
-    def compact(self, keep_recent: int = 6, chars_per_token: int = 4) -> dict:
+    def compact(self, keep_recent: int = 10, chars_per_token: int = 4) -> dict:
         """Compact the session by summarizing old messages and keeping recent ones.
 
         Returns a dict with compaction metadata (before_count, after_count, summary).
+
+        Turn-symmetry guard: adjusts ``keep_recent`` so the preserved window always
+        starts with a user message and ends with an assistant message (or user if
+        the assistant hasn't replied yet). This prevents the model from losing track
+        of who spoke last after compaction.
         """
         if len(self.messages) <= keep_recent:
             return {"compacted": False, "reason": "not enough messages"}
@@ -148,8 +153,33 @@ class Session:
         from wisp.summarizer import ExtractiveSummarizer
 
         before_count = len(self.messages)
-        old_messages = self.messages[:-keep_recent]
-        recent_messages = self.messages[-keep_recent:]
+
+        # ── Turn-symmetry guard ─────────────────────────────────────
+        # Ensure the kept window starts with a user message.
+        # If it starts with assistant/tool, expand until we hit a user.
+        adjusted = keep_recent
+        while adjusted < len(self.messages):
+            first_kept = self.messages[-adjusted]
+            if first_kept.get("role") == "user":
+                break
+            adjusted += 1
+
+        # Ensure the kept window ends with an assistant message (complete turn).
+        # If the last message is not an assistant, search backward for the nearest
+        # assistant and expand to include it. If no assistant exists in the
+        # entire history, leave the window as-is (degenerate case).
+        if self.messages[-1].get("role") != "assistant":
+            found = False
+            for i in range(adjusted, len(self.messages) + 1):
+                idx = len(self.messages) - i
+                if idx >= 0 and self.messages[idx].get("role") == "assistant":
+                    adjusted = i
+                    found = True
+                    break
+            # If no assistant found, don't expand further
+
+        old_messages = self.messages[:-adjusted]
+        recent_messages = self.messages[-adjusted:]
 
         # Generate summary of old messages
         summarizer = ExtractiveSummarizer()
@@ -163,6 +193,19 @@ class Session:
         summary_parts = ["## Previous conversation summary"]
         if summary_obj and summary_obj.summary:
             summary_parts.append(summary_obj.summary)
+
+        # NEW: Thread stack — tells the model what was in progress
+        if summary_obj and summary_obj.thread_stack:
+            summary_parts.append("\n### Active threads")
+            for t in summary_obj.thread_stack:
+                status = t.get("status", "COMPLETE")
+                topic = t.get("topic", "")
+                summary_parts.append(f'- [{status}] {topic}')
+                if status == "INCOMPLETE":
+                    summary_parts.append(
+                        f'  → When the user says "continue", resume from: {topic}'
+                    )
+
         if summary_obj and summary_obj.key_decisions:
             summary_parts.append("\n### Key decisions")
             for d in summary_obj.key_decisions:
@@ -185,7 +228,7 @@ class Session:
             "role": "system",
             "content": compacted_content,
             "compacted": True,
-            "original_count": before_count - keep_recent,
+            "original_count": before_count - adjusted,
         }
 
         # Replace messages
@@ -196,7 +239,7 @@ class Session:
             "timestamp": _now_iso(),
             "before_count": before_count,
             "after_count": len(self.messages),
-            "keep_recent": keep_recent,
+            "keep_recent": adjusted,
             "summary": summary_obj.summary if summary_obj else "",
         }
         self.compaction_history.append(event)
@@ -206,6 +249,7 @@ class Session:
             "compacted": True,
             "before_count": before_count,
             "after_count": len(self.messages),
+            "keep_recent": adjusted,
             "tokens_saved": (before_count - len(self.messages)) * chars_per_token * 50,  # rough estimate
             "summary": summary_obj.summary if summary_obj else "",
         }

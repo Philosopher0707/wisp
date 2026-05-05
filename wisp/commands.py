@@ -73,7 +73,9 @@ def dispatch(text: str, agent) -> bool:
 
     body = text[1:].strip()
     if not body:
-        return False
+        # Bare "/" typed — show help menu
+        cmd_help(agent, "")
+        return True
 
     parts = body.split(maxsplit=1)
     name = parts[0]
@@ -400,6 +402,42 @@ def cmd_new(agent, args: str):
     )
     agent.messages = []
     print(success(f"✓ New session started: {agent.session.id}"))
+
+
+@register("continue", "Continue the assistant's previous response", aliases=("c", "go", "on"), usage="/continue")
+def cmd_continue(agent, args: str):
+    """Explicitly continue from the last assistant message.
+
+    Builds an expanded continuation prompt using the same logic as the
+    automatic _expand_continuation hook, but shows the user what context
+    is being resumed before sending it.
+    """
+    if not agent.messages:
+        print(warning("⚠ No conversation history to continue from."))
+        return
+
+    expanded = agent._expand_continuation("continue")
+
+    # If expansion did nothing useful, warn and bail
+    if expanded == "continue":
+        print(warning("⚠ No previous assistant message found to continue from."))
+        return
+
+    # Show the user what we're continuing from (first line only for brevity)
+    context_preview = expanded.split("\n")[-1] if "\n" in expanded else expanded
+    if context_preview.startswith("[Context:"):
+        print(info(f"⏩ Continuing… {context_preview[:100]}"))
+    else:
+        print(info("⏩ Continuing previous response…"))
+
+    agent._add_message("user", expanded)
+    system = agent._build_system_prompt()
+    ws = agent.config.workspace or "."
+    agent._execute_loop(system, ws, agent.config.auto_approve)
+
+    # Print separator so the visual rhythm matches normal REPL turns
+    from wisp.agent import _print_separator
+    _print_separator()
 
 
 @register("exit", "Exit Wisp", aliases=("quit", "q", "bye"), usage="/exit")

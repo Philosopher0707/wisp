@@ -95,6 +95,7 @@ class SessionSummary:
     user_preferences: list[str] = field(default_factory=list)
     open_tasks: list[str] = field(default_factory=list)
     files_touched: list[str] = field(default_factory=list)
+    thread_stack: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -106,6 +107,7 @@ class SessionSummary:
             "user_preferences": self.user_preferences,
             "open_tasks": self.open_tasks,
             "files_touched": self.files_touched,
+            "thread_stack": self.thread_stack,
         }
 
     @classmethod
@@ -119,6 +121,7 @@ class SessionSummary:
             user_preferences=data.get("user_preferences", []),
             open_tasks=data.get("open_tasks", []),
             files_touched=data.get("files_touched", []),
+            thread_stack=data.get("thread_stack", []),
         )
 
 
@@ -148,6 +151,7 @@ class ExtractiveSummarizer:
         summary.user_preferences = self._extract_preferences(messages)
         summary.open_tasks = self._extract_tasks(messages)
         summary.files_touched = self._extract_files(messages)
+        summary.thread_stack = self._extract_thread_stack(messages)
 
         return summary
 
@@ -326,6 +330,67 @@ class ExtractiveSummarizer:
                 break
 
         return results
+
+    # ── Thread stack ─────────────────────────────────────────────────
+
+    _INCOMPLETE_MARKERS = [
+        "here are the steps", "first,", "1.", "step 1", "let me start",
+        "i will", "we will", "coming up", "next, we", "finally,",
+        "to begin", "starting with", "part 1", "option 1",
+    ]
+
+    def _extract_thread_stack(self, messages: list[dict]) -> list[dict]:
+        """Identify active or incomplete discussion threads from assistant messages.
+
+        Walks backwards through assistant messages to find the most recent
+        thread. If the last assistant message looks like it was cut off
+        (no closing punctuation, contains incomplete markers), it is flagged
+        as INCOMPLETE so compaction can tell the model to resume on 'continue'.
+        """
+        stack: list[dict] = []
+        assistant_msgs = [
+            (i, m) for i, m in enumerate(messages) if m.get("role") == "assistant"
+        ]
+        if not assistant_msgs:
+            return stack
+
+        # Most recent assistant message
+        last_idx, last_msg = assistant_msgs[-1]
+        content = (last_msg.get("content", "") or "").strip()
+        if not content:
+            return stack
+
+        lower = content.lower()
+        # Heuristic: message looks incomplete if it lacks terminal punctuation
+        # or contains explicit incomplete markers.
+        no_terminal = not bool(re.search(r"[.!?```}\])]$", content[-5:]))
+        has_marker = any(marker in lower for marker in self._INCOMPLETE_MARKERS)
+        looks_incomplete = no_terminal or has_marker
+
+        # Find the user prompt that triggered this assistant message
+        user_prompt = ""
+        for prev in reversed(messages[:last_idx]):
+            if prev.get("role") == "user":
+                user_prompt = (prev.get("content", "") or "")[:200]
+                break
+
+        topic = content[:120].replace("\n", " ")
+        if looks_incomplete:
+            stack.append({
+                "topic": topic,
+                "status": "INCOMPLETE",
+                "last_sub_topic": "",
+                "prompt": user_prompt,
+            })
+        else:
+            stack.append({
+                "topic": topic,
+                "status": "COMPLETE",
+                "last_sub_topic": "",
+                "prompt": user_prompt,
+            })
+
+        return stack
 
     # ── Helpers ──────────────────────────────────────────────────────
 
