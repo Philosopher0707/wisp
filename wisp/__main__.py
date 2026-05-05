@@ -4,7 +4,8 @@ import logging
 import sys
 from wisp import __version__
 from wisp.config import WispConfig, load_config, save_config
-from wisp.agent import WispAgent
+from wisp.core.agent import WispAgentCore
+from wisp.transport.cli import CLITransport
 from wisp.skills import discover_skills
 from wisp.session import SessionManager, format_session_preview
 from wisp.colors import success, error, warning, info, dim, accent
@@ -38,8 +39,9 @@ def cmd_run(prompt, model=None, skill=None, workspace=None, auto_approve=False, 
     if show_thinking:
         config.show_thinking = True
 
-    agent = WispAgent(config)
-    agent.run(prompt, skill_name=skill, session_id=session_id)
+    core = WispAgentCore(config)
+    transport = CLITransport(core)
+    transport.run_once(prompt, skill_name=skill)
 
 
 def cmd_repl(model=None, skill=None, workspace=None, session_id=None, show_thinking=False, auto_approve=False):
@@ -54,8 +56,9 @@ def cmd_repl(model=None, skill=None, workspace=None, session_id=None, show_think
     if auto_approve:
         config.auto_approve = True
 
-    agent = WispAgent(config)
-    agent.repl(skill_name=skill, session_id=session_id)
+    core = WispAgentCore(config)
+    transport = CLITransport(core)
+    transport.repl(skill_name=skill, session_id=session_id)
 
 
 def cmd_skills(workspace=None):
