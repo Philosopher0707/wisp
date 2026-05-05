@@ -40,3 +40,4 @@ sessions/
 # Misc
 *.log
 .env
+warp-source/
