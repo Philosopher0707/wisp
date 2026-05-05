@@ -199,7 +199,7 @@ class TestToolRunBash:
             tool_run_bash("x" * 5000, str(temp_workspace))
 
     def test_output_truncated(self, temp_workspace):
-        result = tool_run_bash("printf 'a%.0s' {1..15000}", str(temp_workspace))
+        result = tool_run_bash("python3 -c \"print('a'*15000)\"", str(temp_workspace))
         assert "[output truncated]" in result
         assert len(result) <= 10050  # 10K max + overhead
 
