@@ -1143,6 +1143,7 @@ def _build_tool_metadata(name: str, args: dict, result: str) -> dict:
         m = re.search(r"Found (\d+) symbol", result)
         if m:
             meta["results_count"] = int(m.group(1))
+
     elif name == "remember":
         meta["fact"] = (args.get("fact", "") or "")[:80]
 
@@ -1150,7 +1151,10 @@ def _build_tool_metadata(name: str, args: dict, result: str) -> dict:
         meta["query"] = (args.get("query", "") or "")[:80]
         meta["limit"] = args.get("limit", 10)
 
-    elif name == "git_status":    return meta
+    return meta
+
+
+# ── Tool schemas ────────────────────────────────────────────────────
 
 
 def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0) -> str:

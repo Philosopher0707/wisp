@@ -389,6 +389,19 @@ def cmd_spawn(agent, args: str):
     print(result.output)
 
 
+@register("new", "Start a new session", aliases=(), usage="/new")
+def cmd_new(agent, args: str):
+    from wisp.session import Session
+    agent._save_session()
+    agent.session = Session.create(
+        model=agent.config.model,
+        workspace=agent.config.workspace or ".",
+        first_prompt="New session",
+    )
+    agent.messages = []
+    print(success(f"✓ New session started: {agent.session.id}"))
+
+
 @register("exit", "Exit Wisp", aliases=("quit", "q", "bye"), usage="/exit")
 def cmd_exit(agent, args: str):
     raise ExitREPL

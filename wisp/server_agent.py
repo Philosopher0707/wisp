@@ -277,10 +277,14 @@ class ServerAgent(WispAgent):
             return True
 
     def _maybe_compact_session(self):
-        """Override to notify the remote client when auto-compaction happens."""
+        """Override to notify the remote client when auto-compaction happens.
+
+        Compaction now triggers purely on token usage (message-count gate
+        removed). Warns the client on 2nd+ compaction.
+        """
         if not self.config.auto_compact:
             return
-        if not self.session or len(self.messages) < self.config.compact_threshold_msgs:
+        if not self.session:
             return
 
         system = self._build_system_prompt()
@@ -289,12 +293,25 @@ class ServerAgent(WispAgent):
         budget = self.config.max_context_tokens
         token_pct = (msg_tokens + overhead) / budget * 100 if budget else 0
 
-        if len(self.messages) < self.config.compact_threshold_msgs and token_pct < self.config.compact_threshold_tokens:
+        if token_pct < self.config.compact_threshold_tokens:
             return
+
+        compaction_count = len(self.session.compaction_history)
+
+        # Warn client on 2nd+ compaction
+        if compaction_count >= 1:
+            self._send({
+                "type": "status",
+                "message": (
+                    "⚠️ This session has already been compacted once. "
+                    "Accuracy may degrade with repeated compaction. "
+                    "Start a new session if responses become less coherent."
+                ),
+            })
 
         self._send({
             "type": "status",
-            "message": f"Compacting session ({len(self.messages)} msgs, ~{token_pct:.0f}% context)...",
+            "message": f"Compacting session (~{token_pct:.0f}% context)...",
         })
 
         result = self.session.compact(

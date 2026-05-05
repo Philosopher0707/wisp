@@ -265,6 +265,7 @@ class WispConfig:
         self.chars_per_token: int = int(get_setting("chars_per_token", "4"))
         # Auto-compaction settings
         self.auto_compact: bool = str(get_setting("auto_compact", "true")).lower() == "true"
+        # compact_threshold_msgs is deprecated; compaction now triggers purely on token usage
         self.compact_threshold_msgs: int = int(get_setting("compact_threshold_msgs", "40"))
         self.compact_threshold_tokens: int = int(get_setting("compact_threshold_tokens", "75"))
         self.compact_keep_recent: int = int(get_setting("compact_keep_recent", "6"))

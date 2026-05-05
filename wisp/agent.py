@@ -16,6 +16,7 @@ import os
 import shutil
 import signal
 import sys
+import uuid
 import weakref
 from typing import Optional
 
@@ -322,12 +323,23 @@ def _remove_oldest_turn(messages: list):
     del messages[start:end]
 
 
+def _generate_agent_id() -> str:
+    """Generate a unique agent identifier."""
+    return f"wisp-{uuid.uuid4().hex[:8]}"
+
+
 # ── Agent ────────────────────────────────────────────────────────────
 
 class WispAgent:
     """The main agent loop — orchestrates planning, tool calls, and response generation."""
 
-    def __init__(self, config: Optional[WispConfig] = None, session: Optional[Session] = None):
+    def __init__(
+        self,
+        config: Optional[WispConfig] = None,
+        session: Optional[Session] = None,
+        agent_id: Optional[str] = None,
+        role: Optional[str] = None,
+    ):
         self.config = config or WispConfig()
         self.client = OllamaClient(self.config)
         # Auto-detect context window unless user explicitly configured it
@@ -349,6 +361,11 @@ class WispAgent:
         self._interrupted = False
         self._system_prompt = ""
         self._active_skill: Optional[str] = None
+        # Swarm / multi-agent attributes
+        self.agent_id = agent_id or _generate_agent_id()
+        self.role = role or "agent"
+        self._role_system_extra = ""
+        self._allowed_tools: Optional[set[str]] = None
         # Initialize MCP (connects to configured servers)
         self.mcp = MCPManager(self.config.workspace or ".")
         self._mcp_initialized = False
@@ -362,7 +379,7 @@ class WispAgent:
         # Initialize collaborative editing tools
         from wisp.file_lock import FileLock
         from wisp.change_tracker import ChangeTracker
-        self.file_lock = FileLock(self.config.workspace or ".")
+        self.file_lock = FileLock(self.config.workspace or ".", self.agent_id)
         self.change_tracker = ChangeTracker(self.config.workspace or ".", self.file_lock.agent_id)
         # Register with tools module
         from wisp import tools as tools_module
@@ -420,28 +437,52 @@ class WispAgent:
             user_count = sum(1 for m in self.messages if m.get("role") == "user")
 
     def _maybe_compact_session(self):
-        """Auto-compact the session if it exceeds configured thresholds.
+        """Auto-compact the session when token usage exceeds the threshold.
 
-        Called before each agent turn. Preserves recent messages and
-        replaces older ones with a summary. Logs compaction events.
+        Called before each agent turn. Compaction now triggers purely on
+        context-window token percentage (message-count gate removed).
+        On the 2nd compaction, warns the user that accuracy may degrade
+        and offers to start a fresh session.
         """
         if not self.config.auto_compact:
             return
-        if not self.session or len(self.messages) < self.config.compact_threshold_msgs:
+        if not self.session:
             return
 
-        # Check token threshold
+        # Check token threshold only (message-count gate removed)
         system = self._build_system_prompt()
         overhead = self._estimate_tokens([{"content": system}])
         msg_tokens = self._estimate_tokens(self.messages)
         budget = self.config.max_context_tokens
         token_pct = (msg_tokens + overhead) / budget * 100 if budget else 0
 
-        if len(self.messages) < self.config.compact_threshold_msgs and token_pct < self.config.compact_threshold_tokens:
+        if token_pct < self.config.compact_threshold_tokens:
             return
 
+        compaction_count = len(self.session.compaction_history)
+
+        # Warn on 2nd+ compaction and offer a fresh session
+        if compaction_count >= 1:
+            print(warning("\n⚠️  WARNING: This session has already been compacted once."))
+            print(warning("    Accuracy may degrade with repeated compaction."))
+
+            if _is_interactive():
+                try:
+                    choice = input("    Continue with compaction? [Y/n/new] ").strip().lower()
+                    if choice in ("n", "no"):
+                        print(dim("    Skipping compaction."))
+                        return
+                    if choice in ("new", "/new"):
+                        self._start_new_session()
+                        return
+                except (KeyboardInterrupt, EOFError, OSError):
+                    print()
+                    return
+            else:
+                print(dim("    Tip: Type /new to start a fresh session if accuracy degrades."))
+
         from wisp.colors import info, success, dim
-        print(info(f"\n📦 Session growing large ({len(self.messages)} msgs, ~{token_pct:.0f}% context). Compacting..."))
+        print(info(f"\n📦 Session growing large (~{token_pct:.0f}% context). Compacting..."))
 
         result = self.session.compact(
             keep_recent=self.config.compact_keep_recent,
@@ -461,6 +502,30 @@ class WispAgent:
             )
         else:
             print(dim("  Compaction skipped: not enough messages to summarize."))
+
+    def _start_new_session(self):
+        """Start a fresh session, preserving the most recent user message."""
+        # Save old session first
+        self._save_session()
+
+        # Find the last user message (the current prompt)
+        last_user_msg = None
+        for m in reversed(self.messages):
+            if m.get("role") == "user":
+                last_user_msg = dict(m)
+                break
+
+        prompt_text = last_user_msg.get("content", "") if last_user_msg else "New session"
+        self.session = Session.create(
+            model=self.config.model,
+            workspace=self.config.workspace or ".",
+            first_prompt=prompt_text,
+        )
+        self.messages = [last_user_msg] if last_user_msg else []
+
+        print(success(f"\n✓ Started new session: {self.session.id}"))
+        if last_user_msg:
+            print(dim("  Preserved your current prompt."))
 
     def _save_session(self):
         """Persist the current session to disk."""
@@ -509,6 +574,10 @@ class WispAgent:
             return cached
 
         system = DEFAULT_SYSTEM
+
+        # Inject role-specific system prompt (from multi-agent swarm)
+        if hasattr(self, "_role_system_extra") and self._role_system_extra:
+            system += f"\n\n{self._role_system_extra}"
 
         # Discover skills ONCE and reuse for both the skills block and the active skill
         skills = discover_skills(ws)
@@ -589,6 +658,15 @@ class WispAgent:
             schemas.extend(mcp_schemas)
         except Exception as e:
             logger.warning("Failed to get MCP tool schemas: %s", e)
+
+        # Apply role-based tool filtering (multi-agent swarm)
+        if hasattr(self, "_allowed_tools") and self._allowed_tools is not None:
+            allowed = self._allowed_tools
+            schemas = [
+                s for s in schemas
+                if s.get("function", {}).get("name") in allowed
+            ]
+
         return schemas
 
     def _is_mcp_tool(self, name: str) -> bool:
@@ -599,6 +677,69 @@ class WispAgent:
             if tool.name == name:
                 return True
         return False
+
+    def run_task(self, task_description: str, workspace: str = ".", max_iterations: int = 10, timeout_seconds: float = 120.0) -> dict:
+        """Run a full agent loop for a single task, non-interactively.
+
+        Used by the orchestrator to execute subtasks without user interaction.
+        Returns a dict with ``success`` (bool) and ``output`` (str) keys.
+        """
+        self._add_message("user", task_description)
+        system = self._build_system_prompt(workspace)
+        self._trim_context_if_needed(system)
+
+        start = time.monotonic()
+        iteration = 0
+        final_content = ""
+
+        while iteration < max_iterations:
+            if time.monotonic() - start > timeout_seconds:
+                return {"success": False, "output": f"[Task timed out after {timeout_seconds:.0f}s]"}
+
+            try:
+                response = self._run_turn(system)
+            except Exception as e:
+                return {"success": False, "output": f"[Error during task execution: {e}]"}
+
+            if not response:
+                return {"success": False, "output": "[No response from model]"}
+
+            msg = response.get("message", {})
+            content = msg.get("content", "") or "" if isinstance(msg, dict) else ""
+            thinking = msg.get("thinking", "") or "" if isinstance(msg, dict) else ""
+            tool_calls = _parse_tool_call(response)
+
+            self._add_message("assistant", content or "", thinking)
+            if tool_calls:
+                self.messages[-1]["tool_calls"] = tool_calls
+                results = self._run_tool_calls(tool_calls, workspace, auto_approve=True, quiet=True)
+                self.messages.extend(results)
+                iteration += 1
+                continue
+
+            final_content = content
+            break
+        else:
+            final_content = f"[Task reached max iterations ({max_iterations}) without completion]"
+            return {"success": False, "output": final_content}
+
+        return {"success": True, "output": final_content}
+
+    def _run_turn(self, system: str) -> dict:
+        """Run one agent turn (non-streaming) and return the response dict."""
+        self._trim_context_if_needed(system)
+        try:
+            response = self.client.generate(
+                system_prompt=system,
+                messages=self.messages,
+                tools=self._get_tool_schemas(),
+            )
+            return response or {}
+        except OllamaError:
+            return {}
+        except Exception as e:
+            logger.error("Unexpected error in turn: %s", e, exc_info=True)
+            return {}
 
     def _run_turn_streaming(self, system: str) -> dict:
         """Run one agent turn with streaming text output using batched events.
@@ -717,7 +858,7 @@ class WispAgent:
         response = getattr(self.client, "stream_response", None) or {}
         return response
 
-    def _run_tool_calls(self, tool_calls: list, workspace: str, auto_approve: bool) -> list[dict]:
+    def _run_tool_calls(self, tool_calls: list, workspace: str, auto_approve: bool, quiet: bool = False) -> list[dict]:
         """Execute a batch of tool calls, return result messages for the model."""
         all_results = []
         for tc in tool_calls:
@@ -745,7 +886,8 @@ class WispAgent:
                 logger.warning("Tool arguments for %s are not a dict: %s", func_name, type(func_args).__name__)
                 func_args = {}
 
-            print(dim(f"  🛠  {func_name}({_args_preview(func_args)})"))
+            if not quiet:
+                print(dim(f"  🛠  {func_name}({_args_preview(func_args)})"))
 
             # Dangerous command guard: always prompt, even with auto_approve
             danger_reason = None
@@ -754,8 +896,9 @@ class WispAgent:
                 danger_reason = check_dangerous_command(func_args.get("command", ""))
 
             if danger_reason:
-                if not _is_interactive():
-                    print(warning(f"  ⚠️  Blocked dangerous command ({danger_reason})"))
+                if quiet or not _is_interactive():
+                    if not quiet:
+                        print(warning(f"  ⚠️  Blocked dangerous command ({danger_reason})"))
                     all_results.append({
                         "role": "tool",
                         "content": f"[Blocked: dangerous command — {danger_reason}]",
@@ -764,10 +907,11 @@ class WispAgent:
                     continue
                 approved = _prompt_dangerous(func_name, danger_reason)
             else:
-                approved = auto_approve or _prompt_approve(func_name)
+                approved = auto_approve or (not quiet and _prompt_approve(func_name))
 
             if not approved:
-                print(dim(f"  ⏭  Skipped {func_name}"))
+                if not quiet:
+                    print(dim(f"  ⏭  Skipped {func_name}"))
                 all_results.append({
                     "role": "tool",
                     "content": f"[User skipped {func_name}]",
@@ -823,7 +967,8 @@ class WispAgent:
             all_results.append({"role": "tool", "content": result, "name": func_name})
             if len(preview) > 200:
                 preview += "..."
-            print(dim(f"     → {preview}"))
+            if not quiet:
+                print(dim(f"     → {preview}"))
 
         return all_results
 

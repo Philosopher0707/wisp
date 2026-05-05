@@ -706,6 +706,9 @@ Subcommands:
   config [--set k=v]       View or set configuration
   check                    Verify Ollama connectivity
   models                   List available Ollama models
+  swarm 'goal'             Spawn multi-agent swarm to accomplish a goal
+  agents list              List available agent roles
+  agents status            Show running swarm agent status
 
 Examples:
   wisp 'add error handling to main.py'
@@ -735,7 +738,7 @@ def main():
         print_help()
         return
 
-    _SUBCOMMANDS = {"run", "repl", "skills", "config", "check", "models", "session", "memory", "mcp", "git", "plan", "progress", "diagnose", "locks", "changes", "acp", "server", "compact"}
+    _SUBCOMMANDS = {"run", "repl", "skills", "config", "check", "models", "session", "memory", "mcp", "git", "plan", "progress", "diagnose", "locks", "changes", "acp", "server", "compact", "swarm", "agents"}
     first = argv[0]
 
     # Global flags
@@ -890,6 +893,43 @@ def main():
                 else:
                     i += 1
             cmd_server(host=host, port=port)
+
+        elif first == "swarm":
+            if not rest:
+                print(error("✗ Usage: wisp swarm 'goal' [--roles coder,reviewer,tester] [--max-parallel N]"))
+                print(dim("  wisp swarm 'implement user auth' --roles coder,reviewer,tester"))
+                return
+
+            goal = rest[0]
+            roles = None
+            max_parallel = 3
+            i = 1
+            while i < len(rest):
+                if rest[i] == "--roles" and i + 1 < len(rest):
+                    roles = [r.strip() for r in rest[i + 1].split(",")]
+                    i += 2
+                elif rest[i] == "--max-parallel" and i + 1 < len(rest):
+                    max_parallel = int(rest[i + 1])
+                    i += 2
+                else:
+                    i += 1
+
+            from wisp.multi_agent.cli import cmd_swarm
+            cmd_swarm(goal, roles=roles, model=flags_model, workspace=flags_workspace, max_parallel=max_parallel)
+
+        elif first == "agents":
+            from wisp.multi_agent.cli import cmd_agents_list, cmd_agents_status
+            if not rest:
+                cmd_agents_list()
+                return
+            sub = rest[0]
+            if sub == "list":
+                cmd_agents_list()
+            elif sub == "status":
+                cmd_agents_status()
+            else:
+                print(error(f"✗ Unknown agents subcommand: {sub}"))
+                print(dim("  Try: list, status"))
 
     else:
         # Implicit mode: wisp [flags] 'prompt'
