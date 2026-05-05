@@ -1,0 +1,481 @@
+"""CLI transport for Wisp — renders AgentEvent to terminal, handles user input.
+
+This module contains all I/O-specific code: printing, colors, readline,
+signal handling, and approval prompts. It wraps WispAgentCore and drives
+the REPL loop.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import shutil
+import signal
+import sys
+import threading
+import weakref
+from typing import Optional
+
+# Enable readline for line-editing and history in REPL
+try:
+    import readline
+except ImportError:
+    readline = None
+
+from wisp.core.agent import WispAgentCore
+from wisp.core.events import (
+    AgentEvent,
+    TYPE_CONTENT,
+    TYPE_THINKING,
+    TYPE_TOOL_CALL,
+    TYPE_TOOL_RESULT,
+    TYPE_ERROR,
+    TYPE_DONE,
+    TYPE_SYSTEM,
+    TYPE_APPROVAL_REQUEST,
+)
+from wisp.colors import success, error, warning, info, dim, accent
+from wisp.session import Session, SessionManager, format_session_preview
+
+logger = logging.getLogger(__name__)
+
+# ── Signal handling ──────────────────────────────────────────────────
+
+_transport_instances: weakref.WeakSet = weakref.WeakSet()
+_old_sigint_handler = None
+
+
+def _handle_sigint(signum, frame):
+    """Mark interruption on all live transport instances so loops exit gracefully."""
+    for inst in _transport_instances:
+        inst._interrupted = True
+    print(error("\n\n⏹  Interrupted. Finishing current step... (Ctrl+C again to force quit)"))
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+
+
+def _install_signal_handler():
+    """Register interrupt handler and reset interrupt state on all instances."""
+    global _old_sigint_handler
+    for inst in _transport_instances:
+        inst._interrupted = False
+    _old_sigint_handler = signal.signal(signal.SIGINT, _handle_sigint)
+
+
+def _restore_signal_handler():
+    """Restore the previous SIGINT handler."""
+    global _old_sigint_handler
+    if _old_sigint_handler is not None:
+        signal.signal(signal.SIGINT, _old_sigint_handler)
+        _old_sigint_handler = None
+
+
+# ── Terminal helpers ─────────────────────────────────────────────────
+
+def _is_interactive() -> bool:
+    """Detect if stdin is a real terminal (vs pipe/redirect)."""
+    return sys.stdin.isatty()
+
+
+def _print_separator():
+    """Print a visual separator between turns."""
+    try:
+        width = shutil.get_terminal_size().columns
+    except OSError:
+        width = 50
+    print("─" * max(20, min(width, 80)))
+
+
+# ── Readline setup ─────────────────────────────────────────────────────
+
+def _setup_readline_history():
+    """Load readline history from disk for REPL arrow-key recall."""
+    if readline is None:
+        return
+    histfile = os.path.expanduser("~/.config/wisp/history")
+    try:
+        os.makedirs(os.path.dirname(histfile), exist_ok=True)
+        readline.read_history_file(histfile)
+    except (OSError, FileNotFoundError):
+        pass
+    import atexit
+    atexit.register(lambda: readline.write_history_file(histfile))
+
+    _doc = (readline.__doc__ or "").lower()
+    _is_libedit = "libedit" in _doc
+
+    try:
+        readline.set_completer_delims(" \t\n`~!@#$%^&*()-=+[{]}\\|;'\",<>")
+    except Exception:
+        pass
+
+    def _completer(text, state):
+        if not text.startswith("/"):
+            return None
+        from wisp.commands import all_commands
+        names = sorted(
+            {f"/{c.name}" for c in all_commands()}
+            | {f"/{a}" for c in all_commands() for a in c.aliases}
+        )
+        matches = [n for n in names if n.startswith(text)]
+        return matches[state] if state < len(matches) else None
+
+    readline.set_completer(_completer)
+
+    if _is_libedit:
+        readline.parse_and_bind("bind ^I rl_complete")
+    else:
+        readline.parse_and_bind("tab: complete")
+
+    if _is_libedit:
+        readline.parse_and_bind("bind ^[[A ed-search-prev-history")
+        readline.parse_and_bind("bind ^[[B ed-search-next-history")
+    else:
+        readline.parse_and_bind(r'"\e[A": history-search-backward')
+        readline.parse_and_bind(r'"\e[B": history-search-forward')
+
+    from wisp.commands import all_commands
+    for cmd in all_commands():
+        readline.add_history(f"/{cmd.name}")
+    readline.add_history("/")
+
+    try:
+        readline.write_history_file(histfile)
+    except OSError:
+        pass
+
+
+# ── Input handling ───────────────────────────────────────────────────
+
+def _input_line(prompt: str, allow_multiline: bool = True) -> str:
+    """Read input from the user with a prompt.
+
+    Interactive mode:
+      - Uses readline for arrow-key editing and history.
+      - Supports multi-line input: if a line ends with '\\',
+        the next line is appended.
+      - Auto-detects paste: if multiple lines arrive rapidly,
+        they are combined into a single multi-line input.
+
+    Non-interactive mode:
+      - Reads raw bytes to survive invalid UTF-8 in piped input.
+    """
+    if sys.stdin.isatty():
+        lines = []
+        while True:
+            try:
+                if not lines:
+                    rl_prompt = f"\001\033[1m\002{prompt}\001\033[0m\002"
+                else:
+                    rl_prompt = "... "
+                line = input(rl_prompt)
+            except KeyboardInterrupt:
+                print()
+                raise
+            except (EOFError, OSError, UnicodeDecodeError):
+                return ""
+
+            stripped = line.rstrip()
+            if allow_multiline and stripped.endswith("\\"):
+                lines.append(stripped[:-1])
+                continue
+            lines.append(line)
+
+            if allow_multiline and lines:
+                try:
+                    import select
+                    ready, _, _ = select.select([sys.stdin], [], [], 0.1)
+                    if ready:
+                        while True:
+                            try:
+                                ready2, _, _ = select.select([sys.stdin], [], [], 0)
+                                if not ready2:
+                                    break
+                                extra_line = input()
+                                lines.append(extra_line)
+                            except (EOFError, OSError):
+                                break
+                        return "\n".join(lines)
+                except (ImportError, OSError):
+                    pass
+
+            break
+        return "\n".join(lines)
+
+    try:
+        data = sys.stdin.buffer.readline()
+    except (EOFError, OSError):
+        return ""
+    if not data:
+        return ""
+    return data.decode("utf-8", errors="replace").rstrip("\n")
+
+
+# ── Approval prompts ─────────────────────────────────────────────────
+
+def _prompt_approve(func_name: str) -> bool:
+    """Prompt user to approve a tool call. Returns True if approved."""
+    if not _is_interactive():
+        return True
+    try:
+        choice = input(f"     Enter to approve, 's' to skip: ").strip().lower()
+        return choice != "s"
+    except KeyboardInterrupt:
+        print()
+        return False
+    except (EOFError, OSError):
+        logger.warning("Stdin unavailable, auto-approving")
+        return True
+
+
+def _prompt_dangerous(func_name: str, reason: str) -> bool:
+    """Prompt user to approve a dangerous tool call. Requires typing 'yes'."""
+    if not _is_interactive():
+        return False
+    try:
+        print(warning(f"     ⚠️  DANGEROUS: {reason}"))
+        choice = input(f"     Type 'yes' to approve {func_name}: ").strip().lower()
+        return choice == "yes"
+    except KeyboardInterrupt:
+        print()
+        return False
+    except (EOFError, OSError):
+        logger.warning("Stdin unavailable, auto-declining dangerous command")
+        return False
+
+
+# ── Event rendering ──────────────────────────────────────────────────
+
+def _render_event(event: AgentEvent, show_thinking: bool = False) -> Optional[str]:
+    """Render an AgentEvent to a terminal string. Returns None for silent events."""
+    etype = event.type
+
+    if etype == TYPE_CONTENT:
+        return event.text
+
+    if etype == TYPE_THINKING:
+        if show_thinking:
+            return dim(f"⏳ Thinking: {event.text}")
+        return None
+
+    if etype == TYPE_TOOL_CALL:
+        name = event.data.get("name", "")
+        args = event.data.get("arguments", {})
+        preview = _args_preview(args)
+        return dim(f"  🛠  {name}({preview})")
+
+    if etype == TYPE_TOOL_RESULT:
+        name = event.data.get("name", "")
+        result = event.data.get("result", "")
+        preview = result[:200].replace("\n", " ")
+        if len(preview) > 200:
+            preview += "..."
+        return dim(f"     → {preview}")
+
+    if etype == TYPE_ERROR:
+        return error(f"✗ {event.data.get('message', '')}")
+
+    if etype == TYPE_SYSTEM:
+        level = event.data.get("level", "info")
+        if level == "debug":
+            return None  # Suppress debug in CLI
+        msg = event.data.get("message", "")
+        if level == "warning":
+            return warning(f"⚠ {msg}")
+        return info(f"ℹ {msg}")
+
+    if etype == TYPE_APPROVAL_REQUEST:
+        return warning(f"  ⚠️  Approval required: {event.data.get('reason', '')}")
+
+    if etype == TYPE_DONE:
+        return None
+
+    return None
+
+
+def _args_preview(args: dict) -> str:
+    """Short one-line preview of tool arguments."""
+    parts = []
+    path = args.get("path", args.get("command", ""))
+    if path:
+        s = str(path)
+        parts.append(s[:60])
+    content = args.get("content", "")
+    if content:
+        parts.append(f"({len(content)} chars)")
+    return ", ".join(parts) if parts else "..."
+
+
+# ── CLITransport ─────────────────────────────────────────────────────
+
+class CLITransport:
+    """Terminal transport for WispAgentCore.
+
+    Drives the REPL loop, renders events with colors, handles user input,
+    and manages signal interrupts.
+    """
+
+    def __init__(self, core: WispAgentCore):
+        self.core = core
+        self.show_thinking = core.config.show_thinking
+        self.auto_approve = core.config.auto_approve
+        self._interrupted = False
+        _transport_instances.add(self)
+
+    # ── Public API ─────────────────────────────────────────────────
+
+    def run_once(self, prompt: str, skill_name: Optional[str] = None) -> None:
+        """Run a single prompt and print results."""
+        _install_signal_handler()
+        try:
+            asyncio.run(self._run_once_async(prompt, skill_name))
+        finally:
+            _restore_signal_handler()
+
+    def repl(self, skill_name: Optional[str] = None, session_id: Optional[str] = None) -> None:
+        """Interactive REPL — continuous conversation until the user exits."""
+        _install_signal_handler()
+
+        if not self.core.client.check_health():
+            _restore_signal_handler()
+            return
+
+        # Session setup
+        if session_id:
+            loaded = self.core._resolve_session(session_id)
+            if loaded is None:
+                print(error(f"✗ Session '{session_id}' not found."))
+                return
+            self.core.session = loaded
+            self.core.messages = list(loaded.messages)
+            session_id = self.core.session.id
+        else:
+            self.core.session = Session.create(
+                model=self.core.config.model,
+                workspace=self.core.config.workspace or ".",
+                first_prompt="REPL session",
+            )
+            self.core.messages = []
+
+        ws = self.core.config.workspace or "."
+
+        _setup_readline_history()
+
+        msg_count = len(self.core.messages)
+        print(info(f"🔮 Wisp (model: {self.core.config.model})"))
+        print(f"   {dim('Session:')} {self.core.session.id}")
+        if msg_count:
+            print(f"   {dim('History:')} {msg_count} messages so far")
+        if skill_name:
+            print(f"   {dim('Skill:')} {skill_name}")
+        print()
+        print(dim("Type /help for commands, 'exit', or press Ctrl+C to end."))
+        print(dim("Tip: end a line with \\ to continue on the next line."))
+        print()
+
+        self._interrupted = False
+        try:
+            while not self._interrupted:
+                try:
+                    user_input = _input_line("➜ ")
+                except KeyboardInterrupt:
+                    print(error("\n⏹  Exiting."))
+                    break
+
+                cmd = user_input.strip()
+                if not cmd:
+                    if not _is_interactive():
+                        break
+                    continue
+
+                # Slash commands
+                from wisp.commands import dispatch, ExitREPL
+                try:
+                    if dispatch(cmd, self.core):
+                        continue
+                except ExitREPL:
+                    print(success("👋 Goodbye."))
+                    break
+
+                # Legacy non-slash commands
+                if cmd in ("exit", "quit"):
+                    print(success("👋 Goodbye."))
+                    break
+                if cmd in ("help", "?"):
+                    dispatch("/help", self.core)
+                    continue
+
+                # Update session title
+                if self.core.session and (
+                    not self.core.session.title
+                    or self.core.session.title in ("REPL session", "(untitled)")
+                ):
+                    self.core.session.title = cmd[:60].strip()
+
+                print()
+
+                try:
+                    system = self.core._build_system_prompt(skill_name)
+                    self.core._add_message("user", self.core._expand_continuation(cmd))
+                    asyncio.run(self._execute_turn(system, ws))
+                except KeyboardInterrupt:
+                    print(error("\n⏹  Turn interrupted. Type 'exit' to quit or continue chatting."))
+                    self._interrupted = False
+                    continue
+
+                if not self._interrupted:
+                    _print_separator()
+
+            print()
+            if self.core.session:
+                print(success(f"📋 Session {self.core.session.id} saved."))
+                print(dim(f"   Continue with: wisp repl -S {self.core.session.id}"))
+        finally:
+            self.core._save_session_summary()
+            self.core.mcp.shutdown()
+            _restore_signal_handler()
+
+    # ── Internal ─────────────────────────────────────────────────────
+
+    async def _run_once_async(self, prompt: str, skill_name: Optional[str] = None) -> None:
+        """Async helper for run_once."""
+        system = self.core._build_system_prompt(skill_name)
+        self.core._add_message("user", self.core._expand_continuation(prompt))
+        await self._execute_turn(system, self.core.config.workspace or ".")
+
+    async def _execute_turn(self, system: str, workspace: str) -> None:
+        """Execute one user turn by consuming events from core.run()."""
+        self._interrupted = False
+
+        # We need to manually drive the core since run() expects a prompt
+        # But we already added the user message. So we need a different approach.
+        # Actually, let's use core.run() but we need to handle the fact that
+        # it adds the user message itself.
+        # For now, let's clear the last user message and let run() add it.
+        # This is a bit awkward — in a real refactor, core.run() should accept
+        # an already-added message or we should use a different method.
+        # For now, we'll pop the last user message and pass the raw prompt.
+        prompt = ""
+        if self.core.messages and self.core.messages[-1].get("role") == "user":
+            prompt = self.core.messages[-1].get("content", "")
+            self.core.messages.pop()
+
+        async for event in self.core.run(prompt):
+            if self._interrupted:
+                break
+            rendered = _render_event(event, self.show_thinking)
+            if rendered is not None:
+                print(rendered, end="" if event.type == TYPE_CONTENT else "\n", flush=True)
+
+            # Handle approval requests
+            if event.type == TYPE_APPROVAL_REQUEST:
+                func_name = event.data.get("name", "")
+                reason = event.data.get("reason", "")
+                approved = _prompt_dangerous(func_name, reason)
+                # The core already yielded a blocked result, so we don't need
+                # to do anything special here. The transport just informs the user.
+                if approved:
+                    print(info("  ℹ Approval not yet wired for re-execution in SDK mode."))
+
+            if event.type == TYPE_DONE:
+                print()
