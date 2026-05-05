@@ -468,7 +468,7 @@ class WispAgentCore:
             if self._interrupted:
                 break
 
-            response = await self._run_turn_streaming(system)
+            response = self._run_turn_streaming(system)
             if not response:
                 yield error_event("No response from model", recoverable=False)
                 break
@@ -502,7 +502,7 @@ class WispAgentCore:
                 if isinstance(func, dict):
                     yield tool_call_event(func.get("name", ""), func.get("arguments", {}))
 
-            async for event in self._run_tool_calls(tool_calls, self.config.workspace or "."):
+            async for event in WispAgentCore._run_tool_calls(self, tool_calls, self.config.workspace or "."):
                 yield event
 
         self._save_session()
@@ -516,7 +516,7 @@ class WispAgentCore:
         async for event in self._arun(prompt):
             yield event
 
-    async def _run_turn_streaming(self, system: str) -> dict:
+    def _run_turn_streaming(self, system: str) -> dict:
         """Run one streaming turn and yield thinking/content events.
 
         Returns the assembled response dict for message history.
@@ -698,7 +698,7 @@ class WispAgentCore:
                 return {"success": False, "output": f"[Task timed out after {timeout_seconds:.0f}s]"}
 
             try:
-                response = await self._run_turn_streaming(system)
+                response = self._run_turn_streaming(system)
             except Exception as e:
                 return {"success": False, "output": f"[Error during task execution: {e}]"}
 

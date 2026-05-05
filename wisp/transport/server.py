@@ -101,7 +101,7 @@ class ServerTransport:
         if etype == TYPE_SYSTEM:
             return {
                 "type": "status",
-                "message": event.text,
+                "message": event.data.get("message", ""),
                 "level": event.data.get("level", "info"),
             }
 

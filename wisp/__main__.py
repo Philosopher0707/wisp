@@ -4,8 +4,7 @@ import logging
 import sys
 from wisp import __version__
 from wisp.config import WispConfig, load_config, save_config
-from wisp.core.agent import WispAgentCore
-from wisp.transport.cli import CLITransport
+from wisp.agent import WispAgent
 from wisp.skills import discover_skills
 from wisp.session import SessionManager, format_session_preview
 from wisp.colors import success, error, warning, info, dim, accent
@@ -39,9 +38,8 @@ def cmd_run(prompt, model=None, skill=None, workspace=None, auto_approve=False, 
     if show_thinking:
         config.show_thinking = True
 
-    core = WispAgentCore(config)
-    transport = CLITransport(core)
-    transport.run_once(prompt, skill_name=skill)
+    agent = WispAgent(config)
+    agent.run(prompt, skill_name=skill, session_id=session_id)
 
 
 def cmd_repl(model=None, skill=None, workspace=None, session_id=None, show_thinking=False, auto_approve=False):
@@ -56,9 +54,8 @@ def cmd_repl(model=None, skill=None, workspace=None, session_id=None, show_think
     if auto_approve:
         config.auto_approve = True
 
-    core = WispAgentCore(config)
-    transport = CLITransport(core)
-    transport.repl(skill_name=skill, session_id=session_id)
+    agent = WispAgent(config)
+    agent.repl(skill_name=skill, session_id=session_id)
 
 
 def cmd_skills(workspace=None):
@@ -651,6 +648,9 @@ def cmd_session_compact(session_id: str, keep: int = 6):
             print(dim(f"  Summary: {result['summary'][:120]}..."))
     else:
         print(dim("Compaction skipped: not enough messages to summarize."))
+
+
+def cmd_session_trim(session_id: str, keep: int = 10):
     """Trim a session to the last N exchanges (for context window management).
 
     Trims intelligently by counting complete user turns (user → assistant exchanges),
