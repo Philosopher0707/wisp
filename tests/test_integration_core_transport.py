@@ -39,8 +39,9 @@ class TestCoreTransportIntegration:
     async def test_core_yields_content_event(self, core):
         """Verify core.run() yields content events that transport can render."""
         # Mock the streaming turn to return a simple text response
-        with patch.object(core, '_run_turn_streaming') as mock_stream:
-            mock_stream.return_value = {
+        with patch.object(core, '_run_turn_streaming_events') as mock_events:
+            mock_events.return_value = iter([])
+            core.client.stream_response = {
                 "message": {"content": "Hello from core"}
             }
             events = []
@@ -60,8 +61,9 @@ class TestCoreTransportIntegration:
         async def mock_tool_gen(*args, **kwargs):
             yield tool_result("read_file", "file contents")
 
-        with patch.object(core, '_run_turn_streaming') as mock_stream:
-            mock_stream.return_value = {
+        with patch.object(core, '_run_turn_streaming_events') as mock_events:
+            mock_events.return_value = iter([])
+            core.client.stream_response = {
                 "message": {
                     "content": "",
                     "tool_calls": [
@@ -100,8 +102,9 @@ class TestCoreTransportIntegration:
     @pytest.mark.asyncio
     async def test_dangerous_command_blocked_at_core(self, core):
         """Verify dangerous commands are blocked by core and yield approval_request."""
-        with patch.object(core, '_run_turn_streaming') as mock_stream:
-            mock_stream.return_value = {
+        with patch.object(core, '_run_turn_streaming_events') as mock_events:
+            mock_events.return_value = iter([])
+            core.client.stream_response = {
                 "message": {
                     "content": "",
                     "tool_calls": [
@@ -121,8 +124,9 @@ class TestCoreTransportIntegration:
     @pytest.mark.asyncio
     async def test_session_preserved_across_core_transport(self, core):
         """Verify session state is maintained when core yields events."""
-        with patch.object(core, '_run_turn_streaming') as mock_stream:
-            mock_stream.return_value = {
+        with patch.object(core, '_run_turn_streaming_events') as mock_events:
+            mock_events.return_value = iter([])
+            core.client.stream_response = {
                 "message": {"content": "Response"}
             }
             async for _ in core.run("test prompt"):

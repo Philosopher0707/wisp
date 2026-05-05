@@ -140,8 +140,9 @@ class TestWispAgentCoreDangerousCommand:
             {"role": "user", "content": "run rm -rf /"},
         ]
         # Mock the streaming turn to return a tool call
-        with patch.object(core, '_run_turn_streaming') as mock_stream:
-            mock_stream.return_value = {
+        with patch.object(core, '_run_turn_streaming_events') as mock_events:
+            mock_events.return_value = iter([])
+            core.client.stream_response = {
                 "message": {
                     "content": "",
                     "tool_calls": [

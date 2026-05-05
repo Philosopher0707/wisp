@@ -34,6 +34,7 @@ from wisp.mcp import MCPManager
 from wisp.memory import format_memory_block
 from wisp.core.events import (
     AgentEvent,
+    TYPE_CONTENT,
     thinking,
     tool_call as tool_call_event,
     tool_result as tool_result_event,
@@ -444,10 +445,11 @@ class WispAgentCore:
 
     # ── Turn execution ───────────────────────────────────────────────
 
-    async def _arun(self, prompt: str) -> AsyncIterator[AgentEvent]:
+    async def _arun(self, prompt: str, system: Optional[str] = None) -> AsyncIterator[AgentEvent]:
         """Execute one user turn and yield all events (internal async implementation)."""
         self._add_message("user", self._expand_continuation(prompt))
-        system = self._build_system_prompt()
+        if system is None:
+            system = self._build_system_prompt()
         self._trim_context_if_needed(system)
 
         # Session bookkeeping
@@ -468,7 +470,16 @@ class WispAgentCore:
             if self._interrupted:
                 break
 
-            response = self._run_turn_streaming(system)
+            # Forward streaming token events
+            streamed_content = False
+            for event in self._run_turn_streaming_events(system):
+                if self._interrupted:
+                    break
+                yield event
+                if event.type == TYPE_CONTENT:
+                    streamed_content = True
+
+            response = getattr(self.client, "stream_response", None) or {}
             if not response:
                 yield error_event("No response from model", recoverable=False)
                 break
@@ -486,7 +497,8 @@ class WispAgentCore:
                 if content:
                     self._add_message("assistant", content, thinking_text)
                 self._save_session()
-                yield content_event(content)
+                if not streamed_content:
+                    yield content_event(content)
                 yield done_event(
                     session_id=self.session.id if self.session else "",
                     turns=iteration,
@@ -516,15 +528,14 @@ class WispAgentCore:
         async for event in self._arun(prompt):
             yield event
 
-    def _run_turn_streaming(self, system: str) -> dict:
-        """Run one streaming turn and yield thinking/content events.
+    def _run_turn_streaming_events(self, system: str):
+        """Yield thinking/content AgentEvent deltas in real-time.
 
-        Returns the assembled response dict for message history.
+        After the generator finishes, the response dict is available at
+        self.client.stream_response.
         """
         self._trim_context_if_needed(system)
         _in_thinking = False
-        accumulated_thinking = ""
-        accumulated_content = ""
 
         try:
             for event in self.client.generate_stream_events(
@@ -534,17 +545,19 @@ class WispAgentCore:
                 checkpoint_every=50,
             ):
                 if self._interrupted:
+                    if _in_thinking:
+                        _in_thinking = False
                     break
 
                 if isinstance(event, TokenBatch):
                     if event.phase == "thinking":
                         if not _in_thinking:
                             _in_thinking = True
-                        accumulated_thinking += event.text
+                        yield thinking(event.text)
                     else:
                         if _in_thinking:
                             _in_thinking = False
-                        accumulated_content += event.text
+                        yield content_event(event.text)
 
                 elif isinstance(event, ToolCallBatch):
                     if _in_thinking:
@@ -559,15 +572,17 @@ class WispAgentCore:
                     if _in_thinking:
                         _in_thinking = False
                     logger.error("Stream error (%s): %s", event.error_type, event.message)
-                    return {}
+                    return
 
         except OllamaError as e:
             logger.error("Ollama error: %s", e)
-            return {}
         except Exception as e:
             logger.error("Unexpected error in streaming turn: %s", e, exc_info=True)
-            return {}
 
+    def _run_turn_streaming(self, system: str) -> dict:
+        """Backward compat: accumulate silently and return response dict."""
+        for _ in self._run_turn_streaming_events(system):
+            pass
         return getattr(self.client, "stream_response", None) or {}
 
     def _parse_tool_call(self, response: dict) -> Optional[list[dict]]:

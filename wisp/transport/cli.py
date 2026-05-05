@@ -442,6 +442,7 @@ class CLITransport:
         system = self.core._build_system_prompt(skill_name)
         self.core._add_message("user", self.core._expand_continuation(prompt))
         await self._execute_turn(system, self.core.config.workspace or ".")
+
     async def _execute_turn(self, system: str, workspace: str) -> None:
         """Execute one user turn by consuming events from core._arun()."""
         self._interrupted = False
@@ -453,12 +454,34 @@ class CLITransport:
             prompt = self.core.messages[-1].get("content", "")
             self.core.messages.pop()
 
-        async for event in self.core._arun(prompt):
+        _in_thinking = False
+        async for event in self.core._arun(prompt, system=system):
             if self._interrupted:
                 break
-            rendered = _render_event(event, self.show_thinking)
-            if rendered is not None:
-                print(rendered, end="" if event.type == TYPE_CONTENT else "\n", flush=True)
+
+            show_thinking = self.core.config.show_thinking
+
+            # Real-time streaming for thinking/content tokens
+            if event.type == TYPE_THINKING:
+                if not _in_thinking:
+                    _in_thinking = True
+                    if show_thinking:
+                        print(dim("⏳ Thinking: "), end="", flush=True)
+                    else:
+                        print(dim("⏳ Thinking..."), end="", flush=True)
+                if show_thinking:
+                    print(event.text, end="", flush=True)
+            elif event.type == TYPE_CONTENT:
+                if _in_thinking:
+                    _in_thinking = False
+                    if show_thinking:
+                        print()
+                    print()
+                print(event.text, end="", flush=True)
+            else:
+                rendered = _render_event(event, show_thinking)
+                if rendered is not None:
+                    print(rendered, end="\n", flush=True)
 
             # Handle approval requests
             if event.type == TYPE_APPROVAL_REQUEST:
@@ -468,7 +491,5 @@ class CLITransport:
                 if approved:
                     print(info("  ℹ Approval not yet wired for re-execution in SDK mode."))
 
-            if event.type == TYPE_DONE:
-                print()
             if event.type == TYPE_DONE:
                 print()
