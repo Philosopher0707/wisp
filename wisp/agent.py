@@ -461,6 +461,12 @@ class WispAgent:
         else:
             print(dim("  Compaction skipped: not enough messages to summarize."))
 
+    def _save_session(self):
+        """Persist the current session to disk."""
+        if self.session is not None:
+            self.session.messages = self.messages
+            self.session_mgr.save(self.session)
+
     def _resolve_session(self, session_id: str):
         """Load a session by exact ID or prefix fragment."""
         loaded = self.session_mgr.load(session_id)
