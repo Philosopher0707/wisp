@@ -188,42 +188,9 @@ def _setup_readline_history():
     import atexit
     atexit.register(lambda: readline.write_history_file(histfile))
 
-    # ── Completion menu display ──────────────────────────────────────
-    def _display_matches(substitution, matches, longest_match_length):
-        """Print a clean multi-column menu of slash commands."""
-        print()
-        from wisp.commands import all_commands
-        # Build a map of name -> description for the matches
-        cmd_map = {}
-        for cmd in all_commands():
-            cmd_map[f"/{cmd.name}"] = cmd.description
-            for alias in cmd.aliases:
-                cmd_map[f"/{alias}"] = f"alias for /{cmd.name}"
-
-        # Print in columns
-        cols = max(1, shutil.get_terminal_size().columns // 22)
-        lines: list[str] = []
-        current: list[str] = []
-        for m in matches:
-            desc = cmd_map.get(m, "")
-            line = f"  {m:<14} {desc}"
-            current.append(line[:50])
-            if len(current) >= cols:
-                lines.append("".join(current))
-                current = []
-        if current:
-            lines.append("".join(current))
-        for line in lines[:20]:
-            print(dim(line))
-        if len(matches) > 20:
-            print(dim(f"  … and {len(matches) - 20} more"))
-        # Redraw the prompt cleanly
-        print(end="")
-
-    readline.set_completion_display_matches_hook(_display_matches)
-
-    # Tab completion for slash commands
+    # ── Tab completion for slash commands ──────────────────────────
     def _completer(text, state):
+        """Complete slash commands when text starts with '/'."""
         if not text.startswith("/"):
             return None
         from wisp.commands import all_commands
@@ -235,29 +202,36 @@ def _setup_readline_history():
         return matches[state] if state < len(matches) else None
 
     readline.set_completer(_completer)
-    readline.parse_and_bind("tab: complete")
+
+    # Enable tab completion — try GNU readline syntax first, then libedit fallback
+    try:
+        readline.parse_and_bind("tab: complete")
+    except Exception:
+        try:
+            readline.parse_and_bind("bind ^I rl_complete")
+        except Exception:
+            pass
 
     # ── Pre-populate history with slash commands ───────────────────
     # This lets the user type "/" and hit Up arrow to cycle through commands.
-    # We only add them if the history file is empty or doesn't exist yet.
+    # We add them unconditionally so they're always available for prefix search.
     try:
         current_len = readline.get_current_history_length()
     except Exception:
         current_len = 0
 
-    if current_len == 0:
-        from wisp.commands import all_commands
-        for cmd in all_commands():
-            readline.add_history(f"/{cmd.name}")
-            for alias in cmd.aliases:
-                readline.add_history(f"/{alias}")
-        # Also add the bare "/" so hitting Enter after "/" is in history
-        readline.add_history("/")
-        # Re-save so they persist
-        try:
-            readline.write_history_file(histfile)
-        except OSError:
-            pass
+    from wisp.commands import all_commands
+    for cmd in all_commands():
+        entry = f"/{cmd.name}"
+        readline.add_history(entry)
+    # Add bare "/" as the last entry so Up after "/" cycles through commands
+    readline.add_history("/")
+
+    # Re-save so they persist
+    try:
+        readline.write_history_file(histfile)
+    except OSError:
+        pass
 
 
 def _input_line(prompt: str, allow_multiline: bool = True) -> str:
