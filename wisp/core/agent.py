@@ -728,7 +728,7 @@ class WispAgentCore:
             self._add_message("assistant", content or "", thinking)
             if tool_calls:
                 self.messages[-1]["tool_calls"] = tool_calls
-                async for _event in self._run_tool_calls(tool_calls, workspace):
+                async for _event in WispAgentCore._run_tool_calls(self, tool_calls, workspace):
                     pass  # consume but don't yield in non-interactive mode
                 iteration += 1
                 continue

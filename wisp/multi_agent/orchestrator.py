@@ -158,7 +158,7 @@ Respond in JSON with a "plan" string and a "subtasks" array.
 
         try:
             system = planner._build_system_prompt()
-            raw = planner._run_turn(system)
+            raw = planner._run_turn_streaming(system)
             content = raw.get("message", {}).get("content", "") if isinstance(raw.get("message"), dict) else ""
             # Try to extract JSON (strip markdown fences if present)
             data = self._extract_json(content)
@@ -346,6 +346,7 @@ Respond in JSON with a "plan" string and a "subtasks" array.
         # Emit assignment
         self.bus.emit(assignment.to_event(source="orchestrator", target=agent_id))
 
+        import asyncio
         start = time.monotonic()
         try:
             task_result = agent.run_task(
@@ -354,6 +355,8 @@ Respond in JSON with a "plan" string and a "subtasks" array.
                 max_iterations=assignment.max_iterations,
                 timeout_seconds=assignment.timeout_seconds,
             )
+            if asyncio.iscoroutine(task_result):
+                task_result = asyncio.run(task_result)
             elapsed = time.monotonic() - start
             content = task_result.get("output", "")
 

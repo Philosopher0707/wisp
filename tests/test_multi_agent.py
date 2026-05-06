@@ -432,7 +432,7 @@ class TestSwarmOrchestrator:
         planner = MockWispAgent(config, agent_id="planner-test", role=AgentRole.PLANNER)
         planner.messages = []
         planner.run_task = lambda **kw: {"success": True, "output": "plan done"}
-        planner._run_turn = lambda system: {
+        planner._run_turn_streaming = lambda system: {
             "message": {
                 "content": '{"plan": "Write auth module", "subtasks": [{"role": "coder", "description": "Implement login", "expected_output": "login.py", "dependencies": []}]}'
             }
@@ -455,7 +455,7 @@ class TestSwarmOrchestrator:
         orch = SwarmOrchestrator(config)
 
         planner = MockWispAgent(config, agent_id="planner-test", role=AgentRole.PLANNER)
-        planner._run_turn = lambda system: {
+        planner._run_turn_streaming = lambda system: {
             "message": {
                 "content": '```json\n{"plan": "Fix bug", "subtasks": [{"role": "debugger", "description": "Find crash", "expected_output": "diagnosis", "dependencies": []}]}\n```'
             }
@@ -477,7 +477,7 @@ class TestSwarmOrchestrator:
         orch = SwarmOrchestrator(config)
 
         planner = MockWispAgent(config, agent_id="planner-test", role=AgentRole.PLANNER)
-        planner._run_turn = lambda system: {"message": {"content": "Just some plain text without JSON"}}
+        planner._run_turn_streaming = lambda system: {"message": {"content": "Just some plain text without JSON"}}
         orch.factory.create = lambda role, agent_id, model=None: planner if role == AgentRole.PLANNER else MockWispAgent(config, agent_id=agent_id, role=role)
 
         plan, subtasks = orch._plan("Do something vague")
