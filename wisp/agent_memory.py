@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +22,11 @@ logger = logging.getLogger(__name__)
 AGENT_MEMORY_DIR = WISP_CONFIG_DIR / "agent_memory"
 SESSIONS_FILE = AGENT_MEMORY_DIR / "sessions.jsonl"
 _MAX_SUMMARIES = 50  # Keep last N summaries to prevent bloat
+
+
+def _resolve_workspace(workspace: str) -> str:
+    """Absolute path without symlink resolution. Avoids macOS /tmp→/private/tmp issues."""
+    return os.path.normpath(os.path.abspath(workspace))
 
 
 class AgentMemory:
@@ -77,7 +83,7 @@ class AgentMemory:
 
         # Filter by workspace if provided
         if workspace:
-            ws_path = str(Path(workspace).resolve())
+            ws_path = _resolve_workspace(workspace)
             summaries = [s for s in summaries if s.workspace == ws_path]
 
         # Sort by timestamp descending (newest first)

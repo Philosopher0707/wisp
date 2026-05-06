@@ -27,6 +27,7 @@ Structure:
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -45,6 +46,11 @@ def _now_iso() -> str:
 def _normalize(content: str) -> str:
     """Normalize fact text for dedup: strip, collapse whitespace."""
     return " ".join(content.strip().split())
+
+
+def _resolve_workspace(workspace: str) -> str:
+    """Absolute path without symlink resolution. Avoids macOS /tmp→/private/tmp issues."""
+    return os.path.normpath(os.path.abspath(workspace))
 
 
 # ── File I/O ────────────────────────────────────────────────────────────
@@ -121,7 +127,7 @@ def _migrate_facts(old: list) -> list[dict]:
 def _make_fact(content: str, important: bool = False) -> dict:
     now = _now_iso()
     return {
-        "content": content,
+        "content": _normalize(content),
         "added": now,
         "last_accessed": now,
         "access_count": 0,
@@ -145,7 +151,7 @@ def _touch(fact: dict):
 
 def _sort_key(fact: dict):
     """Sort: important first, then most recently accessed."""
-    return (not fact.get("important", False), fact.get("last_accessed", ""))
+    return (fact.get("important", False), fact.get("last_accessed", ""))
 
 
 # ── Fact CRUD ───────────────────────────────────────────────────────────
@@ -164,7 +170,7 @@ def add_fact(content: str, workspace: Optional[str] = None,
         return False
 
     if workspace:
-        ws_path = str(Path(workspace).resolve())
+        ws_path = _resolve_workspace(workspace)
         facts = memory.setdefault("workspace_facts", {}).setdefault(ws_path, [])
     else:
         facts = memory.setdefault("global_facts", [])
@@ -172,9 +178,9 @@ def add_fact(content: str, workspace: Optional[str] = None,
     # Check duplicate
     for f in facts:
         if _match(f, norm):
-            # Update content if it changed (e.g. better phrasing)
-            if _fact_content(f) != content:
-                f["content"] = content
+            # Update content if genuinely different (case-insensitive)
+            if _normalize(_fact_content(f)).lower() != norm.lower():
+                f["content"] = norm
             _touch(f)
             _save(memory)
             return False  # Not a new fact, but refreshed
@@ -200,7 +206,7 @@ def remove_fact(content: str, workspace: Optional[str] = None) -> bool:
     norm = _normalize(content)
 
     if workspace:
-        ws_path = str(Path(workspace).resolve())
+        ws_path = _resolve_workspace(workspace)
         ws_facts = memory.get("workspace_facts", {})
         if ws_path not in ws_facts:
             return False
@@ -231,7 +237,7 @@ def list_facts(workspace: Optional[str] = None) -> list[dict]:
         results.append(f)
 
     if workspace:
-        ws_path = str(Path(workspace).resolve())
+        ws_path = _resolve_workspace(workspace)
         ws_facts = memory.get("workspace_facts", {})
         for f in ws_facts.get(ws_path, []):
             _touch(f)
@@ -263,7 +269,7 @@ def clear_memory(workspace: Optional[str] = None):
     memory = load_memory()
 
     if workspace:
-        ws_path = str(Path(workspace).resolve())
+        ws_path = _resolve_workspace(workspace)
         memory.get("workspace_facts", {}).pop(ws_path, None)
     else:
         memory["global_facts"] = []
@@ -305,7 +311,7 @@ def format_memory_block(workspace: Optional[str] = None) -> str:
 
 def _get_fact_list(memory: dict, workspace: Optional[str] = None) -> list[dict]:
     if workspace:
-        ws_path = str(Path(workspace).resolve())
+        ws_path = _resolve_workspace(workspace)
         return memory.setdefault("workspace_facts", {}).setdefault(ws_path, [])
     return memory.setdefault("global_facts", [])
 
