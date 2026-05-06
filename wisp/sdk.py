@@ -5,9 +5,15 @@ Provides a simple, blocking API for developers who don't need async control.
 Example:
     from wisp import Wisp
 
-    agent = Wisp(model="llama3.2", workspace=".")
-    for event in agent.run("refactor auth.py"):
-        print(f"[{event.type}] {event.text}")
+    with Wisp(model="llama3.2", workspace=".") as agent:
+        for event in agent.run("refactor auth.py"):
+            print(f"[{event.type}] {event.text}")
+
+For conversation across multiple prompts, pass auto_new_session=False:
+
+    with Wisp(model="llama3.2", workspace=".", auto_new_session=False) as agent:
+        agent.run("read the code in src/")
+        agent.run("now refactor it")
 """
 
 from __future__ import annotations
@@ -24,39 +30,77 @@ class Wisp:
     """High-level synchronous wrapper around WispAgentCore.
 
     Usage:
-        agent = Wisp(model="llama3.2", workspace=".")
-        for event in agent.run("refactor auth.py"):
-            print(event.text)
+        with Wisp(model="llama3.2", workspace=".") as agent:
+            for event in agent.run("refactor auth.py"):
+                print(event.text)
+
+    Without context manager, call shutdown() when done to clean up MCP connections.
     """
 
     def __init__(
         self,
         model: Optional[str] = None,
         workspace: Optional[str] = None,
+        skill_name: Optional[str] = None,
+        session_id: Optional[str] = None,
         auto_approve: bool = False,
         show_thinking: bool = False,
         max_iterations: int = 10,
+        temperature: Optional[float] = None,
+        auto_new_session: bool = True,
     ):
         config = WispConfig()
         if model:
             config.model = model
         if workspace:
             config.workspace = workspace
+        if temperature is not None:
+            config.temperature = temperature
         config.auto_approve = auto_approve
         config.show_thinking = show_thinking
         config.max_iterations = max_iterations
 
         self._core = WispAgentCore(config=config)
+        self._skill_name = skill_name
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._closed = False
+
+        # Session handling
+        if session_id:
+            loaded = self._core._resolve_session(session_id)
+            if loaded is not None:
+                self._core.session = loaded
+                self._core.messages = list(loaded.messages)
+            else:
+                raise ValueError(f"Session '{session_id}' not found.")
+        elif auto_new_session:
+            from wisp.session import Session
+            self._core.session = Session.create(
+                model=self._core.config.model,
+                workspace=self._core.config.workspace or ".",
+                first_prompt="SDK session",
+            )
 
     def run(self, prompt: str) -> Iterator[AgentEvent]:
         """Run one prompt and yield all events synchronously.
 
-        This blocks until the turn is complete. For async usage,
+        Blocks until the turn is complete. For async usage,
         use WispAgentCore directly.
         """
-        loop = asyncio.new_event_loop()
+        if self._closed:
+            raise RuntimeError("Wisp agent is closed. Create a new instance.")
+        return self._run_impl(prompt)
+
+    def _run_impl(self, prompt: str) -> Iterator[AgentEvent]:
+        """Implementation of run() as a generator — validation done in run()."""
+        if self._loop is None:
+            self._loop = asyncio.new_event_loop()
+        loop = self._loop
+
+        system = self._core._build_system_prompt(self._skill_name)
+
         try:
-            async_gen = self._core.run(prompt)
+            async_gen = self._core._arun(prompt, system=system)
             while True:
                 try:
                     event = loop.run_until_complete(async_gen.__anext__())
@@ -64,7 +108,34 @@ class Wisp:
                 except StopAsyncIteration:
                     break
         finally:
-            loop.close()
+            self._core._save_session()
+
+    def shutdown(self):
+        """Shut down the agent and release resources (MCP connections, etc.)."""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._core._save_session()
+        except Exception:
+            pass
+        try:
+            self._core.mcp.shutdown()
+        except Exception:
+            pass
+        if self._loop is not None:
+            try:
+                self._loop.close()
+            except Exception:
+                pass
+            self._loop = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.shutdown()
+        return False
 
     @property
     def session_id(self) -> str:

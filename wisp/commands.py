@@ -602,7 +602,7 @@ def cmd_continue(agent, args: str):
     agent._execute_loop(system, ws, agent.config.auto_approve)
 
     # Print separator so the visual rhythm matches normal REPL turns
-    from wisp.agent import _print_separator
+    from wisp.transport.cli import _print_separator
     _print_separator()
 
 
