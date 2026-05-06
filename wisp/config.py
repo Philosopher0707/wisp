@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
-DEFAULT_MODEL = "kimi-k2.6:cloud"
+DEFAULT_MODEL = "deepseek-v4-pro:cloud"
 DEFAULT_MAX_CONTEXT_TOKENS = 256000
 WISP_CONFIG_DIR = Path.home() / ".config" / "wisp"
 

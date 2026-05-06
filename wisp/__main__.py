@@ -690,7 +690,7 @@ _SHORT_HELP = """Usage: wisp [options] 'prompt'
    or:  wisp <subcommand> [args]
 
 Options:
-  --model, -m <name>       Ollama model to use (default: kimi-k2.6:cloud)
+  --model, -m <name>       Ollama model to use (default: deepseek-v4-pro:cloud)
   --skill, -s <name>       Load a skill to guide the agent
   --session, -S <id>       Continue an existing session
   --workspace, -w <dir>    Working directory (default: current dir)
