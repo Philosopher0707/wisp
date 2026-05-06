@@ -283,7 +283,7 @@ class SubagentRunner:
                 # Dangerous command guard: always block in subagents because there is
                 # no interactive user present to confirm with "yes".
                 danger_reason = None
-                if func_name == "run_bash":
+                if func_name in ("run_bash", "run_background"):
                     from wisp.tools import check_dangerous_command
                     danger_reason = check_dangerous_command(func_args.get("command", ""))
 
@@ -327,13 +327,21 @@ class SubagentRunner:
     def _filter_tools(self, contract: SubagentContract):
         """Return full tool schemas or a filtered subset.
 
-        Always removes spawn_subagent since subagents cannot spawn subagents.
+        Always removes spawn_subagent (no nesting) and background task tools
+        (subagent processes are ephemeral — bg tasks would be orphaned).
         """
+        _SUBAGENT_BLOCKED = {
+            "spawn_subagent",
+            "run_background",
+            "watch_task",
+            "kill_task",
+            "list_tasks",
+        }
         from wisp.tools import TOOL_SCHEMAS
         if contract.tools == ["all"]:
-            return [t for t in TOOL_SCHEMAS if t["function"]["name"] != "spawn_subagent"]
+            return [t for t in TOOL_SCHEMAS if t["function"]["name"] not in _SUBAGENT_BLOCKED]
         allowed = set(contract.tools)
-        return [t for t in TOOL_SCHEMAS if t["function"]["name"] in allowed and t["function"]["name"] != "spawn_subagent"]
+        return [t for t in TOOL_SCHEMAS if t["function"]["name"] in allowed and t["function"]["name"] not in _SUBAGENT_BLOCKED]
 
     def _extract_partial_output_from_snapshot(self, messages: list[dict]) -> str:
         """Best-effort extraction from a snapshot of messages (thread-safe)."""

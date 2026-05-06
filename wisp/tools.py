@@ -14,17 +14,22 @@ import re
 import shlex
 import subprocess
 import tempfile
+from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Optional
 
 import requests
 
+from wisp.checkpoint import FileSnapshot
+
 logger = logging.getLogger(__name__)
 
-# Module-level references for collaborative editing (set by agent)
+# Module-level references for infrastructure (set by agent)
 _file_lock = None
 _change_tracker = None
+_background_task_manager = None
+_checkpoint_store = None
 
 
 class ToolError(Exception):
@@ -37,6 +42,16 @@ def set_collaboration_tools(file_lock=None, change_tracker=None):
     global _file_lock, _change_tracker
     _file_lock = file_lock
     _change_tracker = change_tracker
+
+
+def set_infrastructure(file_lock=None, change_tracker=None,
+                       background_task_manager=None, checkpoint_store=None):
+    """Set all infrastructure — locks, trackers, task manager, checkpoint store."""
+    global _file_lock, _change_tracker, _background_task_manager, _checkpoint_store
+    _file_lock = file_lock
+    _change_tracker = change_tracker
+    _background_task_manager = background_task_manager
+    _checkpoint_store = checkpoint_store
 
 
 class _TextExtractor(HTMLParser):
@@ -248,6 +263,27 @@ def tool_write_file(path: str, workspace: str, content: str, file_lock=None) -> 
         holder = lock_info.get("agent", "unknown") if lock_info else "unknown"
         raise ToolError(f"File {path} is locked by {holder}. Wait or coordinate before editing.")
 
+    # ── Checkpoint: snapshot current file state before writing ──
+    snapshot = None
+    if _checkpoint_store:
+        existed = full_path.exists()
+        old_content = ""
+        if existed:
+            try:
+                if full_path.stat().st_size <= _MAX_READ_SIZE:
+                    old_content = full_path.read_text(encoding="utf-8", errors="replace")
+                else:
+                    logger.warning("File too large for checkpoint: %s", path)
+            except OSError as e:
+                logger.warning("Failed to read file for checkpoint: %s: %s", path, e)
+        snapshot = FileSnapshot(
+            filepath=path,
+            content_before=old_content,
+            existed_before=existed,
+            tool_name="write_file",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+
     # Warn if overwriting an existing file
     if full_path.exists():
         logger.warning("Overwriting existing file: %s (%d bytes)", path, full_path.stat().st_size)
@@ -255,6 +291,10 @@ def tool_write_file(path: str, workspace: str, content: str, file_lock=None) -> 
     full_path.parent.mkdir(parents=True, exist_ok=True)
     full_path.write_text(content, encoding="utf-8")
     logger.info("Wrote %d bytes to %s", len(content), path)
+
+    # ── Save checkpoint after successful write ──
+    if _checkpoint_store and snapshot is not None:
+        _checkpoint_store.push(snapshot)
 
     # ── Collaborative editing: record change ──
     if _change_tracker:
@@ -359,6 +399,17 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str, file
 
     content = full_path.read_text(encoding="utf-8", errors="replace")
 
+    # ── Checkpoint: snapshot before edit ──
+    snapshot = None
+    if _checkpoint_store:
+        snapshot = FileSnapshot(
+            filepath=path,
+            content_before=content,
+            existed_before=True,
+            tool_name="edit_file",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+
     # ── Exact match (fast path) ──────────────────────────────────
     if old_text in content:
         count = content.count(old_text)
@@ -372,6 +423,10 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str, file
         new_content = content.replace(old_text, new_text, 1)
         full_path.write_text(new_content, encoding="utf-8")
         logger.info("Edited %s — %d chars replaced with %d chars", path, len(old_text), len(new_text))
+
+        # ── Save checkpoint after successful edit ──
+        if _checkpoint_store and snapshot is not None:
+            _checkpoint_store.push(snapshot)
 
         # ── Collaborative editing: record change ──
         if _change_tracker:
@@ -399,6 +454,10 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str, file
         "Edited %s (fuzzy, %.0%% similar) — %d chars replaced with %d chars",
         path, similarity * 100, len(actual_old), len(new_text),
     )
+
+    # ── Save checkpoint after successful fuzzy edit ──
+    if _checkpoint_store and snapshot is not None:
+        _checkpoint_store.push(snapshot)
 
     # ── Collaborative editing: record change ──
     if _change_tracker:
@@ -515,6 +574,38 @@ def tool_run_bash(command: str, workspace: str, timeout: int = 60) -> str:
     except Exception as e:
         logger.error("Unexpected error in run_bash: %s", e)
         raise ToolError(f"Command failed: {e}")
+
+
+def tool_run_background(command: str, workspace: str) -> str:
+    """Start a command in the background, return task ID immediately."""
+    _validate_string(command, "command", _MAX_CMD_LENGTH)
+    if not _background_task_manager:
+        raise ToolError("Background task manager not initialized")
+    task_id = _background_task_manager.start(command, workspace)
+    return f"✓ Started background task {task_id}\nUse watch_task({task_id}) to check output."
+
+
+def tool_watch_task(task_id: str, workspace: str = ".") -> str:
+    """Read latest output from a background task."""
+    _validate_string(task_id, "task_id", 64)
+    if not _background_task_manager:
+        raise ToolError("Background task manager not initialized")
+    return _background_task_manager.watch(task_id)
+
+
+def tool_kill_task(task_id: str, workspace: str = ".") -> str:
+    """Stop a running background task."""
+    _validate_string(task_id, "task_id", 64)
+    if not _background_task_manager:
+        raise ToolError("Background task manager not initialized")
+    return _background_task_manager.kill(task_id)
+
+
+def tool_list_tasks(workspace: str = ".") -> str:
+    """List all background tasks."""
+    if not _background_task_manager:
+        raise ToolError("Background task manager not initialized")
+    return _background_task_manager.list_tasks()
 
 
 def tool_list_files(path: str, workspace: str, pattern: str = "*") -> str:
@@ -1071,6 +1162,60 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_background",
+            "description": "Start a bash command in the background and return immediately. Use for dev servers, watch-mode tests, or any long-running command. Returns a task_id. Use watch_task to check output later.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "Shell command to run in background"},
+                },
+                "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "watch_task",
+            "description": "Read the latest output from a running background task. Returns up to 200 lines of buffered stdout/stderr.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task ID returned by run_background"},
+                },
+                "required": ["task_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "kill_task",
+            "description": "Stop a running background task by its ID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task ID to kill"},
+                },
+                "required": ["task_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_tasks",
+            "description": "List all background tasks and their current statuses.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
 ]
 
 # Map tool names to their implementations
@@ -1090,6 +1235,10 @@ TOOL_IMPLS = {
     "plan_task": tool_plan_task,
     "mark_step_done": tool_mark_step_done,
     "update_plan": tool_update_plan,
+    "run_background": tool_run_background,
+    "watch_task": tool_watch_task,
+    "kill_task": tool_kill_task,
+    "list_tasks": tool_list_tasks,
 }
 
 
@@ -1154,6 +1303,15 @@ def _build_tool_metadata(name: str, args: dict, result: str) -> dict:
     elif name == "recall":
         meta["query"] = (args.get("query", "") or "")[:80]
         meta["limit"] = args.get("limit", 10)
+
+    elif name == "run_background":
+        meta["command"] = (args.get("command", "") or "")[:120]
+
+    elif name == "watch_task":
+        meta["task_id"] = args.get("task_id", "")
+
+    elif name == "kill_task":
+        meta["task_id"] = args.get("task_id", "")
 
     return meta
 

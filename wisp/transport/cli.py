@@ -435,6 +435,7 @@ class CLITransport:
                 print(dim(f"   Continue with: wisp repl -S {self.core.session.id}"))
         finally:
             self.core._save_session_summary()
+            self.core.background_task_manager.cleanup_all()
             self.core.mcp.shutdown()
             _restore_signal_handler()
 

@@ -429,7 +429,7 @@ def cmd_read(agent, args: str):
         print(error(f"✗ {e}"))
 
 
-@register("drop", "Remove the last message from history", aliases=("pop", "undo"), usage="/drop")
+@register("drop", "Remove the last message from history", aliases=("pop",), usage="/drop")
 def cmd_drop(agent, args: str):
     if not agent.messages:
         print(dim("History is empty."))
@@ -438,6 +438,75 @@ def cmd_drop(agent, args: str):
     role = removed.get("role", "?")
     preview = (removed.get("content", "") or "")[:60].replace("\n", " ")
     print(success(f"✓ Dropped last message ({role}): {preview}..."))
+
+
+@register("undo", "Undo the last file-change tool action (revert files + remove messages)", usage="/undo [--with-prompt]")
+def cmd_undo(agent, args: str):
+    """Revert the last file-changing tool action.
+
+    1. Restores the file to its state before the tool action.
+    2. Removes the matching tool-result message from history.
+    3. With --with-prompt, also removes the preceding user message.
+    """
+    from wisp import tools as tools_module
+    store = tools_module._checkpoint_store
+    if not store:
+        print(error("✗ Checkpoint system not initialized."))
+        return
+
+    snapshot = store.pop()
+    if not snapshot:
+        print(dim("Nothing to undo. No file changes have been checkpointed."))
+        return
+
+    # ── Restore file ──────────────────────────────────────────────
+    ws = getattr(agent.config, "workspace", None) or "."
+    full_path = (Path(ws) / snapshot.filepath).resolve()
+
+    if snapshot.existed_before:
+        try:
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_text(snapshot.content_before, encoding="utf-8")
+            print(success(f"✓ Restored {snapshot.filepath} to previous state ({len(snapshot.content_before)} bytes)."))
+        except OSError as e:
+            print(error(f"✗ Failed to restore {snapshot.filepath}: {e}"))
+            store.push(snapshot)  # Put back so user can retry
+            return
+    else:
+        # File was created by the undone action — remove it
+        if full_path.exists():
+            try:
+                full_path.unlink()
+                print(success(f"✓ Removed {snapshot.filepath} (was created by {snapshot.tool_name})."))
+            except OSError as e:
+                print(error(f"✗ Failed to remove {snapshot.filepath}: {e}"))
+                store.push(snapshot)
+                return
+
+    # ── Remove messages ───────────────────────────────────────────
+    removed_count = 0
+
+    # Pop tool-result message matching the undone tool
+    while agent.messages and agent.messages[-1].get("role") == "tool":
+        msg = agent.messages.pop()
+        removed_count += 1
+        if msg.get("name") == snapshot.tool_name:
+            break
+
+    # Pop the assistant message that initiated the tool call
+    if agent.messages and agent.messages[-1].get("role") == "assistant":
+        agent.messages.pop()
+        removed_count += 1
+
+    # Optionally remove the user prompt too
+    if "--with-prompt" in args:
+        if agent.messages and agent.messages[-1].get("role") == "user":
+            removed = agent.messages.pop()
+            removed_count += 1
+            preview = (removed.get("content", "") or "")[:60].replace("\n", " ")
+            print(dim(f"  Also removed user prompt: {preview}..."))
+
+    print(dim(f"  Removed {removed_count} message(s) from conversation."))
 
 
 @register("spawn", "Spawn a subagent for a scoped task", aliases=("sub", "delegate"), usage="/spawn <task description>")

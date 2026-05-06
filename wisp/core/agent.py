@@ -66,7 +66,11 @@ You have access to tools that let you read, write, and edit files, run bash comm
 - read_file: Read file contents (supports offset/limit for large files)
 - write_file: Create or overwrite a file
 - edit_file: Targeted text replacement (surgical edits, with fuzzy fallback)
-- run_bash: Execute shell commands
+- run_bash: Execute shell commands (60s timeout, synchronous)
+- run_background: Start a long-running bash command (dev servers, watch-mode). Returns task_id immediately
+- watch_task: Check latest output from a background task
+- kill_task: Stop a running background task
+- list_tasks: Show all background tasks and their statuses
 - list_files: Explore directory structure
 - web_fetch: Fetch content from URLs (web pages, APIs, documentation)
 - search_symbols: Search code for functions, classes, structs by name
@@ -162,8 +166,19 @@ class WispAgentCore:
         from wisp.change_tracker import ChangeTracker
         self.file_lock = FileLock(self.config.workspace or ".", self.agent_id)
         self.change_tracker = ChangeTracker(self.config.workspace or ".", self.file_lock.agent_id)
+        from wisp.background_task import BackgroundTaskManager
+        from wisp.checkpoint import CheckpointStore
+        self.background_task_manager = BackgroundTaskManager()
+        self.checkpoint_store = CheckpointStore(
+            session_id=self.session.id if self.session else "",
+        )
         from wisp import tools as tools_module
-        tools_module.set_collaboration_tools(self.file_lock, self.change_tracker)
+        tools_module.set_infrastructure(
+            self.file_lock,
+            self.change_tracker,
+            self.background_task_manager,
+            self.checkpoint_store,
+        )
 
     # ── Message helpers ──────────────────────────────────────────────
 
@@ -288,6 +303,7 @@ class WispAgentCore:
             first_prompt=prompt_text,
         )
         self.messages = [last_user_msg] if last_user_msg else []
+        self.checkpoint_store.clear()
 
     # ── System prompt ────────────────────────────────────────────────
 
@@ -642,7 +658,7 @@ class WispAgentCore:
 
             # Dangerous command guard
             danger_reason = None
-            if func_name == "run_bash":
+            if func_name in ("run_bash", "run_background"):
                 from wisp.tools import check_dangerous_command
                 danger_reason = check_dangerous_command(func_args.get("command", ""))
 

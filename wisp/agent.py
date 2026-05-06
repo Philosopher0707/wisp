@@ -292,7 +292,7 @@ class WispAgent(WispAgentCore):
 
             # Dangerous command guard
             danger_reason = None
-            if func_name == "run_bash":
+            if func_name in ("run_bash", "run_background"):
                 from wisp.tools import check_dangerous_command
                 danger_reason = check_dangerous_command(func_args.get("command", ""))
 
