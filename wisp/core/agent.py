@@ -282,7 +282,6 @@ class WispAgentCore:
                 last_user_msg = dict(m)
                 break
         prompt_text = last_user_msg.get("content", "") if last_user_msg else "New session"
-        from wisp.session import Session
         self.session = Session.create(
             model=self.config.model,
             workspace=self.config.workspace or ".",
@@ -469,7 +468,6 @@ class WispAgentCore:
 
         # Session bookkeeping
         if self.session is None:
-            from wisp.session import Session
             self.session = Session.create(
                 model=self.config.model,
                 workspace=self.config.workspace or ".",

@@ -97,9 +97,10 @@ class TestExtractiveSummarizer:
 
     def test_score_sentence_position_bonus(self):
         summarizer = ExtractiveSummarizer()
-        score_first = summarizer._score_sentence("First sentence.", msg_idx=0, sent_idx=0)
-        score_later = summarizer._score_sentence("Later sentence.", msg_idx=1, sent_idx=2)
-        assert score_first > score_later
+        # Last message (conclusion) should score higher than first message (boilerplate intro)
+        score_first = summarizer._score_sentence("First sentence.", msg_idx=0, sent_idx=0, total_msgs=3)
+        score_last = summarizer._score_sentence("Conclusion sentence.", msg_idx=2, sent_idx=0, total_msgs=3)
+        assert score_last > score_first
 
     def test_score_sentence_action_verb_bonus(self):
         summarizer = ExtractiveSummarizer()

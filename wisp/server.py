@@ -337,9 +337,22 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(...)):
                     config.auto_approve = False
                     config.show_thinking = msg.get("show_thinking", True)
 
-                    core = WispAgentCore(config=config)
-                    conn.transport = ServerTransport(core, conn.send)
                     session_id = msg.get("session_id")
+                    session = None
+                    if session_id:
+                        sm = SessionManager()
+                        session = sm.load(session_id)
+                        if session is None:
+                            resolved = sm.get_session_id_from_fragment(session_id)
+                            if resolved:
+                                session = sm.load(resolved)
+
+                    core = WispAgentCore(config=config, session=session)
+                    if session is not None and session.messages:
+                        core.messages = list(session.messages)
+                    conn.transport = ServerTransport(core, conn.send)
+                    if session is not None:
+                        session_id = session.id
 
                     # Run agent as async task
                     async def _run():

@@ -59,7 +59,6 @@ _TASK_PATTERNS = [
     r"\bfuture\b",
     r"plan to\b",
     r"need to\b",
-    r"should\b",
     r"will implement\b",
     r"will add\b",
     r"will fix\b",
@@ -168,26 +167,30 @@ class ExtractiveSummarizer:
         if not assistant_contents:
             return ""
 
-        # Score sentences
-        scored: list[tuple[str, float]] = []
+        # Score sentences — store (sentence, score, original_index) for stable ordering
+        scored: list[tuple[str, float, int]] = []
+        idx = 0
+        total_msgs = len(assistant_contents)
         for msg_idx, content in enumerate(assistant_contents):
             sentences = _SENTENCE_SPLIT.split(content.strip())
             for sent_idx, sentence in enumerate(sentences):
                 sentence = sentence.strip()
                 if len(sentence) < 10:
                     continue
-                score = self._score_sentence(sentence, msg_idx, sent_idx)
-                scored.append((sentence, score))
+                score = self._score_sentence(sentence, msg_idx, sent_idx, total_msgs)
+                scored.append((sentence, score, idx))
+                idx += 1
 
         if not scored:
             return ""
 
-        # Pick top 3, deduplicate, join
+        # Pick top 3 by score
         scored.sort(key=lambda x: x[1], reverse=True)
         top = scored[:3]
-        top.sort(key=lambda x: scored.index(x))  # restore original order
+        # Restore original order using stored index
+        top.sort(key=lambda x: x[2])
 
-        sentences = [s for s, _ in top]
+        sentences = [s for s, _, _ in top]
         # Deduplicate near-identical sentences
         deduped: list[str] = []
         for s in sentences:
@@ -196,16 +199,21 @@ class ExtractiveSummarizer:
 
         return " ".join(deduped)
 
-    def _score_sentence(self, sentence: str, msg_idx: int, sent_idx: int) -> float:
-        """Score a sentence for summary inclusion."""
+    def _score_sentence(self, sentence: str, msg_idx: int, sent_idx: int, total_msgs: int = 1) -> float:
+        """Score a sentence for summary inclusion.
+
+        Rewards sentences from later messages (conclusions > intros),
+        action verbs, and concrete details. Penalizes too-short or too-long sentences.
+        """
         score = 0.0
         lower = sentence.lower()
 
-        # Position bonuses
-        if msg_idx == 0 and sent_idx == 0:
-            score += 2.0
-        elif sent_idx == 0:
-            score += 1.0
+        # Position bonuses — favor later messages (conclusions over boilerplate intros)
+        position_ratio = (msg_idx + 1) / max(total_msgs, 1)
+        if sent_idx == 0 and msg_idx > 0:
+            score += 1.0 * position_ratio  # opening sentence of later messages
+        elif msg_idx == total_msgs - 1:
+            score += 2.0  # last message — most likely to contain conclusion
 
         # Action verb bonus
         for verb in _ACTION_VERBS:
@@ -335,57 +343,52 @@ class ExtractiveSummarizer:
 
     _INCOMPLETE_MARKERS = [
         "here are the steps", "first,", "1.", "step 1", "let me start",
-        "i will", "we will", "coming up", "next, we", "finally,",
+        "i will", "we will", "coming up", "next, we",
         "to begin", "starting with", "part 1", "option 1",
     ]
 
     def _extract_thread_stack(self, messages: list[dict]) -> list[dict]:
         """Identify active or incomplete discussion threads from assistant messages.
 
-        Walks backwards through assistant messages to find the most recent
-        thread. If the last assistant message looks like it was cut off
-        (no closing punctuation, contains incomplete markers), it is flagged
-        as INCOMPLETE so compaction can tell the model to resume on 'continue'.
+        Walks backwards through the conversation to find the last few assistant
+        turns. Each turn is scored for completeness (terminal punctuation, no
+        incomplete markers). The last turn flagged INCOMPLETE tells compaction
+        what to resume on 'continue'. Keeps up to 3 threads.
         """
         stack: list[dict] = []
-        assistant_msgs = [
-            (i, m) for i, m in enumerate(messages) if m.get("role") == "assistant"
-        ]
-        if not assistant_msgs:
+
+        # Collect (msg_index, assistant_msg, user_prompt) for each turn
+        turns: list[tuple[int, dict, str]] = []
+        for i, m in enumerate(messages):
+            if m.get("role") != "assistant":
+                continue
+            content = (m.get("content", "") or "").strip()
+            if not content:
+                continue
+            # Find preceding user prompt
+            user_prompt = ""
+            for prev in reversed(messages[:i]):
+                if prev.get("role") == "user":
+                    user_prompt = (prev.get("content", "") or "")[:200]
+                    break
+            turns.append((i, m, user_prompt))
+
+        if not turns:
             return stack
 
-        # Most recent assistant message
-        last_idx, last_msg = assistant_msgs[-1]
-        content = (last_msg.get("content", "") or "").strip()
-        if not content:
-            return stack
+        # Take last 3 turns, walk backwards for status
+        recent = turns[-3:]
+        for idx, msg, user_prompt in reversed(recent):
+            content = (msg.get("content", "") or "").strip()
+            lower = content.lower()
+            no_terminal = not bool(re.search(r"[.!?```}\])]$", content[-5:]))
+            has_marker = any(marker in lower for marker in self._INCOMPLETE_MARKERS)
+            looks_incomplete = no_terminal or has_marker
 
-        lower = content.lower()
-        # Heuristic: message looks incomplete if it lacks terminal punctuation
-        # or contains explicit incomplete markers.
-        no_terminal = not bool(re.search(r"[.!?```}\])]$", content[-5:]))
-        has_marker = any(marker in lower for marker in self._INCOMPLETE_MARKERS)
-        looks_incomplete = no_terminal or has_marker
-
-        # Find the user prompt that triggered this assistant message
-        user_prompt = ""
-        for prev in reversed(messages[:last_idx]):
-            if prev.get("role") == "user":
-                user_prompt = (prev.get("content", "") or "")[:200]
-                break
-
-        topic = content[:120].replace("\n", " ")
-        if looks_incomplete:
+            topic = content[:120].replace("\n", " ")
             stack.append({
                 "topic": topic,
-                "status": "INCOMPLETE",
-                "last_sub_topic": "",
-                "prompt": user_prompt,
-            })
-        else:
-            stack.append({
-                "topic": topic,
-                "status": "COMPLETE",
+                "status": "INCOMPLETE" if looks_incomplete else "COMPLETE",
                 "last_sub_topic": "",
                 "prompt": user_prompt,
             })
