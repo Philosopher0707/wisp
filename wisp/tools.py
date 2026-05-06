@@ -632,9 +632,10 @@ def tool_recall(query: str, workspace: str = ".", limit: int = 10) -> str:
     # ── Search memory facts ──
     facts = list_facts(workspace)
     for fact in facts:
-        score = _relevance_score(fact, query_lower, query_words)
+        content = fact["content"] if isinstance(fact, dict) else fact
+        score = _relevance_score(content, query_lower, query_words)
         if score > 0:
-            results.append((score, f"[Memory] {fact}"))
+            results.append((score, f"[Memory] {content}"))
 
     # ── Search session summaries ──
     agent_mem = AgentMemory()
@@ -659,10 +660,11 @@ def tool_recall(query: str, workspace: str = ".", limit: int = 10) -> str:
     if len(results) < 3:
         global_facts = list_facts(None)
         for fact in global_facts:
+            content = fact["content"] if isinstance(fact, dict) else fact
             if fact not in facts:  # avoid duplicates
-                score = _relevance_score(fact, query_lower, query_words)
+                score = _relevance_score(content, query_lower, query_words)
                 if score > 0:
-                    results.append((score, f"[Global] {fact}"))
+                    results.append((score, f"[Global] {content}"))
 
     if not results:
         return "No relevant memories found for this query."

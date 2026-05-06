@@ -185,13 +185,15 @@ def cmd_memory(args: list[str]):
         if facts:
             print(info("Global facts:"))
             for f in facts:
-                print(f"  • {f}")
+                content = f["content"] if isinstance(f, dict) else f
+                print(f"  • {content}")
             print()
 
         for ws_path, ws_fs in ws_facts.items():
             print(info(f"Workspace ({ws_path}):"))
             for f in ws_fs:
-                print(f"  • {f}")
+                content = f["content"] if isinstance(f, dict) else f
+                print(f"  • {content}")
             print()
 
         print(dim(f"Total: {len(facts) + sum(len(v) for v in ws_facts.values())} fact(s)"))
@@ -225,7 +227,8 @@ def cmd_memory(args: list[str]):
         if facts:
             print(info("Facts:"))
             for f in facts:
-                print(f"  • {f}")
+                content = f["content"] if isinstance(f, dict) else f
+                print(f"  • {content}")
         else:
             print(dim("No facts stored."))
 
