@@ -33,7 +33,7 @@ def cmd_swarm(goal: str, roles: list[str] | None = None, model: str | None = Non
         config.workspace = workspace
 
     if roles is None:
-        roles = [AgentRole.CODER, AgentRole.REVIEWER, AgentRole.TESTER]
+        roles = [AgentRole.CODER, AgentRole.REVIEWER, AgentRole.TESTER, AgentRole.RESEARCHER]
 
     print(info(f"🐝 Starting swarm with {len(roles)} agent(s)..."))
     print(dim(f"   Goal: {goal}"))

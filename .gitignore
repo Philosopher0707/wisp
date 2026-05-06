@@ -37,6 +37,9 @@ venv/
 # Wisp sessions
 sessions/
 
+# MCP test artifacts
+.playwright-mcp/
+
 # Misc
 *.log
 .env

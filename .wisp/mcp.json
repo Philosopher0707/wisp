@@ -2,14 +2,27 @@
   {
     "name": "vscode",
     "command": "/opt/anaconda3/envs/litllm/bin/python",
-    "args": ["-m", "wisp.mcp_servers.vscode_server"],
+    "args": [
+      "-m",
+      "wisp.mcp_servers.vscode_server"
+    ],
     "description": "VS Code editor integration - open files, run commands, show messages"
   },
   {
     "name": "browser",
-    "command": "npx",
-    "args": ["-y", "@playwright/mcp@latest", "--browser", "chrome"],
-    "description": "Browser automation via Playwright (Chrome DevTools Protocol). DISABLED by default because it slows down REPL startup. Enable by setting disabled: false.",
+    "command": "npm",
+    "args": [
+      "exec",
+      "-y",
+      "--package=@playwright/mcp@latest",
+      "--",
+      "playwright-mcp",
+      "--browser",
+      "chrome",
+      "--headless",
+      "--isolated"
+    ],
+    "description": "Browser automation via Playwright (Chrome DevTools Protocol). DISABLED by default — startup adds 2-3s. Enable by setting disabled: false.",
     "disabled": true
   }
 ]

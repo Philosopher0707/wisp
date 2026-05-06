@@ -463,6 +463,100 @@ def cmd_spawn(agent, args: str):
     print(result.output)
 
 
+@register("swarm", "Launch a multi-agent swarm for a complex task", aliases=("multi",), usage="/swarm <task description>")
+def cmd_swarm(agent, args: str):
+    if not args:
+        print(info("Usage: /swarm <task description>"))
+        print(dim("Example: /swarm add user authentication with JWT tokens"))
+        return
+
+    # Lazy import to avoid circular dependencies
+    from wisp.multi_agent.orchestrator import SwarmOrchestrator
+    from wisp.multi_agent.roles import AgentRole
+    from wisp.colors import success, error, warning, info, dim, accent
+
+    roles = [AgentRole.CODER, AgentRole.REVIEWER, AgentRole.TESTER, AgentRole.RESEARCHER]
+    config = agent.config
+
+    print(info(f"🐝 Starting swarm with {len(roles)} agent(s)..."))
+    print(dim(f"   Goal: {args}"))
+    print(dim(f"   Roles: {', '.join(roles)}"))
+    print()
+
+    orch = SwarmOrchestrator(config, parent_agent=agent)
+    try:
+        result = orch.run(args, roles=roles)
+    except KeyboardInterrupt:
+        print(warning("\n⚠ Interrupted. Stopping all agents..."))
+        orch.stop_all()
+        raise
+
+    # Synthesize a proper final answer using the agent's LLM
+    print()
+    print(info("🐝 Synthesizing final answer..."))
+    final = _swarm_synthesize(agent, result)
+    print()
+    print(success("✓ Swarm complete"))
+    print("─" * 60)
+    print(final)
+    print("─" * 60)
+    print()
+    print(dim(f"⏱  Total time: {result.elapsed_seconds:.1f}s"))
+    print(dim(f"📁 Files changed: {', '.join(result.files_changed) if result.files_changed else 'none'}"))
+    if not result.success:
+        print(warning("⚠ Some tasks failed. Review the output above."))
+
+
+def _swarm_synthesize(agent, result) -> str:
+    """Use the LLM to produce a coherent final answer from swarm results."""
+    agent_results_text = ""
+    for r in result.agent_results:
+        icon = "PASS" if r.success else "FAIL"
+        agent_results_text += f"\n### {icon}: {r.task_id}\n{r.output[:3000]}\n"
+        if r.error:
+            agent_results_text += f"\n**Error:** {r.error}\n"
+
+    prompt = f"""A multi-agent swarm just completed a task on my behalf. You are the conductor giving me the final briefing.
+
+## Goal
+{result.goal}
+
+## Plan
+{result.plan}
+
+## Agent Results
+{agent_results_text}
+
+## Files Changed
+{', '.join(result.files_changed) if result.files_changed else 'none'}
+
+---
+
+Please give me a clear, concise final answer that:
+1. Summarizes what was accomplished
+2. Highlights key decisions or changes made
+3. Mentions any files that were modified
+4. Flags any issues or failures
+5. Suggests next steps if applicable
+
+Write this as a direct report to me, the user. No preamble — just the synthesis.
+"""
+    try:
+        system = agent._build_system_prompt()
+        # Temporarily add synthesis prompt to messages
+        saved_count = len(agent.messages)
+        agent.messages.append({"role": "user", "content": prompt})
+        try:
+            response = agent._run_turn_streaming(system)
+        finally:
+            # Restore messages to pre-synthesis state
+            del agent.messages[saved_count:]
+        content = response.get("message", {}).get("content", "") if isinstance(response.get("message"), dict) else ""
+        return content.strip() or result.final_output
+    except Exception:
+        return result.final_output
+
+
 @register("new", "Start a new session", aliases=(), usage="/new")
 def cmd_new(agent, args: str):
     from wisp.session import Session

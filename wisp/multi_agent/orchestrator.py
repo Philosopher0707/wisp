@@ -126,8 +126,12 @@ class SwarmOrchestrator:
 
     # ── Planning ───────────────────────────────────────────────────────
 
-    def _plan(self, goal: str) -> tuple[str, list[dict]]:
+    def _plan(self, goal: str, available_roles: Optional[list[str]] = None) -> tuple[str, list[dict]]:
         """Use the Planner role (or the parent agent) to break down a goal.
+
+        Args:
+            goal: High-level task description.
+            available_roles: Which roles are available (only tasks for these roles).
 
         Returns:
             (plan_text, subtasks) where subtasks is a list of dicts with
@@ -135,19 +139,32 @@ class SwarmOrchestrator:
         """
         planner = self.factory.create(AgentRole.PLANNER, "planner-" + uuid.uuid4().hex[:6])
 
+        if available_roles is None:
+            available_roles = [AgentRole.CODER, AgentRole.REVIEWER, AgentRole.TESTER, AgentRole.RESEARCHER]
+
+        role_descriptions = {
+            AgentRole.CODER: "writes and edits code",
+            AgentRole.REVIEWER: "reviews code for correctness and style",
+            AgentRole.TESTER: "writes and runs tests",
+            AgentRole.RESEARCHER: "investigates problems and gathers context",
+            AgentRole.DEBUGGER: "diagnoses and fixes bugs",
+            AgentRole.PLANNER: "breaks down goals into structured plans",
+        }
+
+        role_list = "\n".join(
+            f"- {r}: {role_descriptions.get(r, 'assists with tasks')}"
+            for r in available_roles
+        )
+
         prompt = f"""Break down the following goal into subtasks for a multi-agent swarm.
 
 Goal: {goal}
 
-Available roles and their responsibilities:
-- coder: writes and edits code
-- reviewer: reviews code for correctness and style
-- tester: writes and runs tests
-- researcher: investigates problems and gathers context
-- debugger: diagnoses and fixes bugs
+IMPORTANT: Only assign tasks to these available roles:
+{role_list}
 
 For each subtask, provide:
-1. role: which role should handle it
+1. role: which role should handle it (MUST be one of: {', '.join(available_roles)})
 2. description: what to do
 3. expected_output: what the deliverable is
 4. dependencies: list of task indices that must finish first (empty for parallel tasks)
@@ -207,21 +224,21 @@ Respond in JSON with a "plan" string and a "subtasks" array.
 
         Args:
             goal: High-level task description.
-            roles: Which roles to spawn (default: coder, reviewer, tester).
+            roles: Which roles to spawn (default: coder, reviewer, tester, researcher).
 
         Returns:
             SwarmResult with plan, individual results, and synthesized output.
         """
         start = time.monotonic()
         if roles is None:
-            roles = [AgentRole.CODER, AgentRole.REVIEWER, AgentRole.TESTER]
+            roles = [AgentRole.CODER, AgentRole.REVIEWER, AgentRole.TESTER, AgentRole.RESEARCHER]
 
         # Spawn agents
         agent_ids = self.spawn_agents(roles)
         logger.info("Swarm spawned %d agents for goal: %s", len(agent_ids), goal)
 
-        # Plan
-        plan, subtasks = self._plan(goal)
+        # Plan — only suggest tasks for roles we actually have
+        plan, subtasks = self._plan(goal, roles)
         logger.info("Plan generated with %d subtasks", len(subtasks))
 
         # Execute subtasks with dependency resolution
@@ -428,20 +445,45 @@ Respond in JSON with a "plan" string and a "subtasks" array.
 
     def _synthesize(self, goal: str, plan: str, results: list[TaskResult]) -> str:
         """Combine all agent outputs into a coherent final response."""
-        lines = [f"# Swarm Result: {goal}", "", "## Plan", plan, "", "## Agent Results"]
-        for r in results:
-            status = "✅" if r.success else "❌"
-            lines.append(f"\n### {status} {r.task_id}")
-            lines.append(f"- Time: {r.elapsed_seconds:.1f}s")
-            lines.append(f"- Iterations: {r.iterations_used}")
-            if r.files_changed:
-                lines.append(f"- Files: {', '.join(r.files_changed)}")
+        passed = sum(1 for r in results if r.success)
+        failed = sum(1 for r in results if not r.success)
+        all_files = sorted(set(
+            f for r in results for f in r.files_changed
+        ))
+
+        lines = [
+            f"## Swarm Result: {goal}",
+            "",
+            f"**{passed}/{len(results)} tasks passed**"
+            + (f", {failed} failed" if failed else ""),
+            "",
+        ]
+
+        if all_files:
+            lines.append(f"**Files changed:** {', '.join(all_files)}")
             lines.append("")
-            lines.append(r.output[:2000])  # Truncate long outputs
-            if len(r.output) > 2000:
-                lines.append("... [truncated]")
+
+        lines.append("### Plan")
+        lines.append(plan)
+        lines.append("")
+
+        for r in results:
+            status = "PASS" if r.success else "FAIL"
+            lines.append(f"### {status}: {r.task_id}")
+            lines.append(f"Time: {r.elapsed_seconds:.1f}s")
+            if r.files_changed:
+                lines.append(f"Files: {', '.join(r.files_changed)}")
+            lines.append("")
+            if r.output:
+                lines.append(r.output[:3000])
+                if len(r.output) > 3000:
+                    lines.append("... [truncated]")
             if r.error:
-                lines.append(f"\n**Error:** {r.error}")
+                lines.append(f"**Error:** {r.error}")
+            lines.append("")
+
+        total_time = sum(r.elapsed_seconds for r in results)
+        lines.append(f"**Total agent time:** {total_time:.1f}s")
 
         return "\n".join(lines)
 
