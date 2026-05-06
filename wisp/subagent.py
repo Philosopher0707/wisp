@@ -327,13 +327,21 @@ class SubagentRunner:
     def _filter_tools(self, contract: SubagentContract):
         """Return full tool schemas or a filtered subset.
 
-        Always removes spawn_subagent since subagents cannot spawn subagents.
+        Always removes spawn_subagent (no nesting) and LSP tools
+        (subagents don't manage language server processes).
         """
+        _SUBAGENT_BLOCKED = frozenset({
+            "spawn_subagent",
+            "lsp_definition",
+            "lsp_references",
+            "lsp_hover",
+            "lsp_symbols",
+        })
         from wisp.tools import TOOL_SCHEMAS
         if contract.tools == ["all"]:
-            return [t for t in TOOL_SCHEMAS if t["function"]["name"] != "spawn_subagent"]
+            return [t for t in TOOL_SCHEMAS if t["function"]["name"] not in _SUBAGENT_BLOCKED]
         allowed = set(contract.tools)
-        return [t for t in TOOL_SCHEMAS if t["function"]["name"] in allowed and t["function"]["name"] != "spawn_subagent"]
+        return [t for t in TOOL_SCHEMAS if t["function"]["name"] in allowed and t["function"]["name"] not in _SUBAGENT_BLOCKED]
 
     def _extract_partial_output_from_snapshot(self, messages: list[dict]) -> str:
         """Best-effort extraction from a snapshot of messages (thread-safe)."""

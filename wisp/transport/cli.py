@@ -436,6 +436,7 @@ class CLITransport:
         finally:
             self.core._save_session_summary()
             self.core.mcp.shutdown()
+            self.core.lsp.shutdown_all()
             _restore_signal_handler()
 
     # ── Internal ─────────────────────────────────────────────────────

@@ -162,6 +162,7 @@ class WispAgent(WispAgentCore):
         finally:
             self._save_session_summary()
             self.mcp.shutdown()
+            self.lsp.shutdown_all()
             _cli_restore_signal()
 
     def repl(self, skill_name: Optional[str] = None, session_id: Optional[str] = None):

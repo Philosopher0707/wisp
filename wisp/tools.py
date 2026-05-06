@@ -39,6 +39,16 @@ def set_collaboration_tools(file_lock=None, change_tracker=None):
     _change_tracker = change_tracker
 
 
+# LSP manager reference (set by agent)
+_lsp_manager = None
+
+
+def set_lsp_manager(manager):
+    """Set the LSP manager for LSP tool functions."""
+    global _lsp_manager
+    _lsp_manager = manager
+
+
 class _TextExtractor(HTMLParser):
     """HTML text extractor for web_fetch tool. Defined at module level to avoid redefinition on every call."""
 
@@ -833,6 +843,78 @@ def tool_lsp_diagnostics(path: str, workspace: str = ".") -> str:
         return "Error: diagnostics timed out."
 
 
+def tool_lsp_definition(path: str, workspace: str = ".", line: int = 1, character: int = 1) -> str:
+    """Go to definition of a symbol at the given line/character (1-based)."""
+    from wisp.lsp.client import _format_locations
+    if _lsp_manager is None:
+        return "Error: LSP not available (no language servers configured)."
+    full_path = _resolve_path(path, workspace)
+    if not full_path.exists():
+        return f"Error: file not found: {path}"
+    server = _lsp_manager.get_server_safe(str(full_path))
+    if server is None:
+        return f"No LSP server available for {full_path.suffix} files."
+    try:
+        locations = server.get_definition(str(full_path), line - 1, character - 1)
+        return _format_locations(locations, workspace, max_items=5)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def tool_lsp_references(path: str, workspace: str = ".", line: int = 1, character: int = 1) -> str:
+    """Find all references to the symbol at the given line/character (1-based)."""
+    from wisp.lsp.client import _format_locations
+    if _lsp_manager is None:
+        return "Error: LSP not available (no language servers configured)."
+    full_path = _resolve_path(path, workspace)
+    if not full_path.exists():
+        return f"Error: file not found: {path}"
+    server = _lsp_manager.get_server_safe(str(full_path))
+    if server is None:
+        return f"No LSP server available for {full_path.suffix} files."
+    try:
+        locations = server.get_references(str(full_path), line - 1, character - 1)
+        return _format_locations(locations, workspace, max_items=50)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def tool_lsp_hover(path: str, workspace: str = ".", line: int = 1, character: int = 1) -> str:
+    """Get hover info (type, docstring) for the symbol at the given line/character (1-based)."""
+    from wisp.lsp.client import _format_hover
+    if _lsp_manager is None:
+        return "Error: LSP not available (no language servers configured)."
+    full_path = _resolve_path(path, workspace)
+    if not full_path.exists():
+        return f"Error: file not found: {path}"
+    server = _lsp_manager.get_server_safe(str(full_path))
+    if server is None:
+        return f"No LSP server available for {full_path.suffix} files."
+    try:
+        result = server.get_hover(str(full_path), line - 1, character - 1)
+        return _format_hover(result)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def tool_lsp_symbols(path: str, workspace: str = ".") -> str:
+    """List all symbols (functions, classes, etc.) in a file."""
+    from wisp.lsp.client import _format_symbols
+    if _lsp_manager is None:
+        return "Error: LSP not available (no language servers configured)."
+    full_path = _resolve_path(path, workspace)
+    if not full_path.exists():
+        return f"Error: file not found: {path}"
+    server = _lsp_manager.get_server_safe(str(full_path))
+    if server is None:
+        return f"No LSP server available for {full_path.suffix} files."
+    try:
+        symbols = server.get_symbols(str(full_path))
+        return _format_symbols(symbols)
+    except Exception as e:
+        return f"Error: {e}"
+
+
 def tool_diagnose(error_output: str, workspace: str = ".") -> str:
     """Diagnose an error from test output, traceback, or command output.
 
@@ -1233,6 +1315,68 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "lsp_definition",
+            "description": "Go to definition of a symbol at the given line and character (1-based). Returns file:line:char with context.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path to query"},
+                    "line": {"type": "integer", "description": "Line number (1-based)", "default": 1},
+                    "character": {"type": "integer", "description": "Character column (1-based)", "default": 1},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "lsp_references",
+            "description": "Find all references to a symbol at the given line and character (1-based).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path to query"},
+                    "line": {"type": "integer", "description": "Line number (1-based)", "default": 1},
+                    "character": {"type": "integer", "description": "Character column (1-based)", "default": 1},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "lsp_hover",
+            "description": "Get hover info (type signature, docstring) for the symbol at the given line and character (1-based).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path to query"},
+                    "line": {"type": "integer", "description": "Line number (1-based)", "default": 1},
+                    "character": {"type": "integer", "description": "Character column (1-based)", "default": 1},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "lsp_symbols",
+            "description": "List all symbols (functions, classes, methods, etc.) in a file as a hierarchical outline.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path to analyze"},
+                },
+                "required": ["path"],
+            },
+        },
+    },
 ]
 
 # Map tool names to their implementations
@@ -1257,6 +1401,10 @@ TOOL_IMPLS = {
     "git_push": tool_git_push,
     "gh_pr_create": tool_gh_pr_create,
     "lsp_diagnostics": tool_lsp_diagnostics,
+    "lsp_definition": tool_lsp_definition,
+    "lsp_references": tool_lsp_references,
+    "lsp_hover": tool_lsp_hover,
+    "lsp_symbols": tool_lsp_symbols,
 }
 
 
@@ -1329,6 +1477,17 @@ def _build_tool_metadata(name: str, args: dict, result: str) -> dict:
         meta["message"] = (args.get("message", "") or "")[:80]
 
     elif name == "lsp_diagnostics":
+        meta["path"] = args.get("path", "")
+    elif name == "lsp_definition":
+        meta["path"] = args.get("path", "")
+        meta["line"] = args.get("line", 1)
+    elif name == "lsp_references":
+        meta["path"] = args.get("path", "")
+        meta["line"] = args.get("line", 1)
+    elif name == "lsp_hover":
+        meta["path"] = args.get("path", "")
+        meta["line"] = args.get("line", 1)
+    elif name == "lsp_symbols":
         meta["path"] = args.get("path", "")
 
     return meta

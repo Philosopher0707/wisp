@@ -82,6 +82,10 @@ You have access to tools that let you read, write, and edit files, run bash comm
 - git_push: Push current branch to remote
 - gh_pr_create: Create a GitHub pull request (requires gh CLI)
 - lsp_diagnostics: Run language server diagnostics on a file
+- lsp_definition: Go to definition of a symbol (file:line:character → location)
+- lsp_references: Find all references to a symbol
+- lsp_hover: Get type info and docstring for a symbol
+- lsp_symbols: List all symbols in a file as an outline tree
 - diagnose: Diagnose errors from test output, tracebacks, or command failures
 - plan_task: Create a structured plan with subtasks and dependencies
 - mark_step_done: Mark a plan task as completed
@@ -159,6 +163,8 @@ class WispAgentCore:
         self._allowed_tools: Optional[set[str]] = None
         self.mcp = MCPManager(self.config.workspace or ".")
         self._mcp_initialized = False
+        from wisp.lsp.manager import LSPManager
+        self.lsp = LSPManager(self.config.workspace or ".")
         from wisp.agent_memory import AgentMemory
         self.agent_memory = AgentMemory()
         self._recent_summaries = self.agent_memory.load_recent(
@@ -171,6 +177,7 @@ class WispAgentCore:
         self.change_tracker = ChangeTracker(self.config.workspace or ".", self.file_lock.agent_id)
         from wisp import tools as tools_module
         tools_module.set_collaboration_tools(self.file_lock, self.change_tracker)
+        tools_module.set_lsp_manager(self.lsp)
 
     # ── Message helpers ──────────────────────────────────────────────
 
