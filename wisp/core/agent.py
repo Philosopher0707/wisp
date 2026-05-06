@@ -61,6 +61,8 @@ You have access to tools that let you read, write, and edit files, run bash comm
 5. If a command fails, diagnose the error and try a different approach.
 6. Keep explanations concise but clear. Show the user what you're doing.
 7. When you're done, summarize what was accomplished.
+8. Before declaring a task done, run lsp_diagnostics on changed files to catch errors.
+9. For git workflow: check status → branch → commit → push → create PR. Always verify each step.
 
 ## Tools available
 - read_file: Read file contents (supports offset/limit for large files)
@@ -75,6 +77,11 @@ You have access to tools that let you read, write, and edit files, run bash comm
 - spawn_subagent: Delegate a scoped task to a child agent
 - git_status: Show git status (branch, uncommitted files, recent commits)
 - git_diff: Show git diff for files or entire workspace
+- git_branch: List/create/switch git branches
+- git_commit: Stage files and commit with a message
+- git_push: Push current branch to remote
+- gh_pr_create: Create a GitHub pull request (requires gh CLI)
+- lsp_diagnostics: Run language server diagnostics on a file
 - diagnose: Diagnose errors from test output, tracebacks, or command failures
 - plan_task: Create a structured plan with subtasks and dependencies
 - mark_step_done: Mark a plan task as completed

@@ -138,6 +138,10 @@ def check_dangerous_command(command: str) -> Optional[str]:
     if re.search(r'\bdocker\s+system\s+prune\b', cmd_lower):
         return "docker system prune"
 
+    # git push --force
+    if re.search(r'\bgit\s+push\b.*(-f|--force)\b', cmd_lower):
+        return "force push (rewrites remote history)"
+
     # shutdown/reboot
     if re.search(r'\b(shutdown|reboot|halt|poweroff|init\s+0)\b', cmd_lower):
         return "system shutdown/reboot"
@@ -744,6 +748,91 @@ def tool_git_diff(path: str = "", staged: bool = False, workspace: str = ".") ->
     return result
 
 
+def tool_git_branch(action: str, name: str = "", workspace: str = ".") -> str:
+    """List branches, create a new branch, or switch to an existing one."""
+    from wisp.git_context import list_branches, create_branch, switch_branch
+    if action == "list":
+        code, out, err = list_branches(workspace)
+    elif action == "create":
+        if not name:
+            return "Error: branch name required for 'create'"
+        code, out, err = create_branch(name, workspace)
+    elif action == "switch":
+        if not name:
+            return "Error: branch name required for 'switch'"
+        code, out, err = switch_branch(name, workspace)
+    else:
+        return f"Error: unknown action '{action}'. Use: list, create, switch."
+    if code != 0:
+        return f"Error: {err or out}"
+    return out or "OK"
+
+
+def tool_git_commit(message: str, files: str = "", workspace: str = ".") -> str:
+    """Stage files and commit with a message."""
+    from wisp.git_context import commit
+    file_list = [f.strip() for f in files.split(",") if f.strip()] if files else ["."]
+    code, out, err = commit(file_list, message, workspace)
+    if code != 0:
+        return f"Error: {err or out}"
+    return out or "✓ Committed"
+
+
+def tool_git_push(set_upstream: bool = False, workspace: str = ".") -> str:
+    """Push current branch to remote."""
+    from wisp.git_context import push
+    code, out, err = push(workspace, set_upstream=set_upstream)
+    if code != 0:
+        return f"Error: {err or out}"
+    return out or "✓ Pushed"
+
+
+def tool_gh_pr_create(title: str, body: str = "", workspace: str = ".") -> str:
+    """Create a GitHub pull request using gh CLI."""
+    from wisp.git_context import create_pr
+    code, out, err = create_pr(title, body, workspace)
+    if code != 0:
+        return f"Error: {err or out}\n(Is 'gh' CLI installed and authenticated?)"
+    return out or "✓ PR created"
+
+
+def tool_lsp_diagnostics(path: str, workspace: str = ".") -> str:
+    """Run language server diagnostics on a file. Returns linter errors/warnings."""
+    full_path = _resolve_path(path, workspace)
+    if not full_path.exists():
+        return f"Error: file not found: {path}"
+    ext = full_path.suffix.lower()
+
+    linters = {
+        ".py": ["python3", "-m", "py_compile"],
+        ".ts": ["npx", "tsc", "--noEmit"],
+        ".tsx": ["npx", "tsc", "--noEmit"],
+        ".js": ["npx", "eslint"],
+        ".jsx": ["npx", "eslint"],
+        ".rs": ["cargo", "check"],
+        ".go": ["go", "vet"],
+    }
+    cmd = linters.get(ext)
+    if not cmd:
+        return f"No diagnostics available for {ext} files."
+
+    import subprocess
+    try:
+        r = subprocess.run(cmd + [str(full_path)], capture_output=True, text=True,
+                          timeout=60, cwd=workspace)
+        output = r.stdout + r.stderr
+        if not output.strip():
+            return "✓ No issues found."
+        if len(output) > 5000:
+            output = output[:5000] + "\n... [output truncated]"
+        status = "✓ No errors" if r.returncode == 0 else f"Found issues (exit {r.returncode})"
+        return f"[{status}]\n{output}"
+    except FileNotFoundError:
+        return f"Error: linter not found for {ext}. Install it first."
+    except subprocess.TimeoutExpired:
+        return "Error: diagnostics timed out."
+
+
 def tool_diagnose(error_output: str, workspace: str = ".") -> str:
     """Diagnose an error from test output, traceback, or command output.
 
@@ -1071,6 +1160,79 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_branch",
+            "description": "List branches, create a new branch and switch to it, or switch to an existing branch.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "description": "list, create, or switch"},
+                    "name": {"type": "string", "description": "Branch name (required for create/switch)"},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_commit",
+            "description": "Stage files and commit with a message. Follow conventional commits format (feat:, fix:, refactor:, etc). Always check git_status first.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {"type": "string", "description": "Commit message"},
+                    "files": {"type": "string", "description": "Comma-separated file paths to stage (default: all)"},
+                },
+                "required": ["message"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_push",
+            "description": "Push current branch to remote. Always commit before pushing.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "set_upstream": {"type": "boolean", "description": "Set upstream tracking (-u flag)"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gh_pr_create",
+            "description": "Create a GitHub pull request using gh CLI. Requires gh to be installed and authenticated. Use after committing and pushing.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "PR title (short, descriptive)"},
+                    "body": {"type": "string", "description": "PR description (changes, reason, test plan)"},
+                },
+                "required": ["title"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "lsp_diagnostics",
+            "description": "Run language server diagnostics on a file to find errors and warnings. Supports .py (py_compile), .ts/.tsx (tsc), .js/.jsx (eslint), .rs (cargo check), .go (go vet). Use after writing code to catch errors.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path to check"},
+                },
+                "required": ["path"],
+            },
+        },
+    },
 ]
 
 # Map tool names to their implementations
@@ -1090,6 +1252,11 @@ TOOL_IMPLS = {
     "plan_task": tool_plan_task,
     "mark_step_done": tool_mark_step_done,
     "update_plan": tool_update_plan,
+    "git_branch": tool_git_branch,
+    "git_commit": tool_git_commit,
+    "git_push": tool_git_push,
+    "gh_pr_create": tool_gh_pr_create,
+    "lsp_diagnostics": tool_lsp_diagnostics,
 }
 
 
@@ -1154,6 +1321,15 @@ def _build_tool_metadata(name: str, args: dict, result: str) -> dict:
     elif name == "recall":
         meta["query"] = (args.get("query", "") or "")[:80]
         meta["limit"] = args.get("limit", 10)
+
+    elif name == "git_branch":
+        meta["action"] = args.get("action", "")
+
+    elif name == "git_commit":
+        meta["message"] = (args.get("message", "") or "")[:80]
+
+    elif name == "lsp_diagnostics":
+        meta["path"] = args.get("path", "")
 
     return meta
 

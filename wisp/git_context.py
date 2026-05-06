@@ -33,11 +33,11 @@ class GitState:
     merge_conflict_files: list[str] = field(default_factory=list)
 
 
-def _run_git(args: list[str], cwd: str, timeout: int = 10) -> tuple[int, str, str]:
+def _run_git(args: list[str], cwd: str, timeout: int = 10, command: str = "git") -> tuple[int, str, str]:
     """Run a git command and return (returncode, stdout, stderr)."""
     try:
         result = subprocess.run(
-            ["git"] + args,
+            [command] + args,
             cwd=cwd,
             capture_output=True,
             text=True,
@@ -45,13 +45,13 @@ def _run_git(args: list[str], cwd: str, timeout: int = 10) -> tuple[int, str, st
         )
         return result.returncode, result.stdout, result.stderr
     except FileNotFoundError:
-        logger.debug("git not found in PATH")
-        return 1, "", "git not found"
+        logger.debug("%s not found in PATH", command)
+        return 1, "", f"{command} not found"
     except subprocess.TimeoutExpired:
-        logger.warning("git command timed out: %s", " ".join(args))
+        logger.warning("command timed out: %s", " ".join(args))
         return 1, "", "timeout"
     except Exception as e:
-        logger.warning("git command failed: %s", e)
+        logger.warning("command failed: %s", e)
         return 1, "", str(e)
 
 
@@ -235,3 +235,59 @@ def format_git_status_short(workspace: str) -> str:
         parts.append("clean")
 
     return " ".join(parts)
+
+
+# ── Git workflow operations ──────────────────────────────────────────
+
+
+def list_branches(workspace: str) -> tuple[int, str, str]:
+    """List all branches (local + remote)."""
+    return _run_git(["branch", "-a"], workspace)
+
+
+def create_branch(name: str, workspace: str) -> tuple[int, str, str]:
+    """Create and switch to a new branch."""
+    if not _is_git_repo(workspace):
+        return (1, "", "not a git repository")
+    if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9._/-]*$', name):
+        return (1, "", f"invalid branch name: {name}")
+    return _run_git(["checkout", "-b", name], workspace)
+
+
+def switch_branch(name: str, workspace: str) -> tuple[int, str, str]:
+    """Switch to an existing branch."""
+    if not _is_git_repo(workspace):
+        return (1, "", "not a git repository")
+    return _run_git(["checkout", name], workspace)
+
+
+def commit(files: list[str], message: str, workspace: str) -> tuple[int, str, str]:
+    """Stage given files and commit with message."""
+    if not _is_git_repo(workspace):
+        return (1, "", "not a git repository")
+    if not message.strip():
+        return (1, "", "commit message cannot be empty")
+    code, out, err = _run_git(["add"] + files, workspace)
+    if code != 0:
+        return (code, out, err)
+    return _run_git(["commit", "-m", message], workspace)
+
+
+def push(workspace: str, set_upstream: bool = False, force: bool = False) -> tuple[int, str, str]:
+    """Push current branch to remote. force=True blocked by tools.py guard."""
+    if not _is_git_repo(workspace):
+        return (1, "", "not a git repository")
+    args = ["push"]
+    if set_upstream:
+        args.extend(["-u", "origin", "HEAD"])
+    if force:
+        args.append("--force-with-lease")
+    return _run_git(args, workspace)
+
+
+def create_pr(title: str, body: str, workspace: str) -> tuple[int, str, str]:
+    """Create a GitHub PR using gh CLI."""
+    if not _is_git_repo(workspace):
+        return (1, "", "not a git repository")
+    args = ["pr", "create", "--title", title, "--body", body]
+    return _run_git(args, workspace, command="gh")
