@@ -76,7 +76,7 @@ def cmd_skills(workspace=None):
 
 def cmd_config(set_kv=None, validate=False):
     """View or set configuration."""
-    from wisp.config import load_config, save_config, validate_config, get_schema
+    from wisp.config import load_config, save_config, validate_config, get_schema, _type_name
 
     if set_kv:
         key, value = set_kv.split("=", 1)
@@ -119,7 +119,7 @@ def cmd_config(set_kv=None, validate=False):
     print(dim("Available settings:"))
     for key, info_item in sorted(schema.items()):
         default = info_item["default"]
-        type_name = info_item["type"].__name__ if not isinstance(info_item["type"], tuple) else " or ".join(t.__name__ for t in info_item["type"] if t is not type(None)) + " or None"
+        type_name = _type_name(info_item["type"])
         print(f"  {accent(key):20s}  ({type_name:8s})  default: {default!r}")
     print()
     print(dim("Set a value:  wisp config --set key=value"))

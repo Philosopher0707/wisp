@@ -356,7 +356,11 @@ Respond in JSON with a "plan" string and a "subtasks" array.
                 timeout_seconds=assignment.timeout_seconds,
             )
             if asyncio.iscoroutine(task_result):
-                task_result = asyncio.run(task_result)
+                loop = asyncio.new_event_loop()
+                try:
+                    task_result = loop.run_until_complete(task_result)
+                finally:
+                    loop.close()
             elapsed = time.monotonic() - start
             content = task_result.get("output", "")
 

@@ -196,13 +196,11 @@ def call_tool(server: MCPServer, tool_name: str, arguments: dict[str, Any]) -> s
 
 def _connect_stdio(server: MCPServer):
     """Connect to a stdio-based MCP server by spawning its process."""
-    env = {**server.config.env}
-    if env:
+    env = None
+    if server.config.env:
         full_env = dict(subprocess.os.environ)
-        full_env.update(env)
+        full_env.update(server.config.env)
         env = full_env
-    else:
-        env = None
 
     server.process = subprocess.Popen(
         [server.config.command] + server.config.args,

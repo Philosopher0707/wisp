@@ -320,6 +320,7 @@ class CLITransport:
         self.show_thinking = core.config.show_thinking
         self.auto_approve = core.config.auto_approve
         self._interrupted = False
+        self._pending_approval = None
         _transport_instances.add(self)
 
     # ── Public API ─────────────────────────────────────────────────
@@ -455,6 +456,7 @@ class CLITransport:
             self.core.messages.pop()
 
         _in_thinking = False
+        _content_started = False
         async for event in self.core._arun(prompt, system=system):
             if self._interrupted:
                 break
@@ -463,6 +465,8 @@ class CLITransport:
 
             # Real-time streaming for thinking/content tokens
             if event.type == TYPE_THINKING:
+                if _content_started:
+                    continue
                 if not _in_thinking:
                     _in_thinking = True
                     if show_thinking:
@@ -472,12 +476,19 @@ class CLITransport:
                 if show_thinking:
                     print(event.text, end="", flush=True)
             elif event.type == TYPE_CONTENT:
+                _content_started = True
                 if _in_thinking:
                     _in_thinking = False
                     if show_thinking:
                         print()
                     print()
                 print(event.text, end="", flush=True)
+            elif event.type == TYPE_TOOL_CALL:
+                # Reset content tracking so thinking is allowed after tool calls
+                _content_started = False
+                rendered = _render_event(event, show_thinking)
+                if rendered is not None:
+                    print(rendered, end="\n", flush=True)
             else:
                 rendered = _render_event(event, show_thinking)
                 if rendered is not None:
@@ -487,9 +498,49 @@ class CLITransport:
             if event.type == TYPE_APPROVAL_REQUEST:
                 func_name = event.data.get("name", "")
                 reason = event.data.get("reason", "")
+                func_args = event.data.get("arguments", {})
                 approved = _prompt_dangerous(func_name, reason)
                 if approved:
-                    print(info("  ℹ Approval not yet wired for re-execution in SDK mode."))
+                    # Pop the blocked tool-result that core will append next
+                    _last_idx = len(self.core.messages)
+                    # Wait for the corresponding tool_result (blocked) event to arrive,
+                    # then replace it with actual tool execution.
+                    self._pending_approval = (func_name, func_args, workspace)
+                else:
+                    self._pending_approval = None
 
-            if event.type == TYPE_DONE:
-                print()
+            # Re-execute approved tool: replace blocked tool_result with real execution
+            if event.type == TYPE_TOOL_RESULT:
+                pending = getattr(self, "_pending_approval", None)
+                if pending is not None:
+                    self._pending_approval = None
+                    p_func_name, p_func_args, p_workspace = pending
+                    if event.data.get("name") == p_func_name and "Blocked" in event.data.get("result", ""):
+                        # Remove the blocked message from core
+                        if self.core.messages and self.core.messages[-1].get("role") == "tool":
+                            m = self.core.messages[-1]
+                            if m.get("name") == p_func_name and "Blocked" in str(m.get("content", "")):
+                                self.core.messages.pop()
+                        # Execute the tool for real
+                        from wisp.tools import execute_tool
+                        import time as _time
+                        _start = _time.monotonic()
+                        try:
+                            _result = execute_tool(p_func_name, p_func_args, p_workspace, max_data_chars=8000, file_lock=self.core.file_lock)
+                        except Exception as e:
+                            _result = f"Error: {e}"
+                        _dur = (_time.monotonic() - _start) * 1000
+                        if isinstance(_result, str) and _result.startswith("{"):
+                            try:
+                                import json as _json
+                                _parsed = _json.loads(_result)
+                                _result = _parsed.get("data", _result)
+                            except Exception:
+                                pass
+                        self.core.messages.append({
+                            "role": "tool",
+                            "content": str(_result),
+                            "name": p_func_name,
+                        })
+                        preview = str(_result)[:200].replace("\n", " ")
+                        print(dim(f"     → {preview}"))

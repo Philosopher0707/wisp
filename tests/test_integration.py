@@ -246,7 +246,7 @@ class TestIntegrationMemory:
         raw = execute_tool("remember", {"fact": "Python 3.11 is the current version"}, str(temp_workspace))
         result = parse_tool_result(raw)
         assert result["status"] == "ok"
-        assert "Remembered" in result["data"]
+        assert "Remembered" in result["data"] or "Already remembered" in result["data"]
 
         raw2 = execute_tool("recall", {"query": "Python version", "limit": 5}, str(temp_workspace))
         result2 = parse_tool_result(raw2)

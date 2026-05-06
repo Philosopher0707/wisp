@@ -96,14 +96,6 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Automatically compact sessions when they grow too long",
         "env_var": "WISP_AUTO_COMPACT",
     },
-    "compact_threshold_msgs": {
-        "type": int,
-        "default": 40,
-        "min": 4,
-        "max": 500,
-        "description": "Message count threshold to trigger auto-compaction",
-        "env_var": "WISP_COMPACT_THRESHOLD_MSGS",
-    },
     "compact_threshold_tokens": {
         "type": int,
         "default": 75,
@@ -265,8 +257,6 @@ class WispConfig:
         self.chars_per_token: int = int(get_setting("chars_per_token", "4"))
         # Auto-compaction settings
         self.auto_compact: bool = str(get_setting("auto_compact", "true")).lower() == "true"
-        # compact_threshold_msgs is deprecated; compaction now triggers purely on token usage
-        self.compact_threshold_msgs: int = int(get_setting("compact_threshold_msgs", "40"))
         self.compact_threshold_tokens: int = int(get_setting("compact_threshold_tokens", "75"))
         self.compact_keep_recent: int = int(get_setting("compact_keep_recent", "6"))
 

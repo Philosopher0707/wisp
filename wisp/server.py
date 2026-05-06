@@ -106,6 +106,7 @@ class Connection:
         self.client_id = client_id
         self.agent_task: Optional[asyncio.Task] = None
         self.transport: Optional[ServerTransport] = None
+        self._run_lock = asyncio.Lock()
 
     async def send(self, msg: dict):
         try:
@@ -178,7 +179,10 @@ async def list_models():
 async def list_sessions():
     sm = SessionManager()
     sessions = sm.list_sessions()
-    return {"sessions": [s.to_dict() for s in sessions]}
+    # list_sessions returns list[dict]; strip non-serializable keys
+    for s in sessions:
+        s.pop("file", None)
+    return {"sessions": sessions}
 
 
 @app.get("/api/files", dependencies=[Depends(verify_api_key)])
@@ -314,38 +318,40 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(...)):
                     await conn.send({"type": "error", "message": "Empty prompt"})
                     continue
 
-                # Stop any existing agent run
-                if conn.agent_task and not conn.agent_task.done():
-                    if conn.transport:
-                        conn.transport.interrupt()
-                    conn.agent_task.cancel()
-                    try:
-                        await asyncio.wait_for(conn.agent_task, timeout=2)
-                    except (asyncio.TimeoutError, asyncio.CancelledError):
-                        pass
+                # Serialize prompt handling per connection to prevent concurrent agents
+                async with conn._run_lock:
+                    # Stop any existing agent run
+                    if conn.agent_task and not conn.agent_task.done():
+                        if conn.transport:
+                            conn.transport.interrupt()
+                        conn.agent_task.cancel()
+                        try:
+                            await asyncio.wait_for(conn.agent_task, timeout=2)
+                        except (asyncio.TimeoutError, asyncio.CancelledError):
+                            pass
 
-                config = WispConfig()
-                if msg.get("model"):
-                    config.model = msg["model"]
-                config.workspace = str(WORKSPACE_ROOT)
-                config.auto_approve = False
-                config.show_thinking = msg.get("show_thinking", True)
+                    config = WispConfig()
+                    if msg.get("model"):
+                        config.model = msg["model"]
+                    config.workspace = str(WORKSPACE_ROOT)
+                    config.auto_approve = False
+                    config.show_thinking = msg.get("show_thinking", True)
 
-                core = WispAgentCore(config=config)
-                conn.transport = ServerTransport(core, conn.send)
-                session_id = msg.get("session_id")
+                    core = WispAgentCore(config=config)
+                    conn.transport = ServerTransport(core, conn.send)
+                    session_id = msg.get("session_id")
 
-                # Run agent as async task
-                async def _run():
-                    try:
-                        await conn.transport.run(prompt)
-                    except Exception as e:
-                        logger.error("Agent error for %s: %s", client_id, e)
-                        await conn.send({"type": "error", "message": str(e)})
-                    finally:
-                        await conn.send({"type": "complete", "session_id": session_id or ""})
+                    # Run agent as async task
+                    async def _run():
+                        try:
+                            await conn.transport.run(prompt)
+                        except Exception as e:
+                            logger.error("Agent error for %s: %s", client_id, e)
+                            await conn.send({"type": "error", "message": str(e)})
+                        finally:
+                            await conn.send({"type": "complete", "session_id": session_id or ""})
 
-                conn.agent_task = asyncio.create_task(_run())
+                    conn.agent_task = asyncio.create_task(_run())
 
             elif msg_type == "tool_approval":
                 call_id = msg.get("id")

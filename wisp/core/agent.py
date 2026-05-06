@@ -13,6 +13,7 @@ import logging
 import re
 import time
 import uuid
+from pathlib import Path
 from typing import AsyncIterator, Callable, Optional
 
 from wisp.config import WispConfig
@@ -72,6 +73,12 @@ You have access to tools that let you read, write, and edit files, run bash comm
 - remember: Store a fact in cross-session memory (preferences, decisions)
 - recall: Search cross-session memory and past summaries for relevant facts
 - spawn_subagent: Delegate a scoped task to a child agent
+- git_status: Show git status (branch, uncommitted files, recent commits)
+- git_diff: Show git diff for files or entire workspace
+- diagnose: Diagnose errors from test output, tracebacks, or command failures
+- plan_task: Create a structured plan with subtasks and dependencies
+- mark_step_done: Mark a plan task as completed
+- update_plan: Update a plan task's status (pending, in_progress, done, skipped)
 """
 
 
@@ -295,7 +302,9 @@ class WispAgentCore:
         if cached is not None:
             return cached
 
+        ws_abs = Path(ws).resolve()
         system = DEFAULT_SYSTEM
+        system += f"\n\n## Workspace\nYou are working in: {ws_abs}"
         if hasattr(self, "_role_system_extra") and self._role_system_extra:
             system += f"\n\n{self._role_system_extra}"
 
@@ -307,10 +316,14 @@ class WispAgentCore:
         if ctx_block:
             system += f"\n\n{ctx_block}"
 
-        if is_tree_sitter_available():
-            code_index = build_ts_index(ws)
-        else:
-            code_index = build_regex_index(ws)
+        if not hasattr(self, "_code_index_cache"):
+            self._code_index_cache = {}
+        if ws not in self._code_index_cache:
+            if is_tree_sitter_available():
+                self._code_index_cache[ws] = build_ts_index(ws)
+            else:
+                self._code_index_cache[ws] = build_regex_index(ws)
+        code_index = self._code_index_cache[ws]
         index_summary = format_index_summary(code_index)
         if index_summary:
             system += f"\n\n{index_summary}"
@@ -359,6 +372,8 @@ class WispAgentCore:
     def _invalidate_system_prompt_cache(self):
         if hasattr(self, "_system_prompt_cache"):
             self._system_prompt_cache.clear()
+        if hasattr(self, "_code_index_cache"):
+            self._code_index_cache.clear()
 
     # ── Tool schemas ─────────────────────────────────────────────────
 
@@ -637,10 +652,17 @@ class WispAgentCore:
                 # In SDK mode, dangerous commands are blocked unless explicitly approved
                 # by the transport layer. We yield an approval_request and skip.
                 yield approval_request(func_name, func_args, reason=danger_reason)
+                blocked_result = f"[Blocked: dangerous command — {danger_reason}]"
                 yield tool_result_event(
                     func_name,
-                    f"[Blocked: dangerous command — {danger_reason}]",
+                    blocked_result,
                 )
+                self.messages.append({
+                    "role": "tool",
+                    "content": blocked_result,
+                    "name": func_name,
+                    **({"tool_call_id": tc.get("id")} if tc.get("id") else {}),
+                })
                 continue
 
             # Execute tool
@@ -668,6 +690,12 @@ class WispAgentCore:
                 self._invalidate_system_prompt_cache()
 
             yield tool_result_event(func_name, result, duration_ms=duration_ms)
+            self.messages.append({
+                "role": "tool",
+                "content": str(result),
+                "name": func_name,
+                **({"tool_call_id": tc.get("id")} if tc.get("id") else {}),
+            })
 
     def _spawn_subagent(self, args: dict, workspace: str) -> str:
         from wisp.subagent import SubagentRunner, SubagentContract
@@ -701,7 +729,7 @@ class WispAgentCore:
         Returns a dict with ``success`` (bool) and ``output`` (str) keys.
         """
         self._add_message("user", task_description)
-        system = self._build_system_prompt(workspace)
+        system = self._build_system_prompt(workspace=workspace)
         self._trim_context_if_needed(system)
 
         start = time.monotonic()

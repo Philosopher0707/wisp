@@ -9,12 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import shutil
-import signal
-import sys
-import uuid
-import weakref
 from typing import Optional
 
 # Re-export helpers from transport layer for backward compatibility
@@ -26,6 +20,8 @@ from wisp.transport.cli import (
     _input_line,
     _print_separator,
     _args_preview,
+    _install_signal_handler as _cli_install_signal,
+    _restore_signal_handler as _cli_restore_signal,
 )
 
 # Core logic (pure, no I/O)
@@ -43,36 +39,6 @@ from wisp.skills import discover_skills, find_skill
 from wisp.tools import execute_tool, ToolError
 
 logger = logging.getLogger(__name__)
-
-# ── Signal handling (kept here for backward compat) ──────────────────
-
-_agent_instances: weakref.WeakSet = weakref.WeakSet()
-_old_sigint_handler = None
-
-
-def _handle_sigint(signum, frame):
-    """Mark interruption on all live agent instances so loops exit gracefully."""
-    for inst in _agent_instances:
-        inst._interrupted = True
-    print(error("\n\n⏹  Interrupted. Finishing current step... (Ctrl+C again to force quit)"))
-    signal.signal(signal.SIGINT, signal.default_int_handler)
-
-
-def _install_signal_handler():
-    """Register interrupt handler and reset interrupt state on all instances."""
-    global _old_sigint_handler
-    for inst in _agent_instances:
-        inst._interrupted = False
-    _old_sigint_handler = signal.signal(signal.SIGINT, _handle_sigint)
-
-
-def _restore_signal_handler():
-    """Restore the previous SIGINT handler."""
-    global _old_sigint_handler
-    if _old_sigint_handler is not None:
-        signal.signal(signal.SIGINT, _old_sigint_handler)
-        _old_sigint_handler = None
-
 
 # ── Standalone helpers (re-exported for tests & other modules) ─────
 
@@ -122,16 +88,15 @@ class WispAgent(WispAgentCore):
         role: Optional[str] = None,
     ):
         super().__init__(config=config, session=session, agent_id=agent_id, role=role)
-        _agent_instances.add(self)
 
     # ── Synchronous public API ─────────────────────────────────────
 
     def run(self, prompt: str, skill_name: Optional[str] = None, session_id: Optional[str] = None):
         """Execute the agent (single-shot mode) with streaming output."""
-        _install_signal_handler()
+        _cli_install_signal()
 
         if not self.client.check_health():
-            _restore_signal_handler()
+            _cli_restore_signal()
             return
 
         # ── Session setup ──────────────────────────────────────────
@@ -194,12 +159,43 @@ class WispAgent(WispAgentCore):
         finally:
             self._save_session_summary()
             self.mcp.shutdown()
-            _restore_signal_handler()
+            _cli_restore_signal()
 
     def repl(self, skill_name: Optional[str] = None, session_id: Optional[str] = None):
         """Interactive REPL — continuous conversation until the user exits."""
         transport = CLITransport(self)
         transport.repl(skill_name, session_id)
+
+    def _run_turn_streaming(self, system: str) -> dict:
+        """Backward compat: stream to stdout while accumulating."""
+        _in_thinking = False
+        _content_started = False
+        for event in self._run_turn_streaming_events(system):
+            if event.type == "thinking":
+                # Suppress trailing thinking tokens after content has started
+                if _content_started:
+                    continue
+                if not _in_thinking:
+                    _in_thinking = True
+                    if self.config.show_thinking:
+                        print(dim("⏳ Thinking: "), end="", flush=True)
+                    else:
+                        print(dim("⏳ Thinking..."), end="", flush=True)
+                if self.config.show_thinking:
+                    print(event.text, end="", flush=True)
+            elif event.type == "content":
+                _content_started = True
+                if _in_thinking:
+                    _in_thinking = False
+                    if self.config.show_thinking:
+                        print()
+                    print()
+                print(event.text, end="", flush=True)
+            elif event.type == "error":
+                print(error(f"\n✗ {event.data.get('message', '')}"))
+        if _in_thinking:
+            print()
+        return getattr(self.client, "stream_response", None) or {}
 
     # ── Internal sync execution loop ───────────────────────────────
 

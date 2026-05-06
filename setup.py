@@ -11,6 +11,10 @@ setup(
     install_requires=[
         "requests>=2.28",
         "pyyaml>=6.0",
+        "fastapi>=0.110",
+        "uvicorn[standard]>=0.29",
+        "python-multipart>=0.0.9",
+        "websockets>=12.0",
     ],
     entry_points={
         "console_scripts": [

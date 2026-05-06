@@ -225,7 +225,6 @@ wisp/
 │   ├── __main__.py          # CLI entry point
 │   ├── agent.py             # Plan → Act → Observe loop
 │   ├── server.py            # FastAPI + WebSocket cloud server
-│   ├── server_agent.py      # Server-aware agent variant
 │   ├── session.py           # Session persistence + compaction
 │   ├── memory.py            # Cross-session memory (remember/recall)
 │   ├── agent_memory.py      # Session summary storage
