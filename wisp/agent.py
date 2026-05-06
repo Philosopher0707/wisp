@@ -112,6 +112,9 @@ class WispAgent(WispAgentCore):
             print(info(f"📋 Continuing session: {self.session.id}"))
             if loaded.title:
                 print(f"   {dim('Title:')} {loaded.title}")
+            print(f"   {dim('Model:')} {self.config.model}")
+            if loaded.model and loaded.model != self.config.model:
+                print(warning(f"   ⚠️  Session was created with model '{loaded.model}'. Now using '{self.config.model}'."))
             print(f"   {dim('Messages so far:')} {len(self.messages)}")
             last_user = None
             for m in reversed(self.messages):

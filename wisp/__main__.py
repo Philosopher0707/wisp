@@ -126,9 +126,11 @@ def cmd_config(set_kv=None, validate=False):
     print(dim("Validate:     wisp config --validate"))
 
 
-def cmd_check():
+def cmd_check(model=None):
     """Check if Ollama is available and the model is usable."""
     config = WispConfig()
+    if model:
+        config.model = model
     from wisp.ollama_client import OllamaClient
     client = OllamaClient(config)
     ok = client.check_health()
@@ -860,7 +862,7 @@ def main():
                     i += 1
             cmd_config(set_kv, validate=validate)
         elif first == "check":
-            cmd_check()
+            cmd_check(flags_model)
         elif first == "models":
             cmd_models()
         elif first == "memory":

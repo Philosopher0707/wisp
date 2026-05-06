@@ -350,6 +350,8 @@ class CLITransport:
             self.core.session = loaded
             self.core.messages = list(loaded.messages)
             session_id = self.core.session.id
+            if loaded.model and loaded.model != self.core.config.model:
+                print(warning(f"   ⚠️  Session was created with model '{loaded.model}'. Now using '{self.core.config.model}'."))
         else:
             self.core.session = Session.create(
                 model=self.core.config.model,
