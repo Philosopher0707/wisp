@@ -68,7 +68,7 @@ _BUILTIN_LSP_CONFIGS = [
 
 def path_to_uri(file_path: str) -> str:
     """Convert an absolute filesystem path to a file:// URI."""
-    return Path(file_path).as_uri()
+    return Path(file_path).resolve().as_uri()
 
 
 def uri_to_path(uri: str) -> str:
@@ -91,7 +91,7 @@ class LSPServer:
 
     def __init__(self, config: LSPServerConfig, root_path: str):
         self.config = config
-        self.root_path = root_path
+        self.root_path = os.path.abspath(root_path)
         self.process: subprocess.Popen | None = None
         self._reader_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
@@ -110,20 +110,38 @@ class LSPServer:
         if self.config.env:
             env.update(self.config.env)
 
+        # Resolve command path — try PATH, then common framework locations
+        import shutil
+        command_path = shutil.which(self.config.command)
+        if not command_path:
+            _EXTRA_PATHS = [
+                "/Library/Frameworks/Python.framework/Versions/Current/bin",
+                "/Library/Frameworks/Python.framework/Versions/3/bin",
+                os.path.expanduser("~/.local/bin"),
+                os.path.expanduser("~/Library/Python/3.12/bin"),
+                os.path.expanduser("~/Library/Python/3.13/bin"),
+            ]
+            for p in _EXTRA_PATHS:
+                candidate = os.path.join(p, self.config.command)
+                if os.path.isfile(candidate):
+                    command_path = candidate
+                    break
+
+        if not command_path:
+            raise LSPServerError(
+                f"{self.config.command} not found on PATH. Install it first "
+                f"(e.g., pip install python-lsp-server)."
+            )
+
         try:
             self.process = subprocess.Popen(
-                [self.config.command] + self.config.args,
+                [command_path] + self.config.args,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=self.root_path,
                 env=env,
                 text=False,  # binary mode for Content-Length header parsing
-            )
-        except FileNotFoundError:
-            cmd = self.config.command
-            raise LSPServerError(
-                f"{cmd} not found on PATH. Install it first (e.g., pip install python-lsp-server)."
             )
         except Exception as e:
             raise LSPServerError(f"Failed to start {self.config.command}: {e}")
@@ -183,7 +201,7 @@ class LSPServer:
 
     # ── Request / Notification ────────────────────────────────────
 
-    def send_request(self, method: str, params: dict, timeout: int = 15) -> dict:
+    def send_request(self, method: str, params: dict, timeout: int = 30) -> dict:
         """Send a JSON-RPC request and block waiting for the response."""
         if not self._started:
             raise LSPServerError(f"LSP server {self.config.command} not started")
@@ -248,7 +266,7 @@ class LSPServer:
         }
         self._write_message(request)
 
-        deadline = time.monotonic() + 15
+        deadline = time.monotonic() + 30
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -380,11 +398,10 @@ class LSPServer:
         """Write a Content-Length framed JSON-RPC message to stdin."""
         if not self.process or not self.process.stdin:
             raise LSPServerError("LSP process not available")
-        body = json.dumps(msg, ensure_ascii=False)
-        header = f"Content-Length: {len(body)}\r\n\r\n"
+        body_bytes = json.dumps(msg, ensure_ascii=False).encode("utf-8")
+        header = f"Content-Length: {len(body_bytes)}\r\n\r\n".encode("utf-8")
         try:
-            self.process.stdin.write(header.encode("utf-8"))
-            self.process.stdin.write(body.encode("utf-8"))
+            self.process.stdin.write(header + body_bytes)
             self.process.stdin.flush()
         except (BrokenPipeError, OSError) as e:
             raise LSPServerError(f"Failed to write to LSP server: {e}")
