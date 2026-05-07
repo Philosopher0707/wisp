@@ -45,6 +45,9 @@ sessions/
 .env
 warp-source/
 
+# Node modules
+node_modules/
+
 # Android build artifacts
 android/.gradle/
 android/local.properties
