@@ -74,7 +74,7 @@ class ToolApproval(BaseModel):
 # ── Auth ─────────────────────────────────────────────────────────────
 
 async def verify_api_key(x_api_key: str = Query(..., alias="api-key")):
-    if x_api_key != API_KEY:
+    if API_KEY and x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
     return x_api_key
 
@@ -331,7 +331,7 @@ async def run_bash(req: BashRequest):
 
 @app.websocket("/ws/agent")
 async def agent_websocket(websocket: WebSocket, api_key: str = Query(...)):
-    if api_key != API_KEY:
+    if API_KEY and api_key != API_KEY:
         await websocket.close(code=4001, reason="Invalid API key")
         return
 
@@ -436,8 +436,18 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(...)):
 
 # ── Entry point ──────────────────────────────────────────────────────
 
-def main(host: str = "0.0.0.0", port: int = 8000):
+def main(host: str = "0.0.0.0", port: int = 8000, no_auth: bool = False):
     import uvicorn
+
+    if no_auth:
+        global API_KEY
+        API_KEY = ""
+
+        # HTTP: bypass api key check
+        async def _noop_auth(x_api_key: str = Query(default="", alias="api-key")):
+            return x_api_key
+        app.dependency_overrides[verify_api_key] = _noop_auth
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
