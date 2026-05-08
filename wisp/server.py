@@ -330,7 +330,7 @@ async def run_bash(req: BashRequest):
 # ── WebSocket Agent ──────────────────────────────────────────────────
 
 @app.websocket("/ws/agent")
-async def agent_websocket(websocket: WebSocket, api_key: str = Query(...)):
+async def agent_websocket(websocket: WebSocket, api_key: str = Query(default="")):
     if API_KEY and api_key != API_KEY:
         await websocket.close(code=4001, reason="Invalid API key")
         return

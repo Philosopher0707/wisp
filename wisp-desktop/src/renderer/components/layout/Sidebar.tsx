@@ -77,10 +77,13 @@ export const Sidebar: React.FC = () => {
         <SidebarNav />
         <div className="sidebar-session-list">
           {state.sessions.slice(0, 15).map((s) => (
-            <button
+            <div
               key={s.id}
               className={`chat-list-item ${s.id === state.sessionId ? 'chat-list-item--active' : ''}`}
               onClick={() => handleSelectSession(s.id)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleSelectSession(s.id); }}
             >
               <span className="chat-list-item-title">
                 {loadingId === s.id ? 'Loading...' : editingId === s.id ? (
@@ -114,7 +117,7 @@ export const Sidebar: React.FC = () => {
               >
                 <Trash2 size={13} />
               </button>
-            </button>
+            </div>
           ))}
           {state.sessions.length === 0 && (
             <p className="sidebar-empty">No sessions yet</p>

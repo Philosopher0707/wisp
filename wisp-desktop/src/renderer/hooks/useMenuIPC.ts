@@ -3,6 +3,7 @@ import type { Action } from '../state/types.js';
 
 export function useMenuIPC(dispatch: Dispatch<Action>) {
   useEffect(() => {
+    if (!window.wisp?.onMenuAction) return;
     const unsub = window.wisp.onMenuAction((action: string) => {
       switch (action) {
         case 'new-chat':
