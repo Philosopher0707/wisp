@@ -207,6 +207,21 @@ async def delete_session(session_id: str):
     return {"ok": True}
 
 
+class RenameRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+
+
+@app.patch("/api/sessions/{session_id}", dependencies=[Depends(verify_api_key)])
+async def rename_session(session_id: str, req: RenameRequest):
+    sm = SessionManager()
+    session = sm.load(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session.title = req.title
+    sm.save(session)
+    return {"ok": True, "title": req.title}
+
+
 @app.get("/api/files", dependencies=[Depends(verify_api_key)])
 async def list_or_read_file(path: str = ""):
     target = _resolve_path(path)

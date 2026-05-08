@@ -12,6 +12,8 @@ export const Sidebar: React.FC = () => {
   const { state, dispatch } = useAppState();
   const api = useApi(state.serverUrl, state.apiKey);
   const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState('');
 
   useEffect(() => {
     if (state.connection === 'connected') {
@@ -43,9 +45,30 @@ export const Sidebar: React.FC = () => {
       if (id === state.sessionId) {
         dispatch({ type: 'NEW_CHAT' });
       }
-      // trigger session list refresh
       dispatch({ type: 'RECEIVE_COMPLETE' });
     }
+  };
+
+  const startRename = (e: React.MouseEvent, id: string, title: string) => {
+    e.stopPropagation();
+    setEditingId(id);
+    setEditTitle(title);
+  };
+
+  const commitRename = async () => {
+    const id = editingId;
+    const title = editTitle.trim();
+    setEditingId(null);
+    setEditTitle('');
+    if (!id || !title) return;
+    await api.renameSession(id, title);
+    // trigger session list refresh
+    dispatch({ type: 'RECEIVE_COMPLETE' });
+  };
+
+  const cancelRename = () => {
+    setEditingId(null);
+    setEditTitle('');
   };
 
   return (
@@ -60,7 +83,28 @@ export const Sidebar: React.FC = () => {
               onClick={() => handleSelectSession(s.id)}
             >
               <span className="chat-list-item-title">
-                {loadingId === s.id ? 'Loading...' : (s.title || s.id.slice(0, 12))}
+                {loadingId === s.id ? 'Loading...' : editingId === s.id ? (
+                  <input
+                    className="chat-list-rename-input"
+                    value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
+                    onBlur={commitRename}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') commitRename();
+                      if (e.key === 'Escape') cancelRename();
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    autoFocus
+                  />
+                ) : (
+                  <span
+                    className="chat-list-title-text"
+                    onDoubleClick={(e) => startRename(e, s.id, s.title || s.id.slice(0, 12))}
+                    title="Double-click to rename"
+                  >
+                    {s.title || s.id.slice(0, 12)}
+                  </span>
+                )}
               </span>
               <span className="chat-list-item-time">{s.msg_count} msgs</span>
               <button

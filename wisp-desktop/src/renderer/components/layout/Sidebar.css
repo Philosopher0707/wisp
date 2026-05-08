@@ -87,3 +87,22 @@
   font-size: var(--text-sm);
   text-align: center;
 }
+
+.chat-list-rename-input {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--accent-purple);
+  border-radius: 3px;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-family: var(--font-sans);
+  padding: 1px 4px;
+  outline: none;
+}
+
+.chat-list-title-text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

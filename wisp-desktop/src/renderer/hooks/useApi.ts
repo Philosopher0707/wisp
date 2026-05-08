@@ -5,6 +5,7 @@ interface ApiClient {
   fetchSessions: () => Promise<SessionSummary[]>;
   fetchSession: (id: string) => Promise<Message[]>;
   deleteSession: (id: string) => Promise<boolean>;
+  renameSession: (id: string, title: string) => Promise<boolean>;
   healthCheck: () => Promise<boolean>;
 }
 
@@ -20,9 +21,14 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
   const authParams = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
 
   const apiFetch = useCallback(
-    async (path: string, opts?: { method?: string }): Promise<unknown> => {
+    async (path: string, opts?: { method?: string; body?: unknown }): Promise<unknown> => {
       const url = serverUrl.replace(/\/$/, '') + path;
-      const resp = await fetch(url, { method: opts?.method || 'GET' });
+      const init: RequestInit = { method: opts?.method || 'GET' };
+      if (opts?.body) {
+        init.headers = { 'Content-Type': 'application/json' };
+        init.body = JSON.stringify(opts.body);
+      }
+      const resp = await fetch(url, init);
       if (!resp.ok) throw new Error(`API ${resp.status}: ${resp.statusText}`);
       return resp.json();
     },
@@ -91,6 +97,18 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
     }
   }, [apiFetch, authParams]);
 
+  const renameSession = useCallback(async (id: string, title: string): Promise<boolean> => {
+    try {
+      const data = await apiFetch(
+        `/api/sessions/${encodeURIComponent(id)}${authParams}`,
+        { method: 'PATCH', body: { title } },
+      ) as { ok?: boolean };
+      return data.ok === true;
+    } catch {
+      return false;
+    }
+  }, [apiFetch, authParams]);
+
   const healthCheck = useCallback(async (): Promise<boolean> => {
     try {
       const data = await apiFetch('/api/health') as { status: string };
@@ -100,5 +118,5 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
     }
   }, [apiFetch]);
 
-  return { fetchSessions, fetchSession, deleteSession, healthCheck };
+  return { fetchSessions, fetchSession, deleteSession, renameSession, healthCheck };
 }

@@ -32,3 +32,24 @@
   color: var(--text-placeholder);
   font-size: var(--text-md);
 }
+
+.chat-input-box--drag {
+  outline: 2px dashed var(--accent-purple);
+  outline-offset: -2px;
+  background: rgba(139, 92, 246, 0.06);
+}
+
+.chat-input-drop-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(17, 17, 17, 0.9);
+  border-radius: var(--radius-xl);
+  color: var(--accent-purple);
+  font-size: var(--text-lg);
+  font-weight: 500;
+  z-index: 10;
+  pointer-events: none;
+}
