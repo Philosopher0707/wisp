@@ -96,3 +96,25 @@
 .send-btn--active:hover {
   background: var(--accent-purple-hover);
 }
+
+.stop-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--accent-orange);
+  color: #fff;
+  transition: background var(--transition-fast);
+  animation: stop-pulse 1.5s ease-in-out infinite;
+}
+
+.stop-btn:hover {
+  background: #d97706;
+}
+
+@keyframes stop-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}

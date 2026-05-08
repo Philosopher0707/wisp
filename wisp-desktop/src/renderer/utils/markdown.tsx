@@ -13,6 +13,46 @@ function highlightCode(code: string, lang?: string): string {
   }
 }
 
+const CodeBlock: React.FC<{ code: string; lang: string }> = ({ code, lang }) => {
+  const [copied, setCopied] = React.useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // fallback for older Electron
+      const ta = document.createElement('textarea');
+      ta.value = code;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
+  };
+
+  return (
+    <pre className="md-code-block">
+      {lang && <div className="md-code-lang">{lang}</div>}
+      <button
+        className={`md-copy-btn ${copied ? 'md-copy-btn--copied' : ''}`}
+        onClick={handleCopy}
+        title="Copy code"
+      >
+        {copied ? 'Copied!' : 'Copy'}
+      </button>
+      <code
+        dangerouslySetInnerHTML={{ __html: highlightCode(code, lang) }}
+      />
+    </pre>
+  );
+};
+
 export function renderMarkdown(text: string): React.ReactNode {
   if (!text) return text;
 
@@ -30,12 +70,7 @@ export function renderMarkdown(text: string): React.ReactNode {
     if (line.trimStart().startsWith('```')) {
       if (inCodeBlock) {
         result.push(
-          <pre key={`cb-${i}`} className="md-code-block">
-            {codeLang && <div className="md-code-lang">{codeLang}</div>}
-            <code
-              dangerouslySetInnerHTML={{ __html: highlightCode(codeContent.replace(/\n$/, ''), codeLang) }}
-            />
-          </pre>,
+          <CodeBlock key={`cb-${i}`} code={codeContent.replace(/\n$/, '')} lang={codeLang} />,
         );
         codeContent = '';
         codeLang = '';
@@ -126,12 +161,7 @@ export function renderMarkdown(text: string): React.ReactNode {
   // Unclosed code block
   if (inCodeBlock && codeContent) {
     result.push(
-      <pre key="cb-end" className="md-code-block">
-        {codeLang && <div className="md-code-lang">{codeLang}</div>}
-        <code
-          dangerouslySetInnerHTML={{ __html: highlightCode(codeContent.replace(/\n$/, ''), codeLang) }}
-        />
-      </pre>,
+      <CodeBlock key="cb-end" code={codeContent.replace(/\n$/, '')} lang={codeLang} />,
     );
   }
 

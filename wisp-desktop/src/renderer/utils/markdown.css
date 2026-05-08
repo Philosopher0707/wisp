@@ -15,7 +15,7 @@
 .md-code-lang {
   position: absolute;
   top: 0;
-  right: var(--space-3);
+  left: var(--space-3);
   font-size: 11px;
   color: var(--text-muted);
   text-transform: uppercase;
@@ -23,6 +23,37 @@
   padding: 2px 6px;
   background: rgba(255, 255, 255, 0.04);
   border-radius: 0 0 4px 4px;
+}
+
+.md-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: var(--space-3);
+  font-size: 11px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+  font-family: var(--font-sans);
+}
+
+.md-code-block:hover .md-copy-btn {
+  opacity: 1;
+}
+
+.md-copy-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.md-copy-btn--copied {
+  color: var(--accent-purple);
+  border-color: var(--accent-purple);
+  opacity: 1;
 }
 
 /* highlight.js dark theme */
