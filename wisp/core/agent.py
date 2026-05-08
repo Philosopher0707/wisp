@@ -333,12 +333,14 @@ class WispAgentCore:
         # ── OntoSkills: inject deterministic skill context ──
         from wisp.skills import has_ontology, match_skill_via_ontology
         if has_ontology():
-            # Use last user message as query for skill matching
-            ontology_result = match_skill_via_ontology(str(ws_abs))
-            if ontology_result is None and hasattr(self, "_last_user_prompt"):
+            # Try user prompt first (most relevant), then workspace name
+            ontology_result = None
+            if hasattr(self, "_last_user_prompt") and self._last_user_prompt:
                 ontology_result = match_skill_via_ontology(self._last_user_prompt)
+            if ontology_result is None:
+                ontology_result = match_skill_via_ontology(str(ws_abs))
             if ontology_result:
-                system += f"\n\n## Ontology Skill Match\n{ontology_result['context']}"
+                system += f"\n\n## {ontology_result['name']}\n{ontology_result['context']}"
 
         project_ctx = detect_project_context(ws)
         ctx_block = format_context(project_ctx)

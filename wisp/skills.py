@@ -165,22 +165,32 @@ import os as _os
 import sys as _sys
 
 _ONTOLOGY_PATH = _os.environ.get("WISP_ONTOLOGY_PATH", "")
-_HAS_ONTOLOGY = _ONTOLOGY_PATH and _os.path.isdir(_ONTOLOGY_PATH)
 _ontology_cache: dict = {}
 
 
 def has_ontology() -> bool:
-    """Check if ontology-backed skills are available."""
-    return _HAS_ONTOLOGY
+    """Check if ontology-backed skills are available.
+    
+    Re-checks WISP_ONTOLOGY_PATH env var on each call (not cached at import).
+    """
+    path = _os.environ.get("WISP_ONTOLOGY_PATH", "")
+    return bool(path and _os.path.isdir(path))
+
+
+def _get_ontology_path() -> str:
+    """Get current ontology path from environment."""
+    return _os.environ.get("WISP_ONTOLOGY_PATH", _ONTOLOGY_PATH)
 
 
 def _get_ontology_client():
     """Lazy-load the OntoSkills client (subprocess-based, heavy)."""
-    if "client" not in _ontology_cache:
+    path = _get_ontology_path()
+    if "client" not in _ontology_cache or _ontology_cache.get("_path") != path:
         from ontoskills import OntoSkillsClient
-        client = OntoSkillsClient(ontology_root=_ONTOLOGY_PATH)
+        client = OntoSkillsClient(ontology_root=path)
         _ontology_cache["client"] = client
         _ontology_cache["started"] = False
+        _ontology_cache["_path"] = path
     return _ontology_cache["client"]
 
 
@@ -190,7 +200,7 @@ def match_skill_via_ontology(query: str) -> Optional[dict]:
     Returns dict with 'name', 'intent', 'context' keys, or None if no match.
     This is DETERMINISTIC — same query always returns same result.
     """
-    if not _HAS_ONTOLOGY:
+    if not has_ontology():
         return None
 
     # Quick cache check
