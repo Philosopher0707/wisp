@@ -371,12 +371,12 @@ async def diff_file(req: DiffRequest):
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to read file: {e}")
         from wisp.diff import generate_diff_string
-        diff = generate_diff_string(old_content, req.new_content)
-        return {"diff": diff, "is_new": False, "path": req.path}
+        result = generate_diff_string(old_content, req.new_content)
+        return {"diff": result.diff, "is_new": False, "path": req.path, "first_changed_line": result.first_changed_line}
     else:
         from wisp.diff import generate_diff_string
-        diff = generate_diff_string("", req.new_content)
-        return {"diff": diff, "is_new": True, "path": req.path}
+        result = generate_diff_string("", req.new_content)
+        return {"diff": result.diff, "is_new": True, "path": req.path, "first_changed_line": result.first_changed_line}
 
 
 @app.get("/api/git", dependencies=[Depends(verify_api_key)])

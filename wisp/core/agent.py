@@ -706,8 +706,9 @@ class WispAgentCore:
                 "plan_task", "mark_step_done", "update_plan",
             }
 
-            if pm == "read_only" and func_name in write_tools:
-                blocked = f"[Blocked: read-only mode — {func_name} requires write access]"
+            if (pm == "read_only" or self.config.plan_mode) and func_name in write_tools:
+                reason = "plan mode" if self.config.plan_mode else "read-only mode"
+                blocked = f"[Blocked: {reason} — {func_name} requires write access]"
                 yield tool_result_event(func_name, blocked)
                 self.messages.append({
                     "role": "tool", "content": blocked, "name": func_name,
