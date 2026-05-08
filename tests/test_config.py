@@ -29,6 +29,7 @@ class TestWispConfig:
     def test_defaults_are_sane(self):
         cfg = WispConfig()
         assert cfg.ollama_url == "http://localhost:11434"
+        assert cfg.provider == "ollama"
         assert cfg.temperature == 0.2
         assert cfg.max_tokens is None  # No default limit
         assert cfg.max_context_tokens == 256000
@@ -51,6 +52,10 @@ class TestWispConfig:
     def test_ollama_url_from_env(self, monkeypatch):
         monkeypatch.setenv("WISP_OLLAMA_URL", "http://other:11434")
         assert WispConfig().ollama_url == "http://other:11434"
+
+    def test_provider_from_env(self, monkeypatch):
+        monkeypatch.setenv("WISP_PROVIDER", "ollama")
+        assert WispConfig().provider == "ollama"
 
     def test_context_tokens_explicit_when_env_set(self, monkeypatch):
         monkeypatch.setenv("WISP_MAX_CONTEXT_TOKENS", "64000")

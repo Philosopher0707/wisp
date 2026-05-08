@@ -327,15 +327,10 @@ class SubagentRunner:
     def _filter_tools(self, contract: SubagentContract):
         """Return full tool schemas or a filtered subset.
 
-        Always removes spawn_subagent (no nesting) and LSP tools
-        (subagents don't manage language server processes).
+        Always removes spawn_subagent to prevent nested delegation.
         """
         _SUBAGENT_BLOCKED = frozenset({
             "spawn_subagent",
-            "lsp_definition",
-            "lsp_references",
-            "lsp_hover",
-            "lsp_symbols",
         })
         from wisp.tools import TOOL_SCHEMAS
         if contract.tools == ["all"]:

@@ -458,9 +458,14 @@ class CLITransport:
             prompt = self.core.messages[-1].get("content", "")
             self.core.messages.pop()
 
+        # Build approval handler that prompts the user in the terminal
+        async def _cli_approval(name: str, args: dict, reason: str) -> tuple[bool, Optional[dict]]:
+            approved = _prompt_dangerous(name, reason)
+            return (approved, None)
+
         _in_thinking = False
         _content_started = False
-        async for event in self.core._arun(prompt, system=system):
+        async for event in self.core._arun(prompt, system=system, approval_handler=_cli_approval):
             if self._interrupted:
                 break
 
@@ -487,7 +492,6 @@ class CLITransport:
                     print()
                 print(event.text, end="", flush=True)
             elif event.type == TYPE_TOOL_CALL:
-                # Reset content tracking so thinking is allowed after tool calls
                 _content_started = False
                 rendered = _render_event(event, show_thinking)
                 if rendered is not None:
@@ -496,54 +500,3 @@ class CLITransport:
                 rendered = _render_event(event, show_thinking)
                 if rendered is not None:
                     print(rendered, end="\n", flush=True)
-
-            # Handle approval requests
-            if event.type == TYPE_APPROVAL_REQUEST:
-                func_name = event.data.get("name", "")
-                reason = event.data.get("reason", "")
-                func_args = event.data.get("arguments", {})
-                approved = _prompt_dangerous(func_name, reason)
-                if approved:
-                    # Pop the blocked tool-result that core will append next
-                    _last_idx = len(self.core.messages)
-                    # Wait for the corresponding tool_result (blocked) event to arrive,
-                    # then replace it with actual tool execution.
-                    self._pending_approval = (func_name, func_args, workspace)
-                else:
-                    self._pending_approval = None
-
-            # Re-execute approved tool: replace blocked tool_result with real execution
-            if event.type == TYPE_TOOL_RESULT:
-                pending = getattr(self, "_pending_approval", None)
-                if pending is not None:
-                    self._pending_approval = None
-                    p_func_name, p_func_args, p_workspace = pending
-                    if event.data.get("name") == p_func_name and "Blocked" in event.data.get("result", ""):
-                        # Remove the blocked message from core
-                        if self.core.messages and self.core.messages[-1].get("role") == "tool":
-                            m = self.core.messages[-1]
-                            if m.get("name") == p_func_name and "Blocked" in str(m.get("content", "")):
-                                self.core.messages.pop()
-                        # Execute the tool for real
-                        from wisp.tools import execute_tool
-                        import time as _time
-                        _start = _time.monotonic()
-                        try:
-                            _result = execute_tool(p_func_name, p_func_args, p_workspace, max_data_chars=8000, file_lock=self.core.file_lock)
-                        except Exception as e:
-                            _result = f"Error: {e}"
-                        _dur = (_time.monotonic() - _start) * 1000
-                        if isinstance(_result, str) and _result.startswith("{"):
-                            try:
-                                import json as _json
-                                _parsed = _json.loads(_result)
-                                _result = _parsed.get("data", _result)
-                            except Exception:
-                                pass
-                        self.core.messages.append({
-                            "role": "tool",
-                            "content": str(_result),
-                            "name": p_func_name,
-                        })
-                        preview = str(_result)[:200].replace("\n", " ")
-                        print(dim(f"     → {preview}"))

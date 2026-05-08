@@ -5,6 +5,7 @@ import sys
 from wisp import __version__
 from wisp.config import WispConfig, load_config, save_config
 from wisp.agent import WispAgent
+from wisp.providers import get_provider
 from wisp.skills import discover_skills
 from wisp.session import SessionManager, format_session_preview
 from wisp.colors import success, error, warning, info, dim, accent
@@ -20,10 +21,10 @@ def _setup_logging(verbose: bool = False):
     )
 
 
-def cmd_server(host="0.0.0.0", port=8000):
+def cmd_server(host="0.0.0.0", port=8000, no_auth=False):
     """Run Wisp Cloud Server."""
     from wisp.server import main as server_main
-    server_main(host=host, port=port)
+    server_main(host=host, port=port, no_auth=no_auth)
 
 
 def cmd_run(prompt, model=None, skill=None, workspace=None, auto_approve=False, session_id=None, show_thinking=False):
@@ -56,6 +57,24 @@ def cmd_repl(model=None, skill=None, workspace=None, session_id=None, show_think
 
     agent = WispAgent(config)
     agent.repl(skill_name=skill, session_id=session_id)
+
+
+def cmd_tui(model=None, workspace=None, show_thinking=False, auto_approve=False):
+    """Run the experimental full-screen terminal app."""
+    config = WispConfig()
+    if model:
+        config.model = model
+    if workspace:
+        config.workspace = workspace
+    if show_thinking:
+        config.show_thinking = True
+    if auto_approve:
+        config.auto_approve = True
+
+    from wisp.tui.app import WispTUIApp
+
+    app = WispTUIApp(config=config)
+    app.run()
 
 
 def cmd_skills(workspace=None):
@@ -131,11 +150,12 @@ def cmd_check(model=None):
     config = WispConfig()
     if model:
         config.model = model
-    from wisp.ollama_client import OllamaClient
-    client = OllamaClient(config)
+    client = get_provider(config)
     ok = client.check_health()
     if ok:
-        print(success(f"✓ Ollama is running at {config.ollama_url}"))
+        print(success(f"✓ Provider '{config.provider}' is available"))
+        if config.provider == "ollama":
+            print(success(f"✓ Ollama is running at {config.ollama_url}"))
         print(success(f"✓ Model '{config.model}' is available"))
     else:
         sys.exit(1)
@@ -144,8 +164,7 @@ def cmd_check(model=None):
 def cmd_models():
     """List all models available in Ollama."""
     config = WispConfig()
-    from wisp.ollama_client import OllamaClient
-    client = OllamaClient(config)
+    client = get_provider(config)
     try:
         models = client.list_models()
         if not models:
@@ -704,6 +723,7 @@ Options:
 Subcommands:
   run <prompt>             Single-shot agent with a prompt
   repl                     Interactive REPL mode (continuous chat)
+  tui                      Full-screen terminal app (experimental)
   server                   Start cloud server for remote clients
   session list             List all saved sessions
   session show <id>        Show session details and recent messages
@@ -746,7 +766,7 @@ def main():
         print_help()
         return
 
-    _SUBCOMMANDS = {"run", "repl", "skills", "config", "check", "models", "session", "memory", "mcp", "git", "plan", "progress", "diagnose", "locks", "changes", "acp", "server", "compact", "swarm", "agents"}
+    _SUBCOMMANDS = {"run", "repl", "tui", "skills", "config", "check", "models", "session", "memory", "mcp", "git", "plan", "progress", "diagnose", "locks", "changes", "acp", "server", "compact", "swarm", "agents"}
     first = argv[0]
 
     # Global flags
@@ -798,6 +818,9 @@ def main():
 
         elif first == "repl":
             cmd_repl(flags_model, flags_skill, flags_workspace, flags_session, flags_show_thinking, flags_auto)
+
+        elif first == "tui":
+            cmd_tui(flags_model, flags_workspace, flags_show_thinking, flags_auto)
 
         elif first == "session":
             if not rest:
@@ -890,6 +913,7 @@ def main():
         elif first == "server":
             host = "0.0.0.0"
             port = 8000
+            no_auth = False
             i = 0
             while i < len(rest):
                 if rest[i] == "--host" and i + 1 < len(rest):
@@ -898,9 +922,12 @@ def main():
                 elif rest[i] == "--port" and i + 1 < len(rest):
                     port = int(rest[i + 1])
                     i += 2
+                elif rest[i] == "--no-auth":
+                    no_auth = True
+                    i += 1
                 else:
                     i += 1
-            cmd_server(host=host, port=port)
+            cmd_server(host=host, port=port, no_auth=no_auth)
 
         elif first == "swarm":
             if not rest:

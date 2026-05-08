@@ -122,42 +122,41 @@ class ServerTransport:
 
     async def run(self, prompt: str) -> None:
         """Run one prompt and stream all events to the WebSocket client."""
-        async for event in self.core.run(prompt):
+
+        async def _ws_approval(name: str, args: dict, reason: str) -> tuple[bool, Optional[dict]]:
+            call_id = self._next_call_id()
+            await self._send({
+                "type": "tool_approval_request",
+                "call_id": call_id,
+                "name": name,
+                "arguments": args,
+                "reason": reason,
+            })
+            pa = PendingApproval(call_id, name, args)
+            async with self._approval_lock:
+                self._pending_approvals[call_id] = pa
+
+            try:
+                await asyncio.wait_for(pa.event.wait(), timeout=300)
+            except asyncio.TimeoutError:
+                return (False, None)
+            finally:
+                async with self._approval_lock:
+                    self._pending_approvals.pop(call_id, None)
+            return (pa.approved, None)
+
+        async for event in self.core.run(prompt, approval_handler=_ws_approval):
             if self._interrupted:
                 break
             msg = self._event_to_json(event)
             if msg is not None:
-                await self._send(msg)
-
-            if event.type == TYPE_APPROVAL_REQUEST:
-                call_id = msg["call_id"] if msg else self._next_call_id()
-                pa = PendingApproval(call_id, event.data.get("name", ""), event.data.get("arguments", {}))
-                async with self._approval_lock:
-                    self._pending_approvals[call_id] = pa
-
-                # Wait for client approval (with 5-minute timeout)
-                try:
-                    await asyncio.wait_for(pa.event.wait(), timeout=300)
-                except asyncio.TimeoutError:
-                    await self._send({
-                        "type": "tool_result",
-                        "call_id": call_id,
-                        "output": "[Approval timed out after 5 minutes]",
-                        "error": "timeout",
-                    })
+                # Skip approval_request in _event_to_json since we handle it
+                # inline in the approval handler above (call_id already sent).
+                # _event_to_json for approval_request generates a new call_id
+                # each time — don't send a duplicate.
+                if event.type == TYPE_APPROVAL_REQUEST:
                     continue
-
-                async with self._approval_lock:
-                    self._pending_approvals.pop(call_id, None)
-
-                if not pa.approved:
-                    reason = pa.denied_reason or "User denied"
-                    await self._send({
-                        "type": "tool_result",
-                        "call_id": call_id,
-                        "output": f"[{reason}]",
-                        "error": "denied",
-                    })
+                await self._send(msg)
 
     async def approve_tool(self, call_id: str, approved: bool, reason: Optional[str] = None) -> bool:
         """Called by the WebSocket handler when a client approves/denies a tool."""

@@ -10,6 +10,7 @@ The orchestrator is the conductor of the multi-agent system:
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import re
@@ -238,7 +239,16 @@ Respond in JSON with a "plan" string and a "subtasks" array.
         logger.info("Swarm spawned %d agents for goal: %s", len(agent_ids), goal)
 
         # Plan — only suggest tasks for roles we actually have
-        plan, subtasks = self._plan(goal, roles)
+        plan_fn = self._plan
+        positional_params = [
+            param
+            for param in inspect.signature(plan_fn).parameters.values()
+            if param.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        ]
+        if len(positional_params) >= 2:
+            plan, subtasks = plan_fn(goal, roles)
+        else:
+            plan, subtasks = plan_fn(goal)
         logger.info("Plan generated with %d subtasks", len(subtasks))
 
         # Execute subtasks with dependency resolution

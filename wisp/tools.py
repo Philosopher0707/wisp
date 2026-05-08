@@ -843,17 +843,27 @@ def tool_lsp_diagnostics(path: str, workspace: str = ".") -> str:
         return "Error: diagnostics timed out."
 
 
-def tool_lsp_definition(path: str, workspace: str = ".", line: int = 1, character: int = 1) -> str:
-    """Go to definition of a symbol at the given line/character (1-based)."""
-    from wisp.lsp.client import _format_locations
-    if _lsp_manager is None:
+def _get_lsp_server(path: str, workspace: str, lsp_manager=None):
+    """Resolve LSP manager and return (server, full_path) or error string."""
+    mgr = lsp_manager or _lsp_manager
+    if mgr is None:
         return "Error: LSP not available (no language servers configured)."
     full_path = _resolve_path(path, workspace)
     if not full_path.exists():
         return f"Error: file not found: {path}"
-    server = _lsp_manager.get_server_safe(str(full_path))
+    server = mgr.get_server_safe(str(full_path))
     if server is None:
         return f"No LSP server available for {full_path.suffix} files."
+    return (server, full_path)
+
+
+def tool_lsp_definition(path: str, workspace: str = ".", line: int = 1, character: int = 1, lsp_manager=None) -> str:
+    """Go to definition of a symbol at the given line/character (1-based)."""
+    from wisp.lsp.client import _format_locations
+    resolved = _get_lsp_server(path, workspace, lsp_manager)
+    if isinstance(resolved, str):
+        return resolved
+    server, full_path = resolved
     try:
         locations = server.get_definition(str(full_path), line - 1, character - 1)
         return _format_locations(locations, workspace, max_items=5)
@@ -861,17 +871,13 @@ def tool_lsp_definition(path: str, workspace: str = ".", line: int = 1, characte
         return f"Error: {e}"
 
 
-def tool_lsp_references(path: str, workspace: str = ".", line: int = 1, character: int = 1) -> str:
+def tool_lsp_references(path: str, workspace: str = ".", line: int = 1, character: int = 1, lsp_manager=None) -> str:
     """Find all references to the symbol at the given line/character (1-based)."""
     from wisp.lsp.client import _format_locations
-    if _lsp_manager is None:
-        return "Error: LSP not available (no language servers configured)."
-    full_path = _resolve_path(path, workspace)
-    if not full_path.exists():
-        return f"Error: file not found: {path}"
-    server = _lsp_manager.get_server_safe(str(full_path))
-    if server is None:
-        return f"No LSP server available for {full_path.suffix} files."
+    resolved = _get_lsp_server(path, workspace, lsp_manager)
+    if isinstance(resolved, str):
+        return resolved
+    server, full_path = resolved
     try:
         locations = server.get_references(str(full_path), line - 1, character - 1)
         return _format_locations(locations, workspace, max_items=50)
@@ -879,17 +885,13 @@ def tool_lsp_references(path: str, workspace: str = ".", line: int = 1, characte
         return f"Error: {e}"
 
 
-def tool_lsp_hover(path: str, workspace: str = ".", line: int = 1, character: int = 1) -> str:
+def tool_lsp_hover(path: str, workspace: str = ".", line: int = 1, character: int = 1, lsp_manager=None) -> str:
     """Get hover info (type, docstring) for the symbol at the given line/character (1-based)."""
     from wisp.lsp.client import _format_hover
-    if _lsp_manager is None:
-        return "Error: LSP not available (no language servers configured)."
-    full_path = _resolve_path(path, workspace)
-    if not full_path.exists():
-        return f"Error: file not found: {path}"
-    server = _lsp_manager.get_server_safe(str(full_path))
-    if server is None:
-        return f"No LSP server available for {full_path.suffix} files."
+    resolved = _get_lsp_server(path, workspace, lsp_manager)
+    if isinstance(resolved, str):
+        return resolved
+    server, full_path = resolved
     try:
         result = server.get_hover(str(full_path), line - 1, character - 1)
         return _format_hover(result)
@@ -897,17 +899,13 @@ def tool_lsp_hover(path: str, workspace: str = ".", line: int = 1, character: in
         return f"Error: {e}"
 
 
-def tool_lsp_symbols(path: str, workspace: str = ".") -> str:
+def tool_lsp_symbols(path: str, workspace: str = ".", lsp_manager=None) -> str:
     """List all symbols (functions, classes, etc.) in a file."""
     from wisp.lsp.client import _format_symbols
-    if _lsp_manager is None:
-        return "Error: LSP not available (no language servers configured)."
-    full_path = _resolve_path(path, workspace)
-    if not full_path.exists():
-        return f"Error: file not found: {path}"
-    server = _lsp_manager.get_server_safe(str(full_path))
-    if server is None:
-        return f"No LSP server available for {full_path.suffix} files."
+    resolved = _get_lsp_server(path, workspace, lsp_manager)
+    if isinstance(resolved, str):
+        return resolved
+    server, full_path = resolved
     try:
         symbols = server.get_symbols(str(full_path))
         return _format_symbols(symbols)
@@ -1496,7 +1494,7 @@ def _build_tool_metadata(name: str, args: dict, result: str) -> dict:
 # ── Tool schemas ────────────────────────────────────────────────────
 
 
-def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0, file_lock=None) -> str:
+def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0, file_lock=None, lsp_manager=None) -> str:
     """Execute a tool by name with given arguments.
 
     Returns a structured JSON string with status, data, and metadata
@@ -1507,9 +1505,7 @@ def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0,
 
     Args:
         file_lock: Optional file lock instance (for multi-agent swarm).
-                   If provided, write/edit tools use this lock instead of
-                   the module-level global. Prevents collision when multiple
-                   agents run in parallel threads.
+        lsp_manager: Optional LSP manager instance (for per-connection isolation).
     """
     impl = TOOL_IMPLS.get(name)
     if not impl:
@@ -1520,9 +1516,10 @@ def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0,
     sig = inspect.signature(impl)
     filtered = {k: v for k, v in args.items() if k in sig.parameters}
     filtered["workspace"] = workspace
-    # Thread the caller's file lock to tools that support it (write_file, edit_file)
     if "file_lock" in sig.parameters:
         filtered["file_lock"] = file_lock
+    if "lsp_manager" in sig.parameters:
+        filtered["lsp_manager"] = lsp_manager
 
     try:
         result = impl(**filtered)

@@ -17,6 +17,12 @@ WISP_CONFIG_DIR = Path.home() / ".config" / "wisp"
 # ── Schema definition ────────────────────────────────────────────────
 
 SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
+    "provider": {
+        "type": str,
+        "default": "ollama",
+        "description": "Model provider backend",
+        "env_var": "WISP_PROVIDER",
+    },
     "ollama_url": {
         "type": str,
         "default": DEFAULT_OLLAMA_URL,
@@ -219,6 +225,7 @@ class WispConfig:
     """
 
     def __init__(self):
+        self.provider: str = get_setting("provider", "ollama")
         self.ollama_url: str = get_setting("ollama_url", DEFAULT_OLLAMA_URL)
         self.model: str = get_setting("model", DEFAULT_MODEL)
         self.temperature: float = float(get_setting("temperature", "0.2"))
@@ -262,6 +269,6 @@ class WispConfig:
 
     def __repr__(self):
         return (
-            f"WispConfig(ollama_url={self.ollama_url}, model={self.model}, "
+            f"WispConfig(provider={self.provider}, ollama_url={self.ollama_url}, model={self.model}, "
             f"workspace={self.workspace})"
         )

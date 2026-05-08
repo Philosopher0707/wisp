@@ -1,4 +1,17 @@
 import React from 'react';
+import hljs from 'highlight.js';
+
+function highlightCode(code: string, lang?: string): string {
+  if (!code.trim()) return '';
+  try {
+    if (lang && hljs.getLanguage(lang)) {
+      return hljs.highlight(code, { language: lang }).value;
+    }
+    return hljs.highlightAuto(code).value;
+  } catch {
+    return code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+}
 
 export function renderMarkdown(text: string): React.ReactNode {
   if (!text) return text;
@@ -18,7 +31,10 @@ export function renderMarkdown(text: string): React.ReactNode {
       if (inCodeBlock) {
         result.push(
           <pre key={`cb-${i}`} className="md-code-block">
-            <code>{codeContent.replace(/\n$/, '')}</code>
+            {codeLang && <div className="md-code-lang">{codeLang}</div>}
+            <code
+              dangerouslySetInnerHTML={{ __html: highlightCode(codeContent.replace(/\n$/, ''), codeLang) }}
+            />
           </pre>,
         );
         codeContent = '';
@@ -111,7 +127,10 @@ export function renderMarkdown(text: string): React.ReactNode {
   if (inCodeBlock && codeContent) {
     result.push(
       <pre key="cb-end" className="md-code-block">
-        <code>{codeContent.replace(/\n$/, '')}</code>
+        {codeLang && <div className="md-code-lang">{codeLang}</div>}
+        <code
+          dangerouslySetInnerHTML={{ __html: highlightCode(codeContent.replace(/\n$/, ''), codeLang) }}
+        />
       </pre>,
     );
   }
