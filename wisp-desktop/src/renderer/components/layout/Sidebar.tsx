@@ -18,7 +18,7 @@ export const Sidebar: React.FC = () => {
         dispatch({ type: 'SET_SESSIONS', sessions });
       }).catch(() => {});
     }
-  }, [state.connection, state.sessionId]);
+  }, [state.connection, state.sessionsVersion]);
 
   const handleSelectSession = async (id: string) => {
     if (id === state.sessionId) return;

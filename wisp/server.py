@@ -185,6 +185,19 @@ async def list_sessions():
     return {"sessions": sessions}
 
 
+@app.get("/api/sessions/{session_id}", dependencies=[Depends(verify_api_key)])
+async def get_session(session_id: str):
+    sm = SessionManager()
+    session = sm.load(session_id)
+    if session is None:
+        resolved = sm.get_session_id_from_fragment(session_id)
+        if resolved:
+            session = sm.load(resolved)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"session": session.to_dict()}
+
+
 @app.get("/api/files", dependencies=[Depends(verify_api_key)])
 async def list_or_read_file(path: str = ""):
     target = _resolve_path(path)
@@ -362,7 +375,8 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(...)):
                             logger.error("Agent error for %s: %s", client_id, e)
                             await conn.send({"type": "error", "message": str(e)})
                         finally:
-                            await conn.send({"type": "complete", "session_id": session_id or ""})
+                            sid = core.session.id if core.session else (session_id or "")
+                            await conn.send({"type": "complete", "session_id": sid})
 
                     conn.agent_task = asyncio.create_task(_run())
 

@@ -94,7 +94,7 @@ export function useWebSocket(
             dispatch({ type: 'RECEIVE_DONE' });
             break;
           case 'complete':
-            dispatch({ type: 'RECEIVE_COMPLETE' });
+            dispatch({ type: 'RECEIVE_COMPLETE', sessionId: msg.session_id || undefined });
             break;
           case 'error':
             dispatch({ type: 'RECEIVE_ERROR', message: msg.message || '' });

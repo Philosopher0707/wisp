@@ -56,6 +56,7 @@ export interface AppState {
   pinnedChats: ChatSummary[];
   projects: ProjectFolder[];
   sessions: SessionSummary[];
+  sessionsVersion: number;
   sessionId: string | null;
   messages: Message[];
   isStreaming: boolean;
@@ -87,7 +88,7 @@ export type Action =
   | { type: 'RECEIVE_TOOL_RESULT'; name: string; result: string; durationMs?: number }
   | { type: 'RECEIVE_APPROVAL_REQUEST'; callId: string; name: string; arguments: Record<string, unknown>; reason: string }
   | { type: 'RECEIVE_DONE' }
-  | { type: 'RECEIVE_COMPLETE' }
+  | { type: 'RECEIVE_COMPLETE'; sessionId?: string }
   | { type: 'RECEIVE_ERROR'; message: string }
   | { type: 'RECEIVE_STATUS'; message: string; level: string }
   | { type: 'APPROVE_TOOL'; callId: string }
@@ -122,6 +123,7 @@ export function createInitialState(overrides?: { serverUrl?: string; apiKey?: st
     pinnedChats: [],
     projects: [],
     sessions: [],
+    sessionsVersion: 0,
     sessionId: null,
     messages: [],
     isStreaming: false,
@@ -247,7 +249,12 @@ export function appReducer(state: AppState, action: Action): AppState {
       return { ...state, isStreaming: false };
 
     case 'RECEIVE_COMPLETE':
-      return { ...state, isStreaming: false };
+      return {
+        ...state,
+        isStreaming: false,
+        sessionId: action.sessionId || state.sessionId,
+        sessionsVersion: state.sessionsVersion + 1,
+      };
 
     case 'RECEIVE_ERROR':
       return {
