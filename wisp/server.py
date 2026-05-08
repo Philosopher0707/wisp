@@ -198,6 +198,15 @@ async def get_session(session_id: str):
     return {"session": session.to_dict()}
 
 
+@app.delete("/api/sessions/{session_id}", dependencies=[Depends(verify_api_key)])
+async def delete_session(session_id: str):
+    sm = SessionManager()
+    ok = sm.delete(session_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"ok": True}
+
+
 @app.get("/api/files", dependencies=[Depends(verify_api_key)])
 async def list_or_read_file(path: str = ""):
     target = _resolve_path(path)

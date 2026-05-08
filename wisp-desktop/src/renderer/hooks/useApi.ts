@@ -4,6 +4,7 @@ import type { SessionSummary, Message, ToolCallItem } from '../state/types.js';
 interface ApiClient {
   fetchSessions: () => Promise<SessionSummary[]>;
   fetchSession: (id: string) => Promise<Message[]>;
+  deleteSession: (id: string) => Promise<boolean>;
   healthCheck: () => Promise<boolean>;
 }
 
@@ -19,9 +20,9 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
   const authParams = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
 
   const apiFetch = useCallback(
-    async (path: string): Promise<unknown> => {
+    async (path: string, opts?: { method?: string }): Promise<unknown> => {
       const url = serverUrl.replace(/\/$/, '') + path;
-      const resp = await fetch(url);
+      const resp = await fetch(url, { method: opts?.method || 'GET' });
       if (!resp.ok) throw new Error(`API ${resp.status}: ${resp.statusText}`);
       return resp.json();
     },
@@ -78,6 +79,18 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
     return messages;
   }, [apiFetch, authParams]);
 
+  const deleteSession = useCallback(async (id: string): Promise<boolean> => {
+    try {
+      const data = await apiFetch(
+        `/api/sessions/${encodeURIComponent(id)}${authParams}`,
+        { method: 'DELETE' },
+      ) as { ok?: boolean };
+      return data.ok === true;
+    } catch {
+      return false;
+    }
+  }, [apiFetch, authParams]);
+
   const healthCheck = useCallback(async (): Promise<boolean> => {
     try {
       const data = await apiFetch('/api/health') as { status: string };
@@ -87,5 +100,5 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
     }
   }, [apiFetch]);
 
-  return { fetchSessions, fetchSession, healthCheck };
+  return { fetchSessions, fetchSession, deleteSession, healthCheck };
 }

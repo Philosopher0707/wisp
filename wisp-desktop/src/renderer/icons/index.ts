@@ -19,4 +19,5 @@ export {
   Square,
   SlidersHorizontal,
   Paperclip,
+  Trash2,
 } from 'lucide-react';

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useAppState } from '../../state/context.js';
 import { useApi } from '../../hooks/useApi.js';
+import { Trash2 } from '../../icons/index.js';
 import { SidebarNav } from '../sidebar/SidebarNav.js';
 import { PinnedSection } from '../sidebar/PinnedSection.js';
 import { ProjectsSection } from '../sidebar/ProjectsSection.js';
@@ -35,6 +36,18 @@ export const Sidebar: React.FC = () => {
     }
   };
 
+  const handleDeleteSession = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    const ok = await api.deleteSession(id);
+    if (ok) {
+      if (id === state.sessionId) {
+        dispatch({ type: 'NEW_CHAT' });
+      }
+      // trigger session list refresh
+      dispatch({ type: 'RECEIVE_COMPLETE' });
+    }
+  };
+
   return (
     <aside className="sidebar">
       <div className="sidebar-top">
@@ -50,6 +63,13 @@ export const Sidebar: React.FC = () => {
                 {loadingId === s.id ? 'Loading...' : (s.title || s.id.slice(0, 12))}
               </span>
               <span className="chat-list-item-time">{s.msg_count} msgs</span>
+              <button
+                className="chat-list-delete-btn"
+                title="Delete session"
+                onClick={(e) => handleDeleteSession(e, s.id)}
+              >
+                <Trash2 size={13} />
+              </button>
             </button>
           ))}
           {state.sessions.length === 0 && (
