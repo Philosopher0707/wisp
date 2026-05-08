@@ -7,12 +7,58 @@
   flex-direction: column;
   justify-content: space-between;
   overflow: hidden;
+  transition: width var(--transition-normal), min-width var(--transition-normal);
+}
+
+.sidebar--collapsed {
+  width: var(--sidebar-collapsed-width);
+  min-width: var(--sidebar-collapsed-width);
 }
 
 .sidebar-top {
   flex: 1;
   overflow-y: auto;
   padding-top: var(--space-2);
+}
+
+.sidebar-session-filter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: var(--space-2) var(--space-3);
+  padding: var(--space-1) var(--space-2);
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.sidebar-filter-icon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.sidebar-filter-input {
+  flex: 1;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+}
+
+.sidebar-filter-input::placeholder {
+  color: var(--text-muted);
+}
+
+.sidebar-filter-clear {
+  color: var(--text-muted);
+  font-size: var(--text-lg);
+  padding: 0 2px;
+  line-height: 1;
+  transition: color var(--transition-fast);
+}
+
+.sidebar-filter-clear:hover {
+  color: var(--text-primary);
 }
 
 .sidebar-session-list {
@@ -22,65 +68,6 @@
   gap: 2px;
 }
 
-.chat-list-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  width: 100%;
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  font-size: var(--text-sm);
-  text-align: left;
-  transition: background var(--transition-fast);
-  position: relative;
-}
-
-.chat-list-item:hover {
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-primary);
-}
-
-.chat-list-item--active {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-primary);
-}
-
-.chat-list-item-title {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-list-item-time {
-  font-size: var(--text-xs);
-  color: var(--text-muted);
-  flex-shrink: 0;
-}
-
-.chat-list-delete-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 4px;
-  color: var(--text-muted);
-  opacity: 0;
-  transition: opacity var(--transition-fast), color var(--transition-fast), background var(--transition-fast);
-  flex-shrink: 0;
-}
-
-.chat-list-item:hover .chat-list-delete-btn {
-  opacity: 1;
-}
-
-.chat-list-delete-btn:hover {
-  color: #f87171;
-  background: rgba(248, 113, 113, 0.12);
-}
-
 .sidebar-empty {
   padding: var(--space-4) var(--space-3);
   color: var(--text-muted);
@@ -88,21 +75,109 @@
   text-align: center;
 }
 
-.chat-list-rename-input {
-  width: 100%;
-  background: var(--bg-input);
-  border: 1px solid var(--accent-purple);
-  border-radius: 3px;
-  color: var(--text-primary);
-  font-size: var(--text-sm);
-  font-family: var(--font-sans);
-  padding: 1px 4px;
-  outline: none;
+/* ── Collapse toggle ── */
+
+.sidebar-bottom-group {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.chat-list-title-text {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.sidebar-collapse-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 32px;
+  color: var(--text-muted);
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.sidebar-collapse-btn:hover {
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.sidebar--collapsed .sidebar-collapse-btn {
+  height: 36px;
+}
+
+/* ── Bulk select ── */
+
+.sidebar-bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  background: rgba(139, 92, 246, 0.08);
+  border-bottom: 1px solid rgba(139, 92, 246, 0.15);
+  font-size: var(--text-xs);
+  flex-wrap: wrap;
+}
+
+.sidebar-bulk-count {
+  color: var(--text-secondary);
+  font-weight: 500;
+  flex: 1;
+}
+
+.sidebar-bulk-btn {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  padding: 2px 6px;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  border-radius: 3px;
+}
+
+.sidebar-bulk-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.sidebar-bulk-delete {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-xs);
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+
+.sidebar-bulk-delete:hover {
+  background: rgba(239, 68, 68, 0.2);
+}
+
+.sidebar-bulk-delete:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ── Session checkbox ── */
+
+.chat-list-item-check {
+  display: flex;
+  align-items: center;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+  padding: 2px;
+  border-radius: 2px;
+}
+
+.chat-list-item:hover .chat-list-item-check,
+.chat-list-item-check:hover {
+  opacity: 1;
+}
+
+.chat-list-item-check:hover {
+  color: var(--accent-purple);
 }

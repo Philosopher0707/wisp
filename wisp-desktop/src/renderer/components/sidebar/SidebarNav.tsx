@@ -1,10 +1,11 @@
 import React from 'react';
 import { useAppState } from '../../state/context.js';
-import { Pencil, Search, Grid3x3, Bot } from '../../icons/index.js';
+import { Pencil, Search, Grid3x3 } from '../../icons/index.js';
 import './SidebarNav.css';
 
 export const SidebarNav: React.FC = () => {
-  const { dispatch } = useAppState();
+  const { state, dispatch } = useAppState();
+  const collapsed = state.sidebarCollapsed;
 
   const handleClick = (label: string) => {
     switch (label) {
@@ -17,9 +18,6 @@ export const SidebarNav: React.FC = () => {
       case 'Plugins':
         dispatch({ type: 'OPEN_OVERLAY', overlay: 'plugins' });
         break;
-      case 'Automations':
-        dispatch({ type: 'OPEN_OVERLAY', overlay: 'plugins' });
-        break;
     }
   };
 
@@ -27,15 +25,19 @@ export const SidebarNav: React.FC = () => {
     { icon: Pencil, label: 'New Chat' },
     { icon: Search, label: 'Search' },
     { icon: Grid3x3, label: 'Plugins' },
-    { icon: Bot, label: 'Automations' },
   ];
 
   return (
-    <nav className="sidebar-nav">
+    <nav className={`sidebar-nav${collapsed ? ' sidebar-nav--collapsed' : ''}`}>
       {navItems.map((item) => (
-        <button key={item.label} className="sidebar-nav-item" onClick={() => handleClick(item.label)}>
+        <button
+          key={item.label}
+          className="sidebar-nav-item"
+          onClick={() => handleClick(item.label)}
+          title={collapsed ? item.label : undefined}
+        >
           <item.icon size={16} />
-          <span>{item.label}</span>
+          {!collapsed && <span>{item.label}</span>}
         </button>
       ))}
     </nav>

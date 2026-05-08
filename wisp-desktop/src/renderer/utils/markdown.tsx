@@ -1,7 +1,9 @@
 import React from 'react';
 import hljs from 'highlight.js';
+import { useAppState } from '../state/context.js';
+import { DiffPreview } from '../components/chat/DiffPreview.js';
 
-function highlightCode(code: string, lang?: string): string {
+export function highlightCode(code: string, lang?: string): string {
   if (!code.trim()) return '';
   try {
     if (lang && hljs.getLanguage(lang)) {
@@ -13,8 +15,37 @@ function highlightCode(code: string, lang?: string): string {
   }
 }
 
+function guessFilePath(lang: string, workspacePath: string): string {
+  if (!workspacePath) return '';
+  const extMap: Record<string, string> = {
+    typescript: '.ts', tsx: '.tsx', javascript: '.js', jsx: '.jsx',
+    python: '.py', rust: '.rs', go: '.go', java: '.java', css: '.css',
+    html: '.html', json: '.json', yaml: '.yml', markdown: '.md',
+    sql: '.sql', sh: '.sh', bash: '.sh', toml: '.toml', xml: '.xml',
+    ruby: '.rb', php: '.php', swift: '.swift', kotlin: '.kt',
+  };
+  const ext = extMap[lang] || `.${lang}` || '';
+  return `${workspacePath}/new_file${ext}`;
+}
+
 const CodeBlock: React.FC<{ code: string; lang: string }> = ({ code, lang }) => {
   const [copied, setCopied] = React.useState(false);
+  const [applying, setApplying] = React.useState(false);
+  const [applyPath, setApplyPath] = React.useState('');
+  const [applyStatus, setApplyStatus] = React.useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [applyMsg, setApplyMsg] = React.useState('');
+  const inputRef = React.useRef<HTMLInputElement>(null);
+
+  const { state } = useAppState();
+  const serverUrl = state.serverUrl;
+  const apiKey = state.apiKey;
+  const workspacePath = state.workspacePath;
+
+  const isRunnable = /^(sh|bash|shell|zsh)$/.test(lang);
+
+  const [running, setRunning] = React.useState(false);
+  const [runOutput, setRunOutput] = React.useState<{ stdout: string; stderr: string; exitCode: number } | null>(null);
+  const [showOutput, setShowOutput] = React.useState(false);
 
   const handleCopy = async () => {
     try {
@@ -22,7 +53,6 @@ const CodeBlock: React.FC<{ code: string; lang: string }> = ({ code, lang }) => 
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      // fallback for older Electron
       const ta = document.createElement('textarea');
       ta.value = code;
       ta.style.position = 'fixed';
@@ -36,19 +66,214 @@ const CodeBlock: React.FC<{ code: string; lang: string }> = ({ code, lang }) => 
     }
   };
 
+  const handleRun = async () => {
+    setRunning(true);
+    setShowOutput(true);
+    setRunOutput(null);
+    try {
+      const base = serverUrl.replace(/\/$/, '');
+      const params = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
+      const body = JSON.stringify({ command: code, cwd: workspacePath || '.' });
+      const resp = await fetch(`${base}/api/bash${params}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+        setRunOutput({ stdout: '', stderr: (err as { detail?: string }).detail || resp.statusText, exitCode: 1 });
+      } else {
+        const data = await resp.json() as { stdout: string; stderr: string; exit_code: number };
+        setRunOutput({ stdout: data.stdout, stderr: data.stderr, exitCode: data.exit_code });
+      }
+    } catch (err) {
+      setRunOutput({ stdout: '', stderr: err instanceof Error ? err.message : 'Run failed', exitCode: 1 });
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const startApply = () => {
+    setApplying(true);
+    setApplyStatus('idle');
+    setApplyMsg('');
+    const guess = guessFilePath(lang, workspacePath);
+    setApplyPath(guess);
+    setTimeout(() => inputRef.current?.focus(), 50);
+  };
+
+  const cancelApply = () => {
+    setApplying(false);
+    setApplyPath('');
+    setApplyStatus('idle');
+  };
+
+  const [diffData, setDiffData] = React.useState<{ diff: string; isNew: boolean } | null>(null);
+  const [diffPath, setDiffPath] = React.useState('');
+
+  const submitApply = async () => {
+    const fp = applyPath.trim();
+    if (!fp) return;
+
+    let relPath = fp;
+    if (workspacePath && fp.startsWith(workspacePath)) {
+      relPath = fp.slice(workspacePath.length).replace(/^\//, '');
+    }
+
+    setApplyStatus('saving');
+    try {
+      const base = serverUrl.replace(/\/$/, '');
+      const params = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
+
+      // Fetch diff preview
+      const diffResp = await fetch(`${base}/api/diff${params}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: relPath, new_content: code }),
+      });
+      if (!diffResp.ok) {
+        const err = await diffResp.json().catch(() => ({ detail: diffResp.statusText }));
+        throw new Error((err as { detail?: string }).detail || diffResp.statusText);
+      }
+      const d = await diffResp.json() as { diff: string; is_new: boolean; path: string };
+      setDiffData({ diff: d.diff, isNew: d.is_new });
+      setDiffPath(relPath);
+      setApplyStatus('idle');
+    } catch (err) {
+      setApplyStatus('error');
+      setApplyMsg(err instanceof Error ? err.message : 'Failed to generate diff');
+    }
+  };
+
+  const confirmApply = async () => {
+    if (!diffPath) return;
+    setApplyStatus('saving');
+    try {
+      const base = serverUrl.replace(/\/$/, '');
+      const params = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
+      const qs = `${params}${params ? '&' : '?'}path=${encodeURIComponent(diffPath)}`;
+      const resp = await fetch(`${base}/api/files${qs}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: code }),
+      });
+      if (resp.ok) {
+        setApplyStatus('saved');
+        setApplyMsg(`Written to ${diffPath}`);
+        setDiffData(null);
+        setDiffPath('');
+        setTimeout(() => { setApplying(false); setApplyStatus('idle'); }, 2000);
+      } else {
+        const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+        throw new Error((err as { detail?: string }).detail || resp.statusText);
+      }
+    } catch (err) {
+      setApplyStatus('error');
+      setApplyMsg(err instanceof Error ? err.message : 'Failed to write file');
+    }
+  };
+
   return (
     <pre className="md-code-block">
       {lang && <div className="md-code-lang">{lang}</div>}
-      <button
-        className={`md-copy-btn ${copied ? 'md-copy-btn--copied' : ''}`}
-        onClick={handleCopy}
-        title="Copy code"
-      >
-        {copied ? 'Copied!' : 'Copy'}
-      </button>
+      <div className="md-code-actions">
+        <button
+          className={`md-copy-btn ${copied ? 'md-copy-btn--copied' : ''}`}
+          onClick={handleCopy}
+          title="Copy code"
+        >
+          {copied ? 'Copied!' : 'Copy'}
+        </button>
+        <button
+          className="md-apply-btn"
+          onClick={startApply}
+          title="Apply to file"
+        >
+          Apply
+        </button>
+        {isRunnable && (
+          <button
+            className="md-run-btn"
+            onClick={handleRun}
+            disabled={running}
+            title="Run command"
+          >
+            {running ? '...' : 'Run'}
+          </button>
+        )}
+      </div>
+      {applying && !diffData && (
+        <div className="md-apply-form">
+          <input
+            ref={inputRef}
+            className="md-apply-input"
+            type="text"
+            placeholder="path/to/file.ts"
+            value={applyPath}
+            onChange={(e) => { setApplyPath(e.target.value); setApplyStatus('idle'); }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') submitApply();
+              if (e.key === 'Escape') cancelApply();
+            }}
+          />
+          <button
+            className="md-apply-submit"
+            onClick={submitApply}
+            disabled={applyStatus === 'saving'}
+          >
+            {applyStatus === 'saving' ? 'Diffing...' : 'Preview'}
+          </button>
+          <button className="md-apply-cancel" onClick={cancelApply}>Cancel</button>
+          {applyMsg && (
+            <span className={`md-apply-msg md-apply-msg--${applyStatus}`}>{applyMsg}</span>
+          )}
+        </div>
+      )}
+      {applying && diffData && (
+        <DiffPreview diff={diffData.diff} path={diffPath} isNew={diffData.isNew} />
+      )}
+      {applying && diffData && (
+        <div className="diff-actions">
+          <button className="diff-cancel" onClick={() => { setDiffData(null); setDiffPath(''); }}>Cancel</button>
+          <button
+            className="diff-confirm"
+            onClick={confirmApply}
+            disabled={applyStatus === 'saving'}
+          >
+            {applyStatus === 'saving' ? 'Saving...' : `Write to ${diffPath}`}
+          </button>
+          {applyMsg && (
+            <span className={`md-apply-msg md-apply-msg--${applyStatus}`}>{applyMsg}</span>
+          )}
+        </div>
+      )}
       <code
         dangerouslySetInnerHTML={{ __html: highlightCode(code, lang) }}
       />
+      {showOutput && runOutput && (
+        <div className="md-run-output">
+          <div className="md-run-output-header">
+            <span className={`md-run-exit ${runOutput.exitCode === 0 ? 'md-run-exit--ok' : 'md-run-exit--err'}`}>
+              exit: {runOutput.exitCode}
+            </span>
+            <button className="md-run-close" onClick={() => setShowOutput(false)}>×</button>
+          </div>
+          {runOutput.stdout && (
+            <pre className="md-run-stdout">{runOutput.stdout.slice(-8000)}</pre>
+          )}
+          {runOutput.stderr && (
+            <pre className="md-run-stderr">{runOutput.stderr.slice(-8000)}</pre>
+          )}
+          {!runOutput.stdout && !runOutput.stderr && (
+            <p className="md-run-empty">(no output)</p>
+          )}
+        </div>
+      )}
+      {showOutput && !runOutput && running && (
+        <div className="md-run-output">
+          <p className="md-run-loading">Running...</p>
+        </div>
+      )}
     </pre>
   );
 };

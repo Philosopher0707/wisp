@@ -21,7 +21,7 @@ export function useMenuIPC(dispatch: Dispatch<Action>) {
           });
           break;
         case 'find':
-          // Focus search — handled by SearchModal state
+          dispatch({ type: 'OPEN_OVERLAY', overlay: 'search' });
           break;
         case 'toggle-thinking':
           dispatch({ type: 'TOGGLE_THINKING' });

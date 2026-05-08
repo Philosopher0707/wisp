@@ -29,6 +29,11 @@
   color: var(--text-primary);
 }
 
+.toolbar-icon-btn--active {
+  color: var(--accent-purple);
+  background: rgba(139, 92, 246, 0.12);
+}
+
 .full-access-badge {
   display: flex;
   align-items: center;

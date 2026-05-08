@@ -3,3 +3,16 @@
   height: 100%;
   width: 100%;
 }
+
+.sidebar-resize-handle {
+  width: 4px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background var(--transition-fast);
+  flex-shrink: 0;
+  z-index: 10;
+}
+
+.sidebar-resize-handle:hover {
+  background: rgba(139, 92, 246, 0.4);
+}

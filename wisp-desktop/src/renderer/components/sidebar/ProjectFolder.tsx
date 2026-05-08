@@ -1,15 +1,14 @@
 import React from 'react';
 import { useAppState } from '../../state/context.js';
 import { ChevronDown } from '../../icons/index.js';
-import { ChatListItem } from './ChatListItem.js';
 import './SidebarSections.css';
 
-interface ProjectFolderProps {
+interface Props {
   id: string;
   name: string;
 }
 
-export const ProjectFolder: React.FC<ProjectFolderProps> = ({ id, name }) => {
+export const ProjectFolder: React.FC<Props> = ({ id, name }) => {
   const { state, dispatch } = useAppState();
   const expanded = state.sidebarExpandedProjects.has(id);
 
@@ -27,8 +26,7 @@ export const ProjectFolder: React.FC<ProjectFolderProps> = ({ id, name }) => {
       </button>
       {expanded && (
         <div className="project-folder-children">
-          <ChatListItem />
-          <ChatListItem />
+          <p className="sidebar-empty">No sessions yet</p>
         </div>
       )}
     </div>

@@ -260,6 +260,12 @@ class WispConfig:
         self.max_context_tokens: int = int(raw_ctx) if raw_ctx is not None else DEFAULT_MAX_CONTEXT_TOKENS
         # Track whether user explicitly set context window (disables auto-detection)
         self._context_tokens_explicit: bool = raw_ctx is not None
+        # Permissions: full | ask_all | auto_edit | read_only
+        self.permission_mode: str = get_setting("permission_mode", "full")
+        # Plan mode: agent plans only, no tool execution
+        self.plan_mode: bool = str(get_setting("plan_mode", "false")).lower() == "true"
+        # Plan context: approved plan injected into system prompt
+        self.plan_context: Optional[str] = None
         # Tokens per character estimate for context budget (4 is conservative for code/text)
         self.chars_per_token: int = int(get_setting("chars_per_token", "4"))
         # Auto-compaction settings

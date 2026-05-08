@@ -30,13 +30,14 @@
   --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Display',
     'SF Pro Text', 'Helvetica Neue', sans-serif;
   --font-mono: 'SF Mono', 'Fira Code', monospace;
-  --text-xs: 11px;
-  --text-sm: 12px;
-  --text-base: 13px;
-  --text-md: 14px;
-  --text-lg: 16px;
-  --text-xl: 20px;
-  --text-2xl: 32px;
+  --font-scale: 1;
+  --text-xs: calc(11px * var(--font-scale));
+  --text-sm: calc(12px * var(--font-scale));
+  --text-base: calc(13px * var(--font-scale));
+  --text-md: calc(14px * var(--font-scale));
+  --text-lg: calc(16px * var(--font-scale));
+  --text-xl: calc(20px * var(--font-scale));
+  --text-2xl: calc(32px * var(--font-scale));
 
   /* ── Spacing ── */
   --space-1: 4px;
@@ -57,6 +58,7 @@
 
   /* ── Layout ── */
   --sidebar-width: 240px;
+  --sidebar-collapsed-width: 52px;
   --topbar-height: 44px;
   --input-max-width: 720px;
   --traffic-light-offset: 78px;

@@ -388,6 +388,19 @@ class WispAgentCore:
             else:
                 logger.warning("Skill '%s' not found in discovered skills", effective_skill)
 
+        if self.config.plan_mode:
+            system += (
+                "\n\n## PLAN MODE ACTIVE\n"
+                "You are in plan mode. Your job is to produce a detailed implementation plan.\n"
+                "- Use read-only tools (read_file, list_files, search_symbols, lsp_*) to understand the codebase.\n"
+                "- Do NOT modify any files, run bash commands, or make git changes.\n"
+                "- Output a structured plan in markdown with: summary, files to touch, step-by-step approach, edge cases.\n"
+                "- End with '## Plan Complete' when finished."
+            )
+
+        if self.config.plan_context:
+            system += f"\n\n## Approved Plan\n{self.config.plan_context}\n\nFollow the approved plan above. Execute each step."
+
         self._system_prompt_cache[cache_key] = system
         return system
 
@@ -684,6 +697,69 @@ class WispAgentCore:
                     func_args = {}
             if not isinstance(func_args, dict):
                 func_args = {}
+
+            # ── Permission mode enforcement ──
+            pm = self.config.permission_mode
+            write_tools = {
+                "write_file", "edit_file", "edit_file_multi", "run_bash",
+                "git_branch", "git_commit", "git_push", "gh_pr_create",
+                "plan_task", "mark_step_done", "update_plan",
+            }
+
+            if pm == "read_only" and func_name in write_tools:
+                blocked = f"[Blocked: read-only mode — {func_name} requires write access]"
+                yield tool_result_event(func_name, blocked)
+                self.messages.append({
+                    "role": "tool", "content": blocked, "name": func_name,
+                    **({"tool_call_id": tc.get("id")} if tc.get("id") else {}),
+                })
+                continue
+
+            if pm == "ask_all":
+                yield approval_request(func_name, func_args, reason=f"Permission mode: ask_all — {func_name}")
+                if approval_handler is not None:
+                    approved, modified_args = await approval_handler(func_name, func_args, "ask_all")
+                    if not approved:
+                        denied = f"[Denied by user]"
+                        yield tool_result_event(func_name, denied)
+                        self.messages.append({
+                            "role": "tool", "content": denied, "name": func_name,
+                            **({"tool_call_id": tc.get("id")} if tc.get("id") else {}),
+                        })
+                        continue
+                    if modified_args is not None:
+                        func_args = modified_args
+                else:
+                    blocked = f"[Blocked: approval required but no handler available]"
+                    yield tool_result_event(func_name, blocked)
+                    self.messages.append({
+                        "role": "tool", "content": blocked, "name": func_name,
+                        **({"tool_call_id": tc.get("id")} if tc.get("id") else {}),
+                    })
+                    continue
+
+            if pm == "auto_edit" and func_name in write_tools:
+                yield approval_request(func_name, func_args, reason=f"Permission mode: auto_edit — {func_name}")
+                if approval_handler is not None:
+                    approved, modified_args = await approval_handler(func_name, func_args, "auto_edit")
+                    if not approved:
+                        denied = f"[Denied by user]"
+                        yield tool_result_event(func_name, denied)
+                        self.messages.append({
+                            "role": "tool", "content": denied, "name": func_name,
+                            **({"tool_call_id": tc.get("id")} if tc.get("id") else {}),
+                        })
+                        continue
+                    if modified_args is not None:
+                        func_args = modified_args
+                else:
+                    blocked = f"[Blocked: approval required but no handler available]"
+                    yield tool_result_event(func_name, blocked)
+                    self.messages.append({
+                        "role": "tool", "content": blocked, "name": func_name,
+                        **({"tool_call_id": tc.get("id")} if tc.get("id") else {}),
+                    })
+                    continue
 
             # Dangerous command guard
             danger_reason = None

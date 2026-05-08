@@ -36,6 +36,8 @@ export interface Message {
   content: string;
   thinking?: string;
   toolCalls?: ToolCallItem[];
+  timestamp?: number;
+  tokens?: number;
 }
 
 export interface ApprovalRequest {
@@ -53,6 +55,7 @@ export interface AppState {
   connection: ConnectionState;
   connectionError: string | null;
   sidebarExpandedProjects: Set<string>;
+  pinnedSessionIds: Set<string>;
   pinnedChats: ChatSummary[];
   projects: ProjectFolder[];
   sessions: SessionSummary[];
@@ -66,9 +69,19 @@ export interface AppState {
   reasoningLevel: 'low' | 'medium' | 'high';
   selectedProject: string | null;
   activeDropdown: string | null;
-  isFullAccessEnabled: boolean;
+  permissionMode: 'full' | 'ask_all' | 'auto_edit' | 'read_only';
   showThinking: boolean;
+  sidebarCollapsed: boolean;
+  availableModels: string[];
+  rightPanelOpen: boolean;
+  workspacePath: string;
   uiOverlay: string | null;
+  convSearchActive: boolean;
+  systemPrompt: string;
+  selectedFilePath: string | null;
+  gitCommitBanner: { branch: string; changedFiles: string[] } | null;
+  planMode: boolean;
+  pendingPlan: string | null;
 }
 
 // ── Actions ──
@@ -98,12 +111,26 @@ export type Action =
   | { type: 'SET_REASONING'; level: 'low' | 'medium' | 'high' }
   | { type: 'OPEN_DROPDOWN'; id: string }
   | { type: 'CLOSE_DROPDOWN' }
-  | { type: 'TOGGLE_FULL_ACCESS' }
+  | { type: 'SET_PERMISSION_MODE'; mode: 'full' | 'ask_all' | 'auto_edit' | 'read_only' }
   | { type: 'CLEAR_CHAT' }
   | { type: 'TOGGLE_THINKING' }
   | { type: 'SET_PROJECT'; projectId: string | null }
   | { type: 'OPEN_OVERLAY'; overlay: string }
-  | { type: 'CLOSE_OVERLAY' };
+  | { type: 'CLOSE_OVERLAY' }
+  | { type: 'TOGGLE_SIDEBAR' }
+  | { type: 'TOGGLE_RIGHT_PANEL' }
+  | { type: 'SET_WORKSPACE'; path: string }
+  | { type: 'SET_MODELS'; models: string[] }
+  | { type: 'TOGGLE_PIN_SESSION'; sessionId: string }
+  | { type: 'TOGGLE_CONV_SEARCH' }
+  | { type: 'SET_SYSTEM_PROMPT'; prompt: string }
+  | { type: 'SELECT_FILE'; path: string }
+  | { type: 'SHOW_GIT_BANNER'; branch: string; changedFiles: string[] }
+  | { type: 'DISMISS_GIT_BANNER' }
+  | { type: 'TOGGLE_PLAN_MODE' }
+  | { type: 'RECEIVE_PLAN'; content: string }
+  | { type: 'APPROVE_PLAN'; planContext: string }
+  | { type: 'REJECT_PLAN' };
 
 // ── Helpers ──
 
@@ -113,13 +140,21 @@ function nextMsgId(): string {
   return `msg-${_msgCounter}`;
 }
 
-export function createInitialState(overrides?: { serverUrl?: string; apiKey?: string }): AppState {
+export function createInitialState(overrides?: {
+  serverUrl?: string;
+  apiKey?: string;
+  selectedModel?: string;
+  pinnedSessionIds?: string[];
+  systemPrompt?: string;
+  permissionMode?: 'full' | 'ask_all' | 'auto_edit' | 'read_only';
+}): AppState {
   return {
     serverUrl: overrides?.serverUrl || 'http://localhost:8000',
     apiKey: overrides?.apiKey || '',
     connection: 'disconnected',
     connectionError: null,
     sidebarExpandedProjects: new Set<string>(),
+    pinnedSessionIds: new Set<string>(overrides?.pinnedSessionIds || []),
     pinnedChats: [],
     projects: [],
     sessions: [],
@@ -129,13 +164,23 @@ export function createInitialState(overrides?: { serverUrl?: string; apiKey?: st
     isStreaming: false,
     approvalPending: null,
     inputValue: '',
-    selectedModel: 'claude-sonnet-4-6',
+    selectedModel: overrides?.selectedModel || 'claude-sonnet-4-6',
     reasoningLevel: 'medium',
     selectedProject: null,
     activeDropdown: null,
-    isFullAccessEnabled: true,
     showThinking: false,
+    sidebarCollapsed: false,
+    availableModels: [],
+    rightPanelOpen: false,
+    workspacePath: '',
     uiOverlay: null,
+    convSearchActive: false,
+    systemPrompt: overrides?.systemPrompt || '',
+    selectedFilePath: null,
+    permissionMode: overrides?.permissionMode || 'full',
+    gitCommitBanner: null,
+    planMode: false,
+    pendingPlan: null,
   };
 }
 
@@ -150,7 +195,7 @@ export function appReducer(state: AppState, action: Action): AppState {
       return { ...state, sessions: action.sessions };
 
     case 'SET_SESSION_ID':
-      return { ...state, sessionId: action.id };
+      return { ...state, sessionId: action.id, inputValue: '' };
 
     case 'SET_MESSAGES':
       return { ...state, messages: action.messages };
@@ -182,12 +227,14 @@ export function appReducer(state: AppState, action: Action): AppState {
         id: nextMsgId(),
         role: 'user',
         content: action.content,
+        timestamp: Date.now(),
       };
       const assistantMsg: Message = {
         id: nextMsgId(),
         role: 'assistant',
         content: '',
         toolCalls: [],
+        timestamp: Date.now(),
       };
       return {
         ...state,
@@ -248,13 +295,22 @@ export function appReducer(state: AppState, action: Action): AppState {
     case 'RECEIVE_DONE':
       return { ...state, isStreaming: false };
 
-    case 'RECEIVE_COMPLETE':
+    case 'RECEIVE_COMPLETE': {
+      let msgs = state.messages;
+      const last = msgs[msgs.length - 1];
+      if (last && last.role === 'assistant') {
+        const totalChars = (last.content?.length || 0) + (last.thinking?.length || 0);
+        const estimatedTokens = Math.max(1, Math.ceil(totalChars / 4));
+        msgs = [...msgs.slice(0, -1), { ...last, tokens: estimatedTokens }];
+      }
       return {
         ...state,
         isStreaming: false,
         sessionId: action.sessionId || state.sessionId,
         sessionsVersion: state.sessionsVersion + 1,
+        messages: msgs,
       };
+    }
 
     case 'RECEIVE_ERROR':
       return {
@@ -296,8 +352,8 @@ export function appReducer(state: AppState, action: Action): AppState {
     case 'CLOSE_DROPDOWN':
       return { ...state, activeDropdown: null };
 
-    case 'TOGGLE_FULL_ACCESS':
-      return { ...state, isFullAccessEnabled: !state.isFullAccessEnabled };
+    case 'SET_PERMISSION_MODE':
+      return { ...state, permissionMode: action.mode };
 
     case 'CLEAR_CHAT':
       return { ...state, messages: [] };
@@ -313,6 +369,52 @@ export function appReducer(state: AppState, action: Action): AppState {
 
     case 'CLOSE_OVERLAY':
       return { ...state, uiOverlay: null };
+
+    case 'TOGGLE_SIDEBAR':
+      return { ...state, sidebarCollapsed: !state.sidebarCollapsed };
+
+    case 'SET_MODELS':
+      return { ...state, availableModels: action.models };
+
+    case 'TOGGLE_PIN_SESSION': {
+      const nextPins = new Set(state.pinnedSessionIds);
+      if (nextPins.has(action.sessionId)) nextPins.delete(action.sessionId);
+      else nextPins.add(action.sessionId);
+      return { ...state, pinnedSessionIds: nextPins };
+    }
+
+    case 'TOGGLE_RIGHT_PANEL':
+      return { ...state, rightPanelOpen: !state.rightPanelOpen };
+
+    case 'SET_WORKSPACE':
+      return { ...state, workspacePath: action.path };
+
+    case 'TOGGLE_CONV_SEARCH':
+      return { ...state, convSearchActive: !state.convSearchActive };
+
+    case 'SET_SYSTEM_PROMPT':
+      return { ...state, systemPrompt: action.prompt };
+
+    case 'SELECT_FILE':
+      return { ...state, rightPanelOpen: true, selectedFilePath: action.path };
+
+    case 'SHOW_GIT_BANNER':
+      return { ...state, gitCommitBanner: { branch: action.branch, changedFiles: action.changedFiles } };
+
+    case 'DISMISS_GIT_BANNER':
+      return { ...state, gitCommitBanner: null };
+
+    case 'TOGGLE_PLAN_MODE':
+      return { ...state, planMode: !state.planMode };
+
+    case 'RECEIVE_PLAN':
+      return { ...state, pendingPlan: action.content, isStreaming: false };
+
+    case 'APPROVE_PLAN':
+      return { ...state, pendingPlan: null, planMode: false };
+
+    case 'REJECT_PLAN':
+      return { ...state, pendingPlan: null, planMode: false };
 
     default:
       return state;

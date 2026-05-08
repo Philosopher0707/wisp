@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
+import { exec } from 'child_process';
 import { createMainWindow } from './window.js';
 import { buildMenu } from './menu.js';
 
@@ -12,6 +13,29 @@ function registerIpcHandlers(): void {
       title: 'Select files to attach',
     });
     return result.canceled ? null : result.filePaths;
+  });
+
+  ipcMain.handle('dialog:openDirectory', async () => {
+    if (!mainWindow) return null;
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openDirectory'],
+      title: 'Select Workspace Directory',
+    });
+    return result.canceled ? null : result.filePaths[0] || null;
+  });
+
+  ipcMain.handle('code:open', async (_e, workspacePath: string) => {
+    const cmd = `code "${workspacePath}"`;
+    return new Promise((resolve) => {
+      exec(cmd, (err) => {
+        if (err) {
+          // Fallback: try opening with shell
+          shell.openPath(workspacePath).then(() => resolve(true)).catch(() => resolve(false));
+        } else {
+          resolve(true);
+        }
+      });
+    });
   });
 }
 

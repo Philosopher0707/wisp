@@ -15,6 +15,15 @@
   justify-content: center;
 }
 
+.msg-row--highlighted {
+  animation: highlight-flash 1s ease;
+}
+
+@keyframes highlight-flash {
+  0%, 100% { background: transparent; }
+  50% { background: rgba(139, 92, 246, 0.1); }
+}
+
 .msg-bubble {
   max-width: 85%;
   padding: var(--space-2) var(--space-4);
@@ -73,4 +82,124 @@
 @keyframes pulse {
   0%, 100% { opacity: 0.4; }
   50% { opacity: 0.8; }
+}
+
+.msg-actions {
+  display: flex;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.msg-bubble--assistant:hover .msg-actions {
+  opacity: 1;
+}
+
+.msg-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.msg-action-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.msg-action-label {
+  color: var(--accent-purple-text);
+  font-size: var(--text-xs);
+}
+
+.msg-actions--user {
+  opacity: 0;
+  margin-top: var(--space-1);
+}
+
+.msg-bubble--user:hover .msg-actions--user {
+  opacity: 1;
+}
+
+.msg-edit-box {
+  width: 350px;
+  max-width: 100%;
+}
+
+.msg-edit-input {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  line-height: 1.5;
+  resize: vertical;
+  min-height: 72px;
+}
+
+.msg-edit-input:focus {
+  border-color: var(--accent-purple);
+  outline: none;
+}
+
+.msg-edit-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: var(--space-1);
+}
+
+.msg-edit-hint {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.msg-edit-btns {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.msg-edit-cancel {
+  padding: 3px var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.msg-edit-cancel:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.msg-edit-submit {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--accent-purple);
+  color: #fff;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  transition: background var(--transition-fast);
+}
+
+.msg-edit-submit:hover {
+  background: var(--accent-purple-hover);
+}
+
+.msg-meta {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  margin-left: auto;
+  white-space: nowrap;
 }

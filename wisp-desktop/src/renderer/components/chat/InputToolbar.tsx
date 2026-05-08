@@ -1,8 +1,9 @@
 import React from 'react';
 import { useAppState } from '../../state/context.js';
-import { Plus, Shield, Mic, ArrowUp, Square, ChevronDown } from '../../icons/index.js';
+import { Plus, Shield, Mic, ArrowUp, Square, ChevronDown, Sparkles } from '../../icons/index.js';
 import { ModelSelector } from './ModelSelector.js';
 import { ReasoningSelector } from './ReasoningSelector.js';
+import { PermissionSelector } from './PermissionSelector.js';
 import './InputToolbar.css';
 
 interface InputToolbarProps {
@@ -32,13 +33,13 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({ hasContent, onSubmit
         <button className="toolbar-icon-btn" title="Attach files" onClick={handleAttach}>
           <Plus size={18} />
         </button>
+        <PermissionSelector />
         <button
-          className="full-access-badge"
-          onClick={() => dispatch({ type: 'TOGGLE_FULL_ACCESS' })}
+          className={`toolbar-icon-btn ${state.planMode ? 'toolbar-icon-btn--active' : ''}`}
+          title={state.planMode ? 'Plan mode on' : 'Plan mode off'}
+          onClick={() => dispatch({ type: 'TOGGLE_PLAN_MODE' })}
         >
-          <Shield size={13} />
-          <span>{state.isFullAccessEnabled ? 'Full access' : 'Restricted'}</span>
-          <ChevronDown size={10} />
+          <Sparkles size={18} />
         </button>
       </div>
       <div className="input-toolbar-right">

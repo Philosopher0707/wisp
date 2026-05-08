@@ -5,5 +5,7 @@ interface Window {
     platform: string;
     onMenuAction: (callback: (action: string) => void) => () => void;
     openFileDialog: () => Promise<string[] | null>;
+    openInVSCode: (workspacePath: string) => Promise<boolean>;
+    selectDirectory: () => Promise<string | null>;
   };
 }

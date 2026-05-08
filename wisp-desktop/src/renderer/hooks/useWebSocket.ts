@@ -93,8 +93,26 @@ export function useWebSocket(
           case 'done':
             dispatch({ type: 'RECEIVE_DONE' });
             break;
+          case 'plan_ready':
+            dispatch({ type: 'RECEIVE_COMPLETE', sessionId: msg.session_id || undefined });
+            dispatch({ type: 'RECEIVE_PLAN', content: msg.content || '' });
+            break;
           case 'complete':
             dispatch({ type: 'RECEIVE_COMPLETE', sessionId: msg.session_id || undefined });
+            // Check git status after agent completes
+            (async () => {
+              try {
+                const base = serverUrl.replace(/\/$/, '');
+                const params = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
+                const resp = await fetch(`${base}/api/git${params}`);
+                if (resp.ok) {
+                  const git = await resp.json() as { git: boolean; branch?: string; dirty?: boolean; changed_files?: string[] };
+                  if (git.git && git.dirty && git.changed_files && git.changed_files.length > 0) {
+                    dispatch({ type: 'SHOW_GIT_BANNER', branch: git.branch || 'unknown', changedFiles: git.changed_files });
+                  }
+                }
+              } catch { /* ignore git check failures */ }
+            })();
             break;
           case 'error':
             dispatch({ type: 'RECEIVE_ERROR', message: msg.message || '' });

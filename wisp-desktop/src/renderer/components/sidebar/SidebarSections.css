@@ -29,23 +29,6 @@
   flex-direction: column;
 }
 
-/* ── Session list in sidebar ── */
-
-.sidebar-session-list {
-  display: flex;
-  flex-direction: column;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  padding-bottom: var(--space-2);
-  margin-bottom: var(--space-3);
-}
-
-.sidebar-empty {
-  color: var(--text-muted);
-  font-size: var(--text-sm);
-  padding: var(--space-2);
-  text-align: center;
-}
-
 /* ── ChatListItem ── */
 
 .chat-list-item {
@@ -72,6 +55,58 @@
   color: var(--text-muted);
   flex-shrink: 0;
   margin-top: 1px;
+  opacity: 0;
+  transition: opacity var(--transition-fast), color var(--transition-fast);
+}
+
+.chat-list-item:hover .chat-list-item-pin,
+.chat-list-item-pin--pinned {
+  opacity: 1;
+}
+
+.chat-list-item-pin--pinned {
+  color: var(--accent-purple-text);
+}
+
+.chat-list-delete-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity var(--transition-fast), color var(--transition-fast), background var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.chat-list-item:hover .chat-list-delete-btn {
+  opacity: 1;
+}
+
+.chat-list-delete-btn:hover {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.12);
+}
+
+.chat-list-rename-input {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--accent-purple);
+  border-radius: 3px;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-family: var(--font-sans);
+  padding: 1px 4px;
+  outline: none;
+}
+
+.chat-list-title-text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-list-item-title {

@@ -6,6 +6,11 @@
   margin-bottom: var(--space-3);
 }
 
+.sidebar-nav--collapsed {
+  padding-bottom: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
 .sidebar-nav-item {
   display: flex;
   align-items: center;
@@ -21,4 +26,12 @@
 
 .sidebar-nav-item:hover {
   background: var(--bg-hover);
+}
+
+.sidebar-nav--collapsed .sidebar-nav-item {
+  justify-content: center;
+  padding: 8px;
+  margin: 0 auto;
+  width: 36px;
+  gap: 0;
 }

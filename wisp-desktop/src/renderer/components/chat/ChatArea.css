@@ -11,6 +11,7 @@
 .chat-area--conversation {
   justify-content: flex-start;
   padding: 0;
+  position: relative;
 }
 
 .chat-area-center {
@@ -37,4 +38,33 @@
 .chat-input-centered {
   max-width: var(--input-max-width);
   margin: 0 auto;
+}
+
+.chat-scroll-btn {
+  position: absolute;
+  bottom: 120px;
+  right: 24px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--bg-dropdown);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  z-index: 10;
+  transition: background var(--transition-fast), color var(--transition-fast);
+  animation: fade-in var(--transition-fast);
+}
+
+.chat-scroll-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1); }
 }

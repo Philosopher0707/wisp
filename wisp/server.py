@@ -66,6 +66,10 @@ class FileEditRequest(BaseModel):
     old_text: str
     new_text: str
 
+class DiffRequest(BaseModel):
+    path: str
+    new_content: str
+
 class ToolApproval(BaseModel):
     call_id: str
     approved: bool
@@ -161,6 +165,28 @@ async def health():
     return {"status": "ok", "version": "0.1.0"}
 
 
+@app.get("/api/workspace")
+async def workspace_info():
+    return {"path": str(WORKSPACE_ROOT)}
+
+
+class WorkspaceRequest(BaseModel):
+    path: str = Field(..., min_length=1, max_length=1000)
+
+
+@app.post("/api/workspace", dependencies=[Depends(verify_api_key)])
+async def set_workspace(req: WorkspaceRequest):
+    global WORKSPACE_ROOT
+    new_root = Path(req.path).resolve()
+    if not new_root.exists():
+        raise HTTPException(status_code=400, detail="Directory does not exist")
+    if not new_root.is_dir():
+        raise HTTPException(status_code=400, detail="Path is not a directory")
+    WORKSPACE_ROOT = new_root
+    logger.info("Workspace changed to %s", WORKSPACE_ROOT)
+    return {"path": str(WORKSPACE_ROOT)}
+
+
 @app.get("/api/models", dependencies=[Depends(verify_api_key)])
 async def list_models():
     """List available Ollama models."""
@@ -222,6 +248,47 @@ async def rename_session(session_id: str, req: RenameRequest):
     return {"ok": True, "title": req.title}
 
 
+class ForkRequest(BaseModel):
+    messages: list[dict]
+    title: Optional[str] = None
+
+
+@app.post("/api/sessions/fork", dependencies=[Depends(verify_api_key)])
+async def fork_session(req: ForkRequest):
+    from wisp.session import Session
+    import copy, uuid
+
+    sm = SessionManager()
+    now = _now_iso()
+    if req.title:
+        slug = req.title[:60].strip()
+    else:
+        slug = "forked"
+    sid = f"{_timestamp_id()}-{slug}"
+
+    session = Session(
+        id=sid,
+        created_at=now,
+        updated_at=now,
+        model="",
+        workspace=str(WORKSPACE_ROOT),
+        messages=copy.deepcopy(req.messages),
+        title=slug,
+    )
+    sm.save(session)
+    return {"session_id": session.id, "title": session.title}
+
+
+def _now_iso():
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _timestamp_id():
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+
+
 @app.get("/api/files", dependencies=[Depends(verify_api_key)])
 async def list_or_read_file(path: str = ""):
     target = _resolve_path(path)
@@ -244,6 +311,26 @@ async def list_or_read_file(path: str = ""):
             raise HTTPException(status_code=500, detail=str(e))
     else:
         raise HTTPException(status_code=404, detail="Not found")
+
+
+@app.get("/api/files/tree", dependencies=[Depends(verify_api_key)])
+async def file_tree():
+    """Return a flat list of all files recursively (for quick-open)."""
+    files = []
+    for root, dirs, filenames in os.walk(WORKSPACE_ROOT):
+        # Skip hidden directories and common ignore patterns
+        dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ('node_modules', '__pycache__', '.git', 'dist', 'build', 'target', '.next', 'venv', '.venv', 'env')]
+        for f in filenames:
+            if f.startswith('.'):
+                continue
+            full = os.path.join(root, f)
+            try:
+                rel = os.path.relpath(full, WORKSPACE_ROOT)
+                files.append({"name": f, "path": rel, "size": os.path.getsize(full)})
+            except OSError:
+                pass
+    files.sort(key=lambda x: x["path"])
+    return {"files": files}
 
 
 @app.post("/api/files", dependencies=[Depends(verify_api_key)])
@@ -273,6 +360,95 @@ async def edit_file(path: str, req: FileEditRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/diff", dependencies=[Depends(verify_api_key)])
+async def diff_file(req: DiffRequest):
+    target = _resolve_path(req.path)
+    if target.is_file():
+        try:
+            old_content = target.read_text(encoding="utf-8", errors="replace")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to read file: {e}")
+        from wisp.diff import generate_diff_string
+        diff = generate_diff_string(old_content, req.new_content)
+        return {"diff": diff, "is_new": False, "path": req.path}
+    else:
+        from wisp.diff import generate_diff_string
+        diff = generate_diff_string("", req.new_content)
+        return {"diff": diff, "is_new": True, "path": req.path}
+
+
+@app.get("/api/git", dependencies=[Depends(verify_api_key)])
+async def git_status():
+    import subprocess
+    git_dir = WORKSPACE_ROOT / ".git"
+    if not git_dir.exists():
+        return {"git": False}
+
+    result: dict = {"git": True, "branch": "", "dirty": False, "ahead": 0, "behind": 0, "changed_files": []}
+
+    try:
+        branch = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=5,
+        )
+        if branch.returncode == 0:
+            result["branch"] = branch.stdout.strip()
+    except Exception:
+        pass
+
+    try:
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=5,
+        )
+        if status.returncode == 0:
+            lines = [l for l in status.stdout.strip().split("\n") if l]
+            result["dirty"] = len(lines) > 0
+            result["changed_files"] = [l[3:].strip() for l in lines]
+    except Exception:
+        pass
+
+    return result
+
+
+class GitCommitRequest(BaseModel):
+    message: Optional[str] = None
+
+
+@app.post("/api/git/commit", dependencies=[Depends(verify_api_key)])
+async def git_commit(req: GitCommitRequest):
+    import subprocess
+    git_dir = WORKSPACE_ROOT / ".git"
+    if not git_dir.exists():
+        raise HTTPException(status_code=400, detail="No git repository")
+
+    # Stage all changes
+    add = subprocess.run(
+        ["git", "add", "-A"],
+        cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=10,
+    )
+    if add.returncode != 0:
+        raise HTTPException(status_code=500, detail=f"git add failed: {add.stderr}")
+
+    # Build commit message if not provided
+    msg = req.message
+    if not msg:
+        diff_stat = subprocess.run(
+            ["git", "diff", "--staged", "--stat"],
+            cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=10,
+        )
+        msg = f"chore: update files\n\n{diff_stat.stdout.strip()}" if diff_stat.stdout.strip() else "chore: update"
+
+    commit = subprocess.run(
+        ["git", "commit", "-m", msg],
+        cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=10,
+    )
+    if commit.returncode != 0:
+        raise HTTPException(status_code=500, detail=f"git commit failed: {commit.stderr}")
+
+    return {"ok": True, "message": msg, "output": commit.stdout.strip()}
 
 
 @app.delete("/api/files", dependencies=[Depends(verify_api_key)])
@@ -373,6 +549,9 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(default="")
                     config.workspace = str(WORKSPACE_ROOT)
                     config.auto_approve = False
                     config.show_thinking = msg.get("show_thinking", True)
+                    config.permission_mode = msg.get("permission_mode", "full")
+                    config.plan_mode = msg.get("plan_mode", False)
+                    config.plan_context = msg.get("plan_context")
 
                     session_id = msg.get("session_id")
                     session = None
@@ -400,7 +579,15 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(default="")
                             await conn.send({"type": "error", "message": str(e)})
                         finally:
                             sid = core.session.id if core.session else (session_id or "")
-                            await conn.send({"type": "complete", "session_id": sid})
+                            if config.plan_mode:
+                                plan_content = ""
+                                for m in reversed(core.messages):
+                                    if m.get("role") == "assistant" and m.get("content"):
+                                        plan_content = m["content"]
+                                        break
+                                await conn.send({"type": "plan_ready", "session_id": sid, "content": plan_content})
+                            else:
+                                await conn.send({"type": "complete", "session_id": sid})
 
                     conn.agent_task = asyncio.create_task(_run())
 

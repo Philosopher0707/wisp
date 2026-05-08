@@ -1,15 +1,29 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { useAppState } from '../../state/context.js';
+import { useApi } from '../../hooks/useApi.js';
 import { ProjectFolder } from './ProjectFolder.js';
 import { Pin, ArrowUpDown, Folder } from '../../icons/index.js';
 import './SidebarSections.css';
 
-const defaultProjects = [
-  { id: 'proj-wisp', name: 'wisp' },
-  { id: 'proj-smart-memory', name: 'smart-memory-mcp' },
-  { id: 'proj-aegis', name: 'aegis-extension' },
-];
-
 export const ProjectsSection: React.FC = () => {
+  const { state } = useAppState();
+  const api = useApi(state.serverUrl, state.apiKey);
+  const [projectDirs, setProjectDirs] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!state.workspacePath) return;
+    api.fetchFiles(state.workspacePath).then((data) => {
+      if (!data?.items) return;
+      const dirs = data.items
+        .filter((item) => item.type === 'directory' && !item.name.startsWith('.'))
+        .map((item) => item.name)
+        .slice(0, 20);
+      setProjectDirs(dirs);
+    }).catch(() => {});
+  }, [state.workspacePath]);
+
+  if (projectDirs.length === 0) return null;
+
   return (
     <div className="sidebar-section">
       <div className="sidebar-section-header">
@@ -21,8 +35,8 @@ export const ProjectsSection: React.FC = () => {
         </div>
       </div>
       <div className="sidebar-section-items">
-        {defaultProjects.map((p) => (
-          <ProjectFolder key={p.id} id={p.id} name={p.name} />
+        {projectDirs.map((name) => (
+          <ProjectFolder key={`proj-${name}`} id={`proj-${name}`} name={name} />
         ))}
       </div>
     </div>

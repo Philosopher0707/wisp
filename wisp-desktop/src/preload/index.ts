@@ -4,6 +4,8 @@ export interface WispAPI {
   platform: string;
   onMenuAction: (callback: (action: string) => void) => () => void;
   openFileDialog: () => Promise<string[] | null>;
+  openInVSCode: (workspacePath: string) => Promise<boolean>;
+  selectDirectory: () => Promise<string | null>;
 }
 
 contextBridge.exposeInMainWorld('wisp', {
@@ -16,4 +18,8 @@ contextBridge.exposeInMainWorld('wisp', {
   },
 
   openFileDialog: () => ipcRenderer.invoke('dialog:openFile'),
+
+  openInVSCode: (workspacePath: string) => ipcRenderer.invoke('code:open', workspacePath),
+
+  selectDirectory: () => ipcRenderer.invoke('dialog:openDirectory'),
 } satisfies WispAPI);

@@ -16,3 +16,20 @@
   background: rgba(139, 92, 246, 0.3);
   color: var(--text-white);
 }
+
+.panel-close {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: var(--text-lg);
+  transition: background var(--transition-fast);
+  cursor: pointer;
+}
+
+.panel-close:hover {
+  background: var(--bg-hover);
+}

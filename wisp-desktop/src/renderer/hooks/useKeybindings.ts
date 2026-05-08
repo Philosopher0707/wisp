@@ -1,6 +1,31 @@
 import { useEffect } from 'react';
 import { useAppState } from '../state/context.js';
 
+const FONT_SCALE_KEY = 'wisp_font_scale';
+const MIN_SCALE = 0.8;
+const MAX_SCALE = 1.6;
+const STEP = 0.05;
+
+function getScale(): number {
+  const stored = localStorage.getItem(FONT_SCALE_KEY);
+  if (stored) {
+    const n = parseFloat(stored);
+    if (n >= MIN_SCALE && n <= MAX_SCALE) return n;
+  }
+  return 1;
+}
+
+function setScale(s: number) {
+  const clamped = Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
+  localStorage.setItem(FONT_SCALE_KEY, String(clamped));
+  document.documentElement.style.setProperty('--font-scale', String(clamped));
+}
+
+// Init on load
+if (typeof document !== 'undefined') {
+  setScale(getScale());
+}
+
 export function useKeybindings() {
   const { state, dispatch, sendMessage } = useAppState();
 
@@ -58,11 +83,22 @@ export function useKeybindings() {
           case 'n':
             e.preventDefault();
             dispatch({ type: 'NEW_CHAT' });
-            sendMessage({ type: 'new_session' });
             return;
           case 'k':
             e.preventDefault();
-            // Focus search modal (future)
+            dispatch({ type: 'OPEN_OVERLAY', overlay: 'search' });
+            return;
+          case 'p':
+            e.preventDefault();
+            dispatch({ type: 'OPEN_OVERLAY', overlay: 'quickfile' });
+            return;
+          case 'f':
+            e.preventDefault();
+            dispatch({ type: 'TOGGLE_CONV_SEARCH' });
+            return;
+          case '/':
+            e.preventDefault();
+            dispatch({ type: 'OPEN_OVERLAY', overlay: 'shortcuts' });
             return;
           case 'l':
             e.preventDefault();
@@ -71,6 +107,23 @@ export function useKeybindings() {
           case 't':
             e.preventDefault();
             dispatch({ type: 'TOGGLE_THINKING' });
+            return;
+          case 'b':
+            e.preventDefault();
+            dispatch({ type: 'TOGGLE_RIGHT_PANEL' });
+            return;
+          case '=':  // Cmd+= (which is Cmd+Shift+= on US keyboards = Cmd+Plus)
+          case '+':
+            e.preventDefault();
+            setScale(getScale() + STEP);
+            return;
+          case '-':
+            e.preventDefault();
+            setScale(getScale() - STEP);
+            return;
+          case '0':
+            e.preventDefault();
+            setScale(1);
             return;
           case 'c':
             if (state.isStreaming) {

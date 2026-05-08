@@ -3,7 +3,7 @@ import { useAppState } from '../state/context.js';
 import './ApprovalPrompt.css';
 
 export const ApprovalPrompt: React.FC = () => {
-  const { state, sendMessage } = useAppState();
+  const { state, dispatch, sendMessage } = useAppState();
   if (!state.approvalPending) return null;
 
   const { callId, toolName, args, reason } = state.approvalPending;
@@ -25,22 +25,28 @@ export const ApprovalPrompt: React.FC = () => {
         <div className="approval-actions">
           <button
             className="approval-btn approval-btn--deny"
-            onClick={() => sendMessage({
-              type: 'tool_approval',
-              id: callId,
-              approved: false,
-              reason: 'User denied',
-            })}
+            onClick={() => {
+              dispatch({ type: 'DENY_TOOL', callId });
+              sendMessage({
+                type: 'tool_approval',
+                id: callId,
+                approved: false,
+                reason: 'User denied',
+              });
+            }}
           >
             Deny
           </button>
           <button
             className="approval-btn approval-btn--approve"
-            onClick={() => sendMessage({
-              type: 'tool_approval',
-              id: callId,
-              approved: true,
-            })}
+            onClick={() => {
+              dispatch({ type: 'APPROVE_TOOL', callId });
+              sendMessage({
+                type: 'tool_approval',
+                id: callId,
+                approved: true,
+              });
+            }}
           >
             Approve
           </button>

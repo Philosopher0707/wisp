@@ -17,10 +17,103 @@
   -webkit-app-region: no-drag;
 }
 
-.topbar-label {
+.topbar-new-chat-btn {
   color: var(--text-secondary);
   font-size: var(--text-md);
   font-weight: 500;
+  padding: 3px var(--space-2);
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.topbar-new-chat-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.topbar-center {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.topbar-ws-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar-git {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.topbar-git-branch {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar-git-dirty {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-orange);
+  flex-shrink: 0;
+}
+
+.topbar-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+}
+
+.topbar-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: background var(--transition-normal);
+}
+
+.topbar-status--connected .topbar-status-dot {
+  background: #22c55e;
+}
+
+.topbar-status--connecting .topbar-status-dot {
+  background: var(--accent-orange);
+  animation: status-pulse 1s ease-in-out infinite;
+}
+
+.topbar-status--error .topbar-status-dot {
+  background: #ef4444;
+}
+
+.topbar-status--disconnected .topbar-status-dot {
+  background: var(--text-muted);
+}
+
+.topbar-status-label {
+  color: var(--text-muted);
+}
+
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
 .topbar-right {

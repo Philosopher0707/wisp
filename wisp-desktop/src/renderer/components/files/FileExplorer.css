@@ -1,0 +1,220 @@
+.file-explorer {
+  width: 300px;
+  min-width: 300px;
+  height: 100%;
+  background: var(--bg-sidebar);
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.fe-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-3);
+  height: var(--topbar-height);
+  min-height: var(--topbar-height);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.fe-title {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.fe-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-left: var(--space-2);
+}
+
+.fe-open-folder-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+}
+
+.fe-open-folder-btn:hover {
+  background: var(--bg-hover);
+  color: var(--accent-purple);
+}
+
+.fe-close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+}
+
+.fe-close-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.fe-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.fe-tree {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-2) 0;
+}
+
+.fe-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.fe-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+}
+
+.fe-item--selected {
+  background: rgba(139, 92, 246, 0.12);
+  color: var(--text-primary);
+}
+
+.fe-chevron {
+  width: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.fe-icon {
+  flex-shrink: 0;
+}
+
+.fe-icon--folder {
+  color: var(--accent-orange-text);
+}
+
+.fe-icon--file {
+  color: var(--text-muted);
+}
+
+.fe-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+
+.fe-size {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  flex-shrink: 0;
+  margin-left: var(--space-2);
+}
+
+.fe-empty {
+  padding: var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+/* ── Spinner ── */
+
+.fe-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  border-top-color: var(--text-muted);
+  border-radius: 50%;
+  animation: fe-spin 0.6s linear infinite;
+}
+
+@keyframes fe-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── File viewer ── */
+
+.fe-viewer {
+  height: 45%;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.fe-viewer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px var(--space-3);
+  background: var(--bg-hover);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.fe-viewer-title {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.fe-viewer-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.fe-viewer-close:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+}
+
+.fe-viewer-code {
+  flex: 1;
+  overflow: auto;
+  padding: var(--space-2) var(--space-3);
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  white-space: pre;
+  tab-size: 2;
+}

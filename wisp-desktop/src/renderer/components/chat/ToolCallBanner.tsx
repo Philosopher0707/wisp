@@ -1,5 +1,6 @@
 import React from 'react';
 import type { ToolCallItem } from '../../state/types.js';
+import { SearchResults } from './SearchResults.js';
 import './ToolCallBanner.css';
 
 interface Props {
@@ -7,7 +8,7 @@ interface Props {
 }
 
 function argsPreview(args: Record<string, unknown>): string {
-  const val = (args.path || args.command || args.content || '') as string;
+  const val = (args.path || args.command || args.content || args.query || '') as string;
   if (val) return String(val).slice(0, 60);
   return '...';
 }
@@ -18,6 +19,7 @@ function resultPreview(result: string): string {
 
 export const ToolCallBanner: React.FC<Props> = ({ toolCall }) => {
   const [expanded, setExpanded] = React.useState(false);
+  const isSearch = toolCall.name === 'web_search';
 
   return (
     <div className="tcb" onClick={() => toolCall.result && setExpanded(!expanded)}>
@@ -28,10 +30,13 @@ export const ToolCallBanner: React.FC<Props> = ({ toolCall }) => {
           <span className="tcb-time">{toolCall.durationMs.toFixed(0)}ms</span>
         )}
       </div>
-      {expanded && toolCall.result && (
+      {expanded && toolCall.result && !isSearch && (
         <div className="tcb-result">
           <code>{resultPreview(toolCall.result)}</code>
         </div>
+      )}
+      {expanded && toolCall.result && isSearch && (
+        <SearchResults text={toolCall.result} />
       )}
     </div>
   );

@@ -5,10 +5,11 @@ import { PillButton } from '../common/PillButton.js';
 import './SidebarFooter.css';
 
 export const SidebarFooter: React.FC = () => {
-  const { dispatch } = useAppState();
+  const { state, dispatch } = useAppState();
+  const collapsed = state.sidebarCollapsed;
 
   return (
-    <div className="sidebar-footer">
+    <div className={`sidebar-footer${collapsed ? ' sidebar-footer--collapsed' : ''}`}>
       <button
         className="sidebar-footer-settings"
         title="Settings"
@@ -16,7 +17,7 @@ export const SidebarFooter: React.FC = () => {
       >
         <Settings size={16} />
       </button>
-      <PillButton variant="outlined">Upgrade</PillButton>
+      {!collapsed && <PillButton variant="outlined">Upgrade</PillButton>}
     </div>
   );
 };

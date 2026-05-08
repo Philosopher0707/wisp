@@ -3,16 +3,22 @@ import { useAppState } from '../../state/context.js';
 import { ChevronDown } from '../../icons/index.js';
 import { Dropdown } from '../common/Dropdown.js';
 
-const models = [
-  { value: 'claude-opus-4-7', label: 'Claude Opus 4.7' },
-  { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
-  { value: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },
-  { value: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
-];
+function modelLabel(name: string): string {
+  return name
+    .split(/[-:]/)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
 
 export const ModelSelector: React.FC = () => {
   const { state, dispatch } = useAppState();
   const isOpen = state.activeDropdown === 'model';
+
+  const models = state.availableModels.length > 0
+    ? state.availableModels.map((m) => ({ value: m, label: modelLabel(m) }))
+    : [{ value: state.selectedModel, label: modelLabel(state.selectedModel) }];
+
+  const currentLabel = models.find((m) => m.value === state.selectedModel)?.label || modelLabel(state.selectedModel);
 
   return (
     <div className="selector-wrapper">
@@ -22,7 +28,7 @@ export const ModelSelector: React.FC = () => {
           dispatch({ type: isOpen ? 'CLOSE_DROPDOWN' : 'OPEN_DROPDOWN', id: 'model' })
         }
       >
-        <span>{models.find((m) => m.value === state.selectedModel)?.label || state.selectedModel}</span>
+        <span>{currentLabel}</span>
         <ChevronDown size={10} />
       </button>
       {isOpen && (

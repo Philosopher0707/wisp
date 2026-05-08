@@ -1,12 +1,35 @@
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 import type { SessionSummary, Message, ToolCallItem } from '../state/types.js';
+
+export interface GitStatus {
+  git: boolean;
+  branch?: string;
+  dirty?: boolean;
+}
 
 interface ApiClient {
   fetchSessions: () => Promise<SessionSummary[]>;
   fetchSession: (id: string) => Promise<Message[]>;
   deleteSession: (id: string) => Promise<boolean>;
   renameSession: (id: string, title: string) => Promise<boolean>;
+  fetchModels: () => Promise<string[]>;
+  fetchFiles: (path?: string) => Promise<FileItems | null>;
+  fetchGitStatus: () => Promise<GitStatus | null>;
   healthCheck: () => Promise<boolean>;
+}
+
+export interface FileItem {
+  name: string;
+  path: string;
+  type: 'file' | 'directory';
+  size: number | null;
+}
+
+export interface FileItems {
+  type: 'directory' | 'file';
+  path: string;
+  items?: FileItem[];
+  content?: string;
 }
 
 interface RawMessage {
@@ -118,5 +141,34 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
     }
   }, [apiFetch]);
 
-  return { fetchSessions, fetchSession, deleteSession, renameSession, healthCheck };
+  const fetchModels = useCallback(async (): Promise<string[]> => {
+    try {
+      const data = await apiFetch(`/api/models${authParams}`) as { models?: string[] };
+      return data.models || [];
+    } catch {
+      return [];
+    }
+  }, [apiFetch, authParams]);
+
+  const fetchGitStatus = useCallback(async (): Promise<GitStatus | null> => {
+    try {
+      return await apiFetch(`/api/git${authParams}`) as GitStatus;
+    } catch {
+      return null;
+    }
+  }, [apiFetch, authParams]);
+
+  const fetchFiles = useCallback(async (path = ''): Promise<FileItems | null> => {
+    try {
+      const qs = `${authParams}${authParams ? '&' : '?'}path=${encodeURIComponent(path)}`;
+      return await apiFetch(`/api/files${qs}`) as FileItems;
+    } catch {
+      return null;
+    }
+  }, [apiFetch, authParams]);
+
+  return useMemo(
+    () => ({ fetchSessions, fetchSession, deleteSession, renameSession, fetchModels, fetchFiles, fetchGitStatus, healthCheck }),
+    [fetchSessions, fetchSession, deleteSession, renameSession, fetchModels, fetchFiles, fetchGitStatus, healthCheck],
+  );
 }

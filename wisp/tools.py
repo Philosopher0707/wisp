@@ -347,9 +347,11 @@ def _fuzzy_find_text(content: str, old_text: str, threshold: float = 0.85) -> tu
 def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str, file_lock=None) -> str:
     """Replace exact text in a file (surgical edit).
 
-    First tries exact match. If that fails, falls back to fuzzy matching
-    using character-level similarity (Dice coefficient on bigrams).
+    Uses Unicode-aware fuzzy matching (smart quotes, dashes, special spaces)
+    when exact matching fails. Returns a structured JSON result with diff.
     """
+    from wisp.diff import EditOp, apply_edit_with_diff
+
     _validate_string(path, "path")
     _validate_string(old_text, "old_text")
     _validate_string(new_text, "new_text", _MAX_WRITE_SIZE, allow_empty=True)
@@ -371,60 +373,115 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str, file
         holder = lock_info.get("agent", "unknown") if lock_info else "unknown"
         raise ToolError(f"File {path} is locked by {holder}. Wait or coordinate before editing.")
 
-    content = full_path.read_text(encoding="utf-8", errors="replace")
+    try:
+        result = apply_edit_with_diff(path, [EditOp(old_text=old_text, new_text=new_text)], workspace)
 
-    # ── Exact match (fast path) ──────────────────────────────────
-    if old_text in content:
-        count = content.count(old_text)
-        if count > 1:
-            if lock:
-                lock.release(path)
-            raise ToolError(
-                f"old_text appears {count} times in {path}. "
-                "Edit must target a unique match."
-            )
-        new_content = content.replace(old_text, new_text, 1)
-        full_path.write_text(new_content, encoding="utf-8")
-        logger.info("Edited %s — %d chars replaced with %d chars", path, len(old_text), len(new_text))
+        if not result.success:
+            raise ToolError(result.error or "Edit failed")
 
         # ── Collaborative editing: record change ──
         if _change_tracker:
             _change_tracker.record_edit(path, old_text, new_text)
 
-        if lock:
-            lock.release(path)
-
-        return f"✓ Edited {path} — {len(old_text)} chars replaced with {len(new_text)} chars"
-
-    # ── Fuzzy match (fallback) ───────────────────────────────────
-    match_start, actual_old, similarity = _fuzzy_find_text(content, old_text)
-    if match_start is None or actual_old is None:
-        if lock:
-            lock.release(path)
-        raise ToolError(
-            f"old_text not found in {path} "
-            f"(best fuzzy similarity: {similarity:.0%}). "
-            "Make sure the exact text exists (including whitespace)."
+        logger.info(
+            "Edited %s — %d chars replaced with %d chars%s",
+            path, result.old_length, result.new_length,
+            " (fuzzy)" if result.used_fuzzy_match else "",
         )
 
-    new_content = content[:match_start] + new_text + content[match_start + len(actual_old):]
-    full_path.write_text(new_content, encoding="utf-8")
-    logger.info(
-        "Edited %s (fuzzy, %.0%% similar) — %d chars replaced with %d chars",
-        path, similarity * 100, len(actual_old), len(new_text),
-    )
+        return {
+            "status": "ok",
+            "data": f"✓ Edited {path} — {result.old_length} chars replaced with {result.new_length} chars",
+            "metadata": {
+                "path": path,
+                "old_length": result.old_length,
+                "new_length": result.new_length,
+                "edits_applied": result.edits_applied,
+                "used_fuzzy_match": result.used_fuzzy_match,
+                "diff": result.diff,
+                "first_changed_line": result.first_changed_line,
+            },
+        }
 
-    # ── Collaborative editing: record change ──
-    if _change_tracker:
-        _change_tracker.record_edit(path, actual_old, new_text)
+    finally:
+        if lock:
+            lock.release(path)
 
-    if lock:
-        lock.release(path)
 
-    return (
-        f"✓ Edited {path} (fuzzy match, {similarity:.0%} similar) — "
-        f"{len(actual_old)} chars replaced with {len(new_text)} chars"
-    )
+def tool_edit_file_multi(path: str, workspace: str, edits: list[dict], file_lock=None) -> str:
+    """Make multiple precise edits to a single file in one call.
+
+    All edits[].old_text values are matched against the ORIGINAL file content
+    (not incrementally). Edits must not overlap. Uses Unicode-aware fuzzy
+    matching when exact matching fails.
+
+    Args:
+        path: Path to the file to edit.
+        edits: List of {"old_text": str, "new_text": str} objects.
+    """
+    from wisp.diff import EditOp, apply_edit_with_diff
+
+    _validate_string(path, "path")
+    if not isinstance(edits, list) or len(edits) == 0:
+        raise ToolError("edits must be a non-empty array of {old_text, new_text} objects")
+    for i, edit in enumerate(edits):
+        if not isinstance(edit, dict):
+            raise ToolError(f"edits[{i}] must be an object with old_text and new_text")
+        _validate_string(edit.get("old_text", ""), f"edits[{i}].old_text")
+        _validate_string(edit.get("new_text", ""), f"edits[{i}].new_text", _MAX_WRITE_SIZE, allow_empty=True)
+
+    full_path = _resolve_path(path, workspace)
+    if not full_path.exists():
+        raise ToolError(f"File not found: {path}")
+
+    size = full_path.stat().st_size
+    if size > _MAX_READ_SIZE:
+        raise ToolError(
+            f"File too large: {path} is {size / 1024 / 1024:.1f} MB "
+            f"(max edit: {_MAX_READ_SIZE / 1024 / 1024:.0f} MB)."
+        )
+
+    # ── Collaborative editing: check lock ──
+    lock = file_lock or _file_lock
+    if lock and not lock.acquire(path):
+        lock_info = lock.lock_info(path)
+        holder = lock_info.get("agent", "unknown") if lock_info else "unknown"
+        raise ToolError(f"File {path} is locked by {holder}. Wait or coordinate before editing.")
+
+    try:
+        ops = [EditOp(old_text=e["old_text"], new_text=e["new_text"]) for e in edits]
+        result = apply_edit_with_diff(path, ops, workspace)
+
+        if not result.success:
+            raise ToolError(result.error or "Edit failed")
+
+        # ── Collaborative editing: record changes ──
+        if _change_tracker:
+            for edit in edits:
+                _change_tracker.record_edit(path, edit["old_text"], edit["new_text"])
+
+        logger.info(
+            "Multi-edited %s — %d edits, %d→%d chars",
+            path, result.edits_applied, result.old_length, result.new_length,
+        )
+
+        return {
+            "status": "ok",
+            "data": f"✓ Applied {result.edits_applied} edit(s) to {path} — {result.old_length} chars replaced with {result.new_length} chars",
+            "metadata": {
+                "path": path,
+                "old_length": result.old_length,
+                "new_length": result.new_length,
+                "edits_applied": result.edits_applied,
+                "used_fuzzy_match": result.used_fuzzy_match,
+                "diff": result.diff,
+                "first_changed_line": result.first_changed_line,
+            },
+        }
+
+    finally:
+        if lock:
+            lock.release(path)
 
 
 def tool_web_fetch(url: str, workspace: str = ".", max_chars: int = 10000) -> str:
@@ -996,6 +1053,78 @@ def tool_update_plan(task_id: str, status: str, notes: str = "", workspace: str 
     return f"✓ Updated task {task_id} to '{status}'. Progress: {done}/{total}"
 
 
+def tool_web_search(query: str, num_results: int = 5) -> str:
+    """Search the web using DuckDuckGo HTML (no API key required)."""
+    import urllib.request
+    import urllib.parse
+    from html.parser import HTMLParser
+
+    class ResultParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.results: list[dict] = []
+            self._current: dict = {}
+            self._in_result = False
+            self._in_link = False
+            self._in_snippet = False
+            self._text = ""
+
+        def handle_starttag(self, tag, attrs):
+            a = dict(attrs)
+            cls = a.get("class", "")
+            if tag == "article" or ("result" in cls.lower()):
+                self._in_result = True
+                self._current = {}
+            if self._in_result and tag == "a" and "result" in cls.lower():
+                self._in_link = True
+                self._current["href"] = a.get("href", "")
+            if self._in_result and ("snippet" in cls.lower() or "description" in cls.lower()):
+                self._in_snippet = True
+
+        def handle_endtag(self, tag):
+            if self._in_link and tag == "a":
+                self._in_link = False
+                self._current["title"] = self._text.strip()
+                self._text = ""
+            if self._in_snippet and tag in ("span", "div", "p"):
+                self._in_snippet = False
+                self._current["snippet"] = self._text.strip()
+                self._text = ""
+            if tag == "article" and self._in_result:
+                self._in_result = False
+                if self._current.get("title"):
+                    self.results.append(self._current)
+
+        def handle_data(self, data):
+            if self._in_link or self._in_snippet:
+                self._text += data
+
+    try:
+        qs = urllib.parse.urlencode({"q": query})
+        url = f"https://html.duckduckgo.com/html/?{qs}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Wisp/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+        parser = ResultParser()
+        parser.feed(html)
+        results = parser.results[:num_results]
+        if not results:
+            return f"No results found for: {query}"
+        lines = [f"Web search results for '{query}':"]
+        for i, r in enumerate(results, 1):
+            href = r.get("href", "")
+            title = r.get("title", "Untitled")
+            snippet = r.get("snippet", "")
+            lines.append(f"\n{i}. {title}")
+            if href:
+                lines.append(f"   URL: {href}")
+            if snippet:
+                lines.append(f"   {snippet}")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Search error: {e}. Try again or use web_fetch on a known URL."
+
+
 # ── Tool schema definitions (Ollama tool-calling format) ──
 
 TOOL_SCHEMAS = [
@@ -1034,7 +1163,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "edit_file",
-            "description": "Replace exact text in a file. The old_text must match exactly and be unique. Use for targeted edits instead of rewriting entire files.",
+            "description": "Replace exact text in a file. The old_text must match exactly and be unique. Use for targeted edits instead of rewriting entire files. Supports Unicode fuzzy matching for smart quotes, dashes, and special spaces.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1043,6 +1172,32 @@ TOOL_SCHEMAS = [
                     "new_text": {"type": "string", "description": "Replacement text"},
                 },
                 "required": ["path", "old_text", "new_text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_file_multi",
+            "description": "Make multiple precise edits to a single file in one call. All edits[].old_text values are matched against the ORIGINAL file (not incrementally). Edits must not overlap. Use when changing multiple separate locations in one file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the file to edit"},
+                    "edits": {
+                        "type": "array",
+                        "description": "One or more targeted replacements. Each edit is matched against the original file, not incrementally.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old_text": {"type": "string", "description": "Exact text to replace (must be unique in the file and not overlap with other edits)"},
+                                "new_text": {"type": "string", "description": "Replacement text"},
+                            },
+                            "required": ["old_text", "new_text"],
+                        },
+                    },
+                },
+                "required": ["path", "edits"],
             },
         },
     },
@@ -1375,6 +1530,21 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the web for information, docs, error messages, or latest news. Returns top results with titles, URLs, and snippets. Use for finding up-to-date information beyond your knowledge cutoff.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"},
+                    "num_results": {"type": "number", "description": "Number of results (default: 5, max: 10)"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 # Map tool names to their implementations
@@ -1382,6 +1552,7 @@ TOOL_IMPLS = {
     "read_file": tool_read_file,
     "write_file": tool_write_file,
     "edit_file": tool_edit_file,
+    "edit_file_multi": tool_edit_file_multi,
     "run_bash": tool_run_bash,
     "list_files": tool_list_files,
     "web_fetch": tool_web_fetch,
@@ -1403,6 +1574,7 @@ TOOL_IMPLS = {
     "lsp_references": tool_lsp_references,
     "lsp_hover": tool_lsp_hover,
     "lsp_symbols": tool_lsp_symbols,
+    "web_search": tool_web_search,
 }
 
 
@@ -1428,6 +1600,11 @@ def _build_tool_metadata(name: str, args: dict, result: str) -> dict:
         meta["path"] = args.get("path", "")
         meta["old_text_preview"] = (args.get("old_text", "") or "")[:80]
         meta["new_text_preview"] = (args.get("new_text", "") or "")[:80]
+
+    elif name == "edit_file_multi":
+        meta["path"] = args.get("path", "")
+        edits_list = args.get("edits", [])
+        meta["edits_count"] = len(edits_list) if isinstance(edits_list, list) else 0
 
     elif name == "run_bash":
         meta["command"] = (args.get("command", "") or "")[:120]
@@ -1523,13 +1700,29 @@ def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0,
 
     try:
         result = impl(**filtered)
-        logger.debug("Tool %s returned %d chars", name, len(result))
+
+        # Tools can return a dict with 'data' and 'metadata' keys for structured output
+        if isinstance(result, dict) and "data" in result:
+            metadata = result.get("metadata", _build_tool_metadata(name, args, ""))
+            data = result["data"]
+            if max_data_chars > 0 and len(str(data)) > max_data_chars:
+                data = str(data)[:max_data_chars] + f"\n... [truncated]"
+                metadata["truncated"] = True
+            structured = {
+                "status": result.get("status", "ok"),
+                "tool": name,
+                "data": data,
+                "metadata": metadata,
+            }
+            return json.dumps(structured, ensure_ascii=False)
+
+        logger.debug("Tool %s returned %d chars", name, len(str(result)))
 
         # Build structured result with optional truncation
-        metadata = _build_tool_metadata(name, args, result)
-        data = result
+        metadata = _build_tool_metadata(name, args, str(result))
+        data = str(result)
         if max_data_chars > 0 and len(data) > max_data_chars:
-            data = data[:max_data_chars] + f"\n... [truncated {len(result)} total chars]"
+            data = data[:max_data_chars] + f"\n... [truncated {len(str(result))} total chars]"
             metadata["truncated"] = True
 
         structured = {

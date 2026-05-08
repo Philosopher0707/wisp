@@ -48,14 +48,26 @@
 }
 
 .search-result-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   padding: var(--space-2) var(--space-4);
-  color: var(--text-primary);
-  font-size: var(--text-md);
   transition: background var(--transition-fast);
+  text-align: left;
 }
 
 .search-result-item:hover {
   background: var(--bg-hover);
+}
+
+.search-result-title {
+  color: var(--text-primary);
+  font-size: var(--text-md);
+}
+
+.search-result-meta {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
 }
 
 .search-empty {

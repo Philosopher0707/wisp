@@ -1,0 +1,131 @@
+.plan-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+}
+
+.plan-panel {
+  width: 100%;
+  max-width: 720px;
+  max-height: 85vh;
+  background: var(--bg-surface);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.plan-header {
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.plan-title {
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: var(--text-white);
+  margin: 0 0 var(--space-1) 0;
+}
+
+.plan-subtitle {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.plan-body {
+  flex: 1;
+  overflow: auto;
+  padding: var(--space-4) var(--space-5);
+  min-height: 200px;
+}
+
+.plan-content {
+  font-size: var(--text-sm);
+  line-height: 1.7;
+  color: var(--text-primary);
+}
+
+.plan-editor {
+  width: 100%;
+  min-height: 400px;
+  background: #0d0d0d;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  resize: vertical;
+  outline: none;
+  line-height: 1.6;
+}
+
+.plan-editor:focus {
+  border-color: var(--accent-purple);
+}
+
+.plan-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.plan-btn {
+  font-size: var(--text-sm);
+  font-family: var(--font-sans);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-weight: 500;
+  transition: opacity 0.15s, background 0.15s;
+  border: 1px solid transparent;
+}
+
+.plan-btn:hover {
+  opacity: 0.9;
+}
+
+.plan-btn--approve {
+  background: var(--accent-purple);
+  color: white;
+  border-color: var(--accent-purple);
+}
+
+.plan-btn--edit {
+  background: transparent;
+  color: var(--text-secondary);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.plan-btn--edit:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.plan-btn--reject {
+  background: transparent;
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.2);
+  margin-right: auto;
+}
+
+.plan-btn--reject:hover {
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.plan-btn--cancel {
+  background: transparent;
+  color: var(--text-muted);
+  border-color: rgba(255, 255, 255, 0.1);
+  margin-right: auto;
+}
