@@ -13,10 +13,23 @@ interface InputToolbarProps {
 export const InputToolbar: React.FC<InputToolbarProps> = ({ hasContent, onSubmit }) => {
   const { state, dispatch } = useAppState();
 
+  const handleAttach = async () => {
+    if (window.wisp?.openFileDialog) {
+      const paths = await window.wisp.openFileDialog();
+      if (paths && paths.length > 0) {
+        dispatch({
+          type: 'RECEIVE_STATUS',
+          message: `Attached: ${paths.map((p) => p.split('/').pop()).join(', ')}`,
+          level: 'info',
+        });
+      }
+    }
+  };
+
   return (
     <div className="input-toolbar">
       <div className="input-toolbar-left">
-        <button className="toolbar-icon-btn" title="Attach files">
+        <button className="toolbar-icon-btn" title="Attach files" onClick={handleAttach}>
           <Plus size={18} />
         </button>
         <button

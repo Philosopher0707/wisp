@@ -1,5 +1,9 @@
 import { Menu, BrowserWindow, app } from 'electron';
 
+function sendAction(win: BrowserWindow, action: string): void {
+  win.webContents.send('menu:action', action);
+}
+
 export function buildMenu(win: BrowserWindow): void {
   const isMac = process.platform === 'darwin';
 
@@ -26,7 +30,12 @@ export function buildMenu(win: BrowserWindow): void {
         {
           label: 'New Chat',
           accelerator: 'CmdOrCtrl+N',
-          click: () => win.webContents.send('menu:new-chat'),
+          click: () => sendAction(win, 'new-chat'),
+        },
+        {
+          label: 'Open File...',
+          accelerator: 'CmdOrCtrl+O',
+          click: () => sendAction(win, 'open-file'),
         },
         { type: 'separator' },
         isMac ? { role: 'close' } : { role: 'quit' },
@@ -42,6 +51,12 @@ export function buildMenu(win: BrowserWindow): void {
         { role: 'copy' },
         { role: 'paste' },
         { role: 'selectAll' },
+        { type: 'separator' },
+        {
+          label: 'Find',
+          accelerator: 'CmdOrCtrl+F',
+          click: () => sendAction(win, 'find'),
+        },
       ],
     },
     {
@@ -56,6 +71,17 @@ export function buildMenu(win: BrowserWindow): void {
         { role: 'zoomOut' },
         { type: 'separator' },
         { role: 'togglefullscreen' },
+        { type: 'separator' },
+        {
+          label: 'Toggle Thinking',
+          accelerator: 'CmdOrCtrl+T',
+          click: () => sendAction(win, 'toggle-thinking'),
+        },
+        {
+          label: 'Clear Chat',
+          accelerator: 'CmdOrCtrl+L',
+          click: () => sendAction(win, 'clear-chat'),
+        },
       ],
     },
     {

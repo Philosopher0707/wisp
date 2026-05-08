@@ -41,6 +41,17 @@
   font-style: italic;
 }
 
+.msg-thinking-details {
+  margin-bottom: var(--space-2);
+}
+
+.msg-thinking-toggle {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  user-select: none;
+}
+
 .msg-thinking {
   color: var(--text-muted);
   font-size: var(--text-sm);
@@ -48,6 +59,10 @@
   margin-bottom: var(--space-2);
   border-left: 2px solid rgba(255, 255, 255, 0.1);
   padding-left: var(--space-2);
+}
+
+.msg-content {
+  word-break: break-word;
 }
 
 .msg-loading {

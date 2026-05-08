@@ -67,6 +67,7 @@ export interface AppState {
   activeDropdown: string | null;
   isFullAccessEnabled: boolean;
   showThinking: boolean;
+  uiOverlay: string | null;
 }
 
 // ── Actions ──
@@ -75,6 +76,7 @@ export type Action =
   | { type: 'SET_CONNECTION'; status: ConnectionState; error?: string }
   | { type: 'SET_SESSIONS'; sessions: SessionSummary[] }
   | { type: 'SET_SESSION_ID'; id: string | null }
+  | { type: 'SET_MESSAGES'; messages: Message[] }
   | { type: 'TOGGLE_PROJECT_FOLDER'; projectId: string }
   | { type: 'SELECT_CHAT'; chatId: string }
   | { type: 'NEW_CHAT' }
@@ -98,7 +100,9 @@ export type Action =
   | { type: 'TOGGLE_FULL_ACCESS' }
   | { type: 'CLEAR_CHAT' }
   | { type: 'TOGGLE_THINKING' }
-  | { type: 'SET_PROJECT'; projectId: string | null };
+  | { type: 'SET_PROJECT'; projectId: string | null }
+  | { type: 'OPEN_OVERLAY'; overlay: string }
+  | { type: 'CLOSE_OVERLAY' };
 
 // ── Helpers ──
 
@@ -129,6 +133,7 @@ export function createInitialState(overrides?: { serverUrl?: string; apiKey?: st
     activeDropdown: null,
     isFullAccessEnabled: true,
     showThinking: false,
+    uiOverlay: null,
   };
 }
 
@@ -144,6 +149,9 @@ export function appReducer(state: AppState, action: Action): AppState {
 
     case 'SET_SESSION_ID':
       return { ...state, sessionId: action.id };
+
+    case 'SET_MESSAGES':
+      return { ...state, messages: action.messages };
 
     case 'TOGGLE_PROJECT_FOLDER': {
       const next = new Set(state.sidebarExpandedProjects);
@@ -292,6 +300,12 @@ export function appReducer(state: AppState, action: Action): AppState {
 
     case 'SET_PROJECT':
       return { ...state, selectedProject: action.projectId };
+
+    case 'OPEN_OVERLAY':
+      return { ...state, uiOverlay: action.overlay };
+
+    case 'CLOSE_OVERLAY':
+      return { ...state, uiOverlay: null };
 
     default:
       return state;

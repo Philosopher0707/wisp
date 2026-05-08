@@ -1,6 +1,8 @@
 import React from 'react';
 import type { Message } from '../../state/types.js';
+import { renderMarkdown } from '../../utils/markdown.js';
 import { ToolCallBanner } from './ToolCallBanner.js';
+import '../../utils/markdown.css';
 import './MessageBubble.css';
 
 interface Props {
@@ -12,7 +14,7 @@ export const MessageBubble: React.FC<Props> = ({ msg }) => {
     return (
       <div className="msg-row msg-row--user">
         <div className="msg-bubble msg-bubble--user">
-          <p>{msg.content}</p>
+          <div className="msg-content">{renderMarkdown(msg.content)}</div>
         </div>
       </div>
     );
@@ -30,9 +32,12 @@ export const MessageBubble: React.FC<Props> = ({ msg }) => {
     <div className="msg-row msg-row--assistant">
       <div className="msg-bubble msg-bubble--assistant">
         {msg.thinking && (
-          <p className="msg-thinking">{msg.thinking.slice(-300)}</p>
+          <details className="msg-thinking-details">
+            <summary className="msg-thinking-toggle">Thinking...</summary>
+            <p className="msg-thinking">{msg.thinking.slice(-500)}</p>
+          </details>
         )}
-        {msg.content && <p>{msg.content}</p>}
+        {msg.content && <div className="msg-content">{renderMarkdown(msg.content)}</div>}
         {msg.toolCalls?.map((tc, i) => (
           <ToolCallBanner key={i} toolCall={tc} />
         ))}

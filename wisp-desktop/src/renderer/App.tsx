@@ -4,6 +4,8 @@ import { AppContext } from './state/context.js';
 import { appReducer, createInitialState } from './state/types.js';
 import { useWebSocket } from './hooks/useWebSocket.js';
 
+import { useMenuIPC } from './hooks/useMenuIPC.js';
+
 interface Props {
   serverUrl: string;
   apiKey: string;
@@ -16,6 +18,7 @@ export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
     (opts) => createInitialState(opts),
   );
   const ws = useWebSocket(serverUrl, apiKey, dispatch);
+  useMenuIPC(dispatch);
 
   const ctx = React.useMemo(
     () => ({ state, dispatch, sendMessage: (msg: Record<string, unknown>) => ws.send(msg) }),
