@@ -1,6 +1,8 @@
 {
   "name": "wisp-desktop",
   "version": "0.1.0",
+  "description": "Wisp — AI coding agent desktop client for macOS",
+  "author": "Wisp Contributors",
   "private": true,
   "type": "module",
   "main": "./out/main/index.js",

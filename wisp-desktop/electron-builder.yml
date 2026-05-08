@@ -6,6 +6,7 @@ directories:
 files:
   - out/**/*
 mac:
+  icon: resources/icon.icns
   category: public.app-category.developer-tools
   target:
     - dmg
