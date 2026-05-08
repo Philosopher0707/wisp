@@ -4,11 +4,24 @@ import { InputToolbar } from './InputToolbar.js';
 import './ChatInput.css';
 
 export const ChatInput: React.FC = () => {
-  const { state, dispatch } = useAppState();
+  const { state, dispatch, sendMessage } = useAppState();
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
 
-  const handleChange = (value: string) => {
-    dispatch({ type: 'SET_INPUT', value });
+  const submitPrompt = () => {
+    const trimmed = state.inputValue.trim();
+    if (!trimmed) return;
+    dispatch({ type: 'SUBMIT_MESSAGE', content: trimmed });
+    sendMessage({
+      type: 'prompt',
+      content: trimmed,
+      model: state.selectedModel || undefined,
+      session_id: state.sessionId || undefined,
+      show_thinking: state.showThinking,
+    });
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    dispatch({ type: 'SET_INPUT', value: e.target.value });
     const ta = textareaRef.current;
     if (ta) {
       ta.style.height = 'auto';
@@ -19,10 +32,7 @@ export const ChatInput: React.FC = () => {
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      const trimmed = state.inputValue.trim();
-      if (trimmed) {
-        dispatch({ type: 'SUBMIT_MESSAGE', content: trimmed });
-      }
+      submitPrompt();
     }
   };
 
@@ -40,11 +50,11 @@ export const ChatInput: React.FC = () => {
           className="chat-input-textarea"
           placeholder="Ask Wisp anything. @ to use plugins or use files"
           value={state.inputValue}
-          onChange={(e) => handleChange(e.target.value)}
+          onChange={handleChange}
           onKeyDown={handleKeyDown}
           rows={1}
         />
-        <InputToolbar hasContent={state.inputValue.length > 0} />
+        <InputToolbar hasContent={state.inputValue.length > 0} onSubmit={submitPrompt} />
       </div>
     </div>
   );

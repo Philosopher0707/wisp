@@ -2,13 +2,49 @@ import { useEffect } from 'react';
 import { useAppState } from '../state/context.js';
 
 export function useKeybindings() {
-  const { state, dispatch } = useAppState();
+  const { state, dispatch, sendMessage } = useAppState();
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       const isMeta = e.metaKey || e.ctrlKey;
 
-      // Escape — close dropdown or dismiss approval
+      // Approval keys — highest priority when approval is pending
+      if (state.approvalPending) {
+        if (e.key === 'y' && !isMeta) {
+          e.preventDefault();
+          sendMessage({
+            type: 'tool_approval',
+            id: state.approvalPending.callId,
+            approved: true,
+          });
+          dispatch({ type: 'APPROVE_TOOL', callId: state.approvalPending.callId });
+          return;
+        }
+        if (e.key === 'n' && !isMeta) {
+          e.preventDefault();
+          sendMessage({
+            type: 'tool_approval',
+            id: state.approvalPending.callId,
+            approved: false,
+            reason: 'User denied',
+          });
+          dispatch({ type: 'DENY_TOOL', callId: state.approvalPending.callId });
+          return;
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          sendMessage({
+            type: 'tool_approval',
+            id: state.approvalPending.callId,
+            approved: false,
+            reason: 'User denied',
+          });
+          dispatch({ type: 'DENY_TOOL', callId: state.approvalPending.callId });
+          return;
+        }
+      }
+
+      // Escape — close dropdown
       if (e.key === 'Escape') {
         if (state.activeDropdown) {
           dispatch({ type: 'CLOSE_DROPDOWN' });
@@ -22,25 +58,25 @@ export function useKeybindings() {
           case 'n':
             e.preventDefault();
             dispatch({ type: 'NEW_CHAT' });
+            sendMessage({ type: 'new_session' });
             return;
           case 'k':
             e.preventDefault();
-            // Focus search — could open search modal
+            // Focus search modal (future)
             return;
           case 'l':
             e.preventDefault();
-            // Clear chat
             dispatch({ type: 'CLEAR_CHAT' });
             return;
           case 't':
             e.preventDefault();
             dispatch({ type: 'TOGGLE_THINKING' });
             return;
-          case 'enter':
-            e.preventDefault();
-            // Submit with current input
-            if (state.inputValue.trim()) {
-              dispatch({ type: 'SUBMIT_MESSAGE', content: state.inputValue.trim() });
+          case 'c':
+            if (state.isStreaming) {
+              e.preventDefault();
+              sendMessage({ type: 'interrupt' });
+              dispatch({ type: 'INTERRUPT' });
             }
             return;
         }
@@ -49,5 +85,5 @@ export function useKeybindings() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [state.activeDropdown, state.inputValue, dispatch]);
+  }, [state.approvalPending, state.activeDropdown, state.isStreaming, dispatch, sendMessage]);
 }

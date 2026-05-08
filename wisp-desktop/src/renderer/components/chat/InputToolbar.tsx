@@ -7,17 +7,11 @@ import './InputToolbar.css';
 
 interface InputToolbarProps {
   hasContent: boolean;
+  onSubmit: () => void;
 }
 
-export const InputToolbar: React.FC<InputToolbarProps> = ({ hasContent }) => {
+export const InputToolbar: React.FC<InputToolbarProps> = ({ hasContent, onSubmit }) => {
   const { state, dispatch } = useAppState();
-
-  const handleSubmit = () => {
-    const trimmed = state.inputValue.trim();
-    if (trimmed) {
-      dispatch({ type: 'SUBMIT_MESSAGE', content: trimmed });
-    }
-  };
 
   return (
     <div className="input-toolbar">
@@ -43,7 +37,7 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({ hasContent }) => {
         <button
           className={`send-btn ${hasContent ? 'send-btn--active' : ''}`}
           title="Send"
-          onClick={handleSubmit}
+          onClick={onSubmit}
         >
           <ArrowUp size={16} />
         </button>

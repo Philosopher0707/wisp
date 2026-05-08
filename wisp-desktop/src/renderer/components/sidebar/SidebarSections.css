@@ -29,6 +29,16 @@
   flex-direction: column;
 }
 
+/* ── Session list in sidebar ── */
+
+.sidebar-session-list {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding-bottom: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
 /* ── ChatListItem ── */
 
 .chat-list-item {
@@ -40,9 +50,14 @@
   font-size: var(--text-base);
   color: var(--text-primary);
   transition: background var(--transition-fast);
+  width: 100%;
 }
 
 .chat-list-item:hover {
+  background: var(--bg-hover);
+}
+
+.chat-list-item--active {
   background: var(--bg-hover);
 }
 
