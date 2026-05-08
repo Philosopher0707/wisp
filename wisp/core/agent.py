@@ -14,10 +14,14 @@ import re
 import time
 import uuid
 from pathlib import Path
-from typing import AsyncIterator, Callable, Optional
+from typing import AsyncIterator, Awaitable, Callable, Optional
+
+# (tool_name, args, danger_reason) -> (approved, modified_args_or_none)
+ApprovalHandler = Callable[[str, dict, str], Awaitable[tuple[bool, Optional[dict]]]]
 
 from wisp.config import WispConfig
 from wisp.ollama_client import OllamaClient, OllamaError
+from wisp.providers import get_provider
 from wisp.stream_events import (
     TokenBatch,
     ToolCallBatch,
@@ -138,7 +142,9 @@ class WispAgentCore:
         role: Optional[str] = None,
     ):
         self.config = config or WispConfig()
-        self.client = OllamaClient(self.config)
+        self.provider = get_provider(self.config)
+        # Backward-compatible alias while the rest of the codebase migrates.
+        self.client = self.provider
         if not self.config._context_tokens_explicit:
             try:
                 detected = self.client.get_context_length()
@@ -324,6 +330,16 @@ class WispAgentCore:
         skills = discover_skills(ws)
         system += self._build_skills_block_from_skills(skills)
 
+        # ── OntoSkills: inject deterministic skill context ──
+        from wisp.skills import has_ontology, match_skill_via_ontology
+        if has_ontology():
+            # Use last user message as query for skill matching
+            ontology_result = match_skill_via_ontology(str(ws_abs))
+            if ontology_result is None and hasattr(self, "_last_user_prompt"):
+                ontology_result = match_skill_via_ontology(self._last_user_prompt)
+            if ontology_result:
+                system += f"\n\n## Ontology Skill Match\n{ontology_result['context']}"
+
         project_ctx = detect_project_context(ws)
         ctx_block = format_context(project_ctx)
         if ctx_block:
@@ -473,8 +489,14 @@ class WispAgentCore:
 
     # ── Turn execution ───────────────────────────────────────────────
 
-    async def _arun(self, prompt: str, system: Optional[str] = None) -> AsyncIterator[AgentEvent]:
+    async def _arun(
+        self,
+        prompt: str,
+        system: Optional[str] = None,
+        approval_handler: Optional[ApprovalHandler] = None,
+    ) -> AsyncIterator[AgentEvent]:
         """Execute one user turn and yield all events (internal async implementation)."""
+        self._last_user_prompt = prompt  # For ontology skill matching
         self._add_message("user", self._expand_continuation(prompt))
         if system is None:
             system = self._build_system_prompt()
@@ -541,18 +563,24 @@ class WispAgentCore:
                 if isinstance(func, dict):
                     yield tool_call_event(func.get("name", ""), func.get("arguments", {}))
 
-            async for event in WispAgentCore._run_tool_calls(self, tool_calls, self.config.workspace or "."):
+            async for event in WispAgentCore._run_tool_calls(
+                self, tool_calls, self.config.workspace or ".", approval_handler=approval_handler
+            ):
                 yield event
 
         self._save_session()
 
-    async def run(self, prompt: str) -> AsyncIterator[AgentEvent]:
+    async def run(
+        self,
+        prompt: str,
+        approval_handler: Optional[ApprovalHandler] = None,
+    ) -> AsyncIterator[AgentEvent]:
         """Execute one user turn and yield all events.
 
         This is the primary SDK entry point. Transports consume the yielded
         events and decide how to present them (print, WebSocket, etc.).
         """
-        async for event in self._arun(prompt):
+        async for event in self._arun(prompt, approval_handler=approval_handler):
             yield event
 
     def _run_turn_streaming_events(self, system: str):
@@ -625,6 +653,7 @@ class WispAgentCore:
         self,
         tool_calls: list,
         workspace: str,
+        approval_handler: Optional[ApprovalHandler] = None,
     ) -> AsyncIterator[AgentEvent]:
         """Execute tool calls and yield result events.
 
@@ -661,21 +690,34 @@ class WispAgentCore:
                 danger_reason = check_dangerous_command(func_args.get("command", ""))
 
             if danger_reason:
-                # In SDK mode, dangerous commands are blocked unless explicitly approved
-                # by the transport layer. We yield an approval_request and skip.
                 yield approval_request(func_name, func_args, reason=danger_reason)
-                blocked_result = f"[Blocked: dangerous command — {danger_reason}]"
-                yield tool_result_event(
-                    func_name,
-                    blocked_result,
-                )
-                self.messages.append({
-                    "role": "tool",
-                    "content": blocked_result,
-                    "name": func_name,
-                    **({"tool_call_id": tc.get("id")} if tc.get("id") else {}),
-                })
-                continue
+
+                if approval_handler is not None:
+                    approved, modified_args = await approval_handler(func_name, func_args, danger_reason)
+                    if not approved:
+                        denied_result = f"[Denied: {danger_reason}]"
+                        yield tool_result_event(func_name, denied_result)
+                        self.messages.append({
+                            "role": "tool",
+                            "content": denied_result,
+                            "name": func_name,
+                            **({"tool_call_id": tc.get("id")} if tc.get("id") else {}),
+                        })
+                        continue
+                    if modified_args is not None:
+                        func_args = modified_args
+                    # Fall through to normal execution below
+                else:
+                    # No approval handler: auto-block
+                    blocked_result = f"[Blocked: dangerous command — {danger_reason}]"
+                    yield tool_result_event(func_name, blocked_result)
+                    self.messages.append({
+                        "role": "tool",
+                        "content": blocked_result,
+                        "name": func_name,
+                        **({"tool_call_id": tc.get("id")} if tc.get("id") else {}),
+                    })
+                    continue
 
             # Execute tool
             start = time.monotonic()
@@ -690,7 +732,7 @@ class WispAgentCore:
                     result = f"MCP error: {e}"
             else:
                 try:
-                    result = execute_tool(func_name, func_args, workspace, max_data_chars=8000, file_lock=self.file_lock)
+                    result = execute_tool(func_name, func_args, workspace, max_data_chars=8000, file_lock=self.file_lock, lsp_manager=self.lsp)
                 except ToolError as e:
                     result = f"Error: {e}"
                 except Exception as e:

@@ -4,6 +4,12 @@ Supports the same SKILL.md format Warp uses:
   .agents/skills/<skill-name>/SKILL.md
   .warp/skills/<skill-name>/SKILL.md
   (and others: .claude, .codex, .cursor, .gemini, etc.)
+
+Also supports OntoSkills ontology-backed skill resolution:
+  - Deterministic skill matching via SPARQL queries
+  - 150x fewer tokens than loading raw markdown
+  - Works on small models (4B+)
+  - Set WISP_ONTOLOGY_PATH to enable (e.g. ~/.ontoskills/wisp/)
 """
 
 import logging
@@ -151,3 +157,77 @@ def find_skill(name: str, workspace: str) -> Optional[Skill]:
         if skill.name == name:
             return skill
     return None
+
+
+# ── OntoSkills integration ──────────────────────────────────────────
+
+import os as _os
+import sys as _sys
+
+_ONTOLOGY_PATH = _os.environ.get("WISP_ONTOLOGY_PATH", "")
+_HAS_ONTOLOGY = _ONTOLOGY_PATH and _os.path.isdir(_ONTOLOGY_PATH)
+_ontology_cache: dict = {}
+
+
+def has_ontology() -> bool:
+    """Check if ontology-backed skills are available."""
+    return _HAS_ONTOLOGY
+
+
+def _get_ontology_client():
+    """Lazy-load the OntoSkills client (subprocess-based, heavy)."""
+    if "client" not in _ontology_cache:
+        from ontoskills import OntoSkillsClient
+        client = OntoSkillsClient(ontology_root=_ONTOLOGY_PATH)
+        _ontology_cache["client"] = client
+        _ontology_cache["started"] = False
+    return _ontology_cache["client"]
+
+
+def match_skill_via_ontology(query: str) -> Optional[dict]:
+    """Query the ontology for a matching skill.
+
+    Returns dict with 'name', 'intent', 'context' keys, or None if no match.
+    This is DETERMINISTIC — same query always returns same result.
+    """
+    if not _HAS_ONTOLOGY:
+        return None
+
+    # Quick cache check
+    cache_key = query.lower().strip()[:100]
+    if cache_key in _ontology_cache:
+        return _ontology_cache[cache_key]
+
+    import asyncio
+
+    async def _query():
+        client = _get_ontology_client()
+        if not _ontology_cache["started"]:
+            await client.start()
+            _ontology_cache["started"] = True
+
+        # Use search() which handles both exact ID match and BM25 search
+        results = await client.search(query, top_k=1)
+        if not results:
+            return None
+
+        r = results[0]
+        ctx = await client.get_context(r.skill_id)
+
+        from ontoskills.formatter import ContextFormatter
+        return {
+            "name": r.skill_id,
+            "intent": r.intent or ctx.intent or "",
+            "context": ContextFormatter.format_context(ctx),
+        }
+
+    try:
+        result = asyncio.run(_query())
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("Ontology query failed: %s", e)
+        result = None
+
+    if result:
+        _ontology_cache[cache_key] = result
+    return result
