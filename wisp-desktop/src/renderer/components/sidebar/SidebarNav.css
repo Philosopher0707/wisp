@@ -1,0 +1,24 @@
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding-bottom: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.sidebar-nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 7px var(--space-3);
+  margin: 0 var(--space-2);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: var(--text-md);
+  font-weight: 450;
+  transition: background var(--transition-fast);
+}
+
+.sidebar-nav-item:hover {
+  background: var(--bg-hover);
+}

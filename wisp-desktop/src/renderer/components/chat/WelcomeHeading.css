@@ -1,0 +1,8 @@
+.welcome-heading {
+  font-size: var(--text-2xl);
+  font-weight: 500;
+  color: var(--text-white);
+  margin-bottom: var(--space-8);
+  text-align: center;
+  letter-spacing: -0.01em;
+}

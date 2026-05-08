@@ -1,0 +1,28 @@
+.pill-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-full);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  transition: background var(--transition-fast);
+  white-space: nowrap;
+}
+
+.pill-btn--filled.pill-btn--purple {
+  background: var(--accent-purple);
+  color: var(--text-white);
+}
+.pill-btn--filled.pill-btn--purple:hover {
+  background: var(--accent-purple-hover);
+}
+
+.pill-btn--outlined {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: var(--text-primary);
+}
+.pill-btn--outlined:hover {
+  background: var(--bg-hover);
+}

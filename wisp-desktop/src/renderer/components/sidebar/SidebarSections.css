@@ -1,0 +1,107 @@
+/* ── Shared section styles ── */
+
+.sidebar-section {
+  margin-bottom: var(--space-3);
+  padding: 0 var(--space-2);
+}
+
+.sidebar-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-2);
+  margin-bottom: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sidebar-section-header-icons {
+  display: flex;
+  gap: var(--space-2);
+  color: var(--text-muted);
+}
+
+.sidebar-section-items {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── ChatListItem ── */
+
+.chat-list-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 5px var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-base);
+  color: var(--text-primary);
+  transition: background var(--transition-fast);
+}
+
+.chat-list-item:hover {
+  background: var(--bg-hover);
+}
+
+.chat-list-item-pin {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.chat-list-item-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-list-item-time {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  flex-shrink: 0;
+}
+
+.chat-list-item-ext {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+/* ── ProjectFolder ── */
+
+.project-folder {
+  margin-bottom: var(--space-1);
+}
+
+.project-folder-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 5px var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-base);
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.project-folder-header:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.project-folder-chevron {
+  transition: transform var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.project-folder-chevron--open {
+  transform: rotate(90deg);
+}
+
+.project-folder-children {
+  padding-left: var(--space-4);
+}

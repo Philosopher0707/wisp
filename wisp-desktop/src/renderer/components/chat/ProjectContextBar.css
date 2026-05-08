@@ -1,0 +1,22 @@
+.project-context-bar {
+  display: flex;
+  justify-content: flex-start;
+  width: 100%;
+  margin-top: var(--space-2);
+}
+
+.project-context-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 3px var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.project-context-btn:hover {
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+}

@@ -1,0 +1,16 @@
+.sidebar {
+  width: var(--sidebar-width);
+  min-width: var(--sidebar-width);
+  height: 100%;
+  background: var(--bg-sidebar);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  overflow: hidden;
+}
+
+.sidebar-top {
+  flex: 1;
+  overflow-y: auto;
+  padding-top: var(--space-2);
+}
