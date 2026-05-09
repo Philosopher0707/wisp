@@ -13,7 +13,15 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
+from wisp.core.message_format import extract_text
+
 logger = logging.getLogger(__name__)
+
+
+def _get_content(msg: dict) -> str:
+    """Extract plain text from a message, handling multimodal content arrays."""
+    return extract_text(msg.get("content", "") or "")
+
 
 # ── Patterns ─────────────────────────────────────────────────────────
 
@@ -159,7 +167,7 @@ class ExtractiveSummarizer:
     def _build_summary(self, messages: list[dict]) -> str:
         """Build a 1–3 sentence narrative summary."""
         assistant_contents = [
-            m.get("content", "") or ""
+            _get_content(m)
             for m in messages
             if m.get("role") == "assistant"
         ]
@@ -248,7 +256,7 @@ class ExtractiveSummarizer:
         pattern = re.compile("|".join(_DECISION_PATTERNS), re.IGNORECASE)
 
         for m in messages:
-            content = m.get("content", "") or ""
+            content = _get_content(m)
             for sentence in _SENTENCE_SPLIT.split(content):
                 sentence = sentence.strip()
                 if pattern.search(sentence) and len(sentence) > 15:
@@ -266,7 +274,7 @@ class ExtractiveSummarizer:
         for m in messages:
             if m.get("role") != "user":
                 continue
-            content = m.get("content", "") or ""
+            content = _get_content(m)
             for sentence in _SENTENCE_SPLIT.split(content):
                 sentence = sentence.strip()
                 if pattern.search(sentence) and len(sentence) > 10:
@@ -277,7 +285,7 @@ class ExtractiveSummarizer:
         for m in messages:
             if m.get("role") != "user":
                 continue
-            content = m.get("content", "") or ""
+            content = _get_content(m)
             for sentence in _SENTENCE_SPLIT.split(content):
                 sentence = sentence.strip()
                 if correction_pattern.search(sentence) and sentence not in results:
@@ -293,7 +301,7 @@ class ExtractiveSummarizer:
         pattern = re.compile("|".join(_TASK_PATTERNS), re.IGNORECASE)
 
         for m in messages:
-            content = m.get("content", "") or ""
+            content = _get_content(m)
             for sentence in _SENTENCE_SPLIT.split(content):
                 sentence = sentence.strip()
                 if pattern.search(sentence) and len(sentence) > 10:
@@ -311,7 +319,7 @@ class ExtractiveSummarizer:
 
         for m in messages:
             # From message content
-            content = m.get("content", "") or ""
+            content = _get_content(m)
             for match in _FILE_PATTERN.finditer(content):
                 path = match.group(0)
                 path = path.rstrip(".,;:!?)")
@@ -363,7 +371,7 @@ class ExtractiveSummarizer:
         for i, m in enumerate(messages):
             if m.get("role") != "assistant":
                 continue
-            content = (m.get("content", "") or "").strip()
+            content = (_get_content(m)).strip()
             if not content:
                 continue
             # Find preceding user prompt
@@ -380,7 +388,7 @@ class ExtractiveSummarizer:
         # Take last 3 turns, walk backwards for status
         recent = turns[-3:]
         for idx, msg, user_prompt in reversed(recent):
-            content = (msg.get("content", "") or "").strip()
+            content = _get_content(msg).strip()
             lower = content.lower()
             no_terminal = not bool(re.search(r"[.!?```}\])]$", content[-5:]))
             has_marker = any(marker in lower for marker in self._INCOMPLETE_MARKERS)

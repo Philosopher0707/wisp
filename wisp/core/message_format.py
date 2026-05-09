@@ -150,12 +150,12 @@ def to_ollama_messages(messages: list[dict]) -> list[dict]:
         role = msg.get("role", "")
         content = msg.get("content", "")
 
-        # Only user messages can have images in Ollama
-        if role == "user" and isinstance(content, list):
+        # Extract text from content arrays (multimodal format → plain string)
+        if isinstance(content, list):
             text = extract_text(content)
             images = extract_images(content)
             new_msg: dict = {"role": role, "content": text}
-            if images:
+            if role == "user" and images:
                 new_msg["images"] = images
             if msg.get("thinking"):
                 new_msg["thinking"] = msg["thinking"]

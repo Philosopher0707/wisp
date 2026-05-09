@@ -455,7 +455,9 @@ class CLITransport:
         # Extract the last user message content before _arun() clears/re-adds it.
         prompt = ""
         if self.core.messages and self.core.messages[-1].get("role") == "user":
-            prompt = self.core.messages[-1].get("content", "")
+            raw = self.core.messages[-1].get("content", "")
+            from wisp.core.message_format import extract_text
+            prompt = extract_text(raw)
             self.core.messages.pop()
 
         # Build approval handler that prompts the user in the terminal
