@@ -379,7 +379,10 @@ class WispAgent(WispAgentCore):
             if func_name != "spawn_subagent" and result.startswith("{"):
                 try:
                     parsed = json.loads(result)
-                    preview = parsed.get("data", result)[:200].replace("\n", " ")
+                    data = parsed.get("data", result)
+                    if isinstance(data, dict):
+                        data = json.dumps(data)
+                    preview = data[:200].replace("\n", " ")
                 except (json.JSONDecodeError, KeyError):
                     pass
 

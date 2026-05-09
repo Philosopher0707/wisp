@@ -275,7 +275,10 @@ def _render_event(event: AgentEvent, show_thinking: bool = False) -> Optional[st
         if isinstance(result, str) and result.startswith("{"):
             try:
                 parsed = json.loads(result)
-                result = parsed.get("data", result)
+                data = parsed.get("data", result)
+                if isinstance(data, dict):
+                    data = json.dumps(data)
+                result = data
             except (json.JSONDecodeError, KeyError):
                 pass
         preview = str(result)[:200].replace("\n", " ")

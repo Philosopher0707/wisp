@@ -322,7 +322,10 @@ class SubagentRunner:
                     try:
                         import json
                         parsed = json.loads(result)
-                        preview = parsed.get("data", result)[:120].replace("\n", " ")
+                        data = parsed.get("data", result)
+                        if isinstance(data, dict):
+                            data = json.dumps(data)
+                        preview = data[:120].replace("\n", " ")
                     except json.JSONDecodeError:
                         pass
                     except KeyError:
