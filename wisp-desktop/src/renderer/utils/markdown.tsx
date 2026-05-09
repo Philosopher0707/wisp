@@ -315,6 +315,30 @@ export function renderMarkdown(text: string): React.ReactNode {
     // Inline formatting
     let processed = line;
 
+    // Image syntax: ![alt](data:image/...)
+    const imgMatch = processed.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+    if (imgMatch) {
+      result.push(
+        <img
+          key={`img-${i}`}
+          src={imgMatch[2]}
+          alt={imgMatch[1] || 'Image'}
+          className="md-image"
+          style={{ maxWidth: '100%', maxHeight: '400px', borderRadius: 'var(--radius-md)', margin: 'var(--space-2) 0', cursor: 'pointer' }}
+          onClick={(e) => {
+            const target = e.currentTarget;
+            if (target.style.maxHeight === '400px') {
+              target.style.maxHeight = 'none';
+            } else {
+              target.style.maxHeight = '400px';
+            }
+          }}
+          loading="lazy"
+        />,
+      );
+      continue;
+    }
+
     // Inline code (before bold/italic)
     processed = processed.replace(/`([^`]+)`/g, '<code class="md-inline-code">$1</code>');
 

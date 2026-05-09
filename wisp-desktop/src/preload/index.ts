@@ -6,6 +6,7 @@ export interface WispAPI {
   openFileDialog: () => Promise<string[] | null>;
   openInVSCode: (workspacePath: string) => Promise<boolean>;
   selectDirectory: () => Promise<string | null>;
+  readFileAsDataUrl: (path: string) => Promise<string | null>;
 }
 
 contextBridge.exposeInMainWorld('wisp', {
@@ -22,4 +23,6 @@ contextBridge.exposeInMainWorld('wisp', {
   openInVSCode: (workspacePath: string) => ipcRenderer.invoke('code:open', workspacePath),
 
   selectDirectory: () => ipcRenderer.invoke('dialog:openDirectory'),
+
+  readFileAsDataUrl: (path: string) => ipcRenderer.invoke('file:readDataUrl', path),
 } satisfies WispAPI);

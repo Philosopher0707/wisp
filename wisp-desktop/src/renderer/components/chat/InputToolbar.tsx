@@ -4,6 +4,7 @@ import { Plus, Shield, Mic, ArrowUp, Square, ChevronDown, Sparkles, History, Key
 import { ModelSelector } from './ModelSelector.js';
 import { ReasoningSelector } from './ReasoningSelector.js';
 import { PermissionSelector } from './PermissionSelector.js';
+import type { PendingImage } from '../../state/types.js';
 import './InputToolbar.css';
 
 interface InputToolbarProps {
@@ -19,11 +20,45 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({ hasContent, onSubmit
     if (window.wisp?.openFileDialog) {
       const paths = await window.wisp.openFileDialog();
       if (paths && paths.length > 0) {
-        dispatch({
-          type: 'RECEIVE_STATUS',
-          message: `Attached: ${paths.map((p) => p.split('/').pop()).join(', ')}`,
-          level: 'info',
-        });
+        const IMG_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg']);
+        const imagePaths: string[] = [];
+        const otherPaths: string[] = [];
+        for (const p of paths) {
+          const ext = p.split('.').pop()?.toLowerCase() || '';
+          if (IMG_EXTS.has(ext)) imagePaths.push(p);
+          else otherPaths.push(p);
+        }
+
+        // Read images via IPC
+        if (imagePaths.length > 0 && window.wisp.readFileAsDataUrl) {
+          const images: PendingImage[] = [];
+          let idCounter = 0;
+          for (const imgPath of imagePaths) {
+            try {
+              const dataUrl = await window.wisp.readFileAsDataUrl(imgPath);
+              if (dataUrl) {
+                idCounter += 1;
+                images.push({
+                  id: `attach-${idCounter}`,
+                  dataUrl,
+                  fileName: imgPath.split('/').pop() || imgPath,
+                  size: 0,
+                });
+              }
+            } catch { /* skip */ }
+          }
+          if (images.length > 0) {
+            dispatch({ type: 'ADD_IMAGES', images });
+          }
+        }
+
+        if (otherPaths.length > 0) {
+          dispatch({
+            type: 'RECEIVE_STATUS',
+            message: `Attached: ${otherPaths.map((p) => p.split('/').pop()).join(', ')}`,
+            level: 'info',
+          });
+        }
       }
     }
   };

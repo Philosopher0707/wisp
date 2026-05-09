@@ -98,6 +98,7 @@ export interface AppState {
   contextFiles: ContextFile[];
   keybindings: Record<string, string>;
   inlineEdit: InlineEditState | null;
+  pendingImages: PendingImage[];
 }
 
 export interface InlineEditState {
@@ -115,6 +116,13 @@ export interface ContextFile {
   path: string;
   loaded: boolean;
   content?: string;
+}
+
+export interface PendingImage {
+  id: string;
+  dataUrl: string;
+  fileName: string;
+  size: number;
 }
 
 export interface Suggestion {
@@ -216,7 +224,10 @@ export type Action =
   | { type: 'INLINE_EDIT_ERROR'; error: string }
   | { type: 'CANCEL_INLINE_EDIT' }
   | { type: 'SET_SUGGESTIONS'; suggestions: Suggestion[] }
-  | { type: 'TOGGLE_SUGGESTIONS_PANEL' };
+  | { type: 'TOGGLE_SUGGESTIONS_PANEL' }
+  | { type: 'ADD_IMAGES'; images: PendingImage[] }
+  | { type: 'REMOVE_IMAGE'; id: string }
+  | { type: 'CLEAR_IMAGES' };
 
 // ── Helpers ──
 
@@ -282,6 +293,7 @@ export function createInitialState(overrides?: {
     contextFiles: [],
     keybindings: {},
     inlineEdit: null,
+    pendingImages: [],
   };
 }
 
@@ -683,6 +695,15 @@ export function appReducer(state: AppState, action: Action): AppState {
 
     case 'CANCEL_INLINE_EDIT':
       return { ...state, inlineEdit: null };
+
+    case 'ADD_IMAGES':
+      return { ...state, pendingImages: [...state.pendingImages, ...action.images] };
+
+    case 'REMOVE_IMAGE':
+      return { ...state, pendingImages: state.pendingImages.filter((img) => img.id !== action.id) };
+
+    case 'CLEAR_IMAGES':
+      return { ...state, pendingImages: [] };
 
     default:
       return state;

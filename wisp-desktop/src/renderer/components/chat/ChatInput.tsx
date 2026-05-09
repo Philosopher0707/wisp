@@ -5,6 +5,8 @@ import { MentionPopup } from './MentionPopup.js';
 import { ContextIndicator } from './ContextIndicator.js';
 import { CompletionGhost } from './CompletionGhost.js';
 import { VimEditor } from '../../utils/vim.js';
+import { ImagePreview } from './ImagePreview.js';
+import type { PendingImage } from '../../state/types.js';
 import './ChatInput.css';
 
 export const ChatInput: React.FC = () => {
@@ -69,9 +71,11 @@ export const ChatInput: React.FC = () => {
     setMentionQuery(null);
     setMentionRange(null);
     dispatch({ type: 'SUBMIT_MESSAGE', content: trimmed });
+    const imageUrls = state.pendingImages.map((img) => img.dataUrl);
     sendMessage({
       type: 'prompt',
       content: trimmed,
+      images: imageUrls.length > 0 ? imageUrls : undefined,
       model: state.selectedModel || undefined,
       session_id: state.sessionId || undefined,
       show_thinking: state.showThinking,
@@ -80,9 +84,68 @@ export const ChatInput: React.FC = () => {
       permission_mode: state.permissionMode,
       plan_mode: state.planMode,
     });
+    dispatch({ type: 'CLEAR_IMAGES' });
   };
 
+  const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg']);
+  const IMAGE_MIME_PREFIX = 'image/';
+  const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
+
+  let _imgCounter = 0;
+  function nextImgId(): string { _imgCounter += 1; return `img-${_imgCounter}`; }
+
+  function readFileAsDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      if (file.size > MAX_IMAGE_BYTES) {
+        reject(new Error(`Image too large: ${(file.size / 1024 / 1024).toFixed(1)}MB (max 5MB)`));
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function filesToImages(files: FileList | File[]): Promise<PendingImage[]> {
+    const results: PendingImage[] = [];
+    for (const f of files) {
+      const ext = f.name.split('.').pop()?.toLowerCase() || '';
+      const isImage = f.type.startsWith(IMAGE_MIME_PREFIX) || IMAGE_EXTENSIONS.has(ext);
+      if (isImage) {
+        try {
+          const dataUrl = await readFileAsDataUrl(f);
+          results.push({ id: nextImgId(), dataUrl, fileName: f.name, size: f.size });
+        } catch (err: any) {
+          dispatch({ type: 'RECEIVE_ERROR', message: err.message || 'Failed to read image' });
+        }
+      }
+    }
+    return results;
+  }
+
   const ghostRef = React.useRef<any>(null);
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const imageFiles: File[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith(IMAGE_MIME_PREFIX)) {
+        const file = item.getAsFile();
+        if (file) imageFiles.push(file);
+      }
+    }
+    if (imageFiles.length > 0) {
+      e.preventDefault();
+      filesToImages(imageFiles).then((images) => {
+        if (images.length > 0) {
+          dispatch({ type: 'ADD_IMAGES', images });
+        }
+      });
+    }
+  };
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
@@ -164,18 +227,26 @@ export const ChatInput: React.FC = () => {
     const files = e.dataTransfer.files;
     if (files.length === 0) return;
 
-    const paths: string[] = [];
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i] as File & { path?: string };
-      if (f.path) paths.push(f.path);
-    }
-
-    if (paths.length > 0) {
-      const current = state.inputValue;
-      const fileList = paths.join('\n');
-      const newValue = current ? current + '\n' + fileList : fileList;
-      dispatch({ type: 'SET_INPUT', value: newValue });
-    }
+    filesToImages(files).then((images) => {
+      if (images.length > 0) {
+        dispatch({ type: 'ADD_IMAGES', images });
+      }
+      // Remaining non-image files: insert paths as text
+      const paths: string[] = [];
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i] as File & { path?: string };
+        const ext = f.name.split('.').pop()?.toLowerCase() || '';
+        if (!f.type.startsWith(IMAGE_MIME_PREFIX) && !IMAGE_EXTENSIONS.has(ext) && f.path) {
+          paths.push(f.path);
+        }
+      }
+      if (paths.length > 0) {
+        const current = state.inputValue;
+        const fileList = paths.join('\n');
+        const newValue = current ? current + '\n' + fileList : fileList;
+        dispatch({ type: 'SET_INPUT', value: newValue });
+      }
+    });
   };
 
   React.useEffect(() => {
@@ -223,9 +294,11 @@ export const ChatInput: React.FC = () => {
           value={state.inputValue}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           rows={1}
           disabled={state.connection !== 'connected'}
         />
+        <ImagePreview />
         <CompletionGhost textareaRef={textareaRef} />
         {state.vimMode && (
           <div className="chat-input-vim-status">

@@ -1,5 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import { exec } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
 import { createMainWindow } from './window.js';
 import { buildMenu } from './menu.js';
 
@@ -36,6 +38,28 @@ function registerIpcHandlers(): void {
         }
       });
     });
+  });
+
+  ipcMain.handle('file:readDataUrl', async (_e, filePath: string) => {
+    try {
+      const ext = path.extname(filePath).toLowerCase();
+      const mimeMap: Record<string, string> = {
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+        '.bmp': 'image/bmp',
+        '.svg': 'image/svg+xml',
+      };
+      const mime = mimeMap[ext];
+      if (!mime) return null;
+      const data = fs.readFileSync(filePath);
+      const b64 = data.toString('base64');
+      return `data:${mime};base64,${b64}`;
+    } catch {
+      return null;
+    }
   });
 }
 
