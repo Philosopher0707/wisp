@@ -136,6 +136,15 @@ class ContextUpdateRequest(BaseModel):
     content: str = Field(..., min_length=1, description="Content for .wisp/rules.md")
 
 
+class SwarmRunRequest(BaseModel):
+    goal: str = Field(..., min_length=1, description="High-level task description")
+    roles: list[str] = Field(default=[], description="Agent roles to spawn")
+    count_per_role: Optional[dict[str, int]] = None
+    model: Optional[str] = None
+    max_retries: int = Field(default=2, ge=0, le=5)
+    max_parallel: int = Field(default=3, ge=1, le=10)
+
+
 class PRReviewRequest(BaseModel):
     pr_number: Optional[int] = None
     base_branch: str = Field(default="main", description="Base branch for diffing")
@@ -795,6 +804,120 @@ async def cancel_background_run(run_id: str):
     if not ok:
         raise HTTPException(status_code=404, detail="Run not found or not running")
     return {"ok": True}
+
+
+# ── Swarm HTTP API ────────────────────────────────────────────────────
+
+# In-memory store for async swarm runs. Each entry holds the orchestrator,
+# an accumulated event log, and metadata for polling.
+_swarm_store: dict[str, dict] = {}
+_swarm_lock = asyncio.Lock()
+
+
+def _default_roles() -> list[str]:
+    from wisp.multi_agent.roles import AgentRole
+    return [AgentRole.CODER, AgentRole.REVIEWER, AgentRole.TESTER, AgentRole.RESEARCHER]
+
+
+@app.post("/api/swarm/run", dependencies=[Depends(verify_api_key)])
+async def swarm_run_api(req: SwarmRunRequest):
+    """Run a multi-agent swarm asynchronously. Returns run_id for polling."""
+    from wisp.config import WispConfig
+    from wisp.multi_agent.orchestrator import SwarmOrchestrator
+    from wisp.multi_agent.task import OrchestratorEvent as SwarmEvent
+
+    roles = req.roles or _default_roles()
+
+    config = WispConfig()
+    if req.model:
+        config.model = req.model
+    config.workspace = str(WORKSPACE_ROOT)
+    config.auto_approve = True
+
+    orch = SwarmOrchestrator(config, max_parallel=req.max_parallel)
+    run_id = f"swarm-{secrets.token_hex(6)}"
+    event_log: list[dict] = []
+
+    async def collect_events(evt: SwarmEvent) -> None:
+        ws_msg = evt.to_ws_message()
+        entry = {
+            "event_type": evt.event_type,
+            "task_id": evt.task_id,
+            "payload": evt.payload,
+        }
+        if ws_msg:
+            entry["ws_message"] = ws_msg
+        event_log.append(entry)
+
+    async with _swarm_lock:
+        _swarm_store[run_id] = {
+            "orchestrator": orch,
+            "event_log": event_log,
+            "goal": req.goal,
+            "roles": roles,
+            "start_time": time.monotonic(),
+        }
+
+    async def _run():
+        try:
+            await orch.arun(
+                req.goal,
+                roles=roles,
+                count_per_role=req.count_per_role,
+                max_retries=req.max_retries,
+                progress_callback=collect_events,
+            )
+        except Exception as e:
+            logger.error("Swarm run %s error: %s", run_id, e)
+        finally:
+            async with _swarm_lock:
+                entry = _swarm_store.get(run_id)
+                if entry:
+                    entry["finished"] = True
+                    entry["end_time"] = time.monotonic()
+
+    asyncio.create_task(_run())
+    return {"run_id": run_id, "status": "running", "roles": roles}
+
+
+@app.get("/api/swarm/status/{run_id}", dependencies=[Depends(verify_api_key)])
+async def swarm_status_api(run_id: str):
+    """Get status of a swarm run: agent list, counts, elapsed."""
+    async with _swarm_lock:
+        entry = _swarm_store.get(run_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Swarm run not found")
+
+    orch = entry["orchestrator"]
+    registry_data = orch.registry.to_dict()
+    elapsed = time.monotonic() - entry["start_time"]
+
+    return {
+        "run_id": run_id,
+        "goal": entry["goal"],
+        "roles": entry["roles"],
+        "elapsed_seconds": round(elapsed, 1),
+        "finished": entry.get("finished", False),
+        "agents": registry_data["agents"],
+        "total_agents": registry_data["total"],
+        "active_agents": registry_data["active"],
+    }
+
+
+@app.get("/api/swarm/events/{run_id}", dependencies=[Depends(verify_api_key)])
+async def swarm_events_api(run_id: str):
+    """Get accumulated event log for a swarm run (for polling clients)."""
+    async with _swarm_lock:
+        entry = _swarm_store.get(run_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Swarm run not found")
+
+    return {
+        "run_id": run_id,
+        "goal": entry["goal"],
+        "finished": entry.get("finished", False),
+        "events": list(entry["event_log"]),
+    }
 
 
 # ── Arena Mode ─────────────────────────────────────────────────────────
