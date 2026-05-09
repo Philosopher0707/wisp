@@ -74,6 +74,7 @@ TYPE_ERROR = "error"
 TYPE_DONE = "done"
 TYPE_SYSTEM = "system"          # meta: model changed, session compacted, etc.
 TYPE_APPROVAL_REQUEST = "approval_request"  # transport should prompt user
+TYPE_CHECKPOINT_CREATED = "checkpoint_created"
 
 # Human-readable descriptions
 _EVENT_DESCRIPTIONS: dict[str, str] = {
@@ -124,6 +125,16 @@ def done(session_id: str, turns: int = 0, summary: str = "") -> AgentEvent:
 
 def system(message: str, level: str = "info") -> AgentEvent:
     return AgentEvent(TYPE_SYSTEM, {"message": message, "level": level})
+
+
+def checkpoint_created(checkpoint_id: str, description: str,
+                       tool_name: str = "", file_count: int = 0) -> AgentEvent:
+    return AgentEvent(TYPE_CHECKPOINT_CREATED, {
+        "checkpoint_id": checkpoint_id,
+        "description": description,
+        "tool_name": tool_name,
+        "file_count": file_count,
+    })
 
 
 def approval_request(tool_name: str, args: dict[str, Any], reason: str = "") -> AgentEvent:

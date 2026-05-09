@@ -48,6 +48,7 @@ from wisp.core.events import (
     done as done_event,
     system as system_event,
     approval_request,
+    checkpoint_created,
 )
 
 logger = logging.getLogger(__name__)
@@ -920,7 +921,7 @@ class WispAgentCore:
                     from wisp.checkpoints import CheckpointManager
                     cpm = CheckpointManager(Path(self.config.workspace))
                     cp = await cpm.auto_checkpoint(func_name)
-                    yield system_event(f"Checkpoint created: {cp.id[:8]} — {cp.description}")
+                    yield checkpoint_created(cp.id, cp.description, func_name, cp.file_count)
                 except ImportError:
                     pass
                 except Exception as e:

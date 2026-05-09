@@ -23,6 +23,7 @@ from wisp.core.events import (
     TYPE_DONE,
     TYPE_SYSTEM,
     TYPE_APPROVAL_REQUEST,
+    TYPE_CHECKPOINT_CREATED,
 )
 
 logger = logging.getLogger(__name__)
@@ -117,6 +118,15 @@ class ServerTransport:
 
         if etype == TYPE_DONE:
             return {"type": "done", "session_id": event.data.get("session_id", "")}
+
+        if etype == TYPE_CHECKPOINT_CREATED:
+            return {
+                "type": "checkpoint_created",
+                "checkpoint_id": event.data.get("checkpoint_id", ""),
+                "description": event.data.get("description", ""),
+                "tool_name": event.data.get("tool_name", ""),
+                "file_count": event.data.get("file_count", 0),
+            }
 
         return None
 
