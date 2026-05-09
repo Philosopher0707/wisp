@@ -173,8 +173,8 @@ export class WispClient extends EventEmitter {
     this._ws.send(JSON.stringify(data));
   }
 
-  sendPrompt(content: string, options: WispPromptOptions = {}): void {
-    this._send({
+  sendPrompt(content: string, options: WispPromptOptions = {}, images?: string[]): void {
+    const msg: Record<string, unknown> = {
       type: 'prompt',
       content,
       model: options.model,
@@ -182,7 +182,11 @@ export class WispClient extends EventEmitter {
       show_thinking: options.showThinking ?? true,
       permission_mode: options.permissionMode || 'ask_all',
       plan_mode: options.planMode || false,
-    });
+    };
+    if (images && images.length > 0) {
+      msg.images = images;
+    }
+    this._send(msg);
   }
 
   approveTool(callId: string, approved: boolean, reason?: string): void {

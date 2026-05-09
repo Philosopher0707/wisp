@@ -102,13 +102,14 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     switch (msg.type) {
       case 'sendPrompt': {
         const content = msg.content as string;
+        const images = msg.images as string[] | undefined;
         const options: WispPromptOptions = {
           model: msg.model as string | undefined,
           showThinking: msg.showThinking as boolean | undefined ?? true,
           permissionMode: (msg.permissionMode as WispPromptOptions['permissionMode']) || 'ask_all',
         };
         this._messageHistory.push({ role: 'user', content });
-        this._client.sendPrompt(content, options);
+        this._client.sendPrompt(content, options, images);
         break;
       }
       case 'interrupt':
@@ -845,6 +846,33 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   inputEl.oninput = function() {
     inputEl.style.height = 'auto';
     inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';
+  };
+
+  inputEl.onpaste = function(e) {
+    var items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    var imageFiles = [];
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf('image/') === 0) {
+        var file = items[i].getAsFile();
+        if (file) imageFiles.push(file);
+      }
+    }
+    if (imageFiles.length > 0) {
+      e.preventDefault();
+      imageFiles.forEach(function(file) {
+        if (file.size > 5 * 1024 * 1024) return;
+        var reader = new FileReader();
+        reader.onload = function(ev) {
+          vscode.postMessage({
+            type: 'sendPrompt',
+            content: 'What is in this image?',
+            images: [ev.target.result]
+          });
+        };
+        reader.readAsDataURL(file);
+      });
+    }
   };
 
   document.querySelectorAll('.context-btn').forEach(function(btn) {
