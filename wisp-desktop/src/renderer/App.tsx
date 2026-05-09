@@ -106,6 +106,28 @@ export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
     }
   }, []);
 
+  // Poll for edit suggestions every 30s when panel is open
+  React.useEffect(() => {
+    if (!state.suggestionsPanelOpen || state.connection !== 'connected') return;
+    const baseUrl = serverUrl.replace(/\/$/, '');
+    const params = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
+
+    const poll = () => {
+      fetch(`${baseUrl}/api/suggestions${params}`)
+        .then((r) => r.json())
+        .then((data: { suggestions?: Array<{ path: string; mtime: number; diagnostic_count: number; severities: Record<string, number> }> }) => {
+          if (data.suggestions) {
+            dispatch({ type: 'SET_SUGGESTIONS', suggestions: data.suggestions });
+          }
+        })
+        .catch(() => {});
+    };
+
+    poll(); // immediate first poll
+    const interval = setInterval(poll, 30_000);
+    return () => clearInterval(interval);
+  }, [state.suggestionsPanelOpen, state.connection, serverUrl, apiKey]);
+
   // Restore vim mode
   React.useEffect(() => {
     const storedVim = localStorage.getItem('wisp_vim_mode');

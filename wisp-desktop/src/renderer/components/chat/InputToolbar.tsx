@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useAppState } from '../../state/context.js';
-import { Plus, Shield, Mic, ArrowUp, Square, ChevronDown, Sparkles, History, Keyboard, Pause, Play } from '../../icons/index.js';
+import { Plus, Shield, Mic, ArrowUp, Square, ChevronDown, Sparkles, History, Keyboard, Pause, Play, Lightbulb } from '../../icons/index.js';
 import { ModelSelector } from './ModelSelector.js';
 import { ReasoningSelector } from './ReasoningSelector.js';
 import { PermissionSelector } from './PermissionSelector.js';
@@ -62,6 +62,13 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({ hasContent, onSubmit
           onClick={() => dispatch({ type: 'TOGGLE_CHECKPOINT_PANEL' })}
         >
           <History size={18} />
+        </button>
+        <button
+          className={`toolbar-icon-btn ${state.suggestionsPanelOpen ? 'toolbar-icon-btn--active' : ''}`}
+          title={state.suggestionsPanelOpen ? 'Hide suggestions' : 'Show edit suggestions'}
+          onClick={() => dispatch({ type: 'TOGGLE_SUGGESTIONS_PANEL' })}
+        >
+          <Lightbulb size={18} />
         </button>
         <button
           className={`toolbar-icon-btn ${state.vimMode ? 'toolbar-icon-btn--active' : ''}`}

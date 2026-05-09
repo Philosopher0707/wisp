@@ -87,6 +87,8 @@ export interface AppState {
   forkingMessageId: string | null;
   checkpoints: Checkpoint[];
   checkpointPanelOpen: boolean;
+  suggestions: Suggestion[];
+  suggestionsPanelOpen: boolean;
   subagentTasks: SubagentTask[];
   tokenUsagePercent: number;
   theme: ThemeMode;
@@ -113,6 +115,13 @@ export interface ContextFile {
   path: string;
   loaded: boolean;
   content?: string;
+}
+
+export interface Suggestion {
+  path: string;
+  mtime: number;
+  diagnostic_count: number;
+  severities: Record<string, number>;
 }
 
 export interface Checkpoint {
@@ -205,7 +214,9 @@ export type Action =
   | { type: 'START_INLINE_EDIT'; path: string; selection: string }
   | { type: 'INLINE_EDIT_RESULT'; newText: string; diff: string }
   | { type: 'INLINE_EDIT_ERROR'; error: string }
-  | { type: 'CANCEL_INLINE_EDIT' };
+  | { type: 'CANCEL_INLINE_EDIT' }
+  | { type: 'SET_SUGGESTIONS'; suggestions: Suggestion[] }
+  | { type: 'TOGGLE_SUGGESTIONS_PANEL' };
 
 // ── Helpers ──
 
@@ -260,6 +271,8 @@ export function createInitialState(overrides?: {
     forkingMessageId: null,
     checkpoints: [],
     checkpointPanelOpen: false,
+    suggestions: [],
+    suggestionsPanelOpen: false,
     subagentTasks: [],
     tokenUsagePercent: 0,
     theme: 'dark',
@@ -539,6 +552,12 @@ export function appReducer(state: AppState, action: Action): AppState {
       localStorage.setItem('wisp_checkpoint_panel', String(next));
       return { ...state, checkpointPanelOpen: next };
     }
+
+    case 'SET_SUGGESTIONS':
+      return { ...state, suggestions: action.suggestions };
+
+    case 'TOGGLE_SUGGESTIONS_PANEL':
+      return { ...state, suggestionsPanelOpen: !state.suggestionsPanelOpen };
 
     case 'SUBAGENT_START':
       return {

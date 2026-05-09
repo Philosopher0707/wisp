@@ -41,4 +41,8 @@ export {
   ClipboardList,
   Pause,
   Play,
+  AlertTriangle,
+  AlertCircle,
+  Lightbulb,
+  Info,
 } from 'lucide-react';
