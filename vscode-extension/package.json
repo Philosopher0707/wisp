@@ -1,0 +1,138 @@
+{
+  "name": "wisp-ai",
+  "displayName": "Wisp AI Assistant",
+  "description": "AI-powered coding assistant connected to Wisp — chat, edit, and explore your codebase",
+  "version": "0.1.0",
+  "publisher": "wisp",
+  "license": "MIT",
+  "repository": "https://github.com/wisp/wisp",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Machine Learning",
+    "Chat",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "ai",
+    "assistant",
+    "coding",
+    "agent",
+    "llm",
+    "wisp"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "wisp-sidebar",
+          "title": "Wisp AI",
+          "icon": "media/wisp-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "wisp-sidebar": [
+        {
+          "type": "webview",
+          "id": "wisp.chatPanel",
+          "name": "Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "wisp.explainCode",
+        "title": "Wisp: Explain This Code"
+      },
+      {
+        "command": "wisp.fixCode",
+        "title": "Wisp: Fix Bugs"
+      },
+      {
+        "command": "wisp.addTests",
+        "title": "Wisp: Add Tests"
+      },
+      {
+        "command": "wisp.reviewCode",
+        "title": "Wisp: Review Code"
+      },
+      {
+        "command": "wisp.customPrompt",
+        "title": "Wisp: Custom Prompt..."
+      },
+      {
+        "command": "wisp.focusChat",
+        "title": "Wisp: Focus Chat Panel"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "wisp.explainCode",
+          "group": "wisp",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "wisp.fixCode",
+          "group": "wisp",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "wisp.addTests",
+          "group": "wisp",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "wisp.reviewCode",
+          "group": "wisp",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "wisp.customPrompt",
+          "group": "wisp"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Wisp AI",
+      "properties": {
+        "wisp.serverUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "description": "URL of the Wisp server"
+        },
+        "wisp.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key for the Wisp server (required if auth enabled)"
+        },
+        "wisp.autoConnect": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically connect to the Wisp server on startup"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.3.0",
+    "@vscode/vsce": "^3.0.0"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}
