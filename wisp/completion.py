@@ -116,15 +116,15 @@ async def generate_completion(
         prefix, suffix, request.path, request.language
     )
 
+    # Save and temporarily override temperature for completions
+    original_temp = getattr(config, "temperature", 0.7)
+    config.temperature = 0.1  # Low temp for precise completions
     try:
         provider = get_provider(config)
-        # Save and temporarily override temperature for completions
-        original_temp = getattr(config, "temperature", 0.7)
-        config.temperature = 0.1  # Low temp for precise completions
 
         messages = [{"role": "user", "content": prompt}]
         response = provider.generate(system_prompt="", messages=messages)
-
+    finally:
         config.temperature = original_temp
 
         completion_text = ""

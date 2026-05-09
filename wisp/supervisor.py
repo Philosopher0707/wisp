@@ -57,7 +57,10 @@ class WispSupervisor:
         for line in path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
-            events.append(AppEvent.from_dict(json.loads(line)))
+            try:
+                events.append(AppEvent.from_dict(json.loads(line)))
+            except (json.JSONDecodeError, KeyError, TypeError):
+                continue
         return events
 
     def _translate_agent_event(self, thread_id: str, run_id: str, event: AgentEvent) -> AppEvent:

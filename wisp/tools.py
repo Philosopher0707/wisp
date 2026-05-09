@@ -7,6 +7,7 @@ Production-hardened with:
 - Timeout enforcement on bash commands
 """
 
+import contextvars
 import json
 import logging
 import os
@@ -22,9 +23,10 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-# Module-level references for collaborative editing (set by agent)
-_file_lock = None
-_change_tracker = None
+# Per-agent context variables for multi-agent concurrency safety.
+# Each asyncio.Task (each agent) gets its own lock/tracker/manager.
+_file_lock_ctx: contextvars.ContextVar = contextvars.ContextVar("file_lock", default=None)
+_change_tracker_ctx: contextvars.ContextVar = contextvars.ContextVar("change_tracker", default=None)
 
 
 class ToolError(Exception):
@@ -33,20 +35,18 @@ class ToolError(Exception):
 
 
 def set_collaboration_tools(file_lock=None, change_tracker=None):
-    """Set file lock and change tracker for collaborative editing."""
-    global _file_lock, _change_tracker
-    _file_lock = file_lock
-    _change_tracker = change_tracker
+    """Set file lock and change tracker for the current agent context."""
+    _file_lock_ctx.set(file_lock)
+    _change_tracker_ctx.set(change_tracker)
 
 
-# LSP manager reference (set by agent)
-_lsp_manager = None
+# LSP manager context variable (set per agent)
+_lsp_manager_ctx: contextvars.ContextVar = contextvars.ContextVar("lsp_manager", default=None)
 
 
 def set_lsp_manager(manager):
-    """Set the LSP manager for LSP tool functions."""
-    global _lsp_manager
-    _lsp_manager = manager
+    """Set the LSP manager for the current agent context."""
+    _lsp_manager_ctx.set(manager)
 
 
 class _TextExtractor(HTMLParser):
@@ -256,7 +256,7 @@ def tool_write_file(path: str, workspace: str, content: str, file_lock=None) -> 
         )
 
     # ── Collaborative editing: check lock ──
-    lock = file_lock or _file_lock
+    lock = file_lock or _file_lock_ctx.get()
     if lock and not lock.acquire(path):
         lock_info = lock.lock_info(path)
         holder = lock_info.get("agent", "unknown") if lock_info else "unknown"
@@ -271,8 +271,9 @@ def tool_write_file(path: str, workspace: str, content: str, file_lock=None) -> 
     logger.info("Wrote %d bytes to %s", len(content), path)
 
     # ── Collaborative editing: record change ──
-    if _change_tracker:
-        _change_tracker.record_write(path, content)
+    tracker = _change_tracker_ctx.get()
+    if tracker:
+        tracker.record_write(path, content)
 
     # Release lock after write
     if lock:
@@ -344,7 +345,7 @@ def _fuzzy_find_text(content: str, old_text: str, threshold: float = 0.85) -> tu
     return None, None, best_score
 
 
-def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str, file_lock=None) -> str:
+def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str, file_lock=None) -> dict:
     """Replace exact text in a file (surgical edit).
 
     Uses Unicode-aware fuzzy matching (smart quotes, dashes, special spaces)
@@ -367,7 +368,7 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str, file
         )
 
     # ── Collaborative editing: check lock ──
-    lock = file_lock or _file_lock
+    lock = file_lock or _file_lock_ctx.get()
     if lock and not lock.acquire(path):
         lock_info = lock.lock_info(path)
         holder = lock_info.get("agent", "unknown") if lock_info else "unknown"
@@ -380,8 +381,9 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str, file
             raise ToolError(result.error or "Edit failed")
 
         # ── Collaborative editing: record change ──
-        if _change_tracker:
-            _change_tracker.record_edit(path, old_text, new_text)
+        tracker = _change_tracker_ctx.get()
+        if tracker:
+            tracker.record_edit(path, old_text, new_text)
 
         logger.info(
             "Edited %s — %d chars replaced with %d chars%s",
@@ -408,7 +410,7 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str, file
             lock.release(path)
 
 
-def tool_edit_file_multi(path: str, workspace: str, edits: list[dict], file_lock=None) -> str:
+def tool_edit_file_multi(path: str, workspace: str, edits: list[dict], file_lock=None) -> dict:
     """Make multiple precise edits to a single file in one call.
 
     All edits[].old_text values are matched against the ORIGINAL file content
@@ -442,7 +444,7 @@ def tool_edit_file_multi(path: str, workspace: str, edits: list[dict], file_lock
         )
 
     # ── Collaborative editing: check lock ──
-    lock = file_lock or _file_lock
+    lock = file_lock or _file_lock_ctx.get()
     if lock and not lock.acquire(path):
         lock_info = lock.lock_info(path)
         holder = lock_info.get("agent", "unknown") if lock_info else "unknown"
@@ -456,9 +458,10 @@ def tool_edit_file_multi(path: str, workspace: str, edits: list[dict], file_lock
             raise ToolError(result.error or "Edit failed")
 
         # ── Collaborative editing: record changes ──
-        if _change_tracker:
+        tracker = _change_tracker_ctx.get()
+        if tracker:
             for edit in edits:
-                _change_tracker.record_edit(path, edit["old_text"], edit["new_text"])
+                tracker.record_edit(path, edit["old_text"], edit["new_text"])
 
         logger.info(
             "Multi-edited %s — %d edits, %d→%d chars",
@@ -902,7 +905,7 @@ def tool_lsp_diagnostics(path: str, workspace: str = ".") -> str:
 
 def _get_lsp_server(path: str, workspace: str, lsp_manager=None):
     """Resolve LSP manager and return (server, full_path) or error string."""
-    mgr = lsp_manager or _lsp_manager
+    mgr = lsp_manager or _lsp_manager_ctx.get()
     if mgr is None:
         return "Error: LSP not available (no language servers configured)."
     full_path = _resolve_path(path, workspace)
@@ -1167,10 +1170,8 @@ def tool_web_search(query: str, num_results: int = 5) -> str:
         })
 
 
-def tool_search_codebase(query: str, top_k: int = 5) -> str:
+def tool_search_codebase(query: str, top_k: int = 5, workspace: str = ".") -> str:
     """Semantic search over the codebase using embedding similarity."""
-    import os as _os
-    workspace = _os.environ.get("WISP_WORKSPACE", ".")
     try:
         from wisp.semantic_index import SemanticIndex
         index = SemanticIndex(workspace)
@@ -1629,8 +1630,19 @@ TOOL_SCHEMAS = [
     },
 ]
 
+def _tool_spawn_subagent_stub(**kwargs) -> str:
+    """Stub: spawn_subagent is handled by the agent core, not the tool executor."""
+    return json.dumps({
+        "status": "error",
+        "tool": "spawn_subagent",
+        "data": "spawn_subagent must be handled by the agent core, not the tool executor",
+        "metadata": {},
+    })
+
+
 # Map tool names to their implementations
 TOOL_IMPLS = {
+    "spawn_subagent": _tool_spawn_subagent_stub,
     "read_file": tool_read_file,
     "write_file": tool_write_file,
     "edit_file": tool_edit_file,
@@ -1754,11 +1766,26 @@ def _build_tool_metadata(name: str, args: dict, result: str) -> dict:
     elif name == "web_search":
         meta["query"] = args.get("query", "")
         meta["num_results"] = args.get("num_results", 5)
+    elif name == "git_status":
+        pass  # no specific args to capture
+    elif name == "git_diff":
+        meta["path"] = args.get("path", "")
+        meta["staged"] = args.get("staged", False)
+    elif name == "git_push":
+        meta["set_upstream"] = args.get("set_upstream", False)
+    elif name == "gh_pr_create":
+        meta["title"] = (args.get("title", "") or "")[:80]
+    elif name == "diagnose":
+        meta["error_preview"] = (args.get("error_output", "") or "")[:80]
+    elif name == "plan_task":
+        meta["goal"] = (args.get("goal", "") or "")[:80]
+    elif name == "mark_step_done":
+        meta["task_id"] = args.get("task_id", "")
+    elif name == "update_plan":
+        meta["task_id"] = args.get("task_id", "")
+        meta["status"] = args.get("status", "")
 
     return meta
-
-
-# ── Tool schemas ────────────────────────────────────────────────────
 
 
 def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0, file_lock=None, lsp_manager=None) -> str:

@@ -34,10 +34,10 @@ class SubagentContract:
     tools: list[str] = field(default_factory=lambda: ["all"])
     """Tool names the subagent may use. ["all"] means inherit parent's full toolset."""
 
-    max_iterations: int = 5
+    max_iterations: int = 15
     """Maximum agent loop iterations before forced stop."""
 
-    timeout_seconds: int = 30
+    timeout_seconds: int = 120
     """Hard wall-clock timeout. Subagent is killed after this."""
 
     output_format: str = "text"
@@ -59,9 +59,16 @@ class SubagentContract:
     """Truncate subagent output to this length before returning to parent."""
 
 
+# Unified type available at wisp.multi_agent.task.SubagentResult
+# This local definition kept for backward compatibility — prefer the unified type for new code.
+
 @dataclass
 class SubagentResult:
-    """Structured output from a completed (or timed-out) subagent."""
+    """Structured output from a completed (or timed-out) subagent.
+
+    For new code, prefer wisp.multi_agent.task.SubagentResult which
+    is the unified type shared across all multi-agent systems.
+    """
 
     success: bool
     """True if the subagent completed within budget and timeout."""
@@ -316,8 +323,10 @@ class SubagentRunner:
                         import json
                         parsed = json.loads(result)
                         preview = parsed.get("data", result)[:120].replace("\n", " ")
-                    except (json.JSONDecodeError, KeyError):
+                    except json.JSONDecodeError:
                         pass
+                    except KeyError:
+                        logger.debug("Structured result missing 'data' key for %s", func_name)
                 if len(preview) > 120:
                     preview += "..."
                 print(dim(f"  [sub]    → {preview}"))

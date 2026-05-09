@@ -138,7 +138,7 @@ def _generate_agent_id() -> str:
 def _should_block_hook(hook_results: list) -> bool:
     """Check if any hook result should block execution."""
     for r in (hook_results or []):
-        if getattr(r, 'block', False) or getattr(r, 'action', '') == 'block':
+        if getattr(r, "is_blocking", False) or getattr(r, "action", "") == "block":
             return True
     return False
 
@@ -271,6 +271,7 @@ class WispAgentCore:
     })
 
     def _expand_continuation(self, user_text: str) -> str:
+        from wisp.core.message_format import extract_text
         lowered = user_text.strip().lower().rstrip("?.!")
         if lowered not in self._CONTINUATION_TRIGGERS:
             return user_text
@@ -278,7 +279,7 @@ class WispAgentCore:
         last_assistant = ""
         for m in reversed(self.messages):
             if m.get("role") == "assistant":
-                last_assistant = m.get("content", "") or ""
+                last_assistant = extract_text(m.get("content", "") or "")
                 break
         if last_assistant:
             tail = last_assistant[-200:].replace("\n", " ")
@@ -294,7 +295,7 @@ class WispAgentCore:
                 and self.messages[0].get("role") == "system"
                 and self.messages[0].get("compacted")
             ):
-                compacted_summary = self.messages[0].get("content", "")
+                compacted_summary = extract_text(self.messages[0].get("content", "") or "")
             if compacted_summary:
                 m = re.search(
                     r"→ When the user says .continue., resume from: (.+)",
@@ -311,11 +312,14 @@ class WispAgentCore:
     # ── Token estimation ─────────────────────────────────────────────
 
     def _estimate_tokens(self, messages: list[dict]) -> int:
+        from wisp.core.message_format import extract_text
         total = 0
         for msg in messages:
             if msg.get("role") != "tool":
                 for key in ("content", "thinking"):
                     val = msg.get(key, "") or ""
+                    if isinstance(val, list):
+                        val = extract_text(val)
                     total += len(val)
             for tc in msg.get("tool_calls", []) or []:
                 func = tc.get("function", {})
@@ -858,7 +862,7 @@ class WispAgentCore:
                         yield tool_result_event(func_name, blocked_msg)
                         self.messages.append({
                             "role": "tool", "content": blocked_msg, "name": func_name,
-                            **({"tool_call_id": tc.get("id")} if tc.get("id") else {}),
+                            **({"tool_call_id": tc.get("id")} if tc.get("id") is not None else {}),
                         })
                         continue
                     modified = _get_modified_args(hook_results)
@@ -883,7 +887,7 @@ class WispAgentCore:
                 yield tool_result_event(func_name, blocked)
                 self.messages.append({
                     "role": "tool", "content": blocked, "name": func_name,
-                    **({"tool_call_id": tc.get("id")} if tc.get("id") else {}),
+                    **({"tool_call_id": tc.get("id")} if tc.get("id") is not None else {}),
                 })
                 continue
 
@@ -896,7 +900,7 @@ class WispAgentCore:
                         yield tool_result_event(func_name, denied)
                         self.messages.append({
                             "role": "tool", "content": denied, "name": func_name,
-                            **({"tool_call_id": tc.get("id")} if tc.get("id") else {}),
+                            **({"tool_call_id": tc.get("id")} if tc.get("id") is not None else {}),
                         })
                         continue
                     if modified_args is not None:
@@ -906,7 +910,7 @@ class WispAgentCore:
                     yield tool_result_event(func_name, blocked)
                     self.messages.append({
                         "role": "tool", "content": blocked, "name": func_name,
-                        **({"tool_call_id": tc.get("id")} if tc.get("id") else {}),
+                        **({"tool_call_id": tc.get("id")} if tc.get("id") is not None else {}),
                     })
                     continue
 
@@ -919,7 +923,7 @@ class WispAgentCore:
                         yield tool_result_event(func_name, denied)
                         self.messages.append({
                             "role": "tool", "content": denied, "name": func_name,
-                            **({"tool_call_id": tc.get("id")} if tc.get("id") else {}),
+                            **({"tool_call_id": tc.get("id")} if tc.get("id") is not None else {}),
                         })
                         continue
                     if modified_args is not None:
@@ -929,7 +933,7 @@ class WispAgentCore:
                     yield tool_result_event(func_name, blocked)
                     self.messages.append({
                         "role": "tool", "content": blocked, "name": func_name,
-                        **({"tool_call_id": tc.get("id")} if tc.get("id") else {}),
+                        **({"tool_call_id": tc.get("id")} if tc.get("id") is not None else {}),
                     })
                     continue
 
@@ -951,7 +955,7 @@ class WispAgentCore:
                             "role": "tool",
                             "content": denied_result,
                             "name": func_name,
-                            **({"tool_call_id": tc.get("id")} if tc.get("id") else {}),
+                            **({"tool_call_id": tc.get("id")} if tc.get("id") is not None else {}),
                         })
                         continue
                     if modified_args is not None:
@@ -965,7 +969,7 @@ class WispAgentCore:
                         "role": "tool",
                         "content": blocked_result,
                         "name": func_name,
-                        **({"tool_call_id": tc.get("id")} if tc.get("id") else {}),
+                        **({"tool_call_id": tc.get("id")} if tc.get("id") is not None else {}),
                     })
                     continue
 
@@ -1010,7 +1014,7 @@ class WispAgentCore:
                 "role": "tool",
                 "content": str(result),
                 "name": func_name,
-                **({"tool_call_id": tc.get("id")} if tc.get("id") else {}),
+                **({"tool_call_id": tc.get("id")} if tc.get("id") is not None else {}),
             })
 
             # ── Post-tool hooks ──

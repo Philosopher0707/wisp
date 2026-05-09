@@ -267,7 +267,15 @@ def _render_event(event: AgentEvent, show_thinking: bool = False) -> Optional[st
     if etype == TYPE_TOOL_RESULT:
         name = event.data.get("name", "")
         result = event.data.get("result", "")
-        preview = result[:200].replace("\n", " ")
+        # Parse structured JSON wrapper to extract the actual data
+        import json
+        if isinstance(result, str) and result.startswith("{"):
+            try:
+                parsed = json.loads(result)
+                result = parsed.get("data", result)
+            except (json.JSONDecodeError, KeyError):
+                pass
+        preview = str(result)[:200].replace("\n", " ")
         if len(preview) > 200:
             preview += "..."
         return dim(f"     → {preview}")
@@ -286,6 +294,20 @@ def _render_event(event: AgentEvent, show_thinking: bool = False) -> Optional[st
 
     if etype == TYPE_APPROVAL_REQUEST:
         return warning(f"  ⚠️  Approval required: {event.data.get('reason', '')}")
+
+    if etype == TYPE_CHECKPOINT_CREATED:
+        cid = event.data.get("checkpoint_id", "")[:12]
+        desc = event.data.get("description", "")
+        return dim(f"  📸 checkpoint {cid}: {desc}")
+
+    if etype == TYPE_STEERING_PAUSED:
+        return warning(f"  ⏸  Steering paused: {event.data.get('reason', '')}")
+
+    if etype == TYPE_STEERING_RESUMED:
+        return success("  ▶  Steering resumed")
+
+    if etype == TYPE_STEERING_INJECT:
+        return dim(f"  💉 Steering feedback: {event.data.get('text', '')[:80]}")
 
     if etype == TYPE_DONE:
         return None
@@ -467,38 +489,44 @@ class CLITransport:
 
         _in_thinking = False
         _content_started = False
-        async for event in self.core._arun(prompt, system=system, approval_handler=_cli_approval):
-            if self._interrupted:
-                break
+        _popped_message = None
+        try:
+            async for event in self.core._arun(prompt, system=system, approval_handler=_cli_approval):
+                if self._interrupted:
+                    break
 
-            show_thinking = self.core.config.show_thinking
+                show_thinking = self.core.config.show_thinking
 
-            # Real-time streaming for thinking/content tokens
-            if event.type == TYPE_THINKING:
-                if _content_started:
-                    continue
-                if not _in_thinking:
-                    _in_thinking = True
+                # Real-time streaming for thinking/content tokens
+                if event.type == TYPE_THINKING:
+                    if _content_started:
+                        continue
+                    if not _in_thinking:
+                        _in_thinking = True
+                        if show_thinking:
+                            print(dim("⏳ Thinking: "), end="", flush=True)
+                        else:
+                            print(dim("⏳ Thinking..."), end="", flush=True)
                     if show_thinking:
-                        print(dim("⏳ Thinking: "), end="", flush=True)
-                    else:
-                        print(dim("⏳ Thinking..."), end="", flush=True)
-                if show_thinking:
-                    print(event.text, end="", flush=True)
-            elif event.type == TYPE_CONTENT:
-                _content_started = True
-                if _in_thinking:
-                    _in_thinking = False
-                    if show_thinking:
+                        print(event.text, end="", flush=True)
+                elif event.type == TYPE_CONTENT:
+                    _content_started = True
+                    if _in_thinking:
+                        _in_thinking = False
+                        if show_thinking:
+                            print()
                         print()
-                    print()
-                print(event.text, end="", flush=True)
-            elif event.type == TYPE_TOOL_CALL:
-                _content_started = False
-                rendered = _render_event(event, show_thinking)
-                if rendered is not None:
-                    print(rendered, end="\n", flush=True)
-            else:
-                rendered = _render_event(event, show_thinking)
-                if rendered is not None:
-                    print(rendered, end="\n", flush=True)
+                    print(event.text, end="", flush=True)
+                elif event.type == TYPE_TOOL_CALL:
+                    _content_started = False
+                    rendered = _render_event(event, show_thinking)
+                    if rendered is not None:
+                        print(rendered, end="\n", flush=True)
+                else:
+                    rendered = _render_event(event, show_thinking)
+                    if rendered is not None:
+                        print(rendered, end="\n", flush=True)
+        except Exception:
+            if self.core.messages and self.core.messages[-1].get("role") != "user":
+                self.core.messages.append({"role": "user", "content": [{"type": "text", "text": prompt}]})
+            raise

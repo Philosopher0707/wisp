@@ -499,7 +499,12 @@ def _send_stdio_request(process: subprocess.Popen, request: dict) -> dict:
             f"MCP server process died. Stderr: {stderr_output[:500]}"
         )
 
-    response = json.loads(response_line)
+    try:
+        response = json.loads(response_line)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(
+            f"MCP server returned invalid JSON: {response_line[:200]}"
+        ) from e
 
     if "error" in response:
         error = response["error"]

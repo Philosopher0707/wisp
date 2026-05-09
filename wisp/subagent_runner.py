@@ -83,9 +83,16 @@ class SubagentSpec:
     """Specific file paths to mention in the subagent's context."""
 
 
+# Unified type available at wisp.multi_agent.task.SubagentResult
+# This local definition kept for backward compatibility — prefer the unified type for new code.
+
 @dataclass
 class SubagentResult:
-    """Structured output from a subagent run."""
+    """Structured output from a subagent run.
+
+    For new code, prefer wisp.multi_agent.task.SubagentResult which
+    is the unified type shared across all multi-agent systems.
+    """
 
     spec: SubagentSpec
     """The spec that produced this result."""
