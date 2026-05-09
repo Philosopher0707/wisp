@@ -11,6 +11,8 @@ import { SettingsModal } from '../SettingsModal.js';
 import { ShortcutModal } from '../ShortcutModal.js';
 import { QuickFileModal } from '../QuickFileModal.js';
 import { PlanPanel } from '../PlanPanel.js';
+import { CheckpointPanel } from '../CheckpointPanel.js';
+import { InlineEdit } from '../chat/InlineEdit.js';
 import './AppShell.css';
 
 const MIN_SIDEBAR = 180;
@@ -27,7 +29,7 @@ function getSidebarWidth(): number {
 
 export const AppShell: React.FC = () => {
   useKeybindings();
-  const { state } = useAppState();
+  const { state, dispatch } = useAppState();
   const [sidebarWidth, setSidebarWidth] = useState(getSidebarWidth);
   const dragging = useRef(false);
 
@@ -66,12 +68,16 @@ export const AppShell: React.FC = () => {
       <div className="sidebar-resize-handle" onMouseDown={onMouseDown} />
       <MainContent />
       {state.rightPanelOpen && <FileExplorer />}
+      {state.checkpointPanelOpen && <CheckpointPanel />}
       {state.approvalPending && <ApprovalPrompt />}
       {state.uiOverlay === 'search' && <SearchModal />}
       {state.uiOverlay === 'plugins' && <PluginsPanel />}
       {state.uiOverlay === 'settings' && <SettingsModal />}
       {state.uiOverlay === 'shortcuts' && <ShortcutModal />}
       {state.uiOverlay === 'quickfile' && <QuickFileModal />}
+      {state.uiOverlay === 'inlineEdit' && (
+        <InlineEdit visible onClose={() => dispatch({ type: 'CLOSE_OVERLAY' })} />
+      )}
       {state.pendingPlan && <PlanPanel />}
     </div>
   );

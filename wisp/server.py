@@ -19,6 +19,7 @@ import logging
 import os
 import secrets
 import shutil
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -30,6 +31,16 @@ from pydantic import BaseModel, Field
 
 from wisp.config import WispConfig
 from wisp.core.agent import WispAgentCore
+from wisp.core.events import (
+    AgentEvent,
+    TYPE_CONTENT,
+    TYPE_THINKING,
+    TYPE_TOOL_CALL,
+    TYPE_TOOL_RESULT,
+    TYPE_ERROR,
+    TYPE_DONE,
+    TYPE_APPROVAL_REQUEST,
+)
 from wisp.transport.server import ServerTransport
 from wisp.session import SessionManager
 
@@ -54,6 +65,7 @@ class PromptRequest(BaseModel):
     model: Optional[str] = None
     session_id: Optional[str] = None
     skill: Optional[str] = None
+    permission_mode: str = Field(default="full", description="full | ask_all | auto_edit | read_only")
 
 class BashRequest(BaseModel):
     command: str = Field(..., max_length=2000)
@@ -70,10 +82,39 @@ class DiffRequest(BaseModel):
     path: str
     new_content: str
 
+
+class InlineEditRequest(BaseModel):
+    path: str = Field(..., description="File path relative to workspace")
+    selection: str = Field(..., min_length=1, description="Selected code to replace")
+    instruction: str = Field(..., min_length=1, description="Natural language edit instruction")
+    model: Optional[str] = None
+
 class ToolApproval(BaseModel):
     call_id: str
     approved: bool
     reason: Optional[str] = None
+
+
+class ContextUpdateRequest(BaseModel):
+    content: str = Field(..., min_length=1, description="Content for .wisp/rules.md")
+
+
+class PRReviewRequest(BaseModel):
+    pr_number: Optional[int] = None
+    base_branch: str = Field(default="main", description="Base branch for diffing")
+    head_branch: Optional[str] = None
+    repo: Optional[str] = None
+    model: Optional[str] = None
+
+
+class DiffReviewRequest(BaseModel):
+    target: str = Field(default="uncommitted", description="uncommitted | staged | commit SHA")
+
+
+class BestOfNRequest(BaseModel):
+    models: list[str] = Field(..., min_items=2, max_items=4, description="Models to run in parallel")
+    n: int = Field(default=2, ge=2, le=4, description="Number of parallel reviews")
+    prompt: Optional[str] = None
 
 # ── Auth ─────────────────────────────────────────────────────────────
 
@@ -157,6 +198,141 @@ def _resolve_path(path: str) -> Path:
     except ValueError:
         raise HTTPException(status_code=400, detail="Path traversal blocked")
     return target
+
+# ── MemoryTransport ────────────────────────────────────────────────────
+
+
+class MemoryTransport:
+    """Minimal in-memory event collector for headless/CI agent execution.
+
+    Collects all :class:`AgentEvent` instances yielded by the agent core
+    into structured result dicts -- no WebSocket, no stdout, no blocking.
+    """
+
+    def __init__(self, permission_mode: str = "full"):
+        self.events: list[AgentEvent] = []
+        self.content_parts: list[str] = []
+        self.thinking_parts: list[str] = []
+        self.tool_calls: list[dict] = []
+        self.errors: list[dict] = []
+        self.permission_mode = permission_mode
+        self.session_id: str = ""
+        self.iterations: int = 0
+
+    async def approval_handler(self, name: str, args: dict, reason: str) -> tuple[bool, Optional[dict]]:
+        """Auto-approve or deny tool calls based on permission mode.
+
+        In CI/headless mode, dangerous operations are denied unless
+        permission_mode is ``full``.
+        """
+        if self.permission_mode == "full":
+            return (True, None)
+        return (False, None)
+
+    def collect(self, event: AgentEvent) -> None:
+        """Ingest a single event."""
+        self.events.append(event)
+
+        if event.type == TYPE_CONTENT:
+            self.content_parts.append(event.text)
+        elif event.type == TYPE_THINKING:
+            self.thinking_parts.append(event.text)
+        elif event.type == TYPE_TOOL_CALL:
+            self.tool_calls.append({
+                "name": event.data.get("name", ""),
+                "args": event.data.get("arguments", {}),
+            })
+        elif event.type == TYPE_TOOL_RESULT:
+            # Attach result to the last tool call (matched by name)
+            name = event.data.get("name", "")
+            duration = event.data.get("duration_ms")
+            for tc in reversed(self.tool_calls):
+                if tc["name"] == name and "result" not in tc:
+                    tc["result"] = event.data.get("result", "")
+                    if duration is not None:
+                        tc["duration_ms"] = duration
+                    break
+        elif event.type == TYPE_ERROR:
+            self.errors.append({
+                "message": event.data.get("message", ""),
+                "recoverable": event.data.get("recoverable", True),
+            })
+        elif event.type == TYPE_DONE:
+            self.session_id = event.data.get("session_id", "")
+            self.iterations = event.data.get("turns", 0)
+
+    def to_result(self, extra_files_changed: Optional[list[str]] = None) -> dict:
+        """Build the final structured response dict."""
+        content = "\n".join(self.content_parts)
+        thinking = "\n".join(self.thinking_parts) if self.thinking_parts else ""
+        # Clean tool_calls: remove pending entries that never got a result
+        resolved_calls = [tc for tc in self.tool_calls if "result" in tc]
+
+        result: dict = {
+            "ok": len(self.errors) == 0,
+            "session_id": self.session_id,
+            "content": content,
+            "thinking": thinking,
+            "tool_calls": resolved_calls,
+            "files_changed": extra_files_changed or [],
+            "iterations": self.iterations,
+            "errors": self.errors if self.errors else None,
+        }
+        return result
+
+
+async def _run_agent_headless(
+    prompt: str,
+    model: Optional[str] = None,
+    session_id: Optional[str] = None,
+    skill: Optional[str] = None,
+    permission_mode: str = "full",
+) -> dict:
+    """Run the agent synchronously in memory and return a structured result."""
+    start = time.time()
+    config = WispConfig()
+    if model:
+        config.model = model
+    config.workspace = str(WORKSPACE_ROOT)
+    config.auto_approve = True
+    config.show_thinking = True
+    config.permission_mode = permission_mode
+
+    session = None
+    if session_id:
+        sm = SessionManager()
+        session = sm.load(session_id)
+        if session is None:
+            resolved = sm.get_session_id_from_fragment(session_id)
+            if resolved:
+                session = sm.load(resolved)
+
+    core = WispAgentCore(config=config, session=session)
+    if session is not None and session.messages:
+        core.messages = list(session.messages)
+
+    transport = MemoryTransport(permission_mode=permission_mode)
+
+    try:
+        async for event in core.run(prompt, approval_handler=transport.approval_handler):
+            transport.collect(event)
+    except Exception as e:
+        logger.error("Headless agent error: %s", e)
+        transport.errors.append({"message": str(e), "recoverable": False})
+
+    result = transport.to_result()
+
+    # Collect changed file paths from the change tracker
+    try:
+        changed = core.change_tracker.files_changed() if hasattr(core.change_tracker, 'files_changed') else []
+        result["files_changed"] = changed
+    except Exception:
+        pass
+
+    duration = (time.time() - start) * 1000
+    result["duration_ms"] = round(duration)
+    return result
+
 
 # ── HTTP Routes ──────────────────────────────────────────────────────
 
@@ -379,6 +555,68 @@ async def diff_file(req: DiffRequest):
         return {"diff": result.diff, "is_new": True, "path": req.path, "first_changed_line": result.first_changed_line}
 
 
+@app.post("/api/edit/inline", dependencies=[Depends(verify_api_key)])
+async def inline_edit(req: InlineEditRequest):
+    """Inline edit — replace a selection based on natural language instruction.
+
+    Accepts a file path, the selected code, and an instruction. Runs a
+    single-turn agent call to generate the replacement, then returns the
+    new text and a diff.
+    """
+    target = _resolve_path(req.path)
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    try:
+        file_content = target.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read file: {e}")
+
+    if req.selection not in file_content:
+        raise HTTPException(status_code=400, detail="Selection not found in file")
+
+    edit_prompt = f"""Rewrite the selected code according to the instruction.
+
+## File: {req.path}
+```{file_content[:8000]}
+```
+
+## Selected code:
+```{req.selection}
+```
+
+## Instruction:
+{req.instruction}
+
+Return ONLY the replacement code for the selection. No explanation, no markdown fences.
+The replacement must be valid code that can directly substitute the selection."""
+
+    result = await _run_agent_headless(
+        prompt=edit_prompt,
+        model=req.model,
+        permission_mode="read_only",
+    )
+
+    new_text = result.get("content", "").strip()
+    # Strip markdown fences if model included them
+    if new_text.startswith("```") and new_text.endswith("```"):
+        new_text = "\n".join(new_text.split("\n")[1:-1])
+        new_text = new_text.strip()
+
+    new_file_content = file_content.replace(req.selection, new_text, 1)
+    from wisp.diff import generate_diff_string
+    diff_result = generate_diff_string(file_content, new_file_content)
+
+    return {
+        "ok": True,
+        "path": req.path,
+        "new_text": new_text,
+        "diff": diff_result.diff,
+        "first_changed_line": diff_result.first_changed_line,
+        "new_file_content": new_file_content,
+    }
+
+
 @app.get("/api/git", dependencies=[Depends(verify_api_key)])
 async def git_status():
     import subprocess
@@ -501,6 +739,348 @@ async def run_bash(req: BashRequest):
         raise HTTPException(status_code=408, detail="Command timed out after 60s")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Headless / CI Prompt ──────────────────────────────────────────────
+
+@app.post("/api/prompt", dependencies=[Depends(verify_api_key)])
+async def prompt_sync(req: PromptRequest):
+    """Non-interactive/headless prompt execution with JSON response.
+
+    Runs the agent synchronously and returns the final result.
+    No WebSocket needed. For CI/CD pipelines, scripting, and automation.
+    """
+    result = await _run_agent_headless(
+        prompt=req.prompt,
+        model=req.model,
+        session_id=req.session_id,
+        skill=req.skill,
+        permission_mode=req.permission_mode,
+    )
+    if not result.get("ok"):
+        return JSONResponse(status_code=500, content=result)
+    return result
+
+
+# ── Context File Endpoints ────────────────────────────────────────────
+
+@app.get("/api/context", dependencies=[Depends(verify_api_key)])
+async def get_context():
+    """Get loaded project context for display in UI."""
+    config = WispConfig()
+    config.workspace = str(WORKSPACE_ROOT)
+    content = config.load_context_files()
+    files_found: list[str] = list(config._context_mtimes.keys()) if content else []
+    return {
+        "content": content,
+        "files_found": files_found,
+        "context_files_setting": config.context_files,
+    }
+
+
+@app.post("/api/context", dependencies=[Depends(verify_api_key)])
+async def update_context(req: ContextUpdateRequest):
+    """Update or create .wisp/rules.md with the provided content."""
+    wisp_dir = WORKSPACE_ROOT / ".wisp"
+    wisp_dir.mkdir(parents=True, exist_ok=True)
+    rules_path = wisp_dir / "rules.md"
+    try:
+        rules_path.write_text(req.content, encoding="utf-8")
+        logger.info("Updated %s (%d chars)", rules_path, len(req.content))
+        return {
+            "ok": True,
+            "path": str(rules_path.relative_to(WORKSPACE_ROOT)),
+            "bytes": len(req.content.encode("utf-8")),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── PR Review Endpoints ───────────────────────────────────────────────
+
+@app.post("/api/review/pr", dependencies=[Depends(verify_api_key)])
+async def review_pr(req: PRReviewRequest):
+    """Review a PR by diffing base vs head and running the agent.
+
+    Returns a structured review with summary, issues, and an approval recommendation.
+    """
+    git_dir = WORKSPACE_ROOT / ".git"
+    if not git_dir.exists():
+        raise HTTPException(status_code=400, detail="No git repository in workspace")
+
+    import subprocess
+
+    # Determine the diff target
+    base = req.base_branch
+    head = req.head_branch
+
+    if req.pr_number is not None and not head:
+        head = f"pull/{req.pr_number}/head"
+    elif not head:
+        raise HTTPException(status_code=400, detail="Either pr_number or head_branch is required")
+
+    try:
+        proc = subprocess.run(
+            ["git", "diff", f"{base}...{head}"],
+            cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=30,
+        )
+        if proc.returncode != 0:
+            raise HTTPException(status_code=500, detail=f"git diff failed: {proc.stderr}")
+        diff_text = proc.stdout
+        if not diff_text.strip():
+            return {"summary": "No changes to review.", "issues": [], "approval": "approve", "files_reviewed": []}
+    except HTTPException:
+        raise
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=408, detail="git diff timed out")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Collect changed files from diff
+    files_reviewed = _extract_files_from_diff(diff_text)
+
+    review_prompt = f"""Review the following code diff. Find bugs, security issues, style problems,
+and suggest improvements. Be concise and actionable.
+
+## Git diff ({base}...{head})
+```diff
+{diff_text[:15000]}
+```
+
+## Instructions
+1. Identify critical bugs (logic errors, data corruption, security vulnerabilities)
+2. Identify warnings (code smells, performance issues, missing error handling)
+3. Identify informational notes (style improvements, better patterns)
+4. Provide a final verdict: approve, request_changes, or comment
+
+## Response format
+Return your review as JSON:
+```json
+{{
+  "summary": "1-2 sentence overview",
+  "issues": [
+    {{"severity": "critical|warning|info", "file": "path", "line": int, "message": "...", "suggestion": "..."}}
+  ],
+  "approval": "approve|request_changes|comment",
+  "files_reviewed": ["path1", "path2"]
+}}
+```
+"""
+
+    result = await _run_agent_headless(
+        prompt=review_prompt,
+        model=req.model if hasattr(req, 'model') else None,
+        permission_mode="read_only",
+    )
+
+    # Try to parse JSON from the agent response
+    try:
+        content = result.get("content", "")
+        json_match = _extract_json(content)
+        if json_match:
+            parsed = json.loads(json_match)
+            result["review"] = parsed
+    except Exception:
+        logger.warning("Could not parse structured review from agent output")
+
+    result["files_reviewed"] = files_reviewed
+    return result
+
+
+@app.post("/api/review/diff", dependencies=[Depends(verify_api_key)])
+async def review_diff(req: DiffReviewRequest):
+    """Review uncommitted changes, staged changes, or a specific commit diff."""
+    git_dir = WORKSPACE_ROOT / ".git"
+    if not git_dir.exists():
+        raise HTTPException(status_code=400, detail="No git repository in workspace")
+
+    import subprocess
+
+    diff_text = ""
+    target_desc = req.target
+
+    try:
+        if req.target == "uncommitted":
+            proc = subprocess.run(
+                ["git", "diff"],
+                cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=30,
+            )
+            diff_text = proc.stdout
+        elif req.target == "staged":
+            proc = subprocess.run(
+                ["git", "diff", "--staged"],
+                cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=30,
+            )
+            diff_text = proc.stdout
+        elif req.target:
+            # Treat as commit SHA
+            proc = subprocess.run(
+                ["git", "diff", f"{req.target}^!"],
+                cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=30,
+            )
+            diff_text = proc.stdout
+            if not diff_text.strip():
+                # Try diff against parent
+                proc = subprocess.run(
+                    ["git", "show", req.target],
+                    cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=30,
+                )
+                diff_text = proc.stdout
+
+        if not diff_text.strip():
+            return {"summary": "No changes to review.", "issues": [], "files_reviewed": []}
+
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=408, detail="git command timed out")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    files_reviewed = _extract_files_from_diff(diff_text)
+
+    review_prompt = f"""Review the following code diff. Find bugs, security issues, style problems,
+and suggest improvements. Be concise and actionable.
+
+## Diff ({target_desc})
+```diff
+{diff_text[:15000]}
+```
+
+## Response format
+Return your review as JSON:
+```json
+{{
+  "summary": "1-2 sentence overview",
+  "issues": [
+    {{"severity": "critical|warning|info", "file": "path", "line": int, "message": "...", "suggestion": "..."}}
+  ],
+  "approval": "approve|request_changes|comment"
+}}
+```
+"""
+
+    result = await _run_agent_headless(
+        prompt=review_prompt,
+        permission_mode="read_only",
+    )
+
+    try:
+        content = result.get("content", "")
+        json_match = _extract_json(content)
+        if json_match:
+            parsed = json.loads(json_match)
+            result["review"] = parsed
+    except Exception:
+        logger.warning("Could not parse structured review from agent output")
+
+    result["files_reviewed"] = files_reviewed
+    return result
+
+
+@app.post("/api/review/best-of-n", dependencies=[Depends(verify_api_key)])
+async def best_of_n(req: BestOfNRequest):
+    """Run N parallel reviews with different models and compare results.
+
+    Each model reviews the same diff independently. Results are returned
+    side-by-side for comparison.
+    """
+    git_dir = WORKSPACE_ROOT / ".git"
+    if not git_dir.exists():
+        raise HTTPException(status_code=400, detail="No git repository in workspace")
+
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["git", "diff"],
+            cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=30,
+        )
+        diff_text = proc.stdout
+        if not diff_text.strip():
+            return {"diff": "", "reviews": [], "message": "No changes to review."}
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=408, detail="git diff timed out")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    files_reviewed = _extract_files_from_diff(diff_text)
+
+    review_prompt = req.prompt or f"""Review the following code diff. Find bugs, security issues, style problems,
+and suggest improvements.
+
+```diff
+{diff_text[:10000]}
+```
+
+Be concise and return a JSON object with: summary, issues (list of {{severity, file, line, message, suggestion}}), and approval.
+"""
+
+    async def _review_with_model(model: str) -> dict:
+        try:
+            result = await _run_agent_headless(
+                prompt=review_prompt,
+                model=model,
+                permission_mode="read_only",
+            )
+            content = result.get("content", "")
+            json_match = _extract_json(content)
+            if json_match:
+                try:
+                    result["review"] = json.loads(json_match)
+                except json.JSONDecodeError:
+                    result["review"] = {"raw_content": content[:2000]}
+            else:
+                result["review"] = {"raw_content": content[:2000]}
+            return result
+        except Exception as e:
+            return {"model": model, "ok": False, "error": str(e)}
+
+    # Run up to N reviews in parallel
+    models_to_use = req.models[:req.n]
+    tasks = [_review_with_model(m) for m in models_to_use]
+    reviews = await asyncio.gather(*tasks)
+
+    return {
+        "diff": diff_text[:5000],
+        "files_reviewed": files_reviewed,
+        "models_used": models_to_use,
+        "reviews": reviews,
+    }
+
+
+def _extract_files_from_diff(diff_text: str) -> list[str]:
+    """Extract unique file paths from a git diff output."""
+    files: list[str] = []
+    for line in diff_text.split("\n"):
+        if line.startswith("+++ ") and line != "+++ /dev/null":
+            # Strip the b/ prefix
+            path = line[4:].strip()
+            if path.startswith("b/"):
+                path = path[2:]
+            if path and path not in files:
+                files.append(path)
+    return files
+
+
+def _extract_json(text: str) -> Optional[str]:
+    """Extract a JSON object from text that may contain surrounding content."""
+    import re
+    # Find content between ```json ... ``` or just { ... }
+    fenced = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+    if fenced:
+        return fenced.group(1).strip()
+    # Find outermost braces
+    brace_start = text.find("{")
+    if brace_start == -1:
+        return None
+    depth = 0
+    for i in range(brace_start, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[brace_start:i + 1]
+    return None
 
 
 # ── WebSocket Agent ──────────────────────────────────────────────────

@@ -1,0 +1,295 @@
+.inline-edit-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 15vh;
+}
+
+.inline-edit-panel {
+  width: 640px;
+  max-width: 90vw;
+  max-height: 70vh;
+  overflow-y: auto;
+  background: #1a1a1f;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-md, 8px);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+}
+
+.inline-edit-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2, 8px) var(--space-3, 12px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.inline-edit-title {
+  font-size: var(--text-sm, 13px);
+  font-family: var(--font-sans);
+  color: var(--text-secondary);
+}
+
+.inline-edit-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.inline-edit-close:hover {
+  color: var(--text-primary);
+}
+
+.inline-edit-selection {
+  padding: var(--space-2, 8px) var(--space-3, 12px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.inline-edit-section-label {
+  font-size: 10px;
+  font-family: var(--font-sans);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
+}
+
+.inline-edit-code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs, 11px);
+  line-height: 1.5;
+  background: #0d0d0d;
+  color: var(--text-primary);
+  padding: var(--space-2, 8px);
+  border-radius: 4px;
+  margin: 0;
+  overflow: auto;
+  max-height: 140px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.inline-edit-field {
+  padding: var(--space-2, 8px) var(--space-3, 12px) 0;
+}
+
+.inline-edit-label {
+  display: block;
+  font-size: 10px;
+  font-family: var(--font-sans);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
+}
+
+.inline-edit-text-input {
+  width: 100%;
+  padding: var(--space-2, 8px);
+  background: #0d0d0d;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs, 11px);
+  box-sizing: border-box;
+}
+
+.inline-edit-text-input:focus {
+  outline: none;
+  border-color: var(--accent-purple, #7c3aed);
+}
+
+.inline-edit-code-input {
+  width: 100%;
+  padding: var(--space-2, 8px);
+  background: #0d0d0d;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs, 11px);
+  resize: vertical;
+  box-sizing: border-box;
+  line-height: 1.5;
+}
+
+.inline-edit-code-input:focus {
+  outline: none;
+  border-color: var(--accent-purple, #7c3aed);
+}
+
+.inline-edit-instruction-input {
+  width: 100%;
+  padding: var(--space-2, 8px);
+  background: #0d0d0d;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm, 13px);
+  resize: vertical;
+  min-height: 50px;
+  box-sizing: border-box;
+}
+
+.inline-edit-instruction-input:focus {
+  outline: none;
+  border-color: var(--accent-purple, #7c3aed);
+}
+
+.inline-edit-input {
+  margin: var(--space-2, 8px) var(--space-3, 12px);
+  padding: var(--space-2, 8px);
+  background: #0d0d0d;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm, 13px);
+  resize: vertical;
+  min-height: 50px;
+}
+
+.inline-edit-input:focus {
+  outline: none;
+  border-color: var(--accent-purple, #7c3aed);
+}
+
+.inline-edit-input:disabled {
+  opacity: 0.5;
+}
+
+.inline-edit-processing {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  padding: 0 var(--space-3, 12px);
+  color: var(--text-muted);
+  font-size: var(--text-sm, 13px);
+}
+
+.inline-edit-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  border-top-color: var(--accent-purple, #7c3aed);
+  border-radius: 50%;
+  animation: ie-spin 0.6s linear infinite;
+}
+
+@keyframes ie-spin {
+  to { transform: rotate(360deg); }
+}
+
+.inline-edit-error {
+  margin: var(--space-2, 8px) var(--space-3, 12px);
+  padding: var(--space-2, 8px);
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: 4px;
+  color: #fca5a5;
+  font-size: var(--text-xs, 11px);
+  font-family: var(--font-sans);
+}
+
+.inline-edit-result {
+  padding: 0 var(--space-3, 12px) var(--space-2, 8px);
+}
+
+.inline-edit-result .diff-preview {
+  margin-top: var(--space-2, 8px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.inline-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2, 8px);
+  margin-top: var(--space-2, 8px);
+}
+
+.inline-edit-apply-btn {
+  font-size: 12px;
+  font-family: var(--font-sans);
+  background: var(--accent-purple, #7c3aed);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 16px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.inline-edit-apply-btn:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.inline-edit-apply-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.inline-edit-cancel-btn {
+  font-size: 12px;
+  font-family: var(--font-sans);
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.inline-edit-cancel-btn:hover {
+  color: var(--text-primary);
+}
+
+.inline-edit-submit-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2, 8px);
+  padding: var(--space-2, 8px) var(--space-3, 12px);
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.inline-edit-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.inline-edit-generate-btn {
+  font-size: 12px;
+  font-family: var(--font-sans);
+  background: var(--accent-purple, #7c3aed);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 16px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.inline-edit-generate-btn:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.inline-edit-generate-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.inline-edit-new {
+  background: rgba(34, 197, 94, 0.03);
+  border: 1px solid rgba(34, 197, 94, 0.15);
+}

@@ -82,6 +82,54 @@ export interface AppState {
   gitCommitBanner: { branch: string; changedFiles: string[] } | null;
   planMode: boolean;
   pendingPlan: string | null;
+  forkingMessageId: string | null;
+  checkpoints: Checkpoint[];
+  checkpointPanelOpen: boolean;
+  subagentTasks: SubagentTask[];
+  tokenUsagePercent: number;
+  theme: ThemeMode;
+  customThemePath: string | null;
+  availableThemes: Array<{ name: string; path: string; isBuiltin: boolean }>;
+  vimMode: boolean;
+  contextFiles: ContextFile[];
+  keybindings: Record<string, string>;
+  inlineEdit: InlineEditState | null;
+}
+
+export interface InlineEditState {
+  path: string;
+  selection: string;
+  newText: string | null;
+  diff: string | null;
+  isProcessing: boolean;
+  error: string | null;
+}
+
+export type ThemeMode = 'dark' | 'light' | 'custom';
+
+export interface ContextFile {
+  path: string;
+  loaded: boolean;
+  content?: string;
+}
+
+export interface Checkpoint {
+  id: string;
+  timestamp: string;
+  description: string;
+  toolName: string;
+  fileCount: number;
+}
+
+export interface SubagentTask {
+  id: string;
+  name: string;
+  description: string;
+  status: 'pending' | 'running' | 'done' | 'failed';
+  progress: string;
+  filesChanged: string[];
+  durationMs: number | null;
+  error?: string;
 }
 
 // ── Actions ──
@@ -130,7 +178,30 @@ export type Action =
   | { type: 'TOGGLE_PLAN_MODE' }
   | { type: 'RECEIVE_PLAN'; content: string }
   | { type: 'APPROVE_PLAN'; planContext: string }
-  | { type: 'REJECT_PLAN' };
+  | { type: 'REJECT_PLAN' }
+  | { type: 'FORK_SESSION'; messageId: string }
+  | { type: 'FORK_SESSION_DONE'; sessionId: string }
+  | { type: 'CANCEL_FORK' }
+  | { type: 'SET_CHECKPOINTS'; checkpoints: Checkpoint[] }
+  | { type: 'ADD_CHECKPOINT'; checkpoint: Checkpoint }
+  | { type: 'REMOVE_CHECKPOINT'; id: string }
+  | { type: 'TOGGLE_CHECKPOINT_PANEL' }
+  | { type: 'SUBAGENT_START'; id: string; name: string; description: string }
+  | { type: 'SUBAGENT_PROGRESS'; id: string; progress: string }
+  | { type: 'SUBAGENT_COMPLETE'; id: string; filesChanged: string[]; durationMs: number }
+  | { type: 'SUBAGENT_FAIL'; id: string; error: string }
+  | { type: 'CLEAR_SUBAGENT_TASKS' }
+  | { type: 'SET_TOKEN_USAGE'; percent: number }
+  | { type: 'SET_THEME'; theme: ThemeMode; customPath?: string }
+  | { type: 'SET_AVAILABLE_THEMES'; themes: Array<{ name: string; path: string; isBuiltin: boolean }> }
+  | { type: 'TOGGLE_VIM_MODE' }
+  | { type: 'SET_KEYBINDINGS'; keybindings: Record<string, string> }
+  | { type: 'SET_CONTEXT_FILES'; files: ContextFile[] }
+  | { type: 'CONTEXT_LOADED'; path: string }
+  | { type: 'START_INLINE_EDIT'; path: string; selection: string }
+  | { type: 'INLINE_EDIT_RESULT'; newText: string; diff: string }
+  | { type: 'INLINE_EDIT_ERROR'; error: string }
+  | { type: 'CANCEL_INLINE_EDIT' };
 
 // ── Helpers ──
 
@@ -181,6 +252,18 @@ export function createInitialState(overrides?: {
     gitCommitBanner: null,
     planMode: false,
     pendingPlan: null,
+    forkingMessageId: null,
+    checkpoints: [],
+    checkpointPanelOpen: false,
+    subagentTasks: [],
+    tokenUsagePercent: 0,
+    theme: 'dark',
+    customThemePath: null,
+    availableThemes: [],
+    vimMode: false,
+    contextFiles: [],
+    keybindings: {},
+    inlineEdit: null,
   };
 }
 
@@ -415,6 +498,161 @@ export function appReducer(state: AppState, action: Action): AppState {
 
     case 'REJECT_PLAN':
       return { ...state, pendingPlan: null, planMode: false };
+
+    case 'FORK_SESSION':
+      return { ...state, forkingMessageId: action.messageId };
+
+    case 'FORK_SESSION_DONE':
+      return { ...state, forkingMessageId: null };
+
+    case 'CANCEL_FORK':
+      return { ...state, forkingMessageId: null };
+
+    case 'SET_CHECKPOINTS':
+      return { ...state, checkpoints: action.checkpoints };
+
+    case 'ADD_CHECKPOINT': {
+      const existing = state.checkpoints.find((c) => c.id === action.checkpoint.id);
+      if (existing) return state;
+      return { ...state, checkpoints: [action.checkpoint, ...state.checkpoints] };
+    }
+
+    case 'REMOVE_CHECKPOINT':
+      return {
+        ...state,
+        checkpoints: state.checkpoints.filter((c) => c.id !== action.id),
+      };
+
+    case 'TOGGLE_CHECKPOINT_PANEL': {
+      const next = !state.checkpointPanelOpen;
+      localStorage.setItem('wisp_checkpoint_panel', String(next));
+      return { ...state, checkpointPanelOpen: next };
+    }
+
+    case 'SUBAGENT_START':
+      return {
+        ...state,
+        subagentTasks: [
+          ...state.subagentTasks,
+          {
+            id: action.id,
+            name: action.name,
+            description: action.description,
+            status: 'running' as const,
+            progress: '',
+            filesChanged: [],
+            durationMs: null,
+          },
+        ],
+      };
+
+    case 'SUBAGENT_PROGRESS':
+      return {
+        ...state,
+        subagentTasks: state.subagentTasks.map((t) =>
+          t.id === action.id ? { ...t, progress: action.progress } : t,
+        ),
+      };
+
+    case 'SUBAGENT_COMPLETE':
+      return {
+        ...state,
+        subagentTasks: state.subagentTasks.map((t) =>
+          t.id === action.id
+            ? { ...t, status: 'done' as const, filesChanged: action.filesChanged, durationMs: action.durationMs }
+            : t,
+        ),
+      };
+
+    case 'SUBAGENT_FAIL':
+      return {
+        ...state,
+        subagentTasks: state.subagentTasks.map((t) =>
+          t.id === action.id
+            ? { ...t, status: 'failed' as const, error: action.error }
+            : t,
+        ),
+      };
+
+    case 'CLEAR_SUBAGENT_TASKS':
+      return {
+        ...state,
+        subagentTasks: state.subagentTasks.filter((t) => t.status === 'running'),
+      };
+
+    case 'SET_TOKEN_USAGE':
+      return { ...state, tokenUsagePercent: action.percent };
+
+    case 'SET_THEME': {
+      localStorage.setItem('wisp_theme', action.theme);
+      if (action.customPath) {
+        localStorage.setItem('wisp_custom_theme_path', action.customPath);
+      } else {
+        localStorage.removeItem('wisp_custom_theme_path');
+      }
+      return {
+        ...state,
+        theme: action.theme,
+        customThemePath: action.customPath || null,
+      };
+    }
+
+    case 'SET_AVAILABLE_THEMES':
+      return { ...state, availableThemes: action.themes };
+
+    case 'TOGGLE_VIM_MODE': {
+      const nextVim = !state.vimMode;
+      localStorage.setItem('wisp_vim_mode', String(nextVim));
+      return { ...state, vimMode: nextVim };
+    }
+
+    case 'SET_KEYBINDINGS': {
+      localStorage.setItem('wisp_keybindings', JSON.stringify(action.keybindings));
+      return { ...state, keybindings: action.keybindings };
+    }
+
+    case 'SET_CONTEXT_FILES':
+      return { ...state, contextFiles: action.files };
+
+    case 'CONTEXT_LOADED':
+      return {
+        ...state,
+        contextFiles: state.contextFiles.map((f) =>
+          f.path === action.path ? { ...f, loaded: true } : f,
+        ),
+      };
+
+    case 'START_INLINE_EDIT':
+      return {
+        ...state,
+        inlineEdit: {
+          path: action.path,
+          selection: action.selection,
+          newText: null,
+          diff: null,
+          isProcessing: true,
+          error: null,
+        },
+      };
+
+    case 'INLINE_EDIT_RESULT':
+      return {
+        ...state,
+        inlineEdit: state.inlineEdit
+          ? { ...state.inlineEdit, newText: action.newText, diff: action.diff, isProcessing: false }
+          : null,
+      };
+
+    case 'INLINE_EDIT_ERROR':
+      return {
+        ...state,
+        inlineEdit: state.inlineEdit
+          ? { ...state.inlineEdit, error: action.error, isProcessing: false }
+          : null,
+      };
+
+    case 'CANCEL_INLINE_EDIT':
+      return { ...state, inlineEdit: null };
 
     default:
       return state;

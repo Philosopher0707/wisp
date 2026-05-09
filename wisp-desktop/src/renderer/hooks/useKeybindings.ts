@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useAppState } from '../state/context.js';
+import { loadKeybindings, findMatchingAction } from '../utils/keybindings.js';
 
 const FONT_SCALE_KEY = 'wisp_font_scale';
 const MIN_SCALE = 0.8;
@@ -26,10 +27,75 @@ if (typeof document !== 'undefined') {
   setScale(getScale());
 }
 
+function executeAction(
+  action: string,
+  dispatch: (a: any) => void,
+  sendMessage: (m: any) => void,
+  state: any,
+): void {
+  switch (action) {
+    case 'newChat':
+      dispatch({ type: 'NEW_CHAT' });
+      break;
+    case 'search':
+      dispatch({ type: 'OPEN_OVERLAY', overlay: 'search' });
+      break;
+    case 'quickfile':
+      dispatch({ type: 'OPEN_OVERLAY', overlay: 'quickfile' });
+      break;
+    case 'convSearch':
+      dispatch({ type: 'TOGGLE_CONV_SEARCH' });
+      break;
+    case 'shortcuts':
+      dispatch({ type: 'OPEN_OVERLAY', overlay: 'shortcuts' });
+      break;
+    case 'settings':
+      dispatch({ type: 'OPEN_OVERLAY', overlay: 'settings' });
+      break;
+    case 'clearChat':
+      dispatch({ type: 'CLEAR_CHAT' });
+      break;
+    case 'toggleThinking':
+      dispatch({ type: 'TOGGLE_THINKING' });
+      break;
+    case 'toggleSidebar':
+      dispatch({ type: 'TOGGLE_SIDEBAR' });
+      break;
+    case 'toggleRightPanel':
+      dispatch({ type: 'TOGGLE_RIGHT_PANEL' });
+      break;
+    case 'fontIncrease':
+      setScale(getScale() + STEP);
+      break;
+    case 'fontDecrease':
+      setScale(getScale() - STEP);
+      break;
+    case 'fontReset':
+      setScale(1);
+      break;
+    case 'interrupt':
+      if (state.isStreaming) {
+        sendMessage({ type: 'interrupt' });
+        dispatch({ type: 'INTERRUPT' });
+      }
+      break;
+    case 'planMode':
+      dispatch({ type: 'TOGGLE_PLAN_MODE' });
+      break;
+    case 'inlineEdit':
+      dispatch({ type: 'OPEN_OVERLAY', overlay: 'inlineEdit' });
+      break;
+  }
+}
+
 export function useKeybindings() {
   const { state, dispatch, sendMessage } = useAppState();
 
   useEffect(() => {
+    // Load and set custom keybindings on mount
+    const bindings = loadKeybindings();
+    dispatch({ type: 'SET_KEYBINDINGS', keybindings: bindings });
+
     function handleKeyDown(e: KeyboardEvent) {
       const isMeta = e.metaKey || e.ctrlKey;
 
@@ -69,74 +135,37 @@ export function useKeybindings() {
         }
       }
 
-      // Escape — close dropdown
+      // Escape — close dropdown or overlay
       if (e.key === 'Escape') {
         if (state.activeDropdown) {
           dispatch({ type: 'CLOSE_DROPDOWN' });
           return;
         }
+        if (state.uiOverlay) {
+          dispatch({ type: 'CLOSE_OVERLAY' });
+          return;
+        }
+        // If vim mode is on, let ChatInput handle Escape to exit insert mode
+        // Don't prevent default here as it would block vim's Escape handler
+        return;
       }
 
-      // Cmd/Ctrl shortcuts
+      // Use custom keybindings for Cmd/Ctrl shortcuts
+      const keybindings = state.keybindings && Object.keys(state.keybindings).length > 0
+        ? state.keybindings
+        : loadKeybindings();
+
       if (isMeta) {
-        switch (e.key.toLowerCase()) {
-          case 'n':
-            e.preventDefault();
-            dispatch({ type: 'NEW_CHAT' });
-            return;
-          case 'k':
-            e.preventDefault();
-            dispatch({ type: 'OPEN_OVERLAY', overlay: 'search' });
-            return;
-          case 'p':
-            e.preventDefault();
-            dispatch({ type: 'OPEN_OVERLAY', overlay: 'quickfile' });
-            return;
-          case 'f':
-            e.preventDefault();
-            dispatch({ type: 'TOGGLE_CONV_SEARCH' });
-            return;
-          case '/':
-            e.preventDefault();
-            dispatch({ type: 'OPEN_OVERLAY', overlay: 'shortcuts' });
-            return;
-          case 'l':
-            e.preventDefault();
-            dispatch({ type: 'CLEAR_CHAT' });
-            return;
-          case 't':
-            e.preventDefault();
-            dispatch({ type: 'TOGGLE_THINKING' });
-            return;
-          case 'b':
-            e.preventDefault();
-            dispatch({ type: 'TOGGLE_RIGHT_PANEL' });
-            return;
-          case '=':  // Cmd+= (which is Cmd+Shift+= on US keyboards = Cmd+Plus)
-          case '+':
-            e.preventDefault();
-            setScale(getScale() + STEP);
-            return;
-          case '-':
-            e.preventDefault();
-            setScale(getScale() - STEP);
-            return;
-          case '0':
-            e.preventDefault();
-            setScale(1);
-            return;
-          case 'c':
-            if (state.isStreaming) {
-              e.preventDefault();
-              sendMessage({ type: 'interrupt' });
-              dispatch({ type: 'INTERRUPT' });
-            }
-            return;
+        const matchedAction = findMatchingAction(e, keybindings);
+        if (matchedAction) {
+          e.preventDefault();
+          executeAction(matchedAction, dispatch, sendMessage, state);
+          return;
         }
       }
     }
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [state.approvalPending, state.activeDropdown, state.isStreaming, dispatch, sendMessage]);
+  }, [state.approvalPending, state.activeDropdown, state.uiOverlay, state.isStreaming, state.keybindings, dispatch, sendMessage]);
 }

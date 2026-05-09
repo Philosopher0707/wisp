@@ -134,3 +134,116 @@
 .diff-cancel:hover {
   color: var(--text-primary);
 }
+
+/* ── Per-hunk styles ── */
+
+.diff-hunk-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  background: rgba(255, 255, 255, 0.025);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.hunk-toolbar-btn {
+  font-size: 10px;
+  font-family: var(--font-sans);
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.hunk-toolbar-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.hunk-toolbar-info {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.diff-hunk-group {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.diff-hunk-group:last-child {
+  border-bottom: none;
+}
+
+.diff-hunk-group.hunk-rejected {
+  opacity: 0.45;
+}
+
+.diff-hunk-group.hunk-active {
+  box-shadow: inset 2px 0 0 var(--accent-purple);
+}
+
+.diff-hunk-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px var(--space-3);
+  cursor: pointer;
+  user-select: none;
+  background: rgba(255, 255, 255, 0.02);
+  transition: background 0.1s;
+}
+
+.diff-hunk-header:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.hunk-toggle {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.hunk-toggle--on {
+  background: rgba(34, 197, 94, 0.15);
+  border-color: rgba(34, 197, 94, 0.3);
+  color: #22c55e;
+}
+
+.hunk-toggle--off {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.25);
+  color: #ef4444;
+}
+
+.hunk-header-text {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.hunk-line-count {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+/* ── Compact mode ── */
+
+.diff-compact-footer {
+  padding: 4px var(--space-3);
+  font-size: 10px;
+  color: var(--text-muted);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
