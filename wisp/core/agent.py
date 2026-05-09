@@ -8,6 +8,7 @@ layer via callbacks.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -49,6 +50,7 @@ from wisp.core.events import (
     system as system_event,
     approval_request,
     checkpoint_created,
+    steering_feedback,
 )
 
 logger = logging.getLogger(__name__)
@@ -190,6 +192,9 @@ class WispAgentCore:
         self.messages: list[dict] = []
         self.max_iterations = self.config.max_iterations
         self._interrupted = False
+        self._paused: asyncio.Event = asyncio.Event()
+        self._paused.set()  # starts unpaused
+        self._injected_text: Optional[str] = None
         self._system_prompt = ""
         self._active_skill: Optional[str] = None
         self.agent_id = agent_id or _generate_agent_id()
@@ -225,6 +230,28 @@ class WispAgentCore:
             logger.debug("wisp.hooks module not available — hooks disabled")
         except Exception as e:
             logger.warning("Failed to initialize HookManager: %s", e)
+
+    # ── Steering (pause / resume) ────────────────────────────────────
+
+    def pause(self) -> None:
+        """Pause agent execution at next checkpoint."""
+        self._paused.clear()
+
+    def resume(self, injected_text: Optional[str] = None) -> None:
+        """Resume agent execution, optionally injecting steering feedback."""
+        if injected_text:
+            self._injected_text = injected_text
+        self._paused.set()
+
+    async def _check_steering(self):
+        """Wait if paused. Yield inject event if feedback was provided."""
+        await self._paused.wait()
+        if self._injected_text is not None:
+            text = self._injected_text
+            self._injected_text = None
+            self._add_message("user", text)
+            return steering_feedback(text)
+        return None
 
     # ── Message helpers ──────────────────────────────────────────────
 
@@ -593,15 +620,29 @@ class WispAgentCore:
         if compact_event:
             yield compact_event
 
+        # Steering checkpoint 1: after compact, before iteration loop
+        inject = await self._check_steering()
+        if inject is not None:
+            yield inject
+
         for iteration in range(1, self.max_iterations + 1):
             if self._interrupted:
                 break
+
+            # Steering checkpoint 2: start of each iteration
+            inject = await self._check_steering()
+            if inject is not None:
+                yield inject
 
             # Forward streaming token events
             streamed_content = False
             for event in self._run_turn_streaming_events(system):
                 if self._interrupted:
                     break
+                # Steering checkpoint 4: during token streaming
+                inject = await self._check_steering()
+                if inject is not None:
+                    yield inject
                 yield event
                 if event.type == TYPE_CONTENT:
                     streamed_content = True
@@ -767,6 +808,11 @@ class WispAgentCore:
         for tc in tool_calls:
             if self._interrupted:
                 break
+
+            # Steering checkpoint 3: before each tool execution
+            inject = await self._check_steering()
+            if inject is not None:
+                yield inject
 
             func = tc.get("function", {})
             if not isinstance(func, dict):

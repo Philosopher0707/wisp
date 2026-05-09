@@ -24,6 +24,9 @@ from wisp.core.events import (
     TYPE_SYSTEM,
     TYPE_APPROVAL_REQUEST,
     TYPE_CHECKPOINT_CREATED,
+    TYPE_STEERING_PAUSED,
+    TYPE_STEERING_INJECT,
+    TYPE_STEERING_RESUMED,
 )
 
 logger = logging.getLogger(__name__)
@@ -128,6 +131,15 @@ class ServerTransport:
                 "file_count": event.data.get("file_count", 0),
             }
 
+        if etype == TYPE_STEERING_PAUSED:
+            return {"type": "steering_paused", "reason": event.data.get("reason", "")}
+
+        if etype == TYPE_STEERING_INJECT:
+            return {"type": "steering_inject", "text": event.data.get("text", "")}
+
+        if etype == TYPE_STEERING_RESUMED:
+            return {"type": "steering_resumed"}
+
         return None
 
     async def run(self, prompt: str) -> None:
@@ -184,3 +196,14 @@ class ServerTransport:
         """Interrupt the current run."""
         self._interrupted = True
         self.core._interrupted = True
+        # Unpause so stop works while paused
+        if not self.core._paused.is_set():
+            self.core._paused.set()
+
+    def pause(self) -> None:
+        """Pause agent execution at next checkpoint."""
+        self.core.pause()
+
+    def resume(self, injected_text: Optional[str] = None) -> None:
+        """Resume agent execution, optionally with steering feedback."""
+        self.core.resume(injected_text)

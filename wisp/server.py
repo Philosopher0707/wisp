@@ -1507,6 +1507,16 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(default="")
                     conn.agent_task.cancel()
                 await conn.send({"type": "status", "message": "Interrupted"})
 
+            elif msg_type == "pause":
+                if conn.transport:
+                    conn.transport.pause()
+                await conn.send({"type": "steering_paused", "reason": "User paused"})
+
+            elif msg_type == "resume":
+                if conn.transport:
+                    conn.transport.resume(msg.get("injected_text"))
+                await conn.send({"type": "steering_resumed"})
+
             elif msg_type == "ping":
                 await conn.send({"type": "pong"})
 
