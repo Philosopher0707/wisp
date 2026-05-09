@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 _last_orchestrator: SwarmOrchestrator | None = None
 
 
-def cmd_swarm(goal: str, roles: list[str] | None = None, model: str | None = None, workspace: str | None = None, max_parallel: int = 3):
+def cmd_swarm(goal: str, roles: list[str] | None = None, model: str | None = None, workspace: str | None = None, max_parallel: int = 3, count_per_role: dict[str, int] | None = None, max_retries: int = 2):
     """Run a multi-agent swarm to accomplish a goal."""
     global _last_orchestrator
     config = WispConfig()
@@ -35,17 +35,20 @@ def cmd_swarm(goal: str, roles: list[str] | None = None, model: str | None = Non
     if roles is None:
         roles = [AgentRole.CODER, AgentRole.REVIEWER, AgentRole.TESTER, AgentRole.RESEARCHER]
 
-    print(info(f"🐝 Starting swarm with {len(roles)} agent(s)..."))
+    total_agents = sum((count_per_role or {}).get(r, 1) for r in roles)
+    print(info(f"🐝 Starting swarm with {total_agents} agent(s) across {len(roles)} role(s)..."))
     print(dim(f"   Goal: {goal}"))
     print(dim(f"   Roles: {', '.join(roles)}"))
     print(dim(f"   Model: {config.model}"))
     print(dim(f"   Workspace: {config.workspace}"))
+    if max_retries:
+        print(dim(f"   Retries: up to {max_retries} per task"))
     print()
 
     orch = SwarmOrchestrator(config, max_parallel=max_parallel)
     _last_orchestrator = orch
     try:
-        result = orch.run(goal, roles=roles)
+        result = orch.run(goal, roles=roles, count_per_role=count_per_role, max_retries=max_retries)
 
         print()
         print(success("✓ Swarm execution complete"))

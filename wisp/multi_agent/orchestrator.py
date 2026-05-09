@@ -1,24 +1,26 @@
-"""Swarm orchestrator — spawns agents, assigns tasks, collects results.
+"""Async swarm orchestrator — spawns agents, assigns tasks, collects results.
+
+v2: async execution, multi-agent per role, streaming progress, retry with backoff.
 
 The orchestrator is the conductor of the multi-agent system:
 1. Parses a high-level goal
 2. Spawns a Planner to decompose it into subtasks
 3. Assigns subtasks to specialized agents (Coder, Tester, Reviewer, etc.)
 4. Manages file locking to prevent conflicts
-5. Collects results and synthesizes a final answer
+5. Collects results, retries failures, synthesizes final answer
+6. Streams progress events for live UI
 """
 
 from __future__ import annotations
 
-import inspect
+import asyncio
 import json
 import logging
 import re
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from wisp.agent import WispAgent
 from wisp.config import WispConfig
@@ -29,8 +31,11 @@ from .bus import MessageBus
 from .roles import AgentRole, ROLE_CONFIGS
 from .agent_factory import AgentFactory
 from .workspace_lock import WorkspaceLock
+from .task import EventKind, OrchestratorEvent
 
 logger = logging.getLogger(__name__)
+
+ProgressCallback = Optional[Callable[[OrchestratorEvent], Awaitable[None]]]
 
 
 @dataclass
@@ -58,7 +63,14 @@ class SwarmResult:
 
 
 class SwarmOrchestrator:
-    """Manages a swarm of specialized agents working toward a shared goal."""
+    """Manages a swarm of specialized agents working toward a shared goal.
+
+    v2 features:
+    - async execution via asyncio.Semaphore + asyncio.gather
+    - multiple agents per role with round-robin selection
+    - retry with exponential backoff (different agent on retry)
+    - streaming progress events via OrchestratorEvent callback
+    """
 
     def __init__(
         self,
@@ -78,35 +90,39 @@ class SwarmOrchestrator:
         self._agents: dict[str, WispAgent] = {}
         self._shutdown = False
 
-        # Subscribe to all result events
         self.bus.subscribe(self._on_task_result, event_type=EventType.TASK_RESULT)
         self.bus.subscribe(self._on_task_failed, event_type=EventType.TASK_FAILED)
         self.bus.subscribe(self._on_heartbeat, event_type=EventType.AGENT_HEARTBEAT)
 
     # ── Lifecycle ──────────────────────────────────────────────────────
 
-    def spawn_agents(self, roles: list[str]) -> list[str]:
-        """Spawn one agent per role and return their IDs."""
+    def spawn_agents(
+        self,
+        roles: list[str],
+        count_per_role: Optional[dict[str, int]] = None,
+    ) -> list[str]:
+        """Spawn agents per role. If count_per_role given, spawn multiple per role."""
         ids: list[str] = []
+        counts = count_per_role or {}
         for role in roles:
-            agent_id = f"{role}-{uuid.uuid4().hex[:6]}"
-            agent = self.factory.create(role, agent_id, model=self.config.model)
-
-            self._agents[agent_id] = agent
-            self.registry.register(
-                AgentRecord(agent_id=agent_id, role=role, status=AgentStatus.IDLE)
-            )
-
-            # Emit started event
-            self.bus.emit(
-                AgentEvent(
-                    event_type=EventType.AGENT_STARTED,
-                    source_agent=agent_id,
-                    payload={"role": role},
+            n = counts.get(role, 1)
+            for i in range(n):
+                suffix = f"-{i}" if n > 1 else ""
+                agent_id = f"{role}{suffix}-{uuid.uuid4().hex[:6]}"
+                agent = self.factory.create(role, agent_id, model=self.config.model)
+                self._agents[agent_id] = agent
+                self.registry.register(
+                    AgentRecord(agent_id=agent_id, role=role, status=AgentStatus.IDLE)
                 )
-            )
-            ids.append(agent_id)
-            logger.info("Spawned %s agent %s", role, agent_id)
+                self.bus.emit(
+                    AgentEvent(
+                        event_type=EventType.AGENT_STARTED,
+                        source_agent=agent_id,
+                        payload={"role": role},
+                    )
+                )
+                ids.append(agent_id)
+                logger.info("Spawned %s agent %s", role, agent_id)
         return ids
 
     def stop_all(self) -> None:
@@ -127,21 +143,26 @@ class SwarmOrchestrator:
 
     # ── Planning ───────────────────────────────────────────────────────
 
-    def _plan(self, goal: str, available_roles: Optional[list[str]] = None) -> tuple[str, list[dict]]:
-        """Use the Planner role (or the parent agent) to break down a goal.
+    async def _plan(
+        self, goal: str, available_roles: Optional[list[str]] = None
+    ) -> tuple[str, list[dict]]:
+        """Decompose goal into subtasks (async wrapper around sync LLM call)."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._plan_sync, goal, available_roles)
 
-        Args:
-            goal: High-level task description.
-            available_roles: Which roles are available (only tasks for these roles).
-
-        Returns:
-            (plan_text, subtasks) where subtasks is a list of dicts with
-            keys: role, description, expected_output, dependencies.
-        """
-        planner = self.factory.create(AgentRole.PLANNER, "planner-" + uuid.uuid4().hex[:6])
+    def _plan_sync(
+        self, goal: str, available_roles: Optional[list[str]] = None
+    ) -> tuple[str, list[dict]]:
+        """Sync planning logic — runs in thread pool executor."""
+        planner = self.factory.create(
+            AgentRole.PLANNER, "planner-" + uuid.uuid4().hex[:6]
+        )
 
         if available_roles is None:
-            available_roles = [AgentRole.CODER, AgentRole.REVIEWER, AgentRole.TESTER, AgentRole.RESEARCHER]
+            available_roles = [
+                AgentRole.CODER, AgentRole.REVIEWER,
+                AgentRole.TESTER, AgentRole.RESEARCHER,
+            ]
 
         role_descriptions = {
             AgentRole.CODER: "writes and edits code",
@@ -177,40 +198,52 @@ Respond in JSON with a "plan" string and a "subtasks" array.
         try:
             system = planner._build_system_prompt()
             raw = planner._run_turn_streaming(system)
-            content = raw.get("message", {}).get("content", "") if isinstance(raw.get("message"), dict) else ""
-            # Try to extract JSON (strip markdown fences if present)
+            content = (
+                raw.get("message", {}).get("content", "")
+                if isinstance(raw.get("message"), dict)
+                else ""
+            )
             data = self._extract_json(content)
             if data is not None:
                 plan = data.get("plan", content)
                 subtasks = data.get("subtasks", [])
             else:
-                # Fallback: wrap whole response as a single task
                 plan = content
-                subtasks = [{"role": "coder", "description": goal, "expected_output": "working code", "dependencies": []}]
+                subtasks = [
+                    {
+                        "role": "coder",
+                        "description": goal,
+                        "expected_output": "working code",
+                        "dependencies": [],
+                    }
+                ]
         except Exception as e:
             logger.warning("Planner failed: %s. Using fallback single-task plan.", e)
             plan = goal
-            subtasks = [{"role": "coder", "description": goal, "expected_output": "working code", "dependencies": []}]
+            subtasks = [
+                {
+                    "role": "coder",
+                    "description": goal,
+                    "expected_output": "working code",
+                    "dependencies": [],
+                }
+            ]
 
         return plan, subtasks
 
     def _extract_json(self, content: str) -> Optional[dict]:
         """Extract JSON from model output, handling markdown fences."""
         content = content.strip()
-        # Try stripping markdown fences
         if content.startswith("```"):
             lines = content.splitlines()
-            # Remove opening fence
             if lines[0].startswith("```"):
                 lines = lines[1:]
-            # Remove closing fence
             if lines and lines[-1].startswith("```"):
                 lines = lines[:-1]
             content = "\n".join(lines).strip()
         try:
             return json.loads(content)
         except json.JSONDecodeError:
-            # Try finding JSON object/array inside the text
             for match in re.finditer(r"(\{[\s\S]*\}|\[[\s\S]*\])", content):
                 try:
                     return json.loads(match.group(1))
@@ -218,54 +251,135 @@ Respond in JSON with a "plan" string and a "subtasks" array.
                     continue
             return None
 
-    # ── Execution ──────────────────────────────────────────────────────
+    # ── Execution (sync entry points) ──────────────────────────────────
 
-    def run(self, goal: str, roles: Optional[list[str]] = None) -> SwarmResult:
-        """Execute a goal using the swarm.
+    def run(
+        self,
+        goal: str,
+        roles: Optional[list[str]] = None,
+        count_per_role: Optional[dict[str, int]] = None,
+        max_retries: int = 2,
+        progress_callback: ProgressCallback = None,
+    ) -> SwarmResult:
+        """Sync wrapper — delegates to async arun().
+
+        Detects whether an event loop is already running (e.g. inside REPL
+        slash command) and adapts accordingly.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop — simple case (CLI entry point)
+            return asyncio.run(
+                self.arun(goal, roles, count_per_role, max_retries, progress_callback)
+            )
+
+        # Event loop already running — run async in a dedicated thread
+        return self._run_sync_in_thread(
+            goal, roles, count_per_role, max_retries, progress_callback
+        )
+
+    def _run_sync_in_thread(
+        self,
+        goal: str,
+        roles: Optional[list[str]],
+        count_per_role: Optional[dict[str, int]],
+        max_retries: int,
+        progress_callback: ProgressCallback,
+    ) -> SwarmResult:
+        """Run arun() in a background thread with its own event loop."""
+        result_holder: dict[str, Any] = {}
+
+        async def _runner():
+            result_holder["result"] = await self.arun(
+                goal, roles, count_per_role, max_retries, progress_callback
+            )
+
+        def _target():
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(_runner())
+            finally:
+                loop.close()
+
+        thread = __import__("threading").Thread(target=_target)
+        thread.start()
+        thread.join()
+
+        if "error" in result_holder:
+            raise RuntimeError(result_holder["error"])
+        return result_holder.get("result") or SwarmResult(
+            success=False, goal=goal, plan="", final_output="Orchestrator thread returned no result"
+        )
+
+    # ── Async core ─────────────────────────────────────────────────────
+
+    async def arun(
+        self,
+        goal: str,
+        roles: Optional[list[str]] = None,
+        count_per_role: Optional[dict[str, int]] = None,
+        max_retries: int = 2,
+        progress_callback: ProgressCallback = None,
+    ) -> SwarmResult:
+        """Execute a goal using the swarm (async).
 
         Args:
             goal: High-level task description.
-            roles: Which roles to spawn (default: coder, reviewer, tester, researcher).
-
-        Returns:
-            SwarmResult with plan, individual results, and synthesized output.
+            roles: Which roles to spawn. Default: coder, reviewer, tester, researcher.
+            count_per_role: How many agents per role (e.g. {"coder": 3}).
+            max_retries: Max retries per failed task.
+            progress_callback: Async callback receiving OrchestratorEvent.
         """
         start = time.monotonic()
         if roles is None:
             roles = [AgentRole.CODER, AgentRole.REVIEWER, AgentRole.TESTER, AgentRole.RESEARCHER]
 
-        # Spawn agents
-        agent_ids = self.spawn_agents(roles)
-        logger.info("Swarm spawned %d agents for goal: %s", len(agent_ids), goal)
+        async def emit(event: OrchestratorEvent) -> None:
+            if progress_callback:
+                await progress_callback(event)
 
-        # Plan — only suggest tasks for roles we actually have
-        plan_fn = self._plan
-        positional_params = [
-            param
-            for param in inspect.signature(plan_fn).parameters.values()
-            if param.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
-        ]
-        if len(positional_params) >= 2:
-            plan, subtasks = plan_fn(goal, roles)
-        else:
-            plan, subtasks = plan_fn(goal)
+        # Spawn agents
+        agent_ids = self.spawn_agents(roles, count_per_role)
+        logger.info("Swarm spawned %d agents for: %s", len(agent_ids), goal[:100])
+
+        # Plan
+        await emit(OrchestratorEvent(
+            event_type=EventKind.PLANNING, payload={"goal": goal}
+        ))
+        plan, subtasks = await self._plan(goal, roles)
+        await emit(OrchestratorEvent(
+            event_type=EventKind.PLANNING,
+            payload={"plan": plan, "subtask_count": len(subtasks)},
+        ))
         logger.info("Plan generated with %d subtasks", len(subtasks))
 
-        # Execute subtasks with dependency resolution
-        results = self._execute_subtasks(subtasks, agent_ids)
+        # Execute with retry + streaming
+        results = await self._execute_subtasks_async(
+            subtasks, agent_ids, max_retries, emit
+        )
 
-        # Synthesize final answer
+        # Synthesize
         final_output = self._synthesize(goal, plan, results)
-
         elapsed = time.monotonic() - start
-        all_files = []
+        all_files: list[str] = []
         for r in results:
             all_files.extend(r.files_changed)
+
+        await emit(OrchestratorEvent(
+            event_type=EventKind.DONE,
+            payload={
+                "elapsed": elapsed,
+                "files_changed": sorted(set(all_files)),
+                "passed": sum(1 for r in results if r.success),
+                "failed": sum(1 for r in results if not r.success),
+            },
+        ))
 
         self.stop_all()
 
         return SwarmResult(
-            success=all(r.success for r in results) or len(results) == 0,
+            success=all(r.success for r in results) if results else True,
             goal=goal,
             plan=plan,
             agent_results=results,
@@ -274,126 +388,199 @@ Respond in JSON with a "plan" string and a "subtasks" array.
             files_changed=sorted(set(all_files)),
         )
 
-    def _execute_subtasks(self, subtasks: list[dict], agent_ids: list[str]) -> list[TaskResult]:
-        """Execute subtasks respecting dependencies, with parallelization."""
-        results: dict[int, TaskResult] = {}
-        completed = set()
-        failed = set()
+    # ── Subtask execution ──────────────────────────────────────────────
 
-        # Map role to available agent IDs
+    async def _execute_subtasks_async(
+        self,
+        subtasks: list[dict],
+        agent_ids: list[str],
+        max_retries: int,
+        emit: Callable[[OrchestratorEvent], Awaitable[None]],
+    ) -> list[TaskResult]:
+        """Execute subtasks with dependency resolution + async concurrency."""
+        results: dict[int, TaskResult] = {}
+        completed: set[int] = set()
+        failed: set[int] = set()
+
+        # Map role → available agent IDs
         role_to_agents: dict[str, list[str]] = {}
         for aid in agent_ids:
             rec = self.registry.get(aid)
             if rec:
                 role_to_agents.setdefault(rec.role, []).append(aid)
 
-        pending = set(range(len(subtasks)))
+        # Round-robin index per role
+        role_rr: dict[str, int] = {r: 0 for r in role_to_agents}
 
-        with ThreadPoolExecutor(max_workers=self.max_parallel) as executor:
-            futures = {}
+        semaphore = asyncio.Semaphore(self.max_parallel)
 
-            while pending or futures:
-                # Launch ready tasks
-                for idx in list(pending):
-                    task = subtasks[idx]
-                    deps = task.get("dependencies", [])
-                    if all(d in completed for d in deps) and any(d in failed for d in deps) is False:
-                        # Check if any dependency failed
-                        if any(d in failed for d in deps):
-                            failed.add(idx)
-                            pending.discard(idx)
-                            continue
+        async def run_task(idx: int) -> None:
+            nonlocal results, completed, failed
 
-                        role = task.get("role", "coder")
-                        available = role_to_agents.get(role, [])
-                        if not available:
-                            logger.warning("No agent available for role %s, skipping task %d", role, idx)
-                            failed.add(idx)
-                            pending.discard(idx)
-                            continue
+            task = subtasks[idx]
+            role = task.get("role", "coder")
+            available = role_to_agents.get(role, [])
 
-                        # Pick first idle agent
-                        agent_id = available[0]
-                        rec = self.registry.get(agent_id)
-                        if rec and rec.status == AgentStatus.WORKING:
-                            # Agent busy, try next or wait
-                            continue
+            if not available:
+                logger.warning("No agent for role %s, skipping task %d", role, idx)
+                results[idx] = TaskResult(
+                    task_id=f"task-{idx}", success=False, output="",
+                    error=f"No agent available for role {role}",
+                )
+                failed.add(idx)
+                return
 
-                        pending.discard(idx)
-                        self.registry.update_status(agent_id, AgentStatus.WORKING, task=task.get("description", ""))
+            async with semaphore:
+                # Round-robin pick
+                rr_idx = role_rr[role] % len(available)
+                agent_id = available[rr_idx]
+                role_rr[role] += 1
 
-                        assignment = TaskAssignment(
-                            task_id=f"task-{idx}",
-                            description=task.get("description", ""),
-                            expected_output=task.get("expected_output", ""),
-                            max_iterations=ROLE_CONFIGS.get(role, ROLE_CONFIGS[AgentRole.CODER]).max_iterations,
-                            timeout_seconds=ROLE_CONFIGS.get(role, ROLE_CONFIGS[AgentRole.CODER]).timeout_seconds,
-                        )
+                assignment = TaskAssignment(
+                    task_id=f"task-{idx}",
+                    description=task.get("description", ""),
+                    expected_output=task.get("expected_output", ""),
+                    max_iterations=ROLE_CONFIGS.get(
+                        role, ROLE_CONFIGS[AgentRole.CODER]
+                    ).max_iterations,
+                    timeout_seconds=ROLE_CONFIGS.get(
+                        role, ROLE_CONFIGS[AgentRole.CODER]
+                    ).timeout_seconds,
+                )
 
-                        future = executor.submit(self._run_agent_task, agent_id, assignment)
-                        futures[future] = idx
+                await emit(OrchestratorEvent(
+                    task_id=assignment.task_id,
+                    event_type=EventKind.TASK_STARTED,
+                    payload={
+                        "role": role,
+                        "agent_id": agent_id,
+                        "description": assignment.description,
+                    },
+                ))
 
-                if not futures:
-                    break
+                # Retry loop with exponential backoff
+                retry_count = 0
+                result: Optional[TaskResult] = None
 
-                # Wait for at least one future to complete, then launch more
-                for future in as_completed(futures):
-                    idx = futures.pop(future)
+                while retry_count <= max_retries:
                     try:
-                        result = future.result()
-                        results[idx] = result
-                        if result.success:
-                            completed.add(idx)
-                        else:
-                            failed.add(idx)
-                    except Exception as e:
-                        logger.error("Task %d failed with exception: %s", idx, e)
-                        results[idx] = TaskResult(
-                            task_id=f"task-{idx}",
-                            success=False,
-                            output="",
-                            error=str(e),
+                        self.registry.update_status(
+                            agent_id, AgentStatus.WORKING,
+                            task=task.get("description", ""),
                         )
-                        failed.add(idx)
-                    break  # Process one at a time to allow launching new ready tasks
+                        result = await self._run_agent_task_async(agent_id, assignment)
+                        self.registry.update_status(agent_id, AgentStatus.IDLE, task=None)
+                    except Exception as e:
+                        result = TaskResult(
+                            task_id=assignment.task_id,
+                            success=False, output="", error=str(e),
+                        )
 
-        return [results.get(i, TaskResult(task_id=f"task-{i}", success=False, output="")) for i in range(len(subtasks))]
+                    if result.success:
+                        break
 
-    def _run_agent_task(self, agent_id: str, assignment: TaskAssignment) -> TaskResult:
-        """Run a single task on a single agent."""
+                    if retry_count < max_retries:
+                        retry_count += 1
+                        backoff = 2 ** (retry_count - 1)  # 1s, 2s, 4s
+
+                        # Different agent on retry (if multiple available)
+                        if len(available) > 1:
+                            rr_idx2 = role_rr[role] % len(available)
+                            new_agent_id = available[rr_idx2]
+                            if new_agent_id != agent_id:
+                                agent_id = new_agent_id
+                            role_rr[role] += 1
+
+                        await emit(OrchestratorEvent(
+                            task_id=assignment.task_id,
+                            event_type=EventKind.TASK_RETRY,
+                            payload={
+                                "retry": retry_count,
+                                "error": result.error if result else "unknown",
+                                "backoff_seconds": backoff,
+                                "agent_id": agent_id,
+                            },
+                        ))
+                        await asyncio.sleep(backoff)
+                    else:
+                        break
+
+                if result is None:
+                    result = TaskResult(
+                        task_id=assignment.task_id, success=False, output="",
+                        error="No result produced",
+                    )
+
+                results[idx] = result
+                if result.success:
+                    completed.add(idx)
+                    await emit(OrchestratorEvent(
+                        task_id=assignment.task_id,
+                        event_type=EventKind.TASK_COMPLETED,
+                        payload={
+                            "files_changed": result.files_changed,
+                            "elapsed": result.elapsed_seconds,
+                        },
+                    ))
+                else:
+                    failed.add(idx)
+                    await emit(OrchestratorEvent(
+                        task_id=assignment.task_id,
+                        event_type=EventKind.TASK_FAILED,
+                        payload={"error": result.error},
+                    ))
+
+        async def wait_then_run(idx: int) -> None:
+            """Poll until dependencies resolved, then run."""
+            deps = subtasks[idx].get("dependencies", [])
+            while True:
+                if self._shutdown:
+                    failed.add(idx)
+                    return
+                if all(d in completed for d in deps):
+                    await run_task(idx)
+                    return
+                if any(d in failed for d in deps):
+                    failed.add(idx)
+                    return
+                await asyncio.sleep(0.1)
+
+        coros = [wait_then_run(i) for i in range(len(subtasks))]
+        await asyncio.gather(*coros)
+
+        return [
+            results.get(
+                i, TaskResult(task_id=f"task-{i}", success=False, output="")
+            )
+            for i in range(len(subtasks))
+        ]
+
+    async def _run_agent_task_async(
+        self, agent_id: str, assignment: TaskAssignment
+    ) -> TaskResult:
+        """Run a single task on a single agent (async)."""
         agent = self._agents.get(agent_id)
         if not agent:
             return TaskResult(
                 task_id=assignment.task_id,
-                success=False,
-                output="",
+                success=False, output="",
                 error=f"Agent {agent_id} not found",
             )
 
-        # Emit assignment
         self.bus.emit(assignment.to_event(source="orchestrator", target=agent_id))
 
-        import asyncio
         start = time.monotonic()
         try:
-            task_result = agent.run_task(
+            task_result = await agent.run_task(
                 task_description=assignment.description,
                 workspace=agent.config.workspace or ".",
                 max_iterations=assignment.max_iterations,
                 timeout_seconds=assignment.timeout_seconds,
             )
-            if asyncio.iscoroutine(task_result):
-                loop = asyncio.new_event_loop()
-                try:
-                    task_result = loop.run_until_complete(task_result)
-                finally:
-                    loop.close()
             elapsed = time.monotonic() - start
             content = task_result.get("output", "")
 
-            # Extract file changes from the agent's change tracker (accurate)
-            files_changed = agent.change_tracker.get_changed_files()
-            # Also do best-effort regex extraction from output as fallback
+            files_changed: list[str] = agent.change_tracker.get_changed_files()
             if not files_changed:
                 files_changed = self._extract_file_changes(content)
 
@@ -409,13 +596,11 @@ Respond in JSON with a "plan" string and a "subtasks" array.
             elapsed = time.monotonic() - start
             result = TaskResult(
                 task_id=assignment.task_id,
-                success=False,
-                output="",
+                success=False, output="",
                 error=str(e),
                 elapsed_seconds=elapsed,
             )
 
-        # Update registry with files this agent touched
         for path in result.files_changed:
             self.registry.claim_file(agent_id, path)
             self.bus.emit(
@@ -426,11 +611,8 @@ Respond in JSON with a "plan" string and a "subtasks" array.
                 )
             )
 
-        # Emit result
         self.bus.emit(result.to_event(source=agent_id, target="orchestrator"))
-        self.registry.update_status(agent_id, AgentStatus.IDLE, task=None)
 
-        # Release all file locks held by this agent
         agent.file_lock.release_all()
         for path in result.files_changed:
             self.registry.release_file(agent_id, path)
@@ -446,26 +628,27 @@ Respond in JSON with a "plan" string and a "subtasks" array.
 
     def _extract_file_changes(self, content: str) -> list[str]:
         """Best-effort extraction of file paths from agent output."""
-        import re
         paths = []
-        # Match common patterns like `write_file(path=...)` or `Edited foo.py`
-        for match in re.finditer(r'["\']([\w/\\.-]+\.(py|js|ts|java|rs|go|c|cpp|h|md|json|yaml|yml|toml))["\']', content):
+        for match in re.finditer(
+            r'["\']([\w/\\.-]+\.(py|js|ts|java|rs|go|c|cpp|h|md|json|yaml|yml|toml))["\']',
+            content,
+        ):
             paths.append(match.group(1))
         return sorted(set(paths))
 
-    def _synthesize(self, goal: str, plan: str, results: list[TaskResult]) -> str:
+    def _synthesize(
+        self, goal: str, plan: str, results: list[TaskResult]
+    ) -> str:
         """Combine all agent outputs into a coherent final response."""
         passed = sum(1 for r in results if r.success)
-        failed = sum(1 for r in results if not r.success)
-        all_files = sorted(set(
-            f for r in results for f in r.files_changed
-        ))
+        failed_count = sum(1 for r in results if not r.success)
+        all_files = sorted(set(f for r in results for f in r.files_changed))
 
         lines = [
             f"## Swarm Result: {goal}",
             "",
             f"**{passed}/{len(results)} tasks passed**"
-            + (f", {failed} failed" if failed else ""),
+            + (f", {failed_count} failed" if failed_count else ""),
             "",
         ]
 
@@ -500,7 +683,6 @@ Respond in JSON with a "plan" string and a "subtasks" array.
     # ── Event handlers ─────────────────────────────────────────────────
 
     def _on_task_result(self, event: AgentEvent) -> None:
-        result = TaskResult.from_event(event)
         rec = self.registry.get(event.source_agent)
         if rec:
             rec.total_tasks_completed += 1
