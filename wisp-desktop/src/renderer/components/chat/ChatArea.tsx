@@ -19,6 +19,7 @@ export const ChatArea: React.FC = () => {
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [committing, setCommitting] = useState(false);
+  const [copyToast, setCopyToast] = useState(false);
 
   const handleCommit = async () => {
     setCommitting(true);
@@ -72,6 +73,17 @@ export const ChatArea: React.FC = () => {
     setHighlightId(null);
   }, [dispatch]);
 
+  const handleMouseUp = useCallback(() => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed) return;
+    const text = sel.toString().trim();
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(() => {
+      setCopyToast(true);
+      setTimeout(() => setCopyToast(false), 1200);
+    }).catch(() => {});
+  }, []);
+
   if (hasMessages) {
     return (
       <div className="chat-area chat-area--conversation">
@@ -82,7 +94,7 @@ export const ChatArea: React.FC = () => {
             onHighlight={handleHighlight}
           />
         )}
-        <div className="chat-messages" ref={scrollRef} onScroll={handleScroll}>
+        <div className="chat-messages" ref={scrollRef} onScroll={handleScroll} onMouseUp={handleMouseUp}>
           {state.messages.map((msg) => (
             <div
               key={msg.id}
@@ -97,6 +109,7 @@ export const ChatArea: React.FC = () => {
             <ArrowDown size={16} />
           </button>
         )}
+        {copyToast && <div className="chat-copy-toast">Copied</div>}
         {state.gitCommitBanner && (
           <GitCommitBanner
             branch={state.gitCommitBanner.branch}

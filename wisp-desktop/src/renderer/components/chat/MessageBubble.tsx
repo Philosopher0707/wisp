@@ -18,6 +18,7 @@ export const MessageBubble: React.FC<Props> = ({ msg, highlighted }) => {
   const [copied, setCopied] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
+  const [showTools, setShowTools] = useState(false);
 
   const handleCopy = async () => {
     await navigator.clipboard.writeText(msg.content);
@@ -203,9 +204,30 @@ export const MessageBubble: React.FC<Props> = ({ msg, highlighted }) => {
           </details>
         )}
         {msg.content && <div className="msg-content">{renderMarkdown(msg.content)}</div>}
-        {msg.toolCalls?.map((tc, i) => (
-          <ToolCallBanner key={i} toolCall={tc} />
-        ))}
+        {msg.toolCalls && msg.toolCalls.length > 0 && (
+          <div className="msg-tools-summary">
+            <button
+              className="msg-tools-toggle"
+              onClick={() => setShowTools(!showTools)}
+              title={showTools ? 'Hide tool details' : 'Show tool details'}
+            >
+              <span className="msg-tools-arrow">{showTools ? '▾' : '▸'}</span>
+              <span className="msg-tools-label">
+                {msg.toolCalls.length} tool{msg.toolCalls.length !== 1 ? 's' : ''} used
+              </span>
+              <span className="msg-tools-names">
+                {msg.toolCalls.map((tc) => tc.name).join(', ')}
+              </span>
+            </button>
+            {showTools && (
+              <div className="msg-tools-list">
+                {msg.toolCalls.map((tc, i) => (
+                  <ToolCallBanner key={i} toolCall={tc} />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {!msg.content && !msg.thinking && (!msg.toolCalls || msg.toolCalls.length === 0) && (
           <p className="msg-loading">Thinking...</p>
         )}
