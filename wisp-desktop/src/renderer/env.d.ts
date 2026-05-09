@@ -8,4 +8,5 @@ interface Window {
     openInVSCode: (workspacePath: string) => Promise<boolean>;
     selectDirectory: () => Promise<string | null>;
   };
+  __settingsTab?: string;
 }

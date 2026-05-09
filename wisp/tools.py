@@ -1054,7 +1054,40 @@ def tool_update_plan(task_id: str, status: str, notes: str = "", workspace: str 
 
 
 def tool_web_search(query: str, num_results: int = 5) -> str:
-    """Search the web using DuckDuckGo HTML (no API key required)."""
+    """Search the web using DuckDuckGo (prefers duckduckgo_search library, falls back to HTML)."""
+    import json as _json
+
+    # Try duckduckgo_search/ddgs library first
+    DDGS = None
+    for module_name in ("ddgs", "duckduckgo_search"):
+        try:
+            mod = __import__(module_name, fromlist=["DDGS"])
+            DDGS = mod.DDGS
+            break
+        except ImportError:
+            continue
+    if DDGS is not None:
+        try:
+            with DDGS() as ddgs:
+                results = list(ddgs.text(query, max_results=num_results))
+            formatted = []
+            for i, r in enumerate(results, 1):
+                formatted.append({
+                    "number": i,
+                    "title": r.get("title", "Untitled"),
+                    "url": r.get("href", ""),
+                    "snippet": r.get("body", ""),
+                })
+            if formatted:
+                return _json.dumps({
+                    "status": "ok",
+                    "data": {"query": query, "results": formatted},
+                    "metadata": {"query": query, "num_results": len(formatted), "backend": module_name},
+                })
+        except Exception as e:
+            logger.warning("ddgs/duckduckgo_search failed, falling back to HTML: %s", e)
+
+    # Fallback: HTML parsing
     import urllib.request
     import urllib.parse
     from html.parser import HTMLParser
@@ -1100,29 +1133,38 @@ def tool_web_search(query: str, num_results: int = 5) -> str:
                 self._text += data
 
     try:
+        import ssl
         qs = urllib.parse.urlencode({"q": query})
         url = f"https://html.duckduckgo.com/html/?{qs}"
         req = urllib.request.Request(url, headers={"User-Agent": "Wisp/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
             html = resp.read().decode("utf-8", errors="replace")
         parser = ResultParser()
         parser.feed(html)
         results = parser.results[:num_results]
-        if not results:
-            return f"No results found for: {query}"
-        lines = [f"Web search results for '{query}':"]
+        formatted = []
         for i, r in enumerate(results, 1):
-            href = r.get("href", "")
-            title = r.get("title", "Untitled")
-            snippet = r.get("snippet", "")
-            lines.append(f"\n{i}. {title}")
-            if href:
-                lines.append(f"   URL: {href}")
-            if snippet:
-                lines.append(f"   {snippet}")
-        return "\n".join(lines)
+            formatted.append({
+                "number": i,
+                "title": r.get("title", "Untitled"),
+                "url": r.get("href", ""),
+                "snippet": r.get("snippet", ""),
+            })
+        return _json.dumps({
+            "status": "ok",
+            "data": {"query": query, "results": formatted},
+            "metadata": {"query": query, "num_results": len(formatted), "backend": "html"},
+        })
     except Exception as e:
-        return f"Search error: {e}. Try again or use web_fetch on a known URL."
+        return _json.dumps({
+            "status": "error",
+            "data": {"query": query, "results": []},
+            "metadata": {"query": query, "error": str(e), "backend": ""},
+            "error": str(e),
+        })
 
 
 def tool_search_codebase(query: str, top_k: int = 5) -> str:
@@ -1709,6 +1751,9 @@ def _build_tool_metadata(name: str, args: dict, result: str) -> dict:
     elif name == "search_codebase":
         meta["query"] = args.get("query", "")
         meta["top_k"] = args.get("top_k", 5)
+    elif name == "web_search":
+        meta["query"] = args.get("query", "")
+        meta["num_results"] = args.get("num_results", 5)
 
     return meta
 

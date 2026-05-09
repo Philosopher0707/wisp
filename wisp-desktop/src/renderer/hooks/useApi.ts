@@ -7,6 +7,58 @@ export interface GitStatus {
   dirty?: boolean;
 }
 
+export interface PluginInfo {
+  name: string;
+  version: string;
+  author: string;
+  enabled: boolean;
+  description?: string;
+}
+
+export interface MarketplaceItem {
+  name: string;
+  version: string;
+  author: string;
+  description: string;
+  downloads: number;
+}
+
+export interface MCPServerInfo {
+  name: string;
+  transport: string;
+  status: 'connected' | 'disconnected' | 'error';
+  tool_count: number;
+  latency_ms: number | null;
+}
+
+export interface HookInfo {
+  name: string;
+  event: string;
+  command: string;
+  enabled: boolean;
+  matcher?: string;
+  timeout?: number;
+}
+
+export interface HookLogEntry {
+  hook_name: string;
+  event: string;
+  result: string;
+  timestamp: string;
+}
+
+export interface CheckpointEntry {
+  id: string;
+  created_at: string;
+  label?: string;
+  session_id?: string;
+}
+
+export interface ContextResponse {
+  content: string;
+  files_found: string[];
+}
+
 interface ApiClient {
   fetchSessions: () => Promise<SessionSummary[]>;
   fetchSession: (id: string) => Promise<Message[]>;
@@ -15,7 +67,33 @@ interface ApiClient {
   fetchModels: () => Promise<string[]>;
   fetchFiles: (path?: string) => Promise<FileItems | null>;
   fetchGitStatus: () => Promise<GitStatus | null>;
+  forkSession: (messages: Message[], title?: string) => Promise<string | null>;
   healthCheck: () => Promise<boolean>;
+  // Plugins
+  fetchPlugins: () => Promise<PluginInfo[]>;
+  installPlugin: (path: string) => Promise<boolean>;
+  uninstallPlugin: (name: string) => Promise<boolean>;
+  togglePlugin: (name: string, enabled: boolean) => Promise<boolean>;
+  searchMarketplace: (query: string) => Promise<MarketplaceItem[]>;
+  // MCP
+  fetchMCPServers: () => Promise<MCPServerInfo[]>;
+  addMCPServer: (config: Record<string, unknown>) => Promise<boolean>;
+  removeMCPServer: (name: string) => Promise<boolean>;
+  testMCPServer: (name: string) => Promise<{ ok: boolean; latency_ms: number }>;
+  // Hooks
+  fetchHooks: () => Promise<HookInfo[]>;
+  addHook: (config: Record<string, unknown>) => Promise<boolean>;
+  removeHook: (name: string) => Promise<boolean>;
+  testHook: (name: string, context: Record<string, unknown>) => Promise<{ result: string }>;
+  fetchHookLogs: () => Promise<HookLogEntry[]>;
+  // Checkpoints
+  fetchCheckpoints: () => Promise<CheckpointEntry[]>;
+  restoreCheckpoint: (id: string) => Promise<boolean>;
+  dropCheckpoint: (id: string) => Promise<boolean>;
+  getCheckpointDiff: (id: string) => Promise<string>;
+  // Context
+  fetchContext: () => Promise<ContextResponse>;
+  updateContext: (content: string) => Promise<boolean>;
 }
 
 export interface FileItem {
@@ -158,6 +236,47 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
     }
   }, [apiFetch, authParams]);
 
+  const forkSession = useCallback(async (messages: Message[], title?: string): Promise<string | null> => {
+    try {
+      const rawMessages: Record<string, unknown>[] = [];
+      for (const m of messages) {
+        if (m.role === 'user') {
+          rawMessages.push({ role: 'user', content: m.content });
+        } else if (m.role === 'assistant') {
+          const raw: Record<string, unknown> = { role: 'assistant', content: m.content };
+          if (m.thinking) raw.thinking = m.thinking;
+          if (m.toolCalls) {
+            raw.tool_calls = m.toolCalls.map((tc) => ({
+              function: { name: tc.name, arguments: tc.args },
+            }));
+          }
+          rawMessages.push(raw);
+          // Emit separate tool-result messages for each completed tool call
+          if (m.toolCalls) {
+            for (let i = 0; i < m.toolCalls.length; i++) {
+              const tc = m.toolCalls[i];
+              if (tc.result !== undefined) {
+                rawMessages.push({
+                  role: 'tool',
+                  content: tc.result,
+                  name: tc.name,
+                  tool_call_id: `fc-${i}`,
+                });
+              }
+            }
+          }
+        }
+      }
+      const data = await apiFetch(`/api/sessions/fork${authParams}`, {
+        method: 'POST',
+        body: { messages: rawMessages, title: title || null },
+      }) as { session_id: string };
+      return data.session_id || null;
+    } catch {
+      return null;
+    }
+  }, [apiFetch, authParams]);
+
   const fetchFiles = useCallback(async (path = ''): Promise<FileItems | null> => {
     try {
       const qs = `${authParams}${authParams ? '&' : '?'}path=${encodeURIComponent(path)}`;
@@ -167,8 +286,242 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
     }
   }, [apiFetch, authParams]);
 
+  const fetchCheckpoints = useCallback(async (): Promise<CheckpointEntry[]> => {
+    try {
+      const data = await apiFetch(`/api/checkpoints${authParams}`) as { checkpoints?: CheckpointEntry[] };
+      return data.checkpoints || [];
+    } catch {
+      return [];
+    }
+  }, [apiFetch, authParams]);
+
+  const restoreCheckpoint = useCallback(async (id: string): Promise<boolean> => {
+    try {
+      const data = await apiFetch(`/api/checkpoints/${encodeURIComponent(id)}/restore${authParams}`, {
+        method: 'POST',
+      }) as { ok?: boolean };
+      return data.ok === true;
+    } catch {
+      return false;
+    }
+  }, [apiFetch, authParams]);
+
+  const dropCheckpoint = useCallback(async (id: string): Promise<boolean> => {
+    try {
+      const data = await apiFetch(`/api/checkpoints/${encodeURIComponent(id)}${authParams}`, {
+        method: 'DELETE',
+      }) as { ok?: boolean };
+      return data.ok === true;
+    } catch {
+      return false;
+    }
+  }, [apiFetch, authParams]);
+
+  const getCheckpointDiff = useCallback(async (id: string): Promise<string> => {
+    try {
+      const url = serverUrl.replace(/\/$/, '') + `/api/checkpoints/${encodeURIComponent(id)}/diff${authParams}`;
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`API ${resp.status}`);
+      return await resp.text();
+    } catch {
+      return '';
+    }
+  }, [serverUrl, authParams]);
+
+  // ── Plugins ──
+
+  const fetchPlugins = useCallback(async (): Promise<PluginInfo[]> => {
+    try {
+      const data = await apiFetch(`/api/plugins${authParams}`) as { plugins?: PluginInfo[] };
+      return data.plugins || [];
+    } catch {
+      return [];
+    }
+  }, [apiFetch, authParams]);
+
+  const installPlugin = useCallback(async (sourcePath: string): Promise<boolean> => {
+    try {
+      const data = await apiFetch(`/api/plugins/install${authParams}`, {
+        method: 'POST',
+        body: { path: sourcePath },
+      }) as { ok?: boolean };
+      return data.ok === true;
+    } catch {
+      return false;
+    }
+  }, [apiFetch, authParams]);
+
+  const uninstallPlugin = useCallback(async (name: string): Promise<boolean> => {
+    try {
+      const data = await apiFetch(`/api/plugins/${encodeURIComponent(name)}${authParams}`, {
+        method: 'DELETE',
+      }) as { ok?: boolean };
+      return data.ok === true;
+    } catch {
+      return false;
+    }
+  }, [apiFetch, authParams]);
+
+  const togglePlugin = useCallback(async (name: string, enabled: boolean): Promise<boolean> => {
+    try {
+      const data = await apiFetch(`/api/plugins/${encodeURIComponent(name)}/toggle${authParams}`, {
+        method: 'POST',
+        body: { enabled },
+      }) as { ok?: boolean };
+      return data.ok === true;
+    } catch {
+      return false;
+    }
+  }, [apiFetch, authParams]);
+
+  const searchMarketplace = useCallback(async (query: string): Promise<MarketplaceItem[]> => {
+    try {
+      const qs = `${authParams}${authParams ? '&' : '?'}q=${encodeURIComponent(query)}`;
+      const data = await apiFetch(`/api/plugins/marketplace${qs}`) as { results?: MarketplaceItem[] };
+      return data.results || [];
+    } catch {
+      return [];
+    }
+  }, [apiFetch, authParams]);
+
+  // ── MCP ──
+
+  const fetchMCPServers = useCallback(async (): Promise<MCPServerInfo[]> => {
+    try {
+      const data = await apiFetch(`/api/mcp/servers${authParams}`) as { servers?: MCPServerInfo[] };
+      return data.servers || [];
+    } catch {
+      return [];
+    }
+  }, [apiFetch, authParams]);
+
+  const addMCPServer = useCallback(async (config: Record<string, unknown>): Promise<boolean> => {
+    try {
+      const data = await apiFetch(`/api/mcp/servers${authParams}`, {
+        method: 'POST',
+        body: config,
+      }) as { ok?: boolean };
+      return data.ok === true;
+    } catch {
+      return false;
+    }
+  }, [apiFetch, authParams]);
+
+  const removeMCPServer = useCallback(async (name: string): Promise<boolean> => {
+    try {
+      const data = await apiFetch(`/api/mcp/servers/${encodeURIComponent(name)}${authParams}`, {
+        method: 'DELETE',
+      }) as { ok?: boolean };
+      return data.ok === true;
+    } catch {
+      return false;
+    }
+  }, [apiFetch, authParams]);
+
+  const testMCPServer = useCallback(async (name: string): Promise<{ ok: boolean; latency_ms: number }> => {
+    try {
+      return await apiFetch(`/api/mcp/servers/${encodeURIComponent(name)}/test${authParams}`, {
+        method: 'POST',
+      }) as { ok: boolean; latency_ms: number };
+    } catch {
+      return { ok: false, latency_ms: 0 };
+    }
+  }, [apiFetch, authParams]);
+
+  // ── Hooks ──
+
+  const fetchHooks = useCallback(async (): Promise<HookInfo[]> => {
+    try {
+      const data = await apiFetch(`/api/hooks${authParams}`) as { hooks?: HookInfo[] };
+      return data.hooks || [];
+    } catch {
+      return [];
+    }
+  }, [apiFetch, authParams]);
+
+  const addHook = useCallback(async (config: Record<string, unknown>): Promise<boolean> => {
+    try {
+      const data = await apiFetch(`/api/hooks${authParams}`, {
+        method: 'POST',
+        body: config,
+      }) as { ok?: boolean };
+      return data.ok === true;
+    } catch {
+      return false;
+    }
+  }, [apiFetch, authParams]);
+
+  const removeHook = useCallback(async (name: string): Promise<boolean> => {
+    try {
+      const data = await apiFetch(`/api/hooks/${encodeURIComponent(name)}${authParams}`, {
+        method: 'DELETE',
+      }) as { ok?: boolean };
+      return data.ok === true;
+    } catch {
+      return false;
+    }
+  }, [apiFetch, authParams]);
+
+  const testHook = useCallback(async (name: string, context: Record<string, unknown>): Promise<{ result: string }> => {
+    try {
+      return await apiFetch(`/api/hooks/${encodeURIComponent(name)}/test${authParams}`, {
+        method: 'POST',
+        body: context,
+      }) as { result: string };
+    } catch {
+      return { result: 'Error: test failed' };
+    }
+  }, [apiFetch, authParams]);
+
+  const fetchHookLogs = useCallback(async (): Promise<HookLogEntry[]> => {
+    try {
+      const data = await apiFetch(`/api/hooks/logs${authParams}`) as { logs?: HookLogEntry[] };
+      return data.logs || [];
+    } catch {
+      return [];
+    }
+  }, [apiFetch, authParams]);
+
+  // ── Context ──
+
+  const fetchContext = useCallback(async (): Promise<ContextResponse> => {
+    try {
+      return await apiFetch(`/api/context${authParams}`) as ContextResponse;
+    } catch {
+      return { content: '', files_found: [] };
+    }
+  }, [apiFetch, authParams]);
+
+  const updateContext = useCallback(async (content: string): Promise<boolean> => {
+    try {
+      const data = await apiFetch(`/api/context${authParams}`, {
+        method: 'PUT',
+        body: { content },
+      }) as { ok?: boolean };
+      return data.ok === true;
+    } catch {
+      return false;
+    }
+  }, [apiFetch, authParams]);
+
   return useMemo(
-    () => ({ fetchSessions, fetchSession, deleteSession, renameSession, fetchModels, fetchFiles, fetchGitStatus, healthCheck }),
-    [fetchSessions, fetchSession, deleteSession, renameSession, fetchModels, fetchFiles, fetchGitStatus, healthCheck],
+    () => ({
+      fetchSessions, fetchSession, deleteSession, renameSession, fetchModels, fetchFiles,
+      fetchGitStatus, forkSession, healthCheck,
+      fetchCheckpoints, restoreCheckpoint, dropCheckpoint, getCheckpointDiff,
+      fetchPlugins, installPlugin, uninstallPlugin, togglePlugin, searchMarketplace,
+      fetchMCPServers, addMCPServer, removeMCPServer, testMCPServer,
+      fetchHooks, addHook, removeHook, testHook, fetchHookLogs,
+      fetchContext, updateContext,
+    }),
+    [
+      fetchSessions, fetchSession, deleteSession, renameSession, fetchModels, fetchFiles,
+      fetchGitStatus, forkSession, healthCheck,
+      fetchCheckpoints, restoreCheckpoint, dropCheckpoint, getCheckpointDiff,
+      fetchPlugins, installPlugin, uninstallPlugin, togglePlugin, searchMarketplace,
+      fetchMCPServers, addMCPServer, removeMCPServer, testMCPServer,
+      fetchHooks, addHook, removeHook, testHook, fetchHookLogs,
+      fetchContext, updateContext,
+    ],
   );
 }

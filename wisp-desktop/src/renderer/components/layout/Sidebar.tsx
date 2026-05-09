@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useAppState } from '../../state/context.js';
 import { useApi } from '../../hooks/useApi.js';
-import { Trash2, Pin, ChevronLeft, ChevronRight, Search, X, Square, CheckSquare } from '../../icons/index.js';
+import { Trash2, Pin, ChevronLeft, ChevronRight, Search, X, Square, CheckSquare, ClipboardList } from '../../icons/index.js';
 import { SidebarNav } from '../sidebar/SidebarNav.js';
 import { PinnedSection } from '../sidebar/PinnedSection.js';
 import { ProjectsSection } from '../sidebar/ProjectsSection.js';
@@ -230,6 +230,19 @@ export const Sidebar: React.FC = () => {
         {!collapsed && <ProjectsSection />}
       </div>
       <div className="sidebar-bottom-group">
+        {!collapsed && (
+          <button
+            className={`sidebar-checkpoints-btn ${state.checkpointPanelOpen ? 'sidebar-checkpoints-btn--active' : ''}`}
+            onClick={() => dispatch({ type: 'TOGGLE_CHECKPOINT_PANEL' })}
+            title="Checkpoints"
+          >
+            <ClipboardList size={15} />
+            <span>Checkpoints</span>
+            {state.checkpoints.length > 0 && (
+              <span className="sidebar-checkpoints-badge">{state.checkpoints.length}</span>
+            )}
+          </button>
+        )}
         <button
           className="sidebar-collapse-btn"
           onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })}
@@ -238,6 +251,28 @@ export const Sidebar: React.FC = () => {
           {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
         </button>
         <SidebarFooter />
+        {/* Subagent badge */}
+        {!collapsed && state.subagentTasks.filter((t) => t.status === 'running').length > 0 && (
+          <div className="sidebar-subagent-badge">
+            <span className="sidebar-subagent-dot" />
+            <span>{state.subagentTasks.filter((t) => t.status === 'running').length} agents running</span>
+          </div>
+        )}
+        {/* Token usage bar */}
+        {!collapsed && (
+          <div className="sidebar-token-bar" title={`Context: ${state.tokenUsagePercent}% used`}>
+            <div className="sidebar-token-bar-label">
+              <span>Context</span>
+              <span>{state.tokenUsagePercent}%</span>
+            </div>
+            <div className="sidebar-token-bar-track">
+              <div
+                className={`sidebar-token-bar-fill ${state.tokenUsagePercent > 80 ? 'sidebar-token-bar-fill--warn' : ''} ${state.tokenUsagePercent > 95 ? 'sidebar-token-bar-fill--danger' : ''}`}
+                style={{ width: `${Math.min(state.tokenUsagePercent, 100)}%` }}
+              />
+            </div>
+          </div>
+        )}
       </div>
     </aside>
   );

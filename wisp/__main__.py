@@ -1,6 +1,8 @@
 """CLI entry point for Wisp — the local Ollama-powered coding agent."""
 
+import json
 import logging
+import os
 import sys
 from wisp import __version__
 from wisp.config import WispConfig, load_config, save_config
@@ -143,6 +145,159 @@ def cmd_config(set_kv=None, validate=False):
     print()
     print(dim("Set a value:  wisp config --set key=value"))
     print(dim("Validate:     wisp config --validate"))
+
+
+def cmd_print(prompt, model=None, session_id=None, output_format="json", quiet=False):
+    """Headless mode: run prompt, print JSON result to stdout, exit.
+
+    First attempts to reach a local Wisp server at port 8000.
+    If unavailable, runs the agent directly in-process.
+    """
+    import requests
+
+    result = None
+    exit_code = 0
+
+    # Try local server first
+    try:
+        api_key = os.environ.get("WISP_API_KEY", "")
+        params = {"api-key": api_key} if api_key else {}
+        resp = requests.post(
+            "http://127.0.0.1:8000/api/prompt",
+            json={
+                "prompt": prompt,
+                "model": model,
+                "session_id": session_id,
+            },
+            params=params,
+            timeout=600,
+        )
+        if resp.status_code == 200:
+            result = resp.json()
+        elif resp.status_code == 401:
+            # Auth required -- fall through to in-process
+            pass
+        else:
+            # Other error from server
+            try:
+                result = resp.json()
+            except Exception:
+                result = {"ok": False, "error": f"Server returned {resp.status_code}: {resp.text[:500]}"}
+            exit_code = 1
+    except requests.ConnectionError:
+        # No server running, fall through to in-process
+        pass
+    except Exception:
+        pass
+
+    # Run in-process if server not available
+    if result is None:
+        if not quiet:
+            sys.stderr.write("No local server found — running agent in-process...\n")
+        try:
+            import asyncio
+            from wisp.config import WispConfig as _WispConfig
+            from wisp.core.agent import WispAgentCore as _WispAgentCore
+            from wisp.session import SessionManager as _SessionManager
+            import time as _time
+
+            config = _WispConfig()
+            if model:
+                config.model = model
+            config.workspace = os.getcwd()
+            config.auto_approve = True
+            config.show_thinking = True
+            config.permission_mode = "full"
+
+            s = None
+            if session_id:
+                sm = _SessionManager()
+                s = sm.load(session_id)
+                if s is None:
+                    resolved = sm.get_session_id_from_fragment(session_id)
+                    if resolved:
+                        s = sm.load(resolved)
+
+            core = _WispAgentCore(config=config, session=s)
+            if s is not None and s.messages:
+                core.messages = list(s.messages)
+
+            # Collect events in memory
+            content_parts: list[str] = []
+            thinking_parts: list[str] = []
+            tool_calls: list[dict] = []
+            errors: list[dict] = []
+            session_id_out = ""
+            iterations = 0
+            start = _time.time()
+
+            async def _run_and_collect():
+                nonlocal session_id_out, iterations
+                async for event in core.run(prompt):
+                    etype = event.type
+                    if etype == "content":
+                        content_parts.append(event.text)
+                    elif etype == "thinking":
+                        thinking_parts.append(event.text)
+                    elif etype == "tool_call":
+                        tool_calls.append({
+                            "name": event.data.get("name", ""),
+                            "args": event.data.get("arguments", {}),
+                            "result": "",
+                        })
+                    elif etype == "tool_result":
+                        for tc in reversed(tool_calls):
+                            if tc["name"] == event.data.get("name", "") and "result" in tc and not tc["result"]:
+                                tc["result"] = event.data.get("result", "")
+                                tc["duration_ms"] = event.data.get("duration_ms")
+                                break
+                        else:
+                            tool_calls.append({
+                                "name": event.data.get("name", ""),
+                                "result": event.data.get("result", ""),
+                                "duration_ms": event.data.get("duration_ms"),
+                            })
+                    elif etype == "error":
+                        errors.append({
+                            "message": event.data.get("message", ""),
+                            "recoverable": event.data.get("recoverable", True),
+                        })
+                    elif etype == "done":
+                        session_id_out = event.data.get("session_id", "")
+                        iterations = event.data.get("turns", 0)
+
+            asyncio.run(_run_and_collect())
+
+            duration = (_time.time() - start) * 1000
+            result = {
+                "ok": len(errors) == 0,
+                "session_id": session_id_out or (core.session.id if core.session else ""),
+                "content": "\n".join(content_parts),
+                "thinking": "\n".join(thinking_parts) if thinking_parts else "",
+                "tool_calls": tool_calls,
+                "files_changed": [],
+                "iterations": iterations,
+                "duration_ms": round(duration),
+            }
+            if errors:
+                result["errors"] = errors
+        except Exception as e:
+            result = {"ok": False, "error": str(e)}
+            exit_code = 1
+
+    # Output
+    if output_format == "stream-json":
+        # For streaming, we just output the full result as JSON
+        if not quiet:
+            sys.stderr.write(json.dumps({"status": "complete"}) + "\n")
+        sys.stdout.write(json.dumps(result, indent=2) + "\n")
+    else:
+        if quiet:
+            sys.stdout.write(json.dumps(result) + "\n")
+        else:
+            sys.stdout.write(json.dumps(result, indent=2) + "\n")
+
+    sys.exit(exit_code)
 
 
 def cmd_check(model=None):
@@ -718,6 +873,9 @@ Options:
   --workspace, -w <dir>    Working directory (default: current dir)
   --auto-approve, -y       Skip approval prompts for tool calls
   --show-thinking, -T      Show reasoning trace inline
+  --print <prompt>         Headless mode: run prompt, print JSON result, exit
+  --output-format <fmt>    Output format for --print: json | stream-json (default: json)
+  --quiet                  Suppress all output except final result
   --version                Show version
 
 Subcommands:
@@ -745,6 +903,7 @@ Examples:
   wisp -S mysession 'next'   # Continue session in single-shot
   wisp --model kimi-k2.5:cloud 'refactor the auth module'
   wisp --skill code-review 'review the latest changes'
+  wisp --print "refactor the auth module" --output-format json > result.json
 """
 
 
@@ -776,10 +935,14 @@ def main():
     flags_workspace = None
     flags_auto = False
     flags_show_thinking = False
+    flags_print = None
+    flags_output_format = "json"
+    flags_quiet = False
 
     def extract_global_flags(args):
         """Extract global flags from args list, return remaining args."""
         nonlocal flags_model, flags_skill, flags_session, flags_workspace, flags_auto, flags_show_thinking
+        nonlocal flags_print, flags_output_format, flags_quiet
         result = []
         i = 0
         while i < len(args):
@@ -801,6 +964,15 @@ def main():
                 i += 1
             elif a in ("--show-thinking", "-T"):
                 flags_show_thinking = True
+                i += 1
+            elif a == "--print" and i + 1 < len(args):
+                flags_print = args[i + 1]
+                i += 2
+            elif a == "--output-format" and i + 1 < len(args):
+                flags_output_format = args[i + 1].lower()
+                i += 2
+            elif a == "--quiet":
+                flags_quiet = True
                 i += 1
             else:
                 result.append(a)
@@ -967,8 +1139,22 @@ def main():
                 print(dim("  Try: list, status"))
 
     else:
-        # Implicit mode: wisp [flags] 'prompt'
+        # Implicit mode: wisp [flags] 'prompt'  OR  wisp --print "prompt"
         rest = extract_global_flags(argv)
+
+        # If --print is set, use it as the prompt for headless mode
+        if flags_print is not None:
+            if flags_quiet:
+                _setup_logging(verbose=False)
+            cmd_print(
+                prompt=flags_print,
+                model=flags_model,
+                session_id=flags_session,
+                output_format=flags_output_format,
+                quiet=flags_quiet,
+            )
+            return
+
         if not rest:
             print(error("✗ Please provide a prompt."))
             print_help()

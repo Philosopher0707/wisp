@@ -75,6 +75,7 @@ You have access to tools that let you read, write, and edit files, run bash comm
 - run_bash: Execute shell commands
 - list_files: Explore directory structure
 - web_fetch: Fetch content from URLs (web pages, APIs, documentation)
+- web_search: Search the web for current information, docs, error messages
 - search_symbols: Search code for functions, classes, structs by name
 - remember: Store a fact in cross-session memory (preferences, decisions)
 - recall: Search cross-session memory and past summaries for relevant facts
@@ -131,6 +132,33 @@ def _generate_agent_id() -> str:
     return f"wisp-{uuid.uuid4().hex[:8]}"
 
 
+def _should_block_hook(hook_results: list) -> bool:
+    """Check if any hook result should block execution."""
+    for r in (hook_results or []):
+        if getattr(r, 'block', False) or getattr(r, 'action', '') == 'block':
+            return True
+    return False
+
+
+def _collect_hook_messages(hook_results: list) -> str:
+    """Collect messages from hook results into a single string."""
+    msgs: list[str] = []
+    for r in (hook_results or []):
+        msg = getattr(r, 'message', '') or str(r)
+        if msg:
+            msgs.append(msg)
+    return "; ".join(msgs)
+
+
+def _get_modified_args(hook_results: list) -> Optional[dict]:
+    """Return modified tool args from hook results, if any hook modified them."""
+    for r in (hook_results or []):
+        modified = getattr(r, 'modified_args', None)
+        if modified is not None:
+            return modified
+    return None
+
+
 class WispAgentCore:
     """Event-driven agent core — no print, no input, no global state."""
 
@@ -184,6 +212,18 @@ class WispAgentCore:
         from wisp import tools as tools_module
         tools_module.set_collaboration_tools(self.file_lock, self.change_tracker)
         tools_module.set_lsp_manager(self.lsp)
+
+        # ── Hooks ──
+        self.hook_manager = None
+        try:
+            from wisp.hooks import HookManager
+            self.hook_manager = HookManager(config=self.config, workspace=Path(self.config.workspace))
+            self.hook_manager.load_project_hooks()
+            logger.info("HookManager initialized")
+        except ImportError:
+            logger.debug("wisp.hooks module not available — hooks disabled")
+        except Exception as e:
+            logger.warning("Failed to initialize HookManager: %s", e)
 
     # ── Message helpers ──────────────────────────────────────────────
 
@@ -401,6 +441,28 @@ class WispAgentCore:
         if self.config.plan_context:
             system += f"\n\n## Approved Plan\n{self.config.plan_context}\n\nFollow the approved plan above. Execute each step."
 
+        # ── Repo Map: inject structural overview of the codebase ──
+        try:
+            from wisp.repo_map import RepoMap
+            rm = RepoMap(ws_abs)
+            entries = rm.build(use_cache=True)
+            if entries:
+                map_text = rm.format_for_llm(max_tokens=1200)
+                system += f"\n\n## Codebase Map\n{map_text}\n"
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.warning("Failed to build repo map: %s", e)
+
+        # ── Context files (CLAUDE.md, AGENTS.md, etc.) ──
+        if hasattr(self.config, 'load_context_files'):
+            try:
+                context = self.config.load_context_files()
+                if context:
+                    system = context + "\n\n" + system
+            except Exception as e:
+                logger.warning("Failed to load context files: %s", e)
+
         self._system_prompt_cache[cache_key] = system
         return system
 
@@ -595,8 +657,34 @@ class WispAgentCore:
         This is the primary SDK entry point. Transports consume the yielded
         events and decide how to present them (print, WebSocket, etc.).
         """
-        async for event in self._arun(prompt, approval_handler=approval_handler):
-            yield event
+        # ── Session start hooks ──
+        if self.hook_manager:
+            try:
+                from wisp.hooks import HookEvent
+                await self.hook_manager.run_hooks(HookEvent.SESSION_START, {
+                    "prompt": prompt,
+                    "workspace": self.config.workspace,
+                    "session_id": self.session.id if self.session else "",
+                    "agent_id": self.agent_id,
+                })
+            except Exception as e:
+                logger.warning("Session start hook failed: %s", e)
+
+        try:
+            async for event in self._arun(prompt, approval_handler=approval_handler):
+                yield event
+        finally:
+            # ── Session end hooks ──
+            if self.hook_manager:
+                try:
+                    from wisp.hooks import HookEvent
+                    await self.hook_manager.run_hooks(HookEvent.SESSION_END, {
+                        "workspace": self.config.workspace,
+                        "session_id": self.session.id if self.session else "",
+                        "agent_id": self.agent_id,
+                    })
+                except Exception as e:
+                    logger.warning("Session end hook failed: %s", e)
 
     def _run_turn_streaming_events(self, system: str):
         """Yield thinking/content AgentEvent deltas in real-time.
@@ -698,6 +786,34 @@ class WispAgentCore:
             if not isinstance(func_args, dict):
                 func_args = {}
 
+            # ── Pre-tool hooks ──
+            if self.hook_manager:
+                try:
+                    from wisp.hooks import HookEvent
+                    context = {
+                        "tool_name": func_name,
+                        "tool_args": func_args,
+                        "workspace": self.config.workspace,
+                        "session_id": self.session.id if self.session else "",
+                        "cwd": str(Path(self.config.workspace)),
+                    }
+                    hook_results = await self.hook_manager.run_hooks(HookEvent.PRE_TOOL_USE, context)
+                    if _should_block_hook(hook_results):
+                        blocked_msg = f"[Blocked by hook: {_collect_hook_messages(hook_results)}]"
+                        yield tool_result_event(func_name, blocked_msg)
+                        self.messages.append({
+                            "role": "tool", "content": blocked_msg, "name": func_name,
+                            **({"tool_call_id": tc.get("id")} if tc.get("id") else {}),
+                        })
+                        continue
+                    modified = _get_modified_args(hook_results)
+                    if modified is not None:
+                        func_args = modified
+                except ImportError:
+                    pass
+                except Exception as e:
+                    logger.warning("Pre-tool hook failed for %s: %s", func_name, e)
+
             # ── Permission mode enforcement ──
             pm = self.config.permission_mode
             write_tools = {
@@ -798,6 +914,18 @@ class WispAgentCore:
                     })
                     continue
 
+            # ── Checkpoint before write operations ──
+            if func_name in ("write_file", "edit_file", "edit_file_multi"):
+                try:
+                    from wisp.checkpoints import CheckpointManager
+                    cpm = CheckpointManager(Path(self.config.workspace))
+                    cp = await cpm.auto_checkpoint(func_name)
+                    yield system_event(f"Checkpoint created: {cp.id[:8]} — {cp.description}")
+                except ImportError:
+                    pass
+                except Exception as e:
+                    logger.warning("Checkpoint creation failed for %s: %s", func_name, e, exc_info=True)
+
             # Execute tool
             start = time.monotonic()
             if func_name == "spawn_subagent":
@@ -830,6 +958,24 @@ class WispAgentCore:
                 **({"tool_call_id": tc.get("id")} if tc.get("id") else {}),
             })
 
+            # ── Post-tool hooks ──
+            if self.hook_manager:
+                try:
+                    from wisp.hooks import HookEvent
+                    post_context = {
+                        "tool_name": func_name,
+                        "tool_args": func_args,
+                        "tool_result": str(result),
+                        "duration_ms": duration_ms,
+                        "workspace": self.config.workspace,
+                        "session_id": self.session.id if self.session else "",
+                    }
+                    await self.hook_manager.run_hooks(HookEvent.POST_TOOL_USE, post_context)
+                except ImportError:
+                    pass
+                except Exception as e:
+                    logger.warning("Post-tool hook failed for %s: %s", func_name, e)
+
     def _spawn_subagent(self, args: dict, workspace: str) -> str:
         from wisp.subagent import SubagentRunner, SubagentContract
         depth = getattr(self, "_subagent_depth", 0)
@@ -847,6 +993,61 @@ class WispAgentCore:
         runner = SubagentRunner(self)
         result = runner.spawn(contract)
         return result.output
+
+    # ── Checkpoint rollback ──────────────────────────────────────────
+
+    async def rollback(self, checkpoint_id: Optional[str] = None) -> bool:
+        """Rollback to the most recent checkpoint or a specific one.
+
+        Args:
+            checkpoint_id: Optional specific checkpoint ID to restore.
+                           If None, restores the most recent checkpoint.
+
+        Returns:
+            True if rollback succeeded, False otherwise.
+        """
+        try:
+            from wisp.checkpoints import CheckpointManager
+            cpm = CheckpointManager(Path(self.config.workspace))
+            if checkpoint_id:
+                return await cpm.restore(checkpoint_id)
+            else:
+                checkpoints = await cpm.list_checkpoints()
+                if checkpoints:
+                    return await cpm.restore(checkpoints[0].id)
+        except ImportError:
+            logger.warning("checkpoints module not available for rollback")
+        except Exception as e:
+            logger.error("Rollback failed: %s", e)
+        return False
+
+    # ── Parallel subagents ───────────────────────────────────────────
+
+    async def spawn_subagents(self, specs: list) -> list:
+        """Spawn parallel subagents for independent tasks.
+
+        Args:
+            specs: A list of SubagentSpec objects describing each subagent's task.
+
+        Returns:
+            A list of SubagentResult objects, one per spec.
+            Returns an empty list if the subagent_runner module is unavailable.
+        """
+        try:
+            from wisp.subagent_runner import SubagentRunner
+            runner = SubagentRunner(config=self.config, workspace=Path(self.config.workspace))
+            results = await runner.run_parallel(specs)
+            for r in results:
+                logger.info(
+                    "Subagent %s: success=%s, duration=%.1fs, files=%s",
+                    r.spec.name, r.success, r.duration_seconds, r.files_changed,
+                )
+            return results
+        except ImportError:
+            logger.warning("subagent_runner module not available")
+        except Exception as e:
+            logger.error("Failed to spawn subagents: %s", e)
+        return []
 
     # ── Non-interactive task runner ──────────────────────────────────
 

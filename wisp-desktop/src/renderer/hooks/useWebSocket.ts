@@ -73,14 +73,23 @@ export function useWebSocket(
               arguments: msg.arguments || {},
             });
             break;
-          case 'tool_result':
+          case 'tool_result': {
+            let structuredResult: unknown = undefined;
+            try {
+              const parsed = JSON.parse(msg.result || '');
+              if (parsed && typeof parsed === 'object' && parsed.status) {
+                structuredResult = parsed;
+              }
+            } catch { /* not JSON, keep as plain text */ }
             dispatch({
               type: 'RECEIVE_TOOL_RESULT',
               name: msg.name || '',
               result: msg.result || '',
               durationMs: msg.duration_ms,
+              structuredResult,
             });
             break;
+          }
           case 'tool_approval_request':
             dispatch({
               type: 'RECEIVE_APPROVAL_REQUEST',
@@ -122,6 +131,63 @@ export function useWebSocket(
               type: 'RECEIVE_STATUS',
               message: msg.message || '',
               level: msg.level || 'info',
+            });
+            break;
+          case 'hook_executed':
+            // Hook execution log — store locally when hook log panel needs it
+            break;
+          case 'checkpoint_created':
+            dispatch({
+              type: 'ADD_CHECKPOINT',
+              checkpoint: {
+                id: (msg as any).checkpoint_id || '',
+                timestamp: new Date().toISOString(),
+                description: (msg as any).description || '',
+                toolName: (msg as any).tool_name || '',
+                fileCount: (msg as any).file_count || 0,
+              },
+            });
+            break;
+          case 'subagent_start':
+            dispatch({
+              type: 'SUBAGENT_START',
+              id: (msg as any).subagent_id || '',
+              name: (msg as any).name || '',
+              description: (msg as any).description || '',
+            });
+            break;
+          case 'subagent_progress':
+            dispatch({
+              type: 'SUBAGENT_PROGRESS',
+              id: (msg as any).subagent_id || '',
+              progress: (msg as any).progress || '',
+            });
+            break;
+          case 'subagent_complete':
+            dispatch({
+              type: 'SUBAGENT_COMPLETE',
+              id: (msg as any).subagent_id || '',
+              filesChanged: (msg as any).files_changed || [],
+              durationMs: (msg as any).duration_ms || 0,
+            });
+            break;
+          case 'subagent_fail':
+            dispatch({
+              type: 'SUBAGENT_FAIL',
+              id: (msg as any).subagent_id || '',
+              error: (msg as any).error || 'Unknown error',
+            });
+            break;
+          case 'context_loaded':
+            if ((msg as any).files) {
+              const files: Array<{ path: string; loaded: boolean; content?: string }> = (msg as any).files;
+              dispatch({ type: 'SET_CONTEXT_FILES', files });
+            }
+            break;
+          case 'token_usage':
+            dispatch({
+              type: 'SET_TOKEN_USAGE',
+              percent: typeof (msg as any).percent === 'number' ? (msg as any).percent : 0,
             });
             break;
           case 'pong':

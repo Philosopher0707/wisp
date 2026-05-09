@@ -28,6 +28,7 @@ CHECKPOINTS_DIR = ".wisp/checkpoints"
 BACKUPS_SUBDIR = "backups"
 METADATA_FILE = "metadata.json"
 DEFAULT_MAX_CHECKPOINTS = 50
+GIT_TIMEOUT = 15  # seconds — max wait for any single git subprocess
 
 # Directories and file patterns excluded from non-git backups.
 _EXCLUDED_DIRS: frozenset[str] = frozenset({
@@ -43,6 +44,10 @@ _EXCLUDED_SUFFIXES: tuple[str, ...] = (
 # ── Checkpoint dataclass ─────────────────────────────────────────────────
 
 @dataclass
+class CheckpointError(RuntimeError):
+    """Raised when checkpoint creation or restore fails irrecoverably."""
+
+
 class Checkpoint:
     """A snapshot of the workspace at a point in time."""
 
@@ -54,6 +59,11 @@ class Checkpoint:
     file_count: int         # number of files tracked
     git_ref: str | None = None       # git stash ref (git mode only)
     backup_path: str | None = None   # path to .tar.gz (no-git mode only)
+
+    @property
+    def is_valid(self) -> bool:
+        """A checkpoint is valid if it has backing data to restore from."""
+        return bool(self.git_ref or self.backup_path)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -171,8 +181,8 @@ class CheckpointManager:
     ) -> Checkpoint:
         """Capture a snapshot of the current workspace state.
 
-        Returns the new ``Checkpoint``.  Raises ``RuntimeError`` if the
-        underlying git or filesystem operation fails.
+        Returns the new ``Checkpoint``.  Raises ``CheckpointError`` if all
+        snapshot methods (git + file backup) fail.
 
         This method is protected by an ``asyncio.Lock`` so concurrent
         ``create()`` calls are serialized.
@@ -183,17 +193,41 @@ class CheckpointManager:
 
             checkpoint_id = str(uuid.uuid4())
             timestamp = datetime.now(timezone.utc).isoformat()
+            errors: list[str] = []
 
+            cp: Checkpoint | None = None
+
+            # Try git first, then file backup, collecting errors along the way.
             if await self._has_git():
-                cp = await self._create_via_git(
-                    checkpoint_id, timestamp, description, tool_name, tag
-                )
-            else:
-                cp = await self._create_via_backup(
-                    checkpoint_id, timestamp, description, tool_name, tag
+                try:
+                    cp = await self._create_via_git(
+                        checkpoint_id, timestamp, description, tool_name, tag
+                    )
+                except Exception as exc:
+                    errors.append(f"git: {exc}")
+                    logger.debug("Git checkpoint failed, trying backup: %s", exc)
+
+            if cp is None:
+                try:
+                    cp = await self._create_via_backup(
+                        checkpoint_id, timestamp, description, tool_name, tag
+                    )
+                except Exception as exc:
+                    errors.append(f"backup: {exc}")
+                    logger.error("Backup checkpoint also failed: %s", exc)
+
+            if cp is None or not cp.is_valid:
+                raise CheckpointError(
+                    f"Failed to create checkpoint [{description}]: {'; '.join(errors)}"
                 )
 
-            await self._store.save(cp)
+            # Persist metadata — if this fails we orphan the backing data,
+            # but the checkpoint itself is still usable for this session.
+            try:
+                await self._store.save(cp)
+            except Exception as exc:
+                logger.warning("Failed to persist checkpoint metadata: %s — checkpoint is session-only", exc)
+
             logger.info(
                 "Checkpoint %s created [%s] — %d file(s)",
                 cp.id, cp.description, cp.file_count,
@@ -287,31 +321,83 @@ class CheckpointManager:
 
     # ── Internal: git detection & directory setup ────────────────────
 
+    @staticmethod
+    async def _git_proc(*args: str, cwd: Path, timeout: float = GIT_TIMEOUT) -> tuple[int, str, str]:
+        """Run a git subprocess with a timeout. Returns (returncode, stdout, stderr)."""
+        proc = None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                cwd=cwd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            return (proc.returncode or 0, stdout.decode(), stderr.decode())
+        except asyncio.TimeoutError:
+            logger.warning("git %s timed out after %ss", args[0], timeout)
+            if proc is not None and proc.returncode is None:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            return (-1, "", f"timeout after {timeout}s")
+        except FileNotFoundError:
+            return (-2, "", "git not found")
+        except Exception as exc:
+            logger.debug("git %s failed: %s", args[0], exc)
+            if proc is not None and proc.returncode is None:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            return (-3, "", str(exc))
+
     async def _has_git(self) -> bool:
         if self._git_cache is None:
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    "git", "rev-parse", "--git-dir",
-                    cwd=self.workspace,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                await proc.wait()
-                self._git_cache = proc.returncode == 0
-            except FileNotFoundError:
+            rc, _, _ = await self._git_proc("git", "rev-parse", "--git-dir",
+                                            cwd=self.workspace, timeout=5)
+            if rc == -2:  # git not found
                 self._git_cache = False
+            else:
+                self._git_cache = rc == 0
             logger.debug("git available: %s", self._git_cache)
         return self._git_cache
 
     def _clear_stale_index_lock(self) -> None:
         """Remove a stale .git/index.lock left by a crashed git process."""
-        lock_file = self.workspace / ".git" / "index.lock"
+        git_dir = self._resolve_git_dir()
+        if git_dir is None:
+            return
+        lock_file = git_dir / "index.lock"
         try:
             if lock_file.exists():
                 lock_file.unlink()
                 logger.debug("Removed stale .git/index.lock")
         except OSError as exc:
             logger.debug("Could not remove .git/index.lock: %s", exc)
+
+    def _resolve_git_dir(self) -> Path | None:
+        """Return the actual .git directory for the workspace, using git rev-parse."""
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--git-dir"],
+                cwd=self.workspace,
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                git_dir = Path(result.stdout.strip())
+                if not git_dir.is_absolute():
+                    git_dir = self.workspace / git_dir
+                return git_dir.resolve()
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+        # Fallback: check common locations
+        for candidate in (self.workspace / ".git", self.workspace):
+            if (candidate / ".git").is_dir():
+                return candidate / ".git"
+        return None
 
     async def _prepare_dirs(self) -> None:
         self._dir.mkdir(parents=True, exist_ok=True)
@@ -350,47 +436,28 @@ class CheckpointManager:
         """Snapshot using ``git stash create`` (dangling ref, zero branch impact)."""
         self._clear_stale_index_lock()
 
-        # Stage everything so the stash sees the complete working-tree state.
-        add = await asyncio.create_subprocess_exec(
-            "git", "add", "-A",
-            cwd=self.workspace,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _stdout, stderr = await add.communicate()
-        if add.returncode != 0:
-            err = stderr.decode().strip()
-            logger.warning("git add -A failed (exit %d): %s — falling back to file backup", add.returncode, err)
-            self._git_cache = False  # disable git mode for subsequent checkpoints
+        rc, _, stderr = await self._git_proc("git", "add", "-A", cwd=self.workspace)
+        if rc != 0:
+            logger.warning("git add -A failed (exit %d): %s — falling back to file backup",
+                           rc, stderr.strip())
+            self._git_cache = False
             return await self._create_via_backup(cid, ts, desc, tool, tag)
 
-        proc = await asyncio.create_subprocess_exec(
-            "git", "stash", "create",
-            cwd=self.workspace,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
+        rc, stdout, stderr = await self._git_proc("git", "stash", "create", cwd=self.workspace)
+        if rc != 0:
+            logger.warning("git stash create failed (exit %d): %s — falling back to file backup",
+                           rc, stderr.strip())
+            self._git_cache = False
+            return await self._create_via_backup(cid, ts, desc, tool, tag)
 
-        if proc.returncode != 0:
-            err = stderr.decode().strip()
-            logger.error("git stash create failed: %s", err)
-            raise RuntimeError(f"git stash create failed: {err}")
-
-        git_ref = stdout.decode().strip()
+        git_ref = stdout.strip()
 
         # When the tree is clean, stash create returns empty.  Use the
         # current index tree so that ``restore()`` still has something
         # to check out (even if it's a no-op relative to HEAD).
         if not git_ref:
-            tree = await asyncio.create_subprocess_exec(
-                "git", "write-tree",
-                cwd=self.workspace,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            tree_out, _ = await tree.communicate()
-            git_ref = tree_out.decode().strip() if tree.returncode == 0 else "EMPTY"
+            rc, tree_out, _ = await self._git_proc("git", "write-tree", cwd=self.workspace)
+            git_ref = tree_out.strip() if rc == 0 else "EMPTY"
 
         file_count = await self._git_file_count()
 
@@ -406,14 +473,10 @@ class CheckpointManager:
 
     async def _git_file_count(self) -> int:
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "git", "ls-files",
-                cwd=self.workspace,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            stdout, _ = await proc.communicate()
-            return sum(1 for line in stdout.decode().splitlines() if line.strip())
+            rc, stdout, _ = await self._git_proc("git", "ls-files", cwd=self.workspace, timeout=5)
+            if rc != 0:
+                return 0
+            return sum(1 for line in stdout.splitlines() if line.strip())
         except Exception:
             return 0
 
@@ -472,20 +535,14 @@ class CheckpointManager:
             )
             return False
 
-        # Create a safety stash so we can roll back if the restore fails.
         safety = await self._safety_stash()
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "git", "checkout", cp.git_ref, "--", ".",
-                cwd=self.workspace,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            rc, _, stderr = await self._git_proc(
+                "git", "checkout", cp.git_ref, "--", ".", cwd=self.workspace, timeout=15,
             )
-            _, stderr = await proc.communicate()
-
-            if proc.returncode != 0:
-                logger.error("git checkout failed: %s", stderr.decode().strip())
+            if rc != 0:
+                logger.error("git checkout failed: %s", stderr.strip())
                 return False
 
             logger.info("Restored workspace to checkpoint %s", cp.id)
@@ -501,60 +558,32 @@ class CheckpointManager:
         """Create a temporary stash of current state.  Returns ref or None."""
         self._clear_stale_index_lock()
         try:
-            add = await asyncio.create_subprocess_exec(
-                "git", "add", "-A",
-                cwd=self.workspace,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await add.wait()
-
-            proc = await asyncio.create_subprocess_exec(
-                "git", "stash", "create",
-                cwd=self.workspace,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            stdout, _ = await proc.communicate()
-            ref = stdout.decode().strip()
+            rc, _, _ = await self._git_proc("git", "add", "-A", cwd=self.workspace, timeout=10)
+            if rc != 0:
+                return None
+            rc, stdout, _ = await self._git_proc("git", "stash", "create", cwd=self.workspace, timeout=10)
+            ref = stdout.strip()
             return ref if ref else None
         except Exception:
             return None
 
     async def _drop_ref(self, ref: str) -> None:
         try:
-            await asyncio.create_subprocess_exec(
-                "git", "stash", "drop", ref,
-                cwd=self.workspace,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
+            await self._git_proc("git", "stash", "drop", ref, cwd=self.workspace, timeout=10)
         except Exception as exc:
             logger.debug("Could not drop ref %s: %s", ref, exc)
 
     async def _git_ref_valid(self, ref: str) -> bool:
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "git", "cat-file", "-t", ref,
-                cwd=self.workspace,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await proc.wait()
-            return proc.returncode == 0
+            rc, _, _ = await self._git_proc("git", "cat-file", "-t", ref, cwd=self.workspace, timeout=5)
+            return rc == 0
         except Exception:
             return False
 
     async def _try_drop_git_ref(self, ref: str) -> None:
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "git", "stash", "drop", ref,
-                cwd=self.workspace,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await proc.wait()
-            if proc.returncode != 0:
+            rc, _, _ = await self._git_proc("git", "stash", "drop", ref, cwd=self.workspace, timeout=10)
+            if rc != 0:
                 logger.debug("git stash drop for %s returned non-zero (ok)", ref)
         except Exception as exc:
             logger.debug("git stash drop error (non-critical): %s", exc)
@@ -616,15 +645,10 @@ class CheckpointManager:
 
     async def _git_diff(self, ref: str) -> str:
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "git", "diff", ref,
-                cwd=self.workspace,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await proc.communicate()
-            text = stdout.decode()
-            return text if text.strip() else "(no differences)"
+            rc, stdout, _ = await self._git_proc("git", "diff", ref, cwd=self.workspace, timeout=10)
+            if rc != 0:
+                return f"Error computing git diff (exit {rc})"
+            return stdout if stdout.strip() else "(no differences)"
         except Exception as exc:
             return f"Error computing git diff: {exc}"
 
@@ -673,7 +697,7 @@ class CheckpointManager:
     # ── Internal: file enumeration (no-git mode) ─────────────────────
 
     @staticmethod
-    async def _enumerate_files_in(workspace: Path) -> list[str]:
+    def _enumerate_files_in(workspace: Path) -> list[str]:
         """Walk *workspace* and return relative paths of tracked files."""
         files: list[str] = []
         for root, dirs, filenames in os.walk(workspace):

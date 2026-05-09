@@ -28,6 +28,7 @@ export interface ToolCallItem {
   args: Record<string, unknown>;
   result?: string;
   durationMs?: number;
+  structuredResult?: unknown;
 }
 
 export interface Message {
@@ -146,7 +147,7 @@ export type Action =
   | { type: 'SUBMIT_MESSAGE'; content: string }
   | { type: 'RECEIVE_TOKEN'; text: string; phase: 'thinking' | 'content' }
   | { type: 'RECEIVE_TOOL_CALL'; name: string; arguments: Record<string, unknown> }
-  | { type: 'RECEIVE_TOOL_RESULT'; name: string; result: string; durationMs?: number }
+  | { type: 'RECEIVE_TOOL_RESULT'; name: string; result: string; durationMs?: number; structuredResult?: unknown }
   | { type: 'RECEIVE_APPROVAL_REQUEST'; callId: string; name: string; arguments: Record<string, unknown>; reason: string }
   | { type: 'RECEIVE_DONE' }
   | { type: 'RECEIVE_COMPLETE'; sessionId?: string }
@@ -357,7 +358,7 @@ export function appReducer(state: AppState, action: Action): AppState {
         const tcs = [...last.toolCalls];
         const idx = tcs.length - 1;
         if (idx >= 0 && !tcs[idx].result) {
-          tcs[idx] = { ...tcs[idx], result: action.result, durationMs: action.durationMs };
+          tcs[idx] = { ...tcs[idx], result: action.result, durationMs: action.durationMs, structuredResult: action.structuredResult };
         }
         msgs[msgs.length - 1] = { ...last, toolCalls: tcs };
       }

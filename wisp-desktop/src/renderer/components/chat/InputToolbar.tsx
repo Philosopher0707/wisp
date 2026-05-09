@@ -1,6 +1,6 @@
 import React from 'react';
 import { useAppState } from '../../state/context.js';
-import { Plus, Shield, Mic, ArrowUp, Square, ChevronDown, Sparkles } from '../../icons/index.js';
+import { Plus, Shield, Mic, ArrowUp, Square, ChevronDown, Sparkles, History, Keyboard } from '../../icons/index.js';
 import { ModelSelector } from './ModelSelector.js';
 import { ReasoningSelector } from './ReasoningSelector.js';
 import { PermissionSelector } from './PermissionSelector.js';
@@ -40,6 +40,23 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({ hasContent, onSubmit
           onClick={() => dispatch({ type: 'TOGGLE_PLAN_MODE' })}
         >
           <Sparkles size={18} />
+        </button>
+        <button
+          className={`toolbar-icon-btn ${state.checkpointPanelOpen ? 'toolbar-icon-btn--active' : ''}`}
+          title={state.checkpointPanelOpen ? 'Hide checkpoints' : 'Show checkpoints'}
+          onClick={() => dispatch({ type: 'TOGGLE_CHECKPOINT_PANEL' })}
+        >
+          <History size={18} />
+        </button>
+        <button
+          className={`toolbar-icon-btn ${state.vimMode ? 'toolbar-icon-btn--active' : ''}`}
+          title={state.vimMode ? 'Vim mode on (Esc to disable)' : 'Vim mode off'}
+          onClick={() => {
+            dispatch({ type: 'TOGGLE_VIM_MODE' });
+            localStorage.setItem('wisp_vim_mode', String(!state.vimMode));
+          }}
+        >
+          <Keyboard size={18} />
         </button>
       </div>
       <div className="input-toolbar-right">

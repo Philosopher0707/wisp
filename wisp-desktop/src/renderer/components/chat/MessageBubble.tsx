@@ -84,25 +84,55 @@ export const MessageBubble: React.FC<Props> = ({ msg, highlighted }) => {
   const handleFork = async () => {
     const idx = state.messages.indexOf(msg);
     if (idx < 0) return;
-    const forkMsgs = state.messages.slice(0, idx + 1).map((m) => ({
-      role: m.role,
-      content: m.content,
-      ...(m.thinking ? { thinking: m.thinking } : {}),
-      ...(m.toolCalls ? { tool_calls: m.toolCalls.map((tc) => ({ name: tc.name, arguments: tc.args, result: tc.result })) } : {}),
-    }));
+    // Fork BEFORE this assistant message — keep only prior messages
+    const priorMsgs = state.messages.slice(0, idx);
+    const rawMessages: Record<string, unknown>[] = [];
+    for (const m of priorMsgs) {
+      if (m.role === 'user') {
+        rawMessages.push({ role: 'user', content: m.content });
+      } else if (m.role === 'assistant') {
+        const raw: Record<string, unknown> = { role: 'assistant', content: m.content };
+        if (m.thinking) raw.thinking = m.thinking;
+        if (m.toolCalls) {
+          raw.tool_calls = m.toolCalls.map((tc) => ({
+            function: { name: tc.name, arguments: tc.args },
+          }));
+        }
+        rawMessages.push(raw);
+        if (m.toolCalls) {
+          for (let i = 0; i < m.toolCalls.length; i++) {
+            const tc = m.toolCalls[i];
+            if (tc.result !== undefined) {
+              rawMessages.push({
+                role: 'tool',
+                content: tc.result,
+                name: tc.name,
+                tool_call_id: `fc-${i}`,
+              });
+            }
+          }
+        }
+      }
+    }
+    dispatch({ type: 'FORK_SESSION', messageId: msg.id });
     try {
       const base = state.serverUrl.replace(/\/$/, '');
       const params = state.apiKey ? `?api-key=${encodeURIComponent(state.apiKey)}` : '';
       const resp = await fetch(`${base}/api/sessions/fork${params}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: forkMsgs, title: msg.content?.slice(0, 40) || 'Fork' }),
+        body: JSON.stringify({ messages: rawMessages, title: msg.content?.slice(0, 40) || 'Fork' }),
       });
       if (resp.ok) {
         const data = await resp.json() as { session_id: string };
+        dispatch({ type: 'FORK_SESSION_DONE', sessionId: data.session_id });
         dispatch({ type: 'SET_SESSION_ID', id: data.session_id });
+      } else {
+        dispatch({ type: 'CANCEL_FORK' });
       }
-    } catch { /* ignore */ }
+    } catch {
+      dispatch({ type: 'CANCEL_FORK' });
+    }
   };
 
   if (msg.role === 'user') {

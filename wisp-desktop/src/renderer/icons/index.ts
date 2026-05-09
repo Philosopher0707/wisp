@@ -34,4 +34,9 @@ export {
   FileText,
   CornerDownLeft,
   GitBranch,
+  History,
+  Keyboard,
+  Moon,
+  Sun,
+  ClipboardList,
 } from 'lucide-react';

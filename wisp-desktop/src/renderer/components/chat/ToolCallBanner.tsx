@@ -1,6 +1,6 @@
 import React from 'react';
 import type { ToolCallItem } from '../../state/types.js';
-import { SearchResults } from './SearchResults.js';
+import { SearchResults, type SearchResultData } from './SearchResults.js';
 import './ToolCallBanner.css';
 
 interface Props {
@@ -36,7 +36,10 @@ export const ToolCallBanner: React.FC<Props> = ({ toolCall }) => {
         </div>
       )}
       {expanded && toolCall.result && isSearch && (
-        <SearchResults text={toolCall.result} />
+        <SearchResults
+          text={toolCall.result}
+          structuredData={(toolCall.structuredResult as Record<string, unknown>)?.data as SearchResultData}
+        />
       )}
     </div>
   );

@@ -59,3 +59,16 @@
   z-index: 10;
   pointer-events: none;
 }
+
+.chat-input-textarea--vim {
+  caret-color: var(--accent-purple);
+}
+
+.chat-input-vim-status {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--accent-purple);
+  padding: 2px var(--space-2);
+  margin-top: 2px;
+  opacity: 0.8;
+}

@@ -50,3 +50,6 @@ android/.gradle/
 android/local.properties
 android/app/build/
 android/build/
+
+# Wisp checkpoints
+.wisp/checkpoints/

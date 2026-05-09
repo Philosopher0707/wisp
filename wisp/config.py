@@ -6,8 +6,11 @@ Config file is stored at ~/.config/wisp/config.json.
 
 import os
 import json
+import logging
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_MODEL = "deepseek-v4-pro:cloud"
@@ -54,6 +57,12 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         "default": [".agents/skills", ".warp/skills", ".claude/skills"],
         "description": "Directories to scan for skills",
         "env_var": "WISP_SKILL_DIRS",
+    },
+    "context_files": {
+        "type": list,
+        "default": ["CLAUDE.md", "AGENTS.md", ".wisp/rules.md", "GEMINI.md"],
+        "description": "Project context files to load and inject into system prompt",
+        "env_var": "WISP_CONTEXT_FILES",
     },
     "workspace": {
         "type": (str, type(None)),
@@ -272,6 +281,93 @@ class WispConfig:
         self.auto_compact: bool = str(get_setting("auto_compact", "true")).lower() == "true"
         self.compact_threshold_tokens: int = int(get_setting("compact_threshold_tokens", "75"))
         self.compact_keep_recent: int = int(get_setting("compact_keep_recent", "6"))
+        # Context files
+        raw_context_files = get_setting(
+            "context_files",
+            ["CLAUDE.md", "AGENTS.md", ".wisp/rules.md", "GEMINI.md"],
+        )
+        if isinstance(raw_context_files, str):
+            self.context_files: list[str] = [f.strip() for f in raw_context_files.split(",") if f.strip()]
+        elif isinstance(raw_context_files, list):
+            self.context_files = raw_context_files
+        else:
+            self.context_files = ["CLAUDE.md", "AGENTS.md", ".wisp/rules.md", "GEMINI.md"]
+        self.loaded_context: str = ""
+        self._context_mtimes: dict[str, float] = {}
+        self._last_workspace_for_context: Optional[str] = None
+
+    def load_context_files(self) -> str:
+        """Load and concatenate context files from workspace root.
+
+        Searches for files listed in ``context_files``, plus additional
+        locations under ``.wisp/`` (rules.md, conventions.md) and user-home
+        config (``~/.config/wisp/CLAUDE.md``).
+
+        Returns concatenated content for injection into system prompt.
+        Caches result -- re-reads if workspace changes or file mtimes change.
+        """
+        workspace = self.workspace or os.getcwd()
+        ws_path = Path(workspace).resolve()
+
+        # Check if cache is valid
+        if self._last_workspace_for_context == str(ws_path) and self.loaded_context:
+            # Verify no files changed
+            stale = False
+            for fpath, cached_mtime in list(self._context_mtimes.items()):
+                try:
+                    current_mtime = Path(fpath).stat().st_mtime
+                    if current_mtime != cached_mtime:
+                        stale = True
+                        break
+                except OSError:
+                    stale = True
+                    break
+            if not stale:
+                return self.loaded_context
+
+        found_files: list[Path] = []
+        mtimes: dict[str, float] = {}
+
+        # 1. Search workspace root for each file in context_files list
+        for fname in self.context_files:
+            candidate = ws_path / fname
+            if candidate.is_file():
+                found_files.append(candidate)
+
+        # 2. Also check .wisp/ directory for convention files
+        wisp_dir = ws_path / ".wisp"
+        for extra in ("rules.md", "conventions.md"):
+            candidate = wisp_dir / extra
+            if candidate.is_file() and candidate not in found_files:
+                found_files.append(candidate)
+
+        # 3. User home config CLAUDE.md
+        user_claude = Path.home() / ".config" / "wisp" / "CLAUDE.md"
+        if user_claude.is_file():
+            found_files.append(user_claude)
+
+        # 4. Read and concatenate
+        blocks: list[str] = []
+        for fpath in found_files:
+            try:
+                content = fpath.read_text(encoding="utf-8", errors="replace")
+                rel = fpath.relative_to(ws_path) if str(fpath).startswith(str(ws_path)) else fpath
+                blocks.append(f"## Project Context: {rel}\n{content}\n---\n")
+                mtimes[str(fpath)] = fpath.stat().st_mtime
+            except Exception as e:
+                logger.warning("Failed to read context file %s: %s", fpath, e)
+
+        if blocks:
+            self.loaded_context = (
+                "## Project Context\n\n" + "\n".join(blocks)
+            )
+        else:
+            self.loaded_context = ""
+
+        self._context_mtimes = mtimes
+        self._last_workspace_for_context = str(ws_path)
+        logger.debug("Loaded %d context file(s) for workspace %s", len(found_files), ws_path)
+        return self.loaded_context
 
     def __repr__(self):
         return (

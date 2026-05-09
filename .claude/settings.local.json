@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rtk ls *)",
+      "Bash(rm -f /Users/philosopher/Documents/wisp/.git/index.lock)"
+    ]
+  }
+}

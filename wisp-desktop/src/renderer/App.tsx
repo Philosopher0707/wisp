@@ -3,6 +3,8 @@ import { AppShell } from './components/layout/AppShell.js';
 import { AppContext } from './state/context.js';
 import { appReducer, createInitialState } from './state/types.js';
 import { useWebSocket } from './hooks/useWebSocket.js';
+import { applyTheme, DARK_THEME, LIGHT_THEME, loadCustomThemeAsync } from './utils/themes.js';
+import { loadKeybindings } from './utils/keybindings.js';
 
 import { useMenuIPC } from './hooks/useMenuIPC.js';
 
@@ -85,6 +87,37 @@ export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
     if (draft) {
       dispatch({ type: 'SET_INPUT', value: draft });
     }
+  }, []);
+
+  // Restore theme
+  React.useEffect(() => {
+    const storedTheme = localStorage.getItem('wisp_theme') as 'dark' | 'light' | 'custom' | null;
+    const storedPath = localStorage.getItem('wisp_custom_theme_path');
+
+    if (storedTheme === 'dark') {
+      applyTheme(DARK_THEME);
+    } else if (storedTheme === 'light') {
+      applyTheme(LIGHT_THEME);
+    } else if (storedTheme === 'custom' && storedPath) {
+      loadCustomThemeAsync(storedPath).then((data) => {
+        if (data) applyTheme(data);
+        else applyTheme(DARK_THEME);
+      });
+    }
+  }, []);
+
+  // Restore vim mode
+  React.useEffect(() => {
+    const storedVim = localStorage.getItem('wisp_vim_mode');
+    if (storedVim === 'true') {
+      dispatch({ type: 'TOGGLE_VIM_MODE' });
+    }
+  }, []);
+
+  // Restore keybindings
+  React.useEffect(() => {
+    const bindings = loadKeybindings();
+    dispatch({ type: 'SET_KEYBINDINGS', keybindings: bindings });
   }, []);
 
   const ctx = React.useMemo(

@@ -38,12 +38,27 @@ function parseResults(text: string): SearchResult[] {
   return results;
 }
 
-interface SearchResultsProps {
-  text: string;
+export interface SearchResultData {
+  query: string;
+  results: Array<{ number: number; title: string; url: string; snippet: string }>;
 }
 
-export const SearchResults: React.FC<SearchResultsProps> = ({ text }) => {
-  const results = parseResults(text);
+interface SearchResultsProps {
+  text: string;
+  structuredData?: SearchResultData;
+}
+
+export const SearchResults: React.FC<SearchResultsProps> = ({ text, structuredData }) => {
+  let results: SearchResult[];
+  if (structuredData?.results) {
+    results = structuredData.results.map(r => ({
+      title: r.title,
+      url: r.url,
+      snippet: r.snippet,
+    }));
+  } else {
+    results = parseResults(text);
+  }
 
   if (results.length === 0) {
     return <div className="sr-empty">{text}</div>;

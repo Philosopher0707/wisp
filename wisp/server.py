@@ -110,6 +110,7 @@ class BackgroundRunRequest(BaseModel):
 
 
 class ArenaCompareRequest(BaseModel):
+    model_config = {"protected_namespaces": ()}
     prompt: str = Field(..., min_length=1)
     task: str = Field(default="", max_length=200)
     model_a: str = Field(default="claude-sonnet-4-6")
@@ -119,6 +120,10 @@ class ArenaCompareRequest(BaseModel):
 class ArenaVoteRequest(BaseModel):
     entry_id: str
     vote: str = Field(..., pattern="^(a|b|tie)$")
+
+class WebSearchRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=200)
+    num_results: int = Field(default=5, ge=1, le=10)
 
 class ToolApproval(BaseModel):
     call_id: str
@@ -725,6 +730,18 @@ async def codebase_stats():
     """Get semantic index statistics."""
     index = _get_semantic_index()
     return index.get_stats()
+
+
+@app.post("/api/search", dependencies=[Depends(verify_api_key)])
+async def web_search(req: WebSearchRequest):
+    """Standalone web search — returns structured results with title/url/snippet."""
+    from wisp.tools import tool_web_search
+    import json as _json
+    try:
+        result = tool_web_search(req.query, req.num_results)
+        return _json.loads(result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── Background Agents ──────────────────────────────────────────────────
