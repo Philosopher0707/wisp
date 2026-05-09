@@ -1009,6 +1009,58 @@ async def delete_checkpoint(checkpoint_id: str):
     return {"ok": True}
 
 
+# ── Suggestion Routes ────────────────────────────────────────────────────
+
+_app_suggestion_watcher = None
+
+
+def _get_suggestion_watcher():
+    global _app_suggestion_watcher
+    if _app_suggestion_watcher is None:
+        from wisp.suggestion_watcher import SuggestionWatcher
+        _app_suggestion_watcher = SuggestionWatcher(str(WORKSPACE_ROOT))
+    return _app_suggestion_watcher
+
+
+@app.get("/api/diagnostics", dependencies=[Depends(verify_api_key)])
+async def get_diagnostics(path: str):
+    """Return LSP diagnostics for a specific file."""
+    target = _resolve_path(path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    try:
+        from wisp.lsp.manager import LSPManager
+        lsp = LSPManager(str(WORKSPACE_ROOT))
+        diags = lsp.get_diagnostics(str(target))
+        return {"path": path, "diagnostics": diags, "count": len(diags)}
+    except Exception as e:
+        return {"path": path, "diagnostics": [], "count": 0, "error": str(e)}
+
+
+@app.get("/api/suggestions", dependencies=[Depends(verify_api_key)])
+async def get_suggestions():
+    """Return files changed since last poll with diagnostic counts."""
+    try:
+        from wisp.lsp.manager import LSPManager
+        lsp = LSPManager(str(WORKSPACE_ROOT))
+        watcher = _get_suggestion_watcher()
+        suggestions = watcher.get_suggestions(lsp)
+        return {
+            "suggestions": [
+                {
+                    "path": s.path,
+                    "mtime": s.mtime,
+                    "diagnostic_count": s.diagnostic_count,
+                    "severities": s.severities,
+                }
+                for s in suggestions
+            ]
+        }
+    except Exception as e:
+        logger.warning("Failed to get suggestions: %s", e)
+        return {"suggestions": []}
+
+
 @app.delete("/api/files", dependencies=[Depends(verify_api_key)])
 async def delete_file(path: str):
     target = _resolve_path(path)

@@ -99,6 +99,7 @@ class LSPServer:
         self._notification_queue: queue.Queue = queue.Queue()
         self._next_id = 1
         self._open_docs: dict[str, int] = {}  # uri -> version
+        self._diagnostics: dict[str, list[dict]] = {}  # uri -> list[Diagnostic]
         self._started = False
         self.server_capabilities: dict = {}
 
@@ -380,6 +381,11 @@ class LSPServer:
             return result
         return {}
 
+    def get_diagnostics(self, file_path: str) -> list[dict]:
+        """Return cached diagnostics for a file."""
+        uri = path_to_uri(os.path.abspath(file_path))
+        return self._diagnostics.get(uri, [])
+
     def get_symbols(self, file_path: str) -> list[dict]:
         """Return list of DocumentSymbol or SymbolInformation dicts."""
         self.ensure_document_open(file_path)
@@ -455,11 +461,16 @@ class LSPServer:
                 else:
                     notification_q.put(msg)
 
-                # Drain notifications silently — they're logged at debug level
+                # Drain notifications — capture diagnostics, log others
                 while True:
                     try:
                         notif = notification_q.get_nowait()
                         method = notif.get("method", "")
+                        if method == "textDocument/publishDiagnostics":
+                            params = notif.get("params", {})
+                            uri = params.get("uri", "")
+                            diagnostics = params.get("diagnostics", [])
+                            self._diagnostics[uri] = diagnostics
                         logger.debug("LSP notification: %s", method)
                     except queue.Empty:
                         break

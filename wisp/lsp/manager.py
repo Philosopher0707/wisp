@@ -81,6 +81,13 @@ class LSPManager:
             logger.debug("Unexpected LSP error for %s: %s", file_path, e)
             return None
 
+    def get_diagnostics(self, file_path: str) -> list[dict]:
+        """Return cached diagnostics for a file from its language server."""
+        server = self.get_server_safe(file_path)
+        if server:
+            return server.get_diagnostics(file_path)
+        return []
+
     def notify_change(self, file_path: str) -> None:
         """Notify the relevant LSP server of a file edit."""
         server = self.get_server_safe(file_path)
