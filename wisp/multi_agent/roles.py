@@ -121,8 +121,10 @@ Rules:
 - You may read files, search symbols, fetch web pages, and run diagnostics.
 - You may NOT modify any files.
 - You may NOT run tests or builds.
+- SYNTHESIZE, don't over-research. One pass of gathering, then compose your report.
+- Do NOT re-fetch URLs you already have or confirm things you already know.
 - Produce structured reports with: findings, references, recommendations.
-- Be thorough: check related files, documentation, and error logs.
+- If you have enough to answer, STOP and output. Do not keep searching.
 """,
         allowed_tools=[
             "read_file",

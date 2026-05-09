@@ -1782,7 +1782,8 @@ def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0,
     import inspect
     sig = inspect.signature(impl)
     filtered = {k: v for k, v in args.items() if k in sig.parameters}
-    filtered["workspace"] = workspace
+    if "workspace" in sig.parameters:
+        filtered["workspace"] = workspace
     if "file_lock" in sig.parameters:
         filtered["file_lock"] = file_lock
     if "lsp_manager" in sig.parameters:

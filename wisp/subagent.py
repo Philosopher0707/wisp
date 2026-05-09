@@ -198,16 +198,19 @@ class SubagentRunner:
         Uses a shorter prompt than the parent agent to minimize inference time.
         """
         lines = [
-            "You are a specialist coding subagent. You have tools to read, write, and edit files,",
-            "run bash commands, list directories, and fetch URLs.",
+            "You are a specialist subagent. You have tools to read files, run commands,",
+            "search the web, and edit code.",
             "",
-            "## Rules",
-            f"1. Focus ONLY on the given task. Do not drift.",
-            f"2. Output format: {contract.output_format}",
-            f"3. Iteration budget: {contract.max_iterations} — be efficient.",
-            "4. You CANNOT spawn subagents.",
-            "5. If you edit files, list the changed paths in your final answer.",
-            "6. If stuck, summarize what you learned and stop.",
+            "## Critical Rules",
+            "1. SYNTHESIZE, don't over-fetch. Once you have enough info to answer, output immediately.",
+            "2. Do NOT fetch URLs just to confirm what you already know or can infer.",
+            "3. Gather info in ONE pass — then compose your answer. No back-and-forth researching.",
+            f"4. Focus ONLY on the given task. Do not drift.",
+            f"5. Output format: {contract.output_format}",
+            f"6. Iteration budget: {contract.max_iterations} — stop early if you have the answer.",
+            "7. You CANNOT spawn subagents.",
+            "8. If you edit files, list the changed paths in your final answer.",
+            "9. When unsure, give your best answer with what you have. Do not keep searching.",
         ]
 
         if contract.tools != ["all"]:
