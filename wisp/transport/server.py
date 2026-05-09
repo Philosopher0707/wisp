@@ -32,6 +32,23 @@ from wisp.core.events import (
 logger = logging.getLogger(__name__)
 
 
+def create_swarm_progress_callback(send_fn):
+    """Return an async callback that maps OrchestratorEvent → WS messages.
+
+    The send_fn is an async callable that takes a dict and sends it to
+    the WebSocket client. Use this as the progress_callback when running
+    a SwarmOrchestrator from a WebSocket handler.
+    """
+    from wisp.multi_agent.task import OrchestratorEvent as SwarmEvent
+
+    async def _on_event(evt: SwarmEvent) -> None:
+        msg = evt.to_ws_message()
+        if msg is not None:
+            await send_fn(msg)
+
+    return _on_event
+
+
 class PendingApproval:
     """Represents a tool call waiting for client approval (async-aware)."""
 

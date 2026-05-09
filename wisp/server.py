@@ -189,6 +189,8 @@ class Connection:
         self.agent_task: Optional[asyncio.Task] = None
         self.transport: Optional[ServerTransport] = None
         self._run_lock = asyncio.Lock()
+        self.swarm_task: Optional[asyncio.Task] = None
+        self.swarm_orchestrator: Optional[object] = None
 
     async def send(self, msg: dict):
         try:
@@ -1591,6 +1593,81 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(default="")
                 if conn.transport:
                     conn.transport.resume(msg.get("injected_text"))
                 await conn.send({"type": "steering_resumed"})
+
+            elif msg_type == "swarm_run":
+                from wisp.config import WispConfig
+                from wisp.multi_agent.orchestrator import SwarmOrchestrator
+                from wisp.multi_agent.roles import AgentRole
+                from wisp.transport.server import create_swarm_progress_callback
+
+                goal = msg.get("goal", "").strip()
+                if not goal:
+                    await conn.send({"type": "error", "message": "Empty swarm goal"})
+                    continue
+
+                roles: list[str] = msg.get("roles", [AgentRole.CODER, AgentRole.REVIEWER, AgentRole.TESTER, AgentRole.RESEARCHER])
+                count_per_role: dict[str, int] | None = msg.get("count_per_role")
+                max_retries: int = msg.get("max_retries", 2)
+                max_parallel: int = msg.get("max_parallel", 3)
+
+                config = WispConfig()
+                if msg.get("model"):
+                    config.model = msg["model"]
+                config.workspace = str(WORKSPACE_ROOT)
+                config.auto_approve = msg.get("auto_approve", True)
+
+                orch = SwarmOrchestrator(config, max_parallel=max_parallel)
+                conn.swarm_orchestrator = orch
+
+                progress_cb = create_swarm_progress_callback(conn.send)
+
+                async def _run_swarm():
+                    try:
+                        result = await orch.arun(
+                            goal, roles=roles,
+                            count_per_role=count_per_role,
+                            max_retries=max_retries,
+                            progress_callback=progress_cb,
+                        )
+                        await conn.send({
+                            "type": "status",
+                            "message": f"Swarm done: {sum(1 for r in result.agent_results if r.success)}/{len(result.agent_results)} tasks passed",
+                            "level": "info" if result.success else "warn",
+                        })
+                    except Exception as e:
+                        logger.error("Swarm error for %s: %s", client_id, e)
+                        await conn.send({"type": "error", "message": f"Swarm failed: {e}"})
+                    finally:
+                        conn.swarm_orchestrator = None
+
+                # Cancel any existing swarm
+                if conn.swarm_task and not conn.swarm_task.done():
+                    if conn.swarm_orchestrator:
+                        conn.swarm_orchestrator.stop_all()
+                    conn.swarm_task.cancel()
+                    try:
+                        await asyncio.wait_for(conn.swarm_task, timeout=2)
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                        pass
+
+                conn.swarm_task = asyncio.create_task(_run_swarm())
+                await conn.send({"type": "status", "message": f"Swarm started with goal: {goal[:100]}", "level": "info"})
+
+            elif msg_type == "swarm_status":
+                orch = conn.swarm_orchestrator
+                if orch is None:
+                    await conn.send({"type": "swarm_status", "active": False, "message": "No active swarm"})
+                else:
+                    registry_data = orch.registry.to_dict()
+                    await conn.send({"type": "swarm_status", "active": True, "agents": registry_data.get("agents", [])})
+
+            elif msg_type == "swarm_stop":
+                if conn.swarm_orchestrator:
+                    conn.swarm_orchestrator.stop_all()
+                if conn.swarm_task and not conn.swarm_task.done():
+                    conn.swarm_task.cancel()
+                conn.swarm_orchestrator = None
+                await conn.send({"type": "status", "message": "Swarm stopped", "level": "info"})
 
             elif msg_type == "ping":
                 await conn.send({"type": "pong"})
