@@ -1079,38 +1079,48 @@ async def delete_file(path: str):
 @app.post("/api/bash", dependencies=[Depends(verify_api_key)])
 async def run_bash(req: BashRequest):
     """Run a bash command inside the workspace. Restricted for safety."""
-    import subprocess
-
     from wisp.tools import check_dangerous_command
     danger = check_dangerous_command(req.command)
     if danger:
         raise HTTPException(status_code=400, detail=f"Dangerous command blocked: {danger}")
 
-    cwd = _resolve_path(req.cwd or ".")
-    if not cwd.is_dir():
+    cwd = req.cwd or "."
+    # Resolve cwd relative to workspace
+    target_cwd = _resolve_path(cwd)
+    if not target_cwd.is_dir():
         raise HTTPException(status_code=400, detail="Invalid cwd")
 
+    from wisp.sandbox import get_sandbox
+    sandbox = get_sandbox(str(WORKSPACE_ROOT))
+
     try:
-        proc = subprocess.run(
+        exit_code, stdout, stderr = await sandbox.run(
             req.command,
-            shell=True,
             cwd=cwd,
-            capture_output=True,
-            text=True,
             timeout=60,
         )
-        stdout = proc.stdout[:MAX_BASH_OUTPUT]
-        stderr = proc.stderr[:MAX_BASH_OUTPUT]
+        stdout = stdout[:MAX_BASH_OUTPUT]
+        stderr = stderr[:MAX_BASH_OUTPUT]
         return {
-            "exit_code": proc.returncode,
+            "exit_code": exit_code,
             "stdout": stdout,
             "stderr": stderr,
-            "truncated": len(proc.stdout) > MAX_BASH_OUTPUT or len(proc.stderr) > MAX_BASH_OUTPUT,
+            "truncated": False,
+            "sandbox": sandbox.name,
         }
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=408, detail="Command timed out after 60s")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/sandbox/status", dependencies=[Depends(verify_api_key)])
+async def sandbox_status():
+    """Return current sandbox provider info."""
+    from wisp.sandbox import get_sandbox
+    sandbox = get_sandbox(str(WORKSPACE_ROOT))
+    return {
+        "type": sandbox.name,
+        "available": sandbox.is_available(),
+    }
 
 
 # ── Headless / CI Prompt ──────────────────────────────────────────────
