@@ -436,9 +436,11 @@ class CheckpointManager:
         """Snapshot using ``git stash create`` (dangling ref, zero branch impact)."""
         self._clear_stale_index_lock()
 
-        rc, _, stderr = await self._git_proc("git", "add", "-A", cwd=self.workspace)
+        # Stage tracked-file changes only (git add -A would mmap entire workspace
+        # including massive untracked directories, hitting macOS mmap limits).
+        rc, _, stderr = await self._git_proc("git", "add", "-u", cwd=self.workspace)
         if rc != 0:
-            logger.warning("git add -A failed (exit %d): %s — falling back to file backup",
+            logger.warning("git add -u failed (exit %d): %s — falling back to file backup",
                            rc, stderr.strip())
             self._git_cache = False
             return await self._create_via_backup(cid, ts, desc, tool, tag)
@@ -558,7 +560,7 @@ class CheckpointManager:
         """Create a temporary stash of current state.  Returns ref or None."""
         self._clear_stale_index_lock()
         try:
-            rc, _, _ = await self._git_proc("git", "add", "-A", cwd=self.workspace, timeout=10)
+            rc, _, _ = await self._git_proc("git", "add", "-u", cwd=self.workspace, timeout=10)
             if rc != 0:
                 return None
             rc, stdout, _ = await self._git_proc("git", "stash", "create", cwd=self.workspace, timeout=10)
