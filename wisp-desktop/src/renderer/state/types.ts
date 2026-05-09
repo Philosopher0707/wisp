@@ -64,6 +64,7 @@ export interface AppState {
   sessionId: string | null;
   messages: Message[];
   isStreaming: boolean;
+  agentPaused: boolean;
   approvalPending: ApprovalRequest | null;
   inputValue: string;
   selectedModel: string;
@@ -156,6 +157,8 @@ export type Action =
   | { type: 'APPROVE_TOOL'; callId: string }
   | { type: 'DENY_TOOL'; callId: string }
   | { type: 'INTERRUPT' }
+  | { type: 'AGENT_PAUSED' }
+  | { type: 'AGENT_RESUMED' }
   | { type: 'SET_MODEL'; model: string }
   | { type: 'SET_REASONING'; level: 'low' | 'medium' | 'high' }
   | { type: 'OPEN_DROPDOWN'; id: string }
@@ -234,6 +237,7 @@ export function createInitialState(overrides?: {
     sessionId: null,
     messages: [],
     isStreaming: false,
+    agentPaused: false,
     approvalPending: null,
     inputValue: '',
     selectedModel: overrides?.selectedModel || 'claude-sonnet-4-6',
@@ -422,7 +426,13 @@ export function appReducer(state: AppState, action: Action): AppState {
       return { ...state, approvalPending: null };
 
     case 'INTERRUPT':
-      return { ...state, isStreaming: false, approvalPending: null };
+      return { ...state, isStreaming: false, agentPaused: false, approvalPending: null };
+
+    case 'AGENT_PAUSED':
+      return { ...state, agentPaused: true };
+
+    case 'AGENT_RESUMED':
+      return { ...state, agentPaused: false };
 
     case 'SET_MODEL':
       return { ...state, selectedModel: action.model, activeDropdown: null };

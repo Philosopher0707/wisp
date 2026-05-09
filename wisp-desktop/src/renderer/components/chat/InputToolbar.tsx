@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useAppState } from '../../state/context.js';
-import { Plus, Shield, Mic, ArrowUp, Square, ChevronDown, Sparkles, History, Keyboard } from '../../icons/index.js';
+import { Plus, Shield, Mic, ArrowUp, Square, ChevronDown, Sparkles, History, Keyboard, Pause, Play } from '../../icons/index.js';
 import { ModelSelector } from './ModelSelector.js';
 import { ReasoningSelector } from './ReasoningSelector.js';
 import { PermissionSelector } from './PermissionSelector.js';
@@ -13,6 +13,7 @@ interface InputToolbarProps {
 
 export const InputToolbar: React.FC<InputToolbarProps> = ({ hasContent, onSubmit }) => {
   const { state, dispatch, sendMessage } = useAppState();
+  const [injectText, setInjectText] = useState('');
 
   const handleAttach = async () => {
     if (window.wisp?.openFileDialog) {
@@ -25,6 +26,20 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({ hasContent, onSubmit
         });
       }
     }
+  };
+
+  const handlePause = () => {
+    sendMessage({ type: 'pause' });
+    dispatch({ type: 'AGENT_PAUSED' });
+  };
+
+  const handleResume = () => {
+    sendMessage({
+      type: 'resume',
+      injected_text: injectText.trim() || undefined,
+    });
+    setInjectText('');
+    dispatch({ type: 'AGENT_RESUMED' });
   };
 
   return (
@@ -63,16 +78,44 @@ export const InputToolbar: React.FC<InputToolbarProps> = ({ hasContent, onSubmit
         <ModelSelector />
         <ReasoningSelector />
         {state.isStreaming ? (
-          <button
-            className="stop-btn"
-            title="Stop generation"
-            onClick={() => {
-              dispatch({ type: 'INTERRUPT' });
-              sendMessage({ type: 'interrupt' });
-            }}
-          >
-            <Square size={14} />
-          </button>
+          <>
+            {state.agentPaused ? (
+              <>
+                <input
+                  className="steering-inject-input"
+                  type="text"
+                  placeholder="Steering feedback..."
+                  value={injectText}
+                  onChange={(e) => setInjectText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleResume();
+                    if (e.key === 'Escape') {
+                      setInjectText('');
+                      handleResume();
+                    }
+                  }}
+                />
+                <button className="resume-btn" title="Resume" onClick={handleResume}>
+                  <Play size={14} />
+                </button>
+              </>
+            ) : (
+              <button className="pause-btn" title="Pause generation" onClick={handlePause}>
+                <Pause size={14} />
+              </button>
+            )}
+            <button
+              className="stop-btn"
+              title="Stop generation"
+              onClick={() => {
+                dispatch({ type: 'INTERRUPT' });
+                sendMessage({ type: 'interrupt' });
+                setInjectText('');
+              }}
+            >
+              <Square size={14} />
+            </button>
+          </>
         ) : (
           <>
             <button className="toolbar-icon-btn" title="Voice input">

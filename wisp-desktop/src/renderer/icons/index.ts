@@ -39,4 +39,6 @@ export {
   Moon,
   Sun,
   ClipboardList,
+  Pause,
+  Play,
 } from 'lucide-react';

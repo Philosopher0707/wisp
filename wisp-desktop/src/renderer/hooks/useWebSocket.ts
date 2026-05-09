@@ -190,6 +190,19 @@ export function useWebSocket(
               percent: typeof (msg as any).percent === 'number' ? (msg as any).percent : 0,
             });
             break;
+          case 'steering_paused':
+            dispatch({ type: 'AGENT_PAUSED' });
+            break;
+          case 'steering_resumed':
+            dispatch({ type: 'AGENT_RESUMED' });
+            break;
+          case 'steering_inject':
+            dispatch({
+              type: 'RECEIVE_STATUS',
+              message: `Steering: ${(msg as any).text || ''}`,
+              level: 'info',
+            });
+            break;
           case 'pong':
             break;
         }

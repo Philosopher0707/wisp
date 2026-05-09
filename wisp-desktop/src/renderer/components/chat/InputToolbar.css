@@ -123,3 +123,51 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.7; }
 }
+
+.pause-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--accent-purple);
+  color: #fff;
+  transition: background var(--transition-fast);
+}
+
+.pause-btn:hover {
+  background: var(--accent-purple-hover);
+}
+
+.resume-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: #16a34a;
+  color: #fff;
+  transition: background var(--transition-fast);
+}
+
+.resume-btn:hover {
+  background: #15803d;
+}
+
+.steering-inject-input {
+  width: 160px;
+  height: 28px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  outline: none;
+}
+
+.steering-inject-input:focus {
+  border-color: var(--accent-purple);
+}
