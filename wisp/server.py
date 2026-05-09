@@ -1621,6 +1621,62 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(default="")
                 if not prompt and not raw_images:
                     await conn.send({"type": "error", "message": "Empty prompt"})
                     continue
+
+                # Intercept /swarm slash command — run with WS progress callback
+                if prompt.startswith("/swarm") or prompt.startswith("/multi"):
+                    swarm_goal = prompt.split(maxsplit=1)[1] if " " in prompt else ""
+                    if not swarm_goal:
+                        await conn.send({"type": "error", "message": "Usage: /swarm <task description>"})
+                        continue
+
+                    from wisp.config import WispConfig
+                    from wisp.multi_agent.orchestrator import SwarmOrchestrator
+                    from wisp.multi_agent.roles import AgentRole
+                    from wisp.transport.server import create_swarm_progress_callback
+
+                    roles = [AgentRole.CODER, AgentRole.REVIEWER, AgentRole.TESTER, AgentRole.RESEARCHER]
+
+                    config = WispConfig()
+                    if msg.get("model"):
+                        config.model = msg["model"]
+                    config.workspace = str(WORKSPACE_ROOT)
+                    config.auto_approve = True
+
+                    orch = SwarmOrchestrator(config, max_parallel=3)
+                    conn.swarm_orchestrator = orch
+                    progress_cb = create_swarm_progress_callback(conn.send)
+
+                    async def _run_swarm_slash():
+                        try:
+                            result = await orch.arun(
+                                swarm_goal, roles=roles, max_retries=2,
+                                progress_callback=progress_cb,
+                            )
+                            await conn.send({
+                                "type": "status",
+                                "message": f"Swarm done: {sum(1 for r in result.agent_results if r.success)}/{len(result.agent_results)} tasks passed",
+                                "level": "info" if result.success else "warn",
+                            })
+                        except Exception as e:
+                            logger.error("Swarm error for %s: %s", client_id, e)
+                            await conn.send({"type": "error", "message": f"Swarm failed: {e}"})
+                        finally:
+                            conn.swarm_orchestrator = None
+
+                    # Cancel any existing swarm
+                    if conn.swarm_task and not conn.swarm_task.done():
+                        if conn.swarm_orchestrator:
+                            conn.swarm_orchestrator.stop_all()
+                        conn.swarm_task.cancel()
+                        try:
+                            await asyncio.wait_for(conn.swarm_task, timeout=2)
+                        except (asyncio.TimeoutError, asyncio.CancelledError):
+                            pass
+
+                    conn.swarm_task = asyncio.create_task(_run_swarm_slash())
+                    await conn.send({"type": "status", "message": f"Swarm starting: {swarm_goal[:100]}", "level": "info"})
+                    continue
+
                 # Validate and filter images
                 images: list[str] | None = None
                 if raw_images:
