@@ -72,7 +72,12 @@
       "Bash(curl -s http://localhost:8000/api/codebase/stats)",
       "Bash(curl -s -X POST http://localhost:8000/api/run/background -H 'Content-Type: application/json' -d @-)",
       "Bash(ollama pull *)",
-      "Bash(.venv/bin/python3 -c ' *)"
+      "Bash(.venv/bin/python3 -c ' *)",
+      "Bash(awk *)",
+      "Bash(sed -n '185,200p' /Users/philosopher/Documents/wisp/wisp/core/agent.py)",
+      "Bash(sed -n '590,610p' /Users/philosopher/Documents/wisp/wisp/core/agent.py)",
+      "Bash(sed -n '700,715p' /Users/philosopher/Documents/wisp/wisp/core/agent.py)",
+      "Bash(sed -n '760,775p' /Users/philosopher/Documents/wisp/wisp/core/agent.py)"
     ]
   }
 }

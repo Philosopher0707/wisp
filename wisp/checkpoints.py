@@ -28,7 +28,8 @@ CHECKPOINTS_DIR = ".wisp/checkpoints"
 BACKUPS_SUBDIR = "backups"
 METADATA_FILE = "metadata.json"
 DEFAULT_MAX_CHECKPOINTS = 50
-GIT_TIMEOUT = 15  # seconds — max wait for any single git subprocess
+GIT_TIMEOUT = 5  # seconds — max wait for any single git subprocess
+CHECKPOINT_DEADLINE = 8  # seconds — hard deadline for entire checkpoint op; skip if exceeded
 
 # Directories and file patterns excluded from non-git backups.
 _EXCLUDED_DIRS: frozenset[str] = frozenset({
@@ -197,24 +198,26 @@ class CheckpointManager:
 
             cp: Checkpoint | None = None
 
-            # Try git first, then file backup, collecting errors along the way.
+            # Try git first. Only fall back to file backup if git is completely
+            # unavailable (not if git is merely slow/timing out — backup mode
+            # is even slower on large workspaces and will hang the agent).
             if await self._has_git():
                 try:
                     cp = await self._create_via_git(
                         checkpoint_id, timestamp, description, tool_name, tag
                     )
+                except CheckpointError:
+                    raise  # git failed at runtime — don't fall back
                 except Exception as exc:
                     errors.append(f"git: {exc}")
-                    logger.debug("Git checkpoint failed, trying backup: %s", exc)
-
-            if cp is None:
+            else:
                 try:
                     cp = await self._create_via_backup(
                         checkpoint_id, timestamp, description, tool_name, tag
                     )
                 except Exception as exc:
                     errors.append(f"backup: {exc}")
-                    logger.error("Backup checkpoint also failed: %s", exc)
+                    logger.error("Backup checkpoint failed: %s", exc)
 
             if cp is None or not cp.is_valid:
                 raise CheckpointError(
@@ -241,10 +244,24 @@ class CheckpointManager:
 
         Uses the naming convention ``auto-{tool_name}-{timestamp}`` so
         that checkpoints are traceable to the tool that triggered them.
+
+        Wrapped in a hard deadline — if checkpoint creation exceeds
+        CHECKPOINT_DEADLINE seconds the operation is cancelled and a
+        CheckpointError is raised so the caller can skip gracefully.
         """
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
         description = f"auto-{tool_name}-{ts}"
-        return await self.create(description=description, tool_name=tool_name)
+        try:
+            return await asyncio.wait_for(
+                self.create(description=description, tool_name=tool_name),
+                timeout=CHECKPOINT_DEADLINE,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Checkpoint deadline exceeded (%ds) for %s — skipping",
+                           CHECKPOINT_DEADLINE, tool_name)
+            raise CheckpointError(
+                f"Checkpoint deadline exceeded ({CHECKPOINT_DEADLINE}s)"
+            )
 
     async def restore(self, checkpoint_id: str) -> bool:
         """Restore workspace to the state captured in *checkpoint_id*.
@@ -440,17 +457,11 @@ class CheckpointManager:
         # including massive untracked directories, hitting macOS mmap limits).
         rc, _, stderr = await self._git_proc("git", "add", "-u", cwd=self.workspace)
         if rc != 0:
-            logger.warning("git add -u failed (exit %d): %s — falling back to file backup",
-                           rc, stderr.strip())
-            self._git_cache = False
-            return await self._create_via_backup(cid, ts, desc, tool, tag)
+            raise CheckpointError(f"git add -u failed (exit {rc}): {stderr.strip()}")
 
         rc, stdout, stderr = await self._git_proc("git", "stash", "create", cwd=self.workspace)
         if rc != 0:
-            logger.warning("git stash create failed (exit %d): %s — falling back to file backup",
-                           rc, stderr.strip())
-            self._git_cache = False
-            return await self._create_via_backup(cid, ts, desc, tool, tag)
+            raise CheckpointError(f"git stash create failed (exit {rc}): {stderr.strip()}")
 
         git_ref = stdout.strip()
 
