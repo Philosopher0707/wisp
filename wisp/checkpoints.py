@@ -43,11 +43,11 @@ _EXCLUDED_SUFFIXES: tuple[str, ...] = (
 
 # ── Checkpoint dataclass ─────────────────────────────────────────────────
 
-@dataclass
 class CheckpointError(RuntimeError):
     """Raised when checkpoint creation or restore fails irrecoverably."""
 
 
+@dataclass
 class Checkpoint:
     """A snapshot of the workspace at a point in time."""
 
