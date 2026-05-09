@@ -66,6 +66,7 @@ class PromptRequest(BaseModel):
     session_id: Optional[str] = None
     skill: Optional[str] = None
     permission_mode: str = Field(default="full", description="full | ask_all | auto_edit | read_only")
+    images: list[str] = Field(default_factory=list, description="Base64 data URLs of images")
 
 class BashRequest(BaseModel):
     command: str = Field(..., max_length=2000)
@@ -323,6 +324,7 @@ async def _run_agent_headless(
     session_id: Optional[str] = None,
     skill: Optional[str] = None,
     permission_mode: str = "full",
+    images: Optional[list[str]] = None,
 ) -> dict:
     """Run the agent synchronously in memory and return a structured result."""
     start = time.time()
@@ -350,7 +352,7 @@ async def _run_agent_headless(
     transport = MemoryTransport(permission_mode=permission_mode)
 
     try:
-        async for event in core.run(prompt, approval_handler=transport.approval_handler):
+        async for event in core.run(prompt, approval_handler=transport.approval_handler, images=images):
             transport.collect(event)
     except Exception as e:
         logger.error("Headless agent error: %s", e)
@@ -1138,6 +1140,7 @@ async def prompt_sync(req: PromptRequest):
         session_id=req.session_id,
         skill=req.skill,
         permission_mode=req.permission_mode,
+        images=req.images if req.images else None,
     )
     if not result.get("ok"):
         return JSONResponse(status_code=500, content=result)
@@ -1489,9 +1492,19 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(default="")
 
             if msg_type == "prompt":
                 prompt = msg.get("content", "").strip()
-                if not prompt:
+                raw_images: list[str] = msg.get("images", []) or []
+                if not prompt and not raw_images:
                     await conn.send({"type": "error", "message": "Empty prompt"})
                     continue
+                # Validate and filter images
+                images: list[str] | None = None
+                if raw_images:
+                    from wisp.core.message_format import validate_images
+                    valid, errors = validate_images(raw_images)
+                    for err in errors:
+                        await conn.send({"type": "error", "message": err})
+                    if valid:
+                        images = valid
 
                 # Serialize prompt handling per connection to prevent concurrent agents
                 async with conn._run_lock:
@@ -1535,7 +1548,7 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(default="")
                     # Run agent as async task
                     async def _run():
                         try:
-                            await conn.transport.run(prompt)
+                            await conn.transport.run(prompt, images=images)
                         except Exception as e:
                             logger.error("Agent error for %s: %s", client_id, e)
                             await conn.send({"type": "error", "message": str(e)})

@@ -142,7 +142,7 @@ class ServerTransport:
 
         return None
 
-    async def run(self, prompt: str) -> None:
+    async def run(self, prompt: str, images: Optional[list[str]] = None) -> None:
         """Run one prompt and stream all events to the WebSocket client."""
 
         async def _ws_approval(name: str, args: dict, reason: str) -> tuple[bool, Optional[dict]]:
@@ -167,7 +167,7 @@ class ServerTransport:
                     self._pending_approvals.pop(call_id, None)
             return (pa.approved, None)
 
-        async for event in self.core.run(prompt, approval_handler=_ws_approval):
+        async for event in self.core.run(prompt, approval_handler=_ws_approval, images=images):
             if self._interrupted:
                 break
             msg = self._event_to_json(event)

@@ -255,7 +255,9 @@ class WispAgentCore:
 
     # ── Message helpers ──────────────────────────────────────────────
 
-    def _add_message(self, role: str, content: str, thinking: str = ""):
+    def _add_message(self, role: str, content: str | list[dict], thinking: str = ""):
+        if isinstance(content, str):
+            content = [{"type": "text", "text": content}]
         msg = {"role": role, "content": content}
         if thinking:
             msg["thinking"] = thinking
@@ -599,10 +601,15 @@ class WispAgentCore:
         prompt: str,
         system: Optional[str] = None,
         approval_handler: Optional[ApprovalHandler] = None,
+        images: Optional[list[str]] = None,
     ) -> AsyncIterator[AgentEvent]:
         """Execute one user turn and yield all events (internal async implementation)."""
         self._last_user_prompt = prompt  # For ontology skill matching
-        self._add_message("user", self._expand_continuation(prompt))
+        content = self._expand_continuation(prompt)
+        if images:
+            from wisp.core.message_format import merge_content
+            content = merge_content(content, images)
+        self._add_message("user", content)
         if system is None:
             system = self._build_system_prompt()
         self._trim_context_if_needed(system)
@@ -693,6 +700,7 @@ class WispAgentCore:
         self,
         prompt: str,
         approval_handler: Optional[ApprovalHandler] = None,
+        images: Optional[list[str]] = None,
     ) -> AsyncIterator[AgentEvent]:
         """Execute one user turn and yield all events.
 
@@ -713,7 +721,7 @@ class WispAgentCore:
                 logger.warning("Session start hook failed: %s", e)
 
         try:
-            async for event in self._arun(prompt, approval_handler=approval_handler):
+            async for event in self._arun(prompt, approval_handler=approval_handler, images=images):
                 yield event
         finally:
             # ── Session end hooks ──

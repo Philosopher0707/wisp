@@ -16,6 +16,7 @@ from typing import Optional, Iterator
 import requests
 
 from wisp.config import WispConfig
+from wisp.core.message_format import to_ollama_messages
 from wisp.stream_events import (
     EventBatcher,
     TokenBatch,
@@ -168,10 +169,12 @@ class OllamaClient:
         if self.max_tokens is not None:
             options["num_predict"] = self.max_tokens
 
+        ollama_messages = to_ollama_messages(messages)
+
         payload = {
             "model": self.model,
             "system": system_prompt,
-            "messages": messages,
+            "messages": ollama_messages,
             "options": options,
             "stream": False,
         }
@@ -223,10 +226,12 @@ class OllamaClient:
         if self.max_tokens is not None:
             options["num_predict"] = self.max_tokens
 
+        ollama_messages = to_ollama_messages(messages)
+
         payload = {
             "model": self.model,
             "system": system_prompt,
-            "messages": messages,
+            "messages": ollama_messages,
             "options": options,
             "stream": True,
         }
