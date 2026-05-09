@@ -2,15 +2,20 @@ import React from 'react';
 import { useAppState } from '../../state/context.js';
 import { InputToolbar } from './InputToolbar.js';
 import { MentionPopup } from './MentionPopup.js';
+import { ContextIndicator } from './ContextIndicator.js';
+import { CompletionGhost } from './CompletionGhost.js';
+import { VimEditor } from '../../utils/vim.js';
 import './ChatInput.css';
 
 export const ChatInput: React.FC = () => {
   const { state, dispatch, sendMessage } = useAppState();
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+  const vimRef = React.useRef(new VimEditor('normal'));
   const [isDragging, setIsDragging] = React.useState(false);
   const dragCounter = React.useRef(0);
   const [mentionQuery, setMentionQuery] = React.useState<string | null>(null);
   const [mentionRange, setMentionRange] = React.useState<{ start: number; end: number } | null>(null);
+  const [vimModeDisplay, setVimModeDisplay] = React.useState(vimRef.current.getStatusLine());
 
   const detectMention = (value: string, cursorPos: number) => {
     const beforeCursor = value.slice(0, cursorPos);
@@ -77,6 +82,8 @@ export const ChatInput: React.FC = () => {
     });
   };
 
+  const ghostRef = React.useRef<any>(null);
+
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
     dispatch({ type: 'SET_INPUT', value });
@@ -89,6 +96,24 @@ export const ChatInput: React.FC = () => {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Vim mode handling
+    if (state.vimMode && textareaRef.current) {
+      const nativeEvent = e.nativeEvent;
+      const handled = vimRef.current.handleKeyDown(nativeEvent, textareaRef.current);
+      setVimModeDisplay(vimRef.current.getStatusLine());
+
+      // After vim changes, sync React state
+      if (handled) {
+        dispatch({ type: 'SET_INPUT', value: textareaRef.current.value });
+
+        // If vim exited insert mode via Escape, also close any mention popup
+        if (vimRef.current.mode === 'normal' && mentionQuery !== null) {
+          setMentionQuery(null);
+          setMentionRange(null);
+        }
+      }
+    }
+
     // If mention popup is open, let it handle arrow keys/enter/escape
     if (mentionQuery !== null) {
       if (['ArrowDown', 'ArrowUp', 'Enter', 'Escape'].includes(e.key)) {
@@ -98,6 +123,11 @@ export const ChatInput: React.FC = () => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       submitPrompt();
+      // Reset vim to normal mode on submit
+      if (state.vimMode) {
+        vimRef.current.mode = 'normal';
+        setVimModeDisplay(vimRef.current.getStatusLine());
+      }
     }
   };
 
@@ -180,10 +210,12 @@ export const ChatInput: React.FC = () => {
         )}
         <textarea
           ref={textareaRef}
-          className="chat-input-textarea"
+          className={`chat-input-textarea ${state.vimMode ? 'chat-input-textarea--vim' : ''}`}
           placeholder={
             state.connection === 'connected'
-              ? "Ask Wisp anything. @ to reference files"
+              ? state.vimMode
+                ? "NORMAL mode -- Press i/a/o to type, Esc to normal"
+                : "Ask Wisp anything. @ to reference files"
               : state.connection === 'connecting'
                 ? "Connecting to server..."
                 : "Disconnected — check server settings"
@@ -194,7 +226,14 @@ export const ChatInput: React.FC = () => {
           rows={1}
           disabled={state.connection !== 'connected'}
         />
+        <CompletionGhost textareaRef={textareaRef} />
+        {state.vimMode && (
+          <div className="chat-input-vim-status">
+            {vimModeDisplay}
+          </div>
+        )}
         <InputToolbar hasContent={state.inputValue.length > 0} onSubmit={submitPrompt} />
+        <ContextIndicator />
       </div>
     </div>
   );

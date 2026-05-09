@@ -89,6 +89,19 @@ class InlineEditRequest(BaseModel):
     instruction: str = Field(..., min_length=1, description="Natural language edit instruction")
     model: Optional[str] = None
 
+
+class CompletionRequest(BaseModel):
+    path: str = Field(default="", description="File path relative to workspace")
+    file_content: str = Field(..., min_length=1, description="Full file content")
+    cursor_line: int = Field(..., ge=0, description="0-based cursor line")
+    cursor_char: int = Field(..., ge=0, description="0-based cursor character")
+    language: str = Field(default="", description="Programming language")
+
+
+class SemanticSearchRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=500)
+    top_k: int = Field(default=5, ge=1, le=20)
+
 class ToolApproval(BaseModel):
     call_id: str
     approved: bool
@@ -615,6 +628,85 @@ The replacement must be valid code that can directly substitute the selection.""
         "first_changed_line": diff_result.first_changed_line,
         "new_file_content": new_file_content,
     }
+
+
+# ── Autocomplete ───────────────────────────────────────────────────────
+
+@app.post("/api/complete", dependencies=[Depends(verify_api_key)])
+async def autocomplete(req: CompletionRequest):
+    """Generate a code completion using the configured LLM provider.
+
+    Accepts file content + cursor position, returns completion text.
+    Uses low-temperature, fill-in-the-middle prompting.
+    """
+    from wisp.completion import generate_completion, CompletionRequest as CR
+
+    config = WispConfig()
+    config.workspace = str(WORKSPACE_ROOT)
+
+    result = await generate_completion(
+        CR(
+            file_content=req.file_content,
+            cursor_line=req.cursor_line,
+            cursor_char=req.cursor_char,
+            path=req.path,
+            language=req.language,
+        ),
+        config,
+    )
+    return {"completion": result.text, "finish_reason": result.finish_reason}
+
+
+# ── Semantic Codebase Search ───────────────────────────────────────────
+
+# Module-level index instance (lazy init)
+_semantic_index: Optional[object] = None
+
+
+def _get_semantic_index():
+    """Get or create the semantic index singleton."""
+    global _semantic_index
+    if _semantic_index is None:
+        from wisp.semantic_index import SemanticIndex
+        _semantic_index = SemanticIndex(str(WORKSPACE_ROOT))
+    return _semantic_index
+
+
+@app.get("/api/codebase/search", dependencies=[Depends(verify_api_key)])
+async def search_codebase(q: str = Query(..., min_length=1, max_length=500),
+                          n: int = Query(default=5, ge=1, le=20)):
+    """Semantic search over the codebase. Returns top-N relevant code chunks."""
+    index = _get_semantic_index()
+    results = index.search(q, top_k=n)
+    return {
+        "query": q,
+        "results": [
+            {
+                "file": r.file_path,
+                "start_line": r.start_line,
+                "end_line": r.end_line,
+                "content": r.content,
+                "symbol": r.symbol_name,
+                "score": r.score,
+            }
+            for r in results
+        ],
+    }
+
+
+@app.post("/api/codebase/index", dependencies=[Depends(verify_api_key)])
+async def reindex_codebase():
+    """Trigger a full re-index of the workspace."""
+    index = _get_semantic_index()
+    stats = index.index_all()
+    return {"ok": True, **stats}
+
+
+@app.get("/api/codebase/stats", dependencies=[Depends(verify_api_key)])
+async def codebase_stats():
+    """Get semantic index statistics."""
+    index = _get_semantic_index()
+    return index.get_stats()
 
 
 @app.get("/api/git", dependencies=[Depends(verify_api_key)])

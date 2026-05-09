@@ -1125,6 +1125,31 @@ def tool_web_search(query: str, num_results: int = 5) -> str:
         return f"Search error: {e}. Try again or use web_fetch on a known URL."
 
 
+def tool_search_codebase(query: str, top_k: int = 5) -> str:
+    """Semantic search over the codebase using embedding similarity."""
+    import os as _os
+    workspace = _os.environ.get("WISP_WORKSPACE", ".")
+    try:
+        from wisp.semantic_index import SemanticIndex
+        index = SemanticIndex(workspace)
+        results = index.search(query, top_k=top_k)
+        if not results:
+            return f"No semantically relevant code found for: {query}"
+        lines = [f"Semantic search results for '{query}':"]
+        for i, r in enumerate(results, 1):
+            lines.append(f"\n{i}. {r.file_path}:{r.start_line}-{r.end_line} "
+                         f"(score: {r.score:.3f})"
+                         f"{' [' + r.symbol_name + ']' if r.symbol_name else ''}")
+            content_lines = r.content.split("\n")[:4]
+            for cl in content_lines:
+                lines.append(f"   | {cl[:120]}")
+        return "\n".join(lines)
+    except ImportError:
+        return "Semantic index module not available. Install: pip install wisp[semantic]"
+    except Exception as e:
+        return f"Semantic search error: {e}"
+
+
 # ── Tool schema definitions (Ollama tool-calling format) ──
 
 TOOL_SCHEMAS = [
@@ -1545,6 +1570,21 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_codebase",
+            "description": "Semantic search over the codebase using embeddings. Finds code related to a natural language query. Use for: 'where is error handling for X?', 'find the authentication logic', 'show me tests for Y'. Returns file paths, line ranges, and relevance scores.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Natural language query about the codebase"},
+                    "top_k": {"type": "number", "description": "Number of results (default: 5, max: 10)"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 # Map tool names to their implementations
@@ -1575,6 +1615,7 @@ TOOL_IMPLS = {
     "lsp_hover": tool_lsp_hover,
     "lsp_symbols": tool_lsp_symbols,
     "web_search": tool_web_search,
+    "search_codebase": tool_search_codebase,
 }
 
 
@@ -1664,6 +1705,10 @@ def _build_tool_metadata(name: str, args: dict, result: str) -> dict:
         meta["line"] = args.get("line", 1)
     elif name == "lsp_symbols":
         meta["path"] = args.get("path", "")
+
+    elif name == "search_codebase":
+        meta["query"] = args.get("query", "")
+        meta["top_k"] = args.get("top_k", 5)
 
     return meta
 
