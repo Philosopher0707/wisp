@@ -32,12 +32,26 @@ export const TopBar: React.FC = () => {
   const { state, dispatch } = useAppState();
   const api = useApi(state.serverUrl, state.apiKey);
   const [git, setGit] = useState<GitStatus | null>(null);
+  const [sandboxType, setSandboxType] = useState<string>('host');
 
   // Fetch git status when workspace changes
   useEffect(() => {
     if (!state.workspacePath) return;
     api.fetchGitStatus().then(setGit).catch(() => setGit(null));
   }, [state.workspacePath, api]);
+
+  // Fetch sandbox status
+  useEffect(() => {
+    if (state.connection !== 'connected') return;
+    const base = state.serverUrl.replace(/\/$/, '');
+    const params = state.apiKey ? `?api-key=${encodeURIComponent(state.apiKey)}` : '';
+    fetch(`${base}/api/sandbox/status${params}`)
+      .then((r) => r.json())
+      .then((data: { type?: string }) => {
+        if (data.type) setSandboxType(data.type);
+      })
+      .catch(() => {});
+  }, [state.serverUrl, state.apiKey, state.connection]);
 
   const openVSCode = useCallback(async () => {
     try {
@@ -99,6 +113,13 @@ export const TopBar: React.FC = () => {
             {git.dirty && <span className="topbar-git-dirty" />}
           </span>
         )}
+        <span
+          className={`topbar-sandbox topbar-sandbox--${sandboxType}`}
+          title={`Sandbox: ${sandboxType === 'docker' ? 'Docker container' : 'Host machine'}`}
+        >
+          <span className={`topbar-sandbox-dot topbar-sandbox-dot--${sandboxType}`} />
+          {sandboxType === 'docker' ? 'Docker' : 'Host'}
+        </span>
         <span
           className={`topbar-status topbar-status--${state.connection}`}
           title={STATUS_LABELS[state.connection] || state.connection}
