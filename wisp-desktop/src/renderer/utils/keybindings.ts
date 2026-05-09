@@ -15,6 +15,7 @@ export const DEFAULT_KEYBINDINGS: Record<string, string> = {
   'interrupt': 'Cmd+C',
   'planMode': 'Cmd+Shift+P',
   'inlineEdit': 'Cmd+K',
+  'arena': 'Cmd+Shift+A',
 };
 
 export function loadKeybindings(): Record<string, string> {

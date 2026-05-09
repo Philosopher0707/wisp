@@ -6,6 +6,8 @@ import { MessageBubble } from './MessageBubble.js';
 import { ProjectContextBar } from './ProjectContextBar.js';
 import { ConversationSearch } from './ConversationSearch.js';
 import { GitCommitBanner } from './GitCommitBanner.js';
+import { BackgroundAgentBanner } from './BackgroundAgentBanner.js';
+import { SubagentPanel } from '../SubagentPanel.js';
 import { ArrowDown } from '../../icons/index.js';
 import './ChatArea.css';
 
@@ -104,6 +106,8 @@ export const ChatArea: React.FC = () => {
             committing={committing}
           />
         )}
+        <BackgroundAgentBanner />
+        {state.subagentTasks.length > 0 && <SubagentPanel />}
         <div className="chat-input-sticky">
           <div className="chat-input-centered">
             <ChatInput />
@@ -118,6 +122,7 @@ export const ChatArea: React.FC = () => {
     <div className="chat-area">
       <div className="chat-area-center">
         <WelcomeHeading />
+        {state.subagentTasks.length > 0 && <SubagentPanel />}
         <ChatInput />
         <ProjectContextBar />
       </div>

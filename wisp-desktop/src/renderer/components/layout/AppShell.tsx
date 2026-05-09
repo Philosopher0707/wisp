@@ -13,6 +13,7 @@ import { QuickFileModal } from '../QuickFileModal.js';
 import { PlanPanel } from '../PlanPanel.js';
 import { CheckpointPanel } from '../CheckpointPanel.js';
 import { InlineEdit } from '../chat/InlineEdit.js';
+import { ArenaPanel } from '../ArenaPanel.js';
 import './AppShell.css';
 
 const MIN_SIDEBAR = 180;
@@ -78,6 +79,7 @@ export const AppShell: React.FC = () => {
       {state.uiOverlay === 'inlineEdit' && (
         <InlineEdit visible onClose={() => dispatch({ type: 'CLOSE_OVERLAY' })} />
       )}
+      {state.uiOverlay === 'arena' && <ArenaPanel />}
       {state.pendingPlan && <PlanPanel />}
     </div>
   );

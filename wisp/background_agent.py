@@ -1,0 +1,178 @@
+"""Background agent execution — spawn and track long-running agent tasks.
+
+Runs agents in asyncio tasks, stores results for polling, and supports
+desktop notifications on completion. Simple in-process execution, not
+full cloud orchestration — leverages existing subagent infrastructure.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import time
+import uuid
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+from wisp.config import WispConfig
+from wisp.core.agent import WispAgentCore
+from wisp.core.events import (
+    AgentEvent, TYPE_CONTENT, TYPE_THINKING, TYPE_TOOL_CALL,
+    TYPE_TOOL_RESULT, TYPE_ERROR, TYPE_DONE,
+)
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class BackgroundRun:
+    id: str
+    prompt: str
+    model: str
+    workspace: str
+    status: str  # pending | running | done | failed
+    created_at: float = field(default_factory=time.time)
+    started_at: Optional[float] = None
+    finished_at: Optional[float] = None
+    content: str = ""
+    tool_calls: list[dict] = field(default_factory=list)
+    files_changed: list[str] = field(default_factory=list)
+    error: Optional[str] = None
+    iterations: int = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "prompt": self.prompt[:200],
+            "model": self.model,
+            "workspace": self.workspace,
+            "status": self.status,
+            "created_at": self.created_at,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "content": self.content[:2000],
+            "tool_calls": self.tool_calls[-10:],
+            "files_changed": self.files_changed,
+            "error": self.error,
+            "iterations": self.iterations,
+            "duration_ms": round(((self.finished_at or time.time()) - (self.started_at or self.created_at)) * 1000) if self.started_at else 0,
+        }
+
+
+class BackgroundRunner:
+    """Manages background agent execution with status tracking."""
+
+    def __init__(self):
+        self._runs: dict[str, BackgroundRun] = {}
+        self._tasks: dict[str, asyncio.Task] = {}
+        self._callbacks: dict[str, asyncio.Task] = {}  # completion callbacks
+
+    def create(self, prompt: str, model: str, workspace: str,
+               permission_mode: str = "auto_edit") -> BackgroundRun:
+        """Create a new background run. Returns the run ID."""
+        run_id = f"bg-{uuid.uuid4().hex[:12]}"
+        run = BackgroundRun(
+            id=run_id,
+            prompt=prompt,
+            model=model,
+            workspace=workspace,
+            status="pending",
+        )
+        self._runs[run_id] = run
+        return run
+
+    def start(self, run_id: str):
+        """Begin execution of a pending run."""
+        run = self._runs.get(run_id)
+        if not run:
+            raise ValueError(f"Unknown run: {run_id}")
+        if run.status != "pending":
+            raise ValueError(f"Run {run_id} already started (status: {run.status})")
+
+        task = asyncio.create_task(self._execute(run_id))
+        self._tasks[run_id] = task
+
+    async def _execute(self, run_id: str):
+        """Execute the agent in background."""
+        run = self._runs[run_id]
+        run.status = "running"
+        run.started_at = time.time()
+
+        try:
+            config = WispConfig()
+            config.model = run.model
+            config.workspace = run.workspace
+            config.permission_mode = "auto_edit"
+            config.auto_approve = True
+
+            core = WispAgentCore(config=config)
+            content_parts: list[str] = []
+
+            async for event in core.run(run.prompt):
+                if event.type == TYPE_CONTENT:
+                    content_parts.append(event.text)
+                elif event.type == TYPE_TOOL_CALL:
+                    run.tool_calls.append({
+                        "name": event.data.get("name", ""),
+                        "args": event.data.get("arguments", {}),
+                    })
+                elif event.type == TYPE_TOOL_RESULT:
+                    name = event.data.get("name", "")
+                    for tc in reversed(run.tool_calls):
+                        if tc["name"] == name and "result" not in tc:
+                            tc["result"] = event.data.get("result", "")
+                            break
+                elif event.type == TYPE_ERROR:
+                    logger.warning("Background run %s error: %s", run_id, event.data.get("message"))
+                elif event.type == TYPE_DONE:
+                    run.iterations = event.data.get("turns", 0)
+
+            run.content = "\n".join(content_parts)
+
+            # Collect changed files
+            try:
+                run.files_changed = core.change_tracker.files_changed() if hasattr(core.change_tracker, 'files_changed') else []
+            except Exception:
+                pass
+
+            run.status = "done"
+
+        except Exception as e:
+            logger.error("Background run %s failed: %s", run_id, e)
+            run.error = str(e)
+            run.status = "failed"
+
+        finally:
+            run.finished_at = time.time()
+
+    def get(self, run_id: str) -> Optional[BackgroundRun]:
+        return self._runs.get(run_id)
+
+    def list_runs(self) -> list[BackgroundRun]:
+        return sorted(self._runs.values(), key=lambda r: r.created_at, reverse=True)
+
+    def cancel(self, run_id: str) -> bool:
+        """Cancel a running background task."""
+        task = self._tasks.get(run_id)
+        if task and not task.done():
+            task.cancel()
+            run = self._runs.get(run_id)
+            if run:
+                run.status = "failed"
+                run.error = "Cancelled by user"
+                run.finished_at = time.time()
+            return True
+        return False
+
+
+# Module-level singleton
+_runner: Optional[BackgroundRunner] = None
+
+
+def get_runner() -> BackgroundRunner:
+    global _runner
+    if _runner is None:
+        _runner = BackgroundRunner()
+    return _runner

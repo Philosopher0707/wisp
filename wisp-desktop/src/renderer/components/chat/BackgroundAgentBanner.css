@@ -1,0 +1,132 @@
+.bg-agent-banner {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.bg-run-item {
+  padding: var(--space-2, 8px) var(--space-3, 12px);
+  cursor: pointer;
+  transition: background 0.1s;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.bg-run-item:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.bg-run-item--running {
+  background: rgba(124, 58, 237, 0.04);
+}
+
+.bg-run-item--done {
+  border-left: 2px solid rgba(34, 197, 94, 0.4);
+}
+
+.bg-run-item--failed {
+  border-left: 2px solid rgba(239, 68, 68, 0.4);
+}
+
+.bg-run-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+}
+
+.bg-run-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.12);
+  border-top-color: var(--accent-purple, #7c3aed);
+  border-radius: 50%;
+  animation: bg-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes bg-spin {
+  to { transform: rotate(360deg); }
+}
+
+.bg-run-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.bg-run-dot--done {
+  background: #22c55e;
+}
+
+.bg-run-dot--failed {
+  background: #ef4444;
+}
+
+.bg-run-label {
+  font-size: 12px;
+  font-family: var(--font-sans);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bg-run-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1, 4px);
+  margin-top: 2px;
+  padding-left: 20px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.bg-run-cancel,
+.bg-run-dismiss {
+  font-size: 10px;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0 4px;
+  margin-left: auto;
+  font-family: var(--font-sans);
+}
+
+.bg-run-cancel:hover,
+.bg-run-dismiss:hover {
+  color: var(--text-primary);
+}
+
+.bg-run-detail {
+  margin-top: var(--space-2, 8px);
+  padding: var(--space-2, 8px);
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+.bg-run-error {
+  color: #fca5a5;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.bg-run-files {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.bg-run-content {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  max-height: 100px;
+  overflow: auto;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}

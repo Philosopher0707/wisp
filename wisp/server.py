@@ -102,6 +102,24 @@ class SemanticSearchRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=500)
     top_k: int = Field(default=5, ge=1, le=20)
 
+
+class BackgroundRunRequest(BaseModel):
+    prompt: str = Field(..., min_length=1)
+    model: Optional[str] = None
+    permission_mode: str = Field(default="auto_edit")
+
+
+class ArenaCompareRequest(BaseModel):
+    prompt: str = Field(..., min_length=1)
+    task: str = Field(default="", max_length=200)
+    model_a: str = Field(default="claude-sonnet-4-6")
+    model_b: str = Field(default="claude-opus-4-7")
+
+
+class ArenaVoteRequest(BaseModel):
+    entry_id: str
+    vote: str = Field(..., pattern="^(a|b|tie)$")
+
 class ToolApproval(BaseModel):
     call_id: str
     approved: bool
@@ -707,6 +725,147 @@ async def codebase_stats():
     """Get semantic index statistics."""
     index = _get_semantic_index()
     return index.get_stats()
+
+
+# ── Background Agents ──────────────────────────────────────────────────
+
+@app.post("/api/run/background", dependencies=[Depends(verify_api_key)])
+async def start_background_run(req: BackgroundRunRequest):
+    """Start an agent run in the background. Returns run ID for polling."""
+    from wisp.background_agent import get_runner
+    runner = get_runner()
+
+    model = req.model or os.environ.get("WISP_DEFAULT_MODEL", "claude-sonnet-4-6")
+    run = runner.create(
+        prompt=req.prompt,
+        model=model,
+        workspace=str(WORKSPACE_ROOT),
+        permission_mode=req.permission_mode,
+    )
+    runner.start(run.id)
+    return {"ok": True, "run_id": run.id, "status": "running"}
+
+
+@app.get("/api/run/{run_id}", dependencies=[Depends(verify_api_key)])
+async def get_background_run(run_id: str):
+    """Get the status and results of a background agent run."""
+    from wisp.background_agent import get_runner
+    runner = get_runner()
+    run = runner.get(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run.to_dict()
+
+
+@app.get("/api/runs", dependencies=[Depends(verify_api_key)])
+async def list_background_runs():
+    """List all background agent runs."""
+    from wisp.background_agent import get_runner
+    runner = get_runner()
+    return {"runs": [r.to_dict() for r in runner.list_runs()[:20]]}
+
+
+@app.delete("/api/run/{run_id}", dependencies=[Depends(verify_api_key)])
+async def cancel_background_run(run_id: str):
+    """Cancel a running background agent."""
+    from wisp.background_agent import get_runner
+    runner = get_runner()
+    ok = runner.cancel(run_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Run not found or not running")
+    return {"ok": True}
+
+
+# ── Arena Mode ─────────────────────────────────────────────────────────
+
+@app.post("/api/arena/compare", dependencies=[Depends(verify_api_key)])
+async def arena_compare(req: ArenaCompareRequest):
+    """Run a blind A/B comparison between two models.
+
+    Runs the same prompt with both models, returns blind side-by-side
+    results. Model identities are hidden until after voting.
+    """
+    from wisp.arena import get_arena, ArenaCompareRequest as AR
+
+    arena = get_arena()
+    entry = await arena.run_comparison(AR(
+        prompt=req.prompt,
+        task=req.task,
+        model_a=req.model_a,
+        model_b=req.model_b,
+        workspace=str(WORKSPACE_ROOT),
+    ))
+
+    return {
+        "entry_id": entry.id,
+        "task": entry.task,
+        "side_a": entry.to_blind_dict("a"),
+        "side_b": entry.to_blind_dict("b"),
+        "voted": False,
+    }
+
+
+@app.post("/api/arena/vote", dependencies=[Depends(verify_api_key)])
+async def arena_vote(req: ArenaVoteRequest):
+    """Vote on an arena comparison. Reveals model identities after voting."""
+    from wisp.arena import get_arena
+
+    arena = get_arena()
+    entry = arena.vote(req.entry_id, req.vote)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Arena entry not found")
+
+    return {
+        "entry_id": entry.id,
+        "model_a": entry.model_a,
+        "model_b": entry.model_b,
+        "vote": entry.vote,
+        "revealed": True,
+    }
+
+
+@app.get("/api/arena/leaderboard", dependencies=[Depends(verify_api_key)])
+async def arena_leaderboard():
+    """Get the per-project arena leaderboard."""
+    from wisp.arena import get_arena
+
+    arena = get_arena()
+    lb = arena.get_leaderboard(str(WORKSPACE_ROOT))
+    entries = [
+        {
+            "id": e.id,
+            "task": e.task,
+            "model_a": e.model_a,
+            "model_b": e.model_b,
+            "a_duration_ms": e.a_duration_ms,
+            "b_duration_ms": e.b_duration_ms,
+            "vote": e.vote,
+            "created_at": e.created_at,
+        }
+        for e in arena.list_entries()[:10]
+    ]
+    return {"leaderboard": lb, "entries": entries}
+
+
+@app.get("/api/arena/entries", dependencies=[Depends(verify_api_key)])
+async def arena_entries():
+    """List all arena comparison entries."""
+    from wisp.arena import get_arena
+
+    arena = get_arena()
+    return {
+        "entries": [
+            {
+                "id": e.id,
+                "task": e.task,
+                "model_a": e.model_a,
+                "model_b": e.model_b,
+                "vote": e.vote,
+                "created_at": e.created_at,
+            }
+            for e in arena.list_entries()[:20]
+        ],
+    }
 
 
 @app.get("/api/git", dependencies=[Depends(verify_api_key)])

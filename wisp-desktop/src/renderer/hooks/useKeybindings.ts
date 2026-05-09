@@ -85,6 +85,9 @@ function executeAction(
     case 'inlineEdit':
       dispatch({ type: 'OPEN_OVERLAY', overlay: 'inlineEdit' });
       break;
+    case 'arena':
+      dispatch({ type: 'OPEN_OVERLAY', overlay: 'arena' });
+      break;
   }
 }
 
