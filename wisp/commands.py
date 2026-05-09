@@ -199,6 +199,18 @@ def cmd_model(agent, args: str):
     agent.config.model = new_model
     if hasattr(agent, "client") and agent.client:
         agent.client.model = new_model
+        # Re-detect context window for the new model
+        if not agent.config._context_tokens_explicit:
+            try:
+                detected = agent.client.get_context_length()
+                if detected != agent.config.max_context_tokens:
+                    logger.info(
+                        "Auto-detected context window for %s: %d tokens",
+                        new_model, detected,
+                    )
+                    agent.config.max_context_tokens = detected
+            except Exception:
+                pass
     if hasattr(agent, "_system_prompt_cache"):
         agent._system_prompt_cache.clear()
     print(success(f"✓ Model set to: {_display_name(new_model)} {dim('(cloud)')}"))

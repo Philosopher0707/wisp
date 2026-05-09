@@ -38,7 +38,10 @@ class AgentMemory:
     # ── Persistence ──
 
     def save(self, summary: SessionSummary) -> None:
-        """Append a summary to sessions.jsonl."""
+        """Append a summary to sessions.jsonl. Skips if session_id already saved."""
+        if self._has_session(summary.session_id):
+            logger.debug("Session %s already summarized — skipping", summary.session_id)
+            return
         try:
             with SESSIONS_FILE.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(summary.to_dict(), ensure_ascii=False) + "\n")
@@ -46,6 +49,26 @@ class AgentMemory:
             self._rotate()
         except OSError as e:
             logger.error("Failed to save session summary: %s", e)
+
+    def _has_session(self, session_id: str) -> bool:
+        """Check if a session_id already exists in the store."""
+        if not SESSIONS_FILE.exists():
+            return False
+        try:
+            with SESSIONS_FILE.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                        if data.get("session_id") == session_id:
+                            return True
+                    except json.JSONDecodeError:
+                        continue
+        except OSError:
+            pass
+        return False
 
     def load_all(self) -> list[SessionSummary]:
         """Load all summaries from disk, oldest first."""

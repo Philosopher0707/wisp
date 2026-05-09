@@ -307,17 +307,19 @@ class ExtractiveSummarizer:
         """Extract file paths mentioned in assistant messages and tool calls."""
         seen: set[str] = set()
         results: list[str] = []
+        _MAX_FILES = 30
 
         for m in messages:
             # From message content
             content = m.get("content", "") or ""
             for match in _FILE_PATTERN.finditer(content):
                 path = match.group(0)
-                # Clean up: remove trailing punctuation
                 path = path.rstrip(".,;:!?)")
-                if path not in seen:
+                if path not in seen and len(path) < 200:
                     seen.add(path)
                     results.append(path)
+                    if len(results) >= _MAX_FILES:
+                        return results
 
             # From tool calls
             tool_calls = m.get("tool_calls", [])
@@ -330,12 +332,11 @@ class ExtractiveSummarizer:
                             if isinstance(val, str):
                                 for match in _FILE_PATTERN.finditer(val):
                                     path = match.group(0).rstrip(".,;:!?)")
-                                    if path not in seen:
+                                    if path not in seen and len(path) < 200:
                                         seen.add(path)
                                         results.append(path)
-
-            if len(results) >= 10:
-                break
+                                        if len(results) >= _MAX_FILES:
+                                            return results
 
         return results
 
@@ -397,12 +398,17 @@ class ExtractiveSummarizer:
 
     # ── Helpers ──────────────────────────────────────────────────────
 
+    _MAX_ITEM_LENGTH = 300
+
     def _dedup_limit(self, items: list[str], limit: int) -> list[str]:
-        """Deduplicate similar items and cap at limit."""
+        """Deduplicate similar items, cap individual length, and cap at limit."""
         deduped: list[str] = []
         for item in items:
-            if not any(self._similar(item, d) for d in deduped):
-                deduped.append(item)
+            trimmed = item.strip()[:self._MAX_ITEM_LENGTH]
+            if len(trimmed) < 10:
+                continue
+            if not any(self._similar(trimmed, d) for d in deduped):
+                deduped.append(trimmed)
             if len(deduped) >= limit:
                 break
         return deduped
