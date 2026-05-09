@@ -7,6 +7,7 @@ of the codebase depend on and adds the synchronous run()/repl() APIs.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Optional
@@ -320,6 +321,23 @@ class WispAgent(WispAgentCore):
                     "name": func_name,
                 })
                 continue
+
+            # ── Checkpoint before write operations ──
+            if func_name in ("write_file", "edit_file", "edit_file_multi"):
+                try:
+                    from wisp.checkpoints import CheckpointManager
+                    cpm = CheckpointManager(workspace)
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        cp = asyncio.run(cpm.auto_checkpoint(func_name))
+                    else:
+                        cp = loop.run_until_complete(cpm.auto_checkpoint(func_name))
+                    logger.debug("Checkpoint created: %s (%s)", cp.id, func_name)
+                except ImportError:
+                    pass
+                except Exception as e:
+                    logger.warning("Checkpoint creation failed for %s: %s", func_name, e)
 
             # Execute tool
             if func_name == "spawn_subagent":
