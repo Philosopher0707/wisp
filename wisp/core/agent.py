@@ -38,6 +38,7 @@ from wisp.code_index import build_index as build_regex_index, format_index_summa
 from wisp.tree_sitter_index import build_index as build_ts_index, is_tree_sitter_available
 from wisp.mcp import MCPManager
 from wisp.memory import format_memory_block
+from wisp.core.message_format import extract_text
 from wisp.core.events import (
     AgentEvent,
     TYPE_CONTENT,
@@ -271,7 +272,6 @@ class WispAgentCore:
     })
 
     def _expand_continuation(self, user_text: str) -> str:
-        from wisp.core.message_format import extract_text
         lowered = user_text.strip().lower().rstrip("?.!")
         if lowered not in self._CONTINUATION_TRIGGERS:
             return user_text
@@ -312,7 +312,6 @@ class WispAgentCore:
     # ── Token estimation ─────────────────────────────────────────────
 
     def _estimate_tokens(self, messages: list[dict]) -> int:
-        from wisp.core.message_format import extract_text
         total = 0
         for msg in messages:
             if msg.get("role") != "tool":

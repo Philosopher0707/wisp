@@ -8,6 +8,7 @@ the REPL loop.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import shutil
@@ -34,6 +35,10 @@ from wisp.core.events import (
     TYPE_DONE,
     TYPE_SYSTEM,
     TYPE_APPROVAL_REQUEST,
+    TYPE_CHECKPOINT_CREATED,
+    TYPE_STEERING_PAUSED,
+    TYPE_STEERING_RESUMED,
+    TYPE_STEERING_INJECT,
 )
 from wisp.colors import success, error, warning, info, dim, accent
 from wisp.session import Session, SessionManager, format_session_preview
@@ -267,8 +272,6 @@ def _render_event(event: AgentEvent, show_thinking: bool = False) -> Optional[st
     if etype == TYPE_TOOL_RESULT:
         name = event.data.get("name", "")
         result = event.data.get("result", "")
-        # Parse structured JSON wrapper to extract the actual data
-        import json
         if isinstance(result, str) and result.startswith("{"):
             try:
                 parsed = json.loads(result)
@@ -489,7 +492,6 @@ class CLITransport:
 
         _in_thinking = False
         _content_started = False
-        _popped_message = None
         try:
             async for event in self.core._arun(prompt, system=system, approval_handler=_cli_approval):
                 if self._interrupted:
