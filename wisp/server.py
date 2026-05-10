@@ -33,6 +33,8 @@ from wisp.config import WispConfig
 from wisp.multi_agent.orchestrator import SwarmOrchestrator
 from wisp.multi_agent.roles import AgentRole
 from wisp.transport.server import create_swarm_progress_callback
+from wisp.app_server import WispAppServer
+from wisp.runtime_protocol import JsonRpcRequest
 
 DEFAULT_SWARM_ROLES = [AgentRole.CODER, AgentRole.REVIEWER, AgentRole.TESTER, AgentRole.RESEARCHER]
 
@@ -369,12 +371,17 @@ async def _run_agent_headless(
 
     transport = MemoryTransport(permission_mode=permission_mode)
 
+    # Pre-build system prompt if skill is specified
+    system = core._build_system_prompt(skill_name=skill, workspace=config.workspace) if skill else None
+
     try:
-        async for event in core.run(prompt, approval_handler=transport.approval_handler, images=images):
+        async for event in core.run(prompt, system=system, approval_handler=transport.approval_handler, images=images):
             transport.collect(event)
     except Exception as e:
         logger.error("Headless agent error: %s", e)
         transport.errors.append({"message": str(e), "recoverable": False})
+    finally:
+        core.close()
 
     result = transport.to_result()
 
@@ -1387,6 +1394,101 @@ async def update_context(req: ContextUpdateRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── JSON-RPC Endpoint ──────────────────────────────────────────────────
+
+_app_server = WispAppServer()
+
+
+@app.post("/api/jsonrpc", dependencies=[Depends(verify_api_key)])
+async def jsonrpc_handler(request: dict):
+    """JSON-RPC 2.0 endpoint for app-style clients."""
+    rpc_request = JsonRpcRequest.from_dict(request)
+    config = WispConfig()
+    config.workspace = str(WORKSPACE_ROOT)
+    response = await _app_server.handle_request(rpc_request, config=config)
+    return response.to_dict()
+
+
+# ── Plugin Management Endpoints ────────────────────────────────────────
+
+
+@app.get("/api/plugins", dependencies=[Depends(verify_api_key)])
+async def list_plugins():
+    return {"plugins": []}
+
+
+@app.post("/api/plugins/install", dependencies=[Depends(verify_api_key)])
+async def install_plugin(request: dict):
+    return {"ok": False, "message": "Plugin installation not yet implemented"}
+
+
+@app.delete("/api/plugins/{name}", dependencies=[Depends(verify_api_key)])
+async def delete_plugin(name: str):
+    return {"ok": False, "message": f"Plugin '{name}' not found"}
+
+
+@app.post("/api/plugins/{name}/toggle", dependencies=[Depends(verify_api_key)])
+async def toggle_plugin(name: str, request: dict):
+    enable = request.get("enable", False)
+    return {"ok": False, "message": f"Plugin '{name}' toggle not yet implemented", "enabled": enable}
+
+
+@app.get("/api/plugins/marketplace", dependencies=[Depends(verify_api_key)])
+async def plugin_marketplace():
+    return {"plugins": []}
+
+
+# ── MCP Management Endpoints ───────────────────────────────────────────
+
+
+@app.get("/api/mcp/servers", dependencies=[Depends(verify_api_key)])
+async def list_mcp_servers():
+    return {"servers": []}
+
+
+@app.post("/api/mcp/servers", dependencies=[Depends(verify_api_key)])
+async def add_mcp_server(request: dict):
+    return {"ok": False, "message": "MCP server management not yet implemented"}
+
+
+@app.delete("/api/mcp/servers/{name}", dependencies=[Depends(verify_api_key)])
+async def delete_mcp_server(name: str):
+    return {"ok": False, "message": f"MCP server '{name}' not found"}
+
+
+@app.post("/api/mcp/servers/{name}/test", dependencies=[Depends(verify_api_key)])
+async def test_mcp_server(name: str):
+    return {"ok": False, "message": f"MCP server '{name}' test not yet implemented"}
+
+
+# ── Hook Management Endpoints ──────────────────────────────────────────
+
+
+@app.get("/api/hooks", dependencies=[Depends(verify_api_key)])
+async def list_hooks():
+    return {"hooks": []}
+
+
+@app.post("/api/hooks", dependencies=[Depends(verify_api_key)])
+async def create_hook(request: dict):
+    return {"ok": False, "message": "Hook management not yet implemented"}
+
+
+@app.delete("/api/hooks/{name}", dependencies=[Depends(verify_api_key)])
+async def delete_hook(name: str):
+    return {"ok": False, "message": f"Hook '{name}' not found"}
+
+
+@app.post("/api/hooks/{name}/test", dependencies=[Depends(verify_api_key)])
+async def test_hook(name: str, request: dict):
+    return {"result": "Hook test not yet implemented"}
+
+
+@app.get("/api/hooks/logs", dependencies=[Depends(verify_api_key)])
+async def hook_logs():
+    return {"logs": []}
 
 
 # ── PR Review Endpoints ───────────────────────────────────────────────

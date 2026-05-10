@@ -239,6 +239,39 @@ class WispAgentCore:
         except Exception as e:
             logger.warning("Failed to initialize HookManager: %s", e)
 
+    def close(self) -> None:
+        """Release resources: MCP connections, LSP servers, and save session state.
+
+        Safe to call multiple times — idempotent.
+        """
+        try:
+            self._save_session()
+            self._save_session_summary()
+        except Exception:
+            pass
+        try:
+            self.mcp.shutdown()
+        except Exception:
+            pass
+        try:
+            self.lsp.shutdown_all()
+        except Exception:
+            pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
     # ── Steering (pause / resume) ────────────────────────────────────
 
     def pause(self) -> None:

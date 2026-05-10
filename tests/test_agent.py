@@ -1,8 +1,9 @@
-"""Tests for agent.py — parse_tool_call, build_skills_block, estimate_tokens, trim, resolve_session."""
+"""Tests for agent.py — parse_tool_call, estimate_tokens, trim, resolve_session."""
 
 import pytest
 from unittest.mock import patch, MagicMock
-from wisp.agent import _parse_tool_call, _build_skills_block, _is_interactive, _args_preview, _input_line
+from wisp.agent import _is_interactive, _args_preview, _input_line
+from wisp.core.agent import WispAgentCore
 from wisp.config import WispConfig
 
 
@@ -12,43 +13,23 @@ class TestParseToolCall:
 
     def test_valid_tool_call(self):
         resp = {"message": {"tool_calls": [{"function": {"name": "read_file"}}]}}
-        result = _parse_tool_call(resp)
+        result = WispAgentCore._parse_tool_call(resp)
         assert result == [{"function": {"name": "read_file"}}]
 
     def test_no_tool_calls(self):
         resp = {"message": {"content": "Hello"}}
-        assert _parse_tool_call(resp) is None
+        assert WispAgentCore._parse_tool_call(resp) is None
 
     def test_empty_list(self):
         resp = {"message": {"tool_calls": []}}
-        assert _parse_tool_call(resp) is None
+        assert WispAgentCore._parse_tool_call(resp) is None
 
     def test_missing_message(self):
-        assert _parse_tool_call({}) is None
+        assert WispAgentCore._parse_tool_call({}) is None
 
     def test_malformed_message_type(self):
         resp = {"message": "not a dict"}
-        assert _parse_tool_call(resp) is None
-
-
-# ── _build_skills_block ───────────────────────────────────────────────
-
-class TestBuildSkillsBlock:
-
-    def test_no_skills(self):
-        with patch("wisp.agent.discover_skills", return_value=[]):
-            assert _build_skills_block(".") == ""
-
-    def test_with_skills(self):
-        mock_skills = [
-            MagicMock(name="code-review", description="Review code changes"),
-            MagicMock(name="debug", description="Debug issues"),
-        ]
-        with patch("wisp.agent.discover_skills", return_value=mock_skills):
-            block = _build_skills_block(".")
-            assert "code-review" in block
-            assert "debug" in block
-            assert "Available Skills" in block
+        assert WispAgentCore._parse_tool_call(resp) is None
 
 
 # ── _is_interactive ───────────────────────────────────────────────────

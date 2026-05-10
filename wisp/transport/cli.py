@@ -25,6 +25,7 @@ except ImportError:
     readline = None
 
 from wisp.core.agent import WispAgentCore, _coerce_tool_data
+from wisp.core.message_format import extract_text
 from wisp.core.events import (
     AgentEvent,
     TYPE_CONTENT,
@@ -42,6 +43,7 @@ from wisp.core.events import (
 )
 from wisp.colors import success, error, warning, info, dim, accent
 from wisp.session import Session, SessionManager, format_session_preview
+from wisp.skills import find_skill
 
 logger = logging.getLogger(__name__)
 
@@ -351,13 +353,93 @@ class CLITransport:
 
     # ── Public API ─────────────────────────────────────────────────
 
-    def run_once(self, prompt: str, skill_name: Optional[str] = None) -> None:
-        """Run a single prompt and print results."""
+    def run(self, prompt: str, skill_name: Optional[str] = None, session_id: Optional[str] = None) -> None:
+        """Single-shot mode — setup, slash commands, skill, execute, cleanup."""
         _install_signal_handler()
-        try:
-            asyncio.run(self._run_once_async(prompt, skill_name))
-        finally:
+
+        if not self.core.client.check_health():
             _restore_signal_handler()
+            return
+
+        # Slash commands
+        if prompt.strip().startswith("/"):
+            from wisp.commands import dispatch, ExitREPL
+            try:
+                if dispatch(prompt.strip(), self.core):
+                    _restore_signal_handler()
+                    return
+            except ExitREPL:
+                _restore_signal_handler()
+                return
+
+        # Skill lookup
+        if skill_name:
+            skill = find_skill(skill_name, self.core.config.workspace or ".")
+            if skill:
+                print(accent(f"🧠 Loaded skill: {skill.name} — {skill.description}"))
+            else:
+                print(warning(f"⚠ Skill '{skill_name}' not found. Running without it."))
+
+        # Session setup
+        if session_id:
+            loaded = self.core._resolve_session(session_id)
+            if loaded is None:
+                print(error(f"✗ Session '{session_id}' not found."))
+                print(dim("  Run 'wisp session list' to see available sessions."))
+                _restore_signal_handler()
+                return
+            self.core.session = loaded
+            self.core.messages = list(loaded.messages)
+            self._print_session_banner(loaded)
+        else:
+            self.core.session = Session.create(
+                model=self.core.config.model,
+                workspace=self.core.config.workspace or ".",
+                first_prompt=prompt,
+            )
+            self.core.messages = []
+
+        print(info(f"🔮 Wisp (model: {self.core.config.model})"))
+        print()
+
+        try:
+            self.core._add_message("user", self.core._expand_continuation(prompt))
+            asyncio.run(self._execute_turn(
+                self.core._build_system_prompt(skill_name, workspace=self.core.config.workspace),
+                self.core.config.workspace or ".",
+            ))
+        finally:
+            self.core._save_session_summary()
+            self.core.mcp.shutdown()
+            self.core.lsp.shutdown_all()
+            _restore_signal_handler()
+
+    def run_once(self, prompt: str, skill_name: Optional[str] = None) -> None:
+        """Run a single prompt and print results (minimal wrapper)."""
+        self.run(prompt, skill_name=skill_name)
+
+    def _print_session_banner(self, loaded) -> None:
+        """Print session continuation info — shared by run() and repl()."""
+        print(info(f"📋 Continuing session: {self.core.session.id}"))
+        if loaded.title:
+            print(f"   {dim('Title:')} {loaded.title}")
+        print(f"   {dim('Model:')} {self.core.config.model}")
+        if loaded.model and loaded.model != self.core.config.model:
+            print(warning(f"   ⚠️  Session was created with model '{loaded.model}'. Now using '{self.core.config.model}'."))
+        print(f"   {dim('Messages so far:')} {len(self.core.messages)}")
+        last_user = None
+        for m in reversed(self.core.messages):
+            if m.get("role") == "user":
+                text = extract_text(m.get("content", ""))
+                if text.strip():
+                    last_user = text
+                    break
+        if last_user:
+            preview = last_user[:100].replace("\n", " ")
+            if len(last_user) > 100:
+                preview += "..."
+            print(f"   {dim('Last prompt:')} {preview}")
+        print()
 
     def repl(self, skill_name: Optional[str] = None, session_id: Optional[str] = None) -> None:
         """Interactive REPL — continuous conversation until the user exits."""
@@ -375,9 +457,7 @@ class CLITransport:
                 return
             self.core.session = loaded
             self.core.messages = list(loaded.messages)
-            session_id = self.core.session.id
-            if loaded.model and loaded.model != self.core.config.model:
-                print(warning(f"   ⚠️  Session was created with model '{loaded.model}'. Now using '{self.core.config.model}'."))
+            self._print_session_banner(loaded)
         else:
             self.core.session = Session.create(
                 model=self.core.config.model,

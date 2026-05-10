@@ -264,15 +264,18 @@ class SessionManager:
         _ensure_sessions_dir()
 
     def save(self, session: Session):
-        """Save a session to disk, creating parent dirs if needed."""
+        """Save a session to disk with cross-process locking."""
         session.touch()
         path = _session_path(session.id)
+        from filelock import FileLock
+        lock = FileLock(str(path) + ".lock")
         try:
-            path.write_text(
-                json.dumps(session.to_dict(), indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
-            logger.debug("Saved session %s (%d messages)", session.id, len(session.messages))
+            with lock:
+                path.write_text(
+                    json.dumps(session.to_dict(), indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                logger.debug("Saved session %s (%d messages)", session.id, len(session.messages))
         except OSError as e:
             logger.error("Failed to save session %s: %s", session.id, e)
             raise

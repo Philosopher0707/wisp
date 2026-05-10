@@ -19,6 +19,7 @@ class MockConfig:
         self.show_thinking = False
         self.max_context_tokens = 128000
         self.chars_per_token = 4
+        self._context_tokens_explicit = False
 
 
 class MockClient:

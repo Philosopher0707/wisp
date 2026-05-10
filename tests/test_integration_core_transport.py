@@ -154,7 +154,7 @@ class TestBackwardCompat:
         assert issubclass(WispAgent, WispAgentCore)
 
     def test_helper_functions_re_exported(self):
-        from wisp.agent import _parse_tool_call, _build_skills_block, _is_interactive
-        assert callable(_parse_tool_call)
-        assert callable(_build_skills_block)
+        from wisp.agent import _is_interactive
+        from wisp.core.agent import WispAgentCore
         assert callable(_is_interactive)
+        assert callable(WispAgentCore._parse_tool_call)
