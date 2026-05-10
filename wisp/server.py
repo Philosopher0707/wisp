@@ -421,7 +421,20 @@ async def set_workspace(req: WorkspaceRequest):
 
 @app.get("/api/models", dependencies=[Depends(verify_api_key)])
 async def list_models():
-    """List available Ollama models."""
+    """List available Ollama models (local + cloud)."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["ollama", "list"], capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0:
+            lines = result.stdout.strip().split("\n")
+            if len(lines) > 1:
+                models = [line.split()[0] for line in lines[1:] if line.strip()]
+                return {"models": models}
+    except Exception:
+        pass
+
     import requests
     try:
         resp = requests.get("http://localhost:11434/api/tags", timeout=5)
