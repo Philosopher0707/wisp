@@ -207,7 +207,7 @@ class WispAgent(WispAgentCore):
 
     def _execute_loop(self, system: str, workspace: str, auto_approve: bool) -> None:
         """Execute the agent loop for one user turn."""
-        self._interrupted = False
+        hit_max_iterations = True
         try:
             # Auto-compact if session is getting large
             compact_event = self._maybe_compact_session()
@@ -242,6 +242,7 @@ class WispAgent(WispAgentCore):
                 if not tool_calls:
                     if content:
                         self._add_message("assistant", content, thinking)
+                    hit_max_iterations = False
                     # Always save, even if content is empty
                     self._save_session()
                     break
@@ -254,9 +255,9 @@ class WispAgent(WispAgentCore):
                 print()  # blank line before tool calls
                 results = self._run_tool_calls(tool_calls, workspace, auto_approve)
                 self.messages.extend(results)
-        else:
-            # Hit max_iterations without a final answer
-            print(error(f"\n✗ Reached max iterations ({self.max_iterations}) without completing the task."))
+
+            if hit_max_iterations:
+                print(error(f"\n✗ Reached max iterations ({self.max_iterations}) without completing the task."))
 
         except KeyboardInterrupt:
             print(error("\n⏹  Turn interrupted by user."))
