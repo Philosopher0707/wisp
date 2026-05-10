@@ -208,11 +208,12 @@ def _validate_int(value: Any, name: str, min_val: int = 0, max_val: int = 10**6)
 
 # ── Tools ────────────────────────────────────────────────────────────
 
-def tool_read_file(path: str, workspace: str, offset: int = 0, limit: int = 2000) -> str:
-    """Read the contents of a file within the workspace."""
+def tool_read_file(path: str, workspace: str, offset: int = 0, limit: Optional[int] = None) -> str:
+    """Read the contents of a file within the workspace. Returns entire file by default."""
     _validate_string(path, "path")
     offset = _validate_int(offset, "offset", 0)
-    limit = _validate_int(limit, "limit", 1, 100_000)
+    if limit is not None:
+        limit = _validate_int(limit, "limit", 1, 100_000)
     full_path = _resolve_path(path, workspace)
     if not full_path.exists():
         raise ToolError(f"File not found: {path}")
@@ -232,11 +233,15 @@ def tool_read_file(path: str, workspace: str, offset: int = 0, limit: int = 2000
     lines = content.splitlines(keepends=True)
     total = len(lines)
 
-    selected = lines[offset:offset + limit]
+    if limit is not None:
+        selected = lines[offset:offset + limit]
+    else:
+        selected = lines[offset:]
     result = "".join(selected)
-    if offset > 0 or limit < total:
+    if (offset > 0 or (limit is not None and limit < total)):
+        shown = min(offset + (limit or total), total)
         result += (
-            f"\n--- [showing lines {offset+1}-{min(offset+limit, total)} of {total}] ---"
+            f"\n--- [showing lines {offset+1}-{shown} of {total}] ---"
         )
     logger.debug("Read %s (%d/%d lines)", path, len(selected), total)
     return result
@@ -1200,13 +1205,13 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Read the contents of a file. Use for reviewing code, configs, or logs. Max file size: 50 MB. Supports offset/limit for large files.",
+            "description": "Read the contents of a file. Returns the ENTIRE file by default. Use for reviewing code, configs, or logs. Max file size: 50 MB. For huge files, use offset/limit to read portions.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Path to the file (relative to workspace or absolute)"},
-                    "offset": {"type": "number", "description": "Starting line number (0-indexed)", "default": 0},
-                    "limit": {"type": "number", "description": "Max lines to read", "default": 2000},
+                    "offset": {"type": "number", "description": "Starting line number (0-indexed). Default 0.", "default": 0},
+                    "limit": {"type": "number", "description": "Max lines to read. Omit to read entire file."},
                 },
                 "required": ["path"],
             },
