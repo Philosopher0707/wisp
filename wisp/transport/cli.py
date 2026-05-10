@@ -321,6 +321,8 @@ def _render_event(event: AgentEvent, show_thinking: bool = False) -> Optional[st
         msg = ""
         if reason == "max_iterations":
             msg = f"\n⚠️  Hit max iterations after {turns} turns. Type 'continue' or increase --max-iterations."
+        elif reason == "max_reflections":
+            msg = f"\n🔄  Detected a reflective loop after {turns} turns. The agent kept repeating the same tool call. Type 'continue' or adjust your prompt."
         elif reason == "interrupted":
             msg = "\n⏹  Interrupted."
         elif reason == "error":

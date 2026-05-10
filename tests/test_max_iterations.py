@@ -23,6 +23,7 @@ def _make_agent():
     agent.config.workspace = "/tmp"
     agent.config.plan_mode = False
     agent.config.plan_context = ""
+    agent.config.max_reflections = 3
     agent.config._context_tokens_explicit = True
     agent.client = MagicMock()
     agent.client.stream_response = {"message": {"content": "done"}}
@@ -81,6 +82,41 @@ class TestMaxIterationsNotWarnOnBreak:
             "message": {
                 "content": "",
                 "tool_calls": [{"function": {"name": "run_bash", "arguments": {}}}],
+            },
+        }
+        ev = [MagicMock(type="tool_call", text="", data={"name": "run_bash", "arguments": {}})]
+        with patch.object(agent, '_run_turn_streaming_events', side_effect=lambda s: iter(ev)):
+            events = _evts_to_list(agent)
+        done_events = [e for e in events if e.type == "done"]
+        assert len(done_events) == 1
+        assert done_events[0].data.get("reason") == "max_iterations"
+
+    def test_reflection_loop_detected(self):
+        """Model repeats the same tool call — stop early with max_reflections."""
+        agent = _make_agent()
+        agent.config.max_reflections = 2
+        agent.config.max_iterations = 30  # ensure we stop via reflections, not max_iter
+        agent.client.stream_response = {
+            "message": {
+                "content": "",
+                "tool_calls": [{"function": {"name": "run_bash", "arguments": {"command": "ls"}}}],
+            },
+        }
+        ev = [MagicMock(type="tool_call", text="", data={"name": "run_bash", "arguments": {}})]
+        with patch.object(agent, '_run_turn_streaming_events', side_effect=lambda s: iter(ev)):
+            events = _evts_to_list(agent)
+        done_events = [e for e in events if e.type == "done"]
+        assert len(done_events) == 1
+        assert done_events[0].data.get("reason") == "max_reflections"
+
+    def test_reflection_disabled(self):
+        """max_reflections=0 lets the loop hit max_iterations normally."""
+        agent = _make_agent()
+        agent.config.max_reflections = 0
+        agent.client.stream_response = {
+            "message": {
+                "content": "",
+                "tool_calls": [{"function": {"name": "run_bash", "arguments": {"command": "ls"}}}],
             },
         }
         ev = [MagicMock(type="tool_call", text="", data={"name": "run_bash", "arguments": {}})]

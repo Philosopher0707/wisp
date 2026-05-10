@@ -90,6 +90,14 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Max agent loop iterations per user turn",
         "env_var": "WISP_MAX_ITERATIONS",
     },
+    "max_reflections": {
+        "type": int,
+        "default": 3,
+        "min": 0,
+        "max": 10,
+        "description": "Max repeated identical tool calls before stopping (0 = disabled)",
+        "env_var": "WISP_MAX_REFLECTIONS",
+    },
     "max_context_tokens": {
         "type": int,
         "default": DEFAULT_MAX_CONTEXT_TOKENS,
@@ -264,6 +272,8 @@ class WispConfig:
         self.show_thinking: bool = str(get_setting("show_thinking", "true")).lower() == "true"
         # Max agent loop iterations per user turn
         self.max_iterations: int = int(get_setting("max_iterations", "30"))
+        # Max repeated identical tool calls before stopping (0 = disabled)
+        self.max_reflections: int = int(get_setting("max_reflections", "3"))
         # Context window guard: trim oldest messages when estimated tokens exceed this
         raw_ctx = get_setting("max_context_tokens")
         self.max_context_tokens: int = int(raw_ctx) if raw_ctx is not None else DEFAULT_MAX_CONTEXT_TOKENS

@@ -676,6 +676,9 @@ class WispAgentCore:
             yield inject
 
         completion_reason = ""
+        last_tool_signature: Optional[str] = None
+        reflection_count = 0
+        max_reflections = getattr(self.config, "max_reflections", 0)
         for iteration in range(1, self.max_iterations + 1):
             if self._interrupted:
                 completion_reason = "interrupted"
@@ -744,6 +747,29 @@ class WispAgentCore:
             self._add_message("assistant", content or "", thinking_text)
             if tool_calls:
                 self.messages[-1]["tool_calls"] = tool_calls
+
+                # Check for reflective loops (same tool call pattern repeated)
+                if max_reflections > 0:
+                    parts = []
+                    for tc in tool_calls:
+                        func = tc.get("function", {})
+                        name = func.get("name", "")
+                        args = func.get("arguments", {})
+                        if isinstance(args, str):
+                            try:
+                                args = json.loads(args)
+                            except Exception:
+                                args = {}
+                        parts.append((name, json.dumps(args, sort_keys=True) if isinstance(args, dict) else str(args)))
+                    current_sig = json.dumps(parts, sort_keys=False)
+                    if current_sig == last_tool_signature:
+                        reflection_count += 1
+                        if reflection_count >= max_reflections:
+                            completion_reason = "max_reflections"
+                            break
+                    else:
+                        reflection_count = 0
+                        last_tool_signature = current_sig
 
             for tc in tool_calls:
                 func = tc.get("function", {})
