@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useAppState } from '../state/context.js';
 import { loadKeybindings, findMatchingAction } from '../utils/keybindings.js';
 
@@ -93,58 +93,65 @@ function executeAction(
 
 export function useKeybindings() {
   const { state, dispatch, sendMessage } = useAppState();
+  const sendMsgRef = useRef(sendMessage);
+  sendMsgRef.current = sendMessage;
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   useEffect(() => {
-    // Load and set custom keybindings on mount
     const bindings = loadKeybindings();
     dispatch({ type: 'SET_KEYBINDINGS', keybindings: bindings });
+  }, []);
 
+  useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       const isMeta = e.metaKey || e.ctrlKey;
+      const cur = stateRef.current;
+      const send = sendMsgRef.current;
 
       // Approval keys — highest priority when approval is pending
-      if (state.approvalPending) {
+      if (cur.approvalPending) {
         if (e.key === 'y' && !isMeta) {
           e.preventDefault();
-          sendMessage({
+          send({
             type: 'tool_approval',
-            id: state.approvalPending.callId,
+            id: cur.approvalPending.callId,
             approved: true,
           });
-          dispatch({ type: 'APPROVE_TOOL', callId: state.approvalPending.callId });
+          dispatch({ type: 'APPROVE_TOOL', callId: cur.approvalPending.callId });
           return;
         }
         if (e.key === 'n' && !isMeta) {
           e.preventDefault();
-          sendMessage({
+          send({
             type: 'tool_approval',
-            id: state.approvalPending.callId,
+            id: cur.approvalPending.callId,
             approved: false,
             reason: 'User denied',
           });
-          dispatch({ type: 'DENY_TOOL', callId: state.approvalPending.callId });
+          dispatch({ type: 'DENY_TOOL', callId: cur.approvalPending.callId });
           return;
         }
         if (e.key === 'Escape') {
           e.preventDefault();
-          sendMessage({
+          send({
             type: 'tool_approval',
-            id: state.approvalPending.callId,
+            id: cur.approvalPending.callId,
             approved: false,
             reason: 'User denied',
           });
-          dispatch({ type: 'DENY_TOOL', callId: state.approvalPending.callId });
+          dispatch({ type: 'DENY_TOOL', callId: cur.approvalPending.callId });
           return;
         }
       }
 
       // Escape — close dropdown or overlay
       if (e.key === 'Escape') {
-        if (state.activeDropdown) {
+        if (cur.activeDropdown) {
           dispatch({ type: 'CLOSE_DROPDOWN' });
           return;
         }
-        if (state.uiOverlay) {
+        if (cur.uiOverlay) {
           dispatch({ type: 'CLOSE_OVERLAY' });
           return;
         }
@@ -154,15 +161,15 @@ export function useKeybindings() {
       }
 
       // Use custom keybindings for Cmd/Ctrl shortcuts
-      const keybindings = state.keybindings && Object.keys(state.keybindings).length > 0
-        ? state.keybindings
+      const keybindings = cur.keybindings && Object.keys(cur.keybindings).length > 0
+        ? cur.keybindings
         : loadKeybindings();
 
       if (isMeta) {
         const matchedAction = findMatchingAction(e, keybindings);
         if (matchedAction) {
           e.preventDefault();
-          executeAction(matchedAction, dispatch, sendMessage, state);
+          executeAction(matchedAction, dispatch, send, cur);
           return;
         }
       }
@@ -170,5 +177,5 @@ export function useKeybindings() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [state.approvalPending, state.activeDropdown, state.uiOverlay, state.isStreaming, state.keybindings, dispatch, sendMessage]);
+  }, [state.approvalPending, state.activeDropdown, state.uiOverlay, state.isStreaming, state.keybindings, dispatch]);
 }
