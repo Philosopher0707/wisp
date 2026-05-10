@@ -48,8 +48,8 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
     },
     "max_tokens": {
         "type": (int, type(None)),
-        "default": None,
-        "description": "Max tokens per response (None = no limit)",
+        "default": 8192,
+        "description": "Max tokens per response (set to null/None for no limit)",
         "env_var": "WISP_MAX_TOKENS",
     },
     "skill_dirs": {
@@ -238,7 +238,7 @@ class WispConfig:
         self.ollama_url: str = get_setting("ollama_url", DEFAULT_OLLAMA_URL)
         self.model: str = get_setting("model", DEFAULT_MODEL)
         self.temperature: float = float(get_setting("temperature", "0.2"))
-        raw_max_tokens = get_setting("max_tokens")
+        raw_max_tokens = get_setting("max_tokens", 8192)
         self.max_tokens: Optional[int] = (
             int(raw_max_tokens) if raw_max_tokens is not None else None
         )
