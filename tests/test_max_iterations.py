@@ -86,6 +86,6 @@ class TestMaxIterationsNotWarnOnBreak:
         ev = [MagicMock(type="tool_call", text="", data={"name": "run_bash", "arguments": {}})]
         with patch.object(agent, '_run_turn_streaming_events', side_effect=lambda s: iter(ev)):
             events = _evts_to_list(agent)
-        types = [e.type for e in events]
-        assert types.count("system") == 1
-        assert any("Reached max iterations" in str(e.data.get("message", "")) for e in events if e.type == "system")
+        done_events = [e for e in events if e.type == "done"]
+        assert len(done_events) == 1
+        assert done_events[0].data.get("reason") == "max_iterations"

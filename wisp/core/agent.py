@@ -766,11 +766,6 @@ class WispAgentCore:
                 reason=completion_reason,
             )
         if completion_reason == "max_iterations":
-            yield system_event(
-                f"Reached max iterations ({self.max_iterations}) without completing the task. "
-                f"Type 'continue' to resume or 'exit' to stop.",
-                level="warning",
-            )
             self._save_session()
 
     async def run(
