@@ -78,16 +78,6 @@ You have access to tools that let you read, write, and edit files, run bash comm
 7. When you're done, summarize what was accomplished.
 8. Before declaring a task done, run lsp_diagnostics on changed files to catch errors.
 9. For git workflow: check status → branch → commit → push → create PR. Always verify each step.
-10. CRITICAL: To finish your turn, respond with content ONLY — no tool calls.
-   A response with tool_calls forces another iteration. Your text is saved but the user
-   won't see your final answer until you respond without tool calls. Do NOT call tools
-   "just to verify" or "double-check" when you already have the answer.
-11. You have a limited iteration budget (~30 per turn). Don't be a perfectionist.
-   Gather what you need in 2-3 tool calls, then synthesize and answer. If you find
-   yourself on iteration 5+ still gathering info, STOP and give your best answer
-   with what you have. The user can always ask follow-up questions.
-12. ONE read_file is enough for most files. Don't re-read the same file.
-   ONE search or list_files is enough to orient. Don't explore exhaustively.
 
 ## Tools available
 - read_file: Read file contents (supports offset/limit for large files)
@@ -699,8 +689,7 @@ class WispAgentCore:
             tool_calls = self._parse_tool_call(response)
 
             if not tool_calls:
-                if content:
-                    self._add_message("assistant", content, thinking_text)
+                self._add_message("assistant", content or "", thinking_text)
                 self._save_session()
                 if not streamed_content:
                     yield content_event(content)
@@ -725,10 +714,10 @@ class WispAgentCore:
                 yield event
 
         # Hit max_iterations without a final answer
-        yield error_event(
+        yield system_event(
             f"Reached max iterations ({self.max_iterations}) without completing the task. "
             f"Last response may be incomplete.",
-            recoverable=False,
+            level="warning",
         )
         self._save_session()
 
@@ -851,7 +840,8 @@ class WispAgentCore:
             pass
         return getattr(self.client, "stream_response", None) or {}
 
-    def _parse_tool_call(self, response: dict) -> Optional[list[dict]]:
+    @staticmethod
+    def _parse_tool_call(response: dict) -> Optional[list[dict]]:
         msg = response.get("message", {})
         if not isinstance(msg, dict):
             return None

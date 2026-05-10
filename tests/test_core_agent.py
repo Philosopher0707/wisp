@@ -35,7 +35,7 @@ class TestWispAgentCoreBasics:
         core._add_message("user", "hello")
         assert len(core.messages) == 1
         assert core.messages[0]["role"] == "user"
-        assert core.messages[0]["content"] == "hello"
+        assert core.messages[0]["content"] == [{"type": "text", "text": "hello"}]
 
     def test_expand_continuation_no_trigger(self, core):
         text = "explain python"

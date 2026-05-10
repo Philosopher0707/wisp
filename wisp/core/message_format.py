@@ -159,6 +159,8 @@ def to_ollama_messages(messages: list[dict]) -> list[dict]:
                 new_msg["images"] = images
             if msg.get("thinking"):
                 new_msg["thinking"] = msg["thinking"]
+            if msg.get("tool_calls"):
+                new_msg["tool_calls"] = msg["tool_calls"]
             converted.append(new_msg)
         else:
             converted.append(msg)
