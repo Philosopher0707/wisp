@@ -3,6 +3,7 @@
 import pytest
 import threading
 import time
+import asyncio
 
 from wisp.multi_agent.protocol import AgentEvent, EventType, TaskAssignment, TaskResult
 from wisp.multi_agent.registry import AgentRegistry, AgentRecord, AgentStatus
@@ -359,7 +360,7 @@ class MockWispAgent:
     def _get_tool_schemas(self):
         return []
 
-    def run_task(self, task_description, workspace=".", max_iterations=10, timeout_seconds=120.0):
+    async def run_task(self, task_description, workspace=".", max_iterations=10, timeout_seconds=120.0):
         self.messages.append({"role": "user", "content": task_description})
         return {"success": True, "output": f"Completed: {task_description}"}
 
@@ -431,7 +432,7 @@ class TestSwarmOrchestrator:
         # Mock the planner agent to return structured JSON
         planner = MockWispAgent(config, agent_id="planner-test", role=AgentRole.PLANNER)
         planner.messages = []
-        planner.run_task = lambda **kw: {"success": True, "output": "plan done"}
+        planner.run_task = lambda **kw: asyncio.sleep(0, result={"success": True, "output": "plan done"})
         planner._run_turn_streaming = lambda system: {
             "message": {
                 "content": '{"plan": "Write auth module", "subtasks": [{"role": "coder", "description": "Implement login", "expected_output": "login.py", "dependencies": []}]}'
@@ -439,7 +440,7 @@ class TestSwarmOrchestrator:
         }
         orch.factory.create = lambda role, agent_id, model=None: planner if role == AgentRole.PLANNER else MockWispAgent(config, agent_id=agent_id, role=role)
 
-        plan, subtasks = orch._plan("Implement user auth")
+        plan, subtasks = orch._plan_sync("Implement user auth")
         assert plan == "Write auth module"
         assert len(subtasks) == 1
         assert subtasks[0]["role"] == "coder"
@@ -462,7 +463,7 @@ class TestSwarmOrchestrator:
         }
         orch.factory.create = lambda role, agent_id, model=None: planner if role == AgentRole.PLANNER else MockWispAgent(config, agent_id=agent_id, role=role)
 
-        plan, subtasks = orch._plan("Fix crash")
+        plan, subtasks = orch._plan_sync("Fix crash")
         assert plan == "Fix bug"
         assert subtasks[0]["role"] == "debugger"
 
@@ -480,7 +481,7 @@ class TestSwarmOrchestrator:
         planner._run_turn_streaming = lambda system: {"message": {"content": "Just some plain text without JSON"}}
         orch.factory.create = lambda role, agent_id, model=None: planner if role == AgentRole.PLANNER else MockWispAgent(config, agent_id=agent_id, role=role)
 
-        plan, subtasks = orch._plan("Do something vague")
+        plan, subtasks = orch._plan_sync("Do something vague")
         assert subtasks[0]["role"] == "coder"
         assert subtasks[0]["description"] == "Do something vague"
 
@@ -499,17 +500,17 @@ class TestSwarmOrchestrator:
             a = MockWispAgent(config, agent_id=agent_id, role=role)
             # Simulate file changes for coder
             if role == AgentRole.CODER:
-                a.run_task = lambda **kw: {"success": True, "output": "Created auth.py"}
+                a.run_task = lambda **kw: asyncio.sleep(0, result={"success": True, "output": "Created auth.py"})
             elif role == AgentRole.REVIEWER:
-                a.run_task = lambda **kw: {"success": True, "output": "Looks good"}
+                a.run_task = lambda **kw: asyncio.sleep(0, result={"success": True, "output": "Looks good"})
             elif role == AgentRole.TESTER:
-                a.run_task = lambda **kw: {"success": True, "output": "Tests pass"}
+                a.run_task = lambda **kw: asyncio.sleep(0, result={"success": True, "output": "Tests pass"})
             return a
 
         orch.factory.create = make_agent
 
-        # Override _plan to return a simple single-task plan
-        orch._plan = lambda goal: ("Simple plan", [{"role": "coder", "description": goal, "expected_output": "code", "dependencies": []}])
+        # Override _plan_sync to return a simple single-task plan
+        orch._plan_sync = lambda goal, available_roles=None: ("Simple plan", [{"role": "coder", "description": goal, "expected_output": "code", "dependencies": []}])
 
         result = orch.run("Write a hello world script")
         assert result.success is True
@@ -529,14 +530,14 @@ class TestSwarmOrchestrator:
 
         def make_agent(role, agent_id, model=None):
             a = MockWispAgent(config, agent_id=agent_id, role=role)
-            def run_task(**kw):
+            async def _run_task(**kw):
                 execution_order.append(agent_id)
                 return {"success": True, "output": f"Done by {agent_id}"}
-            a.run_task = run_task
+            a.run_task = _run_task
             return a
 
         orch.factory.create = make_agent
-        orch._plan = lambda goal: (
+        orch._plan_sync = lambda goal, available_roles=None: (
             "Two-step plan",
             [
                 {"role": "coder", "description": "Step 1", "expected_output": "code", "dependencies": []},
@@ -564,11 +565,11 @@ class TestSwarmOrchestrator:
 
         def make_agent(role, agent_id, model=None):
             a = MockWispAgent(config, agent_id=agent_id, role=role)
-            a.run_task = lambda **kw: {"success": False, "output": "Error occurred"}
+            a.run_task = lambda **kw: asyncio.sleep(0, result={"success": False, "output": "Error occurred"})
             return a
 
         orch.factory.create = make_agent
-        orch._plan = lambda goal: ("Plan", [{"role": "coder", "description": goal, "expected_output": "code", "dependencies": []}])
+        orch._plan_sync = lambda goal, available_roles=None: ("Plan", [{"role": "coder", "description": goal, "expected_output": "code", "dependencies": []}])
 
         result = orch.run("Fail me")
         assert result.success is False
