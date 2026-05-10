@@ -18,6 +18,7 @@ from typing import Optional
 
 from wisp.agent import WispAgent
 from wisp.config import WispConfig
+from wisp.core.agent import _coerce_tool_data
 from wisp.tools import execute_tool, ToolError
 from wisp.colors import success, error, warning, info, dim, accent
 
@@ -322,9 +323,7 @@ class SubagentRunner:
                     try:
                         import json
                         parsed = json.loads(result)
-                        data = parsed.get("data", result)
-                        if isinstance(data, dict):
-                            data = json.dumps(data)
+                        data = _coerce_tool_data(parsed.get("data", result))
                         preview = data[:120].replace("\n", " ")
                     except json.JSONDecodeError:
                         pass

@@ -24,7 +24,7 @@ try:
 except ImportError:
     readline = None
 
-from wisp.core.agent import WispAgentCore
+from wisp.core.agent import WispAgentCore, _coerce_tool_data
 from wisp.core.events import (
     AgentEvent,
     TYPE_CONTENT,
@@ -275,9 +275,7 @@ def _render_event(event: AgentEvent, show_thinking: bool = False) -> Optional[st
         if isinstance(result, str) and result.startswith("{"):
             try:
                 parsed = json.loads(result)
-                data = parsed.get("data", result)
-                if isinstance(data, dict):
-                    data = json.dumps(data)
+                data = _coerce_tool_data(parsed.get("data", result))
                 result = data
             except (json.JSONDecodeError, KeyError):
                 pass

@@ -208,12 +208,11 @@ def _validate_int(value: Any, name: str, min_val: int = 0, max_val: int = 10**6)
 
 # ── Tools ────────────────────────────────────────────────────────────
 
-def tool_read_file(path: str, workspace: str, offset: int = 0, limit: Optional[int] = None) -> str:
+def tool_read_file(path: str, workspace: str, offset: int = 0, limit: int = 1_000_000) -> str:
     """Read the contents of a file within the workspace. Returns entire file by default."""
     _validate_string(path, "path")
     offset = _validate_int(offset, "offset", 0)
-    if limit is not None:
-        limit = _validate_int(limit, "limit", 1, 100_000)
+    limit = _validate_int(limit, "limit", 1, 100_000)
     full_path = _resolve_path(path, workspace)
     if not full_path.exists():
         raise ToolError(f"File not found: {path}")
@@ -233,13 +232,10 @@ def tool_read_file(path: str, workspace: str, offset: int = 0, limit: Optional[i
     lines = content.splitlines(keepends=True)
     total = len(lines)
 
-    if limit is not None:
-        selected = lines[offset:offset + limit]
-    else:
-        selected = lines[offset:]
+    selected = lines[offset:offset + limit]
     result = "".join(selected)
-    if (offset > 0 or (limit is not None and limit < total)):
-        shown = min(offset + (limit or total), total)
+    if offset > 0 or limit < total:
+        shown = min(offset + limit, total)
         result += (
             f"\n--- [showing lines {offset+1}-{shown} of {total}] ---"
         )
@@ -1211,7 +1207,7 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "path": {"type": "string", "description": "Path to the file (relative to workspace or absolute)"},
                     "offset": {"type": "number", "description": "Starting line number (0-indexed). Default 0.", "default": 0},
-                    "limit": {"type": "number", "description": "Max lines to read. Omit to read entire file."},
+                    "limit": {"type": "number", "description": "Max lines to read (default: 1,000,000 lines — effectively unlimited)."},
                 },
                 "required": ["path"],
             },

@@ -30,6 +30,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from wisp.config import WispConfig
+from wisp.multi_agent.orchestrator import SwarmOrchestrator
+from wisp.multi_agent.roles import AgentRole
+from wisp.transport.server import create_swarm_progress_callback
+
+DEFAULT_SWARM_ROLES = [AgentRole.CODER, AgentRole.REVIEWER, AgentRole.TESTER, AgentRole.RESEARCHER]
+
+from wisp.config import WispConfig
 from wisp.core.agent import WispAgentCore
 from wisp.core.events import (
     AgentEvent,
@@ -199,7 +206,7 @@ class Connection:
         self.transport: Optional[ServerTransport] = None
         self._run_lock = asyncio.Lock()
         self.swarm_task: Optional[asyncio.Task] = None
-        self.swarm_orchestrator: Optional[object] = None
+        self.swarm_orchestrator: Optional[SwarmOrchestrator] = None
 
     async def send(self, msg: dict):
         try:
@@ -806,27 +813,77 @@ async def cancel_background_run(run_id: str):
     return {"ok": True}
 
 
+# ── Swarm Helpers ─────────────────────────────────────────────────────
+
+async def _launch_swarm_ws(
+    conn: Connection,
+    goal: str,
+    roles: list[str],
+    *,
+    count_per_role: Optional[dict[str, int]] = None,
+    max_retries: int = 2,
+    max_parallel: int = 3,
+    model: Optional[str] = None,
+) -> None:
+    """Create orchestrator, cancel prior swarm, and launch new one on conn."""
+    config = WispConfig()
+    if model:
+        config.model = model
+    config.workspace = str(WORKSPACE_ROOT)
+    config.auto_approve = True
+
+    orch = SwarmOrchestrator(config, max_parallel=max_parallel)
+    old_orch = conn.swarm_orchestrator
+    conn.swarm_orchestrator = orch
+    progress_cb = create_swarm_progress_callback(conn.send)
+
+    # Cancel any existing swarm before starting new one
+    if conn.swarm_task and not conn.swarm_task.done():
+        if old_orch:
+            old_orch.stop_all()
+        conn.swarm_task.cancel()
+        try:
+            await asyncio.wait_for(conn.swarm_task, timeout=2)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            pass
+
+    async def _run():
+        try:
+            result = await orch.arun(
+                goal, roles=roles,
+                count_per_role=count_per_role,
+                max_retries=max_retries,
+                progress_callback=progress_cb,
+            )
+            await conn.send({
+                "type": "status",
+                "message": f"Swarm done: {sum(1 for r in result.agent_results if r.success)}/{len(result.agent_results)} tasks passed",
+                "level": "info" if result.success else "warn",
+            })
+        except Exception as e:
+            logger.error("Swarm error for %s: %s", conn.client_id, e)
+            await conn.send({"type": "error", "message": f"Swarm failed: {e}"})
+        finally:
+            conn.swarm_orchestrator = None
+            conn.swarm_task = None
+
+    conn.swarm_task = asyncio.create_task(_run())
+    await conn.send({"type": "status", "message": f"Swarm starting: {goal[:100]}", "level": "info"})
+
+
 # ── Swarm HTTP API ────────────────────────────────────────────────────
 
-# In-memory store for async swarm runs. Each entry holds the orchestrator,
-# an accumulated event log, and metadata for polling.
+_SWARM_TTL_SECONDS = 600  # auto-evict finished runs after 10 minutes
 _swarm_store: dict[str, dict] = {}
 _swarm_lock = asyncio.Lock()
-
-
-def _default_roles() -> list[str]:
-    from wisp.multi_agent.roles import AgentRole
-    return [AgentRole.CODER, AgentRole.REVIEWER, AgentRole.TESTER, AgentRole.RESEARCHER]
 
 
 @app.post("/api/swarm/run", dependencies=[Depends(verify_api_key)])
 async def swarm_run_api(req: SwarmRunRequest):
     """Run a multi-agent swarm asynchronously. Returns run_id for polling."""
-    from wisp.config import WispConfig
-    from wisp.multi_agent.orchestrator import SwarmOrchestrator
     from wisp.multi_agent.task import OrchestratorEvent as SwarmEvent
 
-    roles = req.roles or _default_roles()
+    roles = req.roles or DEFAULT_SWARM_ROLES
 
     config = WispConfig()
     if req.model:
@@ -847,7 +904,8 @@ async def swarm_run_api(req: SwarmRunRequest):
         }
         if ws_msg:
             entry["ws_message"] = ws_msg
-        event_log.append(entry)
+        async with _swarm_lock:
+            event_log.append(entry)
 
     async with _swarm_lock:
         _swarm_store[run_id] = {
@@ -880,10 +938,22 @@ async def swarm_run_api(req: SwarmRunRequest):
     return {"run_id": run_id, "status": "running", "roles": roles}
 
 
+def _evict_stale_swarms() -> None:
+    """Remove finished swarm runs older than TTL."""
+    now = time.monotonic()
+    stale = [
+        rid for rid, e in _swarm_store.items()
+        if e.get("finished") and (now - e.get("end_time", 0)) > _SWARM_TTL_SECONDS
+    ]
+    for rid in stale:
+        del _swarm_store[rid]
+
+
 @app.get("/api/swarm/status/{run_id}", dependencies=[Depends(verify_api_key)])
 async def swarm_status_api(run_id: str):
     """Get status of a swarm run: agent list, counts, elapsed."""
     async with _swarm_lock:
+        _evict_stale_swarms()
         entry = _swarm_store.get(run_id)
     if not entry:
         raise HTTPException(status_code=404, detail="Swarm run not found")
@@ -1628,53 +1698,8 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(default="")
                     if not swarm_goal:
                         await conn.send({"type": "error", "message": "Usage: /swarm <task description>"})
                         continue
-
-                    from wisp.config import WispConfig
-                    from wisp.multi_agent.orchestrator import SwarmOrchestrator
-                    from wisp.multi_agent.roles import AgentRole
-                    from wisp.transport.server import create_swarm_progress_callback
-
-                    roles = [AgentRole.CODER, AgentRole.REVIEWER, AgentRole.TESTER, AgentRole.RESEARCHER]
-
-                    config = WispConfig()
-                    if msg.get("model"):
-                        config.model = msg["model"]
-                    config.workspace = str(WORKSPACE_ROOT)
-                    config.auto_approve = True
-
-                    orch = SwarmOrchestrator(config, max_parallel=3)
-                    conn.swarm_orchestrator = orch
-                    progress_cb = create_swarm_progress_callback(conn.send)
-
-                    async def _run_swarm_slash():
-                        try:
-                            result = await orch.arun(
-                                swarm_goal, roles=roles, max_retries=2,
-                                progress_callback=progress_cb,
-                            )
-                            await conn.send({
-                                "type": "status",
-                                "message": f"Swarm done: {sum(1 for r in result.agent_results if r.success)}/{len(result.agent_results)} tasks passed",
-                                "level": "info" if result.success else "warn",
-                            })
-                        except Exception as e:
-                            logger.error("Swarm error for %s: %s", client_id, e)
-                            await conn.send({"type": "error", "message": f"Swarm failed: {e}"})
-                        finally:
-                            conn.swarm_orchestrator = None
-
-                    # Cancel any existing swarm
-                    if conn.swarm_task and not conn.swarm_task.done():
-                        if conn.swarm_orchestrator:
-                            conn.swarm_orchestrator.stop_all()
-                        conn.swarm_task.cancel()
-                        try:
-                            await asyncio.wait_for(conn.swarm_task, timeout=2)
-                        except (asyncio.TimeoutError, asyncio.CancelledError):
-                            pass
-
-                    conn.swarm_task = asyncio.create_task(_run_swarm_slash())
-                    await conn.send({"type": "status", "message": f"Swarm starting: {swarm_goal[:100]}", "level": "info"})
+                    model = msg.get("model")
+                    await _launch_swarm_ws(conn, swarm_goal, DEFAULT_SWARM_ROLES, model=model)
                     continue
 
                 # Validate and filter images
@@ -1774,63 +1799,22 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(default="")
                 await conn.send({"type": "steering_resumed"})
 
             elif msg_type == "swarm_run":
-                from wisp.config import WispConfig
-                from wisp.multi_agent.orchestrator import SwarmOrchestrator
-                from wisp.multi_agent.roles import AgentRole
-                from wisp.transport.server import create_swarm_progress_callback
-
                 goal = msg.get("goal", "").strip()
                 if not goal:
                     await conn.send({"type": "error", "message": "Empty swarm goal"})
                     continue
-
-                roles: list[str] = msg.get("roles", [AgentRole.CODER, AgentRole.REVIEWER, AgentRole.TESTER, AgentRole.RESEARCHER])
+                roles: list[str] = msg.get("roles", DEFAULT_SWARM_ROLES)
                 count_per_role: dict[str, int] | None = msg.get("count_per_role")
                 max_retries: int = msg.get("max_retries", 2)
                 max_parallel: int = msg.get("max_parallel", 3)
-
-                config = WispConfig()
-                if msg.get("model"):
-                    config.model = msg["model"]
-                config.workspace = str(WORKSPACE_ROOT)
-                config.auto_approve = msg.get("auto_approve", True)
-
-                orch = SwarmOrchestrator(config, max_parallel=max_parallel)
-                conn.swarm_orchestrator = orch
-
-                progress_cb = create_swarm_progress_callback(conn.send)
-
-                async def _run_swarm():
-                    try:
-                        result = await orch.arun(
-                            goal, roles=roles,
-                            count_per_role=count_per_role,
-                            max_retries=max_retries,
-                            progress_callback=progress_cb,
-                        )
-                        await conn.send({
-                            "type": "status",
-                            "message": f"Swarm done: {sum(1 for r in result.agent_results if r.success)}/{len(result.agent_results)} tasks passed",
-                            "level": "info" if result.success else "warn",
-                        })
-                    except Exception as e:
-                        logger.error("Swarm error for %s: %s", client_id, e)
-                        await conn.send({"type": "error", "message": f"Swarm failed: {e}"})
-                    finally:
-                        conn.swarm_orchestrator = None
-
-                # Cancel any existing swarm
-                if conn.swarm_task and not conn.swarm_task.done():
-                    if conn.swarm_orchestrator:
-                        conn.swarm_orchestrator.stop_all()
-                    conn.swarm_task.cancel()
-                    try:
-                        await asyncio.wait_for(conn.swarm_task, timeout=2)
-                    except (asyncio.TimeoutError, asyncio.CancelledError):
-                        pass
-
-                conn.swarm_task = asyncio.create_task(_run_swarm())
-                await conn.send({"type": "status", "message": f"Swarm started with goal: {goal[:100]}", "level": "info"})
+                model = msg.get("model")
+                await _launch_swarm_ws(
+                    conn, goal, roles,
+                    count_per_role=count_per_role,
+                    max_retries=max_retries,
+                    max_parallel=max_parallel,
+                    model=model,
+                )
 
             elif msg_type == "swarm_status":
                 orch = conn.swarm_orchestrator
@@ -1846,6 +1830,7 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(default="")
                 if conn.swarm_task and not conn.swarm_task.done():
                     conn.swarm_task.cancel()
                 conn.swarm_orchestrator = None
+                conn.swarm_task = None
                 await conn.send({"type": "status", "message": "Swarm stopped", "level": "info"})
 
             elif msg_type == "ping":
