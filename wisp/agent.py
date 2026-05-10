@@ -260,6 +260,9 @@ class WispAgent(WispAgentCore):
 
         except KeyboardInterrupt:
             print(error("\n⏹  Turn interrupted by user."))
+        except Exception as e:
+            print(error(f"\n✗ Unexpected error: {e}"))
+            logger.error("Unexpected error in agent loop", exc_info=True)
         finally:
             # Always save session on exit
             self._save_session()

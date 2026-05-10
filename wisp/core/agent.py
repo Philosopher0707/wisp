@@ -669,6 +669,16 @@ class WispAgentCore:
                 yield error_event("No response from model", recoverable=False)
                 break
 
+            # Surface stream errors with actual details instead of vague "No response"
+            if response.get("_stream_error"):
+                error_type = response.get("_error_type", "Unknown")
+                error_msg = response.get("_error_message", "Stream error")
+                partial = response.get("_partial_content", "") or ""
+                if partial:
+                    error_msg = f"{error_msg}\n\nPartial output:\n{partial[:500]}"
+                yield error_event(f"Stream error ({error_type}): {error_msg}", recoverable=False)
+                break
+
             if not isinstance(response, dict):
                 yield error_event(f"Unexpected response type: {type(response).__name__}", recoverable=False)
                 break
@@ -795,13 +805,35 @@ class WispAgentCore:
                 elif isinstance(event, StreamError):
                     if _in_thinking:
                         _in_thinking = False
-                    logger.error("Stream error (%s): %s", event.error_type, event.message)
+                    self.client.stream_response = {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "thinking": "",
+                        },
+                        "_stream_error": True,
+                        "_error_type": event.error_type,
+                        "_error_message": event.message,
+                        "_partial_content": event.partial_content,
+                    }
                     return
 
         except OllamaError as e:
             logger.error("Ollama error: %s", e)
+            self.client.stream_response = {
+                "message": {"role": "assistant", "content": "", "thinking": ""},
+                "_stream_error": True,
+                "_error_type": "OllamaError",
+                "_error_message": str(e),
+            }
         except Exception as e:
             logger.error("Unexpected error in streaming turn: %s", e, exc_info=True)
+            self.client.stream_response = {
+                "message": {"role": "assistant", "content": "", "thinking": ""},
+                "_stream_error": True,
+                "_error_type": type(e).__name__,
+                "_error_message": str(e),
+            }
 
     def _run_turn_streaming(self, system: str) -> dict:
         """Backward compat: accumulate silently and return response dict."""
@@ -1000,7 +1032,11 @@ class WispAgentCore:
             # Execute tool
             start = time.monotonic()
             if func_name == "spawn_subagent":
-                result = self._spawn_subagent(func_args, workspace)
+                try:
+                    result = self._spawn_subagent(func_args, workspace)
+                except Exception as e:
+                    result = f"Subagent spawn failed: {e}"
+                    logger.error("Subagent spawn failed: %s", e, exc_info=True)
             elif self._is_mcp_tool(func_name):
                 try:
                     result = self.mcp.call_tool(func_name, func_args)

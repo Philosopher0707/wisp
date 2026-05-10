@@ -451,6 +451,11 @@ class CLITransport:
                     print(error("\n⏹  Turn interrupted. Type 'exit' to quit or continue chatting."))
                     self._interrupted = False
                     continue
+                except Exception as e:
+                    print(error(f"\n✗ Unexpected error in REPL: {e}"))
+                    logger.error("REPL turn crashed", exc_info=True)
+                    self._interrupted = False
+                    continue
 
                 if not self._interrupted:
                     _print_separator()

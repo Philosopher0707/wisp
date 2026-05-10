@@ -523,9 +523,11 @@ def tool_web_fetch(url: str, workspace: str = ".", max_chars: int = 10000) -> st
                 extractor = _TextExtractor()
                 extractor.feed(response.text)
                 text = extractor.get_text()
-            except Exception:
-                # Fallback to plain text
+            except Exception as e:
+                logger.warning("HTML text extraction failed for %s: %s — falling back to raw HTML", url, e)
                 text = response.text
+                if len(text) > max_chars:
+                    text = text[:max_chars] + "\n[Warning: HTML parsing failed, showing raw HTML. Results may be hard to read.]"
         else:
             text = response.text
         
