@@ -524,10 +524,12 @@ class CLITransport:
                     print(event.text, end="", flush=True)
                 elif event.type == TYPE_TOOL_CALL:
                     _content_started = False
+                    _in_thinking = False
                     rendered = _render_event(event, show_thinking)
                     if rendered is not None:
                         print(rendered, end="\n", flush=True)
                 else:
+                    _in_thinking = False
                     rendered = _render_event(event, show_thinking)
                     if rendered is not None:
                         print(rendered, end="\n", flush=True)
