@@ -112,10 +112,21 @@ export interface FileItems {
 
 interface RawMessage {
   role: string;
-  content: string;
+  content: string | Array<{ type: string; text?: string; image_url?: { url: string } }>;
   thinking?: string;
   tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }>;
   name?: string;
+}
+
+function extractText(content: string | unknown[]): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((p): p is { type: 'text'; text: string } => p?.type === 'text' && 'text' in p)
+      .map((p) => p.text)
+      .join('');
+  }
+  return '';
 }
 
 export function useApi(serverUrl: string, apiKey: string): ApiClient {
@@ -156,7 +167,7 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
       const uid = `hist-${i}`;
 
       if (raw.role === 'user') {
-        messages.push({ id: uid, role: 'user', content: raw.content });
+        messages.push({ id: uid, role: 'user', content: extractText(raw.content) });
       } else if (raw.role === 'assistant') {
         const toolCalls: ToolCallItem[] = (raw.tool_calls || []).map((tc) => ({
           name: tc.function.name,
@@ -165,7 +176,7 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
         messages.push({
           id: uid,
           role: 'assistant',
-          content: raw.content || '',
+          content: extractText(raw.content || ''),
           thinking: raw.thinking,
           toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
         });
