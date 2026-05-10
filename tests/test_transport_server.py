@@ -86,7 +86,7 @@ class TestServerTransportSerialization:
     def test_done_event(self, transport):
         event = done("sid-123", 3)
         msg = transport._event_to_json(event)
-        assert msg == {"type": "done", "session_id": "sid-123"}
+        assert msg == {"type": "done", "session_id": "sid-123", "turns": 3, "reason": "natural"}
 
     def test_unknown_event_returns_none(self, transport):
         from wisp.core.events import AgentEvent

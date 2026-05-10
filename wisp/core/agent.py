@@ -675,8 +675,10 @@ class WispAgentCore:
         if inject is not None:
             yield inject
 
+        completion_reason = ""
         for iteration in range(1, self.max_iterations + 1):
             if self._interrupted:
+                completion_reason = "interrupted"
                 break
 
             # Steering checkpoint 2: start of each iteration
@@ -688,6 +690,7 @@ class WispAgentCore:
             streamed_content = False
             for event in self._run_turn_streaming_events(system):
                 if self._interrupted:
+                    completion_reason = "interrupted"
                     break
                 # Steering checkpoint 4: during token streaming
                 inject = await self._check_steering()
@@ -700,6 +703,7 @@ class WispAgentCore:
             response = getattr(self.client, "stream_response", None) or {}
             if not response:
                 yield error_event("No response from model", recoverable=False)
+                completion_reason = "error"
                 break
 
             # Surface stream errors with actual details instead of vague "No response"
@@ -710,10 +714,12 @@ class WispAgentCore:
                 if partial:
                     error_msg = f"{error_msg}\n\nPartial output:\n{partial[:500]}"
                 yield error_event(f"Stream error ({error_type}): {error_msg}", recoverable=False)
+                completion_reason = "error"
                 break
 
             if not isinstance(response, dict):
                 yield error_event(f"Unexpected response type: {type(response).__name__}", recoverable=False)
+                completion_reason = "error"
                 break
 
             msg = response.get("message", {})
@@ -729,7 +735,10 @@ class WispAgentCore:
                 yield done_event(
                     session_id=self.session.id if self.session else "",
                     turns=iteration,
+                    reason="natural",
                 )
+                # natural completion — no post-loop warning needed
+                completion_reason = ""
                 break
 
             self._add_message("assistant", content or "", thinking_text)
@@ -748,9 +757,18 @@ class WispAgentCore:
 
         else:
             # Hit max_iterations without a final answer
+            completion_reason = "max_iterations"
+
+        if completion_reason:
+            yield done_event(
+                session_id=self.session.id if self.session else "",
+                turns=iteration,
+                reason=completion_reason,
+            )
+        if completion_reason == "max_iterations":
             yield system_event(
                 f"Reached max iterations ({self.max_iterations}) without completing the task. "
-                f"Last response may be incomplete.",
+                f"Type 'continue' to resume or 'exit' to stop.",
                 level="warning",
             )
             self._save_session()

@@ -137,7 +137,7 @@ class ServerTransport:
             }
 
         if etype == TYPE_DONE:
-            return {"type": "done", "session_id": event.data.get("session_id", "")}
+            return {"type": "done", "session_id": event.data.get("session_id", ""), "turns": event.data.get("turns", 0), "reason": event.data.get("reason", "natural")}
 
         if etype == TYPE_CHECKPOINT_CREATED:
             return {

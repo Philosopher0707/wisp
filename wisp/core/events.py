@@ -122,8 +122,8 @@ def error(message: str, recoverable: bool = True) -> AgentEvent:
     return AgentEvent(TYPE_ERROR, {"message": message, "recoverable": recoverable})
 
 
-def done(session_id: str, turns: int = 0, summary: str = "") -> AgentEvent:
-    return AgentEvent(TYPE_DONE, {"session_id": session_id, "turns": turns, "summary": summary})
+def done(session_id: str, turns: int = 0, summary: str = "", reason: str = "natural") -> AgentEvent:
+    return AgentEvent(TYPE_DONE, {"session_id": session_id, "turns": turns, "summary": summary, "reason": reason})
 
 
 def system(message: str, level: str = "info") -> AgentEvent:

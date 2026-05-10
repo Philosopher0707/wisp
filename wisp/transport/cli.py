@@ -316,7 +316,16 @@ def _render_event(event: AgentEvent, show_thinking: bool = False) -> Optional[st
         return dim(f"  💉 Steering feedback: {event.data.get('text', '')[:80]}")
 
     if etype == TYPE_DONE:
-        return None
+        reason = event.data.get("reason", "")
+        turns = event.data.get("turns", 0)
+        msg = ""
+        if reason == "max_iterations":
+            msg = f"\n⚠️  Hit max iterations ({turns}/{turns}). Type 'continue' or increase --max-iterations."
+        elif reason == "interrupted":
+            msg = "\n⏹  Interrupted."
+        elif reason == "error":
+            msg = "\n✗ Stream error — turn aborted."
+        return dim(msg) if msg else None
 
     return None
 
