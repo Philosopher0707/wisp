@@ -212,7 +212,7 @@ def tool_read_file(path: str, workspace: str, offset: int = 0, limit: int = 1_00
     """Read the contents of a file within the workspace. Returns entire file by default."""
     _validate_string(path, "path")
     offset = _validate_int(offset, "offset", 0)
-    limit = _validate_int(limit, "limit", 1, 100_000)
+    limit = _validate_int(limit, "limit", 1, 1_000_000)
     full_path = _resolve_path(path, workspace)
     if not full_path.exists():
         raise ToolError(f"File not found: {path}")
