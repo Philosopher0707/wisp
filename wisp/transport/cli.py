@@ -320,7 +320,7 @@ def _render_event(event: AgentEvent, show_thinking: bool = False) -> Optional[st
         turns = event.data.get("turns", 0)
         msg = ""
         if reason == "max_iterations":
-            msg = f"\n⚠️  Hit max iterations ({turns}/{turns}). Type 'continue' or increase --max-iterations."
+            msg = f"\n⚠️  Hit max iterations after {turns} turns. Type 'continue' or increase --max-iterations."
         elif reason == "interrupted":
             msg = "\n⏹  Interrupted."
         elif reason == "error":

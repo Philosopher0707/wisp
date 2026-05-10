@@ -370,7 +370,7 @@ def mock_orchestrator_deps(monkeypatch, tmp_path):
     monkeypatch.setattr("wisp.multi_agent.agent_factory.WispAgent", MockWispAgent)
     monkeypatch.setattr("wisp.agent.WispAgent", MockWispAgent)
     # Prevent real context detection from failing in empty temp dirs
-    monkeypatch.setattr("wisp.agent.discover_skills", lambda ws: [])
+    monkeypatch.setattr("wisp.skills.discover_skills", lambda ws: [])
     monkeypatch.setattr("wisp.project_context.detect_project_context", lambda ws: {})
     monkeypatch.setattr("wisp.code_index.build_index", lambda ws: {})
     monkeypatch.setattr("wisp.tree_sitter_index.build_index", lambda ws: {})
