@@ -746,13 +746,14 @@ class WispAgentCore:
             ):
                 yield event
 
-        # Hit max_iterations without a final answer
-        yield system_event(
-            f"Reached max iterations ({self.max_iterations}) without completing the task. "
-            f"Last response may be incomplete.",
-            level="warning",
-        )
-        self._save_session()
+        else:
+            # Hit max_iterations without a final answer
+            yield system_event(
+                f"Reached max iterations ({self.max_iterations}) without completing the task. "
+                f"Last response may be incomplete.",
+                level="warning",
+            )
+            self._save_session()
 
     async def run(
         self,
