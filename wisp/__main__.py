@@ -267,6 +267,7 @@ def cmd_print(prompt, model=None, session_id=None, output_format="json", quiet=F
                         iterations = event.data.get("turns", 0)
 
             asyncio.run(_run_and_collect())
+            core.close()
 
             duration = (_time.time() - start) * 1000
             result = {

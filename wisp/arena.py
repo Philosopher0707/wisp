@@ -152,11 +152,14 @@ class ArenaRunner:
             core = WispAgentCore(config=config)
             content_parts: list[str] = []
 
-            async for event in core.run(prompt):
-                if event.type == TYPE_CONTENT:
-                    content_parts.append(event.text)
-                elif event.type == TYPE_ERROR:
-                    content_parts.append(f"\n[Error: {event.data.get('message', 'unknown')}]")
+            try:
+                async for event in core.run(prompt):
+                    if event.type == TYPE_CONTENT:
+                        content_parts.append(event.text)
+                    elif event.type == TYPE_ERROR:
+                        content_parts.append(f"\n[Error: {event.data.get('message', 'unknown')}]")
+            finally:
+                core.close()
 
             summary = "\n".join(content_parts)
 

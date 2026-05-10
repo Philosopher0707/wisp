@@ -692,56 +692,59 @@ class SubagentRunner:
             role=f"subagent:{spec.name}",
         )
 
-        # Override the workspace in the config so tool execution resolves
-        # paths relative to the worktree (or shared workspace).
-        agent.config.workspace = workspace_path
+        try:
+            # Override the workspace in the config so tool execution resolves
+            # paths relative to the worktree (or shared workspace).
+            agent.config.workspace = workspace_path
 
-        # Apply tool filtering if specified
-        if spec.tools:
-            agent._allowed_tools = set(spec.tools)
+            # Apply tool filtering if specified
+            if spec.tools:
+                agent._allowed_tools = set(spec.tools)
 
-        # ── Run the task non-interactively ────────────────────────────
-        max_iter = config.max_iterations
-        timeout_per_task = self._timeout
+            # ── Run the task non-interactively ────────────────────────────
+            max_iter = config.max_iterations
+            timeout_per_task = self._timeout
 
-        task_result = await agent.run_task(
-            task_description=spec.prompt,
-            workspace=workspace_path,
-            max_iterations=max_iter,
-            timeout_seconds=timeout_per_task,
-        )
+            task_result = await agent.run_task(
+                task_description=spec.prompt,
+                workspace=workspace_path,
+                max_iterations=max_iter,
+                timeout_seconds=timeout_per_task,
+            )
 
-        # Collect tool call summaries from the agent's message history
-        for msg in agent.messages:
-            tcs = msg.get("tool_calls", []) or []
-            for tc in tcs:
-                func = tc.get("function", {})
-                name = func.get("name", "")
-                args = func.get("arguments", {})
-                if isinstance(args, str):
-                    try:
-                        import json
-                        args = json.loads(args)
-                    except (json.JSONDecodeError, TypeError):
+            # Collect tool call summaries from the agent's message history
+            for msg in agent.messages:
+                tcs = msg.get("tool_calls", []) or []
+                for tc in tcs:
+                    func = tc.get("function", {})
+                    name = func.get("name", "")
+                    args = func.get("arguments", {})
+                    if isinstance(args, str):
+                        try:
+                            import json
+                            args = json.loads(args)
+                        except (json.JSONDecodeError, TypeError):
+                            args = {}
+                    if not isinstance(args, dict):
                         args = {}
-                if not isinstance(args, dict):
-                    args = {}
-                # Build a compact arg preview
-                arg_preview = self._compact_args(args)
-                tool_calls_log.append({"name": name, "args_preview": arg_preview})
+                    # Build a compact arg preview
+                    arg_preview = self._compact_args(args)
+                    tool_calls_log.append({"name": name, "args_preview": arg_preview})
 
-        # Extract files changed from the final output (best-effort)
-        files_changed: list[str] = []
-        output_text = task_result.get("output", "") or ""
-        if output_text:
-            files_changed = self._extract_files_changed(output_text)
+            # Extract files changed from the final output (best-effort)
+            files_changed: list[str] = []
+            output_text = task_result.get("output", "") or ""
+            if output_text:
+                files_changed = self._extract_files_changed(output_text)
 
-        return {
-            "success": task_result.get("success", False),
-            "output": output_text,
-            "error": None if task_result.get("success") else task_result.get("output"),
-            "files_changed": files_changed,
-        }
+            return {
+                "success": task_result.get("success", False),
+                "output": output_text,
+                "error": None if task_result.get("success") else task_result.get("output"),
+                "files_changed": files_changed,
+            }
+        finally:
+            agent.close()
 
     @staticmethod
     def _compact_args(args: dict) -> str:

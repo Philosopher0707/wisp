@@ -110,34 +110,37 @@ class BackgroundRunner:
             core = WispAgentCore(config=config)
             content_parts: list[str] = []
 
-            async for event in core.run(run.prompt):
-                if event.type == TYPE_CONTENT:
-                    content_parts.append(event.text)
-                elif event.type == TYPE_TOOL_CALL:
-                    run.tool_calls.append({
-                        "name": event.data.get("name", ""),
-                        "args": event.data.get("arguments", {}),
-                    })
-                elif event.type == TYPE_TOOL_RESULT:
-                    name = event.data.get("name", "")
-                    for tc in reversed(run.tool_calls):
-                        if tc["name"] == name and "result" not in tc:
-                            tc["result"] = event.data.get("result", "")
-                            break
-                elif event.type == TYPE_ERROR:
-                    logger.warning("Background run %s error: %s", run_id, event.data.get("message"))
-                elif event.type == TYPE_DONE:
-                    run.iterations = event.data.get("turns", 0)
-
-            run.content = "\n".join(content_parts)
-
-            # Collect changed files
             try:
-                run.files_changed = core.change_tracker.files_changed() if hasattr(core.change_tracker, 'files_changed') else []
-            except Exception:
-                pass
+                async for event in core.run(run.prompt):
+                    if event.type == TYPE_CONTENT:
+                        content_parts.append(event.text)
+                    elif event.type == TYPE_TOOL_CALL:
+                        run.tool_calls.append({
+                            "name": event.data.get("name", ""),
+                            "args": event.data.get("arguments", {}),
+                        })
+                    elif event.type == TYPE_TOOL_RESULT:
+                        name = event.data.get("name", "")
+                        for tc in reversed(run.tool_calls):
+                            if tc["name"] == name and "result" not in tc:
+                                tc["result"] = event.data.get("result", "")
+                                break
+                    elif event.type == TYPE_ERROR:
+                        logger.warning("Background run %s error: %s", run_id, event.data.get("message"))
+                    elif event.type == TYPE_DONE:
+                        run.iterations = event.data.get("turns", 0)
 
-            run.status = "done"
+                run.content = "\n".join(content_parts)
+
+                # Collect changed files
+                try:
+                    run.files_changed = core.change_tracker.files_changed() if hasattr(core.change_tracker, 'files_changed') else []
+                except Exception:
+                    pass
+
+                run.status = "done"
+            finally:
+                core.close()
 
         except Exception as e:
             logger.error("Background run %s failed: %s", run_id, e)
