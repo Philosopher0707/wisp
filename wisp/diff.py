@@ -68,9 +68,12 @@ def normalize_for_fuzzy_match(text: str) -> str:
     3. Smart quotes → ASCII equivalents
     4. Unicode dashes/hyphens → ASCII hyphen
     5. Special Unicode spaces → regular space
+    6. Tabs → spaces (4 spaces per tab)
     """
     # NFKC normalization
     text = unicodedata.normalize("NFKC", text)
+    # Expand tabs to spaces before splitting lines
+    text = text.replace("\t", "    ")
     # Strip trailing whitespace per line
     text = "\n".join(line.rstrip() for line in text.split("\n"))
     # Replace Unicode characters with ASCII equivalents
@@ -486,7 +489,7 @@ def apply_edits_to_content(
     content: str,
     edits: list[EditOp],
     file_path: str = "<unknown>",
-) -> tuple[str, str]:
+) -> tuple[str, str, bool]:
     """Apply one or more exact-text replacements to content.
 
     All edits are matched against the SAME original content. Replacements
@@ -498,7 +501,7 @@ def apply_edits_to_content(
         file_path: File path for error messages.
 
     Returns:
-        Tuple of (base_content, new_content).
+        Tuple of (base_content, new_content, used_fuzzy_match).
 
     Raises:
         ValueError: If any old_text is not found, not unique, or edits overlap.
@@ -520,6 +523,7 @@ def apply_edits_to_content(
 
     # Find all matches
     matched_edits: list[dict] = []
+    any_fuzzy = any(m.used_fuzzy_match for m in initial_matches)
     for i, edit in enumerate(edits):
         match = fuzzy_find_text(base_content, edit.old_text)
         if not match.found:
@@ -574,7 +578,7 @@ def apply_edits_to_content(
             "The replacement produced identical content."
         )
 
-    return base_content, new_content
+    return base_content, new_content, any_fuzzy
 
 
 # ── High-level API ───────────────────────────────────────────────────
@@ -614,7 +618,7 @@ def compute_edit_diff(
         _, content = strip_bom(raw_content)
         normalized = normalize_to_lf(content)
 
-        base_content, new_content = apply_edits_to_content(normalized, edits, path)
+        base_content, new_content, used_fuzzy = apply_edits_to_content(normalized, edits, path)
         diff_result = generate_diff_string(base_content, new_content)
 
         return EditResult(
@@ -623,6 +627,7 @@ def compute_edit_diff(
             diff=diff_result.diff,
             first_changed_line=diff_result.first_changed_line,
             edits_applied=len(edits),
+            used_fuzzy_match=used_fuzzy,
         )
 
     except ValueError as e:
@@ -672,7 +677,7 @@ def apply_edit_with_diff(
         original_ending = detect_line_ending(content)
         normalized = normalize_to_lf(content)
 
-        base_content, new_content = apply_edits_to_content(normalized, edits, path)
+        base_content, new_content, used_fuzzy = apply_edits_to_content(normalized, edits, path)
 
         # Restore BOM and line endings before writing
         final_content = bom + restore_line_endings(new_content, original_ending)
@@ -692,6 +697,7 @@ def apply_edit_with_diff(
             old_length=total_old,
             new_length=total_new,
             edits_applied=len(edits),
+            used_fuzzy_match=used_fuzzy,
         )
 
     except ValueError as e:

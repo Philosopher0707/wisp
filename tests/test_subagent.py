@@ -62,8 +62,8 @@ def test_contract_defaults():
     c = SubagentContract(task="do something")
     assert c.task == "do something"
     assert c.tools == ["all"]
-    assert c.max_iterations == 5
-    assert c.timeout_seconds == 30
+    assert c.max_iterations == 15
+    assert c.timeout_seconds == 120
     assert c.output_format == "text"
     assert c.model is None
     assert c.workspace is None
@@ -124,7 +124,7 @@ def test_runner_builds_subagent_system():
     contract = SubagentContract(task="test", output_format="json", max_iterations=10)
     child = MockAgent()
     system = runner._build_subagent_system(contract, child)
-    assert "specialist coding subagent" in system
+    assert "specialist subagent" in system
     assert "json" in system
     assert "10" in system
     assert "CANNOT spawn subagents" in system
@@ -559,7 +559,7 @@ def test_subagent_system_prompt_forbids_spawn(mock_wisp_agent):
     child = MockAgent()
     system = runner._build_subagent_system(contract, child)
     assert "CANNOT spawn subagents" in system
-    assert "specialist coding subagent" in system
+    assert "specialist subagent" in system
 
 
 def test_dangerous_command_variants_blocked(mock_wisp_agent):

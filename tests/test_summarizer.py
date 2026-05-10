@@ -110,11 +110,21 @@ class TestExtractiveSummarizer:
 
     def test_dedup_limit(self):
         summarizer = ExtractiveSummarizer()
-        items = ["a", "a", "b", "b", "c", "c", "d", "e", "f"]
+        items = [
+            "alpha version one",
+            "alpha version one",
+            "beta release two",
+            "beta release two",
+            "gamma build three",
+            "gamma build three",
+            "delta point four",
+            "epsilon five now",
+            "zeta six right here",
+        ]
         result = summarizer._dedup_limit(items, 3)
         assert len(result) <= 3
-        assert "a" in result
-        assert "b" in result
+        assert "alpha" in result[0]
+        assert "beta" in result[1]
 
 
 class TestSessionSummary:

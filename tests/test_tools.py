@@ -74,7 +74,8 @@ class TestToolEditFile:
     def test_edit_replacement(self, temp_workspace, sample_file):
         result = tool_edit_file(str(sample_file.name), str(temp_workspace),
                                 old_text="line 2", new_text="edited line")
-        assert "Edited" in result
+        assert result["status"] == "ok"
+        assert "Edited" in result["data"]
         content = sample_file.read_text()
         assert "edited line" in content
         assert "line 2" not in content
@@ -84,14 +85,14 @@ class TestToolEditFile:
             tool_edit_file("nope.txt", str(temp_workspace), "x", "y")
 
     def test_edit_old_text_not_found(self, temp_workspace, sample_file):
-        with pytest.raises(ToolError, match="old_text not found"):
+        with pytest.raises(ToolError, match="Could not find the exact text"):
             tool_edit_file(str(sample_file.name), str(temp_workspace),
                            old_text="does not exist", new_text="x")
 
     def test_edit_duplicate_match(self, temp_workspace):
         f = temp_workspace / "dup.txt"
         f.write_text("abc\nabc\n")
-        with pytest.raises(ToolError, match="appears 2 times"):
+        with pytest.raises(ToolError, match="Found 2 occurrences"):
             tool_edit_file("dup.txt", str(temp_workspace), "abc", "xyz")
 
     def test_edit_path_traversal_blocked(self, temp_workspace):
@@ -111,26 +112,28 @@ class TestToolEditFileFuzzy:
             old_text="    print('world')",
             new_text="    print('universe')",
         )
-        assert "fuzzy" in result
+        assert result["status"] == "ok"
+        assert result["metadata"]["used_fuzzy_match"] is True
         content = f.read_text()
         assert "print('universe')" in content
 
-    def test_fuzzy_match_slight_wording(self, temp_workspace):
-        """Fuzzy match handles slight wording differences."""
+    def test_fuzzy_match_smart_quotes(self, temp_workspace):
+        """Fuzzy match handles smart quotes."""
         f = temp_workspace / "greeting.py"
-        f.write_text("def greet(name):\n    message = f'Hello, {name}!'\n    return message\n")
-        # old_text uses slightly different variable name
+        # File uses smart quotes; old_text uses straight quotes
+        f.write_text("def greet(name):\n    message = f\u201cHello, {name}!\u201d\n    return message\n")
         result = tool_edit_file(
             "greeting.py", str(temp_workspace),
-            old_text="    msg = f'Hello, {name}!'\n    return msg",
-            new_text="    greeting = f'Hello, {name}!'\n    return greeting",
+            old_text="    message = f\"Hello, {name}!\"\n    return message",
+            new_text="    msg = f\"Hi, {name}!\"\n    return msg",
         )
-        assert "fuzzy" in result
+        assert result["status"] == "ok"
+        assert result["metadata"]["used_fuzzy_match"] is True
         content = f.read_text()
-        assert "greeting" in content
+        assert 'msg = f"Hi,' in content
 
-    def test_fuzzy_match_multiline(self, temp_workspace):
-        """Fuzzy match works with multi-line blocks."""
+    def test_fuzzy_match_special_spaces(self, temp_workspace):
+        """Fuzzy match handles special Unicode spaces."""
         f = temp_workspace / "block.py"
         f.write_text(
             "def process(data):\n"
@@ -138,13 +141,14 @@ class TestToolEditFileFuzzy:
             "    result = result.upper()\n"
             "    return result\n"
         )
-        # old_text has slightly different variable name and missing type hint
+        # old_text uses non-breaking spaces (\u00a0) instead of regular spaces
         result = tool_edit_file(
             "block.py", str(temp_workspace),
-            old_text="    res = data.strip()\n    res = res.upper()\n    return res",
+            old_text="\u00a0\u00a0\u00a0\u00a0result = data.strip()\n    result = result.upper()\n    return result",
             new_text="    cleaned = data.strip()\n    cleaned = cleaned.upper()\n    return cleaned",
         )
-        assert "fuzzy" in result
+        assert result["status"] == "ok"
+        assert result["metadata"]["used_fuzzy_match"] is True
         content = f.read_text()
         assert "cleaned = data.strip()" in content
         assert "cleaned = cleaned.upper()" in content
@@ -154,7 +158,7 @@ class TestToolEditFileFuzzy:
         """Very different text should still fail."""
         f = temp_workspace / "different.py"
         f.write_text("x = 1\ny = 2\nz = 3\n")
-        with pytest.raises(ToolError, match="old_text not found"):
+        with pytest.raises(ToolError, match="Could not find the exact text"):
             tool_edit_file(
                 "different.py", str(temp_workspace),
                 old_text="class UserModel:\n    pass",
@@ -162,7 +166,7 @@ class TestToolEditFileFuzzy:
             )
 
     def test_exact_match_still_works(self, temp_workspace):
-        """Exact match is still used when available (no 'fuzzy' in result)."""
+        """Exact match is still used when available (no fuzzy flag)."""
         f = temp_workspace / "exact.py"
         f.write_text("original text here\n")
         result = tool_edit_file(
@@ -170,8 +174,9 @@ class TestToolEditFileFuzzy:
             old_text="original text here",
             new_text="replaced text here",
         )
-        assert "fuzzy" not in result
-        assert "Edited" in result
+        assert result["status"] == "ok"
+        assert result["metadata"]["used_fuzzy_match"] is False
+        assert "Edited" in result["data"]
         content = f.read_text()
         assert "replaced text here" in content
 
