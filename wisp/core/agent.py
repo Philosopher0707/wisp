@@ -57,6 +57,13 @@ from wisp.core.events import (
 logger = logging.getLogger(__name__)
 
 
+def _coerce_tool_data(value: object) -> object:
+    """If value is a dict, JSON-serialize it so string ops don't crash."""
+    if isinstance(value, dict):
+        return json.dumps(value)
+    return value
+
+
 DEFAULT_SYSTEM = """You are Wisp, a helpful coding agent.
 
 You have access to tools that let you read, write, and edit files, run bash commands, and list directories.
@@ -697,6 +704,12 @@ class WispAgentCore:
             ):
                 yield event
 
+        # Hit max_iterations without a final answer
+        yield error_event(
+            f"Reached max iterations ({self.max_iterations}) without completing the task. "
+            f"Last response may be incomplete.",
+            recoverable=False,
+        )
         self._save_session()
 
     async def run(

@@ -31,6 +31,7 @@ from wisp.core.agent import (
     _remove_oldest_turn,
     _generate_agent_id,
     DEFAULT_SYSTEM,
+    _coerce_tool_data,
 )
 
 from wisp.transport.cli import CLITransport
@@ -253,6 +254,10 @@ class WispAgent(WispAgentCore):
                 print()  # blank line before tool calls
                 results = self._run_tool_calls(tool_calls, workspace, auto_approve)
                 self.messages.extend(results)
+        else:
+            # Hit max_iterations without a final answer
+            print(error(f"\n✗ Reached max iterations ({self.max_iterations}) without completing the task."))
+
         except KeyboardInterrupt:
             print(error("\n⏹  Turn interrupted by user."))
         finally:
@@ -379,9 +384,7 @@ class WispAgent(WispAgentCore):
             if func_name != "spawn_subagent" and result.startswith("{"):
                 try:
                     parsed = json.loads(result)
-                    data = parsed.get("data", result)
-                    if isinstance(data, dict):
-                        data = json.dumps(data)
+                    data = _coerce_tool_data(parsed.get("data", result))
                     preview = data[:200].replace("\n", " ")
                 except (json.JSONDecodeError, KeyError):
                     pass
