@@ -69,7 +69,7 @@ DEFAULT_SYSTEM = """You are Wisp, a helpful coding agent.
 You have access to tools that let you read, write, and edit files, run bash commands, and list directories.
 
 ## Guidelines
-1. Always think step by step. Analyze the problem before writing code.
+1. Think step by step, BUT if the user says "do it", "write it", "go ahead", "now", or any other direct action command, SKIP the analysis and EXECUTE immediately based on what was already decided.
 2. Prefer targeted edits (edit_file) over rewriting entire files.
 3. Run tests after making changes to verify correctness.
 4. For git operations, use run_bash with appropriate git commands.
@@ -312,6 +312,30 @@ class WispAgentCore:
     # expansion when the user message is short (<= 25 chars).  Multi-word
     # triggers that could appear inside normal questions are guarded by the
     # length check below.
+    # Direct-action triggers: user commands that mean "stop analyzing and execute".
+    # Fired when: user message is short (≤40 chars), previous assistant was
+    # thinking-only (no tool_calls — just analysis/planning, not after-action).
+    _ACTION_TRIGGERS: frozenset[str] = frozenset({
+        "do it", "do it now",
+        "go ahead",
+        "write it", "write that", "write this", "write it now",
+        "do that", "do this",
+        "make it", "make that",
+        "create it", "create that", "create this",
+        "build it", "build that",
+        "implement it", "implement that",
+        "get it done", "finish it", "finish that",
+        "go now",
+        "execute", "execute it", "execute now",
+        "proceed", "proceed now",
+    })
+    # Multi-word action triggers that can be prefix-matched
+    _ACTION_PHRASE_TRIGGERS: frozenset[str] = frozenset({
+        "write the file", "create the file", "write it now", "do it now",
+        "write the code", "create the code",
+    })
+    _MAX_ACTION_TRIGGER_LEN = 40
+
     _MAX_CONTINUATION_LEN = 25
 
     _CONTINUATION_TRIGGERS = frozenset({
@@ -320,14 +344,52 @@ class WispAgentCore:
     })
 
     def _expand_continuation(self, user_text: str) -> str:
+        """Expand continuation/action triggers so the model knows what to do.
+
+        Two modes:
+          1. Continuation triggers ("continue", "go on") — append context tail.
+          2. Action triggers ("do it", "write it") — tell model to STOP thinking
+             and execute immediately, preserving the context of what was planned.
+        """
         lowered = user_text.strip().lower().rstrip("?.!")
-        # Guard against false positives in multi-line prompts or questions
-        # that happen to contain continuation trigger words (e.g. "how do I
-        # continue to use this API?").  Only short, standalone prompts are
-        # treated as continuation requests.
+        stripped = user_text.strip()
+
+        # ── Mode 2: Action triggers ─────────────────────────────────────
+        # When user gives a short direct command after the assistant was analyzing,
+        # inject a note telling the model to ACT instead of re-analyzing.
+        is_action_trigger = (
+            lowered in self._ACTION_TRIGGERS
+            or lowered in self._ACTION_PHRASE_TRIGGERS
+            or any(stripped.lower().startswith(p) for p in self._ACTION_PHRASE_TRIGGERS)
+        )
+        if is_action_trigger and len(stripped) <= self._MAX_ACTION_TRIGGER_LEN:
+            # Check if previous assistant was thinking-only (no tool_calls, long analysis)
+            last_assistant = ""
+            last_assistant_role = None
+            for m in reversed(self.messages):
+                role = m.get("role")
+                if role == "assistant":
+                    last_assistant = extract_text(m.get("content", "") or "")
+                    last_assistant_role = m
+                    break
+            # Only expand if previous turn was assistant without tool calls
+            # (thinking/planning, not after-action synthesis).
+            if last_assistant_role and not last_assistant_role.get("tool_calls"):
+                prev_text = last_assistant.strip()
+                analysis_tail = prev_text[-300:].replace("\n", " ")
+                return (
+                    f"{stripped}\n"
+                    f"[Context: Based on your previous analysis above, "
+                    f"EXECUTE the task NOW. Stop thinking or analyzing further. "
+                    f"Pick up exactly where you left off in your reasoning and "
+                    f"PROCEED TO IMMEDIATE ACTION. "
+                    f"Your prior work: ...{analysis_tail}]"
+                )
+
+        # ── Mode 1: Continuation triggers ───────────────────────────────
         if lowered not in self._CONTINUATION_TRIGGERS:
             return user_text
-        if len(user_text.strip()) > self._MAX_CONTINUATION_LEN:
+        if len(stripped) > self._MAX_CONTINUATION_LEN:
             return user_text
         parts: list[str] = [user_text]
         last_assistant = ""

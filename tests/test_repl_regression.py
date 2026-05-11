@@ -149,3 +149,119 @@ class TestInterruptResetPerTurn:
 
         assert transport._interrupted is False
         assert core._interrupted is False
+
+
+class TestActionTriggers:
+    """_expand_continuation must expand 'do it' / 'write it' into action context."""
+
+    def test_do_it_after_thinking_injects_action_context(self):
+        """After the assistant was thinking (no tool_calls), 'do it' should
+        inject context telling the model to EXECUTE immediately."""
+        config = WispConfig()
+        core = WispAgentCore(config=config)
+        # Simulate the conversation from the bug report:
+        # - user asked for research
+        # - assistant thought about what to write (no tool_calls)
+        # - user said "write it"
+        core.messages = [
+            {"role": "user", "content": "research autogen v0.4 and write a deep dive"},
+            {"role": "assistant", "content": "I should cover the actor model, three-layer architecture, AgentChat API, Core API, Extensions layer, and developer tooling like Studio and Bench. I'll structure this as a comprehensive markdown file with code examples."},
+            # No tool_calls — assistant was purely thinking
+        ]
+        result = core._expand_continuation("write it")
+        assert result.startswith("write it")
+        assert "EXECUTE" in result or "execute" in result.lower()
+        assert "STOP" in result or "stop" in result.lower()
+        assert "Context:" in result
+
+    def test_do_it_no_prior_assistant_no_expansion(self):
+        """If there's no prior assistant message, 'do it' is a fresh command.
+        Don't expand."""
+        config = WispConfig()
+        core = WispAgentCore(config=config)
+        assert core._expand_continuation("do it") == "do it"
+
+    def test_do_it_after_tool_call_no_expansion(self):
+        """If the assistant already executed a tool, 'do it' is unrelated.
+        Don't expand."""
+        config = WispConfig()
+        core = WispAgentCore(config=config)
+        core.messages = [
+            {"role": "user", "content": "read file A"},
+            {"role": "assistant", "content": "Done.", "tool_calls": [{"function": {"name": "read_file"}}]},
+        ]
+        assert core._expand_continuation("do it") == "do it"
+
+    def test_various_action_triggers_expand(self):
+        """Multiple direct-action phrases should expand with action context."""
+        config = WispConfig()
+        core = WispAgentCore(config=config)
+        core.messages = [
+            {"role": "user", "content": "write a test"},
+            {"role": "assistant", "content": "I need to create a pytest fixture..."},
+        ]
+        # Core action triggers
+        for trigger in ("do it", "go ahead", "write it", "proceed", "execute"):
+            result = core._expand_continuation(trigger)
+            assert result.startswith(trigger), f"{trigger} didn't expand"
+            assert "Context:" in result, f"{trigger} missing context"
+            assert "EXECUTE" in result, f"{trigger} missing EXECUTE directive"
+
+        # "now" and "start" are NOT in the trigger set — too ambiguous on their own
+        for ambiguous in ("now", "start", "go", "act"):
+            assert core._expand_continuation(ambiguous) == ambiguous
+
+    def test_long_phrase_not_action_trigger(self):
+        """Multi-sentence requests should NOT be treated as action triggers."""
+        config = WispConfig()
+        core = WispAgentCore(config=config)
+        core.messages = [
+            {"role": "user", "content": "write a test"},
+            {"role": "assistant", "content": "I need to create a pytest fixture..."},
+        ]
+        # Too long to be an action trigger (>40 chars)
+        long = "do it now please write the file immediately thanks"
+        assert core._expand_continuation(long) == long
+
+    def test_question_with_trigger_not_action(self):
+        """Questions containing trigger words are not action triggers."""
+        config = WispConfig()
+        core = WispAgentCore(config=config)
+        core.messages = [
+            {"role": "user", "content": "how do I write tests?"},
+            {"role": "assistant", "content": "Use pytest..."},
+        ]
+        # "write" by itself is an action trigger, but "write" in a question context...
+        # Actually "write" is a short trigger — but without a prior thinking-only
+        # assistant message, it won't expand
+        assert core._expand_continuation("write") == "write"
+
+    def test_action_trigger_preserves_analysis_tail(self):
+        """The injected context should include the last part of the assistant's
+        analysis so the model knows what to execute."""
+        config = WispConfig()
+        core = WispAgentCore(config=config)
+        core.messages = [
+            {"role": "user", "content": "write a summary"},
+            {"role": "assistant", "content": "I should cover architecture, API changes, migration path, and code examples."},
+        ]
+        result = core._expand_continuation("write it")
+        # Should contain the tail of the assistant's analysis
+        assert "architecture" in result or "API changes" in result or "migration" in result or "code examples" in result
+        assert "your prior work" in result.lower() or "previous analysis" in result.lower()
+
+    def test_repeated_do_it_escalates(self):
+        """If user says 'do it' multiple times, each should expand with action context."""
+        config = WispConfig()
+        core = WispAgentCore(config=config)
+        core.messages = [
+            {"role": "user", "content": "fix the bug"},
+            {"role": "assistant", "content": "The issue is in the auth module. I need to add validation."},
+        ]
+        r1 = core._expand_continuation("do it")
+        # Simulate the model thinking again after first "do it"
+        core.messages.append({"role": "user", "content": r1})
+        core.messages.append({"role": "assistant", "content": "I should first check the imports before editing."})
+        r2 = core._expand_continuation("do it")
+        assert r2.startswith("do it")
+        assert "Context:" in r2
