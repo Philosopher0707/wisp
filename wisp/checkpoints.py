@@ -231,7 +231,24 @@ class CheckpointManager:
                     errors.append(f"backup: {exc}")
                     logger.error("Backup checkpoint failed: %s", exc)
 
-            if cp is None or not cp.is_valid:
+            if cp is None:
+                # Git or backup failed — return an empty checkpoint so the agent
+                # can continue without a real snapshot.  The checkpoint ID is
+                # still unique and traceable, but restore() will be a no-op.
+                logger.info(
+                    "Returning empty checkpoint %s for %s (git under pressure)",
+                    checkpoint_id, tool_name,
+                )
+                cp = Checkpoint(
+                    id=checkpoint_id,
+                    timestamp=timestamp,
+                    description=description,
+                    tool_name=tool_name,
+                    tag=tag,
+                    file_count=0,
+                    git_ref="EMPTY",
+                )
+            elif not cp.is_valid:
                 raise CheckpointError(
                     f"Failed to create checkpoint [{description}]: {'; '.join(errors)}"
                 )
