@@ -211,6 +211,8 @@ class WispAgentCore:
         self.role = role or "agent"
         self._role_system_extra = ""
         self._allowed_tools: Optional[set[str]] = None
+        self._circuit_breaker = None
+        self._metrics = None
         self.mcp = MCPManager(self.config.workspace or ".")
         self._mcp_initialized = False
         from wisp.lsp.manager import LSPManager
@@ -273,6 +275,25 @@ class WispAgentCore:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         self.close()
         return False
+
+    # ── Lazy load circuit breaker ──
+    @property
+    def breaker(self):
+        if self._circuit_breaker is None:
+            from wisp.circuit_breaker import CircuitBreaker
+            self._circuit_breaker = CircuitBreaker(
+                failure_threshold=getattr(self.config, "circuit_failure_threshold", 3),
+                recovery_timeout=getattr(self.config, "circuit_recovery_timeout", 60),
+            )
+        return self._circuit_breaker
+
+    # ── Lazy load metrics ──
+    @property
+    def metrics(self):
+        if self._metrics is None:
+            from wisp.metrics import AgentMetrics
+            self._metrics = AgentMetrics()
+        return self._metrics
 
     # ── Steering (pause / resume) ────────────────────────────────────
 
@@ -644,6 +665,12 @@ class WispAgentCore:
             self._mcp_initialized = True
 
         schemas = list(TOOL_SCHEMAS)
+        # Plugin tools (registered at runtime via register_tool())
+        try:
+            from wisp.plugin_registry import get_plugin_schemas
+            schemas.extend(get_plugin_schemas())
+        except Exception:
+            pass
         try:
             mcp_schemas = self.mcp.get_tool_schemas()
             schemas.extend(mcp_schemas)
@@ -1171,6 +1198,17 @@ class WispAgentCore:
                     })
                     continue
 
+            # ── Circuit breaker ──
+            if hasattr(self, "circuit_breaker"):
+                if self.circuit_breaker.is_open(func_name):
+                    blocked_msg = (
+                        f"[Circuit breaker open for {func_name}: "
+                        f"{self.circuit_breaker.status(func_name)}]"
+                    )
+                    self.metrics.record_tool_block()
+                    yield tool_result_event(func_name, blocked_msg)
+                    continue
+
             # ── Checkpoint before write operations ──
             if func_name in ("write_file", "edit_file", "edit_file_multi"):
                 try:
@@ -1220,6 +1258,12 @@ class WispAgentCore:
             })
 
             # ── Post-tool hooks ──
+            if hasattr(self, "metrics"):
+                ok = (isinstance(result, str) and '"status": "ok"' in result) or (isinstance(result, str) and not result.startswith("["))
+                self.metrics.record_tool(func_name, duration_ms, success=ok)
+                if hasattr(self, "circuit_breaker"):
+                    self.circuit_breaker.record(func_name, success=ok)
+
             if self.hook_manager:
                 try:
                     from wisp.hooks import HookEvent

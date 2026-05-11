@@ -1858,6 +1858,34 @@ def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0,
         lsp_manager: Optional LSP manager instance (for per-connection isolation).
     """
     impl = TOOL_IMPLS.get(name)
+    # ── Try plugin tools first (user-registered take priority) ──
+    from wisp.plugin_registry import has_plugin_tool, execute_plugin_tool
+    if not impl and has_plugin_tool(name):
+        try:
+            result = execute_plugin_tool(name, **args, workspace=workspace)
+            logger.debug("Plugin tool %s returned %d chars", name, len(str(result)))
+            metadata = _build_tool_metadata(name, args, str(result))
+            data = str(result)
+            if max_data_chars > 0 and len(data) > max_data_chars:
+                data = data[:max_data_chars] + f"\n... [truncated {len(str(result))} total chars]"
+                metadata["truncated"] = True
+            structured = {
+                "status": "ok",
+                "tool": name,
+                "data": data,
+                "metadata": metadata,
+            }
+            return json.dumps(structured, ensure_ascii=False)
+        except Exception as e:
+            logger.error("Plugin tool %s failed: %s", name, e, exc_info=True)
+            structured = {
+                "status": "error",
+                "tool": name,
+                "data": f"Plugin tool error: {e}",
+                "metadata": _build_tool_metadata(name, args, ""),
+            }
+            return json.dumps(structured, ensure_ascii=False)
+
     if not impl:
         raise ToolError(f"Unknown tool: {name}")
 

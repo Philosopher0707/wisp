@@ -14,8 +14,10 @@ mac:
   artifactName: Wisp-${version}-mac.${ext}
   darkModeSupport: true
 
-# Publish configuration for auto-updates
-# TODO: Replace with your actual update server URL
+# Auto-updates via GitHub Releases
+# electron-updater will poll ${repo}/releases/latest/latest-mac.yml
 publish:
-  provider: generic
-  url: "https://example.com/updates"
+  provider: github
+  owner: Philosopher0707
+  repo: wisp
+  releaseType: release
