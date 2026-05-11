@@ -47,10 +47,32 @@ from wisp.skills import find_skill
 
 logger = logging.getLogger(__name__)
 
-# Planning tools whose output is meant for human consumption and must preserve
-# newlines / table formatting.  These bypass the normal 200-char truncation
-# and newline-to-space replacement.
-_PLANNING_TOOLS: set[str] = {"plan_task", "mark_step_done", "update_plan"}
+# Tools whose output is always human-readable multi-line text (plans, search
+# results, git output, diagnostics, etc.).  These bypass the normal truncation
+# and preserve newlines / table formatting.
+_FULL_OUTPUT_TOOLS: set[str] = {
+    "plan_task",
+    "mark_step_done",
+    "update_plan",
+    "web_search",
+    "git_status",
+    "git_diff",
+    "git_branch",
+    "git_commit",
+    "git_push",
+    "gh_pr_create",
+    "list_files",
+    "search_symbols",
+    "search_codebase",
+    "lsp_diagnostics",
+    "lsp_definition",
+    "lsp_references",
+    "lsp_hover",
+    "lsp_symbols",
+    "diagnose",
+    "recall",
+    "run_bash",
+}
 
 # ── Signal handling ──────────────────────────────────────────────────
 
@@ -278,10 +300,6 @@ def _render_event(event: AgentEvent, show_thinking: bool = False) -> Optional[st
         preview = _args_preview(args)
         return dim(f"  🛠  {name}({preview})")
 
-    _PLAN_TOOL_NAMES = frozenset({
-        "plan_task", "mark_step_done", "update_plan",
-    })
-
     if etype == TYPE_TOOL_RESULT:
         name = event.data.get("name", "")
         result = event.data.get("result", "")
@@ -292,11 +310,14 @@ def _render_event(event: AgentEvent, show_thinking: bool = False) -> Optional[st
                 result = data
             except (json.JSONDecodeError, KeyError):
                 pass
-        # Planning tools: show full multi-line output so humans can read plans
-        if name in _PLAN_TOOL_NAMES and isinstance(result, str):
+        # Full-output tools: preserve multi-line formatting so humans can read
+        # plans, search results, git output, diagnostics, etc.
+        if name in _FULL_OUTPUT_TOOLS and isinstance(result, str):
             return dim(f"     → {name} result:\n{result}")
-        preview = str(result)[:200].replace("\n", " ")
-        if len(preview) > 200:
+        # Compact preview for everything else — still indicate truncation
+        result_str = str(result)
+        preview = result_str[:200].replace("\n", " ")
+        if len(result_str) > 200:
             preview += "..."
         return dim(f"     → {preview}")
 

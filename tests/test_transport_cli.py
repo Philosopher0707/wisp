@@ -136,8 +136,8 @@ class TestCLITransport:
         assert transport.show_thinking == core.config.show_thinking
 
 
-class TestRenderEventPlanTools:
-    """Planning tool results must render with full multi-line formatting."""
+class TestRenderEventFullOutputTools:
+    """Tools whose output is meant for human consumption must preserve formatting."""
 
     def test_plan_task_full_output(self):
         plan_text = (
@@ -169,14 +169,117 @@ class TestRenderEventPlanTools:
         rendered = _render_event(event)
         assert "✓ Updated task" in rendered
 
-    def test_non_plan_tool_still_truncated(self):
+    def test_web_search_full_output(self):
+        """web_search returns multi-line JSON/text that must be readable."""
+        result_text = (
+            "1. DuckDuckGo – Privacy-focused search engine\n"
+            "   https://duckduckgo.com\n"
+            "   DuckDuckGo is an internet search engine that emphasizes protecting searchers' privacy.\n\n"
+            "2. Python Documentation\n"
+            "   https://docs.python.org\n"
+            "   Official Python language documentation."
+        )
+        event = tool_result("web_search", result_text)
+        rendered = _render_event(event)
+        assert "web_search result:" in rendered
+        assert "DuckDuckGo" in rendered
+        assert "https://duckduckgo.com" in rendered
+        assert rendered.count("\n") >= 4
+
+    def test_git_status_full_output(self):
+        """git_status returns multi-line output that must preserve newlines."""
+        result_text = (
+            "On branch main\n"
+            "Your branch is ahead of 'origin/main' by 2 commits.\n"
+            "Changes not staged for commit:\n"
+            "  (use \"git add <file>...\" to update what will be committed)\n"
+            "\tmodified:   wisp/transport/cli.py\n"
+            "\tmodified:   tests/test_transport_cli.py"
+        )
+        event = tool_result("git_status", result_text)
+        rendered = _render_event(event)
+        assert "git_status result:" in rendered
+        assert "On branch main" in rendered
+        assert "modified:" in rendered
+        assert rendered.count("\n") >= 4
+
+    def test_run_bash_full_output(self):
+        """run_bash can return multi-line command output."""
+        result_text = (
+            "total 24\n"
+            "drwxr-xr-x  5 user  staff   160 May 11 10:00 .\n"
+            "drwxr-xr-x  3 user  staff    96 May 10 09:00 ..\n"
+            "-rw-r--r--  1 user  staff  2048 May 11 10:00 cli.py"
+        )
+        event = tool_result("run_bash", result_text)
+        rendered = _render_event(event)
+        assert "run_bash result:" in rendered
+        assert "total 24" in rendered
+        assert "cli.py" in rendered
+
+    def test_lsp_diagnostics_full_output(self):
+        """lsp_diagnostics returns structured multi-line output."""
+        result_text = (
+            "wisp/transport/cli.py:42:1: error: Cannot find name '_FULL_OUTPUT_TOOLS'\n"
+            "wisp/transport/cli.py:58:5: warning: Variable 'preview' is unused"
+        )
+        event = tool_result("lsp_diagnostics", result_text)
+        rendered = _render_event(event)
+        assert "lsp_diagnostics result:" in rendered
+        assert "error:" in rendered
+        assert "warning:" in rendered
+
+    def test_compact_tool_still_truncated(self):
+        """Tools NOT in _FULL_OUTPUT_TOOLS get compact single-line preview."""
         long_result = "x" * 300 + "\nline2"
         event = tool_result("read_file", long_result)
         rendered = _render_event(event)
-        assert ("..." in rendered or len(rendered) < 250)
+        assert "..." in rendered
         assert "→" in rendered
+        assert "line2" not in rendered  # newline replaced by space, then truncated
 
-    def test_plan_tool_with_json_result_is_safe(self):
+    def test_compact_tool_ellipsis_at_exactly_200(self):
+        """Ellipsis appears only when result is longer than 200 chars."""
+        short_result = "short"
+        event = tool_result("read_file", short_result)
+        rendered = _render_event(event)
+        assert "..." not in rendered
+        assert "short" in rendered
+
+        exactly_200 = "a" * 200
+        event = tool_result("read_file", exactly_200)
+        rendered = _render_event(event)
+        assert "..." not in rendered  # exactly 200, no truncation
+
+        over_200 = "a" * 201
+        event = tool_result("read_file", over_200)
+        rendered = _render_event(event)
+        assert "..." in rendered
+
+    def test_full_output_tool_with_json_result_is_safe(self):
+        """A full-output tool that happens to return a JSON string still renders."""
         event = tool_result("plan_task", '{"ok": true, "id": "p-1"}')
         rendered = _render_event(event)
         assert isinstance(rendered, str)
+        assert "plan_task result:" in rendered
+
+    def test_search_codebase_full_output(self):
+        """search_codebase returns multi-line results."""
+        result_text = (
+            "Result 1 – score 0.92\n"
+            "  File: wisp/core/agent.py:145\n"
+            "  ```python\n"
+            "  def _expand_continuation(self, user_text: str) -> str:\n"
+            "  ```\n\n"
+            "Result 2 – score 0.87\n"
+            "  File: wisp/transport/cli.py:200\n"
+            "  ```python\n"
+            "  def _render_event(event: AgentEvent):\n"
+            "  ```"
+        )
+        event = tool_result("search_codebase", result_text)
+        rendered = _render_event(event)
+        assert "search_codebase result:" in rendered
+        assert "Result 1" in rendered
+        assert "Result 2" in rendered
+        assert rendered.count("\n") >= 6
