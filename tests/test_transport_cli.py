@@ -134,3 +134,49 @@ class TestCLITransport:
         transport = CLITransport(core)
         assert transport.core is core
         assert transport.show_thinking == core.config.show_thinking
+
+
+class TestRenderEventPlanTools:
+    """Planning tool results must render with full multi-line formatting."""
+
+    def test_plan_task_full_output(self):
+        plan_text = (
+            "✓ Created plan: plan-123\n"
+            "Goal: Implement auth\n"
+            "Tasks: 3\n\n"
+            "  1. [low] Add login — files: auth.py\n"
+            "  2. [medium] Add JWT — deps: 1\n"
+            "  3. [high] Add tests — deps: 1, 2"
+        )
+        event = tool_result("plan_task", plan_text)
+        rendered = _render_event(event)
+        assert "Created plan" in rendered
+        assert "  1." in rendered
+        assert "  2." in rendered
+        assert "  3." in rendered
+        newline_count = rendered.count("\n")
+        assert newline_count >= 4, f"Expected multi-line output, got {newline_count} newlines"
+
+    def test_mark_step_done_full_output(self):
+        result_text = "✓ Marked task auth-login as done. Progress: 2/3"
+        event = tool_result("mark_step_done", result_text)
+        rendered = _render_event(event)
+        assert "✓ Marked task" in rendered
+
+    def test_update_plan_full_output(self):
+        result_text = "✓ Updated task auth-login to 'done'. Progress: 2/3"
+        event = tool_result("update_plan", result_text)
+        rendered = _render_event(event)
+        assert "✓ Updated task" in rendered
+
+    def test_non_plan_tool_still_truncated(self):
+        long_result = "x" * 300 + "\nline2"
+        event = tool_result("read_file", long_result)
+        rendered = _render_event(event)
+        assert ("..." in rendered or len(rendered) < 250)
+        assert "→" in rendered
+
+    def test_plan_tool_with_json_result_is_safe(self):
+        event = tool_result("plan_task", '{"ok": true, "id": "p-1"}')
+        rendered = _render_event(event)
+        assert isinstance(rendered, str)

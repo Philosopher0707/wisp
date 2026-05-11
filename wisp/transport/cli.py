@@ -47,6 +47,11 @@ from wisp.skills import find_skill
 
 logger = logging.getLogger(__name__)
 
+# Planning tools whose output is meant for human consumption and must preserve
+# newlines / table formatting.  These bypass the normal 200-char truncation
+# and newline-to-space replacement.
+_PLANNING_TOOLS: set[str] = {"plan_task", "mark_step_done", "update_plan"}
+
 # ── Signal handling ──────────────────────────────────────────────────
 
 _transport_instances: weakref.WeakSet = weakref.WeakSet()
@@ -273,6 +278,10 @@ def _render_event(event: AgentEvent, show_thinking: bool = False) -> Optional[st
         preview = _args_preview(args)
         return dim(f"  🛠  {name}({preview})")
 
+    _PLAN_TOOL_NAMES = frozenset({
+        "plan_task", "mark_step_done", "update_plan",
+    })
+
     if etype == TYPE_TOOL_RESULT:
         name = event.data.get("name", "")
         result = event.data.get("result", "")
@@ -283,6 +292,9 @@ def _render_event(event: AgentEvent, show_thinking: bool = False) -> Optional[st
                 result = data
             except (json.JSONDecodeError, KeyError):
                 pass
+        # Planning tools: show full multi-line output so humans can read plans
+        if name in _PLAN_TOOL_NAMES and isinstance(result, str):
+            return dim(f"     → {name} result:\n{result}")
         preview = str(result)[:200].replace("\n", " ")
         if len(preview) > 200:
             preview += "..."
