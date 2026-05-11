@@ -532,7 +532,10 @@ class WispAgentCore:
         try:
             from wisp.repo_map import RepoMap
             rm = RepoMap(ws_abs)
-            entries = rm.build(use_cache=True)
+            # Use fast_mode=True for cold starts to avoid blocking the user
+            # for 5-10 seconds on large codebases. The skeleton gives a quick
+            # file listing; a full build with symbols happens on subsequent calls.
+            entries = rm.build(use_cache=True, fast_mode=True)
             if entries:
                 map_text = rm.format_for_llm(max_tokens=1200)
                 system += f"\n\n## Codebase Map\n{map_text}\n"
