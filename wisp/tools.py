@@ -16,6 +16,7 @@ import shlex
 import subprocess
 import tempfile
 from html.parser import HTMLParser
+import time
 from pathlib import Path
 from typing import Any, Optional
 

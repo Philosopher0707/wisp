@@ -236,8 +236,18 @@ def has_plugin_tool(name: str) -> bool:
 
 
 def execute_plugin_tool(name: str, **kwargs) -> Any:
-    """Execute a plugin tool by name.  Used by execute_tool() as fallback."""
+    """Execute a plugin tool by name.  Used by execute_tool() as fallback.
+
+    Mirrors execute_tool's argument filtering: only passes kwargs the
+    function actually accepts, auto-injecting workspace/file_lock/lsp_manager.
+    """
     pt = _plugin_tools.get(name)
     if pt is None:
         raise RuntimeError(f"Plugin tool '{name}' not found")
-    return pt.impl(**kwargs)
+
+    import inspect
+    sig = inspect.signature(pt.impl)
+    filtered = {k: v for k, v in kwargs.items() if k in sig.parameters}
+    # Note: caller already passes workspace via kwargs, but we filter it
+    # only if accepted by the signature.  Same for file_lock / lsp_manager.
+    return pt.impl(**filtered)

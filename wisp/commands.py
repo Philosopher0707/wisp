@@ -285,6 +285,68 @@ def cmd_tokens(agent, args: str):
     print(f"  {dim('Messages:')}        ~{msg_tokens:,} tokens")
 
 
+@register("metrics", "Show agent metrics (turns, tokens, tools, latency)", usage="/metrics")
+def cmd_metrics(agent, args: str):
+    snap = agent.metrics.snapshot(chars_per_token=agent.config.chars_per_token)
+    print(info("📊 Agent Metrics"))
+    print(f"  {dim('Turns:')}           {snap['turns']}")
+    print(f"  {dim('Tokens:')}          {snap['total_tokens']:,} "
+          f"(prompt {snap['prompt_tokens']:,} + completion {snap['completion_tokens']:,})")
+    print(f"  {dim('Avg latency:')}     {snap['avg_latency_ms']:.0f} ms")
+    print(f"  {dim('Tool calls:')}      {snap['tool_calls']} "
+          f"({snap['tool_errors']} errors, {snap['tool_success_rate']:.0f}% success)")
+    if snap['avg_tool_duration_ms']:
+        print(f"  {dim('Tool latencies:')}")
+        for name, dur in sorted(snap['avg_tool_duration_ms'].items()):
+            print(f"    {dim(name + ':')} {dur:.0f} ms")
+    if snap['checkpoints']:
+        print(f"  {dim('Checkpoints:')}     {snap['checkpoints']}")
+    if snap['compactions']:
+        print(f"  {dim('Compactions:')}     {snap['compactions']}")
+    if snap['interruptions']:
+        print(f"  {dim('Interruptions:')}   {snap['interruptions']}")
+    if snap['tool_blocks']:
+        print(f"  {dim('Blocks:')}          {snap['tool_blocks']}")
+
+
+@register("circuit", "Show circuit breaker status", usage="/circuit [tool_name|reset]")
+def cmd_circuit(agent, args: str):
+    cb = agent.circuit_breaker
+    if not cb._states:
+        print(dim("No circuit breaker state (no tools have been called yet)."))
+        return
+
+    parts = args.split()
+    if parts and parts[0] == "reset":
+        reset_name = parts[1] if len(parts) > 1 else ""
+        cb.reset(reset_name)
+        if reset_name:
+            print(success(f"✓ Circuit breaker for '{reset_name}' reset."))
+        else:
+            print(success("✓ All circuit breakers reset."))
+        return
+
+    open_tools = []
+    half_tools = []
+    closed_tools = []
+    for name, state in cb._states.items():
+        if state.state == "OPEN":
+            open_tools.append(name)
+        elif state.state == "HALF_OPEN":
+            half_tools.append(name)
+        else:
+            closed_tools.append(name)
+
+    if open_tools:
+        print(error(f"⚠ OPEN: {', '.join(open_tools)} — blocked until recovery timeout"))
+    if half_tools:
+        print(warning(f"⚡ HALF_OPEN: {', '.join(half_tools)} — one probe allowed"))
+    if closed_tools:
+        print(success(f"✓ CLOSED: {', '.join(closed_tools)}"))
+    if not (open_tools or half_tools or closed_tools):
+        print(dim("All circuits healthy."))
+
+
 @register("compact", "Compact session history to save context", aliases=("c",), usage="/compact")
 def cmd_compact(agent, args: str):
     if agent.session is None:

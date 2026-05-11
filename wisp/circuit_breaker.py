@@ -56,7 +56,7 @@ class CircuitBreaker:
         half_open_successes: int = 1,
     ):
         self.failure_threshold = max(1, failure_threshold)
-        self.recovery_timeout = max(5.0, recovery_timeout)
+        self.recovery_timeout = max(0.0, recovery_timeout)
         self.half_open_successes = max(1, half_open_successes)
         self._states: dict[str, _ToolState] = {}
 

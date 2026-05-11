@@ -138,7 +138,7 @@ class TestIntegrationEditFile:
         }, str(temp_workspace))
         result = parse_tool_result(raw)
         assert result["status"] == "error"
-        assert "not found" in result["data"].lower()
+        assert "could not find" in result["data"].lower()
 
 
 # ── Integration: run_bash ──────────────────────────────────────────

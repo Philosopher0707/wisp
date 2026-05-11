@@ -1,6 +1,14 @@
 import { useCallback, useMemo } from 'react';
 import type { SessionSummary, Message, ToolCallItem } from '../state/types.js';
 
+function makeAuthHeaders(apiKey: string): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (apiKey) {
+    headers['Authorization'] = `Bearer ${apiKey}`;
+  }
+  return headers;
+}
+
 export interface GitStatus {
   git: boolean;
   branch?: string;

@@ -22,6 +22,7 @@ import os
 import secrets
 import shutil
 import sys
+import re
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -59,22 +60,6 @@ from wisp.multi_agent.roles import AgentRole
 from wisp.transport.server import create_swarm_progress_callback
 from wisp.app_server import WispAppServer
 from wisp.runtime_protocol import JsonRpcRequest
-
-# ── Structured Logging ─────────────────────────────────────────────────
-if os.environ.get("WISP_JSON_LOGS") == "1":
-    class JsonFormatter(logging.Formatter):
-        def format(self, record):
-            return json.dumps({
-                "time": self.formatTime(record),
-                "level": record.levelname,
-                "logger": record.name,
-                "msg": record.getMessage(),
-            })
-    _json_handler = logging.StreamHandler(sys.stdout)
-    _json_handler.setFormatter(JsonFormatter())
-    logging.root.handlers.clear()
-    logging.root.addHandler(_json_handler)
-    logging.root.setLevel(logging.INFO)
 
 DEFAULT_SWARM_ROLES = [AgentRole.CODER, AgentRole.REVIEWER, AgentRole.TESTER, AgentRole.RESEARCHER]
 
