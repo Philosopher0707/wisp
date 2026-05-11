@@ -60,6 +60,22 @@ from wisp.transport.server import create_swarm_progress_callback
 from wisp.app_server import WispAppServer
 from wisp.runtime_protocol import JsonRpcRequest
 
+# ── Structured Logging ─────────────────────────────────────────────────
+if os.environ.get("WISP_JSON_LOGS") == "1":
+    class JsonFormatter(logging.Formatter):
+        def format(self, record):
+            return json.dumps({
+                "time": self.formatTime(record),
+                "level": record.levelname,
+                "logger": record.name,
+                "msg": record.getMessage(),
+            })
+    _json_handler = logging.StreamHandler(sys.stdout)
+    _json_handler.setFormatter(JsonFormatter())
+    logging.root.handlers.clear()
+    logging.root.addHandler(_json_handler)
+    logging.root.setLevel(logging.INFO)
+
 DEFAULT_SWARM_ROLES = [AgentRole.CODER, AgentRole.REVIEWER, AgentRole.TESTER, AgentRole.RESEARCHER]
 
 from wisp.config import WispConfig
@@ -109,7 +125,7 @@ class PromptRequest(BaseModel):
     images: list[str] = Field(default_factory=list, description="Base64 data URLs of images")
 
 class BashRequest(BaseModel):
-    command: str = Field(..., max_length=2000)
+    command: str = Field(..., max_length=4096)
     cwd: Optional[str] = None
 
 class FileWriteRequest(BaseModel):

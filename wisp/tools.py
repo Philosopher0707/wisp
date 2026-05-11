@@ -87,8 +87,9 @@ class _TextExtractor(HTMLParser):
 
 _MAX_READ_SIZE = 50 * 1024 * 1024       # 50 MB
 _MAX_WRITE_SIZE = 100 * 1024 * 1024     # 100 MB
-_MAX_BASH_OUTPUT = 10_000               # chars of output to return to model
+_MAX_BASH_OUTPUT = 50_000               # chars of output to return to model
 _MAX_CMD_LENGTH = 4096                  # max command length for safety
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
 
 
 def check_dangerous_command(command: str) -> Optional[str]:
@@ -155,6 +156,20 @@ def check_dangerous_command(command: str) -> Optional[str]:
     # shutdown/reboot
     if re.search(r'\b(shutdown|reboot|halt|poweroff|init\s+0)\b', cmd_lower):
         return "system shutdown/reboot"
+
+    # curl/wget piped to any interpreter
+    if re.search(r'\b(curl|wget)\b.*\|\s*(sh|bash|zsh|python3?|perl|ruby|node)\b', cmd_lower):
+        return "remote code execution (pipe to interpreter)"
+
+    # rm of root filesystem
+    if re.search(r'\brm\s+.*--no-preserve-root', cmd_lower):
+        return "recursive deletion of root filesystem"
+    if re.search(r'\brm\s+(-[a-zA-Z]*r|--recursive).*?\s*/\s*$', cmd_lower):
+        return "recursive deletion of root"
+
+    # fork bomb heuristic
+    if re.search(r'\(\)\s*\{[^}]*\|[^}]*&[^}]*\}', cmd_lower):
+        return "fork bomb detected"
 
     return None
 
@@ -551,15 +566,25 @@ def tool_web_fetch(url: str, workspace: str = ".", max_chars: int = 10000) -> st
 def tool_run_bash(command: str, workspace: str, timeout: int = 60) -> str:
     """Run a bash command in the workspace directory.
 
-    Security: validates command length, enforces timeout, captures output.
-    Uses shell=True for pipeline support but validates the command.
+    Security: validates command length, checks for dangerous commands,
+    rejects null bytes, strips ANSI codes, enforces timeout, caps output.
     """
     _validate_string(command, "command", _MAX_CMD_LENGTH)
     timeout_val = _validate_int(timeout, "timeout", 1, 3600)
 
+    # Reject null bytes
+    if "\x00" in command:
+        raise ToolError("Null bytes not allowed in command")
+
+    # Check dangerous commands
+    danger = check_dangerous_command(command)
+    if danger:
+        raise ToolError(f"Dangerous command blocked: {danger}")
+
     cwd = Path(workspace).resolve()
     logger.info("Running bash (timeout=%ds): %.100s", timeout_val, command)
 
+    start_time = time.time()
     try:
         result = subprocess.run(
             command,
@@ -578,10 +603,21 @@ def tool_run_bash(command: str, workspace: str, timeout: int = 60) -> str:
             output += result.stderr
         if result.returncode != 0:
             output += f"\n[exit code: {result.returncode}]"
-        # Truncate for the model (but log the full output)
-        if len(output) > _MAX_BASH_OUTPUT:
-            logger.debug("Bash output truncated (%d chars)", len(output))
+
+        # Strip ANSI escape codes
+        output = _ANSI_RE.sub('', output)
+
+        # Truncate for the model (but log the full output length)
+        full_len = len(output)
+        if full_len > _MAX_BASH_OUTPUT:
+            logger.debug("Bash output truncated (%d chars)", full_len)
             output = output[:_MAX_BASH_OUTPUT] + "\n... [output truncated]"
+
+        duration_ms = round((time.time() - start_time) * 1000)
+        logger.info(
+            "Bash execution — workspace=%s command=%.100s exit_code=%d output_len=%d duration_ms=%d",
+            workspace, command, result.returncode, len(output), duration_ms,
+        )
         return output or "(no output)"
     except subprocess.TimeoutExpired:
         logger.warning("Command timed out after %ds: %.100s", timeout_val, command)
@@ -1329,7 +1365,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "run_bash",
-            "description": "Run a bash command. Use for building, testing, git operations, or running scripts. Max command length: 4096 chars. Timeout: configurable (default 60s). Output truncated to 10K chars.",
+            "description": "Run a bash command. Use for building, testing, git operations, or running scripts. Max command length: 4096 chars. Timeout: configurable (default 60s). Output truncated to 50K chars.",
             "parameters": {
                 "type": "object",
                 "properties": {
