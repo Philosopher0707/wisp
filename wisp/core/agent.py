@@ -83,11 +83,13 @@ You have access to tools that let you read, write, and edit files, run bash comm
 - read_file: Read file contents (supports offset/limit for large files)
 - write_file: Create or overwrite a file
 - edit_file: Targeted text replacement (surgical edits, with fuzzy fallback)
+- edit_file_multi: Make multiple precise edits in a single file in one call (all edits matched against original content)
 - run_bash: Execute shell commands
 - list_files: Explore directory structure
 - web_fetch: Fetch content from URLs (web pages, APIs, documentation)
 - web_search: Search the web for current information, docs, error messages
-- search_symbols: Search code for functions, classes, structs by name
+- search_symbols: Search code for functions, classes, structs by name (regex-based)
+- search_codebase: Semantic search over the codebase using vector similarity (natural language queries)
 - remember: Store a fact in cross-session memory (preferences, decisions)
 - recall: Search cross-session memory and past summaries for relevant facts
 - spawn_subagent: Delegate a scoped task to a child agent
