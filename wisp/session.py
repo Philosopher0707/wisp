@@ -111,11 +111,11 @@ class Session:
 
     def summarize(self):
         """Generate a summary of this session's conversation."""
-        from wisp.summarizer import ExtractiveSummarizer
+        from wisp.semantic_compressor import SemanticCompressor
         if not self.messages:
             return None
-        summarizer = ExtractiveSummarizer()
-        return summarizer.summarize(
+        compressor = SemanticCompressor()
+        return compressor.summarize(
             messages=self.messages,
             session_id=self.id,
             workspace=self.workspace,
@@ -150,7 +150,7 @@ class Session:
         if len(self.messages) <= keep_recent:
             return {"compacted": False, "reason": "not enough messages"}
 
-        from wisp.summarizer import ExtractiveSummarizer
+        from wisp.semantic_compressor import SemanticCompressor
 
         before_count = len(self.messages)
 
@@ -181,23 +181,23 @@ class Session:
         old_messages = self.messages[:-adjusted]
         recent_messages = self.messages[-adjusted:]
 
-        # Generate summary of old messages
-        summarizer = ExtractiveSummarizer()
-        summary_obj = summarizer.summarize(
+        # Generate semantic summary of old messages
+        compressor = SemanticCompressor()
+        compression = compressor.compress(
             messages=old_messages,
-            session_id=self.id,
-            workspace=self.workspace,
+            chars_per_token=chars_per_token,
         )
+        summary_obj = compression.to_session_summary(self.id, self.workspace)
 
-        # Build compacted context message
+        # Build compacted context message with full semantic structure
         summary_parts = ["## Previous conversation summary"]
-        if summary_obj and summary_obj.summary:
-            summary_parts.append(summary_obj.summary)
+        if compression.summary:
+            summary_parts.append(compression.summary)
 
-        # NEW: Thread stack — tells the model what was in progress
-        if summary_obj and summary_obj.thread_stack:
+        # Thread stack — tells the model what was in progress
+        if compression.thread_stack:
             summary_parts.append("\n### Active threads")
-            for t in summary_obj.thread_stack:
+            for t in compression.thread_stack:
                 status = t.get("status", "COMPLETE")
                 topic = t.get("topic", "")
                 summary_parts.append(f'- [{status}] {topic}')
@@ -206,21 +206,21 @@ class Session:
                         f'  → When the user says "continue", resume from: {topic}'
                     )
 
-        if summary_obj and summary_obj.key_decisions:
+        if compression.key_decisions:
             summary_parts.append("\n### Key decisions")
-            for d in summary_obj.key_decisions:
+            for d in compression.key_decisions:
                 summary_parts.append(f"- {d}")
-        if summary_obj and summary_obj.user_preferences:
+        if compression.user_preferences:
             summary_parts.append("\n### User preferences")
-            for p in summary_obj.user_preferences:
+            for p in compression.user_preferences:
                 summary_parts.append(f"- {p}")
-        if summary_obj and summary_obj.open_tasks:
+        if compression.open_tasks:
             summary_parts.append("\n### Open tasks")
-            for t in summary_obj.open_tasks:
+            for t in compression.open_tasks:
                 summary_parts.append(f"- {t}")
-        if summary_obj and summary_obj.files_touched:
+        if compression.files_touched:
             summary_parts.append("\n### Files touched")
-            for f in summary_obj.files_touched:
+            for f in compression.files_touched:
                 summary_parts.append(f"- {f}")
 
         compacted_content = "\n".join(summary_parts)

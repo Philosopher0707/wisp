@@ -669,7 +669,6 @@ class WispAgentCore:
         self._add_message("user", content)
         if system is None:
             system = self._build_system_prompt()
-        self._trim_context_if_needed(system)
 
         # Session bookkeeping
         if self.session is None:
@@ -679,10 +678,13 @@ class WispAgentCore:
                 first_prompt=prompt,
             )
 
-        # Auto-compact
+        # Auto-compact FIRST (semantic compression) before hard trim
         compact_event = self._maybe_compact_session()
         if compact_event:
             yield compact_event
+
+        # Hard trim only if compaction wasn't sufficient
+        self._trim_context_if_needed(system)
 
         # Steering checkpoint 1: after compact, before iteration loop
         inject = await self._check_steering()
