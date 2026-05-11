@@ -306,14 +306,26 @@ class WispAgentCore:
 
     # ── Continuation expansion ───────────────────────────────────────
 
+    # Single-word/single-phrase triggers are safe because we only fire the
+    # expansion when the user message is short (<= 25 chars).  Multi-word
+    # triggers that could appear inside normal questions are guarded by the
+    # length check below.
+    _MAX_CONTINUATION_LEN = 25
+
     _CONTINUATION_TRIGGERS = frozenset({
-        "continue", "go on", "more", "and?", "keep going", "next", "proceed",
-        "finish", "tell me more", "expand on that", "elaborate", "what else",
+        "continue", "go on", "more", "keep going", "next", "proceed",
+        "finish", "expand on that", "elaborate",
     })
 
     def _expand_continuation(self, user_text: str) -> str:
         lowered = user_text.strip().lower().rstrip("?.!")
+        # Guard against false positives in multi-line prompts or questions
+        # that happen to contain continuation trigger words (e.g. "how do I
+        # continue to use this API?").  Only short, standalone prompts are
+        # treated as continuation requests.
         if lowered not in self._CONTINUATION_TRIGGERS:
+            return user_text
+        if len(user_text.strip()) > self._MAX_CONTINUATION_LEN:
             return user_text
         parts: list[str] = [user_text]
         last_assistant = ""

@@ -54,9 +54,11 @@ _old_sigint_handler = None
 
 
 def _handle_sigint(signum, frame):
-    """Mark interruption on all live transport instances so loops exit gracefully."""
+    """Mark interruption on all live transport instances AND their cores so loops exit gracefully."""
     for inst in _transport_instances:
         inst._interrupted = True
+        if hasattr(inst, "core"):
+            inst.core._interrupted = True
     print(error("\n\n⏹  Interrupted. Finishing current step... (Ctrl+C again to force quit)"))
     signal.signal(signal.SIGINT, signal.default_int_handler)
 
@@ -570,8 +572,15 @@ class CLITransport:
         await self._execute_turn(system, self.core.config.workspace or ".")
 
     async def _execute_turn(self, system: str, workspace: str) -> None:
-        """Execute one user turn by consuming events from core._arun()."""
+        """Execute one user turn by consuming events from core._arun().
+
+        This is a strict event-pump: core owns the turn state, transport
+        only renders.  The transport must NOT mutate core.messages or
+        attempt to recover from failures by rewriting history.
+        """
         self._interrupted = False
+        if hasattr(self.core, "_interrupted"):
+            self.core._interrupted = False
 
         # _arun() adds the user message internally, so we pass the raw prompt.
         # Extract the last user message content before _arun() clears/re-adds it.
@@ -627,7 +636,19 @@ class CLITransport:
                     rendered = _render_event(event, show_thinking)
                     if rendered is not None:
                         print(rendered, end="\n", flush=True)
+        except KeyboardInterrupt:
+            # Ctrl+C during a running turn — propagate interruption cleanly.
+            self.core._interrupted = True
+            self._interrupted = True
+            raise
+        except asyncio.CancelledError:
+            # Task was cancelled (e.g. nested-loop shutdown) — propagate.
+            self.core._interrupted = True
+            self._interrupted = True
+            raise
         except Exception:
-            if self.core.messages and self.core.messages[-1].get("role") != "user":
-                self.core.messages.append({"role": "user", "content": [{"type": "text", "text": prompt}]})
+            # All other exceptions: abandon this turn.  Do NOT rewrite
+            # core.messages — the core's internal state must remain the
+            # single source of truth.  The finally block in the REPL will
+            # handle session save gracefully.
             raise
