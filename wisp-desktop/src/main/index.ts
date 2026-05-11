@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
+import { initAutoUpdater } from './update.js';
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -59,6 +60,19 @@ function registerIpcHandlers(): void {
         .map((f) => path.join(themesDir, f));
     } catch {
       event.returnValue = [];
+    }
+  });
+
+  ipcMain.handle('updater:checkNow', async () => {
+    if (process.env.WISP_AUTO_UPDATE === 'false') {
+      return { status: 'skipped' };
+    }
+    if (!mainWindow) return { status: 'no-window' };
+    try {
+      const result = await initAutoUpdater(mainWindow);
+      return { status: 'checking' };
+    } catch (err: any) {
+      return { status: 'error', message: err.message };
     }
   });
 

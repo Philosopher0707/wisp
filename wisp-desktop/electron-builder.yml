@@ -13,3 +13,9 @@ mac:
     - zip
   artifactName: Wisp-${version}-mac.${ext}
   darkModeSupport: true
+
+# Publish configuration for auto-updates
+# TODO: Replace with your actual update server URL
+publish:
+  provider: generic
+  url: "https://example.com/updates"

@@ -4,4 +4,7 @@ dist/
 release/
 resources/icon.iconset/
 *.log
+test-results/
+coverage/
+playwright-report/
 .DS_Store

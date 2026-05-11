@@ -21,10 +21,32 @@ import logging
 import os
 import secrets
 import shutil
+import sys
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
+
+# ── Structured logging ────────────────────────────────────────────
+if os.environ.get("WISP_JSON_LOGS") == "1":
+    class _JsonFormatter(logging.Formatter):
+        def format(self, record: logging.LogRecord) -> str:
+            payload = {
+                "time": self.formatTime(record),
+                "level": record.levelname,
+                "logger": record.name,
+                "msg": record.getMessage(),
+                "module": record.module,
+            }
+            if record.exc_info:
+                payload["exception"] = self.formatException(record.exc_info)
+            return json.dumps(payload)
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(_JsonFormatter())
+    logging.root.handlers.clear()
+    logging.root.addHandler(handler)
+    logging.root.setLevel(logging.INFO)
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Query, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -1335,8 +1357,18 @@ async def delete_file(path: str):
 async def run_bash(req: BashRequest):
     """Run a bash command inside the workspace. Restricted for safety."""
     from wisp.tools import check_dangerous_command
+
+    # ── Input validation ──────────────────────────────────────
+    if not req.command or not isinstance(req.command, str):
+        raise HTTPException(status_code=400, detail="Command must be a non-empty string")
+    if "\x00" in req.command:
+        raise HTTPException(status_code=400, detail="Null bytes not allowed in command")
+    if len(req.command) > 4096:
+        raise HTTPException(status_code=400, detail="Command too long (max 4096 chars)")
+
     danger = check_dangerous_command(req.command)
     if danger:
+        logger.warning("Dangerous bash blocked: %s", danger[:200])
         raise HTTPException(status_code=400, detail=f"Dangerous command blocked: {danger}")
 
     cwd = req.cwd or "."
@@ -1348,14 +1380,33 @@ async def run_bash(req: BashRequest):
     from wisp.sandbox import get_sandbox
     sandbox = get_sandbox(str(WORKSPACE_ROOT))
 
+    # ── Execution ──────────────────────────────────────
+    start = time.time()
     try:
+        timeout = int(os.environ.get("WISP_BASH_TIMEOUT", "60"))
         exit_code, stdout, stderr = await sandbox.run(
             req.command,
             cwd=cwd,
-            timeout=60,
+            timeout=timeout,
         )
-        stdout = stdout[:MAX_BASH_OUTPUT]
-        stderr = stderr[:MAX_BASH_OUTPUT]
+        duration = round(time.time() - start, 3)
+
+        # ANSI escape code stripping
+        def _strip_ansi(text: str) -> str:
+            import re
+            return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+        stdout = _strip_ansi(stdout[:MAX_BASH_OUTPUT])
+        stderr = _strip_ansi(stderr[:MAX_BASH_OUTPUT])
+
+        # Structured log entry
+        logger.info(
+            "bash_exec sandbox=%s exit=%d duration=%.3fs cmd_prefix=%s",
+            sandbox.name,
+            exit_code,
+            duration,
+            req.command[:100].replace("\n", "\\n"),
+        )
         return {
             "exit_code": exit_code,
             "stdout": stdout,
@@ -1363,7 +1414,10 @@ async def run_bash(req: BashRequest):
             "truncated": False,
             "sandbox": sandbox.name,
         }
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.exception("bash_exec failed")
         raise HTTPException(status_code=500, detail=str(e))
 
 

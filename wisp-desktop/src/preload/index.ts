@@ -9,6 +9,8 @@ export interface WispAPI {
   selectDirectory: () => Promise<string | null>;
   readFileAsDataUrl: (path: string) => Promise<string | null>;
   listCustomThemes: () => string[];
+  checkForUpdates: () => Promise<{ status: string; message?: string }>;
+  onUpdateStatus: (callback: (status: { status: string; version?: string; percent?: number; message?: string }) => void) => () => void;
 }
 
 contextBridge.exposeInMainWorld('wisp', {
@@ -31,4 +33,14 @@ contextBridge.exposeInMainWorld('wisp', {
   readFileAsDataUrl: (path: string) => ipcRenderer.invoke('file:readDataUrl', path),
 
   listCustomThemes: () => ipcRenderer.sendSync('themes:list'),
+
+  checkForUpdates: () => ipcRenderer.invoke('updater:checkNow'),
+
+  onUpdateStatus: (callback) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: { status: string; version?: string; percent?: number; message?: string }) => {
+      callback(payload);
+    };
+    ipcRenderer.on('updater:status', handler);
+    return () => ipcRenderer.removeListener('updater:status', handler);
+  },
 } satisfies WispAPI);
