@@ -1,5 +1,6 @@
 import React from 'react';
 import { AppShell } from './components/layout/AppShell.js';
+import { ErrorBoundary } from './components/ErrorBoundary.js';
 import { AppContext } from './state/context.js';
 import { appReducer, createInitialState } from './state/types.js';
 import { useWebSocket } from './hooks/useWebSocket.js';
@@ -61,8 +62,9 @@ export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
   React.useEffect(() => {
     const baseUrl = serverUrl.replace(/\/$/, '');
     const params = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
+    const headers = apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined;
 
-    fetch(`${baseUrl}/api/models${params}`)
+    fetch(`${baseUrl}/api/models${params}`, { headers })
       .then((r) => r.json())
       .then((data) => {
         if (data.models?.length > 0) {
@@ -71,7 +73,7 @@ export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
       })
       .catch(() => {});
 
-    fetch(`${baseUrl}/api/workspace${params}`)
+    fetch(`${baseUrl}/api/workspace${params}`, { headers })
       .then((r) => r.json())
       .then((data: { path?: string }) => {
         if (data.path) {
@@ -111,9 +113,10 @@ export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
     if (!state.suggestionsPanelOpen || state.connection !== 'connected') return;
     const baseUrl = serverUrl.replace(/\/$/, '');
     const params = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
+    const headers = apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined;
 
     const poll = () => {
-      fetch(`${baseUrl}/api/suggestions${params}`)
+      fetch(`${baseUrl}/api/suggestions${params}`, { headers })
         .then((r) => r.json())
         .then((data: { suggestions?: Array<{ path: string; mtime: number; diagnostic_count: number; severities: Record<string, number> }> }) => {
           if (data.suggestions) {
@@ -148,8 +151,10 @@ export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
   );
 
   return (
-    <AppContext.Provider value={ctx}>
-      <AppShell />
-    </AppContext.Provider>
+    <ErrorBoundary>
+      <AppContext.Provider value={ctx}>
+        <AppShell />
+      </AppContext.Provider>
+    </ErrorBoundary>
   );
 };

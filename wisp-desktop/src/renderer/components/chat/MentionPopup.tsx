@@ -36,7 +36,9 @@ export const MentionPopup: React.FC<Props> = ({
       const params = new URLSearchParams();
       if (apiKey) params.set('api-key', apiKey);
       params.set('path', p);
-      const resp = await fetch(`${base}/api/files?${params.toString()}`);
+      const resp = await fetch(`${base}/api/files?${params.toString()}`, {
+        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
+      });
       const data = await resp.json() as { items?: { name: string; path: string; type: string }[] };
       const items = (data.items || [])
         .filter((item) => {

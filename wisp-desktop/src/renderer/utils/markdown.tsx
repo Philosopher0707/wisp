@@ -76,7 +76,10 @@ const CodeBlock: React.FC<{ code: string; lang: string }> = ({ code, lang }) => 
       const body = JSON.stringify({ command: code, cwd: workspacePath || '.' });
       const resp = await fetch(`${base}/api/bash${params}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        },
         body,
       });
       if (!resp.ok) {
@@ -128,7 +131,10 @@ const CodeBlock: React.FC<{ code: string; lang: string }> = ({ code, lang }) => 
       // Fetch diff preview
       const diffResp = await fetch(`${base}/api/diff${params}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        },
         body: JSON.stringify({ path: relPath, new_content: code }),
       });
       if (!diffResp.ok) {
@@ -154,7 +160,10 @@ const CodeBlock: React.FC<{ code: string; lang: string }> = ({ code, lang }) => 
       const qs = `${params}${params ? '&' : '?'}path=${encodeURIComponent(diffPath)}`;
       const resp = await fetch(`${base}/api/files${qs}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        },
         body: JSON.stringify({ content: code }),
       });
       if (resp.ok) {

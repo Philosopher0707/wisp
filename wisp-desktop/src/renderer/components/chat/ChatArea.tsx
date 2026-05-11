@@ -28,7 +28,10 @@ export const ChatArea: React.FC = () => {
       const params = state.apiKey ? `?api-key=${encodeURIComponent(state.apiKey)}` : '';
       const resp = await fetch(`${base}/api/git/commit${params}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(state.apiKey ? { Authorization: `Bearer ${state.apiKey}` } : {}),
+        },
         body: JSON.stringify({}),
       });
       if (resp.ok) {

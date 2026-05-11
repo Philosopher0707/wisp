@@ -45,7 +45,9 @@ export const TopBar: React.FC = () => {
     if (state.connection !== 'connected') return;
     const base = state.serverUrl.replace(/\/$/, '');
     const params = state.apiKey ? `?api-key=${encodeURIComponent(state.apiKey)}` : '';
-    fetch(`${base}/api/sandbox/status${params}`)
+    fetch(`${base}/api/sandbox/status${params}`, {
+      headers: state.apiKey ? { Authorization: `Bearer ${state.apiKey}` } : undefined,
+    })
       .then((r) => r.json())
       .then((data: { type?: string }) => {
         if (data.type) setSandboxType(data.type);
@@ -57,7 +59,9 @@ export const TopBar: React.FC = () => {
     try {
       const base = state.serverUrl.replace(/\/$/, '');
       const params = state.apiKey ? `?api-key=${encodeURIComponent(state.apiKey)}` : '';
-      const resp = await fetch(`${base}/api/workspace${params}`);
+      const resp = await fetch(`${base}/api/workspace${params}`, {
+        headers: state.apiKey ? { Authorization: `Bearer ${state.apiKey}` } : undefined,
+      });
       const data = await resp.json() as { path?: string };
       const workspacePath = data.path;
       if (!workspacePath) return;

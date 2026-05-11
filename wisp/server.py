@@ -6,9 +6,11 @@ Run:
     wisp server --host 0.0.0.0 --port 8000
 
 Environment:
-    WISP_API_KEY      Pre-shared key for client auth (required)
-    WISP_WORKSPACE    Root workspace directory (default: ./workspace)
-    OLLAMA_HOST       Ollama URL (default: http://localhost:11434)
+    WISP_API_KEY        Pre-shared key for client auth (required)
+    WISP_WORKSPACE      Root workspace directory (default: ./workspace)
+    OLLAMA_HOST         Ollama URL (default: http://localhost:11434)
+    WISP_CORS_ORIGINS   Comma-separated allowed CORS origins (default: localhost dev)
+    WISP_RATE_LIMIT_RPS Requests per second cap for expensive endpoints (default: 10)
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Query, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -66,6 +68,13 @@ if not API_KEY:
     logger.warning("WISP_API_KEY not set — generated temporary key: %s", API_KEY)
 
 WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
+
+# ── CORS Configuration ──────────────────────────────────────────────────
+_cors_raw = os.environ.get("WISP_CORS_ORIGINS", "")
+if _cors_raw:
+    CORS_ORIGINS = [o.strip() for o in _cors_raw.split(",") if o.strip()]
+else:
+    CORS_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
 # ── Pydantic models ──────────────────────────────────────────────────
 
@@ -173,10 +182,39 @@ class BestOfNRequest(BaseModel):
 
 # ── Auth ─────────────────────────────────────────────────────────────
 
-async def verify_api_key(x_api_key: str = Query(..., alias="api-key")):
-    if API_KEY and x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    return x_api_key
+async def verify_api_key(
+    x_api_key: str | None = Query(None, alias="api-key"),
+    authorization: str | None = Header(None),
+):
+    if authorization and authorization.lower().startswith("bearer "):
+        auth_key = authorization[7:]
+        if auth_key == API_KEY:
+            return auth_key
+    if x_api_key and x_api_key == API_KEY:
+        return x_api_key
+    raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+class RateLimiter:
+    def __init__(self, max_requests: int = 60, window_seconds: int = 60):
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self._requests: dict[str, list[float]] = {}
+        self._lock = asyncio.Lock()
+
+    async def __call__(self, request: Request):
+        client_ip = request.client.host if request.client else "unknown"
+        now = time.time()
+        async with self._lock:
+            requests = self._requests.get(client_ip, [])
+            requests = [t for t in requests if now - t < self.window_seconds]
+            if len(requests) >= self.max_requests:
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
+            requests.append(now)
+            self._requests[client_ip] = requests
+
+
+_rate_limit_rps = int(os.environ.get("WISP_RATE_LIMIT_RPS", "10"))
+RATE_LIMITER = RateLimiter(max_requests=_rate_limit_rps * 60, window_seconds=60)
 
 # ── App lifecycle ────────────────────────────────────────────────────
 
@@ -190,7 +228,7 @@ app = FastAPI(title="Wisp Cloud", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -695,7 +733,7 @@ The replacement must be valid code that can directly substitute the selection.""
 
 # ── Autocomplete ───────────────────────────────────────────────────────
 
-@app.post("/api/complete", dependencies=[Depends(verify_api_key)])
+@app.post("/api/complete", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
 async def autocomplete(req: CompletionRequest):
     """Generate a code completion using the configured LLM provider.
 
@@ -757,7 +795,7 @@ async def search_codebase(q: str = Query(..., min_length=1, max_length=500),
     }
 
 
-@app.post("/api/codebase/index", dependencies=[Depends(verify_api_key)])
+@app.post("/api/codebase/index", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
 async def reindex_codebase():
     """Trigger a full re-index of the workspace."""
     index = _get_semantic_index()
@@ -786,7 +824,7 @@ async def web_search(req: WebSearchRequest):
 
 # ── Background Agents ──────────────────────────────────────────────────
 
-@app.post("/api/run/background", dependencies=[Depends(verify_api_key)])
+@app.post("/api/run/background", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
 async def start_background_run(req: BackgroundRunRequest):
     """Start an agent run in the background. Returns run ID for polling."""
     from wisp.background_agent import get_runner
@@ -898,7 +936,7 @@ _swarm_store: dict[str, dict] = {}
 _swarm_lock = asyncio.Lock()
 
 
-@app.post("/api/swarm/run", dependencies=[Depends(verify_api_key)])
+@app.post("/api/swarm/run", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
 async def swarm_run_api(req: SwarmRunRequest):
     """Run a multi-agent swarm asynchronously. Returns run_id for polling."""
     from wisp.multi_agent.task import OrchestratorEvent as SwarmEvent
@@ -1293,7 +1331,7 @@ async def delete_file(path: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/bash", dependencies=[Depends(verify_api_key)])
+@app.post("/api/bash", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
 async def run_bash(req: BashRequest):
     """Run a bash command inside the workspace. Restricted for safety."""
     from wisp.tools import check_dangerous_command
@@ -1782,12 +1820,23 @@ def _extract_json(text: str) -> Optional[str]:
 
 @app.websocket("/ws/agent")
 async def agent_websocket(websocket: WebSocket, api_key: str = Query(default="")):
-    if API_KEY and api_key != API_KEY:
+    authenticated = False
+    # Immediate auth via query param (backward compat)
+    if api_key and API_KEY and api_key == API_KEY:
+        authenticated = True
+    elif not API_KEY:
+        authenticated = True  # open mode
+
+    if API_KEY and not api_key:
+        # Allow first-message auth — don't reject yet
+        authenticated = False
+    elif API_KEY and api_key and api_key != API_KEY:
         await websocket.close(code=4001, reason="Invalid API key")
         return
 
     client_id = f"{websocket.client.host}:{websocket.client.port}"
     conn = await manager.connect(websocket, client_id)
+    _first_message = True
 
     try:
         while True:
@@ -1799,6 +1848,32 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(default="")
                 continue
 
             msg_type = msg.get("type")
+
+            # First-message auth via `type: 'auth'` (desktop sends this after onopen)
+            if msg_type == "auth" and not authenticated:
+                auth_key = msg.get("api_key", "")
+                if API_KEY and auth_key == API_KEY:
+                    authenticated = True
+                elif API_KEY:
+                    await conn.send({"type": "error", "message": "Invalid API key"})
+                    await websocket.close(code=4001)
+                    return
+                _first_message = False
+                continue
+            elif msg_type == "auth" and authenticated:
+                # Already authenticated — just acknowledge
+                continue
+
+            _first_message = False
+
+            if not authenticated:
+                await conn.send({"type": "error", "message": "Authentication required"})
+                await websocket.close(code=4001)
+                return
+
+            if msg_type == "ping":
+                await conn.send({"type": "pong"})
+                continue
 
             if msg_type == "prompt":
                 prompt = msg.get("content", "").strip()
@@ -1972,8 +2047,11 @@ def main(host: str = "0.0.0.0", port: int = 8000, no_auth: bool = False):
         API_KEY = ""
 
         # HTTP: bypass api key check
-        async def _noop_auth(x_api_key: str = Query(default="", alias="api-key")):
-            return x_api_key
+        async def _noop_auth(
+            x_api_key: str | None = Query(None, alias="api-key"),
+            authorization: str | None = Header(None),
+        ):
+            return x_api_key or authorization or ""
         app.dependency_overrides[verify_api_key] = _noop_auth
 
     logging.basicConfig(

@@ -50,6 +50,12 @@ export function useWebSocket(
     ws.onopen = () => {
       attemptRef.current = 0;
       dispatch({ type: 'SET_CONNECTION', status: 'connected' });
+
+      // Send auth message after connection open
+      if (apiKey) {
+        ws.send(JSON.stringify({ type: 'auth', api_key: apiKey }));
+      }
+
       pingRef.current = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'ping' }));
@@ -113,7 +119,9 @@ export function useWebSocket(
               try {
                 const base = serverUrl.replace(/\/$/, '');
                 const params = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
-                const resp = await fetch(`${base}/api/git${params}`);
+                const resp = await fetch(`${base}/api/git${params}`, {
+                  headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
+                });
                 if (resp.ok) {
                   const git = await resp.json() as { git: boolean; branch?: string; dirty?: boolean; changed_files?: string[] };
                   if (git.git && git.dirty && git.changed_files && git.changed_files.length > 0) {

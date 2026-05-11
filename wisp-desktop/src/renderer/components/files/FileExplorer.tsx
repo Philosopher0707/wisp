@@ -79,7 +79,10 @@ export const FileExplorer: React.FC = () => {
     try {
       const resp = await fetch(`${baseUrl}/api/workspace${params}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(state.apiKey ? { Authorization: `Bearer ${state.apiKey}` } : {}),
+        },
         body: JSON.stringify({ path: dirPath }),
       });
       if (resp.ok) {

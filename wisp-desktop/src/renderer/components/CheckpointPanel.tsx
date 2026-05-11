@@ -37,7 +37,9 @@ export const CheckpointPanel: React.FC = () => {
     setDiffLoading(true);
     setDiffContent(null);
     try {
-      const resp = await fetch(`${base}/api/checkpoints/${encodeURIComponent(id)}/diff${params}`);
+      const resp = await fetch(`${base}/api/checkpoints/${encodeURIComponent(id)}/diff${params}`, {
+        headers: state.apiKey ? { Authorization: `Bearer ${state.apiKey}` } : undefined,
+      });
       if (resp.ok) {
         const text = await resp.text();
         setDiffContent(text);
@@ -65,6 +67,7 @@ export const CheckpointPanel: React.FC = () => {
     try {
       const resp = await fetch(`${base}/api/checkpoints/${encodeURIComponent(id)}/restore${params}`, {
         method: 'POST',
+        headers: state.apiKey ? { Authorization: `Bearer ${state.apiKey}` } : undefined,
       });
       if (resp.ok) {
         dispatch({ type: 'SET_CHECKPOINTS', checkpoints: [] });
@@ -79,6 +82,7 @@ export const CheckpointPanel: React.FC = () => {
     try {
       const resp = await fetch(`${base}/api/checkpoints/${encodeURIComponent(id)}${params}`, {
         method: 'DELETE',
+        headers: state.apiKey ? { Authorization: `Bearer ${state.apiKey}` } : undefined,
       });
       if (resp.ok) {
         dispatch({ type: 'REMOVE_CHECKPOINT', id });

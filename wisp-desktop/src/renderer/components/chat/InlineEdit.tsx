@@ -103,7 +103,10 @@ export const InlineEdit: React.FC<InlineEditProps> = ({ visible, onClose }) => {
       const params = state.apiKey ? `?api-key=${encodeURIComponent(state.apiKey)}` : '';
       const resp = await fetch(`${base}/api/files${params}&path=${encodeURIComponent(path.trim())}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(state.apiKey ? { Authorization: `Bearer ${state.apiKey}` } : {}),
+        },
         body: JSON.stringify({ content: result.newText }),
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);

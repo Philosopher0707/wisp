@@ -121,7 +121,10 @@ export const MessageBubble: React.FC<Props> = ({ msg, highlighted }) => {
       const params = state.apiKey ? `?api-key=${encodeURIComponent(state.apiKey)}` : '';
       const resp = await fetch(`${base}/api/sessions/fork${params}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(state.apiKey ? { Authorization: `Bearer ${state.apiKey}` } : {}),
+        },
         body: JSON.stringify({ messages: rawMessages, title: msg.content?.slice(0, 40) || 'Fork' }),
       });
       if (resp.ok) {

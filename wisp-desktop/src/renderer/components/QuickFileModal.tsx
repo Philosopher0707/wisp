@@ -39,7 +39,9 @@ export const QuickFileModal: React.FC = () => {
   useEffect(() => {
     const base = state.serverUrl.replace(/\/$/, '');
     const params = state.apiKey ? `?api-key=${encodeURIComponent(state.apiKey)}` : '';
-    fetch(`${base}/api/files/tree${params}`)
+    fetch(`${base}/api/files/tree${params}`, {
+      headers: state.apiKey ? { Authorization: `Bearer ${state.apiKey}` } : undefined,
+    })
       .then((r) => r.json())
       .then((data: { files?: FileEntry[] }) => {
         setFiles(data.files || []);

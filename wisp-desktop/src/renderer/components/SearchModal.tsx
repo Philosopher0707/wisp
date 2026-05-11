@@ -121,7 +121,9 @@ export const SearchModal: React.FC = () => {
     // Search workspace files via /api/files/search
     const base = state.serverUrl.replace(/\/$/, '');
     const params = state.apiKey ? `?api-key=${encodeURIComponent(state.apiKey)}&q=${encodeURIComponent(value)}` : `?q=${encodeURIComponent(value)}`;
-    fetch(`${base}/api/files/search${params}`)
+    fetch(`${base}/api/files/search${params}`, {
+      headers: state.apiKey ? { Authorization: `Bearer ${state.apiKey}` } : undefined,
+    })
       .then((r) => r.json())
       .then((data: { files?: string[] }) => {
         setFileResults((data.files || []).slice(0, 6));

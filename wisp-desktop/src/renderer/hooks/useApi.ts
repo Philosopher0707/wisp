@@ -136,15 +136,16 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
     async (path: string, opts?: { method?: string; body?: unknown }): Promise<unknown> => {
       const url = serverUrl.replace(/\/$/, '') + path;
       const init: RequestInit = { method: opts?.method || 'GET' };
+      init.headers = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
       if (opts?.body) {
-        init.headers = { 'Content-Type': 'application/json' };
+        (init.headers as Record<string, string>)['Content-Type'] = 'application/json';
         init.body = JSON.stringify(opts.body);
       }
       const resp = await fetch(url, init);
       if (!resp.ok) throw new Error(`API ${resp.status}: ${resp.statusText}`);
       return resp.json();
     },
-    [serverUrl],
+    [serverUrl, apiKey],
   );
 
   const fetchSessions = useCallback(async (): Promise<SessionSummary[]> => {
@@ -331,13 +332,13 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
   const getCheckpointDiff = useCallback(async (id: string): Promise<string> => {
     try {
       const url = serverUrl.replace(/\/$/, '') + `/api/checkpoints/${encodeURIComponent(id)}/diff${authParams}`;
-      const resp = await fetch(url);
+      const resp = await fetch(url, { headers: makeAuthHeaders() });
       if (!resp.ok) throw new Error(`API ${resp.status}`);
       return await resp.text();
     } catch {
       return '';
     }
-  }, [serverUrl, authParams]);
+  }, [serverUrl, authParams, makeAuthHeaders]);
 
   // ── Plugins ──
 
