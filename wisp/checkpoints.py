@@ -28,7 +28,8 @@ CHECKPOINTS_DIR = ".wisp/checkpoints"
 BACKUPS_SUBDIR = "backups"
 METADATA_FILE = "metadata.json"
 DEFAULT_MAX_CHECKPOINTS = 50
-GIT_TIMEOUT = 5  # seconds — max wait for any single git subprocess
+GIT_TIMEOUT = 5  # seconds — max wait for most git subprocesses
+GIT_INDEX_TIMEOUT = 15  # seconds — longer timeout for index-mutating ops (git add, etc.)
 CHECKPOINT_DEADLINE = 8  # seconds — hard deadline for entire checkpoint op; skip if exceeded
 
 # Directories and file patterns excluded from non-git backups.
@@ -206,8 +207,19 @@ class CheckpointManager:
                     cp = await self._create_via_git(
                         checkpoint_id, timestamp, description, tool_name, tag
                     )
-                except CheckpointError:
-                    raise  # git failed at runtime — don't fall back
+                except CheckpointError as exc:
+                    # Git failed at runtime (e.g., index locked, add -u timed out).
+                    # Don't try backup mode — it's even slower on large workspaces.
+                    # Log the error so the agent can continue without a checkpoint.
+                    errors.append(f"git: {exc}")
+                    logger.warning(
+                        "Git checkpoint failed for %s, continuing without checkpoint: %s",
+                        tool_name, exc,
+                    )
+                    # Don't raise — let the agent continue. The caller's
+                    # except Exception already handles this, but re-raising here
+                    # would bypass that protection for internal callers.
+                    cp = None
                 except Exception as exc:
                     errors.append(f"git: {exc}")
             else:
@@ -453,9 +465,31 @@ class CheckpointManager:
         """Snapshot using ``git stash create`` (dangling ref, zero branch impact)."""
         self._clear_stale_index_lock()
 
+        # Fast path: if the working tree is completely clean (no changes at all),
+        # return an empty checkpoint immediately.  This avoids the expensive
+        # git add + stash create on repos where the user hasn't modified anything.
+        rc, _, _ = await self._git_proc(
+            "git", "diff", "--quiet", "HEAD", cwd=self.workspace, timeout=GIT_TIMEOUT
+        )
+        if rc == 0:
+            # rc == 0 means no differences — working tree matches HEAD exactly
+            return Checkpoint(
+                id=cid,
+                timestamp=ts,
+                description=desc,
+                tool_name=tool,
+                tag=tag,
+                file_count=0,
+                git_ref="EMPTY",
+            )
+
         # Stage tracked-file changes only (git add -A would mmap entire workspace
         # including massive untracked directories, hitting macOS mmap limits).
-        rc, _, stderr = await self._git_proc("git", "add", "-u", cwd=self.workspace)
+        # Use a longer timeout because index-mutating ops can be slow on large
+        # repos when the OS is under memory pressure.
+        rc, _, stderr = await self._git_proc(
+            "git", "add", "-u", cwd=self.workspace, timeout=GIT_INDEX_TIMEOUT
+        )
         if rc != 0:
             raise CheckpointError(f"git add -u failed (exit {rc}): {stderr.strip()}")
 
