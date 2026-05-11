@@ -1098,59 +1098,104 @@ def tool_web_search(query: str, num_results: int = 5) -> str:
     import urllib.parse
     from html.parser import HTMLParser
 
-    class ResultParser(HTMLParser):
+    class _ResultParser(HTMLParser):
+        """Parse DuckDuckGo HTML results into structured dicts.
+
+        DDG wraps each organic result in:
+            <div class="result results_links ...">
+              <h2 class="result__title"><a class="result__a" href="//...">Title</a></h2>
+              <a href="//..." class="result__snippet">Snippet text</a>
+            </div>
+        """
+
         def __init__(self):
             super().__init__()
             self.results: list[dict] = []
+            self._state = "idle"    # idle | in_result
             self._current: dict = {}
-            self._in_result = False
-            self._in_link = False
-            self._in_snippet = False
-            self._text = ""
+            self._text_buf = ""
 
         def handle_starttag(self, tag, attrs):
             a = dict(attrs)
             cls = a.get("class", "")
-            if tag == "article" or ("result" in cls.lower()):
-                self._in_result = True
-                self._current = {}
-            if self._in_result and tag == "a" and "result" in cls.lower():
-                self._in_link = True
-                self._current["href"] = a.get("href", "")
-            if self._in_result and ("snippet" in cls.lower() or "description" in cls.lower()):
-                self._in_snippet = True
 
-        def handle_endtag(self, tag):
-            if self._in_link and tag == "a":
-                self._in_link = False
-                self._current["title"] = self._text.strip()
-                self._text = ""
-            if self._in_snippet and tag in ("span", "div", "p"):
-                self._in_snippet = False
-                self._current["snippet"] = self._text.strip()
-                self._text = ""
-            if tag == "article" and self._in_result:
-                self._in_result = False
-                if self._current.get("title"):
-                    self.results.append(self._current)
+            # Detect a result block start
+            if tag == "div" and cls.startswith("result "):
+                self._state = "in_result"
+                self._current = {"href": "", "title": "", "snippet": ""}
+                return
+
+            if self._state != "in_result":
+                return
+
+            if tag == "a":
+                if "result__a" in cls:
+                    # Title link — store the DuckDuckGo redirect href
+                    raw_href = a.get("href", "")
+                    self._current["href"] = raw_href
+                    self._text_buf = ""
+                elif "result__snippet" in cls or "result__a" not in cls:
+                    # Snippet anchor — collect text until closing </a>
+                    self._text_buf = ""
 
         def handle_data(self, data):
-            if self._in_link or self._in_snippet:
-                self._text += data
+            if self._state == "in_result":
+                self._text_buf += data
+
+        def handle_endtag(self, tag):
+            if self._state != "in_result":
+                return
+
+            if tag == "div":
+                # Result block ends
+                self._state = "idle"
+                if self._current.get("title"):
+                    self.results.append(self._current.copy())
+                self._text_buf = ""
+            elif tag == "h2":
+                # h2 closes → title is complete (text inside <a> inside <h2>)
+                pass  # title was captured when </a> closed
+            elif tag == "a":
+                text = self._text_buf.strip()
+                # Heuristic: if href starts with DuckDuckGo redirect, it's the title
+                href = self._current.get("href", "")
+                if text:
+                    if "duckduckgo.com/l/" in href and not self._current["title"]:
+                        self._current["title"] = text
+                        # Try to extract the REAL URL from DDG redirect
+                        try:
+                            qs = urllib.parse.urlparse(href).query
+                            qd = urllib.parse.parse_qs(qs)
+                            real = qd.get("uddg", [])[0] if "uddg" in qd else ""
+                            if real:
+                                self._current["href"] = urllib.parse.unquote(real)
+                        except Exception:
+                            pass
+                    elif not self._current["snippet"]:
+                        # This is likely the snippet anchor (text after title link)
+                        self._current["snippet"] = text
+                self._text_buf = ""
 
     try:
         import ssl
         qs = urllib.parse.urlencode({"q": query})
         url = f"https://html.duckduckgo.com/html/?{qs}"
-        req = urllib.request.Request(url, headers={"User-Agent": "Wisp/1.0"})
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"}
+        )
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
             html = resp.read().decode("utf-8", errors="replace")
-        parser = ResultParser()
+
+        parser = _ResultParser()
         parser.feed(html)
         results = parser.results[:num_results]
+
+        # Filter out ads (they often have empty snippets or different structure)
+        results = [r for r in results if r.get("title") and r.get("snippet")]
+
         formatted = []
         for i, r in enumerate(results, 1):
             formatted.append({
@@ -1159,6 +1204,14 @@ def tool_web_search(query: str, num_results: int = 5) -> str:
                 "url": r.get("href", ""),
                 "snippet": r.get("snippet", ""),
             })
+
+        if not formatted:
+            return _json.dumps({
+                "status": "ok",
+                "data": {"query": query, "results": []},
+                "metadata": {"query": query, "num_results": 0, "backend": "html", "note": "no results matched expected structure"},
+            })
+
         return _json.dumps({
             "status": "ok",
             "data": {"query": query, "results": formatted},
