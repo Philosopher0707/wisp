@@ -26,6 +26,7 @@ import textwrap
 import threading
 import time
 import weakref
+from pathlib import Path as PathLib
 from typing import Optional, Generator
 
 # Enable readline for line-editing and history in REPL
@@ -320,6 +321,50 @@ def _args_preview(args: dict) -> str:
     if content:
         parts.append(f"({len(content)} chars)")
     return ", ".join(parts) if parts else "..."
+
+
+# ── Language detection for syntax highlighting ────────────────────────
+
+_EXT_TO_LANG: dict[str, str] = {
+    ".py": "python", ".pyi": "python", ".pyx": "python",
+    ".rs": "rust",
+    ".ts": "typescript", ".tsx": "typescript", ".mts": "typescript",
+    ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript",
+    ".go": "go",
+    ".rb": "ruby",
+    ".java": "java",
+    ".kt": "kotlin", ".kts": "kotlin",
+    ".swift": "swift",
+    ".c": "c", ".h": "c",
+    ".cpp": "cpp", ".cc": "cpp", ".cxx": "cpp", ".hpp": "cpp", ".hxx": "cpp",
+    ".html": "html", ".htm": "html",
+    ".css": "css", ".scss": "scss",
+    ".json": "json", ".jsonc": "json",
+    ".toml": "toml",
+    ".yaml": "yaml", ".yml": "yaml",
+    ".xml": "xml", ".svg": "xml",
+    ".sql": "sql",
+    ".sh": "bash", ".bash": "bash", ".zsh": "bash",
+    ".md": "markdown", ".mdx": "markdown",
+    ".lua": "lua",
+    ".r": "r",
+    ".scala": "scala",
+    ".dart": "dart",
+    ".php": "php",
+    ".ex": "elixir", ".exs": "elixir",
+    ".erl": "erlang", ".hrl": "erlang",
+    ".hs": "haskell",
+    ".clj": "clojure", ".cljs": "clojure", ".edn": "clojure",
+    ".zig": "zig",
+    ".nim": "nim",
+    ".proto": "protobuf",
+}
+
+
+def _detect_language(path: str) -> Optional[str]:
+    """Detect pygments lexer name from file extension."""
+    ext = os.path.splitext(path)[1].lower()
+    return _EXT_TO_LANG.get(ext)
 
 
 # ── Input handling ───────────────────────────────────────────────────
@@ -621,8 +666,9 @@ def _render_tool_result(name: str, result, duration_ms,
         summary = dim(f"     → {result_text[:200].replace(chr(10), ' ')}")
         try:
             from wisp.diff_renderer import render_diff_box
+            lang = _detect_language(meta.get('path', ''))
             diff_box = render_diff_box(diff_text, title=f"Diff — {meta.get('path', '')}"[:60],
-                                       width=width, box_mode=box_mode)
+                                       width=width, box_mode=box_mode, language=lang)
             return f"{header}\n{summary}\n{diff_box}"
         except ImportError:
             pass
