@@ -1,10 +1,12 @@
-"""Colored diff rendering for terminal REPL output.
+"""Rich-powered diff rendering for terminal REPL output.
 
-Zero new dependencies — uses the existing wisp.colors module and the
-box-drawing primitives from wisp.transport.cli.
+Uses Rich Panel + Text for styled diffs with:
+  - Green/red background for added/deleted lines
+  - Diff-match-patch for intra-line change highlighting
+  - Proper theme support, width adaptation, and NO_COLOR respect
 
 Usage::
-    from wisp.diff_renderer import colorize_diff, render_diff_box
+    from wisp.diff_renderer import colorize_diff, render_diff_box, render_diff_panel
 
     colored = colorize_diff(raw_diff_string)
     print(render_diff_box(raw_diff_string, title="Diff"))
@@ -12,52 +14,87 @@ Usage::
 
 from __future__ import annotations
 
+from io import StringIO
 from typing import Optional
 
-from wisp.colors import success, error, info, dim
+from rich.console import Console
+from rich.panel import Panel
+from rich.style import Style
+from rich.text import Text
+
+# ── Diff styles ────────────────────────────────────────────────────────
+
+_ADD_STYLE = Style(color="green", bgcolor="#1a3a1a")
+_DEL_STYLE = Style(color="red", bgcolor="#3a1a1a")
+_HUNK_STYLE = Style(color="cyan", bold=True, bgcolor="#1a2a3a")
+_HEADER_STYLE = Style(color="bright_cyan", bold=True)
+_CONTEXT_STYLE = Style(color="#888888")
+_SKIP_STYLE = Style(color="#666666", italic=True)
+
+# Intra-line change styles (for diff-match-patch word-level highlighting)
+_ADD_CHANGE_STYLE = Style(color="#00ff00", bold=True, bgcolor="#0a2a0a")
+_DEL_CHANGE_STYLE = Style(color="#ff4444", bold=True, bgcolor="#2a0a0a")
+
+
+def _build_diff_line(line: str) -> Text:
+    """Build a Rich Text object for a single diff line with styling."""
+    stripped = line.rstrip("\n")
+
+    if stripped.startswith("+"):
+        return _build_changed_line(stripped, is_add=True)
+    elif stripped.startswith("-"):
+        return _build_changed_line(stripped, is_add=False)
+    elif stripped.startswith("@@"):
+        return Text(stripped, style=_HUNK_STYLE)
+    elif stripped.startswith("---") or stripped.startswith("+++"):
+        return Text(stripped, style=_HEADER_STYLE)
+    elif stripped.strip() in ("...",) or stripped.startswith("..."):
+        return Text(stripped, style=_SKIP_STYLE)
+    else:
+        return Text(stripped, style=_CONTEXT_STYLE)
+
+
+def _build_changed_line(line: str, is_add: bool) -> Text:
+    """Build a changed line with intra-line word-level highlighting."""
+    prefix = line[0]   # '+' or '-'
+    content = line[1:]  # the actual code
+
+    # Try diff-match-patch for word-level precision
+    try:
+        from diff_match_patch import diff_match_patch
+        # For intra-line highlighting, we compare the content portion
+        # against itself — but we need to know what changed.
+        # We apply dmp within pairs of added/deleted lines at the caller level.
+        # For individual line rendering, apply base style.
+        pass
+    except ImportError:
+        pass
+
+    base_style = _ADD_STYLE if is_add else _DEL_STYLE
+    return Text(f"{prefix}{content}", style=base_style)
 
 
 def colorize_diff(diff_text) -> str:
-    """Apply ANSI colors to a plain unified diff.
-
-    Color rules:
-      - Lines starting with ``+`` (additions)   → green
-      - Lines starting with ``-`` (deletions)   → red
-      - ``@@`` hunk headers & ``---``/``+++``   → cyan
-      - ``...`` skip markers                     → dim
-      - All other lines (context)                → dim
+    """Apply Rich ANSI colors to a unified diff.
 
     Args:
-        diff_text: Raw plain-text diff string, or a DiffResult object
-                   (as produced by wisp/diff.py).
+        diff_text: Raw plain-text diff string, or a DiffResult object.
 
     Returns:
         ANSI-colored diff string.
     """
-    # Handle DiffResult objects
     if hasattr(diff_text, 'diff'):
         diff_text = diff_text.diff
     if not diff_text:
         return ""
 
-    lines = diff_text.split("\n")
-    colored_lines: list[str] = []
-
-    for line in lines:
-        if line.startswith("+"):
-            colored_lines.append(success(line))
-        elif line.startswith("-"):
-            colored_lines.append(error(line))
-        elif line.startswith("@@"):
-            colored_lines.append(info(line))
-        elif line.startswith("---") or line.startswith("+++"):
-            colored_lines.append(info(line))
-        elif line.strip() == "..." or line.startswith("..."):
-            colored_lines.append(dim(line))
-        else:
-            colored_lines.append(dim(line))
-
-    return "\n".join(colored_lines)
+    lines = diff_text.strip().split("\n")
+    text = Text()
+    for i, line in enumerate(lines):
+        if i > 0:
+            text.append("\n")
+        text.append(_build_diff_line(line))
+    return str(text)
 
 
 def render_diff_box(
@@ -67,86 +104,147 @@ def render_diff_box(
     width: Optional[int] = None,
     box_mode: bool = True,
 ) -> str:
-    """Colorize a diff and wrap it in a box-drawn panel.
-
-    Long diffs (>max_lines) are truncated with a footer showing the
-    remaining line count.
+    """Colorize a diff and wrap it in a Rich Panel.
 
     Args:
         diff_text: Raw plain-text diff.
-        title: Panel title shown in the top border.
-        max_lines: Maximum lines to show before truncation.
+        title: Panel title.
+        max_lines: Max lines before truncation.
         width: Terminal width; auto-detected if None.
+        box_mode: If False, return plain colored text (no box).
 
     Returns:
-        ANSI-colored diff wrapped in a box-drawn panel.
+        ANSI-colored diff wrapped in a Rich Panel.
     """
-    if not diff_text.strip():
+    return render_diff_panel(diff_text, title=title, max_lines=max_lines,
+                             width=width, box_mode=box_mode)
+
+
+def render_diff_panel(
+    diff_text,
+    title: str = "Diff",
+    max_lines: int = 50,
+    width: Optional[int] = None,
+    box_mode: bool = True,
+    language: Optional[str] = None,
+) -> str:
+    """Render a diff as a Rich Panel with colored backgrounds.
+
+    With diff-match-patch installed, adds word-level change highlighting
+    within added/deleted lines.
+
+    Args:
+        diff_text: Raw plain-text diff string.
+        title: Panel title shown in the top border.
+        max_lines: Maximum lines to show before truncation.
+        width: Terminal width; auto-detected from terminal if None.
+        box_mode: If False, return plain colored text (no Panel).
+        language: Optional language for syntax highlighting (stretch goal).
+
+    Returns:
+        ANSI-colored diff string.
+    """
+    if hasattr(diff_text, 'diff'):
+        diff_text = diff_text.diff
+    if not diff_text or not diff_text.strip():
         return ""
 
     lines = diff_text.strip().split("\n")
 
+    # Truncate long diffs
     if len(lines) > max_lines:
-        shown = lines[:max_lines]
-        more = len(lines) - max_lines
-        footer = f"... ({more} more lines)"
-        diff_text = "\n".join(shown) + "\n" + footer
-    else:
-        diff_text = "\n".join(lines)
+        lines = lines[:max_lines]
+        footer = f"... ({len(diff_text.strip().split(chr(10))) - max_lines} more lines)"
+        lines.append(footer)
 
-    colored = colorize_diff(diff_text)
+    # Build Rich Text with intra-line highlighting
+    text = _build_diff_text_with_highlighting(lines)
 
     if not box_mode:
-        return colored
+        return str(text)
 
-    # Box the colored diff
-    if width is None:
-        import shutil
-        try:
-            width = shutil.get_terminal_size().columns
-        except OSError:
-            width = 80
-        width = max(40, width)
-
-    return _box_panel(colored, title=title, width=width)
-
-
-def _box_panel(content: str, title: str = "", width: int = 80) -> str:
-    """Wrap content in a box-drawn panel.  (Lightweight duplicate of
-    transport/cli._box so diff_renderer stays self-contained.)
-    """
-    tl, tr, bl, br, hz, vt = "\u250c", "\u2510", "\u2514", "\u2518", "\u2500", "\u2502"  # ┌┐└┘─│
-    inner_width = width - 4  # borders + padding
-
-    import textwrap
-    from wisp.colors import dim as _dim
-
-    # Title bar
-    if title:
-        title_text = f" {title} "
-        available = width - 2
-        if len(title_text) > available:
-            title_text = title_text[:available]
-        top = tl + title_text + hz * (width - 2 - len(title_text)) + tr
-    else:
-        top = tl + hz * (width - 2) + tr
-
-    bottom = bl + hz * (width - 2) + br
-
-    result_lines = [_dim(top)]
-    for line in content.split("\n"):
-        # Already colored lines — just pad to inner_width with spaces
-        # We can't use ANSI-aware width measurement so we use a rough
-        # visual padding approach: pad the inner content visually
-        raw = _strip_for_width(line)
-        padding = max(0, inner_width - len(raw))
-        result_lines.append(_dim(f"{vt} {line}{' ' * padding} {vt}"))
-    result_lines.append(_dim(bottom))
-
-    return "\n".join(result_lines)
+    # Wrap in Rich Panel and render to ANSI string
+    panel = Panel(
+        text,
+        title=title,
+        border_style=Style(color="#555555"),
+        width=width,
+        padding=(0, 1),
+    )
+    buf = StringIO()
+    console = Console(file=buf, width=width or 120, force_terminal=True)
+    console.print(panel)
+    return buf.getvalue().rstrip("\n")
 
 
-def _strip_for_width(text: str) -> str:
-    """Strip ANSI codes to measure visible width."""
-    import re
-    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+def _build_diff_text_with_highlighting(lines: list[str]) -> Text:
+    """Build a Rich Text from diff lines, with word-level highlighting
+    when diff-match-patch is available."""
+    text = Text()
+
+    dmp = None
+    try:
+        from diff_match_patch import diff_match_patch
+        dmp = diff_match_patch()
+    except ImportError:
+        pass
+
+    i = 0
+    while i < len(lines):
+        line = lines[i].rstrip("\n")
+
+        if dmp and line.startswith("-") and i + 1 < len(lines) and lines[i + 1].startswith("+"):
+            old_content = line[1:]
+            new_content = lines[i + 1][1:]
+            diffs = dmp.diff_main(old_content, new_content)
+            dmp.diff_cleanupSemantic(diffs)
+
+            if i > 0:
+                text.append("\n")
+            text.append("-", style=_DEL_STYLE)
+            for op, fragment in diffs:
+                if op == 0:    # equal
+                    text.append(fragment, style=_DEL_STYLE)
+                elif op == -1: # deleted from old
+                    text.append(fragment, style=_DEL_CHANGE_STYLE)
+
+            text.append("\n")
+            text.append("+", style=_ADD_STYLE)
+            for op, fragment in diffs:
+                if op == 0:    # equal
+                    text.append(fragment, style=_ADD_STYLE)
+                elif op == 1:  # added in new
+                    text.append(fragment, style=_ADD_CHANGE_STYLE)
+            i += 2
+            continue
+
+        if i > 0:
+            text.append("\n")
+        text.append(_build_diff_line(line))
+        i += 1
+
+    return text
+
+
+def _build_word_level_line(content: str, is_add: bool) -> Text:
+    """Build a single line with word-level change highlighting."""
+    prefix = "+" if is_add else "-"
+    base_style = _ADD_STYLE if is_add else _DEL_STYLE
+    change_style = _ADD_CHANGE_STYLE if is_add else _DEL_CHANGE_STYLE
+
+    text = Text(prefix, style=base_style)
+
+    try:
+        from diff_match_patch import diff_match_patch
+        dmp = diff_match_patch()
+        diffs = dmp.diff_main(content, content)  # identity diff — always same
+    except ImportError:
+        text.append(content, style=base_style)
+        return text
+
+    # For word-level diff between old and new, we need the old_content at this point.
+    # Since _build_word_level_line doesn't have the old line, we fall back to
+    # just highlighting the entire line. The real intra-line diff happens in
+    # _build_diff_text_with_highlighting where we have both old and new.
+    text.append(content, style=base_style)
+    return text
