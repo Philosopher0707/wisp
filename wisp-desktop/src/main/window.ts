@@ -4,23 +4,13 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-function parseRendererArgs(): { server?: string; apiKey?: string } {
-  const argv = process.argv.slice(2);
-  const result: { server?: string; apiKey?: string } = {};
-  for (let i = 0; i < argv.length; i++) {
-    if ((argv[i] === '--server' || argv[i] === '-s') && i + 1 < argv.length) {
-      result.server = argv[++i];
-    } else if (argv[i] === '--api-key' && i + 1 < argv.length) {
-      result.apiKey = argv[++i];
-    }
-  }
-  if (!result.server) result.server = process.env.WISP_SERVER || 'http://localhost:8000';
-  if (!result.apiKey) result.apiKey = process.env.WISP_API_KEY || '';
-  return result;
+interface WindowOpts {
+  serverUrl: string;
+  apiKey: string;
 }
 
-export function createMainWindow(): BrowserWindow {
-  const { server, apiKey } = parseRendererArgs();
+export function createMainWindow(opts: WindowOpts): BrowserWindow {
+  const { serverUrl, apiKey } = opts;
 
   const win = new BrowserWindow({
     width: 1200,
@@ -48,7 +38,7 @@ export function createMainWindow(): BrowserWindow {
   });
 
   const queryParams = new URLSearchParams();
-  if (server) queryParams.set('server', server);
+  queryParams.set('server', serverUrl);
   if (apiKey) queryParams.set('api_key', apiKey);
 
   if (process.env.ELECTRON_RENDERER_URL) {

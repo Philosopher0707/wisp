@@ -5,6 +5,29 @@ directories:
   buildResources: resources
 files:
   - out/**/*
+extraResources:
+  - from: ../wisp
+    to: backend/wisp
+    filter:
+      - "**/*"
+      - "!.venv/**"
+      - "!__pycache__/**"
+      - "!tests/**"
+      - "!.git/**"
+      - "!*.egg-info/**"
+      - "!graphify-out/**"
+      - "!.playwright-mcp/**"
+      - "!.pytest_cache/**"
+      - "!wisp-desktop/**"
+      - "!wisp-tui/**"
+      - "!vscode-extension/**"
+      - "!android/**"
+      - "!docs/**"
+      - "!examples/**"
+      - "!skills/**"
+      - "!workspace/**"
+      - "!**/.DS_Store"
+      - "!*.md"
 mac:
   icon: resources/icon.icns
   category: public.app-category.developer-tools

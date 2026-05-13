@@ -1,3 +1,24 @@
+import process from 'node:process';
+
+// Prevent crashes from broken stdout (EPIPE when launched without a TTY)
+function safeLogErr(...args: unknown[]) {
+  try {
+    console.error(...args);
+  } catch {
+    /* both stdout and stderr may be broken pipes */
+  }
+}
+
+process.on('uncaughtException', (err) => {
+  // Silently ignore EPIPE — stdout may not exist when launched from Dock/Finder
+  if ((err as any).code === 'EPIPE') return;
+  safeLogErr('Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  safeLogErr('Unhandled Rejection:', reason);
+});
+
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import { initAutoUpdater } from './update.js';
 import { execFile } from 'node:child_process';
@@ -6,6 +27,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { createMainWindow } from './window.js';
 import { buildMenu } from './menu.js';
+import { startBackend, killBackend, getBackendStatus } from './backend.js';
 
 let mainWindow: ReturnType<typeof createMainWindow> | null = null;
 
@@ -97,16 +119,47 @@ function registerIpcHandlers(): void {
       return null;
     }
   });
+
+  // ── Backend status ───────────────────────────────────────────────
+  ipcMain.handle('backend:status', async () => getBackendStatus());
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   registerIpcHandlers();
-  mainWindow = createMainWindow();
+
+  // Start the embedded Python backend (or connect to external)
+  let backend: Awaited<ReturnType<typeof startBackend>>;
+  try {
+    backend = await startBackend();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    try {
+      console.error('[main] Failed to start backend:', msg);
+    } catch {
+      /* stdout may be a broken pipe */
+    }
+    // Show a critical error dialog and quit
+    dialog.showErrorBox(
+      'Backend Startup Failed',
+      `The Wisp backend could not start.\n\n${msg}\n\nPlease check that Python and the wisp package are installed.`,
+    );
+    app.quit();
+    return;
+  }
+
+  // Create window with managed backend URL
+  mainWindow = createMainWindow({
+    serverUrl: backend.url,
+    apiKey: backend.apiKey,
+  });
   buildMenu(mainWindow);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      mainWindow = createMainWindow();
+      mainWindow = createMainWindow({
+        serverUrl: backend.url,
+        apiKey: backend.apiKey,
+      });
       buildMenu(mainWindow);
     }
   });
@@ -116,4 +169,9 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+// Graceful backend shutdown
+app.on('before-quit', () => {
+  killBackend();
 });

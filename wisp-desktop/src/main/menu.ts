@@ -33,8 +33,13 @@ export function buildMenu(win: BrowserWindow): void {
           click: () => sendAction(win, 'new-chat'),
         },
         {
-          label: 'Open File...',
+          label: 'Open Workspace...',
           accelerator: 'CmdOrCtrl+O',
+          click: () => sendAction(win, 'open-workspace'),
+        },
+        {
+          label: 'Open File...',
+          accelerator: 'CmdOrCtrl+Shift+O',
           click: () => sendAction(win, 'open-file'),
         },
         { type: 'separator' },

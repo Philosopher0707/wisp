@@ -1,7 +1,11 @@
 import { useEffect, Dispatch } from 'react';
 import type { Action } from '../state/types.js';
 
-export function useMenuIPC(dispatch: Dispatch<Action>) {
+export function useMenuIPC(
+  dispatch: Dispatch<Action>,
+  serverUrl?: string,
+  apiKey?: string,
+) {
   useEffect(() => {
     if (!window.wisp?.onMenuAction) return;
     const unsub = window.wisp.onMenuAction((action: string) => {
@@ -9,6 +13,36 @@ export function useMenuIPC(dispatch: Dispatch<Action>) {
         case 'new-chat':
           dispatch({ type: 'NEW_CHAT' });
           break;
+        case 'open-workspace': {
+          window.wisp.selectDirectory().then(async (dirPath) => {
+            if (!dirPath) return;
+            // Update backend workspace via POST /api/workspace
+            if (serverUrl) {
+              const base = serverUrl.replace(/\/$/, '');
+              const params = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
+              try {
+                const resp = await fetch(`${base}/api/workspace${params}`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+                  },
+                  body: JSON.stringify({ path: dirPath }),
+                });
+                const data = await resp.json() as { path?: string };
+                if (data.path) {
+                  dispatch({ type: 'SET_WORKSPACE', path: data.path });
+                }
+              } catch {
+                // Fallback: update frontend state only
+                dispatch({ type: 'SET_WORKSPACE', path: dirPath });
+              }
+            } else {
+              dispatch({ type: 'SET_WORKSPACE', path: dirPath });
+            }
+          });
+          break;
+        }
         case 'open-file':
           window.wisp.openFileDialog().then((paths) => {
             if (paths && paths.length > 0) {
@@ -32,5 +66,5 @@ export function useMenuIPC(dispatch: Dispatch<Action>) {
       }
     });
     return unsub;
-  }, [dispatch]);
+  }, [dispatch, serverUrl, apiKey]);
 }

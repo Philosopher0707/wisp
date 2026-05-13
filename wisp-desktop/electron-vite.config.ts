@@ -15,11 +15,15 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     build: {
       outDir: 'out/preload',
+      lib: {
+        entry: 'src/preload/index.ts',
+        formats: ['cjs'],
+        fileName: () => 'index.js',
+      },
       rollupOptions: {
-        input: 'src/preload/index.ts',
         output: {
-          entryFileNames: 'index.js',
           format: 'cjs',
+          entryFileNames: 'index.js',
         },
       },
     },

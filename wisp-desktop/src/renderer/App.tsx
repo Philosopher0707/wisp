@@ -36,7 +36,7 @@ export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
     (opts) => createInitialState(opts),
   );
   const ws = useWebSocket(serverUrl, apiKey, dispatch);
-  useMenuIPC(dispatch);
+  useMenuIPC(dispatch, serverUrl, apiKey);
 
   // Persist settings to localStorage
   React.useEffect(() => {

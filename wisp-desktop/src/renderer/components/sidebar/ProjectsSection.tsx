@@ -12,7 +12,8 @@ export const ProjectsSection: React.FC = () => {
 
   useEffect(() => {
     if (!state.workspacePath) return;
-    api.fetchFiles(state.workspacePath).then((data) => {
+    // Pass empty string = root of current workspace (paths are relative to WORKSPACE_ROOT)
+    api.fetchFiles('').then((data) => {
       if (!data?.items) return;
       const dirs = data.items
         .filter((item) => item.type === 'directory' && !item.name.startsWith('.'))

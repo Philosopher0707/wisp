@@ -8,10 +8,10 @@
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
-    "dev:full": "python -c \"from wisp.server import main; main(no_auth=True)\" & sleep 2 && electron-vite dev",
-    "build": "electron-vite build",
+    "dev:full": "electron-vite dev",
+    "build": "electron-vite build && node scripts/fix-preload-cjs.mjs",
     "preview": "electron-vite preview",
-    "package": "electron-vite build && electron-builder",
+    "package": "npm run build && electron-builder",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:ui": "vitest --ui",

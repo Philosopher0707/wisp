@@ -1,5 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
+export interface BackendStatus {
+  running: boolean;
+  url: string;
+  managed: boolean;
+  pid: number | null;
+  port: number;
+}
+
 export interface WispAPI {
   platform: string;
   onMenuAction: (callback: (action: string) => void) => () => void;
@@ -11,6 +19,7 @@ export interface WispAPI {
   listCustomThemes: () => string[];
   checkForUpdates: () => Promise<{ status: string; message?: string }>;
   onUpdateStatus: (callback: (status: { status: string; version?: string; percent?: number; message?: string }) => void) => () => void;
+  getBackendStatus: () => Promise<BackendStatus>;
 }
 
 contextBridge.exposeInMainWorld('wisp', {
@@ -43,4 +52,6 @@ contextBridge.exposeInMainWorld('wisp', {
     ipcRenderer.on('updater:status', handler);
     return () => ipcRenderer.removeListener('updater:status', handler);
   },
+
+  getBackendStatus: () => ipcRenderer.invoke('backend:status'),
 } satisfies WispAPI);

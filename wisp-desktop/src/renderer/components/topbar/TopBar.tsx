@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useAppState } from '../../state/context.js';
 import { useApi, type GitStatus } from '../../hooks/useApi.js';
-import { Sparkles, User, Folder, Square, Code2, Download, GitBranch } from '../../icons/index.js';
-import { PillButton } from '../common/PillButton.js';
+import { User, Folder, Square, Code2, Download, GitBranch } from '../../icons/index.js';
 import { IconButton } from '../common/IconButton.js';
 import './TopBar.css';
 
@@ -56,23 +55,20 @@ export const TopBar: React.FC = () => {
   }, [state.serverUrl, state.apiKey, state.connection]);
 
   const openVSCode = useCallback(async () => {
-    try {
-      const base = state.serverUrl.replace(/\/$/, '');
-      const params = state.apiKey ? `?api-key=${encodeURIComponent(state.apiKey)}` : '';
-      const resp = await fetch(`${base}/api/workspace${params}`, {
-        headers: state.apiKey ? { Authorization: `Bearer ${state.apiKey}` } : undefined,
-      });
-      const data = await resp.json() as { path?: string };
-      const workspacePath = data.path;
-      if (!workspacePath) return;
+    const workspacePath = state.workspacePath;
+    if (!workspacePath) return;
 
-      if (window.wisp?.openInVSCode) {
+    if (window.wisp?.openInVSCode) {
+      try {
         await window.wisp.openInVSCode(workspacePath);
-      } else {
-        window.open(`vscode://file/${workspacePath}`, '_blank');
+        return;
+      } catch {
+        // Fallback to vscode:// protocol
       }
-    } catch { /* ignore */ }
-  }, [state.serverUrl, state.apiKey]);
+    }
+    // Protocol fallback (browser / other platforms)
+    window.open(`vscode://file/${workspacePath}`, '_blank');
+  }, [state.workspacePath]);
 
   const handleExport = useCallback(() => {
     const md = messagesToMarkdown(state.messages);
@@ -99,9 +95,6 @@ export const TopBar: React.FC = () => {
         >
           New chat
         </button>
-        <PillButton variant="filled" icon={Sparkles} color="purple">
-          Get Plus
-        </PillButton>
       </div>
       <div className="topbar-center">
         {wsLabel && (
