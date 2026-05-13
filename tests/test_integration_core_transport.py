@@ -101,7 +101,7 @@ class TestCoreTransportIntegration:
 
     @pytest.mark.asyncio
     async def test_dangerous_command_blocked_at_core(self, core):
-        """Verify dangerous commands are blocked by core and yield approval_request."""
+        """Dangerous commands auto-blocked without approval_request event."""
         with patch.object(core, '_run_turn_streaming_events') as mock_events:
             mock_events.return_value = iter([])
             core.client.stream_response = {
@@ -116,8 +116,8 @@ class TestCoreTransportIntegration:
             async for event in core.run("run rm -rf /"):
                 events.append(event)
 
-            # Should get approval_request + blocked tool_result
-            assert any(e.type == "approval_request" for e in events)
+            # No approval_request — auto-blocked
+            assert not any(e.type == "approval_request" for e in events)
             tool_results = [e for e in events if e.type == "tool_result"]
             assert any("Blocked" in e.data["result"] for e in tool_results)
 

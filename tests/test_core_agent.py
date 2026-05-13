@@ -135,11 +135,10 @@ class TestWispAgentCoreDangerousCommand:
 
     @pytest.mark.asyncio
     async def test_run_bash_dangerous_blocked(self, core):
-        """Dangerous commands should yield approval_request and skip execution."""
+        """Dangerous commands get auto-blocked without approval prompt."""
         core.messages = [
             {"role": "user", "content": "run rm -rf /"},
         ]
-        # Mock the streaming turn to return a tool call
         with patch.object(core, '_run_turn_streaming_events') as mock_events:
             mock_events.return_value = iter([])
             core.client.stream_response = {
@@ -154,9 +153,9 @@ class TestWispAgentCoreDangerousCommand:
             async for event in core.run("run rm -rf /"):
                 events.append(event)
 
-            # Should get tool_call, then approval_request, then tool_result (blocked)
+            # Dangerous commands get auto-blocked; no approval_request
             types = [e.type for e in events]
             assert TYPE_TOOL_CALL in types
-            assert TYPE_APPROVAL_REQUEST in types
+            assert TYPE_APPROVAL_REQUEST not in types  # No prompt — auto-blocked
             tool_results = [e for e in events if e.type == TYPE_TOOL_RESULT]
             assert any("Blocked" in e.data["result"] for e in tool_results)

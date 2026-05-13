@@ -1111,17 +1111,14 @@ class WispAgentCore:
                 except Exception as e:
                     logger.warning("Pre-tool hook failed for %s: %s", func_name, e)
 
-            # ── Permission mode enforcement ──
-            pm = self.config.permission_mode
+            # ── Plan mode guard (plan mode blocks all writes) ──
             write_tools = {
                 "write_file", "edit_file", "edit_file_multi", "run_bash",
                 "git_branch", "git_commit", "git_push", "gh_pr_create",
                 "plan_task", "mark_step_done", "update_plan",
             }
-
-            if (pm == "read_only" or self.config.plan_mode) and func_name in write_tools:
-                reason = "plan mode" if self.config.plan_mode else "read-only mode"
-                blocked = f"[Blocked: {reason} — {func_name} requires write access]"
+            if self.config.plan_mode and func_name in write_tools:
+                blocked = f"[Blocked: plan mode — {func_name} requires write access]"
                 yield tool_result_event(func_name, blocked)
                 self.messages.append({
                     "role": "tool", "content": blocked, "name": func_name,
@@ -1129,84 +1126,15 @@ class WispAgentCore:
                 })
                 continue
 
-            if pm == "ask_all":
-                yield approval_request(func_name, func_args, reason=f"Permission mode: ask_all — {func_name}")
-                if approval_handler is not None:
-                    approved, modified_args = await approval_handler(func_name, func_args, "ask_all")
-                    if not approved:
-                        denied = f"[Denied by user]"
-                        yield tool_result_event(func_name, denied)
-                        self.messages.append({
-                            "role": "tool", "content": denied, "name": func_name,
-                            **({"tool_call_id": tc.get("id")} if tc.get("id") is not None else {}),
-                        })
-                        continue
-                    if modified_args is not None:
-                        func_args = modified_args
-                else:
-                    blocked = f"[Blocked: approval required but no handler available]"
-                    yield tool_result_event(func_name, blocked)
-                    self.messages.append({
-                        "role": "tool", "content": blocked, "name": func_name,
-                        **({"tool_call_id": tc.get("id")} if tc.get("id") is not None else {}),
-                    })
-                    continue
-
-            if pm == "auto_edit" and func_name in write_tools:
-                yield approval_request(func_name, func_args, reason=f"Permission mode: auto_edit — {func_name}")
-                if approval_handler is not None:
-                    approved, modified_args = await approval_handler(func_name, func_args, "auto_edit")
-                    if not approved:
-                        denied = f"[Denied by user]"
-                        yield tool_result_event(func_name, denied)
-                        self.messages.append({
-                            "role": "tool", "content": denied, "name": func_name,
-                            **({"tool_call_id": tc.get("id")} if tc.get("id") is not None else {}),
-                        })
-                        continue
-                    if modified_args is not None:
-                        func_args = modified_args
-                else:
-                    blocked = f"[Blocked: approval required but no handler available]"
-                    yield tool_result_event(func_name, blocked)
-                    self.messages.append({
-                        "role": "tool", "content": blocked, "name": func_name,
-                        **({"tool_call_id": tc.get("id")} if tc.get("id") is not None else {}),
-                    })
-                    continue
-
-            # Dangerous command guard
-            danger_reason = None
+            # Dangerous command auto-block (no prompt — just block silently)
             if func_name == "run_bash":
                 from wisp.tools import check_dangerous_command
                 danger_reason = check_dangerous_command(func_args.get("command", ""))
-
-            if danger_reason:
-                yield approval_request(func_name, func_args, reason=danger_reason)
-
-                if approval_handler is not None:
-                    approved, modified_args = await approval_handler(func_name, func_args, danger_reason)
-                    if not approved:
-                        denied_result = f"[Denied: {danger_reason}]"
-                        yield tool_result_event(func_name, denied_result)
-                        self.messages.append({
-                            "role": "tool",
-                            "content": denied_result,
-                            "name": func_name,
-                            **({"tool_call_id": tc.get("id")} if tc.get("id") is not None else {}),
-                        })
-                        continue
-                    if modified_args is not None:
-                        func_args = modified_args
-                    # Fall through to normal execution below
-                else:
-                    # No approval handler: auto-block
-                    blocked_result = f"[Blocked: dangerous command — {danger_reason}]"
-                    yield tool_result_event(func_name, blocked_result)
+                if danger_reason:
+                    blocked = f"[Blocked: dangerous command — {danger_reason}]"
+                    yield tool_result_event(func_name, blocked)
                     self.messages.append({
-                        "role": "tool",
-                        "content": blocked_result,
-                        "name": func_name,
+                        "role": "tool", "content": blocked, "name": func_name,
                         **({"tool_call_id": tc.get("id")} if tc.get("id") is not None else {}),
                     })
                     continue

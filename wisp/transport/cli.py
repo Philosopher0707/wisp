@@ -1034,7 +1034,7 @@ class CLITransport:
                 spinner_active = True
 
         try:
-            async for event in self.core._arun(prompt, system=system, approval_handler=_cli_approval):
+            async for event in self.core._arun(prompt, system=system):
                 if self._interrupted:
                     break
 
