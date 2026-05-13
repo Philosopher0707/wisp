@@ -562,10 +562,17 @@ def _render_tool_result(name: str, result, duration_ms,
     """Render a tool result. Extracts and renders diffs for write/edit tools."""
     duration_str = _format_duration(duration_ms)
 
-    # Extract diff metadata for write/edit tools
+    # Parse JSON result if it's a string (execute_tool returns JSON string)
     meta = None
     result_text: str
-    if isinstance(result, dict):
+    if isinstance(result, str) and result.startswith("{"):
+        try:
+            parsed = json.loads(result)
+            meta = parsed.get("metadata", {})
+            result_text = _coerce_tool_data(parsed.get("data", result))
+        except (json.JSONDecodeError, KeyError):
+            result_text = str(result)
+    elif isinstance(result, dict):
         meta = result.get("metadata", {})
         result_text = result.get("data", str(result))
     else:
