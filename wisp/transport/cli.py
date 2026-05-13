@@ -583,8 +583,7 @@ def _render_tool_result(name: str, result, duration_ms,
 
     # Full-output tools (non-edit): preserve multi-line formatting
     if name in _FULL_OUTPUT_TOOLS and not is_edit_tool:
-        # ... (existing full-output logic but using result_text)
-        output_str = result_text if isinstance(result, dict) else str(result)
+        output_str = result_text
         if not show_tool_output:
             line_count = output_str.count("\n") + 1
             return dim(f"  ✓ {name} ({duration_str}) — {line_count} lines of output · · · · · · · · · · · · · · · · · · ·")
