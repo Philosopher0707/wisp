@@ -309,7 +309,8 @@ def tool_write_file(path: str, workspace: str, content: str, file_lock=None) -> 
     if old_content is not None and old_content != content:
         try:
             from wisp.diff import generate_diff_string
-            diff = generate_diff_string(old_content, content, context_lines=3)
+            result = generate_diff_string(old_content, content, context_lines=3)
+            diff = result.diff
         except Exception:
             pass  # Diff generation failure is non-critical
 

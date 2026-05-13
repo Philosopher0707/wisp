@@ -17,7 +17,7 @@ from typing import Optional
 from wisp.colors import success, error, info, dim
 
 
-def colorize_diff(diff_text: str) -> str:
+def colorize_diff(diff_text) -> str:
     """Apply ANSI colors to a plain unified diff.
 
     Color rules:
@@ -28,11 +28,15 @@ def colorize_diff(diff_text: str) -> str:
       - All other lines (context)                → dim
 
     Args:
-        diff_text: Raw plain-text diff (as produced by wisp/diff.py).
+        diff_text: Raw plain-text diff string, or a DiffResult object
+                   (as produced by wisp/diff.py).
 
     Returns:
         ANSI-colored diff string.
     """
+    # Handle DiffResult objects
+    if hasattr(diff_text, 'diff'):
+        diff_text = diff_text.diff
     if not diff_text:
         return ""
 
@@ -57,10 +61,11 @@ def colorize_diff(diff_text: str) -> str:
 
 
 def render_diff_box(
-    diff_text: str,
+    diff_text,
     title: str = "Diff",
     max_lines: int = 50,
     width: Optional[int] = None,
+    box_mode: bool = True,
 ) -> str:
     """Colorize a diff and wrap it in a box-drawn panel.
 
@@ -90,6 +95,9 @@ def render_diff_box(
         diff_text = "\n".join(lines)
 
     colored = colorize_diff(diff_text)
+
+    if not box_mode:
+        return colored
 
     # Box the colored diff
     if width is None:
