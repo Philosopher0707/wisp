@@ -106,7 +106,7 @@ def render_diff_box(
             width = shutil.get_terminal_size().columns
         except OSError:
             width = 80
-        width = max(40, min(width, 160))
+        width = max(40, width)
 
     return _box_panel(colored, title=title, width=width)
 
