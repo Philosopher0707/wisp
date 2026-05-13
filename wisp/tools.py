@@ -259,8 +259,11 @@ def tool_read_file(path: str, workspace: str, offset: int = 0, limit: int = 1_00
     return result
 
 
-def tool_write_file(path: str, workspace: str, content: str, file_lock=None) -> str:
-    """Write content to a file (creates or overwrites)."""
+def tool_write_file(path: str, workspace: str, content: str, file_lock=None) -> dict:
+    """Write content to a file (creates or overwrites).
+
+    Returns a structured dict with diff metadata for CLI rendering.
+    """
     _validate_string(path, "path")
     _validate_string(content, "content", _MAX_WRITE_SIZE, allow_empty=True)
     full_path = _resolve_path(path, workspace)
@@ -279,9 +282,14 @@ def tool_write_file(path: str, workspace: str, content: str, file_lock=None) -> 
         holder = lock_info.get("agent", "unknown") if lock_info else "unknown"
         raise ToolError(f"File {path} is locked by {holder}. Wait or coordinate before editing.")
 
-    # Warn if overwriting an existing file
+    # Read old content for diff (before overwriting)
+    old_content = None
     if full_path.exists():
         logger.warning("Overwriting existing file: %s (%d bytes)", path, full_path.stat().st_size)
+        try:
+            old_content = full_path.read_text(encoding="utf-8")
+        except Exception:
+            pass  # Binary or unreadable — skip diff
 
     full_path.parent.mkdir(parents=True, exist_ok=True)
     full_path.write_text(content, encoding="utf-8")
@@ -296,7 +304,24 @@ def tool_write_file(path: str, workspace: str, content: str, file_lock=None) -> 
     if lock:
         lock.release(path)
 
-    return f"✓ Wrote {len(content)} bytes to {path}"
+    # Generate diff if overwriting an existing file
+    diff = ""
+    if old_content is not None and old_content != content:
+        try:
+            from wisp.diff import generate_diff_string
+            diff = generate_diff_string(old_content, content, context_lines=3)
+        except Exception:
+            pass  # Diff generation failure is non-critical
+
+    return {
+        "status": "ok",
+        "data": f"✓ Wrote {len(content)} bytes to {path}",
+        "metadata": {
+            "path": path,
+            "size": len(content),
+            "diff": diff,
+        },
+    }
 
 
 def _fuzzy_find_text(content: str, old_text: str, threshold: float = 0.85) -> tuple[Optional[int], Optional[str], float]:

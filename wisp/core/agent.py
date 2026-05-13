@@ -1251,9 +1251,14 @@ class WispAgentCore:
                 self._invalidate_system_prompt_cache()
 
             yield tool_result_event(func_name, result, duration_ms=duration_ms)
+            # Extract human-readable summary for the LLM from structured dict results
+            if isinstance(result, dict) and "data" in result:
+                msg_content = str(result["data"])
+            else:
+                msg_content = str(result)
             self.messages.append({
                 "role": "tool",
-                "content": str(result),
+                "content": msg_content,
                 "name": func_name,
                 **({"tool_call_id": tc.get("id")} if tc.get("id") is not None else {}),
             })

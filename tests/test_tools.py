@@ -51,13 +51,13 @@ class TestToolWriteFile:
 
     def test_write_new_file(self, temp_workspace):
         result = tool_write_file("new.txt", str(temp_workspace), "hello")
-        assert "Wrote" in result
+        assert "Wrote" in result["data"]
         actual = (temp_workspace / "new.txt").read_text()
         assert actual == "hello"
 
     def test_write_creates_parent_dirs(self, temp_workspace):
         result = tool_write_file("a/b/c/deep.txt", str(temp_workspace), "deep")
-        assert "Wrote" in result
+        assert "Wrote" in result["data"]
         assert (temp_workspace / "a/b/c/deep.txt").exists()
 
     def test_write_path_traversal_blocked(self, temp_workspace):
@@ -66,7 +66,7 @@ class TestToolWriteFile:
 
     def test_write_empty_content(self, temp_workspace):
         result = tool_write_file("empty.txt", str(temp_workspace), "")
-        assert "Wrote" in result
+        assert "Wrote" in result["data"]
 
 
 class TestToolEditFile:

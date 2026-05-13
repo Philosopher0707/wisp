@@ -556,35 +556,61 @@ def _format_arg_value(key: str, value) -> str:
 
 def _render_tool_result(name: str, result, duration_ms, 
                         show_tool_output: bool, box_mode: bool, width: int) -> str:
-    """Render a tool result."""
+    """Render a tool result. Extracts and renders diffs for write/edit tools."""
     duration_str = _format_duration(duration_ms)
 
-    if name in _FULL_OUTPUT_TOOLS and isinstance(result, str):
+    # Extract diff metadata for write/edit tools
+    meta = None
+    result_text: str
+    if isinstance(result, dict):
+        meta = result.get("metadata", {})
+        result_text = result.get("data", str(result))
+    else:
+        result_text = str(result)
+
+    diff_text = (meta or {}).get("diff", "")
+    is_edit_tool = name in ("write_file", "edit_file", "edit_file_multi")
+
+    # Full-output tools (non-edit): preserve multi-line formatting
+    if name in _FULL_OUTPUT_TOOLS and not is_edit_tool:
+        # ... (existing full-output logic but using result_text)
+        output_str = result_text if isinstance(result, dict) else str(result)
         if not show_tool_output:
-            line_count = result.count("\n") + 1
+            line_count = output_str.count("\n") + 1
             return dim(f"  ✓ {name} ({duration_str}) — {line_count} lines of output · · · · · · · · · · · · · · · · · · ·")
 
         if box_mode:
             header = dim(f"  ✓ {name} ({duration_str}) " + "·" * max(0, width - len(f"  ✓ {name} ({duration_str}) ") - 2))
-            body = _box(result, width=width)
+            body = _box(output_str, width=width)
             return f"{header}\n{body}"
 
         header = dim(f"  ✓ {name} ({duration_str})")
-        body = dim(f"     → {name} result:\n{result}")
+        body = dim(f"     → {name} result:\n{output_str}")
         return f"{header}\n{body}"
 
+    # Edit tools: show summary + diff if available
+    if is_edit_tool and diff_text:
+        header = dim(f"  ✓ {name} ({duration_str}) " + "·" * max(0, width - len(f"  ✓ {name} ({duration_str}) ") - 2))
+        summary = dim(f"     → {result_text[:200].replace(chr(10), ' ')}")
+        try:
+            from wisp.diff_renderer import render_diff_box
+            diff_box = render_diff_box(diff_text, title=f"Diff — {meta.get('path', '')}"[:60],
+                                       width=width, box_mode=box_mode)
+            return f"{header}\n{summary}\n{diff_box}"
+        except ImportError:
+            pass
+
     # Regular / compact tool results
-    result_str = str(result)
     if not show_tool_output:
         return dim(f"  ✓ {name} ({duration_str}) · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · ·")
 
-    status_icon = "✓" if not result_str.startswith("Error") else "✗"
-    if result_str.startswith("Error"):
-        preview = result_str[:200].replace("\n", " ")
+    status_icon = "✓" if not result_text.startswith("Error") else "✗"
+    if result_text.startswith("Error"):
+        preview = result_text[:200].replace("\n", " ")
         return dim(f"  ✗ {name} ({duration_str})") + "\n" + dim(f"     → {preview}")
 
-    preview = result_str[:200].replace("\n", " ")
-    if len(result_str) > 200:
+    preview = result_text[:200].replace("\n", " ")
+    if len(result_text) > 200:
         preview += "..."
     header = dim(f"  {status_icon} {name} ({duration_str}) " + "·" * max(0, width - len(f"  {status_icon} {name} ({duration_str}) ") - 2))
     return f"{header}\n" + dim(f"     → {preview}")
