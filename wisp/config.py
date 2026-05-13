@@ -82,6 +82,18 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Show model reasoning trace inline",
         "env_var": "WISP_SHOW_THINKING",
     },
+    "show_tool_output": {
+        "type": bool,
+        "default": True,
+        "description": "Show full tool output (when false, collapse to one-liners)",
+        "env_var": "WISP_SHOW_TOOL_OUTPUT",
+    },
+    "compact_mode": {
+        "type": bool,
+        "default": False,
+        "description": "Minimal rendering mode — no boxes, flat output",
+        "env_var": "WISP_COMPACT_MODE",
+    },
     "max_iterations": {
         "type": int,
         "default": 30,
@@ -268,8 +280,12 @@ class WispConfig:
         self.workspace: Optional[str] = get_setting("workspace", os.getcwd())
         # Auto-approve tool calls by default (coding agent should flow)
         self.auto_approve: bool = str(get_setting("auto_approve", "true")).lower() == "true"
-        # Show reasoning trace inline (default: false — most users want the answer only)
+        # Show reasoning trace inline
         self.show_thinking: bool = str(get_setting("show_thinking", "true")).lower() == "true"
+        # Show full tool output (when false, collapse to one-liners)
+        self.show_tool_output: bool = str(get_setting("show_tool_output", "true")).lower() == "true"
+        # Minimal rendering mode — no boxes, flat output, good for pipes/narrow terminals
+        self.compact_mode: bool = str(get_setting("compact_mode", "false")).lower() == "true"
         # Max agent loop iterations per user turn
         self.max_iterations: int = int(get_setting("max_iterations", "30"))
         # Max repeated identical tool calls before stopping (0 = disabled)

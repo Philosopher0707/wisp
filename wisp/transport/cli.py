@@ -3,20 +3,30 @@
 This module contains all I/O-specific code: printing, colors, readline,
 signal handling, and approval prompts. It wraps WispAgentCore and drives
 the REPL loop.
+
+Output is rendered with enterprise-grade structure:
+  - Buffered thinking/content for clean phase transitions (no typewriter flicker)
+  - Box-drawn panels for multi-line tool output and responses
+  - Width-adaptive layout respecting terminal size
+  - Hierarchical indentation: primary > meta > debug
+  - Graceful degradation: flat mode for pipes, narrow terminals, and compact_mode
 """
 
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import logging
 import os
 import shutil
 import signal
 import sys
+import textwrap
 import threading
+import time
 import weakref
-from typing import Optional
+from typing import Optional, Generator
 
 # Enable readline for line-editing and history in REPL
 try:
@@ -40,7 +50,7 @@ from wisp.core.events import (
     TYPE_STEERING_RESUMED,
     TYPE_STEERING_INJECT,
 )
-from wisp.colors import success, error, warning, info, dim, accent
+from wisp.colors import success, error, warning, info, dim, accent, muted, border, highlight
 from wisp.session import Session, SessionManager, format_session_preview
 from wisp.skills import find_skill
 
@@ -72,6 +82,9 @@ _FULL_OUTPUT_TOOLS: set[str] = {
     "recall",
     "run_bash",
 }
+
+# Minimum terminal width for box-drawing mode. Below this, use flat mode.
+_MIN_BOX_WIDTH = 50
 
 # ── Signal handling ──────────────────────────────────────────────────
 
@@ -112,13 +125,129 @@ def _is_interactive() -> bool:
     return sys.stdin.isatty()
 
 
-def _print_separator():
-    """Print a visual separator between turns."""
+def _term_width() -> int:
+    """Get terminal width, clamping to reasonable bounds."""
     try:
-        width = shutil.get_terminal_size().columns
+        w = shutil.get_terminal_size().columns
     except OSError:
-        width = 50
-    print("─" * max(20, min(width, 80)))
+        w = 80
+    return max(40, min(w, 200))
+
+
+def _use_box_mode(config: object) -> bool:
+    """Determine whether to use box-drawing mode."""
+    if not sys.stdout.isatty():
+        return False
+    if getattr(config, "compact_mode", False):
+        return False
+    if _term_width() < _MIN_BOX_WIDTH:
+        return False
+    return True
+
+
+def _wrap_text(text: str, width: int, indent: str = "") -> list[str]:
+    """Wrap text to a given width, with an optional indent on each line after the first."""
+    if not text:
+        return [""]
+    lines = []
+    for paragraph in text.split("\n"):
+        if not paragraph.strip():
+            lines.append("")
+            continue
+        wrapped = textwrap.wrap(paragraph, width=width)
+        if indent and len(lines) > 0:
+            wrapped = [wrapped[0]] + [indent + w for w in wrapped[1:]]
+        lines.extend(wrapped)
+    return lines
+
+
+def _box(content: str, title: str = "", style: str = "dim",
+         double: bool = False, width: Optional[int] = None) -> str:
+    """Wrap content in a box-drawn panel.
+
+    Args:
+        content: The text to box.
+        title: Optional title shown in the top border.
+        style: 'dim' for regular, 'error' for red, 'success' for green.
+        double: Use double-line chars (for errors).
+        width: Explicit width; auto-detected from terminal if None.
+    """
+    if width is None:
+        width = _term_width()
+    inner_width = width - 4  # borders + padding
+
+    style_fn = {"dim": dim, "error": error, "success": success, "muted": muted}.get(style, dim)
+
+    if double:
+        tl, tr, bl, br, hz, vt = "╔", "╗", "╚", "╝", "═", "║"
+    else:
+        tl, tr, bl, br, hz, vt = "┌", "┐", "└", "┘", "─", "│"
+
+    # Title in top border
+    if title:
+        title_text = f" {title} "
+        available = width - 2  # corners
+        if len(title_text) > available:
+            title_text = title_text[:available]
+        top = tl + title_text + hz * (width - 2 - len(title_text)) + tr
+    else:
+        top = tl + hz * (width - 2) + tr
+
+    bottom = bl + hz * (width - 2) + br
+
+    lines = content.split("\n")
+    result_lines = [style_fn(top)]
+
+    # Padding line at top for breathing room in response panels
+    if title:
+        result_lines.append(style_fn(f"{vt} {' ' * inner_width} {vt}"))
+
+    for line in lines:
+        if not line.strip():
+            result_lines.append(style_fn(f"{vt} {' ' * inner_width} {vt}"))
+            continue
+        # Wrap long lines
+        wrapped = textwrap.wrap(line, width=inner_width)
+        for w in wrapped:
+            padded = w.ljust(inner_width)
+            result_lines.append(style_fn(f"{vt} {padded} {vt}"))
+
+    # Padding line at bottom for breathing room
+    if title:
+        result_lines.append(style_fn(f"{vt} {' ' * inner_width} {vt}"))
+
+    result_lines.append(style_fn(bottom))
+    return "\n".join(result_lines)
+
+
+def _rule(char: str = "─", label: str = "", style_fn=None,
+          width: Optional[int] = None) -> str:
+    """Draw a horizontal rule, optionally with a label.
+
+    Args:
+        char: Rule character.
+        label: Optional label placed left of center.
+        style_fn: Color function (e.g. dim).
+        width: Explicit width.
+    """
+    if width is None:
+        width = _term_width()
+    style_fn = style_fn or dim
+
+    if label:
+        label_str = f" {label} "
+        remaining = width - len(label_str)
+        left = char * (remaining // 2)
+        right = char * (remaining - len(left))
+        return style_fn(f"{left}{label_str}{right}")
+    return style_fn(char * width)
+
+
+def _spinner_gen() -> Generator[str, None, None]:
+    """Yield spinner frames infinitely."""
+    frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    for i in itertools.cycle(range(len(frames))):
+        yield dim(frames[i])
 
 
 # ── Readline setup ─────────────────────────────────────────────────────
@@ -178,6 +307,19 @@ def _setup_readline_history():
         readline.write_history_file(histfile)
     except OSError:
         pass
+
+
+def _args_preview(args: dict) -> str:
+    """Short one-line preview of tool arguments (backward-compatible)."""
+    parts = []
+    path = args.get("path", args.get("command", ""))
+    if path:
+        s = str(path)
+        parts.append(s[:60])
+    content = args.get("content", "")
+    if content:
+        parts.append(f"({len(content)} chars)")
+    return ", ".join(parts) if parts else "..."
 
 
 # ── Input handling ───────────────────────────────────────────────────
@@ -281,26 +423,51 @@ def _prompt_dangerous(func_name: str, reason: str) -> bool:
 
 # ── Event rendering ──────────────────────────────────────────────────
 
-def _render_event(event: AgentEvent, show_thinking: bool = False) -> Optional[str]:
-    """Render an AgentEvent to a terminal string. Returns None for silent events."""
+def _render_event(event: AgentEvent, show_thinking: bool = False,
+                  show_tool_output: bool = True, box_mode: bool = True) -> Optional[str]:
+    """Render an AgentEvent to a terminal string. Returns None for silent events.
+
+    Args:
+        event: The AgentEvent to render.
+        show_thinking: If True, show thinking content inline.
+        show_tool_output: If False, collapse tool results to one-liners.
+        box_mode: If True, use box-drawing characters for panels.
+    """
     etype = event.type
+    w = _term_width()
 
     if etype == TYPE_CONTENT:
-        return event.text
+        raw = event.text
+        if not box_mode:
+            return raw
+        # Wrap content into a response panel
+        inner_w = w - 4
+        wrapped = _wrap_text(raw, inner_w)
+        return _box("\n".join(wrapped), title="Response", style="muted", width=w)
 
     if etype == TYPE_THINKING:
-        if show_thinking:
-            return dim(f"⏳ Thinking: {event.text}")
-        return None
+        text = event.text
+        if not show_thinking:
+            line_count = text.count("\n") + 1
+            return dim(f"  🧠 Thinking... ({line_count} lines — /thinking to expand)")
+        if not box_mode:
+            header = dim("🧠 Reasoning · · · · · · · · · · · · · · · · · · · · · · · · · · · · · ·")
+            wrapped = _wrap_text(text, w - 2, indent="")
+            body = "\n".join(dim(f"  {line}") for line in wrapped)
+            return f"{header}\n{body}"
+        header = _rule("·", "🧠 Reasoning", style_fn=dim, width=w)
+        wrapped = _wrap_text(text, w - 2)
+        body = "\n".join(dim(f"  {line}") for line in wrapped)
+        return f"{header}\n{body}"
 
     if etype == TYPE_TOOL_CALL:
         name = event.data.get("name", "")
         args = event.data.get("arguments", {})
-        preview = _args_preview(args)
-        return dim(f"  🛠  {name}({preview})")
+        return _render_tool_call(name, args, box_mode)
 
     if etype == TYPE_TOOL_RESULT:
         name = event.data.get("name", "")
+        duration_ms = event.data.get("duration_ms")
         result = event.data.get("result", "")
         if isinstance(result, str) and result.startswith("{"):
             try:
@@ -309,28 +476,22 @@ def _render_event(event: AgentEvent, show_thinking: bool = False) -> Optional[st
                 result = data
             except (json.JSONDecodeError, KeyError):
                 pass
-        # Full-output tools: preserve multi-line formatting so humans can read
-        # plans, search results, git output, diagnostics, etc.
-        if name in _FULL_OUTPUT_TOOLS and isinstance(result, str):
-            return dim(f"     → {name} result:\n{result}")
-        # Compact preview for everything else — still indicate truncation
-        result_str = str(result)
-        preview = result_str[:200].replace("\n", " ")
-        if len(result_str) > 200:
-            preview += "..."
-        return dim(f"     → {preview}")
+        return _render_tool_result(name, result, duration_ms, show_tool_output, box_mode, w)
 
     if etype == TYPE_ERROR:
-        return error(f"✗ {event.data.get('message', '')}")
+        msg = event.data.get("message", "")
+        if box_mode:
+            return _box(f"✗ {msg}", title="Error", style="error", double=True, width=w)
+        return error(f"✗ {msg}")
 
     if etype == TYPE_SYSTEM:
         level = event.data.get("level", "info")
         if level == "debug":
-            return None  # Suppress debug in CLI
+            return None
         msg = event.data.get("message", "")
         if level == "warning":
-            return warning(f"⚠ {msg}")
-        return info(f"ℹ {msg}")
+            return warning(f"  ⚠ {msg}")
+        return info(f"  ℹ {msg}")
 
     if etype == TYPE_APPROVAL_REQUEST:
         return warning(f"  ⚠️  Approval required: {event.data.get('reason', '')}")
@@ -347,31 +508,101 @@ def _render_event(event: AgentEvent, show_thinking: bool = False) -> Optional[st
     if etype == TYPE_DONE:
         reason = event.data.get("reason", "")
         turns = event.data.get("turns", 0)
-        msg = ""
         if reason == "max_iterations":
-            msg = f"\n⚠️  Hit max iterations after {turns} turns. Type 'continue' or increase --max-iterations."
+            msg = f"⚠️  Hit max iterations after {turns} turns. Type 'continue' or increase --max-iterations."
+            return warning(f"\n{msg}")
         elif reason == "max_reflections":
-            msg = f"\n🔄  Detected a reflective loop after {turns} turns. The agent kept repeating the same tool call. Type 'continue' or adjust your prompt."
+            msg = f"🔄  Detected reflective loop after {turns} turns."
+            return warning(f"\n{msg}")
         elif reason == "interrupted":
-            msg = "\n⏹  Interrupted."
+            return dim("\n⏹  Interrupted.")
         elif reason == "error":
-            msg = "\n✗ Stream error — turn aborted."
-        return dim(msg) if msg else None
+            return error("\n✗ Stream error — turn aborted.")
+        return None
 
     return None
 
 
-def _args_preview(args: dict) -> str:
-    """Short one-line preview of tool arguments."""
-    parts = []
-    path = args.get("path", args.get("command", ""))
-    if path:
-        s = str(path)
-        parts.append(s[:60])
-    content = args.get("content", "")
-    if content:
-        parts.append(f"({len(content)} chars)")
-    return ", ".join(parts) if parts else "..."
+def _render_tool_call(name: str, args: dict, box_mode: bool) -> str:
+    """Render a tool call with structured argument display."""
+    lines = [dim(f"  🔧 {name}")]
+    if args:
+        for key, value in args.items():
+            val_str = _format_arg_value(key, value)
+            lines.append(dim(f"  │  {key}: {val_str}"))
+    return "\n".join(lines)
+
+
+def _format_arg_value(key: str, value) -> str:
+    """Format a single argument value for display."""
+    if key in ("path", "command", "pattern", "filepath"):
+        s = str(value)
+        if len(s) > 60:
+            s = s[:57] + "..."
+        return s
+    if key in ("content", "text", "old", "new"):
+        if isinstance(value, str):
+            return f"({len(value)} chars)"
+        return str(value)[:60]
+    if key in ("arguments", "args"):
+        if isinstance(value, dict):
+            return f"({len(value)} keys)"
+        return str(value)[:40]
+    s = str(value)
+    if len(s) > 80:
+        s = s[:77] + "..."
+    return s
+
+
+def _render_tool_result(name: str, result, duration_ms, 
+                        show_tool_output: bool, box_mode: bool, width: int) -> str:
+    """Render a tool result."""
+    duration_str = _format_duration(duration_ms)
+
+    if name in _FULL_OUTPUT_TOOLS and isinstance(result, str):
+        if not show_tool_output:
+            line_count = result.count("\n") + 1
+            return dim(f"  ✓ {name} ({duration_str}) — {line_count} lines of output · · · · · · · · · · · · · · · · · · ·")
+
+        if box_mode:
+            header = dim(f"  ✓ {name} ({duration_str}) " + "·" * max(0, width - len(f"  ✓ {name} ({duration_str}) ") - 2))
+            body = _box(result, width=width)
+            return f"{header}\n{body}"
+
+        header = dim(f"  ✓ {name} ({duration_str})")
+        body = dim(f"     → {name} result:\n{result}")
+        return f"{header}\n{body}"
+
+    # Regular / compact tool results
+    result_str = str(result)
+    if not show_tool_output:
+        return dim(f"  ✓ {name} ({duration_str}) · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · ·")
+
+    status_icon = "✓" if not result_str.startswith("Error") else "✗"
+    if result_str.startswith("Error"):
+        preview = result_str[:200].replace("\n", " ")
+        return dim(f"  ✗ {name} ({duration_str})") + "\n" + dim(f"     → {preview}")
+
+    preview = result_str[:200].replace("\n", " ")
+    if len(result_str) > 200:
+        preview += "..."
+    header = dim(f"  {status_icon} {name} ({duration_str}) " + "·" * max(0, width - len(f"  {status_icon} {name} ({duration_str}) ") - 2))
+    return f"{header}\n" + dim(f"     → {preview}")
+
+
+def _format_duration(duration_ms) -> str:
+    """Format a duration in milliseconds to a human-readable string."""
+    if duration_ms is None:
+        return ""
+    if duration_ms < 1:
+        return f"{duration_ms * 1000:.0f}μs"
+    if duration_ms < 1000:
+        return f"{duration_ms:.0f}ms"
+    if duration_ms < 60000:
+        return f"{duration_ms / 1000:.1f}s"
+    mins = int(duration_ms / 60000)
+    secs = (duration_ms % 60000) / 1000
+    return f"{mins}m {secs:.0f}s"
 
 
 # ── CLITransport ─────────────────────────────────────────────────────
@@ -386,9 +617,11 @@ class CLITransport:
     def __init__(self, core: WispAgentCore):
         self.core = core
         self.show_thinking = core.config.show_thinking
+        self.show_tool_output = getattr(core.config, "show_tool_output", True)
         self.auto_approve = core.config.auto_approve
         self._interrupted = False
         self._pending_approval = None
+        self._spinner = _spinner_gen()
         _transport_instances.add(self)
 
     # ── Public API ─────────────────────────────────────────────────
@@ -465,8 +698,8 @@ class CLITransport:
             print(f"   {dim('Title:')} {loaded.title}")
         print(f"   {dim('Model:')} {self.core.config.model}")
         if loaded.model and loaded.model != self.core.config.model:
-            print(warning(f"   ⚠️  Session was created with model '{loaded.model}'. Now using '{self.core.config.model}'."))
-        print(f"   {dim('Messages so far:')} {len(self.core.messages)}")
+            print(warning(f"   ⚠️  Session created with model '{loaded.model}'. Now using '{self.core.config.model}'."))
+        print(f"   {dim('Messages:')} {len(self.core.messages)}")
         last_user = None
         for m in reversed(self.core.messages):
             if m.get("role") == "user":
@@ -511,15 +744,15 @@ class CLITransport:
         _setup_readline_history()
 
         msg_count = len(self.core.messages)
+        w = _term_width()
         print(info(f"🔮 Wisp (model: {self.core.config.model})"))
-        print(f"   {dim('Session:')} {self.core.session.id}")
+        print(f"   {dim('Session:')} {accent(self.core.session.id)}")
         if msg_count:
-            print(f"   {dim('History:')} {msg_count} messages so far")
+            print(f"   {dim('History:')} {msg_count} messages")
         if skill_name:
             print(f"   {dim('Skill:')} {skill_name}")
         print()
-        print(dim("Type /help for commands, 'exit', or press Ctrl+C to end."))
-        print(dim("Tip: end a line with \\ to continue on the next line."))
+        print(dim("  /help for commands  ·  end line with \\ for multiline  ·  Ctrl+C to exit"))
         print()
 
         self._interrupted = False
@@ -543,12 +776,12 @@ class CLITransport:
                     if dispatch(cmd, self.core):
                         continue
                 except ExitREPL:
-                    print(success("👋 Goodbye."))
+                    print(success("  👋 Goodbye."))
                     break
 
                 # Legacy non-slash commands
                 if cmd in ("exit", "quit"):
-                    print(success("👋 Goodbye."))
+                    print(success("  👋 Goodbye."))
                     break
                 if cmd in ("help", "?"):
                     dispatch("/help", self.core)
@@ -568,17 +801,17 @@ class CLITransport:
                     self.core._add_message("user", self.core._expand_continuation(cmd))
                     asyncio.run(self._execute_turn(system, ws))
                 except KeyboardInterrupt:
-                    print(error("\n⏹  Turn interrupted. Type 'exit' to quit or continue chatting."))
+                    print(error("\n⏹  Turn interrupted."))
                     self._interrupted = False
                     continue
                 except Exception as e:
-                    print(error(f"\n✗ Unexpected error in REPL: {e}"))
+                    print(error(f"\n✗ Unexpected error: {e}"))
                     logger.error("REPL turn crashed", exc_info=True)
                     self._interrupted = False
                     continue
 
                 if not self._interrupted:
-                    _print_separator()
+                    self._print_turn_done()
 
             print()
             if self.core.session:
@@ -599,83 +832,205 @@ class CLITransport:
         await self._execute_turn(system, self.core.config.workspace or ".")
 
     async def _execute_turn(self, system: str, workspace: str) -> None:
-        """Execute one user turn by consuming events from core._arun().
+        """Execute one user turn — buffered phase rendering with spinner.
 
-        This is a strict event-pump: core owns the turn state, transport
-        only renders.  The transport must NOT mutate core.messages or
-        attempt to recover from failures by rewriting history.
+        Thinking and content tokens are accumulated silently while a spinner
+        provides feedback. When a phase transition occurs (thinking→content,
+        content→tool_call, etc.), the buffered text is flushed as a structured
+        block. Tool calls and results are rendered immediately.
         """
         self._interrupted = False
         if hasattr(self.core, "_interrupted"):
             self.core._interrupted = False
 
-        # _arun() adds the user message internally, so we pass the raw prompt.
-        # Extract the last user message content before _arun() clears/re-adds it.
         prompt = ""
         if self.core.messages and self.core.messages[-1].get("role") == "user":
             raw = self.core.messages[-1].get("content", "")
-            from wisp.core.message_format import extract_text
             prompt = extract_text(raw)
             self.core.messages.pop()
 
-        # Build approval handler that prompts the user in the terminal
+        box_mode = _use_box_mode(self.core.config)
+
         async def _cli_approval(name: str, args: dict, reason: str) -> tuple[bool, Optional[dict]]:
             approved = _prompt_dangerous(name, reason)
             return (approved, None)
 
-        _in_thinking = False
-        _content_started = False
+        thinking_buf: list[str] = []
+        content_buf: list[str] = []
+        in_thinking = False
+        in_content = False
+        spinner_active = False
+        spinner = _spinner_gen()
+        total_iterations = 0
+        turn_start = time.monotonic()
+
+        def _stop_spinner():
+            nonlocal spinner_active
+            if spinner_active:
+                sys.stdout.write("\r\033[K")  # clear spinner line
+                sys.stdout.flush()
+                spinner_active = False
+
+        def _flush_thinking():
+            nonlocal in_thinking
+            if thinking_buf:
+                _stop_spinner()
+                text = "".join(thinking_buf)
+                rendered = _render_thinking_block(text, box_mode)
+                if rendered:
+                    print(rendered)
+                thinking_buf.clear()
+            in_thinking = False
+
+        def _flush_content():
+            nonlocal in_content
+            if content_buf:
+                _stop_spinner()
+                text = "".join(content_buf)
+                rendered = _render_content_block(text, box_mode)
+                if rendered:
+                    print(rendered)
+                content_buf.clear()
+            in_content = False
+
+        def _show_spinner(label: str):
+            nonlocal spinner_active
+            if box_mode and sys.stdout.isatty():
+                frame = next(spinner)
+                sys.stdout.write(f"\r{frame} {label}")
+                sys.stdout.flush()
+                spinner_active = True
+
         try:
             async for event in self.core._arun(prompt, system=system, approval_handler=_cli_approval):
                 if self._interrupted:
                     break
 
-                show_thinking = self.core.config.show_thinking
-
-                # Real-time streaming for thinking/content tokens
                 if event.type == TYPE_THINKING:
-                    if _content_started:
+                    if in_content:
                         continue
-                    if not _in_thinking:
-                        _in_thinking = True
-                        if show_thinking:
-                            print(dim("⏳ Thinking: "), end="", flush=True)
-                        else:
-                            print(dim("⏳ Thinking..."), end="", flush=True)
-                    if show_thinking:
-                        print(event.text, end="", flush=True)
+                    if not in_thinking:
+                        _flush_content()
+                        in_thinking = True
+                        _show_spinner("Thinking...")
+                    thinking_buf.append(event.text)
+
                 elif event.type == TYPE_CONTENT:
-                    _content_started = True
-                    if _in_thinking:
-                        _in_thinking = False
-                        if show_thinking:
-                            print()
-                        print()
-                    print(event.text, end="", flush=True)
+                    if in_thinking:
+                        _flush_thinking()
+                    if not in_content:
+                        in_content = True
+                        _show_spinner("Generating response...")
+                    content_buf.append(event.text)
+
                 elif event.type == TYPE_TOOL_CALL:
-                    _content_started = False
-                    _in_thinking = False
-                    rendered = _render_event(event, show_thinking)
-                    if rendered is not None:
-                        print(rendered, end="\n", flush=True)
+                    _flush_thinking()
+                    _flush_content()
+                    _stop_spinner()
+                    rendered = _render_tool_call(
+                        event.data.get("name", ""),
+                        event.data.get("arguments", {}),
+                        box_mode,
+                    )
+                    print(rendered)
+
+                elif event.type == TYPE_TOOL_RESULT:
+                    _stop_spinner()
+                    rendered = _render_tool_result(
+                        event.data.get("name", ""),
+                        event.data.get("result", ""),
+                        event.data.get("duration_ms"),
+                        self.show_tool_output,
+                        box_mode,
+                        _term_width(),
+                    )
+                    print(rendered)
+
+                elif event.type == TYPE_DONE:
+                    total_iterations = event.data.get("turns", 0)
+                    # Render completion reason if non-natural
+                    msg = _render_done_reason(event, total_iterations)
+                    if msg:
+                        _stop_spinner()
+                        print(msg)
+
                 else:
-                    _in_thinking = False
-                    rendered = _render_event(event, show_thinking)
+                    _flush_thinking()
+                    _flush_content()
+                    _stop_spinner()
+                    rendered = _render_event(event, self.show_thinking,
+                                            self.show_tool_output, box_mode)
                     if rendered is not None:
-                        print(rendered, end="\n", flush=True)
+                        print(rendered)
+
+            # Flush any remaining buffered content
+            _flush_thinking()
+            _flush_content()
+            _stop_spinner()
+
         except KeyboardInterrupt:
-            # Ctrl+C during a running turn — propagate interruption cleanly.
             self.core._interrupted = True
             self._interrupted = True
+            _stop_spinner()
             raise
         except asyncio.CancelledError:
-            # Task was cancelled (e.g. nested-loop shutdown) — propagate.
             self.core._interrupted = True
             self._interrupted = True
+            _stop_spinner()
             raise
         except Exception:
-            # All other exceptions: abandon this turn.  Do NOT rewrite
-            # core.messages — the core's internal state must remain the
-            # single source of truth.  The finally block in the REPL will
-            # handle session save gracefully.
+            _stop_spinner()
             raise
+
+    def _print_turn_done(self):
+        """Print a turn-completion separator."""
+        w = _term_width()
+        print()
+        print(dim("─" * w))
+        print()
+
+
+# ── Block renderers (used by _execute_turn for buffered output) ──────
+
+def _render_thinking_block(text: str, box_mode: bool) -> Optional[str]:
+    """Render buffered thinking text as a block."""
+    if not text.strip():
+        return None
+    w = _term_width()
+    inner_w = w - 4
+    wrapped = _wrap_text(text.strip(), inner_w)
+    if box_mode:
+        header = _rule("·", "🧠 Reasoning", style_fn=dim, width=w)
+        body = "\n".join(dim(f"  {line}") for line in wrapped)
+        return f"{header}\n{body}"
+    else:
+        header = _rule("─", "🧠 Reasoning", style_fn=dim, width=w)
+        body = "\n".join(dim(f"  {line}") for line in wrapped)
+        return f"{header}\n{body}"
+
+
+def _render_content_block(text: str, box_mode: bool) -> Optional[str]:
+    """Render buffered content text as a block."""
+    if not text.strip():
+        return None
+    w = _term_width()
+    inner_w = w - 4
+    wrapped = _wrap_text(text.strip(), inner_w)
+    if box_mode:
+        return _box("\n".join(wrapped), title="Response", style="muted", width=w)
+    else:
+        return "\n".join(wrapped)
+
+
+def _render_done_reason(event: AgentEvent, iterations: int) -> Optional[str]:
+    """Render the turn completion reason."""
+    reason = event.data.get("reason", "")
+    if reason == "max_iterations":
+        return warning(f"\n  ⚠️  Max iterations ({iterations}) reached. Type 'continue' or increase --max-iterations.")
+    elif reason == "max_reflections":
+        return warning(f"\n  🔄  Reflective loop detected after {iterations} iterations.")
+    elif reason == "interrupted":
+        return dim("\n  ⏹  Interrupted.")
+    elif reason == "error":
+        return error("\n  ✗ Stream error — turn aborted.")
+    return None

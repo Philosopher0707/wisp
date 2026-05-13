@@ -38,33 +38,44 @@ class TestRenderEvent:
 
     def test_render_content(self):
         event = content("hello")
-        assert _render_event(event) == "hello"
+        rendered = _render_event(event, box_mode=False)
+        assert "hello" in rendered
+
+    def test_render_content_boxed(self):
+        event = content("hello")
+        rendered = _render_event(event, box_mode=True)
+        assert "hello" in rendered
+        assert "Response" in rendered
 
     def test_render_thinking_hidden(self):
         event = thinking("deep thoughts")
-        assert _render_event(event, show_thinking=False) is None
+        rendered = _render_event(event, show_thinking=False)
+        assert rendered is not None
+        assert "Thinking..." in rendered
+        assert "1 lines" in rendered
 
     def test_render_thinking_shown(self):
         event = thinking("deep thoughts")
-        rendered = _render_event(event, show_thinking=True)
+        rendered = _render_event(event, show_thinking=True, box_mode=False)
         assert rendered is not None
-        assert "Thinking" in rendered
+        assert "Reasoning" in rendered
+        assert "deep thoughts" in rendered
 
     def test_render_tool_call(self):
         event = tool_call("read_file", {"path": "/tmp/test.py"})
-        rendered = _render_event(event)
+        rendered = _render_event(event, box_mode=False)
         assert "read_file" in rendered
         assert "/tmp/test.py" in rendered
 
     def test_render_tool_result(self):
         event = tool_result("read_file", "file contents here")
-        rendered = _render_event(event)
+        rendered = _render_event(event, box_mode=False)
         assert "→" in rendered
         assert "file contents" in rendered
 
     def test_render_error(self):
         event = error("something broke")
-        rendered = _render_event(event)
+        rendered = _render_event(event, box_mode=False)
         assert "something broke" in rendered
 
     def test_render_system_info(self):
@@ -149,7 +160,7 @@ class TestRenderEventFullOutputTools:
             "  3. [high] Add tests — deps: 1, 2"
         )
         event = tool_result("plan_task", plan_text)
-        rendered = _render_event(event)
+        rendered = _render_event(event, box_mode=False)
         assert "Created plan" in rendered
         assert "  1." in rendered
         assert "  2." in rendered
@@ -160,13 +171,13 @@ class TestRenderEventFullOutputTools:
     def test_mark_step_done_full_output(self):
         result_text = "✓ Marked task auth-login as done. Progress: 2/3"
         event = tool_result("mark_step_done", result_text)
-        rendered = _render_event(event)
+        rendered = _render_event(event, box_mode=False)
         assert "✓ Marked task" in rendered
 
     def test_update_plan_full_output(self):
         result_text = "✓ Updated task auth-login to 'done'. Progress: 2/3"
         event = tool_result("update_plan", result_text)
-        rendered = _render_event(event)
+        rendered = _render_event(event, box_mode=False)
         assert "✓ Updated task" in rendered
 
     def test_web_search_full_output(self):
@@ -180,8 +191,7 @@ class TestRenderEventFullOutputTools:
             "   Official Python language documentation."
         )
         event = tool_result("web_search", result_text)
-        rendered = _render_event(event)
-        assert "web_search result:" in rendered
+        rendered = _render_event(event, box_mode=False)
         assert "DuckDuckGo" in rendered
         assert "https://duckduckgo.com" in rendered
         assert rendered.count("\n") >= 4
@@ -197,8 +207,7 @@ class TestRenderEventFullOutputTools:
             "\tmodified:   tests/test_transport_cli.py"
         )
         event = tool_result("git_status", result_text)
-        rendered = _render_event(event)
-        assert "git_status result:" in rendered
+        rendered = _render_event(event, box_mode=False)
         assert "On branch main" in rendered
         assert "modified:" in rendered
         assert rendered.count("\n") >= 4
@@ -212,8 +221,7 @@ class TestRenderEventFullOutputTools:
             "-rw-r--r--  1 user  staff  2048 May 11 10:00 cli.py"
         )
         event = tool_result("run_bash", result_text)
-        rendered = _render_event(event)
-        assert "run_bash result:" in rendered
+        rendered = _render_event(event, box_mode=False)
         assert "total 24" in rendered
         assert "cli.py" in rendered
 
@@ -224,8 +232,7 @@ class TestRenderEventFullOutputTools:
             "wisp/transport/cli.py:58:5: warning: Variable 'preview' is unused"
         )
         event = tool_result("lsp_diagnostics", result_text)
-        rendered = _render_event(event)
-        assert "lsp_diagnostics result:" in rendered
+        rendered = _render_event(event, box_mode=False)
         assert "error:" in rendered
         assert "warning:" in rendered
 
@@ -233,7 +240,7 @@ class TestRenderEventFullOutputTools:
         """Tools NOT in _FULL_OUTPUT_TOOLS get compact single-line preview."""
         long_result = "x" * 300 + "\nline2"
         event = tool_result("read_file", long_result)
-        rendered = _render_event(event)
+        rendered = _render_event(event, box_mode=False)
         assert "..." in rendered
         assert "→" in rendered
         assert "line2" not in rendered  # newline replaced by space, then truncated
@@ -242,26 +249,26 @@ class TestRenderEventFullOutputTools:
         """Ellipsis appears only when result is longer than 200 chars."""
         short_result = "short"
         event = tool_result("read_file", short_result)
-        rendered = _render_event(event)
+        rendered = _render_event(event, box_mode=False)
         assert "..." not in rendered
         assert "short" in rendered
 
         exactly_200 = "a" * 200
         event = tool_result("read_file", exactly_200)
-        rendered = _render_event(event)
+        rendered = _render_event(event, box_mode=False)
         assert "..." not in rendered  # exactly 200, no truncation
 
         over_200 = "a" * 201
         event = tool_result("read_file", over_200)
-        rendered = _render_event(event)
+        rendered = _render_event(event, box_mode=False)
         assert "..." in rendered
 
     def test_full_output_tool_with_json_result_is_safe(self):
         """A full-output tool that happens to return a JSON string still renders."""
         event = tool_result("plan_task", '{"ok": true, "id": "p-1"}')
-        rendered = _render_event(event)
+        rendered = _render_event(event, box_mode=False)
         assert isinstance(rendered, str)
-        assert "plan_task result:" in rendered
+        assert "plan_task" in rendered
 
     def test_search_codebase_full_output(self):
         """search_codebase returns multi-line results."""
@@ -278,8 +285,7 @@ class TestRenderEventFullOutputTools:
             "  ```"
         )
         event = tool_result("search_codebase", result_text)
-        rendered = _render_event(event)
-        assert "search_codebase result:" in rendered
+        rendered = _render_event(event, box_mode=False)
         assert "Result 1" in rendered
         assert "Result 2" in rendered
         assert rendered.count("\n") >= 6

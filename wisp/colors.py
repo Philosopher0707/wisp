@@ -49,6 +49,9 @@ info = _Style("36")         # cyan
 dim = _Style("90")          # bright black / gray
 bold = _Style("1")          # bold
 accent = _Style("35")       # magenta
+muted = _Style("37")        # default foreground — neutral body text
+border = _Style("90")       # same as dim, semantically for panel borders
+highlight = _Style("97")    # bright white — key info in headers
 
 # ── Combinations ─────────────────────────────────────────────────────
 
@@ -57,6 +60,7 @@ error_bold = _Style("1;31")
 warning_bold = _Style("1;33")
 info_bold = _Style("1;36")
 accent_bold = _Style("1;35")
+muted_bold = _Style("1;37")
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
