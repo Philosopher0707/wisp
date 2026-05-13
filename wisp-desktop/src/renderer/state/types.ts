@@ -244,6 +244,7 @@ export function createInitialState(overrides?: {
   pinnedSessionIds?: string[];
   systemPrompt?: string;
   permissionMode?: 'full' | 'ask_all' | 'auto_edit' | 'read_only';
+  lastSessionId?: string | null;
 }): AppState {
   return {
     serverUrl: overrides?.serverUrl || 'http://localhost:8000',
@@ -256,7 +257,7 @@ export function createInitialState(overrides?: {
     projects: [],
     sessions: [],
     sessionsVersion: 0,
-    sessionId: null,
+    sessionId: overrides?.lastSessionId || null,
     messages: [],
     isStreaming: false,
     agentPaused: false,

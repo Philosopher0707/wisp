@@ -25,7 +25,9 @@ function getPersistedConfig(defaults: { serverUrl: string; apiKey: string }) {
     const raw = localStorage.getItem('wisp_pinned_sessions');
     if (raw) pinnedSessionIds = JSON.parse(raw);
   } catch { /* ignore corrupt data */ }
-  return { serverUrl: url, apiKey: key, selectedModel: model, pinnedSessionIds, systemPrompt, permissionMode };
+  // Restore last active session ID for cross-session persistence
+  const lastSessionId = localStorage.getItem('wisp_last_session_id') || null;
+  return { serverUrl: url, apiKey: key, selectedModel: model, pinnedSessionIds, systemPrompt, permissionMode, lastSessionId };
 }
 
 export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
@@ -37,6 +39,42 @@ export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
   );
   const ws = useWebSocket(serverUrl, apiKey, dispatch);
   useMenuIPC(dispatch, serverUrl, apiKey);
+
+  // Persist last active session ID for cross-session memory
+  React.useEffect(() => {
+    if (state.sessionId) {
+      localStorage.setItem('wisp_last_session_id', state.sessionId);
+    }
+  }, [state.sessionId]);
+
+  // Auto-resume last session on startup if no active session and backend has it
+  React.useEffect(() => {
+    if (state.sessionId || !persisted.lastSessionId || !state.workspacePath) return;
+    const baseUrl = serverUrl.replace(/\/$/, '');
+    const params = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
+    fetch(`${baseUrl}/api/sessions/${encodeURIComponent(persisted.lastSessionId)}${params}`, {
+      headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
+    })
+      .then((r) => {
+        if (!r.ok) throw new Error('Session not found');
+        return r.json();
+      })
+      .then((data: { session?: { messages?: unknown[] } }) => {
+        if (data.session?.messages && data.session.messages.length > 0) {
+          // Pre-set the session ID so the next message continues the conversation
+          dispatch({ type: 'SET_SESSION_ID', id: persisted.lastSessionId });
+          dispatch({
+            type: 'RECEIVE_STATUS',
+            message: 'Session restored — continuing previous conversation.',
+            level: 'info',
+          });
+        }
+      })
+      .catch(() => {
+        localStorage.removeItem('wisp_last_session_id');
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Persist settings to localStorage
   React.useEffect(() => {
@@ -59,6 +97,7 @@ export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
     localStorage.setItem('wisp_input_draft', state.inputValue);
   }, [state.inputValue]);
 
+  // Initial API fetches (models, workspace)
   React.useEffect(() => {
     const baseUrl = serverUrl.replace(/\/$/, '');
     const params = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
@@ -82,14 +121,6 @@ export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
       })
       .catch(() => {});
   }, [serverUrl, apiKey]);
-
-  // Restore input draft
-  React.useEffect(() => {
-    const draft = localStorage.getItem('wisp_input_draft');
-    if (draft) {
-      dispatch({ type: 'SET_INPUT', value: draft });
-    }
-  }, []);
 
   // Restore theme
   React.useEffect(() => {
@@ -126,7 +157,7 @@ export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
         .catch(() => {});
     };
 
-    poll(); // immediate first poll
+    poll();
     const interval = setInterval(poll, 30_000);
     return () => clearInterval(interval);
   }, [state.suggestionsPanelOpen, state.connection, serverUrl, apiKey]);

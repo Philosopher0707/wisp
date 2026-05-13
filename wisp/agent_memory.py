@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 AGENT_MEMORY_DIR = WISP_CONFIG_DIR / "agent_memory"
 SESSIONS_FILE = AGENT_MEMORY_DIR / "sessions.jsonl"
-_MAX_SUMMARIES = 50  # Keep last N summaries to prevent bloat
+_MAX_SUMMARIES = 100  # Keep last N summaries to prevent bloat
 
 
 def _resolve_workspace(workspace: str) -> str:
@@ -96,7 +96,7 @@ class AgentMemory:
     def load_recent(
         self,
         workspace: Optional[str] = None,
-        limit: int = 3,
+        limit: int = 5,
     ) -> list[SessionSummary]:
         """Load recent summaries, optionally filtered by workspace.
 
@@ -147,32 +147,61 @@ class AgentMemory:
 
     # ── Prompt formatting ──
 
-    def format_for_prompt(self, summaries: list[SessionSummary]) -> str:
-        """Format summaries into a system prompt block."""
-        if not summaries:
+    def format_for_prompt(
+        self,
+        summaries: list[SessionSummary],
+        last_messages: Optional[list[dict]] = None,
+    ) -> str:
+        """Format summaries and optional last messages into a system prompt block."""
+        if not summaries and not last_messages:
             return ""
 
-        lines = ["## Previous Session Context"]
-        for s in summaries:
-            lines.append(f"\n### Session {s.session_id[:24]} ({s.timestamp[:10]})")
-            if s.summary:
-                lines.append(f"**Summary:** {s.summary}")
-            if s.key_decisions:
-                lines.append("**Decisions:**")
-                for d in s.key_decisions:
-                    lines.append(f"  - {d}")
-            if s.open_tasks:
-                lines.append("**Open tasks:**")
-                for t in s.open_tasks:
-                    lines.append(f"  - {t}")
-            if s.user_preferences:
-                lines.append("**User preferences:**")
-                for p in s.user_preferences:
-                    lines.append(f"  - {p}")
-            if s.files_touched:
-                files_str = ", ".join(s.files_touched[:5])
-                if len(s.files_touched) > 5:
-                    files_str += f" (+{len(s.files_touched) - 5} more)"
-                lines.append(f"**Files touched:** {files_str}")
+        lines: list[str] = []
+
+        if summaries:
+            lines.append("## Previous Session Context")
+            for s in summaries:
+                lines.append(f"\n### Session {s.session_id[:24]} ({s.timestamp[:10]})")
+                if s.summary:
+                    lines.append(f"**Summary:** {s.summary}")
+                if s.key_decisions:
+                    lines.append("**Decisions:**")
+                    for d in s.key_decisions:
+                        lines.append(f"  - {d}")
+                if s.open_tasks:
+                    lines.append("**Open tasks:**")
+                    for t in s.open_tasks:
+                        lines.append(f"  - {t}")
+                if s.user_preferences:
+                    lines.append("**User preferences:**")
+                    for p in s.user_preferences:
+                        lines.append(f"  - {p}")
+                if s.files_touched:
+                    files_str = ", ".join(s.files_touched[:5])
+                    if len(s.files_touched) > 5:
+                        files_str += f" (+{len(s.files_touched) - 5} more)"
+                    lines.append(f"**Files touched:** {files_str}")
+
+        if last_messages:
+            lines.append("\n## Recent Conversation (last few messages from current session)")
+            for msg in last_messages:
+                role = msg.get("role", "unknown")
+                content = msg.get("content", "")
+                if isinstance(content, list):
+                    # Multimodal content — extract text parts
+                    text_parts = [
+                        p.get("text", "") for p in content
+                        if isinstance(p, dict) and p.get("type") == "text"
+                    ]
+                    content = "\n".join(text_parts)
+                if role == "user":
+                    lines.append(f"\n**User:** {content[:500]}")
+                elif role == "assistant":
+                    thinking = msg.get("thinking", "")
+                    if thinking:
+                        lines.append(f"\n**Assistant** *(thinking)*: {thinking[:300]}")
+                    lines.append(f"**Assistant:** {content[:500]}")
+                elif role == "tool":
+                    lines.append(f"\n**Tool result** ({msg.get('name', 'unknown')}): {content[:300]}")
 
         return "\n".join(lines)

@@ -220,7 +220,7 @@ class WispAgentCore:
         self.agent_memory = AgentMemory()
         self._recent_summaries = self.agent_memory.load_recent(
             workspace=self.config.workspace or ".",
-            limit=3,
+            limit=7,
         )
         from wisp.file_lock import FileLock
         from wisp.change_tracker import ChangeTracker
@@ -575,7 +575,13 @@ class WispAgentCore:
 
         if hasattr(self, "_recent_summaries") and self._recent_summaries:
             from wisp.agent_memory import AgentMemory
-            summary_block = AgentMemory().format_for_prompt(self._recent_summaries)
+            last_msgs = []
+            if self.session and self.session.messages:
+                # Include up to 8 most recent messages from current session for continuity
+                last_msgs = self.session.messages[-8:]
+            summary_block = AgentMemory().format_for_prompt(
+                self._recent_summaries, last_messages=last_msgs
+            )
             if summary_block:
                 system += f"\n\n{summary_block}"
 
