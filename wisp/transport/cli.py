@@ -421,6 +421,100 @@ def _prompt_dangerous(func_name: str, reason: str) -> bool:
         return False
 
 
+def _prompt_edit_approval(func_name: str, reason: str) -> bool:
+    """Prompt user to approve a file edit. Diff already shown above."""
+    if not _is_interactive():
+        return True
+    try:
+        choice = input(f"     Apply this change? [Enter=yes / s=skip / n=reject]: ").strip().lower()
+        if choice == 'n':
+            return False
+        return choice != 's'  # Enter or 'y' = approve; 's' = skip
+    except KeyboardInterrupt:
+        print()
+        return False
+    except (EOFError, OSError):
+        return True
+
+
+# ── Preview diff computation ──────────────────────────────────────────
+
+def _compute_preview_diff(name: str, args: dict, workspace: str,
+                          box_mode: bool = True) -> Optional[str]:
+    """Compute a read-only preview diff before tool execution.
+
+    For edit_file/edit_file_multi: uses compute_edit_diff() — reads the
+    file, applies edits in memory, returns diff, never writes.
+    For write_file: reads current file (if exists), diffs against content.
+
+    Returns a colored diff inside a box panel, or None if diff can't be
+    computed.
+    """
+    try:
+        if name in ("edit_file", "edit_file_multi"):
+            from wisp.diff import EditOp, compute_edit_diff
+            if name == "edit_file":
+                edits = [EditOp(
+                    old_text=str(args.get("old_text", "")),
+                    new_text=str(args.get("new_text", "")),
+                )]
+            else:
+                raw_edits = args.get("edits", [])
+                edits = [
+                    EditOp(
+                        old_text=str(e.get("old_text", "")),
+                        new_text=str(e.get("new_text", "")),
+                    )
+                    for e in raw_edits
+                ]
+            result = compute_edit_diff(str(args.get("path", "")), edits, workspace)
+            if not result.success or not result.diff:
+                return None
+            diff_text = result.diff
+
+        elif name == "write_file":
+            path = str(args.get("path", ""))
+            content = str(args.get("content", ""))
+            from pathlib import Path as PathLib
+            ws_path = PathLib(workspace).resolve()
+            file_path = (ws_path / path).resolve() if not PathLib(path).is_absolute() else PathLib(path).resolve()
+
+            old_content = None
+            if file_path.exists():
+                try:
+                    raw = file_path.read_text(encoding="utf-8", errors="replace")
+                    from wisp.diff import strip_bom, normalize_to_lf
+                    _, old_content = strip_bom(raw)
+                    old_content = normalize_to_lf(old_content)
+                except Exception:
+                    pass
+
+            if old_content and old_content != content:
+                from wisp.diff import generate_diff_string
+                dr = generate_diff_string(old_content, content, context_lines=3)
+                diff_text = dr.diff
+            elif not old_content:
+                # New file — all lines are additions
+                lines = content.split("\n")
+                diff_text = "\n".join(
+                    f"+{i+1} {line}" for i, line in enumerate(lines)
+                )
+            else:
+                return None  # No changes
+        else:
+            return None
+
+        if not diff_text or not diff_text.strip():
+            return None
+
+        from wisp.diff_renderer import render_diff_box
+        title = f"Preview — {args.get('path', '')}"[:60]
+        return render_diff_box(diff_text, title=title, box_mode=box_mode)
+
+    except Exception:
+        return None
+
+
 # ── Event rendering ──────────────────────────────────────────────────
 
 def _render_event(event: AgentEvent, show_thinking: bool = False,
@@ -887,7 +981,10 @@ class CLITransport:
         box_mode = _use_box_mode(self.core.config)
 
         async def _cli_approval(name: str, args: dict, reason: str) -> tuple[bool, Optional[dict]]:
-            approved = _prompt_dangerous(name, reason)
+            if name in ("write_file", "edit_file", "edit_file_multi"):
+                approved = _prompt_edit_approval(name, reason)
+            else:
+                approved = _prompt_dangerous(name, reason)
             return (approved, None)
 
         thinking_buf: list[str] = []
@@ -962,12 +1059,17 @@ class CLITransport:
                     _flush_thinking()
                     _flush_content()
                     _stop_spinner()
-                    rendered = _render_tool_call(
-                        event.data.get("name", ""),
-                        event.data.get("arguments", {}),
-                        box_mode,
-                    )
+                    name = event.data.get("name", "")
+                    args = event.data.get("arguments", {})
+                    rendered = _render_tool_call(name, args, box_mode)
                     print(rendered)
+                    # Show preview diff for file-editing tools before they execute
+                    if name in ("write_file", "edit_file", "edit_file_multi"):
+                        diff = _compute_preview_diff(name, args, workspace, box_mode)
+                        if diff:
+                            print()
+                            print(diff)
+                            print()
 
                 elif event.type == TYPE_TOOL_RESULT:
                     _stop_spinner()
