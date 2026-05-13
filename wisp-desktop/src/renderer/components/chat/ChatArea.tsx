@@ -57,12 +57,17 @@ export const ChatArea: React.FC = () => {
     setIsAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < threshold);
   }, []);
 
+  // Reset scroll to bottom when session changes
+  useEffect(() => {
+    scrollToBottom();
+  }, [state.sessionId, scrollToBottom]);
+
   // Auto-scroll on new messages only if already at bottom
   useEffect(() => {
     if (isAtBottom) {
       scrollToBottom();
     }
-  }, [state.messages]);
+  }, [state.messages, isAtBottom, scrollToBottom]);
 
   // Scroll to highlighted message
   const handleHighlight = useCallback((msgId: string) => {
@@ -86,6 +91,19 @@ export const ChatArea: React.FC = () => {
       setTimeout(() => setCopyToast(false), 1200);
     }).catch(() => {});
   }, []);
+
+  if (state.isLoadingSession) {
+    return (
+      <div className="chat-area">
+        <div className="chat-area-center">
+          <div className="chat-loading">
+            <div className="chat-loading-spinner" />
+            <p>Loading session...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (hasMessages) {
     return (

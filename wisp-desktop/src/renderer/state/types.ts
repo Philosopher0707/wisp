@@ -62,6 +62,7 @@ export interface AppState {
   sessions: SessionSummary[];
   sessionsVersion: number;
   sessionId: string | null;
+  isLoadingSession: boolean;
   messages: Message[];
   isStreaming: boolean;
   agentPaused: boolean;
@@ -188,6 +189,7 @@ export type Action =
   | { type: 'CLOSE_OVERLAY' }
   | { type: 'TOGGLE_SIDEBAR' }
   | { type: 'TOGGLE_RIGHT_PANEL' }
+  | { type: 'SET_LOADING_SESSION'; loading: boolean }
   | { type: 'SET_WORKSPACE'; path: string }
   | { type: 'SET_MODELS'; models: string[] }
   | { type: 'TOGGLE_PIN_SESSION'; sessionId: string }
@@ -308,8 +310,11 @@ export function appReducer(state: AppState, action: Action): AppState {
     case 'SET_SESSIONS':
       return { ...state, sessions: action.sessions };
 
+    case 'SET_LOADING_SESSION':
+      return { ...state, isLoadingSession: action.loading };
+
     case 'SET_SESSION_ID':
-      return { ...state, sessionId: action.id, inputValue: '' };
+      return { ...state, sessionId: action.id, inputValue: '', isLoadingSession: false, isStreaming: false };
 
     case 'SET_MESSAGES':
       return { ...state, messages: action.messages };

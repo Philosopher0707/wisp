@@ -15,6 +15,8 @@ export const PinnedSection: React.FC = () => {
   const handleSelect = async (id: string) => {
     if (id === state.sessionId) return;
     setLoadingId(id);
+    dispatch({ type: 'SET_LOADING_SESSION', loading: true });
+    dispatch({ type: 'SET_MESSAGES', messages: [] });
     try {
       const messages = await api.fetchSession(id);
       dispatch({ type: 'SET_SESSION_ID', id });
@@ -23,6 +25,7 @@ export const PinnedSection: React.FC = () => {
       dispatch({ type: 'RECEIVE_ERROR', message: 'Failed to load session' });
     } finally {
       setLoadingId(null);
+      dispatch({ type: 'SET_LOADING_SESSION', loading: false });
     }
   };
 

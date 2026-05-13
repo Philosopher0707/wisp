@@ -29,6 +29,9 @@ export const Sidebar: React.FC = () => {
   const handleSelectSession = async (id: string) => {
     if (id === state.sessionId) return;
     setLoadingId(id);
+    // Clear stale messages immediately so old chat doesn't flash
+    dispatch({ type: 'SET_LOADING_SESSION', loading: true });
+    dispatch({ type: 'SET_MESSAGES', messages: [] });
 
     try {
       const messages = await api.fetchSession(id);
@@ -38,6 +41,7 @@ export const Sidebar: React.FC = () => {
       dispatch({ type: 'RECEIVE_ERROR', message: 'Failed to load session' });
     } finally {
       setLoadingId(null);
+      dispatch({ type: 'SET_LOADING_SESSION', loading: false });
     }
   };
 
@@ -106,11 +110,11 @@ export const Sidebar: React.FC = () => {
   const collapsed = state.sidebarCollapsed;
 
   const filteredSessions = useMemo(() => {
-    if (!filterText) return state.sessions.slice(0, 15);
+    if (!filterText) return state.sessions;
     const q = filterText.toLowerCase();
     return state.sessions.filter(
       (s) => (s.title || s.id).toLowerCase().includes(q),
-    ).slice(0, 15);
+    );
   }, [state.sessions, filterText]);
 
   return (
