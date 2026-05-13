@@ -472,8 +472,11 @@ def _render_event(event: AgentEvent, show_thinking: bool = False,
         if isinstance(result, str) and result.startswith("{"):
             try:
                 parsed = json.loads(result)
-                data = _coerce_tool_data(parsed.get("data", result))
-                result = data
+                # Pass the full parsed dict so downstream renderers
+                # can access metadata (e.g. diffs for write/edit tools),
+                # but provide a cleaned 'data' field for text display.
+                parsed["data"] = _coerce_tool_data(parsed.get("data", result))
+                result = parsed
             except (json.JSONDecodeError, KeyError):
                 pass
         return _render_tool_result(name, result, duration_ms, show_tool_output, box_mode, w)
