@@ -131,7 +131,7 @@ def _term_width() -> int:
         w = shutil.get_terminal_size().columns
     except OSError:
         w = 80
-    return max(40, min(w, 200))
+    return max(40, w)
 
 
 def _use_box_mode(config: object) -> bool:
