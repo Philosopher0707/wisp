@@ -304,13 +304,24 @@ def tool_write_file(path: str, workspace: str, content: str, file_lock=None) -> 
     if lock:
         lock.release(path)
 
-    # Generate diff if overwriting an existing file
+    # Generate diff: for new files, all lines are additions;
+    # for overwrites, show the actual LCS diff.
     diff = ""
-    if old_content is not None and old_content != content:
+    if old_content is not None and old_content == content:
+        pass  # No changes
+    else:
         try:
             from wisp.diff import generate_diff_string
-            result = generate_diff_string(old_content, content, context_lines=3)
-            diff = result.diff
+            if old_content is not None:
+                # Overwrite — show actual diff
+                result = generate_diff_string(old_content, content, context_lines=3)
+                diff = result.diff
+            else:
+                # New file — all lines are additions
+                lines = content.split("\n")
+                diff = "\n".join(
+                    f"+{i+1} {line}" for i, line in enumerate(lines)
+                )
         except Exception:
             pass  # Diff generation failure is non-critical
 
