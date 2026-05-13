@@ -144,9 +144,6 @@ export class WispClient extends EventEmitter {
       case 'plan_ready':
         this.emit('plan_ready', msg.session_id as string, msg.content as string);
         break;
-      case 'checkpoint_created':
-        this.emit('checkpoint_created', msg.checkpoint_id as string, msg.description as string);
-        break;
       case 'steering_paused':
         this.emit('steering_paused', msg.reason as string || '');
         break;

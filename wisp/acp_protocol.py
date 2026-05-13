@@ -57,7 +57,6 @@ class AgentCapabilities:
     mcp: bool = True
     plans: bool = True
     permissions: bool = True
-    checkpoints: bool = False  # Phase 2
     modes: list[str] = field(default_factory=lambda: ["default", "diagnose", "plan"])
 
     def to_dict(self) -> dict:
@@ -68,7 +67,6 @@ class AgentCapabilities:
             "mcp": self.mcp,
             "plans": self.plans,
             "permissions": self.permissions,
-            "checkpoints": self.checkpoints,
             "modes": self.modes,
         }
 
@@ -81,7 +79,6 @@ class ClientCapabilities:
     terminals: bool = True
     mcp: bool = True
     permissions: bool = True
-    checkpoints: bool = True
 
     def to_dict(self) -> dict:
         return {
@@ -89,7 +86,6 @@ class ClientCapabilities:
             "terminals": self.terminals,
             "mcp": self.mcp,
             "permissions": self.permissions,
-            "checkpoints": self.checkpoints,
         }
 
     @classmethod
@@ -99,7 +95,6 @@ class ClientCapabilities:
             terminals=d.get("terminals", True),
             mcp=d.get("mcp", True),
             permissions=d.get("permissions", True),
-            checkpoints=d.get("checkpoints", True),
         )
 
 

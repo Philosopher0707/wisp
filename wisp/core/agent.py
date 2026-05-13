@@ -50,7 +50,6 @@ from wisp.core.events import (
     done as done_event,
     system as system_event,
     approval_request,
-    checkpoint_created,
     steering_feedback,
 )
 
@@ -298,7 +297,7 @@ class WispAgentCore:
     # ── Steering (pause / resume) ────────────────────────────────────
 
     def pause(self) -> None:
-        """Pause agent execution at next checkpoint."""
+        """Pause agent execution at next steering point."""
         self._paused.clear()
 
     def resume(self, injected_text: Optional[str] = None) -> None:
@@ -822,9 +821,18 @@ class WispAgentCore:
                 error_type = response.get("_error_type", "Unknown")
                 error_msg = response.get("_error_message", "Stream error")
                 partial = response.get("_partial_content", "") or ""
+                # Add the assistant's partial content to the conversation so
+                # it remains valid (user message must be followed by assistant).
+                msg = response.get("message", {})
+                thinking = (msg.get("thinking", "")) if isinstance(msg, dict) else ""
+                self._add_message("assistant", partial or "", thinking)
+                self._save_session()
                 if partial:
                     error_msg = f"{error_msg}\n\nPartial output:\n{partial[:500]}"
-                yield error_event(f"Stream error ({error_type}): {error_msg}", recoverable=False)
+                yield error_event(
+                    f"⏸  Stream error ({error_type}): {error_msg}",
+                    recoverable=False
+                )
                 completion_reason = "error"
                 break
 
@@ -985,16 +993,21 @@ class WispAgentCore:
                 elif isinstance(event, StreamError):
                     if _in_thinking:
                         _in_thinking = False
+                    # Don't throw away accumulated content — record it so
+                    # the conversation state stays valid and the user can
+                    # see what the model produced before the stream failed.
+                    partial = event.partial_content or ""
+                    partial_thinking = event.partial_thinking or ""
                     self.client.stream_response = {
                         "message": {
                             "role": "assistant",
-                            "content": "",
-                            "thinking": "",
+                            "content": partial,
+                            "thinking": partial_thinking,
                         },
                         "_stream_error": True,
                         "_error_type": event.error_type,
                         "_error_message": event.message,
-                        "_partial_content": event.partial_content,
+                        "_partial_content": partial,
                     }
                     return
 
@@ -1209,18 +1222,6 @@ class WispAgentCore:
                     yield tool_result_event(func_name, blocked_msg)
                     continue
 
-            # ── Checkpoint before write operations ──
-            if func_name in ("write_file", "edit_file", "edit_file_multi"):
-                try:
-                    from wisp.checkpoints import CheckpointManager
-                    cpm = CheckpointManager(Path(self.config.workspace))
-                    cp = await cpm.auto_checkpoint(func_name)
-                    yield checkpoint_created(cp.id, cp.description, func_name, cp.file_count)
-                except ImportError:
-                    pass
-                except Exception as e:
-                    logger.warning("Checkpoint creation failed for %s: %s", func_name, e, exc_info=True)
-
             # Execute tool
             start = time.monotonic()
             if func_name == "spawn_subagent":
@@ -1298,33 +1299,6 @@ class WispAgentCore:
         runner = SubagentRunner(self)
         result = runner.spawn(contract)
         return result.output
-
-    # ── Checkpoint rollback ──────────────────────────────────────────
-
-    async def rollback(self, checkpoint_id: Optional[str] = None) -> bool:
-        """Rollback to the most recent checkpoint or a specific one.
-
-        Args:
-            checkpoint_id: Optional specific checkpoint ID to restore.
-                           If None, restores the most recent checkpoint.
-
-        Returns:
-            True if rollback succeeded, False otherwise.
-        """
-        try:
-            from wisp.checkpoints import CheckpointManager
-            cpm = CheckpointManager(Path(self.config.workspace))
-            if checkpoint_id:
-                return await cpm.restore(checkpoint_id)
-            else:
-                checkpoints = await cpm.list_checkpoints()
-                if checkpoints:
-                    return await cpm.restore(checkpoints[0].id)
-        except ImportError:
-            logger.warning("checkpoints module not available for rollback")
-        except Exception as e:
-            logger.error("Rollback failed: %s", e)
-        return False
 
     # ── Parallel subagents ───────────────────────────────────────────
 

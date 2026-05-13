@@ -79,7 +79,6 @@ class TestAgentMetrics:
         m = AgentMetrics()
         m.record_turn(1.0, 100, 100)
         m.record_tool("x", 10.0, True)
-        m.record_checkpoints(5)
         m.record_compaction()
         m.record_interruption()
         m.record_tool_block()
@@ -93,7 +92,6 @@ class TestAgentMetrics:
         assert m.tool_durations_ms == {}
         assert m.interruptions == 0
         assert m.compactions == 0
-        assert m.checkpoints_created == 0
         assert m.tool_blocks == 0
         assert m.tool_approvals == 0
 

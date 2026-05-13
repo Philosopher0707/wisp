@@ -210,6 +210,14 @@ def match_skill_via_ontology(query: str) -> Optional[dict]:
 
     import asyncio
 
+    try:
+        asyncio.get_running_loop()
+        # Already inside an event loop — asyncio.run() would fail.
+        # Skip ontology query in this context.
+        return None
+    except RuntimeError:
+        pass  # Safe to use asyncio.run()
+
     async def _query():
         client = _get_ontology_client()
         if not _ontology_cache["started"]:
@@ -234,8 +242,6 @@ def match_skill_via_ontology(query: str) -> Optional[dict]:
     try:
         result = asyncio.run(_query())
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).warning("Ontology query failed: %s", e)
         result = None
 
     if result:

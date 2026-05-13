@@ -1,7 +1,7 @@
 """Lightweight in-agent metrics for observability.
 
-Tracks token estimates, latency, tool success/failure, compaction,
-and checkpoint counts.  No external dependency — pure in-memory counters
+Tracks token estimates, latency, tool success/failure, and compaction
+counts.  No external dependency — pure in-memory counters
 that survive across turns within a single session.
 
 Usage::
@@ -40,7 +40,6 @@ class AgentMetrics:
     # ── Lifecycle ──
     interruptions: int = 0         # SIGINT / Ctrl+C
     compactions: int = 0           # session.compact() calls
-    checkpoints_created: int = 0   # git checkpoints
     tool_blocks: int = 0           # dangerous-command blocks
     tool_approvals: int = 0        # approval prompts answered "yes"
 
@@ -65,9 +64,6 @@ class AgentMetrics:
     def record_tool_approval(self, approved: bool) -> None:
         if approved:
             self.tool_approvals += 1
-
-    def record_checkpoints(self, count: int = 1) -> None:
-        self.checkpoints_created += count
 
     def record_compaction(self) -> None:
         self.compactions += 1
@@ -99,7 +95,6 @@ class AgentMetrics:
             "avg_tool_duration_ms": avg_tool_dur,
             "interruptions": self.interruptions,
             "compactions": self.compactions,
-            "checkpoints": self.checkpoints_created,
             "tool_blocks": self.tool_blocks,
             "tool_approvals": self.tool_approvals,
         }
@@ -116,7 +111,6 @@ class AgentMetrics:
         self.tool_durations_ms.clear()
         self.interruptions = 0
         self.compactions = 0
-        self.checkpoints_created = 0
         self.tool_blocks = 0
         self.tool_approvals = 0
 

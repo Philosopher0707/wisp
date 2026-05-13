@@ -74,7 +74,6 @@ TYPE_ERROR = "error"
 TYPE_DONE = "done"
 TYPE_SYSTEM = "system"          # meta: model changed, session compacted, etc.
 TYPE_APPROVAL_REQUEST = "approval_request"  # transport should prompt user
-TYPE_CHECKPOINT_CREATED = "checkpoint_created"
 TYPE_STEERING_PAUSED = "steering_paused"
 TYPE_STEERING_INJECT = "steering_inject"
 TYPE_STEERING_RESUMED = "steering_resumed"
@@ -128,16 +127,6 @@ def done(session_id: str, turns: int = 0, summary: str = "", reason: str = "natu
 
 def system(message: str, level: str = "info") -> AgentEvent:
     return AgentEvent(TYPE_SYSTEM, {"message": message, "level": level})
-
-
-def checkpoint_created(checkpoint_id: str, description: str,
-                       tool_name: str = "", file_count: int = 0) -> AgentEvent:
-    return AgentEvent(TYPE_CHECKPOINT_CREATED, {
-        "checkpoint_id": checkpoint_id,
-        "description": description,
-        "tool_name": tool_name,
-        "file_count": file_count,
-    })
 
 
 def steering_paused(reason: str = "User paused") -> AgentEvent:

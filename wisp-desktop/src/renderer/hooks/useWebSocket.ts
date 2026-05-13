@@ -144,18 +144,6 @@ export function useWebSocket(
           case 'hook_executed':
             // Hook execution log — store locally when hook log panel needs it
             break;
-          case 'checkpoint_created':
-            dispatch({
-              type: 'ADD_CHECKPOINT',
-              checkpoint: {
-                id: (msg as any).checkpoint_id || '',
-                timestamp: new Date().toISOString(),
-                description: (msg as any).description || '',
-                toolName: (msg as any).tool_name || '',
-                fileCount: (msg as any).file_count || 0,
-              },
-            });
-            break;
           case 'subagent_start':
             dispatch({
               type: 'SUBAGENT_START',

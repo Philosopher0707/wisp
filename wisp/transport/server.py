@@ -23,7 +23,6 @@ from wisp.core.events import (
     TYPE_DONE,
     TYPE_SYSTEM,
     TYPE_APPROVAL_REQUEST,
-    TYPE_CHECKPOINT_CREATED,
     TYPE_STEERING_PAUSED,
     TYPE_STEERING_INJECT,
     TYPE_STEERING_RESUMED,
@@ -138,15 +137,6 @@ class ServerTransport:
 
         if etype == TYPE_DONE:
             return {"type": "done", "session_id": event.data.get("session_id", ""), "turns": event.data.get("turns", 0), "reason": event.data.get("reason", "natural")}
-
-        if etype == TYPE_CHECKPOINT_CREATED:
-            return {
-                "type": "checkpoint_created",
-                "checkpoint_id": event.data.get("checkpoint_id", ""),
-                "description": event.data.get("description", ""),
-                "tool_name": event.data.get("tool_name", ""),
-                "file_count": event.data.get("file_count", 0),
-            }
 
         if etype == TYPE_STEERING_PAUSED:
             return {"type": "steering_paused", "reason": event.data.get("reason", "")}

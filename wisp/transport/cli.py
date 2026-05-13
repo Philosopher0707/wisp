@@ -36,7 +36,6 @@ from wisp.core.events import (
     TYPE_DONE,
     TYPE_SYSTEM,
     TYPE_APPROVAL_REQUEST,
-    TYPE_CHECKPOINT_CREATED,
     TYPE_STEERING_PAUSED,
     TYPE_STEERING_RESUMED,
     TYPE_STEERING_INJECT,
@@ -335,11 +334,6 @@ def _render_event(event: AgentEvent, show_thinking: bool = False) -> Optional[st
 
     if etype == TYPE_APPROVAL_REQUEST:
         return warning(f"  ⚠️  Approval required: {event.data.get('reason', '')}")
-
-    if etype == TYPE_CHECKPOINT_CREATED:
-        cid = event.data.get("checkpoint_id", "")[:12]
-        desc = event.data.get("description", "")
-        return dim(f"  📸 checkpoint {cid}: {desc}")
 
     if etype == TYPE_STEERING_PAUSED:
         return warning(f"  ⏸  Steering paused: {event.data.get('reason', '')}")

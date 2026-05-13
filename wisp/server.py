@@ -1235,57 +1235,6 @@ async def git_commit(req: GitCommitRequest):
     return {"ok": True, "message": msg, "output": commit.stdout.strip()}
 
 
-# ── Checkpoint Routes ───────────────────────────────────────────────────
-
-class CheckpointCreateRequest(BaseModel):
-    description: str = ""
-    tag: str = ""
-
-
-def _get_cpm():
-    from wisp.checkpoints import CheckpointManager
-    return CheckpointManager(WORKSPACE_ROOT)
-
-
-@app.get("/api/checkpoints", dependencies=[Depends(verify_api_key)])
-async def list_checkpoints():
-    cpm = _get_cpm()
-    cps = await cpm.list_checkpoints()
-    return {"checkpoints": [cp.to_dict() for cp in cps]}
-
-
-@app.post("/api/checkpoints", dependencies=[Depends(verify_api_key)])
-async def create_checkpoint(req: CheckpointCreateRequest):
-    cpm = _get_cpm()
-    cp = await cpm.create(description=req.description or "manual", tag=req.tag)
-    return cp.to_dict()
-
-
-@app.get("/api/checkpoints/{checkpoint_id}/diff", dependencies=[Depends(verify_api_key)])
-async def get_checkpoint_diff(checkpoint_id: str):
-    cpm = _get_cpm()
-    diff_text = await cpm.get_diff(checkpoint_id)
-    from fastapi.responses import PlainTextResponse
-    return PlainTextResponse(content=diff_text)
-
-
-@app.post("/api/checkpoints/{checkpoint_id}/restore", dependencies=[Depends(verify_api_key)])
-async def restore_checkpoint(checkpoint_id: str):
-    cpm = _get_cpm()
-    ok = await cpm.restore(checkpoint_id)
-    if not ok:
-        raise HTTPException(status_code=500, detail="Restore failed")
-    return {"ok": True}
-
-
-@app.delete("/api/checkpoints/{checkpoint_id}", dependencies=[Depends(verify_api_key)])
-async def delete_checkpoint(checkpoint_id: str):
-    cpm = _get_cpm()
-    ok = await cpm.drop(checkpoint_id)
-    if not ok:
-        raise HTTPException(status_code=404, detail="Checkpoint not found")
-    return {"ok": True}
-
 
 # ── Suggestion Routes ────────────────────────────────────────────────────
 

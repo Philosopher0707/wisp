@@ -299,8 +299,6 @@ def cmd_metrics(agent, args: str):
         print(f"  {dim('Tool latencies:')}")
         for name, dur in sorted(snap['avg_tool_duration_ms'].items()):
             print(f"    {dim(name + ':')} {dur:.0f} ms")
-    if snap['checkpoints']:
-        print(f"  {dim('Checkpoints:')}     {snap['checkpoints']}")
     if snap['compactions']:
         print(f"  {dim('Compactions:')}     {snap['compactions']}")
     if snap['interruptions']:
