@@ -903,6 +903,7 @@ class CLITransport:
             self.core.messages.pop()
 
         box_mode = _use_box_mode(self.core.config)
+        width = _term_width()  # snapshot once per turn — prevents jagged boxes on resize
 
         async def _cli_approval(name: str, args: dict, reason: str) -> tuple[bool, Optional[dict]]:
             if name in ("write_file", "edit_file", "edit_file_multi"):
@@ -932,7 +933,7 @@ class CLITransport:
             if thinking_buf:
                 _stop_spinner()
                 text = "".join(thinking_buf)
-                rendered = _render_thinking_block(text, box_mode)
+                rendered = _render_thinking_block(text, box_mode, width)
                 if rendered:
                     print(rendered)
                 thinking_buf.clear()
@@ -943,7 +944,7 @@ class CLITransport:
             if content_buf:
                 _stop_spinner()
                 text = "".join(content_buf)
-                rendered = _render_content_block(text, box_mode)
+                rendered = _render_content_block(text, box_mode, width)
                 if rendered:
                     print(rendered)
                 content_buf.clear()
@@ -996,7 +997,7 @@ class CLITransport:
                         event.data.get("duration_ms"),
                         self.show_tool_output,
                         box_mode,
-                        _term_width(),
+                        width,
                     )
                     print(rendered)
 
@@ -1046,32 +1047,30 @@ class CLITransport:
 
 # ── Block renderers (used by _execute_turn for buffered output) ──────
 
-def _render_thinking_block(text: str, box_mode: bool) -> Optional[str]:
+def _render_thinking_block(text: str, box_mode: bool, width: int) -> Optional[str]:
     """Render buffered thinking text as a block."""
     if not text.strip():
         return None
-    w = _term_width()
-    inner_w = w - 4
+    inner_w = width - 4
     wrapped = _wrap_text(text.strip(), inner_w)
     if box_mode:
-        header = _rule("·", "🧠 Reasoning", style_fn=dim, width=w)
+        header = _rule("·", "🧠 Reasoning", style_fn=dim, width=width)
         body = "\n".join(dim(f"  {line}") for line in wrapped)
         return f"{header}\n{body}"
     else:
-        header = _rule("─", "🧠 Reasoning", style_fn=dim, width=w)
+        header = _rule("─", "🧠 Reasoning", style_fn=dim, width=width)
         body = "\n".join(dim(f"  {line}") for line in wrapped)
         return f"{header}\n{body}"
 
 
-def _render_content_block(text: str, box_mode: bool) -> Optional[str]:
+def _render_content_block(text: str, box_mode: bool, width: int) -> Optional[str]:
     """Render buffered content text as a block."""
     if not text.strip():
         return None
-    w = _term_width()
-    inner_w = w - 4
+    inner_w = width - 4
     wrapped = _wrap_text(text.strip(), inner_w)
     if box_mode:
-        return _box("\n".join(wrapped), title="Response", style="muted", width=w)
+        return _box("\n".join(wrapped), title="Response", style="muted", width=width)
     else:
         return "\n".join(wrapped)
 
