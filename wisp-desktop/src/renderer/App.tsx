@@ -49,18 +49,32 @@ export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
 
   // Auto-resume last session on startup: load messages AND set sessionId
   React.useEffect(() => {
-    if (state.sessionId || !persisted.lastSessionId || !state.workspacePath) return;
+    console.log('[App] Auto-resume effect running:', {
+      sessionId: state.sessionId,
+      lastSessionId: persisted.lastSessionId,
+      workspacePath: state.workspacePath,
+    });
+    if (state.sessionId || !persisted.lastSessionId || !state.workspacePath) {
+      console.log('[App] Skipping auto-resume:', {
+        reason: state.sessionId ? 'already has sessionId' : !persisted.lastSessionId ? 'no lastSessionId' : 'no workspacePath',
+      });
+      return;
+    }
     const baseUrl = serverUrl.replace(/\/$/, '');
     const params = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
-    fetch(`${baseUrl}/api/sessions/${encodeURIComponent(persisted.lastSessionId)}${params}`, {
+    const url = `${baseUrl}/api/sessions/${encodeURIComponent(persisted.lastSessionId)}${params}`;
+    console.log('[App] Fetching session:', url);
+    fetch(url, {
       headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
     })
       .then((r) => {
+        console.log('[App] Fetch response:', r.status);
         if (!r.ok) throw new Error('Session not found');
         return r.json();
       })
       .then((data: any) => {
         const msgs = data?.session?.messages || [];
+        console.log('[App] Session data:', { messagesCount: msgs.length });
         if (msgs.length > 0) {
           // Convert backend messages to frontend format
           const frontendMsgs: Array<{
@@ -103,6 +117,7 @@ export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
               }
             }
           }
+          console.log('[App] Loaded messages:', frontendMsgs.length);
           dispatch({ type: 'SET_MESSAGES', messages: frontendMsgs });
           dispatch({ type: 'SET_SESSION_ID', id: persisted.lastSessionId });
           dispatch({
@@ -110,9 +125,13 @@ export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
             message: `Resumed previous session (${frontendMsgs.length} messages).`,
             level: 'info',
           });
+          console.log('[App] Session resumed successfully');
+        } else {
+          console.log('[App] Session has no messages, not restoring');
         }
       })
-      .catch(() => {
+      .catch((err) => {
+        console.error('[App] Failed to resume session:', err);
         localStorage.removeItem('wisp_last_session_id');
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps

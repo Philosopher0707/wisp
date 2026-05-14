@@ -1966,8 +1966,8 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(default="")
                             # Save session state and summary for cross-session memory
                             try:
                                 core.close()
-                            except Exception:
-                                pass
+                            except Exception as save_err:
+                                logger.error("Session save failed: %s", save_err)
 
                     conn.agent_task = asyncio.create_task(_run())
 
