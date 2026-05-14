@@ -14,9 +14,14 @@ interface Props {
   apiKey: string;
 }
 
-function getPersistedConfig(defaults: { serverUrl: string; apiKey: string }) {
-  const url = localStorage.getItem('wisp_server_url') || defaults.serverUrl;
-  const key = localStorage.getItem('wisp_api_key') || defaults.apiKey;
+function getPersistedConfig(serverDefaults: { serverUrl: string; apiKey: string }) {
+  // CRITICAL: Always trust the server-provided URL and API key.
+  // The Electron main process spawns a fresh backend with a new random
+  // API key on every launch. localStorage may contain stale credentials
+  // from a previous session, which would cause 401 auth failures.
+  const serverUrl = serverDefaults.serverUrl;
+  const apiKey = serverDefaults.apiKey;
+
   const model = localStorage.getItem('wisp_selected_model') || '';
   const systemPrompt = localStorage.getItem('wisp_system_prompt') || '';
   const permissionMode = (localStorage.getItem('wisp_permission_mode') || 'full') as 'full' | 'ask_all' | 'auto_edit' | 'read_only';
@@ -27,10 +32,17 @@ function getPersistedConfig(defaults: { serverUrl: string; apiKey: string }) {
   } catch { /* ignore corrupt data */ }
   // Restore last active session ID for cross-session persistence
   const lastSessionId = localStorage.getItem('wisp_last_session_id') || null;
-  return { serverUrl: url, apiKey: key, selectedModel: model, pinnedSessionIds, systemPrompt, permissionMode, lastSessionId };
+  return { serverUrl, apiKey, selectedModel: model, pinnedSessionIds, systemPrompt, permissionMode, lastSessionId };
 }
 
 export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
+  // Clear stale auth keys from localStorage on every launch.
+  // The backend generates a fresh random API key each time it spawns.
+  React.useEffect(() => {
+    localStorage.removeItem('wisp_server_url');
+    localStorage.removeItem('wisp_api_key');
+  }, []);
+
   const persisted = getPersistedConfig({ serverUrl, apiKey });
   const [state, dispatch] = React.useReducer(
     appReducer,
