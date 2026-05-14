@@ -1463,7 +1463,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "remember",
-            "description": "Store a fact in cross-session memory so you remember it across conversations. Use for user preferences, project conventions, decisions made, or anything worth remembering long-term.",
+            "description": "Store a fact in cross-session memory so you remember it across conversations. Use for user preferences, project conventions, decisions made, or anything worth remembering long-term. IMPORTANT: DO NOT use this for information that is already in the current conversation context — the full conversation history is always available to you. Only use this for facts that should persist across multiple separate chat sessions.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1477,7 +1477,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "recall",
-            "description": "Search cross-session memory and past session summaries for relevant facts. Use when you need to actively recall something learned in previous conversations — user preferences, past decisions, files touched, open tasks, etc. Returns ranked results with relevance scores.",
+            "description": "Search cross-session memory and past session summaries for relevant facts. Use when you need to actively recall something learned in PREVIOUS conversations — user preferences, past decisions, files touched, open tasks, etc. IMPORTANT: DO NOT use this to recall something the user just said in the current conversation — the full current conversation history is always available in context. Only use this for information from earlier sessions that may have been forgotten due to context window limits.",
             "parameters": {
                 "type": "object",
                 "properties": {

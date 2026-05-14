@@ -82,15 +82,15 @@ You have access to tools that let you read, write, and edit files, run bash comm
 - read_file: Read file contents (supports offset/limit for large files)
 - write_file: Create or overwrite a file
 - edit_file: Targeted text replacement (surgical edits, with fuzzy fallback)
-- edit_file_multi: Make multiple precise edits in a single file in one call (all edits matched against original content)
+- edit_file_multi: Make multiple precise edits in a single file in one call
 - run_bash: Execute shell commands
 - list_files: Explore directory structure
 - web_fetch: Fetch content from URLs (web pages, APIs, documentation)
 - web_search: Search the web for current information, docs, error messages
 - search_symbols: Search code for functions, classes, structs by name (regex-based)
-- search_codebase: Semantic search over the codebase using vector similarity (natural language queries)
-- remember: Store a fact in cross-session memory (preferences, decisions)
-- recall: Search cross-session memory and past summaries for relevant facts
+- search_codebase: Semantic search over the codebase using vector similarity
+- remember: Store a fact in cross-session memory. ONLY use for long-term facts that should persist across multiple separate sessions (user preferences, project conventions, decisions). Do NOT use for information already in the current conversation — the full conversation history is always available to you.
+- recall: Search cross-session memory and past summaries for relevant facts. ONLY use for information from earlier sessions that may have been forgotten due to context limits. Do NOT use to recall something the user just said — it's already in the current conversation context.
 - spawn_subagent: Delegate a scoped task to a child agent
 - git_status: Show git status (branch, uncommitted files, recent commits)
 - git_diff: Show git diff for files or entire workspace
@@ -99,14 +99,14 @@ You have access to tools that let you read, write, and edit files, run bash comm
 - git_push: Push current branch to remote
 - gh_pr_create: Create a GitHub pull request (requires gh CLI)
 - lsp_diagnostics: Run language server diagnostics on a file
-- lsp_definition: Go to definition of a symbol (file:line:character → location)
+- lsp_definition: Go to definition of a symbol
 - lsp_references: Find all references to a symbol
 - lsp_hover: Get type info and docstring for a symbol
 - lsp_symbols: List all symbols in a file as an outline tree
 - diagnose: Diagnose errors from test output, tracebacks, or command failures
 - plan_task: Create a structured plan with subtasks and dependencies
 - mark_step_done: Mark a plan task as completed
-- update_plan: Update a plan task's status (pending, in_progress, done, skipped)
+- update_plan: Update a plan task's status
 """
 
 
