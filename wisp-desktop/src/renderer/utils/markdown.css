@@ -359,3 +359,22 @@
   background: rgba(255, 255, 255, 0.1);
   border-radius: 3px;
 }
+
+/* Render error fallback */
+.md-render-error {
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  background: rgba(239, 68, 68, 0.05);
+  margin: var(--space-2) 0;
+}
+
+.md-render-error-text {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}

@@ -11,8 +11,15 @@ export function highlightCode(code: string, lang?: string): string {
     }
     return hljs.highlightAuto(code).value;
   } catch {
-    return code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return escapeHtml(code);
   }
+}
+
+export function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 function guessFilePath(lang: string, workspacePath: string): string {
@@ -287,11 +294,63 @@ const CodeBlock: React.FC<{ code: string; lang: string }> = ({ code, lang }) => 
   );
 };
 
-function applyInlineFormatting(text: string): string {
-  return text
-    .replace(/`([^`]+)`/g, '<code class="md-inline-code">$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*([^*]+)\*/g, '<em>$1</em>');
+/**
+ * Apply inline markdown formatting (code, bold, italic) to text.
+ * Returns HTML string. Escapes HTML entities first to prevent XSS.
+ */
+export function applyInlineFormatting(text: string): string {
+  if (!text) return '';
+  let processed = escapeHtml(text);
+  processed = processed.replace(/`([^`]+)`/g, '<code class="md-inline-code">$1</code>');
+  processed = processed.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  processed = processed.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  return processed;
+}
+
+/**
+ * Parse markdown table rows from lines starting with '|'.
+ * Returns null if not a valid table (no separator row or empty header).
+ */
+export function parseTableRows(lines: string[]): { headers: string[]; bodyRows: string[][] } | null {
+  if (lines.length < 2) return null;
+
+  const allRows = lines.map(l => {
+    const trimmed = l.trim();
+    const content = trimmed.startsWith('|') ? trimmed.slice(1) : trimmed;
+    const parts = content.split('|').map(c => c.trim());
+    if (parts[parts.length - 1] === '') parts.pop();
+    return parts;
+  });
+
+  const isSeparator = allRows[1].length > 0 && allRows[1].every(
+    c => /^[-\s:]+$/.test(c) && c.replace(/[^-]/g, '').length >= 1
+  );
+
+  if (!isSeparator || allRows[0].length === 0) return null;
+
+  // Reject all-empty headers
+  const hasRealHeader = allRows[0].some(h => h.trim().length > 0);
+  if (!hasRealHeader) return null;
+
+  const headers = allRows[0];
+  const bodyRows = allRows.slice(2).filter(row => row.some(c => c.trim().length > 0));
+  return { headers, bodyRows };
+}
+
+/**
+ * Safe wrapper around renderMarkdown that catches errors and renders fallback.
+ */
+export function safeRenderMarkdown(text: string): React.ReactNode {
+  try {
+    return renderMarkdown(text);
+  } catch (err) {
+    console.error('Markdown rendering error:', err);
+    return (
+      <div className="md-render-error">
+        <p className="md-render-error-text">{text}</p>
+      </div>
+    );
+  }
 }
 
 export function renderMarkdown(text: string): React.ReactNode {
@@ -337,46 +396,31 @@ export function renderMarkdown(text: string): React.ReactNode {
         j++;
       }
 
-      if (tableLines.length >= 2) {
-        const allRows = tableLines.map(l => {
-          const trimmed = l.trim();
-          const content = trimmed.startsWith('|') ? trimmed.slice(1) : trimmed;
-          const parts = content.split('|').map(c => c.trim());
-          if (parts[parts.length - 1] === '') parts.pop();
-          return parts;
-        });
-
-        const isSeparator = allRows[1].length > 0 && allRows[1].every(
-          c => /^[-\s:]+$/.test(c) && c.replace(/[^-]/g, '').length >= 1
-        );
-
-        if (isSeparator && allRows[0].length > 0) {
-          const headers = allRows[0];
-          const bodyRows = allRows.slice(2);
-
-          result.push(
-            <table key={`table-${i}`} className="md-table">
-              <thead>
-                <tr>
-                  {headers.map((h, idx) => (
-                    <th key={idx} dangerouslySetInnerHTML={{ __html: applyInlineFormatting(h) }} />
+      const parsed = parseTableRows(tableLines);
+      if (parsed) {
+        const { headers, bodyRows } = parsed;
+        result.push(
+          <table key={`table-${i}`} className="md-table">
+            <thead>
+              <tr>
+                {headers.map((h, idx) => (
+                  <th key={idx} dangerouslySetInnerHTML={{ __html: applyInlineFormatting(h) }} />
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {bodyRows.map((row, ridx) => (
+                <tr key={ridx}>
+                  {row.map((cell, cidx) => (
+                    <td key={cidx} dangerouslySetInnerHTML={{ __html: applyInlineFormatting(cell) }} />
                   ))}
                 </tr>
-              </thead>
-              <tbody>
-                {bodyRows.map((row, ridx) => (
-                  <tr key={ridx}>
-                    {row.map((cell, cidx) => (
-                      <td key={cidx} dangerouslySetInnerHTML={{ __html: applyInlineFormatting(cell) }} />
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          );
-          i = j - 1;
-          continue;
-        }
+              ))}
+            </tbody>
+          </table>
+        );
+        i = j - 1;
+        continue;
       }
 
       // Not a valid table — fall through to normal processing
