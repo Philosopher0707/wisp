@@ -47,7 +47,7 @@ export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
     }
   }, [state.sessionId]);
 
-  // Auto-resume last session on startup if no active session and backend has it
+  // Auto-resume last session on startup: load messages AND set sessionId
   React.useEffect(() => {
     if (state.sessionId || !persisted.lastSessionId || !state.workspacePath) return;
     const baseUrl = serverUrl.replace(/\/$/, '');
@@ -59,13 +59,55 @@ export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
         if (!r.ok) throw new Error('Session not found');
         return r.json();
       })
-      .then((data: { session?: { messages?: unknown[] } }) => {
-        if (data.session?.messages && data.session.messages.length > 0) {
-          // Pre-set the session ID so the next message continues the conversation
+      .then((data: any) => {
+        const msgs = data?.session?.messages || [];
+        if (msgs.length > 0) {
+          // Convert backend messages to frontend format
+          const frontendMsgs: Array<{
+            id: string;
+            role: 'user' | 'assistant' | 'system';
+            content: string;
+            thinking?: string;
+            toolCalls?: Array<{ name: string; args: Record<string, unknown>; result?: string }>;
+          }> = [];
+          for (let i = 0; i < msgs.length; i++) {
+            const m = msgs[i];
+            if (m.role === 'user') {
+              frontendMsgs.push({
+                id: `hist-${i}`,
+                role: 'user',
+                content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+              });
+            } else if (m.role === 'assistant') {
+              const toolCalls = (m.tool_calls || []).map((tc: any) => ({
+                name: tc.function?.name || '',
+                args: tc.function?.arguments || {},
+              }));
+              frontendMsgs.push({
+                id: `hist-${i}`,
+                role: 'assistant',
+                content: typeof m.content === 'string' ? (m.content || '') : '',
+                thinking: m.thinking,
+                toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+              });
+            } else if (m.role === 'tool') {
+              // Attach tool result to previous assistant
+              const last = frontendMsgs[frontendMsgs.length - 1];
+              if (last && last.role === 'assistant' && last.toolCalls) {
+                const tcs = [...last.toolCalls];
+                const idx = tcs.findIndex((tc) => !tc.result);
+                if (idx >= 0) {
+                  tcs[idx] = { ...tcs[idx], result: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) };
+                  frontendMsgs[frontendMsgs.length - 1] = { ...last, toolCalls: tcs };
+                }
+              }
+            }
+          }
+          dispatch({ type: 'SET_MESSAGES', messages: frontendMsgs });
           dispatch({ type: 'SET_SESSION_ID', id: persisted.lastSessionId });
           dispatch({
             type: 'RECEIVE_STATUS',
-            message: 'Session restored — continuing previous conversation.',
+            message: `Resumed previous session (${frontendMsgs.length} messages).`,
             level: 'info',
           });
         }
@@ -74,7 +116,7 @@ export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
         localStorage.removeItem('wisp_last_session_id');
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [state.workspacePath]);
 
   // Persist settings to localStorage
   React.useEffect(() => {

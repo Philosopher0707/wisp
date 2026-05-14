@@ -259,7 +259,7 @@ export function createInitialState(overrides?: {
     projects: [],
     sessions: [],
     sessionsVersion: 0,
-    sessionId: overrides?.lastSessionId || null,
+    sessionId: null,  // always start fresh — auto-resume effect loads if needed
     messages: [],
     isStreaming: false,
     agentPaused: false,
