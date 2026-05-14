@@ -1963,6 +1963,11 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(default="")
                                 await conn.send({"type": "plan_ready", "session_id": sid, "content": plan_content})
                             else:
                                 await conn.send({"type": "complete", "session_id": sid})
+                            # Save session state and summary for cross-session memory
+                            try:
+                                core.close()
+                            except Exception:
+                                pass
 
                     conn.agent_task = asyncio.create_task(_run())
 
