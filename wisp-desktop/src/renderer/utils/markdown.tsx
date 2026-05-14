@@ -287,6 +287,13 @@ const CodeBlock: React.FC<{ code: string; lang: string }> = ({ code, lang }) => 
   );
 };
 
+function applyInlineFormatting(text: string): string {
+  return text
+    .replace(/`([^`]+)`/g, '<code class="md-inline-code">$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>');
+}
+
 export function renderMarkdown(text: string): React.ReactNode {
   if (!text) return text;
 
@@ -321,6 +328,60 @@ export function renderMarkdown(text: string): React.ReactNode {
       continue;
     }
 
+    // Table block detection
+    if (line.trimStart().startsWith('|')) {
+      const tableLines: string[] = [];
+      let j = i;
+      while (j < lines.length && lines[j].trimStart().startsWith('|')) {
+        tableLines.push(lines[j]);
+        j++;
+      }
+
+      if (tableLines.length >= 2) {
+        const allRows = tableLines.map(l => {
+          const trimmed = l.trim();
+          const content = trimmed.startsWith('|') ? trimmed.slice(1) : trimmed;
+          const parts = content.split('|').map(c => c.trim());
+          if (parts[parts.length - 1] === '') parts.pop();
+          return parts;
+        });
+
+        const isSeparator = allRows[1].length > 0 && allRows[1].every(
+          c => /^[-\s:]+$/.test(c) && c.replace(/[^-]/g, '').length >= 1
+        );
+
+        if (isSeparator && allRows[0].length > 0) {
+          const headers = allRows[0];
+          const bodyRows = allRows.slice(2);
+
+          result.push(
+            <table key={`table-${i}`} className="md-table">
+              <thead>
+                <tr>
+                  {headers.map((h, idx) => (
+                    <th key={idx} dangerouslySetInnerHTML={{ __html: applyInlineFormatting(h) }} />
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {bodyRows.map((row, ridx) => (
+                  <tr key={ridx}>
+                    {row.map((cell, cidx) => (
+                      <td key={cidx} dangerouslySetInnerHTML={{ __html: applyInlineFormatting(cell) }} />
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          );
+          i = j - 1;
+          continue;
+        }
+      }
+
+      // Not a valid table — fall through to normal processing
+    }
+
     // Inline formatting
     let processed = line;
 
@@ -348,14 +409,7 @@ export function renderMarkdown(text: string): React.ReactNode {
       continue;
     }
 
-    // Inline code (before bold/italic)
-    processed = processed.replace(/`([^`]+)`/g, '<code class="md-inline-code">$1</code>');
-
-    // Bold
-    processed = processed.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-
-    // Italic
-    processed = processed.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    processed = applyInlineFormatting(processed);
 
     // Headings
     const hMatch = processed.match(/^(#{1,3})\s+(.+)/);

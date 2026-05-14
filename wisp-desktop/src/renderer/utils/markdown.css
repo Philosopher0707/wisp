@@ -295,3 +295,67 @@
 .md-heading {
   color: var(--text-white);
 }
+
+/* Markdown tables */
+.md-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: var(--space-3) 0;
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  overflow-x: auto;
+  display: block;
+}
+
+.md-table thead {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+}
+
+.md-table tbody {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+}
+
+.md-table th {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 2px solid rgba(139, 92, 246, 0.3);
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.md-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+  vertical-align: top;
+}
+
+.md-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.md-table tbody tr:last-child td {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Scrollbar for wide tables */
+.md-table::-webkit-scrollbar {
+  height: 6px;
+}
+
+.md-table::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.md-table::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
