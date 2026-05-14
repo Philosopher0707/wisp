@@ -58,7 +58,7 @@ class WispAgent(WispAgentCore):
         No terminal output — used by orchestrator for programmatic access.
         """
         async def _consume():
-            async for _ in self._run_turn_streaming_events(system):
+            for _ in self._run_turn_streaming_events(system):
                 pass
 
         self._safe_run_sync(_consume())

@@ -545,7 +545,6 @@ def cmd_swarm(agent, args: str):
     # Lazy import to avoid circular dependencies
     from wisp.multi_agent.orchestrator import SwarmOrchestrator
     from wisp.multi_agent.roles import AgentRole
-    from wisp.colors import success, error, warning, info, dim, accent
 
     roles = [AgentRole.CODER, AgentRole.REVIEWER, AgentRole.TESTER, AgentRole.RESEARCHER]
     config = agent.config
