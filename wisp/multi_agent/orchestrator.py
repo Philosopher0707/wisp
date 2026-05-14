@@ -298,17 +298,30 @@ Respond in JSON with a "plan" string and a "subtasks" array.
         def _target():
             loop = asyncio.new_event_loop()
             try:
-                loop.run_until_complete(_runner())
+                result_holder["result"] = loop.run_until_complete(_runner())
+            except Exception as e:
+                result_holder["error"] = e
             finally:
                 loop.close()
 
         thread = __import__("threading").Thread(target=_target)
         thread.start()
-        thread.join()
+        thread.join(timeout=300)
+
+        if thread.is_alive():
+            logger.warning("Swarm thread did not finish within 5 minutes — returning timeout result")
+            self._shutdown = True
+            return SwarmResult(
+                success=False, goal=goal, plan="",
+                final_output="[Swarm timed out after 5 minutes]",
+            )
 
         if "error" in result_holder:
             raise RuntimeError(result_holder["error"])
-        return result_holder.get("result") or SwarmResult(
+        result = result_holder.get("result")
+        if result is not None:
+            return result
+        return SwarmResult(
             success=False, goal=goal, plan="", final_output="Orchestrator thread returned no result"
         )
 

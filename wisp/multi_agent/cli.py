@@ -23,6 +23,24 @@ logger = logging.getLogger(__name__)
 _last_orchestrator: SwarmOrchestrator | None = None
 
 
+def _cli_swarm_progress(event) -> None:
+    """Print swarm progress updates for the CLI entry point."""
+    from wisp.multi_agent.task import EventKind
+    kind = event.event_type
+    p = event.payload
+    if kind == EventKind.PLANNING:
+        if "plan" in p:
+            print(dim(f"   📋 Plan: {p['subtask_count']} subtasks"))
+    elif kind == EventKind.TASK_STARTED:
+        print(dim(f"   🔨 {p.get('role', 'agent')} started: {p.get('description', '')[:50]}"))
+    elif kind == EventKind.TASK_COMPLETED:
+        print(success(f"   ✓ {event.task_id} done ({p.get('elapsed', 0):.1f}s)"))
+    elif kind == EventKind.TASK_FAILED:
+        print(error(f"   ✗ {event.task_id} failed: {p.get('error', '')[:60]}"))
+    elif kind == EventKind.TASK_RETRY:
+        print(warning(f"   🔄 {event.task_id} retry #{p.get('retry', 0)} (backoff {p.get('backoff_seconds', 0)}s)"))
+
+
 def cmd_swarm(goal: str, roles: list[str] | None = None, model: str | None = None, workspace: str | None = None, max_parallel: int = 3, count_per_role: dict[str, int] | None = None, max_retries: int = 2):
     """Run a multi-agent swarm to accomplish a goal."""
     global _last_orchestrator
@@ -48,7 +66,7 @@ def cmd_swarm(goal: str, roles: list[str] | None = None, model: str | None = Non
     orch = SwarmOrchestrator(config, max_parallel=max_parallel)
     _last_orchestrator = orch
     try:
-        result = orch.run(goal, roles=roles, count_per_role=count_per_role, max_retries=max_retries)
+        result = orch.run(goal, roles=roles, count_per_role=count_per_role, max_retries=max_retries, progress_callback=_cli_swarm_progress)
 
         print()
         print(success("✓ Swarm execution complete"))

@@ -536,6 +536,24 @@ def cmd_spawn(agent, args: str):
 
 
 @register("swarm", "Launch a multi-agent swarm for a complex task", aliases=("multi",), usage="/swarm <task description>")
+def _swarm_progress(event) -> None:
+    """Print swarm progress updates to the terminal."""
+    from wisp.multi_agent.task import EventKind
+    kind = event.event_type
+    p = event.payload
+    if kind == EventKind.PLANNING:
+        if "plan" in p:
+            print(dim(f"   📋 Plan: {p['subtask_count']} subtasks"))
+    elif kind == EventKind.TASK_STARTED:
+        print(dim(f"   🔨 {p.get('role', 'agent')} started: {p.get('description', '')[:50]}"))
+    elif kind == EventKind.TASK_COMPLETED:
+        print(success(f"   ✓ {event.task_id} done ({p.get('elapsed', 0):.1f}s)"))
+    elif kind == EventKind.TASK_FAILED:
+        print(error(f"   ✗ {event.task_id} failed: {p.get('error', '')[:60]}"))
+    elif kind == EventKind.TASK_RETRY:
+        print(warning(f"   🔄 {event.task_id} retry #{p.get('retry', 0)} (backoff {p.get('backoff_seconds', 0)}s)"))
+
+
 def cmd_swarm(agent, args: str):
     if not args:
         print(info("Usage: /swarm <task description>"))
@@ -556,7 +574,7 @@ def cmd_swarm(agent, args: str):
 
     orch = SwarmOrchestrator(config, parent_agent=agent)
     try:
-        result = orch.run(args, roles=roles)
+        result = orch.run(args, roles=roles, progress_callback=_swarm_progress)
     except KeyboardInterrupt:
         print(warning("\n⚠ Interrupted. Stopping all agents..."))
         orch.stop_all()
@@ -614,14 +632,14 @@ Write this as a direct report to me, the user. No preamble — just the synthesi
 """
     try:
         system = agent._build_system_prompt()
-        # Temporarily add synthesis prompt to messages
-        saved_count = len(agent.messages)
-        agent.messages.append({"role": "user", "content": prompt})
+        # Synthesize on a temporary copy of messages to avoid mutating live state
+        saved_messages = agent.messages
         try:
+            agent.messages = list(saved_messages)
+            agent.messages.append({"role": "user", "content": prompt})
             response = agent._run_turn_streaming(system)
         finally:
-            # Restore messages to pre-synthesis state
-            del agent.messages[saved_count:]
+            agent.messages = saved_messages
         content = response.get("message", {}).get("content", "") if isinstance(response.get("message"), dict) else ""
         return content.strip() or result.final_output
     except Exception:

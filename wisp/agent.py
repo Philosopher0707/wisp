@@ -56,13 +56,9 @@ class WispAgent(WispAgentCore):
         """Backward compat: run one turn via core events, return raw response dict.
 
         No terminal output — used by orchestrator for programmatic access.
+        Delegates directly to the sync core method to avoid thread overhead.
         """
-        async def _consume():
-            for _ in self._run_turn_streaming_events(system):
-                pass
-
-        self._safe_run_sync(_consume())
-        return getattr(self.client, "stream_response", None) or {}
+        return super()._run_turn_streaming(system)
 
     def _execute_loop(self, system: str, workspace: str, auto_approve: bool = True):
         """Execute a single turn (used by /continue and programmatic callers).
