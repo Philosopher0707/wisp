@@ -18,14 +18,19 @@ interface BgRun {
 
 export const BackgroundAgentBanner: React.FC = () => {
   const { state } = useAppState();
+  const serverUrl = state.serverUrl;
+  const apiKey = state.apiKey;
   const [runs, setRuns] = useState<BgRun[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [notified, setNotified] = useState<Set<string>>(new Set());
 
   const fetchRuns = useCallback(async () => {
     try {
-      const base = state.serverUrl.replace(/\/$/, '');
-      const resp = await fetch(`${base}/api/runs`);
+      const base = serverUrl.replace(/\/$/, '');
+      const params = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
+      const resp = await fetch(`${base}/api/runs${params}`, {
+        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
+      });
       if (!resp.ok) return;
       const data = await resp.json();
       const active = (data.runs || []).filter(
@@ -46,7 +51,7 @@ export const BackgroundAgentBanner: React.FC = () => {
         }
       }
     } catch { /* ignore */ }
-  }, [state.serverUrl, notified]);
+  }, [serverUrl, apiKey, notified]);
 
   useEffect(() => {
     fetchRuns();
@@ -63,8 +68,12 @@ export const BackgroundAgentBanner: React.FC = () => {
 
   const cancelRun = async (runId: string) => {
     try {
-      const base = state.serverUrl.replace(/\/$/, '');
-      await fetch(`${base}/api/run/${encodeURIComponent(runId)}`, { method: 'DELETE' });
+      const base = serverUrl.replace(/\/$/, '');
+      const params = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
+      await fetch(`${base}/api/run/${encodeURIComponent(runId)}${params}`, {
+        method: 'DELETE',
+        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
+      });
       fetchRuns();
     } catch { /* ignore */ }
   };

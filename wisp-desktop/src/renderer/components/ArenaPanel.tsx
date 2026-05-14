@@ -47,9 +47,13 @@ export const ArenaPanel: React.FC = () => {
 
     try {
       const base = state.serverUrl.replace(/\/$/, '');
-      const resp = await fetch(`${base}/api/arena/compare`, {
+      const params = state.apiKey ? `?api-key=${encodeURIComponent(state.apiKey)}` : '';
+      const resp = await fetch(`${base}/api/arena/compare${params}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(state.apiKey ? { Authorization: `Bearer ${state.apiKey}` } : {}),
+        },
         body: JSON.stringify({
           prompt: prompt.trim(),
           task: task.trim() || prompt.trim().slice(0, 100),
@@ -70,15 +74,19 @@ export const ArenaPanel: React.FC = () => {
     } finally {
       setRunning(false);
     }
-  }, [prompt, task, modelA, modelB, state.serverUrl]);
+  }, [prompt, task, modelA, modelB, state.serverUrl, state.apiKey]);
 
   const submitVote = useCallback(async (vote: string) => {
     if (!result) return;
     try {
       const base = state.serverUrl.replace(/\/$/, '');
-      const resp = await fetch(`${base}/api/arena/vote`, {
+      const params = state.apiKey ? `?api-key=${encodeURIComponent(state.apiKey)}` : '';
+      const resp = await fetch(`${base}/api/arena/vote${params}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(state.apiKey ? { Authorization: `Bearer ${state.apiKey}` } : {}),
+        },
         body: JSON.stringify({ entry_id: result.entry_id, vote }),
       });
 
@@ -88,7 +96,7 @@ export const ArenaPanel: React.FC = () => {
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Unknown error');
     }
-  }, [result, state.serverUrl]);
+  }, [result, state.serverUrl, state.apiKey]);
 
   const formatDuration = (ms: number) => {
     if (ms < 1000) return `${ms}ms`;

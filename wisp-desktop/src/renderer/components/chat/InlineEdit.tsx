@@ -68,9 +68,13 @@ export const InlineEdit: React.FC<InlineEditProps> = ({ visible, onClose }) => {
 
     try {
       const base = state.serverUrl.replace(/\/$/, '');
-      const resp = await fetch(`${base}/api/edit/inline`, {
+      const params = state.apiKey ? `?api-key=${encodeURIComponent(state.apiKey)}` : '';
+      const resp = await fetch(`${base}/api/edit/inline${params}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(state.apiKey ? { Authorization: `Bearer ${state.apiKey}` } : {}),
+        },
         body: JSON.stringify({
           path: path.trim(),
           selection: selection.trim(),
