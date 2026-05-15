@@ -59,6 +59,58 @@ _UNICODE_REPLACEMENTS = {
 _UNICODE_NORMALIZE_RE = re.compile("|".join(map(re.escape, _UNICODE_REPLACEMENTS.keys())))
 
 
+def _normalize_with_mapping(text: str) -> tuple[str, list[int]]:
+    """Normalize text for fuzzy matching and return (normalized_text, mapping).
+
+    mapping[i] is the index in the original text of the character at
+    normalized position i.  This lets us translate a match found in
+    normalized space back to the original content so replacements are
+    applied to the *original* text, preserving characters that were not
+    part of the edit (smart quotes, special spaces, tabs, etc.).
+
+    Normalization steps (same as normalize_for_fuzzy_match):
+    1. NFKC normalization per character
+    2. Tab → 4 spaces
+    3. Unicode replacements (smart quotes, dashes, special spaces)
+    4. Strip trailing whitespace per line
+    """
+    # Pass 1: character-level normalization
+    norm_chars: list[str] = []
+    mapping: list[int] = []
+
+    for orig_idx, char in enumerate(text):
+        transformed = unicodedata.normalize("NFKC", char)
+        transformed = transformed.replace("\t", "    ")
+        transformed = _UNICODE_NORMALIZE_RE.sub(
+            lambda m: _UNICODE_REPLACEMENTS[m.group(0)], transformed
+        )
+        for c in transformed:
+            norm_chars.append(c)
+            mapping.append(orig_idx)
+
+    # Pass 2: strip trailing whitespace per line
+    remove = [False] * len(norm_chars)
+    line_start = 0
+    for i, c in enumerate(norm_chars):
+        if c == "\n":
+            j = i - 1
+            while j >= line_start and norm_chars[j] == " ":
+                remove[j] = True
+                j -= 1
+            line_start = i + 1
+
+    # Strip trailing whitespace from last line (no trailing newline)
+    j = len(norm_chars) - 1
+    while j >= line_start and norm_chars[j] == " ":
+        remove[j] = True
+        j -= 1
+
+    final_chars = [c for i, c in enumerate(norm_chars) if not remove[i]]
+    final_mapping = [mapping[i] for i in range(len(norm_chars)) if not remove[i]]
+
+    return "".join(final_chars), final_mapping
+
+
 def normalize_for_fuzzy_match(text: str) -> str:
     """Normalize text for fuzzy matching.
 
@@ -84,8 +136,8 @@ def normalize_for_fuzzy_match(text: str) -> str:
 def fuzzy_find_text(content: str, old_text: str) -> FuzzyMatchResult:
     """Find old_text in content, trying exact match first, then fuzzy match.
 
-    When fuzzy matching is used, the returned content_for_replacement is the
-    fuzzy-normalized version of the content.
+    Returns the match index in the *original* content so callers can
+    apply replacements to the original text without data loss.
     """
     # Try exact match first
     exact_index = content.find(old_text)
@@ -96,10 +148,12 @@ def fuzzy_find_text(content: str, old_text: str) -> FuzzyMatchResult:
             match_length=len(old_text),
             used_fuzzy_match=False,
             content_for_replacement=content,
+            original_index=exact_index,
+            original_match_length=len(old_text),
         )
 
-    # Try fuzzy match — work entirely in normalized space
-    fuzzy_content = normalize_for_fuzzy_match(content)
+    # Try fuzzy match — build mapping so we can translate back to original
+    fuzzy_content, mapping = _normalize_with_mapping(content)
     fuzzy_old_text = normalize_for_fuzzy_match(old_text)
     fuzzy_index = fuzzy_content.find(fuzzy_old_text)
 
@@ -110,7 +164,14 @@ def fuzzy_find_text(content: str, old_text: str) -> FuzzyMatchResult:
             match_length=0,
             used_fuzzy_match=False,
             content_for_replacement=content,
+            original_index=-1,
+            original_match_length=0,
         )
+
+    # Map the normalized match region back to original indices
+    match_end = fuzzy_index + len(fuzzy_old_text) - 1
+    orig_start = mapping[fuzzy_index]
+    orig_end = mapping[match_end] + 1  # +1 because mapping gives start index of each char
 
     return FuzzyMatchResult(
         found=True,
@@ -118,6 +179,8 @@ def fuzzy_find_text(content: str, old_text: str) -> FuzzyMatchResult:
         match_length=len(fuzzy_old_text),
         used_fuzzy_match=True,
         content_for_replacement=fuzzy_content,
+        original_index=orig_start,
+        original_match_length=orig_end - orig_start,
     )
 
 
@@ -132,6 +195,8 @@ class FuzzyMatchResult:
     match_length: int
     used_fuzzy_match: bool
     content_for_replacement: str
+    original_index: int = -1
+    original_match_length: int = 0
 
 
 @dataclass
@@ -193,7 +258,7 @@ def parse_hunks(diff_text: str) -> list[DiffHunk]:
     in_change_block = False
 
     def _flush():
-        nonlocal old_start, new_start, old_count, new_count, in_change_block
+        nonlocal old_start, new_start, old_count, new_count, in_change_block, current_lines
         if current_lines:
             hunks.append(DiffHunk(
                 header=f"@@ -{old_start or 1},{old_count} +{new_start or 1},{new_count} @@",
@@ -224,16 +289,16 @@ def parse_hunks(diff_text: str) -> list[DiffHunk]:
             continue
 
         prefix = raw[0]
-        rest = raw[1:]
+        rest = raw[1:].lstrip(" ")  # skip leading spaces after prefix
 
         # Parse line number and content
-        # Format: "<prefix><line_num> <content>" or "      <content>" for skip markers
+        # Format: "<prefix><line_num_padded> <content>"
         try:
             space_idx = rest.index(" ")
         except ValueError:
             continue
 
-        num_str = rest[:space_idx].strip()
+        num_str = rest[:space_idx]
         content = rest[space_idx + 1:]
 
         try:
@@ -513,19 +578,13 @@ def apply_edits_to_content(
             raise ValueError(f"old_text must not be empty{suffix}")
 
     # Match all edits against original content
-    initial_matches = [fuzzy_find_text(content, edit.old_text) for edit in edits]
-
-    # If any edit needed fuzzy matching, work in fuzzy-normalized space
-    if any(m.used_fuzzy_match for m in initial_matches):
-        base_content = normalize_for_fuzzy_match(content)
-    else:
-        base_content = content
+    matches = [fuzzy_find_text(content, edit.old_text) for edit in edits]
 
     # Find all matches
     matched_edits: list[dict] = []
-    any_fuzzy = any(m.used_fuzzy_match for m in initial_matches)
+    any_fuzzy = any(m.used_fuzzy_match for m in matches)
     for i, edit in enumerate(edits):
-        match = fuzzy_find_text(base_content, edit.old_text)
+        match = matches[i]
         if not match.found:
             suffix = f" in {file_path}" if len(edits) == 1 else f" edits[{i}] in {file_path}"
             raise ValueError(
@@ -533,8 +592,9 @@ def apply_edits_to_content(
                 "The old_text must match exactly including all whitespace and newlines."
             )
 
-        # Check uniqueness
-        count = base_content.count(
+        # Check uniqueness in normalized space
+        fuzzy_content = normalize_for_fuzzy_match(content)
+        count = fuzzy_content.count(
             normalize_for_fuzzy_match(edit.old_text) if match.used_fuzzy_match else edit.old_text
         )
         if count > 1:
@@ -544,10 +604,11 @@ def apply_edits_to_content(
                 "The text must be unique. Please provide more context to make it unique."
             )
 
+        # Use original indices so replacements preserve untouched content
         matched_edits.append({
             "edit_index": i,
-            "match_index": match.index,
-            "match_length": match.match_length,
+            "match_index": match.original_index,
+            "match_length": match.original_match_length,
             "new_text": edit.new_text,
         })
 
@@ -562,8 +623,8 @@ def apply_edits_to_content(
                 f"overlap in {file_path}. Merge them into one edit or target disjoint regions."
             )
 
-    # Apply replacements in reverse order (right-to-left)
-    new_content = base_content
+    # Apply replacements in reverse order (right-to-left) on ORIGINAL content
+    new_content = content
     for edit in reversed(matched_edits):
         new_content = (
             new_content[:edit["match_index"]]
@@ -571,14 +632,14 @@ def apply_edits_to_content(
             + new_content[edit["match_index"] + edit["match_length"]:]
         )
 
-    if base_content == new_content:
+    if content == new_content:
         suffix = f" to {file_path}" if len(edits) == 1 else f" to {file_path}"
         raise ValueError(
             f"No changes made{suffix}. "
             "The replacement produced identical content."
         )
 
-    return base_content, new_content, any_fuzzy
+    return content, new_content, any_fuzzy
 
 
 # ── High-level API ───────────────────────────────────────────────────
@@ -672,7 +733,8 @@ def apply_edit_with_diff(
                 error=f"File not found: {path}",
             )
 
-        raw_content = file_path.read_text(encoding="utf-8", errors="replace")
+        with open(file_path, 'r', encoding='utf-8', errors='replace', newline='') as f:
+            raw_content = f.read()
         bom, content = strip_bom(raw_content)
         original_ending = detect_line_ending(content)
         normalized = normalize_to_lf(content)
@@ -681,7 +743,8 @@ def apply_edit_with_diff(
 
         # Restore BOM and line endings before writing
         final_content = bom + restore_line_endings(new_content, original_ending)
-        file_path.write_text(final_content, encoding="utf-8")
+        with open(file_path, 'w', encoding='utf-8', newline='') as f:
+            f.write(final_content)
 
         diff_result = generate_diff_string(base_content, new_content)
 

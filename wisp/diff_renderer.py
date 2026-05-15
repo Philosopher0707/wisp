@@ -80,23 +80,54 @@ def _pygmentize(code: str, language: str, base_style: Style) -> Text:
     return result
 
 
+def _strip_line_number(line: str) -> str:
+    """Strip the `<prefix><line_num> ` header from a diff line.
+
+    Diff lines from generate_diff_string look like:
+      '+  42 def hello():'  → '+def hello():'
+      '-   1 import os'    → '-import os'
+      '     5     pass'    → '     pass'
+
+    Returns the line unchanged if no line number is detected.
+    """
+    if len(line) < 2:
+        return line
+    prefix = line[0]
+    rest = line[1:]
+    # Skip leading spaces after prefix
+    rest = rest.lstrip(" ")
+    # Read digits (line number)
+    i = 0
+    while i < len(rest) and rest[i].isdigit():
+        i += 1
+    # If we found digits and a following space, strip the number
+    if i > 0 and i < len(rest) and rest[i] == " ":
+        return prefix + rest[i + 1:]
+    return line
+
+
 def _build_diff_line(line: str, language: Optional[str] = None) -> Text:
     """Build a Rich Text for a single diff line."""
     stripped = line.rstrip("\n")
 
-    if stripped.startswith("+"):
+    # Strip line number prefix so pygments/DMP see real code
+    code_line = _strip_line_number(stripped)
+
+    if code_line.startswith("+"):
         text = Text("+", style=_ADD_STYLE)
-        if language:
-            text.append_text(_pygmentize(stripped[1:], language, _ADD_STYLE))
+        code = code_line[1:]
+        if language and code.strip():
+            text.append_text(_pygmentize(code, language, _ADD_STYLE))
         else:
-            text.append(stripped[1:], style=_ADD_STYLE)
+            text.append(code, style=_ADD_STYLE)
         return text
-    elif stripped.startswith("-"):
+    elif code_line.startswith("-"):
         text = Text("-", style=_DEL_STYLE)
-        if language:
-            text.append_text(_pygmentize(stripped[1:], language, _DEL_STYLE))
+        code = code_line[1:]
+        if language and code.strip():
+            text.append_text(_pygmentize(code, language, _DEL_STYLE))
         else:
-            text.append(stripped[1:], style=_DEL_STYLE)
+            text.append(code, style=_DEL_STYLE)
         return text
     elif stripped.startswith("@@"):
         return Text(stripped, style=_HUNK_STYLE)
@@ -106,10 +137,11 @@ def _build_diff_line(line: str, language: Optional[str] = None) -> Text:
         return Text(stripped, style=_SKIP_STYLE)
     else:
         text = Text(" ", style=_CONTEXT_STYLE)
-        if language:
-            text.append_text(_pygmentize(stripped, language, _CONTEXT_STYLE))
+        code = code_line[1:] if code_line.startswith(" ") else code_line
+        if language and code.strip():
+            text.append_text(_pygmentize(code, language, _CONTEXT_STYLE))
         else:
-            text.append(stripped, style=_CONTEXT_STYLE)
+            text.append(code, style=_CONTEXT_STYLE)
         return text
 
 
@@ -196,8 +228,8 @@ def _build_diff_text_with_dmp(lines: list[str],
         line = lines[i].rstrip("\n")
 
         if dmp and line.startswith("-") and i + 1 < len(lines) and lines[i + 1].startswith("+"):
-            old_code = line[1:]
-            new_code = lines[i + 1][1:]
+            old_code = _strip_line_number(line)[1:]
+            new_code = _strip_line_number(lines[i + 1])[1:]
             diffs = dmp.diff_main(old_code, new_code)
             dmp.diff_cleanupSemantic(diffs)
 
@@ -205,11 +237,15 @@ def _build_diff_text_with_dmp(lines: list[str],
                 text.append("\n")
             text.append("-", style=_DEL_STYLE)
             for op, fragment in diffs:
+                if op == 1:  # addition — skip on deletion line
+                    continue
                 style = _DEL_CHANGE if op == -1 else _DEL_STYLE
                 text.append(fragment, style=style)
             text.append("\n")
             text.append("+", style=_ADD_STYLE)
             for op, fragment in diffs:
+                if op == -1:  # deletion — skip on addition line
+                    continue
                 style = _ADD_CHANGE if op == 1 else _ADD_STYLE
                 text.append(fragment, style=style)
             i += 2
