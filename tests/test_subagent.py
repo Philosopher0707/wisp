@@ -546,11 +546,12 @@ def test_config_inheritance_security(mock_wisp_agent):
 def test_nested_spawn_blocked_at_depth_check(mock_wisp_agent):
     """Parent agent with _subagent_depth=1 blocks spawn_subagent tool call."""
     from wisp.agent import WispAgent
+    import asyncio
     # This tests the _spawn_subagent method on WispAgent directly
     parent = MockAgent()
     parent._subagent_depth = 1
     # Simulate what happens when the LLM calls spawn_subagent
-    result = WispAgent._spawn_subagent(parent, {"task": "nested"}, ".")
+    result = asyncio.run(WispAgent._spawn_subagent(parent, {"task": "nested"}, "."))
     assert "cannot spawn subagents" in result
     assert "max depth" in result
 

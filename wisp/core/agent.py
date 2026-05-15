@@ -1194,7 +1194,7 @@ class WispAgentCore:
             start = time.monotonic()
             if func_name == "spawn_subagent":
                 try:
-                    result = self._spawn_subagent(func_args, workspace)
+                    result = await self._spawn_subagent(func_args, workspace)
                 except Exception as e:
                     result = f"Subagent spawn failed: {e}"
                     logger.error("Subagent spawn failed: %s", e, exc_info=True)
@@ -1255,48 +1255,61 @@ class WispAgentCore:
                 except Exception as e:
                     logger.warning("Post-tool hook failed for %s: %s", func_name, e)
 
-    def _spawn_subagent(self, args: dict, workspace: str) -> str:
+    async def _spawn_subagent(self, args: dict, workspace: str) -> str:
+        """Spawn a single subagent and return its output.
+
+        Async-native: delegates directly to SubagentOrchestrator.run()
+        without creating threads.  Progress events are streamed back
+        via the parent agent's event loop.
+        """
         from wisp.multi_agent import SubagentOrchestrator, SubagentContract
+        from wisp.multi_agent.task import EventKind, OrchestratorEvent
+
         depth = getattr(self, "_subagent_depth", 0)
         if depth >= 1:
             return "[Error: subagents cannot spawn subagents (max depth = 1)]"
+
+        # ── Build contract from tool args ──────────────────────────────
         contract = SubagentContract(
             task=args.get("task", ""),
             tools=args.get("tools", ["all"]),
             max_iterations=int(args.get("max_iterations", 15)),
-            timeout_seconds=int(args.get("timeout_seconds", 120)),
+            timeout_seconds=float(args.get("timeout_seconds", 120)),
             output_format=args.get("output_format", "text"),
             workspace=workspace,
             auto_approve=self.config.auto_approve,
+            worktree_isolated=args.get("worktree_isolated", False),
+            max_tokens=args.get("max_tokens"),
+            output_schema=args.get("output_schema"),
         )
+
+        # ── Progress callback: stream subagent events to parent ──────
+        async def _progress(event: OrchestratorEvent) -> None:
+            if event.event_type == EventKind.TASK_STARTED:
+                logger.info("[sub] %s started", event.task_id)
+            elif event.event_type == EventKind.TASK_COMPLETED:
+                logger.info("[sub] %s completed", event.task_id)
+            elif event.event_type == EventKind.TASK_FAILED:
+                logger.warning("[sub] %s failed: %s", event.task_id, event.payload.get("error", ""))
+
+        contract.progress_callback = _progress
+
+        # ── Run subagent ───────────────────────────────────────────────
         orch = SubagentOrchestrator(parent_agent=self)
         try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            result = asyncio.run(orch.run(contract))
-            return result.output
-        # Already inside a running loop — need a dedicated thread
-        import threading
-        result_holder: dict[str, Any] = {}
-        def _target():
-            nloop = asyncio.new_event_loop()
-            try:
-                result_holder["result"] = nloop.run_until_complete(orch.run(contract))
-            except Exception as exc:
-                result_holder["error"] = exc
-            finally:
-                nloop.close()
-        t = threading.Thread(target=_target)
-        t.start()
-        t.join(timeout=contract.timeout_seconds + 10)
-        if t.is_alive():
-            return "[Error: subagent thread timed out]"
-        if "error" in result_holder:
-            return f"[Error: {result_holder['error']}]"
-        result = result_holder.get("result")
-        if result is None:
-            return "[Error: subagent produced no result]"
-        return result.output
+            result = await orch.run(contract)
+        except Exception as exc:
+            logger.error("Subagent %s crashed: %s", contract.name, exc, exc_info=True)
+            return f"[Error: subagent crashed: {exc}]"
+
+        if not result.success:
+            return f"[Error: {result.error or 'subagent failed'}]"
+
+        # ── Return output (with size guard) ────────────────────────────
+        output = result.output
+        if len(output) > 12000:
+            output = output[:12000] + f"\n... [truncated: {len(result.output)} total chars]"
+        return output
 
     # ── Parallel subagents ───────────────────────────────────────────
 
