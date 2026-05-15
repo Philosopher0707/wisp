@@ -103,6 +103,7 @@ _MAX_READ_SIZE = 50 * 1024 * 1024       # 50 MB
 _MAX_WRITE_SIZE = 100 * 1024 * 1024     # 100 MB
 _MAX_BASH_OUTPUT = 50_000               # chars of output to return to model
 _MAX_CMD_LENGTH = 4096                  # max command length for safety
+_MAX_OLD_TEXT_LENGTH = 5_000_000          # max length for old_text in edit operations
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
 
 
@@ -422,7 +423,7 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str, file
     from wisp.diff import EditOp, apply_edit_with_diff
 
     _validate_string(path, "path")
-    _validate_string(old_text, "old_text")
+    _validate_string(old_text, "old_text", _MAX_OLD_TEXT_LENGTH)
     _validate_string(new_text, "new_text", _MAX_WRITE_SIZE, allow_empty=True)
     full_path = _resolve_path(path, workspace)
     if not full_path.exists():
@@ -505,7 +506,7 @@ def tool_edit_file_multi(path: str, workspace: str, edits: list[dict], file_lock
     for i, edit in enumerate(edits):
         if not isinstance(edit, dict):
             raise ToolError(f"edits[{i}] must be an object with old_text and new_text")
-        _validate_string(edit.get("old_text", ""), f"edits[{i}].old_text")
+        _validate_string(edit.get("old_text", ""), f"edits[{i}].old_text", _MAX_OLD_TEXT_LENGTH)
         _validate_string(edit.get("new_text", ""), f"edits[{i}].new_text", _MAX_WRITE_SIZE, allow_empty=True)
 
     full_path = _resolve_path(path, workspace)

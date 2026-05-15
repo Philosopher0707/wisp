@@ -70,8 +70,10 @@ import asyncio
 import copy
 import json
 import logging
+import multiprocessing as mp
 import os
 import re
+import tempfile
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -779,6 +781,61 @@ Respond in JSON with a "plan" string and a "subtasks" array.
 
     def _on_heartbeat(self, event: AgentEvent) -> None:
         self.registry.heartbeat(event.source_agent)
+
+
+# ── Process-based subagent worker ────────────────────────────────────
+
+def _run_subagent_worker(contract_dict: dict, result_path: str, parent_workspace: str):
+    """Standalone worker that runs in a separate process.
+
+    Reconstructs a minimal orchestrator from the serialized contract dict,
+    runs the subagent, and writes the result to ``result_path`` as JSON.
+    """
+    import asyncio
+    import time as _time
+
+    from wisp.config import WispConfig
+    from wisp.session import Session, SessionManager
+    from wisp.multi_agent.orchestrator import SubagentOrchestrator
+    from wisp.multi_agent.task import SubagentContract, SubagentResult
+
+    start = _time.monotonic()
+    contract = SubagentContract(**contract_dict)
+
+    # Build a minimal orchestrator in the child process
+    orch = SubagentOrchestrator(workspace=parent_workspace)
+
+    # Run synchronously in the child process's own event loop
+    loop = asyncio.new_event_loop()
+    try:
+        result = loop.run_until_complete(orch._spawn_subagent_thread(contract))
+    except Exception as exc:
+        duration = _time.monotonic() - start
+        result = SubagentResult(
+            task_id=contract.name,
+            success=False,
+            output=f"",
+            error=f"Process worker crashed: {exc}",
+            elapsed_seconds=duration,
+        )
+    finally:
+        loop.close()
+
+    # Serialize result to file for IPC
+    with open(result_path, "w", encoding="utf-8") as f:
+        json.dump({
+            "task_id": result.task_id,
+            "success": result.success,
+            "output": result.output,
+            "error": result.error,
+            "files_changed": result.files_changed,
+            "elapsed_seconds": result.elapsed_seconds,
+            "iterations_used": result.iterations_used,
+            "retry_count": result.retry_count,
+            "timed_out": result.timed_out,
+            "hit_iteration_limit": result.hit_iteration_limit,
+            "tokens_used": result.tokens_used,
+        }, f, indent=2)
 
 
 # ── SubagentOrchestrator (unified subagent API) ──────────────────────
