@@ -9,7 +9,7 @@ from wisp.multi_agent.protocol import AgentEvent, EventType, TaskAssignment, Tas
 from wisp.multi_agent.registry import AgentRegistry, AgentRecord, AgentStatus
 from wisp.multi_agent.bus import MessageBus
 from wisp.multi_agent.roles import AgentRole, ROLE_CONFIGS
-from wisp.multi_agent.workspace_lock import WorkspaceLock
+from wisp.multi_agent.workspace_lock import WorkspaceLock, SwarmFileLock
 
 
 # ── Protocol tests ───────────────────────────────────────────────────
@@ -627,3 +627,129 @@ def test_file_lock_prevents_collision(tmp_path):
     lock1.release("shared.py")
     assert lock2.acquire("shared.py") is True
     lock2.release("shared.py")
+
+
+# ── Additional registry tests ──────────────────────────────────────────
+
+class TestRegistryExtended:
+    def test_heartbeat_updates_timestamp(self):
+        reg = AgentRegistry()
+        reg.register(AgentRecord(agent_id="a1", role="coder"))
+        assert reg.get("a1").last_heartbeat is None
+        reg.heartbeat("a1")
+        assert reg.get("a1").last_heartbeat is not None
+
+    def test_any_working_true_when_busy(self):
+        reg = AgentRegistry()
+        reg.register(AgentRecord(agent_id="a1", role="coder", status=AgentStatus.WORKING))
+        reg.register(AgentRecord(agent_id="a2", role="tester", status=AgentStatus.IDLE))
+        assert reg.any_working() is True
+
+    def test_any_working_false_when_idle(self):
+        reg = AgentRegistry()
+        reg.register(AgentRecord(agent_id="a1", role="coder", status=AgentStatus.IDLE))
+        reg.register(AgentRecord(agent_id="a2", role="tester", status=AgentStatus.STOPPED))
+        assert reg.any_working() is False
+
+    def test_release_all_files(self):
+        reg = AgentRegistry()
+        reg.register(AgentRecord(agent_id="a1", role="coder"))
+        reg.claim_file("a1", "foo.py")
+        reg.claim_file("a1", "bar.py")
+        reg.release_all_files("a1")
+        assert reg.get("a1").files_locked == []
+
+    def test_to_dict_output(self):
+        reg = AgentRegistry()
+        reg.register(AgentRecord(agent_id="a1", role="coder", status=AgentStatus.IDLE))
+        reg.register(AgentRecord(agent_id="a2", role="tester", status=AgentStatus.WORKING))
+        d = reg.to_dict()
+        assert d["total"] == 2
+        assert d["active"] == 2
+
+
+# ── Additional WorkspaceLock tests ─────────────────────────────────────
+
+class TestWorkspaceLockExtended:
+    def test_cleanup_stale_no_stale(self, tmp_path):
+        reg = AgentRegistry()
+        reg.register(AgentRecord(agent_id="a1", role="coder", status=AgentStatus.WORKING))
+        lock = WorkspaceLock(str(tmp_path), reg)
+        lock.acquire("a1", "active_file.py")
+        # No stale locks — cleanup should return 0
+        removed = lock.cleanup_stale()
+        assert removed == 0
+        assert lock.is_locked("active_file.py") is True
+
+    def test_path_traversal_prevented(self, tmp_path):
+        reg = AgentRegistry()
+        reg.register(AgentRecord(agent_id="a1", role="coder"))
+        lock = WorkspaceLock(str(tmp_path), reg)
+        with pytest.raises(ValueError):
+            lock.acquire("a1", "/etc/passwd")
+
+    def test_acquire_and_double_release(self, tmp_path):
+        """Releasing a lock twice should not raise."""
+        reg = AgentRegistry()
+        reg.register(AgentRecord(agent_id="a1", role="coder"))
+        lock = WorkspaceLock(str(tmp_path), reg)
+        lock.acquire("a1", "foo.py")
+        lock.release("a1", "foo.py")
+        # Second release is a no-op
+        lock.release("a1", "foo.py")
+        assert lock.is_locked("foo.py") is False
+
+    def test_cleanup_stale_active_agent(self, tmp_path):
+        """Acquired lock for active agent is not cleaned up."""
+        reg = AgentRegistry()
+        reg.register(AgentRecord(agent_id="a1", role="coder", status=AgentStatus.IDLE))
+        lock = WorkspaceLock(str(tmp_path), reg)
+        lock.acquire("a1", "active.py")
+        removed = lock.cleanup_stale()
+        assert removed == 0
+        assert lock.is_locked("active.py") is True
+        lock.release_all("a1")
+
+
+# ── SwarmFileLock adapter tests ────────────────────────────────────────
+
+class TestSwarmFileLock:
+    def test_swarm_file_lock_adapts_workspace_lock(self, tmp_path):
+        reg = AgentRegistry()
+        reg.register(AgentRecord(agent_id="a1", role="coder"))
+        ws_lock = WorkspaceLock(str(tmp_path), reg)
+        sfl = SwarmFileLock(ws_lock, "a1")
+
+        assert sfl.acquire("foo.py") is True
+        assert sfl.is_locked("foo.py") is True
+        assert sfl.lock_info("foo.py") == {"agent": "a1"}
+
+        sfl.release("foo.py")
+        assert sfl.is_locked("foo.py") is False
+
+    def test_release_all_on_adapter(self, tmp_path):
+        reg = AgentRegistry()
+        reg.register(AgentRecord(agent_id="a1", role="coder"))
+        ws_lock = WorkspaceLock(str(tmp_path), reg)
+        sfl = SwarmFileLock(ws_lock, "a1")
+
+        sfl.acquire("foo.py")
+        sfl.acquire("bar.py")
+        sfl.release_all()
+        assert sfl.is_locked("foo.py") is False
+        assert sfl.is_locked("bar.py") is False
+
+    def test_adapter_conflict_detection(self, tmp_path):
+        """Two SwarmFileLocks wrapping the same WorkspaceLock detect conflicts."""
+        reg = AgentRegistry()
+        reg.register(AgentRecord(agent_id="a1", role="coder"))
+        reg.register(AgentRecord(agent_id="a2", role="coder"))
+        ws_lock = WorkspaceLock(str(tmp_path), reg)
+        sfl1 = SwarmFileLock(ws_lock, "a1")
+        sfl2 = SwarmFileLock(ws_lock, "a2")
+
+        assert sfl1.acquire("shared.py") is True
+        assert sfl2.acquire("shared.py") is False  # conflict detected
+
+        sfl1.release("shared.py")
+        assert sfl2.acquire("shared.py") is True  # now available

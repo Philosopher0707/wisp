@@ -70,7 +70,7 @@ class WorkspaceLock:
             # Use exclusive create as atomic test-and-set
             fd = os.open(str(lock_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             with os.fdopen(fd, "w") as f:
-                f.write(agent_id)
+                f.write(f"{agent_id}\n{os.getpid()}")
         except FileExistsError:
             # Rollback registry claim
             self.registry.release_file(agent_id, path)
@@ -89,7 +89,7 @@ class WorkspaceLock:
         try:
             if lock_file.exists():
                 with open(lock_file, "r") as f:
-                    owner = f.read().strip()
+                    owner = f.readline().strip()
                 if owner == agent_id:
                     lock_file.unlink()
                 else:
@@ -122,7 +122,7 @@ class WorkspaceLock:
             return None
         try:
             with open(lock_file, "r") as f:
-                return f.read().strip()
+                return f.readline().strip()
         except OSError:
             return None
 
@@ -134,13 +134,27 @@ class WorkspaceLock:
         for lock_file in self.workspace.rglob("*.wisp_lock"):
             try:
                 with open(lock_file, "r") as f:
-                    owner = f.read().strip()
-                if owner not in active_ids:
+                    lines = f.read().strip().splitlines()
+                owner = lines[0] if lines else ""
+                pid = int(lines[1]) if len(lines) > 1 else None
+                # Stale if owner not in active registry OR owning process is dead
+                is_stale = owner not in active_ids
+                if pid is not None and not is_stale:
+                    try:
+                        os.kill(pid, 0)
+                    except (OSError, ProcessLookupError):
+                        is_stale = True
+                if is_stale:
                     lock_file.unlink()
                     removed += 1
                     self.registry.release_file(owner, str(lock_file.with_suffix("").relative_to(self.workspace)))
-            except OSError:
-                pass
+            except (OSError, ValueError):
+                # Malformed lock file — treat as stale
+                try:
+                    lock_file.unlink()
+                    removed += 1
+                except OSError:
+                    pass
 
         return removed
 

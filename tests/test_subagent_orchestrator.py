@@ -578,3 +578,535 @@ def test_agent_registry_from_dict():
     assert a.role == "tester"
     assert a.status == AgentStatus.WORKING
     assert a.total_tasks_completed == 3
+
+
+# ── Internal helper tests ──────────────────────────────────────────────
+
+class TestExtractFilesChanged:
+    """Tests for SubagentOrchestrator._extract_files_changed."""
+
+    def test_backtick_paths(self, orch):
+        text = 'Modified `src/auth.py` and `tests/test_utils.go`'
+        files = orch._extract_files_changed(text)
+        assert "src/auth.py" in files
+        assert "tests/test_utils.go" in files
+
+    def test_change_verb_patterns(self, orch):
+        text = 'Files changed:\n- src/api.ts\n- src/models.rs'
+        files = orch._extract_files_changed(text)
+        assert "src/api.ts" in files
+        assert "src/models.rs" in files
+
+    def test_bare_file_paths(self, orch):
+        text = 'Created src/main.py and config/test.sh'
+        files = orch._extract_files_changed(text)
+        assert "src/main.py" in files
+        assert "config/test.sh" in files
+
+    def test_truncation_limit(self, orch):
+        """Returns max 20 paths, not more."""
+        text = '\n'.join(f'`file_{i}.py`' for i in range(30))
+        files = orch._extract_files_changed(text)
+        assert len(files) <= 20
+
+    def test_empty_input(self, orch):
+        assert orch._extract_files_changed('') == []
+        assert orch._extract_files_changed('no file extensions here') == []
+        assert orch._extract_files_changed('plain text without matches') == []
+
+    def test_duplicates_removed(self, orch):
+        text = '`src/a.py` and also `src/a.py`'
+        files = orch._extract_files_changed(text)
+        assert files == ['src/a.py']
+
+    def test_unsupported_extensions_skipped(self, orch):
+        text = 'Config: `settings.txt` and image `photo.png`'
+        files = orch._extract_files_changed(text)
+        assert all(f.endswith(('.py', '.ts', '.js', '.rs', '.go', '.java', '.rb', '.sh'))
+                   for f in files)
+        # .txt and .png should NOT match
+        assert not any(f.endswith('.txt') for f in files)
+        assert not any(f.endswith('.png') for f in files)
+
+
+class TestCompactArgs:
+    """Tests for SubagentOrchestrator._compact_args."""
+
+    def test_normal_args(self):
+        args = {"filepath": "src/auth.py", "content": "some content"}
+        result = SubagentOrchestrator._compact_args(args)
+        assert "filepath=src/auth.py" in result
+        assert len(result) < 100
+
+    def test_empty_dict(self):
+        result = SubagentOrchestrator._compact_args({})
+        assert result == "..."
+
+    def test_long_value_truncation(self):
+        long_val = "x" * 100
+        args = {"content": long_val}
+        result = SubagentOrchestrator._compact_args(args)
+        # "content=" (8) + 60 chars + "..." (3) = 71
+        assert len(result) == 71
+        assert result == "content=" + "x" * 60 + "..."
+        assert result.endswith("...")
+
+
+class TestBuildChildConfig:
+    """Tests for SubagentOrchestrator._build_child_config."""
+
+    def test_model_override(self, mock_parent_agent):
+        from wisp.config import WispConfig
+        orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+        contract = SubagentContract(name="test", task="hello", model="qwen2.5")
+        cfg = orch._build_child_config(contract)
+        assert cfg.model == "qwen2.5"
+
+    def test_inherits_parent_model(self, mock_parent_agent):
+        orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+        contract = SubagentContract(name="test", task="hello")
+        cfg = orch._build_child_config(contract)
+        assert cfg.model == "test-model"
+
+    def test_workspace_from_contract(self, mock_parent_agent):
+        orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+        contract = SubagentContract(name="test", task="hello", workspace="/custom/path")
+        cfg = orch._build_child_config(contract)
+        assert cfg.workspace == "/custom/path"
+
+    def test_auto_approve_from_contract(self, mock_parent_agent):
+        orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+        contract = SubagentContract(name="test", task="hello", auto_approve=False)
+        cfg = orch._build_child_config(contract)
+        assert cfg.auto_approve is False
+
+    def test_max_tokens_from_contract(self, mock_parent_agent):
+        orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+        contract = SubagentContract(name="test", task="hello", max_tokens=4000)
+        cfg = orch._build_child_config(contract)
+        assert cfg.max_context_tokens == 4000
+
+
+class TestDefaultSystemPrompt:
+    """Tests for SubagentOrchestrator._default_system_prompt."""
+
+    def test_role_based_prompt(self, mock_parent_agent):
+        from wisp.multi_agent.roles import AgentRole
+        orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+        contract = SubagentContract(name="coder-1", task="write code", role=AgentRole.CODER)
+        prompt = orch._default_system_prompt(contract)
+        assert "Coder agent" in prompt
+        assert "write_file" in prompt or "write" in prompt
+
+    def test_fallback_for_unknown_role(self, mock_parent_agent):
+        orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+        contract = SubagentContract(name="custom", task="do stuff", role="unknown-role")
+        prompt = orch._default_system_prompt(contract)
+        assert "specialist subagent" in prompt or "**custom**" in prompt
+        assert "Focus ONLY" in prompt
+
+    def test_with_tool_filter(self, mock_parent_agent):
+        orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+        contract = SubagentContract(
+            name="reader", task="read only",
+            tools=["read_file", "list_files"],
+        )
+        prompt = orch._default_system_prompt(contract)
+        assert "Allowed Tools" in prompt
+        assert "read_file" in prompt
+        assert "list_files" in prompt
+
+    def test_with_context_files(self, mock_parent_agent):
+        orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+        contract = SubagentContract(
+            name="auditor", task="audit",
+            context_files=["src/main.py", "config.yaml"],
+        )
+        prompt = orch._default_system_prompt(contract)
+        assert "Context Files" in prompt
+        assert "src/main.py" in prompt
+        assert "config.yaml" in prompt
+
+    def test_with_system_prompt_extra(self, mock_parent_agent):
+        orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+        contract = SubagentContract(
+            name="tester", task="test",
+            role="tester",
+            system_prompt_extra="Use pytest for all tests.",
+        )
+        prompt = orch._default_system_prompt(contract)
+        assert "Additional Instructions" in prompt
+        assert "Use pytest" in prompt
+
+
+class TestEstimateTokens:
+    """Tests for SubagentOrchestrator._estimate_tokens."""
+
+    def test_input_tokens_counted(self, orch):
+        messages = [
+            {"role": "user", "content": "Hello there!"},
+            {"role": "system", "content": "You are helpful."},
+        ]
+        in_tok, out_tok, total = orch._estimate_tokens(messages)
+        assert in_tok > 0
+        assert out_tok == 0
+        assert total == in_tok
+
+    def test_output_tokens_counted(self, orch):
+        messages = [
+            {"role": "assistant", "content": "Here is my response."},
+        ]
+        in_tok, out_tok, total = orch._estimate_tokens(messages)
+        assert out_tok > 0
+        assert in_tok == 0
+        assert total == out_tok
+
+    def test_tool_calls_counted_as_output(self, orch):
+        messages = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"function": {"name": "read_file", "arguments": '{"filepath": "test.py"}'}}
+                ],
+            },
+        ]
+        in_tok, out_tok, total = orch._estimate_tokens(messages)
+        assert out_tok > 0
+        assert total == out_tok
+
+    def test_mixed_roles(self, orch):
+        messages = [
+            {"role": "system", "content": "System prompt."},
+            {"role": "user", "content": "User message."},
+            {"role": "assistant", "content": "Assistant reply."},
+        ]
+        in_tok, out_tok, total = orch._estimate_tokens(messages)
+        assert in_tok > 0
+        assert out_tok > 0
+        assert total == in_tok + out_tok
+
+
+# ── Telemetry tests ──────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_telemetry_tracked_after_run(orch):
+    """After a successful run, telemetry contains one record."""
+    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+        await orch.run(SubagentContract(name="t1", task="hello"))
+
+    telemetry = orch.get_telemetry()
+    assert len(telemetry) == 1
+    model_name = list(telemetry.keys())[0]
+    assert len(telemetry[model_name]) == 1
+    assert telemetry[model_name][0]["success"] is True
+    assert telemetry[model_name][0]["task_id"] == "t1"
+
+
+@pytest.mark.asyncio
+async def test_telemetry_after_failure(orch):
+    """A task that returns success=False still records telemetry."""
+    class FailAgent(FakeWispAgentCore):
+        async def run_task(self, **kwargs):
+            return {"success": False, "output": "Task failed"}
+
+    with patch("wisp.core.agent.WispAgentCore", FailAgent):
+        contract = SubagentContract(name="failer", task="fail")
+        result = await orch.run(contract)
+
+    assert result.success is False
+
+    telemetry = orch.get_telemetry()
+    assert len(telemetry) >= 1
+    for model_records in telemetry.values():
+        failures = [r for r in model_records if not r["success"]]
+        assert len(failures) >= 1
+
+
+@pytest.mark.asyncio
+async def test_telemetry_multiple_runs_aggregated(orch):
+    """Multiple runs aggregate in telemetry."""
+    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+        await orch.run(SubagentContract(name="t1", task="task1"))
+        await orch.run(SubagentContract(name="t2", task="task2"))
+
+    telemetry = orch.get_telemetry()
+    model_records = list(telemetry.values())[0]
+    assert len(model_records) == 2
+
+
+@pytest.mark.asyncio
+async def test_telemetry_summary(orch):
+    """get_telemetry_summary returns aggregated stats."""
+    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+        await orch.run(SubagentContract(name="t1", task="task1"))
+        await orch.run(SubagentContract(name="t2", task="task2"))
+
+    summary = orch.get_telemetry_summary()
+    assert len(summary) >= 1
+    model_summary = list(summary.values())[0]
+    assert model_summary["count"] == 2
+    assert model_summary["success_rate"] == 1.0
+    assert model_summary["total_tokens"] >= 0
+
+
+# ── Composable pattern edge cases ────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_run_map_reduce_with_mapper_failures(orch):
+    """Some mappers fail — reducer still runs with partial results."""
+    class FlakyMapper(FakeWispAgentCore):
+        counter = 0
+        async def run_task(self, **kwargs):
+            FlakyMapper.counter += 1
+            if FlakyMapper.counter == 2:
+                raise RuntimeError("mapper failed")
+            return {"success": True, "output": "Mapper done."}
+
+    with patch("wisp.core.agent.WispAgentCore", FlakyMapper):
+        result = await orch.run_map_reduce(
+            task="Review files",
+            items=["src/a.py", "src/b.py", "src/c.py"],
+            mapper=lambda item: SubagentContract(
+                name=f"review-{item}", task=f"Review {item}"
+            ),
+            reducer="Synthesize all reviews.",
+            max_concurrent=3,
+        )
+
+    assert isinstance(result, SubagentResult)
+    # Reducer should still have produced output with partial results
+    assert result.output is not None
+    assert len(result.output) > 0
+
+
+@pytest.mark.asyncio
+async def test_run_vote_with_failures(orch):
+    """Some agents fail — consensus calculated from successful only."""
+    class MixedAgent(FakeWispAgentCore):
+        counter = 0
+        async def run_task(self, **kwargs):
+            MixedAgent.counter += 1
+            if MixedAgent.counter == 1:
+                return {"success": True, "output": "YES"}
+            raise RuntimeError("agent failed")
+
+    with patch("wisp.core.agent.WispAgentCore", MixedAgent):
+        result = await orch.run_vote(
+            task="Is this safe?",
+            agents=[
+                SubagentContract(name="auditor-1"),
+                SubagentContract(name="auditor-2"),
+            ],
+            consensus_threshold=0.6,
+        )
+
+    # With 1 success out of 2: 1/2 = 50% < 60% threshold
+    assert result.success is False
+    assert "NOT REACHED" in result.output
+
+
+@pytest.mark.asyncio
+async def test_run_vote_simple_consensus(orch):
+    """Simple yes/no agreement — threshold logic works."""
+    class BinAgent(FakeWispAgentCore):
+        counter = 0
+        async def run_task(self, **kwargs):
+            BinAgent.counter += 1
+            if BinAgent.counter <= 2:
+                return {"success": True, "output": "YES, it is safe."}
+            return {"success": True, "output": "NO, it is not safe."}
+
+    with patch("wisp.core.agent.WispAgentCore", BinAgent):
+        result = await orch.run_vote(
+            task="Is this safe?",
+            agents=[
+                SubagentContract(name="auditor-1"),
+                SubagentContract(name="auditor-2"),
+                SubagentContract(name="auditor-3"),
+            ],
+            consensus_threshold=0.5,
+        )
+
+    # 2/3 agree on YES → 67% ≥ 50% → consensus reached
+    assert result.success is True
+    assert "REACHED" in result.output
+
+
+@pytest.mark.asyncio
+async def test_run_chain_empty(orch):
+    """Empty contracts list returns success with '(empty chain)'."""
+    result = await orch.run_chain([])
+    assert result.success is True
+    assert "(empty chain)" in result.output
+
+
+@pytest.mark.asyncio
+async def test_run_chain_no_context_pass(orch):
+    """pass_context=False — no context prepended to subsequent tasks."""
+    class TrackingAgent(FakeWispAgentCore):
+        last_task = ""
+        async def run_task(self, **kwargs):
+            TrackingAgent.last_task = kwargs.get("task_description", "")
+            return {"success": True, "output": f"Done: {kwargs.get('task_description', '')}"}
+
+    with patch("wisp.core.agent.WispAgentCore", TrackingAgent):
+        result = await orch.run_chain([
+            SubagentContract(name="step1", task="Do step 1"),
+            SubagentContract(name="step2", task="Do step 2"),
+        ], pass_context=False)
+
+    assert result.success is True
+    # Step 2 should NOT contain "Previous Steps Context"
+    assert "Previous Steps Context" not in TrackingAgent.last_task or not TrackingAgent.last_task
+
+
+# ── Token budget edge cases ──────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_token_budget_unset_returns_none(orch):
+    """When no budget set, get_token_budget_remaining returns None."""
+    assert orch.get_token_budget_remaining() is None
+
+
+def test_token_budget_remove(orch):
+    """set_global_token_budget(None) removes the budget."""
+    orch.set_global_token_budget(1000)
+    assert orch.get_token_budget_remaining() == 1000
+    orch.set_global_token_budget(None)
+    assert orch.get_token_budget_remaining() is None
+
+
+@pytest.mark.asyncio
+async def test_output_token_truncation(orch):
+    """max_output_tokens exceeded — output truncated with suffix."""
+    class VerboseAgent(FakeWispAgentCore):
+        async def run_task(self, **kwargs):
+            return {"success": True, "output": "A" * 1000}
+
+    # The FakeWispAgentCore has 3 messages with total chars = ~100
+    # chars_per_token = 4, so about 25 tokens. Setting max_output to 1 forces truncation.
+    with patch("wisp.core.agent.WispAgentCore", VerboseAgent):
+        contract = SubagentContract(
+            name="verbose", task="speak",
+            max_output_tokens=1,
+            max_output_chars=50,
+        )
+        result = await orch.run(contract)
+
+    assert result.success is True
+    assert "OUTPUT TRUNCATED" in result.output
+    assert len(result.output) < 200  # truncated
+
+
+@pytest.mark.asyncio
+async def test_token_budget_check_fails_early(orch):
+    """Budget exhausted — run returns immediately with zero elapsed."""
+    orch.set_global_token_budget(1)
+    # Consume the budget
+    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+        await orch.run(SubagentContract(name="consumer", task="use tokens"))
+
+    # Now budget is exhausted — next run should fail fast
+    orch.set_global_token_budget(orch.get_tokens_consumed())
+
+    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+        result = await orch.run(SubagentContract(name="exhausted", task="should fail"))
+
+    assert result.success is False
+    assert "TOKEN BUDGET EXCEEDED" in result.output
+    assert result.elapsed_seconds == 0.0  # failed before any work
+
+
+@pytest.mark.asyncio
+async def test_token_budget_no_check_without_budget(orch):
+    """Without a global budget, token check passes."""
+    assert orch._check_token_budget(SubagentContract(task="test")) is None
+
+
+# ── Schema validation edge cases ────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_run_schema_auto_retry(orch):
+    """auto_retry_parse=True + schema fail — retries once."""
+    class FirstBadThenGoodAgent(FakeWispAgentCore):
+        call_count = 0
+        async def run_task(self, **kwargs):
+            FirstBadThenGoodAgent.call_count += 1
+            if FirstBadThenGoodAgent.call_count == 1:
+                return {"success": True, "output": "not json at all"}
+            return {"success": True, "output": json.dumps({"value": 42})}
+
+    schema = {"type": "object", "properties": {"value": {"type": "integer"}}, "required": ["value"]}
+
+    with patch("wisp.core.agent.WispAgentCore", FirstBadThenGoodAgent):
+        contract = SubagentContract(
+            name="retry-test",
+            task="return json",
+            output_schema=schema,
+            auto_retry_parse=True,
+        )
+        result = await orch.run(contract)
+
+    assert result.success is True
+    assert result.validated_output is not None
+    assert result.validated_output["value"] == 42
+    assert FirstBadThenGoodAgent.call_count >= 2
+
+
+@pytest.mark.asyncio
+async def test_run_schema_jsonschema_not_installed(monkeypatch):
+    """When jsonschema not installed — graceful fallback with json.loads."""
+    import builtins
+    original_import = builtins.__import__
+
+    def mock_import(name, *args, **kwargs):
+        if name == "jsonschema":
+            raise ImportError("No jsonschema")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", mock_import)
+
+    from wisp.config import WispConfig
+    cfg = WispConfig()
+    cfg.model = "test-model"
+    fresh_orch = SubagentOrchestrator(config=cfg)
+
+    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+        contract = SubagentContract(
+            name="no-schema-lib",
+            task="return json",
+            output_schema={"type": "object"},
+        )
+        result = await fresh_orch.run(contract)
+
+    assert result.success is True
+    assert result.error is None or "jsonschema not installed" not in (result.error or "")
+
+
+# ── Worktree and config tests ──────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_worktree_creation_falls_back(orch, monkeypatch):
+    """Worktree creation fails — falls back to shared workspace."""
+    async def mock_create_worktree(name):
+        raise RuntimeError("git not available")
+
+    monkeypatch.setattr(orch, "_create_worktree", mock_create_worktree)
+
+    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+        contract = SubagentContract(name="no-worktree", task="hello", worktree_isolated=True)
+        result = await orch.run(contract)
+
+    assert result.success is True
+    assert result.output == "Fake output"
+
+
+def test_orchestrator_with_explicit_workspace():
+    """Orchestrator accepts explicit workspace path."""
+    from wisp.config import WispConfig
+    cfg = WispConfig()
+    cfg.model = "test-model"
+    cfg.workspace = "/custom/workspace"
+    orch = SubagentOrchestrator(config=cfg)
+    assert str(orch.workspace) == "/custom/workspace"

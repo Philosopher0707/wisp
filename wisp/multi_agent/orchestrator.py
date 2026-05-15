@@ -67,6 +67,7 @@ Per-contract limits:
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import os
@@ -363,13 +364,17 @@ Respond in JSON with a "plan" string and a "subtasks" array.
             finally:
                 loop.close()
 
-        thread = __import__("threading").Thread(target=_target)
+        thread = __import__("threading").Thread(target=_target, daemon=True)
         thread.start()
         thread.join(timeout=300)
 
         if thread.is_alive():
-            logger.warning("Swarm thread did not finish within 5 minutes — returning timeout result")
+            logger.warning("Swarm thread did not finish within 5 minutes — forcing shutdown")
             self._shutdown = True
+            try:
+                self.stop_all()
+            except Exception:
+                pass
             return SwarmResult(
                 success=False, goal=goal, plan="",
                 final_output="[Swarm timed out after 5 minutes]",
@@ -485,6 +490,7 @@ Respond in JSON with a "plan" string and a "subtasks" array.
         role_rr: dict[str, int] = {r: 0 for r in role_to_agents}
 
         semaphore = asyncio.Semaphore(self.max_parallel)
+        task_done_cond = asyncio.Condition()
 
         async def run_task(idx: int) -> None:
             nonlocal results, completed, failed
@@ -601,21 +607,28 @@ Respond in JSON with a "plan" string and a "subtasks" array.
                         event_type=EventKind.TASK_FAILED,
                         payload={"error": result.error},
                     ))
+                async with task_done_cond:
+                    task_done_cond.notify_all()
 
         async def wait_then_run(idx: int) -> None:
-            """Poll until dependencies resolved, then run."""
+            """Wait until dependencies resolved, then run."""
             deps = subtasks[idx].get("dependencies", [])
             while True:
                 if self._shutdown:
                     failed.add(idx)
                     return
-                if all(d in completed for d in deps):
+                # Check conditions while holding lock, then release before run_task
+                async with task_done_cond:
+                    ready = all(d in completed for d in deps)
+                    failed_deps = any(d in failed for d in deps)
+                if ready:
                     await run_task(idx)
                     return
-                if any(d in failed for d in deps):
+                if failed_deps:
                     failed.add(idx)
                     return
-                await asyncio.sleep(0.1)
+                async with task_done_cond:
+                    await task_done_cond.wait()
 
         coros = [wait_then_run(i) for i in range(len(subtasks))]
         await asyncio.gather(*coros)
@@ -1009,7 +1022,15 @@ class SubagentOrchestrator:
         # ── Spawn & run with timeout ──────────────────────────────────
         try:
             result = await asyncio.wait_for(
-                self._run_agent(contract, child_cfg, session, system, agent_workspace, tool_calls_log),
+                asyncio.to_thread(
+                    self._run_agent_sync,
+                    contract,
+                    child_cfg,
+                    session,
+                    system,
+                    agent_workspace,
+                    tool_calls_log,
+                ),
                 timeout=contract.timeout_seconds,
             )
 
@@ -1052,6 +1073,13 @@ class SubagentOrchestrator:
                         subagent_result.output[:contract.max_output_chars]
                         + f"\n\n[OUTPUT TRUNCATED: exceeded {contract.max_output_tokens} output tokens]"
                     )
+
+            # Enforce per-contract output char limit (independent of token limit)
+            if len(subagent_result.output) > contract.max_output_chars:
+                subagent_result.output = (
+                    subagent_result.output[:contract.max_output_chars]
+                    + f"\n\n[OUTPUT TRUNCATED: exceeded {contract.max_output_chars} characters]"
+                )
 
             # ── Record telemetry ───────────────────────────────────────
             model_used = contract.model or self.config.model or "unknown"
@@ -1307,10 +1335,10 @@ class SubagentOrchestrator:
 
         reducer_result = await self.run(reducer_contract)
 
-        # Aggregate token usage from mappers + reducer
+        # Aggregate total token usage for the whole map-reduce operation.
+        # We preserve the reducer's own input/output counts and only
+        # update tokens_used so telemetry reflects the total job cost.
         mapper_tokens = sum(r.tokens_used for r in mapper_results)
-        reducer_result.input_tokens += sum(r.input_tokens for r in mapper_results)
-        reducer_result.output_tokens += sum(r.output_tokens for r in mapper_results)
         reducer_result.tokens_used += mapper_tokens
         return reducer_result
 
@@ -1364,10 +1392,13 @@ class SubagentOrchestrator:
             na, nb = _normalize(a), _normalize(b)
             if na == nb:
                 return True
-            # One contains the other (e.g. "yes, it's vulnerable" vs "yes")
-            if len(na) > len(nb):
-                return nb in na
-            return na in nb
+            # Only consider short answers similar by containment to avoid
+            # grouping a detailed dissent with a terse majority answer.
+            if len(na) <= 10 and len(nb) <= 10:
+                if len(na) > len(nb):
+                    return nb in na
+                return na in nb
+            return False
 
         # Group outputs by similarity
         groups: list[list[str]] = []
@@ -1471,7 +1502,10 @@ class SubagentOrchestrator:
                     f"## Previous Steps Context\n"
                     f"{context_block}"
                 )
-                contract = SubagentContract(**{**contract.__dict__, "task": augmented_task})
+                # Deep-copy mutable fields so each step is isolated
+                copied = copy.deepcopy(contract.__dict__)
+                copied["task"] = augmented_task
+                contract = SubagentContract(**copied)
 
             result = await self.run(contract)
             last_result = result
@@ -1535,6 +1569,29 @@ class SubagentOrchestrator:
         return last_result
 
     # ── Internal helpers ───────────────────────────────────────────────
+
+    def _run_agent_sync(
+        self,
+        contract: SubagentContract,
+        config: WispConfig,
+        session: Session,
+        system_prompt: str,
+        workspace_path: str,
+        tool_calls_log: list[dict],
+    ) -> dict:
+        """Synchronous wrapper that runs the async _run_agent in a fresh event loop.
+
+        This ensures the work can be cancelled by asyncio.wait_for via
+        asyncio.to_thread, which is not possible when a sync blocking call
+        is nested inside an async coroutine.
+        """
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(
+                self._run_agent(contract, config, session, system_prompt, workspace_path, tool_calls_log)
+            )
+        finally:
+            loop.close()
 
     async def _run_agent(
         self,
@@ -1616,17 +1673,12 @@ class SubagentOrchestrator:
 
     def _build_child_config(self, contract: SubagentContract) -> WispConfig:
         """Clone the parent config with optional per-subagent overrides."""
-        child = WispConfig()
+        child = copy.deepcopy(self.config)
+        # Override only the fields the subagent contract controls
         child.model = contract.model or self.config.model
         child.workspace = str(contract.workspace or self.workspace)
         child.auto_approve = contract.auto_approve
-        child.show_thinking = self.config.show_thinking
-        child.chars_per_token = self.config.chars_per_token
-        child.ollama_url = self.config.ollama_url
-        child.temperature = self.config.temperature
         child.max_context_tokens = contract.max_tokens or self.config.max_context_tokens
-        child._context_tokens_explicit = self.config._context_tokens_explicit
-        child.permission_mode = self.config.permission_mode
         child.max_iterations = contract.max_iterations
         return child
 
@@ -1777,6 +1829,13 @@ class SubagentOrchestrator:
             jsonschema.validate(instance=parsed, schema=contract.output_schema)
             result.validated_output = parsed
             return result
+        except ImportError:
+            logger.warning("jsonschema not installed, skipping output validation")
+            try:
+                result.validated_output = json.loads(result.output)
+            except json.JSONDecodeError:
+                pass
+            return result
         except json.JSONDecodeError as e:
             logger.warning("Subagent %s output is not valid JSON: %s", contract.name, e)
             if contract.auto_retry_parse and result.retry_count == 0:
@@ -1784,12 +1843,6 @@ class SubagentOrchestrator:
             result.error = f"Output is not valid JSON: {e}"
             return result
         except jsonschema.ValidationError as e:
-            logger.warning("Subagent %s output failed schema validation: %s", contract.name, e.message)
-            if contract.auto_retry_parse and result.retry_count == 0:
-                return await self._retry_with_parse_error(result, contract, e.message)
-            result.error = f"Schema validation failed: {e.message}"
-            return result
-        except ImportError:
             logger.warning("jsonschema not installed, skipping output validation")
             try:
                 result.validated_output = json.loads(result.output)
