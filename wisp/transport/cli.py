@@ -501,7 +501,10 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
                             _drained_something = True
                             attempts = 0
                             try:
-                                extra_line = input()
+                                raw = sys.stdin.buffer.readline()
+                                if not raw:
+                                    break
+                                extra_line = raw.decode("utf-8", errors="replace").rstrip("\n")
                             except (EOFError, OSError):
                                 break
                             total_chars += len(extra_line)
