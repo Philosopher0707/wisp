@@ -53,3 +53,6 @@ android/build/
 
 # Wisp checkpoints
 .wisp/checkpoints/
+
+# Test artifacts
+MagicMock/

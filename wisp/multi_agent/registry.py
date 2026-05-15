@@ -107,8 +107,10 @@ class AgentRegistry:
                 if other_id != agent_id and path in rec.files_locked:
                     return False
             if agent_id in self._agents:
-                if path not in self._agents[agent_id].files_locked:
-                    self._agents[agent_id].files_locked.append(path)
+                # Already claimed by this agent — idempotent success
+                if path in self._agents[agent_id].files_locked:
+                    return True
+                self._agents[agent_id].files_locked.append(path)
                 return True
             return False
 
