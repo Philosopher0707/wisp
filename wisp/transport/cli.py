@@ -559,26 +559,20 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
         # If data is already available in the stdin buffer, the user is
         # pasting (not typing).  Bypass readline entirely to avoid the
         # ugly echo of long paste content inside the input box.
-        # Use a small timeout so typing isn't delayed, but paste buffer
-        # has time to flush into stdin.
+        # Uses FIONREAD ioctl for precise byte count — no timing issues.
         try:
-            import select
-            ready, _, _ = select.select([sys.stdin], [], [], 0.05)
-            if ready:
-                while True:
-                    r2, _, _ = select.select([sys.stdin], [], [], 0.02)
-                    if not r2:
-                        break
-                    raw = sys.stdin.buffer.readline()
-                    if not raw:
-                        break
-                    extra_line = raw.decode("utf-8", errors="replace").rstrip("\n")
-                    total_chars += len(extra_line)
-                    if total_chars > _MAX_INPUT_CHARS:
-                        extra_line = extra_line[: max(0, _MAX_INPUT_CHARS - total_chars + len(extra_line))]
-                        lines.append(extra_line)
-                        break
-                    lines.append(extra_line)
+            import fcntl, termios, array
+            import os as _os  # avoid shadowing
+            buf = array.array('i', [0])
+            fcntl.ioctl(sys.stdin, termios.FIONREAD, buf, True)
+            nbytes = buf[0]
+            if nbytes > 0:
+                raw_data = _os.read(sys.stdin.fileno(), min(nbytes, _MAX_INPUT_CHARS + 1))
+                full_text = raw_data.decode("utf-8", errors="replace")
+                raw_lines = full_text.split("\n")
+                lines = [l for l in raw_lines if l or raw_lines.index(l) < len(raw_lines) - 1]
+                if not lines[-1]:
+                    lines = lines[:-1]
                 if lines:
                     _paste_counter += 1
                     _last_paste_lines = len(lines)
@@ -593,6 +587,8 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
                     if readline is not None and result.strip():
                         readline.add_history(result)
                     return result
+        except (ImportError, OSError, TypeError, termios.error):
+            pass
         except ImportError:
             pass
 
