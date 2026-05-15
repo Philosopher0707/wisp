@@ -1321,6 +1321,7 @@ class SubagentOrchestrator:
 
         consensus_reached = False
         winner = ""
+        count = 0
         if most_common:
             winner, count = most_common[0]
             consensus_reached = count / total >= consensus_threshold
