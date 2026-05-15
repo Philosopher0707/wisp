@@ -369,44 +369,119 @@ def _detect_language(path: str) -> Optional[str]:
 
 # ── Input handling ───────────────────────────────────────────────────
 
+_MAX_INPUT_CHARS = 100_000  # guard against accidental huge pastes
+
+
+def _has_unclosed_brackets(text: str) -> bool:
+    """Return True if text has unclosed brackets, quotes, or triple-quotes."""
+    stack: list[str] = []
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        # Triple-quote detection
+        if ch in ('"', "'"):
+            if i + 2 < len(text) and text[i:i + 3] in ('"""', "'''"):
+                quote = text[i:i + 3]
+                # Find closing triple quote
+                close = text.find(quote, i + 3)
+                if close == -1:
+                    return True
+                i = close + 3
+                continue
+            else:
+                # Single quote — toggle if not inside the other kind
+                if stack and stack[-1] == ch:
+                    stack.pop()
+                else:
+                    stack.append(ch)
+                i += 1
+                continue
+        if ch in ('(', '[', '{'):
+            stack.append(ch)
+        elif ch in (')', ']', '}'):
+            if not stack:
+                return False  # mismatched, but not "unclosed"
+            opener = stack.pop()
+            if (ch == ')' and opener != '(') or \
+               (ch == ']' and opener != '[') or \
+               (ch == '}' and opener != '{'):
+                return False  # mismatched
+        i += 1
+    return bool(stack)
+
+
+def _continuation_prompt(depth: int) -> str:
+    """Build a continuation prompt showing bracket nesting depth."""
+    if depth <= 0:
+        return "... "
+    indent = "  " * min(depth, 4)
+    return f"{indent}... "
+
+
 def _input_line(prompt: str, allow_multiline: bool = True) -> str:
     """Read input from the user with a prompt.
 
     Interactive mode:
       - Uses readline for arrow-key editing and history.
-      - Supports multi-line input: if a line ends with '\\',
-        the next line is appended.
+      - Supports multi-line input via backslash continuation OR
+        auto-detection of unclosed brackets/quotes.
       - Auto-detects paste: if multiple lines arrive rapidly,
         they are combined into a single multi-line input.
+      - Guards against accidental huge pastes (>100KB).
 
     Non-interactive mode:
       - Reads raw bytes to survive invalid UTF-8 in piped input.
+      - Returns empty string on EOF so the caller can exit.
     """
     if sys.stdin.isatty():
-        lines = []
+        lines: list[str] = []
+        total_chars = 0
         while True:
             try:
                 if not lines:
                     rl_prompt = f"\001\033[1m\002{prompt}\001\033[0m\002"
                 else:
-                    rl_prompt = "... "
+                    depth = sum(1 for c in "\n".join(lines) if c in "([{")
+                    rl_prompt = _continuation_prompt(depth)
                 line = input(rl_prompt)
             except KeyboardInterrupt:
                 print()
                 raise
-            except (EOFError, OSError, UnicodeDecodeError):
+            except EOFError:
+                # In interactive mode, EOF on empty input means exit.
+                if not lines:
+                    raise
+                # EOF during multiline input: return what we have.
+                break
+            except (OSError, UnicodeDecodeError):
                 return ""
+
+            total_chars += len(line)
+            if total_chars > _MAX_INPUT_CHARS:
+                print(warning(f"\n  ⚠️  Input truncated at {_MAX_INPUT_CHARS} chars."))
+                line = line[: max(0, _MAX_INPUT_CHARS - total_chars + len(line))]
+                lines.append(line)
+                break
 
             stripped = line.rstrip()
             if allow_multiline and stripped.endswith("\\"):
                 lines.append(stripped[:-1])
                 continue
-            lines.append(line)
 
+            lines.append(line)
+            combined = "\n".join(lines)
+
+            # Auto-continue if brackets/quotes are unclosed
+            if allow_multiline and _has_unclosed_brackets(combined):
+                continue
+
+            # Paste detection: only after backslash or bracket continuation
+            # has already been ruled out.  Short timeout so human typing
+            # doesn't accidentally trigger it.
             if allow_multiline and lines:
                 try:
                     import select
-                    ready, _, _ = select.select([sys.stdin], [], [], 0.1)
+                    ready, _, _ = select.select([sys.stdin], [], [], 0.02)
                     if ready:
                         while True:
                             try:
@@ -414,6 +489,12 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
                                 if not ready2:
                                     break
                                 extra_line = input()
+                                total_chars += len(extra_line)
+                                if total_chars > _MAX_INPUT_CHARS:
+                                    print(warning(f"\n  ⚠️  Input truncated at {_MAX_INPUT_CHARS} chars."))
+                                    extra_line = extra_line[: max(0, _MAX_INPUT_CHARS - total_chars + len(extra_line))]
+                                    lines.append(extra_line)
+                                    break
                                 lines.append(extra_line)
                             except (EOFError, OSError):
                                 break
@@ -422,7 +503,12 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
                     pass
 
             break
-        return "\n".join(lines)
+
+        result = "\n".join(lines)
+        # Add to readline history so user can recall full multiline prompts
+        if readline is not None and result.strip():
+            readline.add_history(result)
+        return result
 
     try:
         data = sys.stdin.buffer.readline()
@@ -851,7 +937,7 @@ class CLITransport:
         if skill_name:
             print(f"   {dim('Skill:')} {skill_name}")
         print()
-        print(dim("  /help for commands  ·  end line with \\ for multiline  ·  Ctrl+C to exit"))
+        print(dim("  /help for commands  ·  \\ or unclosed brackets for multiline  ·  Ctrl+C / Ctrl+D to exit"))
         print()
 
         self._interrupted = False
@@ -859,6 +945,9 @@ class CLITransport:
             while not self._interrupted:
                 try:
                     user_input = _input_line("➜ ")
+                except EOFError:
+                    print(success("\n  👋 Goodbye."))
+                    break
                 except KeyboardInterrupt:
                     print(error("\n⏹  Exiting."))
                     break
@@ -1005,7 +1094,7 @@ class CLITransport:
                 spinner_active = True
 
         try:
-            async for event in self.core._arun(prompt, system=system):
+            async for event in self.core._arun(prompt, system=system, approval_handler=_cli_approval):
                 if self._interrupted:
                     break
 

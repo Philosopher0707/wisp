@@ -1156,6 +1156,26 @@ class WispAgentCore:
                     yield tool_result_event(func_name, blocked_msg)
                     continue
 
+            # ── Approval gating ──
+            needs_approval = func_name in {
+                "write_file", "edit_file", "edit_file_multi", "run_bash",
+                "git_branch", "git_commit", "git_push", "gh_pr_create",
+            }
+            if needs_approval and approval_handler and not getattr(self.config, "auto_approve", False):
+                reason = f"{func_name} modifies workspace state"
+                yield approval_request(func_name, func_args, reason)
+                approved, modified = await approval_handler(func_name, func_args, reason)
+                if modified is not None:
+                    func_args = modified
+                if not approved:
+                    blocked = f"[Blocked: user declined {func_name}]"
+                    yield tool_result_event(func_name, blocked)
+                    self.messages.append({
+                        "role": "tool", "content": blocked, "name": func_name,
+                        **({"tool_call_id": tc.get("id")} if tc.get("id") is not None else {}),
+                    })
+                    continue
+
             # Execute tool
             start = time.monotonic()
             if func_name == "spawn_subagent":
