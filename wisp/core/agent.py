@@ -797,6 +797,12 @@ class WispAgentCore:
         # Hard trim only if compaction wasn't sufficient
         self._trim_context_if_needed(system)
 
+        # ── Auto parallel research for complex queries ─────────────────
+        research_results = await self._auto_parallel_research(prompt)
+        if research_results:
+            for event in research_results:
+                yield event
+
         # Steering checkpoint 1: after compact, before iteration loop
         inject = await self._check_steering()
         if inject is not None:
@@ -1404,6 +1410,106 @@ class WispAgentCore:
         except Exception as e:
             logger.error("Failed to spawn subagents: %s", e)
         return []
+
+    # ── Auto parallel research ───────────────────────────────────────
+
+    async def _auto_parallel_research(self, prompt: str) -> list:
+        """Automatically spawn parallel subagents for complex research queries.
+
+        Detects research-oriented prompts and breaks them into parallel
+        sub-tasks. Returns AgentEvent list for yielding.
+        """
+        # Only trigger for research-like queries
+        research_keywords = [
+            "research", "compare", "analyze", "survey", "overview",
+            "explain", "what is", "how does", "pros and cons",
+            "differences between", "similarities between",
+        ]
+        prompt_lower = prompt.lower()
+        is_research = any(kw in prompt_lower for kw in research_keywords)
+
+        # Don't trigger for simple queries
+        if not is_research or len(prompt) < 40:
+            return []
+
+        # Don't trigger if already in a subagent
+        if getattr(self, "_subagent_depth", 0) > 0:
+            return []
+
+        # Check if auto-research is enabled (default: True)
+        if not getattr(self.config, "auto_parallel_research", True):
+            return []
+
+        logger.info("Auto-parallel research triggered for: %s", prompt[:60])
+
+        # Break into parallel research angles
+        angles = self._research_angles(prompt)
+        if len(angles) < 2:
+            return []
+
+        from wisp.multi_agent import SubagentContract
+        from wisp.stream_events import content_event
+
+        contracts = [
+            SubagentContract(
+                name=f"research-{i+1}",
+                task=angle,
+                timeout_seconds=60,
+                isolation="process",
+                max_iterations=5,
+                output_format="markdown",
+                max_tokens=4000,
+                workspace=self.config.workspace,
+                auto_approve=self.config.auto_approve,
+            )
+            for i, angle in enumerate(angles[:4])  # Max 4 parallel
+        ]
+
+        events = []
+        events.append(content_event(f"🔍 Researching: {prompt[:80]}...\n"))
+        events.append(content_event(f"  Spawning {len(contracts)} parallel subagents...\n"))
+
+        results = await self.spawn_subagents(contracts)
+
+        # Build synthesized context
+        synthesis = "\n## Research Results\n\n"
+        for r in results:
+            if r.success:
+                synthesis += f"### {r.task_id}\n{r.output[:2000]}\n\n"
+            elif r.timed_out:
+                synthesis += f"### {r.task_id}\n[Timed out after {r.elapsed_seconds:.0f}s]\n\n"
+            else:
+                synthesis += f"### {r.task_id}\n[Error: {r.error or 'unknown'}]\n\n"
+
+        # Inject as assistant context (not a real assistant message)
+        self.messages.append({
+            "role": "system",
+            "content": f"[Parallel research completed]\n{synthesis}",
+        })
+
+        events.append(content_event(f"  ✓ Research complete ({len([r for r in results if r.success])}/{len(results)} succeeded)\n"))
+        return events
+
+    def _research_angles(self, prompt: str) -> list[str]:
+        """Break a research prompt into parallel investigation angles."""
+        prompt_lower = prompt.lower()
+
+        # KV caching research
+        if "kv cache" in prompt_lower or "kv caching" in prompt_lower:
+            return [
+                "Research the foundational problem: why KV caching is needed in transformers, memory complexity of attention",
+                "Research architectural improvements: Multi-Query Attention, Grouped-Query Attention, FlashAttention optimizations",
+                "Research compression methods: quantization, eviction policies, H2O, SnapKV, dynamic compression",
+                "Research system-level optimizations: vLLM PagedAttention, continuous batching, memory paging",
+            ]
+
+        # Generic research breakdown
+        return [
+            f"Research the core concepts and fundamentals: {prompt}",
+            f"Research recent advances and state-of-the-art: {prompt}",
+            f"Research practical implementations and tools: {prompt}",
+            f"Research limitations, challenges, and future directions: {prompt}",
+        ]
 
     def _subagent_cache_key(self, contract: SubagentContract) -> str:
         """Build a cache key from contract fields that affect output."""
