@@ -555,14 +555,19 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
         lines: list[str] = []
         total_chars = 0
 
-        def _drain_stdin(max_chars: int) -> list[str]:
-            """Read all available lines from raw stdin buffer."""
+        # ── Pre-input paste poll ──
+        # Check stdin BEFORE the first input() call. If data available (paste),
+        # read everything from raw buffer and bypass readline entirely.
+        try:
+            import select
+            ready, _, _ = select.select([sys.stdin], [], [], 0.2)
+        except (ImportError, OSError, ValueError):
+            ready = False
+        if ready:
             drained: list[str] = []
-            used = 0
             while True:
                 try:
-                    import select
-                    r2, _, _ = select.select([sys.stdin], [], [], 0)
+                    r2, _, _ = select.select([sys.stdin], [], [], 0.02)
                 except (ImportError, OSError, ValueError):
                     break
                 if not r2:
@@ -573,79 +578,28 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
                     break
                 if not raw:
                     break
-                line = raw.decode("utf-8", errors="replace").rstrip("\n")
-                used += len(line)
-                if used > max_chars:
-                    line = line[:max(0, max_chars - used + len(line))]
-                    drained.append(line)
+                extra = raw.decode("utf-8", errors="replace").rstrip("\n")
+                total_chars += len(extra)
+                if total_chars > _MAX_INPUT_CHARS:
+                    extra = extra[:max(0, _MAX_INPUT_CHARS - total_chars + len(extra))]
+                    drained.append(extra)
                     break
-                drained.append(line)
-            return drained
-
-        def _paste_return(prompt: str, first_line: str, all_lines: list[str]) -> str:
-            """Print clean prompt+preview and return joined text.
-
-            The first 1+ lines were already echoed by readline's input() calls.
-            Use \033[A (cursor up) + \033[K (erase to end of line) to wipe
-            each echoed row one by one.  \033[A is universally supported on
-            all terminal emulators including macOS Terminal.app.
-            """
-            global _paste_counter, _last_paste_lines
-            _paste_counter += 1
-            _last_paste_lines = len(all_lines)
-            # Cursor up + erase for each echoed line + prompt
-            rows = len(all_lines) + 1  # prompt + each continuation line
-            for _ in range(rows):
-                sys.stdout.write("\033[A\033[K")
-            sys.stdout.write("\033[K\r")  # final CR + clear
-            sys.stdout.flush()
-            # Print clean prompt + one-line preview
-            print(f"\001\033[1m\002{prompt}\001\033[0m\002", end="")
-            w = _term_width()
-            s = first_line[:w - 14].replace("\n", " ")
-            if len(first_line) > w - 14:
-                s += "..."
-            print(f"  {dim(s)}")
-            result = "\n".join(all_lines)
-            if readline is not None and result.strip():
-                readline.add_history(result)
-            return result
+                drained.append(extra)
+            if drained:
+                _paste_counter += 1
+                _last_paste_lines = len(drained)
+                print(f"\001\033[1m\002{prompt}\001\033[0m\002", end="")
+                w = _term_width()
+                s = drained[0][:w - 14].replace("\n", " ")
+                if len(drained[0]) > w - 14:
+                    s += "..."
+                print(f"  {dim(s)}")
+                result = "\n".join(drained)
+                if readline is not None and result.strip():
+                    readline.add_history(result)
+                return result
 
         while True:
-            # ── Pre-input paste poll: check stdin before each input() call ──
-            # 200ms is enough for paste data to arrive in kernel buffer.
-            try:
-                import select, io as _io
-                try:
-                    ready, _, _ = select.select([sys.stdin], [], [], 0.2)
-                except (_io.UnsupportedOperation, OSError, ValueError):
-                    ready = False
-                if ready and not lines:
-                    # First input() hasn't been called yet — drain raw, no echoes to clear
-                    drained = _drain_stdin(_MAX_INPUT_CHARS)
-                    if drained:
-                        _paste_counter += 1
-                        _last_paste_lines = len(drained)
-                        print(f"\001\033[1m\002{prompt}\001\033[0m\002", end="")
-                        w = _term_width()
-                        s = drained[0][:w - 14].replace("\n", " ")
-                        if len(drained[0]) > w - 14:
-                            s += "..."
-                        print(f"  {dim(s)}")
-                        result = "\n".join(drained)
-                        if readline is not None and result.strip():
-                            readline.add_history(result)
-                        return result
-                elif ready and lines:
-                    # Continuation lines — a paste is being typed through bracket
-                    # continuation. Drain remaining lines and return cleaned up.
-                    drained = _drain_stdin(max(0, _MAX_INPUT_CHARS - total_chars))
-                    if drained:
-                        lines.extend(drained)
-                        return _paste_return(prompt, lines[0], lines)
-            except ImportError:
-                pass
-
             try:
                 if not lines:
                     rl_prompt = f"\001\033[1m\002{prompt}\001\033[0m\002"
@@ -678,27 +632,81 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
             lines.append(line)
             combined = "\n".join(lines)
 
+            # Bracket continuation — switch to raw stdin for remaining lines
+            # so we control what's echoed (no ugly readline echo).
             if allow_multiline and _has_unclosed_brackets(combined):
-                continue
+                # More data queued? This is a paste.
+                try:
+                    import select as _sel
+                    r, _, _ = _sel.select([sys.stdin], [], [], 0)
+                    is_paste = bool(r)
+                except ImportError:
+                    is_paste = False
+                if is_paste:
+                    # Drain remaining lines from raw buffer
+                    while True:
+                        try:
+                            r2, _, _ = _sel.select([sys.stdin], [], [], 0.02)
+                        except (ImportError, OSError, ValueError):
+                            break
+                        if not r2:
+                            break
+                        try:
+                            raw = sys.stdin.buffer.readline()
+                        except (EOFError, OSError):
+                            break
+                        if not raw:
+                            break
+                        extra = raw.decode("utf-8", errors="replace").rstrip("\n")
+                        # Don't print this line (we'll show a clean summary)
+                        total_chars += len(extra)
+                        if total_chars > _MAX_INPUT_CHARS:
+                            extra = extra[:max(0, _MAX_INPUT_CHARS - total_chars + len(extra))]
+                            lines.append(extra)
+                            break
+                        lines.append(extra)
+                    _paste_counter += 1
+                    _last_paste_lines = len(lines)
+                    return "\n".join(lines)
+                else:
+                    # Keep typing in readline
+                    continue
 
-            # After bracket continuation ends, check for paste tail
-            was_paste = False
             if allow_multiline and lines:
                 try:
                     import select
                     ready, _, _ = select.select([sys.stdin], [], [], 0.02)
                     if ready:
-                        drained = _drain_stdin(max(0, _MAX_INPUT_CHARS - total_chars))
-                        if drained:
-                            lines.extend(drained)
-                            was_paste = True
+                        _drained_something = False
+                        attempts = 0
+                        while attempts < 200:
+                            ready2, _, _ = select.select([sys.stdin], [], [], 0.01)
+                            if not ready2:
+                                if _drained_something:
+                                    break
+                                attempts += 1
+                                continue
+                            _drained_something = True
+                            attempts = 0
+                            try:
+                                raw = sys.stdin.buffer.readline()
+                                if not raw:
+                                    break
+                                extra_line = raw.decode("utf-8", errors="replace").rstrip("\n")
+                            except (EOFError, OSError):
+                                break
+                            total_chars += len(extra_line)
+                            if total_chars > _MAX_INPUT_CHARS:
+                                print(warning(f"\n  \u26a0\ufe0f  Input truncated at {_MAX_INPUT_CHARS} chars."))
+                                extra_line = extra_line[:max(0, _MAX_INPUT_CHARS - total_chars + len(extra_line))]
+                                lines.append(extra_line)
+                                break
+                            lines.append(extra_line)
+                        _paste_counter += 1
+                        _last_paste_lines = len(lines)
+                        return "\n".join(lines)
                 except (ImportError, OSError):
                     pass
-
-            if was_paste:
-                _paste_counter += 1
-                _last_paste_lines = len(lines)
-                return "\n".join(lines)
 
             break
 
