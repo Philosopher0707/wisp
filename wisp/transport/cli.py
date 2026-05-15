@@ -554,9 +554,98 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
     if sys.stdin.isatty():
         lines: list[str] = []
         total_chars = 0
-        _paste_echo_cleared = False  # track whether we already cleared echoed lines
+
+        def _drain_stdin(max_chars: int) -> list[str]:
+            """Read all available lines from raw stdin buffer."""
+            drained: list[str] = []
+            used = 0
+            while True:
+                try:
+                    import select
+                    r2, _, _ = select.select([sys.stdin], [], [], 0)
+                except (ImportError, OSError, ValueError):
+                    break
+                if not r2:
+                    break
+                try:
+                    raw = sys.stdin.buffer.readline()
+                except (EOFError, OSError):
+                    break
+                if not raw:
+                    break
+                line = raw.decode("utf-8", errors="replace").rstrip("\n")
+                used += len(line)
+                if used > max_chars:
+                    line = line[:max(0, max_chars - used + len(line))]
+                    drained.append(line)
+                    break
+                drained.append(line)
+            return drained
+
+        def _paste_return(prompt: str, first_line: str, all_lines: list[str]) -> str:
+            """Print clean prompt+preview and return joined text.
+
+            The first 1+ lines were already echoed by readline's input() calls.
+            Use \033[A (cursor up) + \033[K (erase to end of line) to wipe
+            each echoed row one by one.  \033[A is universally supported on
+            all terminal emulators including macOS Terminal.app.
+            """
+            global _paste_counter, _last_paste_lines
+            _paste_counter += 1
+            _last_paste_lines = len(all_lines)
+            # Cursor up + erase for each echoed line + prompt
+            rows = len(all_lines) + 1  # prompt + each continuation line
+            for _ in range(rows):
+                sys.stdout.write("\033[A\033[K")
+            sys.stdout.write("\033[K\r")  # final CR + clear
+            sys.stdout.flush()
+            # Print clean prompt + one-line preview
+            print(f"\001\033[1m\002{prompt}\001\033[0m\002", end="")
+            w = _term_width()
+            s = first_line[:w - 14].replace("\n", " ")
+            if len(first_line) > w - 14:
+                s += "..."
+            print(f"  {dim(s)}")
+            result = "\n".join(all_lines)
+            if readline is not None and result.strip():
+                readline.add_history(result)
+            return result
 
         while True:
+            # ── Pre-input paste poll: check stdin before each input() call ──
+            # 200ms is enough for paste data to arrive in kernel buffer.
+            try:
+                import select, io as _io
+                try:
+                    ready, _, _ = select.select([sys.stdin], [], [], 0.2)
+                except (_io.UnsupportedOperation, OSError, ValueError):
+                    ready = False
+                if ready and not lines:
+                    # First input() hasn't been called yet — drain raw, no echoes to clear
+                    drained = _drain_stdin(_MAX_INPUT_CHARS)
+                    if drained:
+                        _paste_counter += 1
+                        _last_paste_lines = len(drained)
+                        print(f"\001\033[1m\002{prompt}\001\033[0m\002", end="")
+                        w = _term_width()
+                        s = drained[0][:w - 14].replace("\n", " ")
+                        if len(drained[0]) > w - 14:
+                            s += "..."
+                        print(f"  {dim(s)}")
+                        result = "\n".join(drained)
+                        if readline is not None and result.strip():
+                            readline.add_history(result)
+                        return result
+                elif ready and lines:
+                    # Continuation lines — a paste is being typed through bracket
+                    # continuation. Drain remaining lines and return cleaned up.
+                    drained = _drain_stdin(max(0, _MAX_INPUT_CHARS - total_chars))
+                    if drained:
+                        lines.extend(drained)
+                        return _paste_return(prompt, lines[0], lines)
+            except ImportError:
+                pass
+
             try:
                 if not lines:
                     rl_prompt = f"\001\033[1m\002{prompt}\001\033[0m\002"
@@ -577,7 +666,7 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
             total_chars += len(line)
             if total_chars > _MAX_INPUT_CHARS:
                 print(warning(f"\n  \u26a0\ufe0f  Input truncated at {_MAX_INPUT_CHARS} chars."))
-                line = line[: max(0, _MAX_INPUT_CHARS - total_chars + len(line))]
+                line = line[:max(0, _MAX_INPUT_CHARS - total_chars + len(line))]
                 lines.append(line)
                 break
 
@@ -590,104 +679,26 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
             combined = "\n".join(lines)
 
             if allow_multiline and _has_unclosed_brackets(combined):
-                # After 4+ lines of bracket continuation, check if stdin has more
-                # data queued.  If so, this is a paste — drain it NOW and return
-                # with a clean preview, before any more readline echoes.
-                if len(lines) >= 4:
-                    try:
-                        import select as _sel
-                        _r, _, _ = _sel.select([sys.stdin], [], [], 0)
-                        if _r:
-                            # Drain remaining lines from raw stdin
-                            while True:
-                                r2, _, _ = _sel.select([sys.stdin], [], [], 0.02)
-                                if not r2:
-                                    break
-                                raw = sys.stdin.buffer.readline()
-                                if not raw:
-                                    break
-                                extra_line = raw.decode("utf-8", errors="replace").rstrip("\n")
-                                total_chars += len(extra_line)
-                                if total_chars > _MAX_INPUT_CHARS:
-                                    extra_line = extra_line[: max(0, _MAX_INPUT_CHARS - total_chars + len(extra_line))]
-                                    lines.append(extra_line)
-                                    break
-                                lines.append(extra_line)
-                            _paste_counter += 1
-                            _last_paste_lines = len(lines)
-                            # Clear ALL echoed lines (each went through input() with ╎ prefix)
-                            w = _term_width()
-                            echoed = sum(len(l) + 3 for l in lines)  # +3 for ╎ prefix
-                            rows = max(1, echoed // w) + len(lines) + 2
-                            for _ in range(rows):
-                                print("\033[F\033[K", end="", flush=True)
-                            # Print clean preview
-                            print(f"\001\033[1m\002{prompt}\001\033[0m\002", end="")
-                            summary = lines[0][: w - 14].replace("\n", " ")
-                            if len(lines[0]) > w - 14:
-                                summary += "..."
-                            print(f"  {dim(summary)}")
-                            result = "\n".join(lines)
-                            if readline is not None and result.strip():
-                                readline.add_history(result)
-                            return result
-                    except ImportError:
-                        pass
                 continue
 
-            # ── Paste drain ──
+            # After bracket continuation ends, check for paste tail
             was_paste = False
             if allow_multiline and lines:
                 try:
                     import select
                     ready, _, _ = select.select([sys.stdin], [], [], 0.02)
                     if ready:
-                        _drained_something = False
-                        attempts = 0
-                        while attempts < 200:
-                            ready2, _, _ = select.select([sys.stdin], [], [], 0.01)
-                            if not ready2:
-                                if _drained_something:
-                                    break
-                                attempts += 1
-                                continue
-                            _drained_something = True
-                            attempts = 0
-                            try:
-                                raw = sys.stdin.buffer.readline()
-                                if not raw:
-                                    break
-                                extra_line = raw.decode("utf-8", errors="replace").rstrip("\n")
-                            except (EOFError, OSError):
-                                break
-                            total_chars += len(extra_line)
-                            if total_chars > _MAX_INPUT_CHARS:
-                                print(warning(f"\n  \u26a0\ufe0f  Input truncated at {_MAX_INPUT_CHARS} chars."))
-                                extra_line = extra_line[: max(0, _MAX_INPUT_CHARS - total_chars + len(extra_line))]
-                                lines.append(extra_line)
-                                break
-                            lines.append(extra_line)
-                        was_paste = True
+                        drained = _drain_stdin(max(0, _MAX_INPUT_CHARS - total_chars))
+                        if drained:
+                            lines.extend(drained)
+                            was_paste = True
                 except (ImportError, OSError):
                     pass
 
             if was_paste:
                 _paste_counter += 1
                 _last_paste_lines = len(lines)
-                # Clear echoed first line
-                w = _term_width()
-                rows = max(2, (len(lines[0]) + 5) // w) + 1
-                for _ in range(rows):
-                    print("\033[F\033[K", end="", flush=True)
-                print(f"\001\033[1m\002{prompt}\001\033[0m\002", end="")
-                summary = lines[0][: w - 14].replace("\n", " ")
-                if len(lines[0]) > w - 14:
-                    summary += "..."
-                print(f"  {dim(summary)}")
-                result = "\n".join(lines)
-                if readline is not None and result.strip():
-                    readline.add_history(result)
-                return result
+                return "\n".join(lines)
 
             break
 
@@ -695,7 +706,6 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
         if readline is not None and result.strip():
             readline.add_history(result)
         return result
-
     try:
         data = sys.stdin.buffer.readline()
     except (EOFError, OSError):

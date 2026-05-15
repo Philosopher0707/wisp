@@ -1448,7 +1448,7 @@ class WispAgentCore:
             return []
 
         from wisp.multi_agent import SubagentContract
-        from wisp.stream_events import content_event
+        from wisp.core.events import content as content_event
 
         contracts = [
             SubagentContract(
