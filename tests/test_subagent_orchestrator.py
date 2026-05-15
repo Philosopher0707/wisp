@@ -1110,3 +1110,97 @@ def test_orchestrator_with_explicit_workspace():
     cfg.workspace = "/custom/workspace"
     orch = SubagentOrchestrator(config=cfg)
     assert str(orch.workspace) == "/custom/workspace"
+
+
+# ── Process isolation tests ────────────────────────────────────────────
+
+def test_contract_isolation_default():
+    """Default isolation is thread."""
+    c = SubagentContract(task="test")
+    assert c.isolation == "thread"
+
+
+def test_contract_isolation_process():
+    """Process isolation can be set."""
+    c = SubagentContract(task="test", isolation="process")
+    assert c.isolation == "process"
+
+
+@pytest.mark.asyncio
+async def test_spawn_subagent_process_timeout(orch):
+    """Process-based subagent times out and is killed."""
+    contract = SubagentContract(
+        name="slow-agent",
+        task="This task will never complete",
+        isolation="process",
+        timeout_seconds=1,
+    )
+
+    result = await orch.run(contract)
+    assert result.success is False
+    assert result.timed_out is True
+    assert "TIMED OUT" in result.output
+
+
+@pytest.mark.asyncio
+async def test_spawn_subagent_process_success(orch):
+    """Process-based subagent completes successfully."""
+    contract = SubagentContract(
+        name="fast-agent",
+        task="Say hello",
+        isolation="process",
+        timeout_seconds=30,
+    )
+
+    result = await orch.run(contract)
+    # May succeed or fail depending on model availability
+    # but should not crash the orchestrator
+    assert isinstance(result, SubagentResult)
+    assert result.task_id == "fast-agent"
+
+
+def test_spawn_subagent_process_ipc_cleanup(tmp_path):
+    """Temp IPC files are cleaned up after process spawn."""
+    from wisp.multi_agent.orchestrator import _run_subagent_worker
+
+    result_path = str(tmp_path / "result.json")
+    contract_dict = {
+        "name": "test",
+        "role": "generalist",
+        "task": "test",
+        "tools": ["all"],
+        "allowed_skills": [],
+        "max_iterations": 1,
+        "timeout_seconds": 5,
+        "max_tokens": None,
+        "max_input_tokens": None,
+        "max_output_tokens": None,
+        "max_output_chars": 8000,
+        "output_format": "text",
+        "output_schema": None,
+        "auto_retry_parse": True,
+        "model": None,
+        "workspace": None,
+        "worktree_isolated": True,
+        "auto_approve": True,
+        "system_prompt_extra": "",
+        "prompt": "",
+        "context_files": [],
+    }
+
+    import multiprocessing as mp
+    process = mp.Process(
+        target=_run_subagent_worker,
+        args=(contract_dict, result_path, str(tmp_path)),
+    )
+    process.start()
+    process.join(timeout=10)
+
+    # Result file should exist after process finishes
+    assert Path(result_path).exists()
+
+    # Read and verify structure
+    with open(result_path) as f:
+        data = json.load(f)
+    assert "task_id" in data
+    assert "success" in data

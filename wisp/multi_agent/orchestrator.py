@@ -803,12 +803,12 @@ def _run_subagent_worker(contract_dict: dict, result_path: str, parent_workspace
     contract = SubagentContract(**contract_dict)
 
     # Build a minimal orchestrator in the child process
-    orch = SubagentOrchestrator(workspace=parent_workspace)
+    orch = SubagentOrchestrator(workspace=Path(parent_workspace))
 
     # Run synchronously in the child process's own event loop
     loop = asyncio.new_event_loop()
     try:
-        result = loop.run_until_complete(orch._spawn_subagent_thread(contract))
+        result = loop.run_until_complete(orch.run(contract))
     except Exception as exc:
         duration = _time.monotonic() - start
         result = SubagentResult(
@@ -1076,7 +1076,33 @@ class SubagentOrchestrator:
                 {"role": contract.role, "description": contract.task},
             )
 
-        # ── Spawn & run with timeout ──────────────────────────────────
+        # ── Dispatch by isolation level ──────────────────────────────
+        try:
+            if contract.isolation == "process":
+                return await self._spawn_subagent_process(contract, start)
+            else:
+                return await self._spawn_subagent_thread(contract, start, agent_workspace, child_cfg, session, system, tool_calls_log)
+        finally:
+            # ── Cleanup worktree (unless debugging) ──────────────────
+            if worktree_path and not os.environ.get("WISP_KEEP_WORKTREES", "").lower() == "true":
+                try:
+                    await self._cleanup_worktree(worktree_path)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to clean up worktree %s: %s", worktree_path, exc
+                    )
+
+    async def _spawn_subagent_thread(
+        self,
+        contract: SubagentContract,
+        start: float,
+        agent_workspace: str,
+        child_cfg: WispConfig,
+        session: Session,
+        system: str,
+        tool_calls_log: list[dict],
+    ) -> SubagentResult:
+        """Thread-based subagent execution (default, fast)."""
         try:
             result = await asyncio.wait_for(
                 asyncio.to_thread(
@@ -1215,15 +1241,172 @@ class SubagentOrchestrator:
                 session_id=session.id if session else "",
             )
 
-        finally:
-            # ── Cleanup worktree (unless debugging) ──────────────────
-            if worktree_path and not os.environ.get("WISP_KEEP_WORKTREES", "").lower() == "true":
-                try:
-                    await self._cleanup_worktree(worktree_path)
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to clean up worktree %s: %s", worktree_path, exc
+    async def _spawn_subagent_process(
+        self,
+        contract: SubagentContract,
+        start: float,
+    ) -> SubagentResult:
+        """Process-based subagent execution (sandboxed, truly killable).
+
+        Spawns the subagent in a separate OS process. On timeout the
+        process is SIGTERM'd (and SIGKILL'd if necessary).  On crash the
+        parent survives and reports the failure immediately.
+        """
+        # Create temp file for IPC
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            result_path = f.name
+
+        # Serialize contract for the child process
+        contract_dict = {
+            "name": contract.name,
+            "role": contract.role,
+            "task": contract.task,
+            "system_prompt": contract.system_prompt,
+            "tools": contract.tools,
+            "allowed_skills": contract.allowed_skills,
+            "max_iterations": contract.max_iterations,
+            "timeout_seconds": contract.timeout_seconds,
+            "max_tokens": contract.max_tokens,
+            "max_input_tokens": contract.max_input_tokens,
+            "max_output_tokens": contract.max_output_tokens,
+            "max_output_chars": contract.max_output_chars,
+            "output_format": contract.output_format,
+            "output_schema": contract.output_schema,
+            "auto_retry_parse": contract.auto_retry_parse,
+            "model": contract.model,
+            "workspace": contract.workspace,
+            "worktree_isolated": contract.worktree_isolated,
+            "auto_approve": contract.auto_approve,
+            "system_prompt_extra": contract.system_prompt_extra,
+            "prompt": contract.prompt,
+            "context_files": contract.context_files,
+        }
+
+        process = mp.Process(
+            target=_run_subagent_worker,
+            args=(contract_dict, result_path, str(self.workspace)),
+        )
+
+        try:
+            process.start()
+            process.join(timeout=contract.timeout_seconds)
+
+            if process.is_alive():
+                # Timeout — force kill
+                duration = time.monotonic() - start
+                logger.warning(
+                    "Subagent %s process timed out after %.1fs — terminating",
+                    contract.name, duration,
+                )
+                process.terminate()
+                process.join(timeout=5)
+                if process.is_alive():
+                    logger.error(
+                        "Subagent %s process refused SIGTERM — sending SIGKILL",
+                        contract.name,
                     )
+                    process.kill()
+                    process.join(timeout=2)
+
+                if contract.progress_callback:
+                    await self._emit(
+                        contract,
+                        EventKind.TASK_FAILED,
+                        {"error": f"Timeout after {contract.timeout_seconds}s"},
+                    )
+                return SubagentResult(
+                    task_id=contract.name,
+                    success=False,
+                    output=f"[TIMED OUT after {contract.timeout_seconds}s]",
+                    elapsed_seconds=duration,
+                    error=f"Timeout after {contract.timeout_seconds}s",
+                    timed_out=True,
+                )
+
+            # Process finished — read result
+            try:
+                with open(result_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except (json.JSONDecodeError, OSError) as exc:
+                duration = time.monotonic() - start
+                logger.error(
+                    "Failed to read subagent %s process result: %s",
+                    contract.name, exc,
+                )
+                return SubagentResult(
+                    task_id=contract.name,
+                    success=False,
+                    output="[RESULT READ FAILED]",
+                    elapsed_seconds=duration,
+                    error=f"Failed to read process result: {exc}",
+                )
+
+            duration = time.monotonic() - start
+            subagent_result = SubagentResult(
+                task_id=data.get("task_id", contract.name),
+                success=data.get("success", False),
+                output=data.get("output", ""),
+                error=data.get("error"),
+                files_changed=data.get("files_changed", []),
+                elapsed_seconds=duration,
+                iterations_used=data.get("iterations_used", 0),
+                retry_count=data.get("retry_count", 0),
+                timed_out=data.get("timed_out", False),
+                hit_iteration_limit=data.get("hit_iteration_limit", False),
+                tokens_used=data.get("tokens_used", 0),
+            )
+
+            # Update parent token budget
+            self._tokens_consumed += subagent_result.tokens_used
+
+            # Record telemetry
+            model_used = contract.model or self.config.model or "unknown"
+            self._telemetry.setdefault(model_used, []).append({
+                "task_id": contract.name,
+                "success": subagent_result.success,
+                "elapsed_seconds": subagent_result.elapsed_seconds,
+                "tokens_used": subagent_result.tokens_used,
+                "iterations_used": subagent_result.iterations_used,
+                "timestamp": time.time(),
+            })
+
+            if contract.progress_callback:
+                await self._emit(
+                    contract,
+                    EventKind.TASK_COMPLETED if subagent_result.success else EventKind.TASK_FAILED,
+                    {
+                        "files_changed": subagent_result.files_changed,
+                        "elapsed": duration,
+                        "output": subagent_result.output[:200],
+                        "error": subagent_result.error,
+                    },
+                )
+
+            return subagent_result
+
+        except Exception as exc:
+            duration = time.monotonic() - start
+            logger.error(
+                "Subagent %s process spawn failed: %s",
+                contract.name, exc, exc_info=True,
+            )
+            if process.is_alive():
+                process.kill()
+                process.join(timeout=2)
+            return SubagentResult(
+                task_id=contract.name,
+                success=False,
+                output="[PROCESS SPAWN FAILED]",
+                elapsed_seconds=duration,
+                error=f"Process spawn failed: {exc}",
+            )
+
+        finally:
+            # Cleanup temp file
+            try:
+                Path(result_path).unlink(missing_ok=True)
+            except OSError:
+                pass
 
     async def run_parallel(
         self,
