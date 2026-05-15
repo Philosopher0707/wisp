@@ -1283,6 +1283,18 @@ class WispAgentCore:
             output_schema=args.get("output_schema"),
         )
 
+        # ── Local model fallback for simple tasks ────────────────────
+        local_model = self._pick_local_model_for_subagent(contract.task)
+        if local_model:
+            contract.model = local_model
+            logger.info("Using local model %s for subagent %s", local_model, contract.name)
+
+        # ── Adaptive timeout based on task complexity + model latency ──
+        timeout = self._adaptive_subagent_timeout(
+            contract.task, contract.timeout_seconds
+        )
+        contract.timeout_seconds = timeout
+
         # ── Progress callback: stream subagent events to parent ──────
         async def _progress(event: OrchestratorEvent) -> None:
             if event.event_type == EventKind.TASK_STARTED:
@@ -1341,6 +1353,79 @@ class WispAgentCore:
         except Exception as e:
             logger.error("Failed to spawn subagents: %s", e)
         return []
+
+    # ── Local model fallback helper ──────────────────────────────────
+
+    def _pick_local_model_for_subagent(self, task: str) -> Optional[str]:
+        """Return a fast local model name if the task is simple enough.
+
+        Simple tasks: read_file, list_files, short summaries.
+        Complex tasks: analysis, synthesis, multi-file edits.
+        """
+        # Only fall back if parent is using a cloud model
+        parent_model = getattr(self.config, "model", "")
+        if not parent_model or ":cloud" not in parent_model:
+            return None  # already local
+
+        # Check if any fast local model is available
+        fast_locals = ["llama3.2", "llama3.1", "qwen2.5", "phi4", "gemma2"]
+        available = self._list_local_models()
+        for candidate in fast_locals:
+            for name in available:
+                if candidate in name.lower():
+                    return name
+        return None
+
+    def _list_local_models(self) -> list[str]:
+        """Query Ollama for locally available models. Cached for 60s."""
+        now = time.monotonic()
+        cache = getattr(self, "_local_model_cache", None)
+        if cache and now - cache["ts"] < 60:
+            return cache["models"]
+        try:
+            import requests
+            url = getattr(self.config, "ollama_url", "http://localhost:11434")
+            resp = requests.get(f"{url}/api/tags", timeout=5)
+            if resp.status_code == 200:
+                models = [m["name"] for m in resp.json().get("models", [])]
+                self._local_model_cache = {"ts": now, "models": models}
+                return models
+        except Exception:
+            pass
+        return []
+
+    # ── Adaptive timeout helper ──────────────────────────────────────
+
+    def _adaptive_subagent_timeout(self, task: str, requested: float) -> float:
+        """Compute adaptive timeout based on task complexity and model latency.
+
+        Cloud models (e.g. deepseek-v4-pro:cloud) need longer timeouts than
+        local models.  Task length and tool count also affect duration.
+        """
+        model = getattr(self.config, "model", "")
+        is_cloud = ":cloud" in model or "https://" in getattr(self.config, "ollama_url", "")
+
+        # Base latency: local ~5s/turn, cloud ~15-30s/turn
+        base_per_turn = 25.0 if is_cloud else 8.0
+
+        # Estimate iterations needed from task complexity
+        estimated_iterations = 3  # minimum
+        if len(task) > 200:
+            estimated_iterations += 1
+        if len(task) > 500:
+            estimated_iterations += 1
+        # Tool-heavy tasks need more iterations
+        tool_keywords = ["read", "write", "edit", "list", "search", "run"]
+        tool_mentions = sum(1 for kw in tool_keywords if kw in task.lower())
+        estimated_iterations += min(tool_mentions, 3)
+
+        estimated_seconds = estimated_iterations * base_per_turn + 10  # overhead
+
+        # Clamp: never less than 30s, never more than 300s
+        adaptive = max(30.0, min(estimated_seconds, 300.0))
+
+        # Respect explicit user request if larger
+        return max(adaptive, requested)
 
     # ── Non-interactive task runner ──────────────────────────────────
 
