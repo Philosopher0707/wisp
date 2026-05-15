@@ -554,43 +554,10 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
     if sys.stdin.isatty():
         lines: list[str] = []
         total_chars = 0
-
-        # ── Pre-input paste detection using FIONREAD ──
-        # FIONREAD ioctl queries the kernel tty buffer directly — no select()
-        # buffering issues. On macOS, select() on PTY doesn't return True
-        # until readline's first input() consumes the data. FIONREAD fixes
-        # this by bypassing the buffering layer entirely.
-        import array, fcntl, termios, os as _paste_os
-        try:
-            _pbuf = array.array('i', [0])
-            fcntl.ioctl(sys.stdin, termios.FIONREAD, _pbuf, True)
-            _nbytes = _pbuf[0]
-        except (OSError, TypeError, termios.error, ImportError):
-            _nbytes = 0
-        if _nbytes > 0:
-            try:
-                _rawdata = _paste_os.read(sys.stdin.fileno(), min(_nbytes, _MAX_INPUT_CHARS + 1))
-                _fulltext = _rawdata.decode("utf-8", errors="replace")
-                # Split into lines, handle trailing newline
-                _parts = _fulltext.split("\n")
-                if _parts[-1] == "":
-                    _parts.pop()
-                if _parts:
-                    _paste_counter += 1
-                    _last_paste_lines = len(_parts)
-                    # Print clean prompt + one-line preview
-                    print(f"\001\033[1m\002{prompt}\001\033[0m\002", end="")
-                    w = _term_width()
-                    s = _parts[0][:w - 14].replace("\n", " ")
-                    if len(_parts[0]) > w - 14:
-                        s += "..."
-                    print(f"  {dim(s)}")
-                    result = "\n".join(_parts)
-                    if readline is not None and result.strip():
-                        readline.add_history(result)
-                    return result
-            except (OSError, TypeError, ValueError):
-                pass
+        # Timing-based paste detection: measure interval between input() returns.
+        # Humans type at 50-250ms+ per line. Pastes arrive at <5ms.
+        _prev_time = 0.0
+        _paste_by_time = False
 
         while True:
             try:
@@ -610,6 +577,13 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
             except (OSError, UnicodeDecodeError):
                 return ""
 
+            # Timing check: <30ms between lines = paste
+            import time as _t
+            _now = _t.monotonic()
+            if lines and (_now - _prev_time) < 0.03:
+                _paste_by_time = True
+            _prev_time = _now
+
             total_chars += len(line)
             if total_chars > _MAX_INPUT_CHARS:
                 print(warning(f"\n  \u26a0\ufe0f  Input truncated at {_MAX_INPUT_CHARS} chars."))
@@ -625,62 +599,66 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
             lines.append(line)
             combined = "\n".join(lines)
 
-            # Bracket continuation — switch to raw stdin for remaining lines
-            # so we control what's echoed (no ugly readline echo).
             if allow_multiline and _has_unclosed_brackets(combined):
-                # More data queued? This is a paste.
-                try:
-                    import select as _sel
-                    r, _, _ = _sel.select([sys.stdin], [], [], 0)
-                    is_paste = bool(r)
-                except ImportError:
-                    is_paste = False
-                if is_paste:
-                    # Drain remaining lines from raw buffer
-                    while True:
-                        try:
-                            r2, _, _ = _sel.select([sys.stdin], [], [], 0.02)
-                        except (ImportError, OSError, ValueError):
-                            break
-                        if not r2:
-                            break
-                        try:
-                            raw = sys.stdin.buffer.readline()
-                        except (EOFError, OSError):
-                            break
-                        if not raw:
-                            break
-                        extra = raw.decode("utf-8", errors="replace").rstrip("\n")
-                        # Don't print this line (we'll show a clean summary)
-                        total_chars += len(extra)
-                        if total_chars > _MAX_INPUT_CHARS:
-                            extra = extra[:max(0, _MAX_INPUT_CHARS - total_chars + len(extra))]
+                if _paste_by_time:
+                    # Paste detected via timing. Clear this echoed line from
+                    # terminal by measuring its visual width.
+                    w = _term_width()
+                    d = sum(1 for c in combined if c in "([{")
+                    prompt_vis = 2 + d * 2  # visual width of "╎ " or "  ╎ " etc.
+                    total_vis = prompt_vis + len(line)
+                    rows = max(1, (total_vis + 1) // w)
+                    sys.stdout.write("\033[A" * rows + "\033[J")
+                    sys.stdout.flush()
+                    # Drain remaining lines from raw buffer (readline may have
+                    # consumed them, but any not yet consumed can be caught)
+                    try:
+                        import select
+                        while True:
+                            r2, _, _ = select.select([sys.stdin], [], [], 0.01)
+                            if not r2:
+                                break
+                            try:
+                                raw = sys.stdin.buffer.readline()
+                                if not raw:
+                                    break
+                                extra = raw.decode("utf-8", errors="replace").rstrip("\n")
+                            except (EOFError, OSError):
+                                break
+                            total_chars += len(extra)
+                            if total_chars > _MAX_INPUT_CHARS:
+                                extra = extra[:max(0, _MAX_INPUT_CHARS - total_chars + len(extra))]
+                                lines.append(extra)
+                                break
                             lines.append(extra)
-                            break
-                        lines.append(extra)
+                    except ImportError:
+                        pass
                     _paste_counter += 1
                     _last_paste_lines = len(lines)
-                    return "\n".join(lines)
-                else:
-                    # Keep typing in readline
-                    continue
+                    # Print clean prompt + summary
+                    print(f"\001\033[1m\002{prompt}\001\033[0m\002", end="")
+                    w = _term_width()
+                    s = lines[0][:w - 14].replace("\n", " ")
+                    if len(lines[0]) > w - 14:
+                        s += "..."
+                    print(f"  {dim(s)}")
+                    result = "\n".join(lines)
+                    if readline is not None and result.strip():
+                        readline.add_history(result)
+                    return result
+                # No paste detected yet — keep typing in readline
+                continue
 
             if allow_multiline and lines:
                 try:
                     import select
                     ready, _, _ = select.select([sys.stdin], [], [], 0.02)
                     if ready:
-                        _drained_something = False
-                        attempts = 0
-                        while attempts < 200:
-                            ready2, _, _ = select.select([sys.stdin], [], [], 0.01)
-                            if not ready2:
-                                if _drained_something:
-                                    break
-                                attempts += 1
-                                continue
-                            _drained_something = True
-                            attempts = 0
+                        drained: list[str] = []
+                        while True:
+                            r2, _, _ = select.select([sys.stdin], [], [], 0.01)
+                            if not r2:
+                                break
                             try:
                                 raw = sys.stdin.buffer.readline()
                                 if not raw:
@@ -690,7 +668,6 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
                                 break
                             total_chars += len(extra_line)
                             if total_chars > _MAX_INPUT_CHARS:
-                                print(warning(f"\n  \u26a0\ufe0f  Input truncated at {_MAX_INPUT_CHARS} chars."))
                                 extra_line = extra_line[:max(0, _MAX_INPUT_CHARS - total_chars + len(extra_line))]
                                 lines.append(extra_line)
                                 break
