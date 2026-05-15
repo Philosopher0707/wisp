@@ -1106,6 +1106,10 @@ class CLITransport:
                 if use_box:
                     print(_input_box_top("input"))
 
+                # Reset paste tracking before each input
+                global _last_paste_lines
+                _last_paste_lines = 0
+
                 try:
                     user_input = _input_line("➜ ")
                 except EOFError:
