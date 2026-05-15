@@ -550,9 +550,50 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
       - Reads raw bytes to survive invalid UTF-8 in piped input.
       - Returns empty string on EOF so the caller can exit.
     """
+    global _paste_counter, _last_paste_lines
     if sys.stdin.isatty():
         lines: list[str] = []
         total_chars = 0
+
+        # ── Early paste detection: check stdin before any input() call ──
+        # If data is already available in the stdin buffer, the user is
+        # pasting (not typing).  Bypass readline entirely to avoid the
+        # ugly echo of long paste content inside the input box.
+        try:
+            import select
+            ready, _, _ = select.select([sys.stdin], [], [], 0)
+            if ready:
+                while True:
+                    r2, _, _ = select.select([sys.stdin], [], [], 0.02)
+                    if not r2:
+                        break
+                    raw = sys.stdin.buffer.readline()
+                    if not raw:
+                        break
+                    extra_line = raw.decode("utf-8", errors="replace").rstrip("\n")
+                    total_chars += len(extra_line)
+                    if total_chars > _MAX_INPUT_CHARS:
+                        extra_line = extra_line[: max(0, _MAX_INPUT_CHARS - total_chars + len(extra_line))]
+                        lines.append(extra_line)
+                        break
+                    lines.append(extra_line)
+                if lines:
+                    _paste_counter += 1
+                    _last_paste_lines = len(lines)
+                    # Print clean prompt with first-line preview
+                    print(f"\001\033[1m\002{prompt}\001\033[0m\002", end="")
+                    w = _term_width()
+                    summary = lines[0][: w - 14].replace("\n", " ")
+                    if len(lines[0]) > w - 14:
+                        summary += "..."
+                    print(f"  {dim(summary)}")
+                    result = "\n".join(lines)
+                    if readline is not None and result.strip():
+                        readline.add_history(result)
+                    return result
+        except ImportError:
+            pass
+
         while True:
             try:
                 if not lines:
@@ -565,17 +606,15 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
                 print()
                 raise
             except EOFError:
-                # In interactive mode, EOF on empty input means exit.
                 if not lines:
                     raise
-                # EOF during multiline input: return what we have.
                 break
             except (OSError, UnicodeDecodeError):
                 return ""
 
             total_chars += len(line)
             if total_chars > _MAX_INPUT_CHARS:
-                print(warning(f"\n  ⚠️  Input truncated at {_MAX_INPUT_CHARS} chars."))
+                print(warning(f"\n  \u26a0\ufe0f  Input truncated at {_MAX_INPUT_CHARS} chars."))
                 line = line[: max(0, _MAX_INPUT_CHARS - total_chars + len(line))]
                 lines.append(line)
                 break
@@ -588,26 +627,18 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
             lines.append(line)
             combined = "\n".join(lines)
 
-            # Auto-continue if brackets/quotes are unclosed
             if allow_multiline and _has_unclosed_brackets(combined):
                 continue
 
-            # Paste detection: only after backslash or bracket continuation
-            # has already been ruled out.  Short timeout so human typing
-            # doesn't accidentally trigger it.
             if allow_multiline and lines:
                 try:
                     import select
                     ready, _, _ = select.select([sys.stdin], [], [], 0.02)
                     if ready:
-                        # Drain remaining lines from stdin buffer.
-                        # Use a small positive timeout (10ms) so the kernel has
-                        # time to deliver all pasted chunks.  Without this, large
-                        # pastes (8+ lines) can arrive in fragments and get
-                        # partially re-consumed by the outer loop.
+                        # Drain remaining lines from raw stdin buffer
                         _drained_something = False
                         attempts = 0
-                        while attempts < 200:  # ~2s worst-case guard
+                        while attempts < 200:
                             ready2, _, _ = select.select([sys.stdin], [], [], 0.01)
                             if not ready2:
                                 if _drained_something:
@@ -625,15 +656,23 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
                                 break
                             total_chars += len(extra_line)
                             if total_chars > _MAX_INPUT_CHARS:
-                                print(warning(f"\n  ⚠️  Input truncated at {_MAX_INPUT_CHARS} chars."))
+                                print(warning(f"\n  \u26a0\ufe0f  Input truncated at {_MAX_INPUT_CHARS} chars."))
                                 extra_line = extra_line[: max(0, _MAX_INPUT_CHARS - total_chars + len(extra_line))]
                                 lines.append(extra_line)
                                 break
                             lines.append(extra_line)
-                        # Track paste for input area indicator
-                        global _paste_counter, _last_paste_lines
                         _paste_counter += 1
                         _last_paste_lines = len(lines)
+                        # Clear the echoed input line(s) that readline printed
+                        w = _term_width()
+                        lines_shift = max(1, (len(lines[0]) + 20) // w)
+                        for _ in range(lines_shift):
+                            print("\033[F\033[K", end="", flush=True)
+                        # Print clean preview
+                        summary = lines[0][: w - 14].replace("\n", " ")
+                        if len(lines[0]) > w - 14:
+                            summary += "..."
+                        print(f"  {dim(summary)}")
                         return "\n".join(lines)
                 except (ImportError, OSError):
                     pass
@@ -641,7 +680,6 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
             break
 
         result = "\n".join(lines)
-        # Add to readline history so user can recall full multiline prompts
         if readline is not None and result.strip():
             readline.add_history(result)
         return result
@@ -653,9 +691,6 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
     if not data:
         return ""
     return data.decode("utf-8", errors="replace").rstrip("\n")
-
-
-# ── Approval prompts ─────────────────────────────────────────────────
 
 def _prompt_approve(func_name: str) -> bool:
     """Prompt user to approve a tool call. Returns True if approved."""
