@@ -1532,6 +1532,12 @@ class WispAgentCore:
             if not response:
                 return {"success": False, "output": "[No response from model]"}
 
+            # Detect stream failures that were swallowed by the generator
+            if response.get("_stream_error"):
+                err_type = response.get("_error_type", "unknown")
+                err_msg = response.get("_error_message", "unknown error")
+                return {"success": False, "output": f"[Model stream error ({err_type}): {err_msg}]"}
+
             msg = response.get("message", {})
             content = msg.get("content", "") or "" if isinstance(msg, dict) else ""
             thinking = msg.get("thinking", "") or "" if isinstance(msg, dict) else ""

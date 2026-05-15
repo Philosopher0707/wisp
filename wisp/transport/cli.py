@@ -559,9 +559,11 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
         # If data is already available in the stdin buffer, the user is
         # pasting (not typing).  Bypass readline entirely to avoid the
         # ugly echo of long paste content inside the input box.
+        # Use a small timeout so typing isn't delayed, but paste buffer
+        # has time to flush into stdin.
         try:
             import select
-            ready, _, _ = select.select([sys.stdin], [], [], 0)
+            ready, _, _ = select.select([sys.stdin], [], [], 0.05)
             if ready:
                 while True:
                     r2, _, _ = select.select([sys.stdin], [], [], 0.02)
