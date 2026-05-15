@@ -73,7 +73,7 @@ def _pygmentize(code: str, language: str, base_style: Style) -> Text:
         lexer = get_lexer_by_name(language)
         for ttype, text in lex(code, lexer):
             color = _TOKEN_COLORS.get(str(ttype), "#f8f8f2")
-            merged = Style.combine([Style(color=color), base_style])
+            merged = Style.combine([base_style, Style(color=color)])
             result.append(text, style=merged)
     except Exception:
         result.append(code, style=base_style)

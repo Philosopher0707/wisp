@@ -863,7 +863,7 @@ class CLITransport:
         try:
             self.core._add_message("user", self.core._expand_continuation(prompt))
             asyncio.run(self._execute_turn(
-                self.core._build_system_prompt(skill_name, workspace=self.core.config.workspace),
+                self.core._build_system_prompt(skill_name, workspace=self.core.config.workspace, query=prompt),
                 self.core.config.workspace or ".",
             ))
         finally:
@@ -985,7 +985,7 @@ class CLITransport:
                 print()
 
                 try:
-                    system = self.core._build_system_prompt(skill_name)
+                    system = self.core._build_system_prompt(skill_name, query=cmd)
                     self.core._add_message("user", self.core._expand_continuation(cmd))
                     asyncio.run(self._execute_turn(system, ws))
                 except KeyboardInterrupt:
@@ -1015,7 +1015,7 @@ class CLITransport:
 
     async def _run_once_async(self, prompt: str, skill_name: Optional[str] = None) -> None:
         """Async helper for run_once."""
-        system = self.core._build_system_prompt(skill_name)
+        system = self.core._build_system_prompt(skill_name, query=prompt)
         self.core._add_message("user", self.core._expand_continuation(prompt))
         await self._execute_turn(system, self.core.config.workspace or ".")
 

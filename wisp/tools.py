@@ -30,6 +30,19 @@ _file_lock_ctx: contextvars.ContextVar = contextvars.ContextVar("file_lock", def
 _change_tracker_ctx: contextvars.ContextVar = contextvars.ContextVar("change_tracker", default=None)
 
 
+def _get_dependents(path: str, workspace: str) -> list[str]:
+    """Find files that depend on the given file using the repo map."""
+    try:
+        from wisp.repo_map import RepoMap
+        rm = RepoMap(Path(workspace).resolve())
+        cached = rm.build(use_cache=True, fast_mode=True)
+        if cached:
+            return rm.get_dependents(path)[:10]
+    except Exception:
+        pass
+    return []
+
+
 class ToolError(Exception):
     """Raised when a tool execution fails."""
     pass
@@ -445,9 +458,16 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str, file
             " (fuzzy)" if result.used_fuzzy_match else "",
         )
 
+        dependents = _get_dependents(path, workspace)
+        dep_note = ""
+        if dependents:
+            dep_note = f"\n⚠️  {len(dependents)} file(s) depend on this file: {', '.join(dependents[:5])}"
+            if len(dependents) > 5:
+                dep_note += f" and {len(dependents) - 5} more"
+
         return {
             "status": "ok",
-            "data": f"✓ Edited {path} — {result.old_length} chars replaced with {result.new_length} chars",
+            "data": f"✓ Edited {path} — {result.old_length} chars replaced with {result.new_length} chars{dep_note}",
             "metadata": {
                 "path": path,
                 "old_length": result.old_length,
@@ -456,6 +476,7 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str, file
                 "used_fuzzy_match": result.used_fuzzy_match,
                 "diff": result.diff,
                 "first_changed_line": result.first_changed_line,
+                "dependents": dependents,
             },
         }
 
@@ -522,9 +543,16 @@ def tool_edit_file_multi(path: str, workspace: str, edits: list[dict], file_lock
             path, result.edits_applied, result.old_length, result.new_length,
         )
 
+        dependents = _get_dependents(path, workspace)
+        dep_note = ""
+        if dependents:
+            dep_note = f"\n⚠️  {len(dependents)} file(s) depend on this file: {', '.join(dependents[:5])}"
+            if len(dependents) > 5:
+                dep_note += f" and {len(dependents) - 5} more"
+
         return {
             "status": "ok",
-            "data": f"✓ Applied {result.edits_applied} edit(s) to {path} — {result.old_length} chars replaced with {result.new_length} chars",
+            "data": f"✓ Applied {result.edits_applied} edit(s) to {path} — {result.old_length} chars replaced with {result.new_length} chars{dep_note}",
             "metadata": {
                 "path": path,
                 "old_length": result.old_length,
@@ -533,6 +561,7 @@ def tool_edit_file_multi(path: str, workspace: str, edits: list[dict], file_lock
                 "used_fuzzy_match": result.used_fuzzy_match,
                 "diff": result.diff,
                 "first_changed_line": result.first_changed_line,
+                "dependents": dependents,
             },
         }
 

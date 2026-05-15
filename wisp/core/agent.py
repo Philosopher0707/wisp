@@ -520,10 +520,10 @@ class WispAgentCore:
 
     # ── System prompt ────────────────────────────────────────────────
 
-    def _build_system_prompt(self, skill_name: Optional[str] = None, workspace: Optional[str] = None) -> str:
+    def _build_system_prompt(self, skill_name: Optional[str] = None, workspace: Optional[str] = None, query: Optional[str] = None) -> str:
         ws = workspace or self.config.workspace or "."
         effective_skill = skill_name or self._active_skill
-        cache_key = (effective_skill, ws)
+        cache_key = (effective_skill, ws, query)
         if not hasattr(self, "_system_prompt_cache"):
             self._system_prompt_cache = {}
         cached = self._system_prompt_cache.get(cache_key)
@@ -620,13 +620,27 @@ class WispAgentCore:
         try:
             from wisp.repo_map import RepoMap
             rm = RepoMap(ws_abs)
-            # Use fast_mode=True for cold starts to avoid blocking the user
-            # for 5-10 seconds on large codebases. The skeleton gives a quick
-            # file listing; a full build with symbols happens on subsequent calls.
-            entries = rm.build(use_cache=True, fast_mode=True)
+            # Build full map (cached).  Skeleton caches are auto-upgraded.
+            entries = rm.build(use_cache=True, fast_mode=False)
             if entries:
                 map_text = rm.format_for_llm(max_tokens=1200)
                 system += f"\n\n## Codebase Map\n{map_text}\n"
+                # Inject files relevant to the user's query for dynamic context
+                if query:
+                    relevant = rm.get_relevant_files(query, top_k=5)
+                    if relevant:
+                        system += "\n## Files Relevant to Query\n"
+                        for f in relevant:
+                            system += f"- {f}\n"
+                        deps_extra = []
+                        for f in relevant:
+                            deps = rm.get_dependents(f)[:3]
+                            if deps:
+                                deps_extra.extend(deps)
+                        if deps_extra:
+                            system += "\n## Dependents of Relevant Files\n"
+                            for d in sorted(set(deps_extra))[:5]:
+                                system += f"- {d}\n"
         except ImportError:
             pass
         except Exception as e:
@@ -765,7 +779,7 @@ class WispAgentCore:
             content = merge_content(content, images)
         self._add_message("user", content)
         if system is None:
-            system = self._build_system_prompt()
+            system = self._build_system_prompt(query=prompt)
 
         # Session bookkeeping
         if self.session is None:
