@@ -202,7 +202,10 @@ def render_diff_panel(
     text = _build_diff_text_with_dmp(lines, language=language)
 
     if not box_mode:
-        return str(text)
+        buf = StringIO()
+        console = Console(file=buf, width=width or 120, force_terminal=True)
+        console.print(text)
+        return buf.getvalue().rstrip("\n")
 
     panel = Panel(text, title=title, border_style=Style(color="#555555"),
                   width=width, padding=(0, 1))
