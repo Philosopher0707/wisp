@@ -1327,6 +1327,10 @@ class WispAgentCore:
                 if result.success:
                     break
                 last_error = result.error or "subagent failed"
+                # Don't retry on timeout — it's a waste of time and tokens
+                if result.timed_out or "timeout" in last_error.lower():
+                    logger.warning("Subagent %s timed out — not retrying", contract.name)
+                    break
                 if attempt < max_retries:
                     backoff = 2 ** attempt
                     logger.warning("Subagent %s failed (attempt %d/%d), retrying in %ds: %s",
@@ -1483,7 +1487,10 @@ class WispAgentCore:
         # Clamp: never less than 30s, never more than 300s
         adaptive = max(30.0, min(estimated_seconds, 300.0))
 
-        # Respect explicit user request if larger
+        # Respect explicit user request — don't override with larger adaptive timeout
+        # User knows their constraints better than our heuristic
+        if requested >= 30.0:
+            return requested
         return max(adaptive, requested)
 
     # ── Non-interactive task runner ──────────────────────────────────

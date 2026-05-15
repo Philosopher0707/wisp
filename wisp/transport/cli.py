@@ -121,6 +121,122 @@ def _restore_signal_handler():
 
 # ── Terminal helpers ─────────────────────────────────────────────────
 
+# Paste tracking for input area indicator
+_paste_counter: int = 0
+_last_paste_lines: int = 0
+
+
+def _get_git_branch() -> Optional[str]:
+    """Get current git branch and dirty status, e.g. 'main [± ↑2]'."""
+    try:
+        import subprocess
+        r = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, timeout=1,
+        )
+        if r.returncode != 0:
+            return None
+        branch = r.stdout.strip()
+        if not branch:
+            return None
+        # Check for dirty
+        r2 = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True, text=True, timeout=1,
+        )
+        dirty = r2.stdout.strip() != ""
+        # Check ahead
+        r3 = subprocess.run(
+            ["git", "rev-list", "--count", f"{branch}..origin/{branch}", "--"],
+            capture_output=True, text=True, timeout=1,
+        )
+        ahead = r3.stdout.strip()
+        suffix = ""
+        if dirty:
+            suffix += " \u00b1"
+        if ahead and ahead != "0":
+            suffix += f" \u2191{ahead}"
+        if suffix:
+            branch += f" [{suffix.strip()}]"
+        return branch
+    except Exception:
+        return None
+
+
+def _shorten_path(path: str, max_len: int = 30) -> str:
+    """Shorten a path for display, e.g. ~/Documents/wisp."""
+    try:
+        home = os.path.expanduser("~")
+        if path.startswith(home):
+            display = "~" + path[len(home):]
+        else:
+            display = path
+        if len(display) <= max_len:
+            return display
+        # Truncate with ellipsis from start
+        return "..." + display[-(max_len - 3):]
+    except Exception:
+        return path
+
+
+def _get_context_info(core) -> str:
+    """Get context token usage as percentage string.
+    Returns something like 'context: 39.6% (103.8k/262.1k)'."""
+    try:
+        tokens = core.estimate_messages_tokens(core.messages)
+        max_tokens = core.config.max_context_tokens
+        if max_tokens and max_tokens > 0:
+            pct = tokens / max_tokens * 100
+            used_k = tokens / 1000
+            max_k = max_tokens / 1000
+            return f"context: {pct:.1f}% ({used_k:.1f}k/{max_k:.1f}k)"
+        return f"context: {tokens:,} tokens"
+    except Exception:
+        return ""
+
+
+def _render_status_bar(core) -> str:
+    """Render the status bar line."""
+    lines = []
+    # Left side: agent (model)  ~/Documents/wisp  main [±]
+    left_parts = []
+    model = getattr(core.config, "model", "") or ""
+    if model:
+        left_parts.append(f"agent ({model})")
+    ws = getattr(core.config, "workspace", ".") or "."
+    left_parts.append(_shorten_path(ws, 40))
+    branch = _get_git_branch()
+    if branch:
+        left_parts.append(branch)
+    left = "  ".join(left_parts)
+    lines.append(dim(left))
+    # Right side: context info (aligned right)
+    ctx = _get_context_info(core)
+    if ctx:
+        w = _term_width()
+        padding = max(0, w - len(left) - len(ctx))
+        lines[-1] = dim(left + " " * padding + ctx)
+    return "\n".join(lines)
+
+
+def _input_box_top(label: str = "input") -> str:
+    """Draw the top border of the input area."""
+    w = _term_width()
+    label_text = f" {label} "
+    top = "─" * (w - 2 - len(label_text))
+    return dim(f"┌{label_text}{top}┐")
+
+
+def _input_box_bottom() -> str:
+    """Draw the bottom border of the input area."""
+    w = _term_width()
+    return dim(f"└" + "─" * (w - 2) + "┘")
+
+
+def _paste_indicator(nth: int, nlines: int) -> str:
+    """Show paste indicator line, e.g. ' [Pasted text #3 +10 lines]'"""
+    return f" {accent('[Pasted text #' + str(nth) + ' +' + str(nlines) + ' lines]')}"
+
 def _is_interactive() -> bool:
     """Detect if stdin is a real terminal (vs pipe/redirect)."""
     return sys.stdin.isatty()
