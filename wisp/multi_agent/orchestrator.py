@@ -962,6 +962,271 @@ class SubagentOrchestrator:
         )
         return resolved
 
+    # ── Composable patterns ────────────────────────────────────────────
+
+    async def run_map_reduce(
+        self,
+        task: str,
+        items: list[str],
+        mapper: Callable[[str], SubagentContract],
+        reducer: str,
+        max_concurrent: int = 4,
+    ) -> SubagentResult:
+        """Map-reduce: split work across mappers, then synthesize with a reducer.
+
+        Parameters
+        ----------
+        task:
+            High-level description of the overall goal.
+        items:
+            List of items to process (e.g., file paths).
+        mapper:
+            Function that takes an item and returns a SubagentContract.
+        reducer:
+            Task description for the reducer subagent.
+        max_concurrent:
+            Maximum number of mapper subagents running at once.
+
+        Returns
+        -------
+        SubagentResult
+            The reducer's synthesized result.
+        """
+        # ── Map phase ────────────────────────────────────────────────
+        mapper_contracts = [mapper(item) for item in items]
+        mapper_results = await self.run_parallel(mapper_contracts, max_concurrent)
+
+        # ── Build reducer input ──────────────────────────────────────
+        successful = [r for r in mapper_results if r.success]
+        failed = [r for r in mapper_results if not r.success]
+
+        parts = [f"## Overall Task\n{task}\n"]
+        parts.append(f"## Mapper Results ({len(successful)}/{len(mapper_results)} succeeded)\n")
+
+        for i, r in enumerate(successful):
+            parts.append(f"### Mapper {i+1}: {r.task_id}\n")
+            parts.append(r.output[:2000])
+            if len(r.output) > 2000:
+                parts.append("\n... [truncated]\n")
+            parts.append("\n")
+
+        if failed:
+            parts.append(f"## Failed Mappers ({len(failed)})\n")
+            for r in failed:
+                parts.append(f"- {r.task_id}: {r.error or 'unknown error'}\n")
+
+        reducer_input = "\n".join(parts)
+
+        # Guard: if reducer input is too large, truncate
+        estimated_tokens = len(reducer_input) // 4
+        max_tokens = self.config.max_context_tokens * 0.8
+        if estimated_tokens > max_tokens:
+            logger.warning(
+                "Reducer input %d tokens exceeds budget %d. Truncating.",
+                estimated_tokens, max_tokens
+            )
+            # Keep all headers, truncate individual mapper outputs
+            truncated_parts = parts[:2]  # headers
+            budget_per_mapper = int(max_tokens * 4 // len(successful)) if successful else 1000
+            for i, r in enumerate(successful):
+                truncated_parts.append(f"### Mapper {i+1}: {r.task_id}\n")
+                truncated_parts.append(r.output[:budget_per_mapper])
+                if len(r.output) > budget_per_mapper:
+                    truncated_parts.append("\n... [truncated]\n")
+                truncated_parts.append("\n")
+            if failed:
+                truncated_parts.append(f"## Failed Mappers ({len(failed)})\n")
+                for r in failed:
+                    truncated_parts.append(f"- {r.task_id}: {r.error or 'unknown error'}\n")
+            reducer_input = "\n".join(truncated_parts)
+
+        # ── Reduce phase ───────────────────────────────────────────────
+        reducer_contract = SubagentContract(
+            name="reducer",
+            role="generalist",
+            task=f"{reducer}\n\n{reducer_input}",
+            max_iterations=15,
+            timeout_seconds=120.0,
+            worktree_isolated=False,  # reducer doesn't need isolation
+        )
+
+        return await self.run(reducer_contract)
+
+    async def run_vote(
+        self,
+        task: str,
+        agents: list[SubagentContract],
+        consensus_threshold: float = 0.6,
+        max_concurrent: int = 4,
+    ) -> SubagentResult:
+        """Vote: ask multiple independent subagents the same question, take majority.
+
+        Parameters
+        ----------
+        task:
+            The question or task to vote on.
+        agents:
+            Subagent contracts (typically same role, different names).
+        consensus_threshold:
+            Minimum fraction of agents that must agree (0.0–1.0).
+        max_concurrent:
+            Maximum number of voting subagents running at once.
+
+        Returns
+        -------
+        SubagentResult
+            A synthesized result with vote metadata in the output.
+        """
+        # Override each agent's task with the voting task
+        voting_contracts = []
+        for agent in agents:
+            c = SubagentContract(**{**agent.__dict__, "task": task})
+            voting_contracts.append(c)
+
+        results = await self.run_parallel(voting_contracts, max_concurrent)
+
+        # Count successes and analyze outputs
+        successful = [r for r in results if r.success]
+        total = len(results)
+        passed = len(successful)
+
+        # Simple consensus: exact output match
+        from collections import Counter
+        outputs = [r.output.strip()[:500] for r in successful]  # first 500 chars for comparison
+        vote_counts = Counter(outputs)
+        most_common = vote_counts.most_common(1)
+
+        consensus_reached = False
+        winner = ""
+        if most_common:
+            winner, count = most_common[0]
+            consensus_reached = count / total >= consensus_threshold
+
+        # Build synthesized output
+        lines = [
+            f"## Vote Result: {task[:100]}",
+            "",
+            f"**Consensus:** {'REACHED' if consensus_reached else 'NOT REACHED'}",
+            f"**Agreement:** {count}/{total} ({count/total*100:.0f}%) — threshold {consensus_threshold*100:.0f}%",
+            "",
+            "### Individual Votes",
+        ]
+        for i, r in enumerate(results):
+            status = "✓" if r.success else "✗"
+            match = " (matches winner)" if r.success and r.output.strip()[:500] == winner else ""
+            lines.append(f"{status} Agent {i+1} ({r.task_id}):{match}")
+            if r.error:
+                lines.append(f"   Error: {r.error}")
+
+        lines.append("")
+        lines.append("### Winning Answer")
+        lines.append(winner if winner else "(no consensus)")
+
+        output = "\n".join(lines)
+
+        return SubagentResult(
+            task_id="vote",
+            success=consensus_reached,
+            output=output,
+            elapsed_seconds=sum(r.elapsed_seconds for r in results),
+            iterations_used=sum(r.iterations_used for r in results),
+            files_changed=list(set(f for r in results for f in r.files_changed)),
+        )
+
+    async def run_chain(
+        self,
+        contracts: list[SubagentContract],
+        pass_context: bool = True,
+        max_concurrent: int = 1,
+    ) -> SubagentResult:
+        """Chain: run subagents sequentially, optionally passing context forward.
+
+        Parameters
+        ----------
+        contracts:
+            Ordered list of subagent contracts to execute.
+        pass_context:
+            If True, each step sees the previous steps' outputs.
+        max_concurrent:
+            For chains this is typically 1 (sequential). Higher values
+            allow parallel steps but break context passing.
+
+        Returns
+        -------
+        SubagentResult
+            The final step's result, augmented with chain metadata.
+        """
+        if max_concurrent != 1:
+            logger.warning("run_chain with max_concurrent > 1 breaks sequential context passing")
+
+        context_parts = []
+        last_result = None
+        all_files_changed = []
+        total_elapsed = 0.0
+        total_iterations = 0
+
+        for i, contract in enumerate(contracts):
+            if pass_context and context_parts:
+                # Inject previous context into the task
+                context_block = "\n\n".join(context_parts)
+                augmented_task = (
+                    f"{contract.task}\n\n"
+                    f"## Previous Steps Context\n"
+                    f"{context_block}"
+                )
+                contract = SubagentContract(**{**contract.__dict__, "task": augmented_task})
+
+            result = await self.run(contract)
+            last_result = result
+            all_files_changed.extend(result.files_changed)
+            total_elapsed += result.elapsed_seconds
+            total_iterations += result.iterations_used
+
+            if pass_context:
+                context_parts.append(
+                    f"### Step {i+1}: {contract.name}\n"
+                    f"{result.output[:1500]}"
+                )
+
+            if not result.success:
+                # Chain broke — return partial result
+                output = (
+                    f"## Chain Failed at Step {i+1}/{len(contracts)}\n\n"
+                    f"**Failed step:** {contract.name}\n"
+                    f"**Error:** {result.error or 'unknown error'}\n\n"
+                    f"### Completed Steps\n"
+                    + "\n\n".join(context_parts[:-1] if context_parts else [])
+                )
+                return SubagentResult(
+                    task_id=f"chain-failed-at-{i+1}",
+                    success=False,
+                    output=output,
+                    elapsed_seconds=total_elapsed,
+                    iterations_used=total_iterations,
+                    files_changed=list(set(all_files_changed)),
+                )
+
+        # Chain completed successfully
+        if last_result is None:
+            return SubagentResult(
+                task_id="chain-empty",
+                success=True,
+                output="(empty chain)",
+            )
+
+        # Augment final result with chain metadata
+        last_result.output = (
+            f"## Chain Complete ({len(contracts)} steps)\n\n"
+            f"{last_result.output}\n\n"
+            f"---\n"
+            f"*Chain elapsed: {total_elapsed:.1f}s, "
+            f"iterations: {total_iterations}*"
+        )
+        last_result.elapsed_seconds = total_elapsed
+        last_result.iterations_used = total_iterations
+        last_result.files_changed = list(set(all_files_changed))
+        return last_result
+
     # ── Internal helpers ───────────────────────────────────────────────
 
     async def _run_agent(

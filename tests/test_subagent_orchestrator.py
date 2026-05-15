@@ -305,3 +305,103 @@ def test_result_backward_compat():
 def test_contract_prompt_alias():
     c = SubagentContract(prompt="do this")
     assert c.task == "do this"
+
+
+# ── Composable pattern tests ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_run_map_reduce(orch):
+    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+        result = await orch.run_map_reduce(
+            task="Review codebase for bugs",
+            items=["src/auth.py", "src/api.py"],
+            mapper=lambda item: SubagentContract(
+                name=f"review-{item}", task=f"Review {item} for bugs"
+            ),
+            reducer="Synthesize all reviews into a prioritized bug list.",
+            max_concurrent=2,
+        )
+
+    assert isinstance(result, SubagentResult)
+    assert result.task_id == "reducer"
+    assert result.success is True
+
+
+@pytest.mark.asyncio
+async def test_run_vote_consensus(orch):
+    """All agents agree — consensus reached."""
+    class AgreeingAgent(FakeWispAgentCore):
+        async def run_task(self, **kwargs):
+            return {"success": True, "output": "YES, this is vulnerable."}
+
+    with patch("wisp.core.agent.WispAgentCore", AgreeingAgent):
+        result = await orch.run_vote(
+            task="Is this function vulnerable?",
+            agents=[
+                SubagentContract(name="sec-1", role="security-auditor"),
+                SubagentContract(name="sec-2", role="security-auditor"),
+                SubagentContract(name="sec-3", role="security-auditor"),
+            ],
+            consensus_threshold=0.6,
+        )
+
+    assert result.success is True  # consensus reached
+    assert "REACHED" in result.output
+    assert "3/3" in result.output
+
+
+@pytest.mark.asyncio
+async def test_run_vote_no_consensus(orch):
+    """Agents disagree — consensus not reached."""
+    class DisagreeingAgent(FakeWispAgentCore):
+        counter = 0
+
+        async def run_task(self, **kwargs):
+            DisagreeingAgent.counter += 1
+            if DisagreeingAgent.counter == 1:
+                return {"success": True, "output": "YES"}
+            return {"success": True, "output": "NO"}
+
+    with patch("wisp.core.agent.WispAgentCore", DisagreeingAgent):
+        result = await orch.run_vote(
+            task="Is this vulnerable?",
+            agents=[
+                SubagentContract(name="sec-1", role="security-auditor"),
+                SubagentContract(name="sec-2", role="security-auditor"),
+            ],
+            consensus_threshold=0.6,
+        )
+
+    assert result.success is False  # no consensus
+    assert "NOT REACHED" in result.output
+
+
+@pytest.mark.asyncio
+async def test_run_chain_success(orch):
+    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+        result = await orch.run_chain([
+            SubagentContract(name="writer", task="Write code"),
+            SubagentContract(name="reviewer", task="Review code"),
+        ], pass_context=True)
+
+    assert result.success is True
+    assert "Chain Complete" in result.output
+    assert "2 steps" in result.output
+
+
+@pytest.mark.asyncio
+async def test_run_chain_failure_midway(orch):
+    class FailingAgent(FakeWispAgentCore):
+        async def run_task(self, **kwargs):
+            raise RuntimeError("step failed")
+
+    with patch("wisp.core.agent.WispAgentCore", FailingAgent):
+        result = await orch.run_chain([
+            SubagentContract(name="step1", task="Do step 1"),
+            SubagentContract(name="step2", task="Do step 2"),
+        ], pass_context=True)
+
+    assert result.success is False
+    assert "Chain Failed" in result.output
+    assert "step1" in result.output  # failed step name
