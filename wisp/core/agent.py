@@ -1306,16 +1306,34 @@ class WispAgentCore:
 
         contract.progress_callback = _progress
 
-        # ── Run subagent ───────────────────────────────────────────────
+        # ── Run subagent with retry ────────────────────────────────────
         orch = SubagentOrchestrator(parent_agent=self)
-        try:
-            result = await orch.run(contract)
-        except Exception as exc:
-            logger.error("Subagent %s crashed: %s", contract.name, exc, exc_info=True)
-            return f"[Error: subagent crashed: {exc}]"
-
-        if not result.success:
-            return f"[Error: {result.error or 'subagent failed'}]"
+        max_retries = int(args.get("auto_retry", True)) * 2  # 0 or 2 retries
+        last_error = ""
+        for attempt in range(max_retries + 1):
+            try:
+                result = await orch.run(contract)
+                if result.success:
+                    break
+                last_error = result.error or "subagent failed"
+                if attempt < max_retries:
+                    backoff = 2 ** attempt
+                    logger.warning("Subagent %s failed (attempt %d/%d), retrying in %ds: %s",
+                                   contract.name, attempt + 1, max_retries + 1, backoff, last_error)
+                    await asyncio.sleep(backoff)
+            except Exception as exc:
+                last_error = str(exc)
+                if attempt < max_retries:
+                    backoff = 2 ** attempt
+                    logger.warning("Subagent %s crashed (attempt %d/%d), retrying in %ds: %s",
+                                   contract.name, attempt + 1, max_retries + 1, backoff, last_error)
+                    await asyncio.sleep(backoff)
+                else:
+                    logger.error("Subagent %s crashed: %s", contract.name, exc, exc_info=True)
+                    return f"[Error: subagent crashed after {max_retries + 1} attempts: {exc}]"
+        else:
+            # All retries exhausted
+            return f"[Error: subagent failed after {max_retries + 1} attempts: {last_error}]"
 
         # ── Return output (with size guard) ────────────────────────────
         output = result.output
@@ -1328,8 +1346,11 @@ class WispAgentCore:
     async def spawn_subagents(self, specs: list) -> list:
         """Spawn parallel subagents for independent tasks.
 
+        Optimized batching: applies adaptive timeout and local model
+        fallback to each contract, then runs all in parallel.
+
         Args:
-            specs: A list of SubagentContract objects describing each subagent's task.
+            specs: A list of SubagentContract objects or dicts describing each subagent's task.
 
         Returns:
             A list of SubagentResult objects, one per spec.
@@ -1340,14 +1361,22 @@ class WispAgentCore:
             contracts = []
             for spec in specs:
                 if isinstance(spec, dict):
-                    contracts.append(SubagentContract(**spec))
+                    contract = SubagentContract(**spec)
                 else:
-                    contracts.append(spec)
+                    contract = spec
+                # Apply production optimizations
+                contract.timeout_seconds = self._adaptive_subagent_timeout(
+                    contract.task, contract.timeout_seconds
+                )
+                local_model = self._pick_local_model_for_subagent(contract.task)
+                if local_model:
+                    contract.model = local_model
+                contracts.append(contract)
             results = await orch.run_parallel(contracts)
             for r in results:
                 logger.info(
-                    "Subagent %s: success=%s, duration=%.1fs, files=%s",
-                    r.task_id, r.success, r.elapsed_seconds, r.files_changed,
+                    "Subagent %s: success=%s, duration=%.1fs, files=%s, tokens=%d",
+                    r.task_id, r.success, r.elapsed_seconds, r.files_changed, r.tokens_used,
                 )
             return results
         except Exception as e:
