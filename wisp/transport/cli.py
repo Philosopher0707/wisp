@@ -555,49 +555,42 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
         lines: list[str] = []
         total_chars = 0
 
-        # ── Pre-input paste poll ──
-        # Check stdin BEFORE the first input() call. If data available (paste),
-        # read everything from raw buffer and bypass readline entirely.
+        # ── Pre-input paste detection using FIONREAD ──
+        # FIONREAD ioctl queries the kernel tty buffer directly — no select()
+        # buffering issues. On macOS, select() on PTY doesn't return True
+        # until readline's first input() consumes the data. FIONREAD fixes
+        # this by bypassing the buffering layer entirely.
+        import array, fcntl, termios, os as _paste_os
         try:
-            import select
-            ready, _, _ = select.select([sys.stdin], [], [], 0.2)
-        except (ImportError, OSError, ValueError):
-            ready = False
-        if ready:
-            drained: list[str] = []
-            while True:
-                try:
-                    r2, _, _ = select.select([sys.stdin], [], [], 0.02)
-                except (ImportError, OSError, ValueError):
-                    break
-                if not r2:
-                    break
-                try:
-                    raw = sys.stdin.buffer.readline()
-                except (EOFError, OSError):
-                    break
-                if not raw:
-                    break
-                extra = raw.decode("utf-8", errors="replace").rstrip("\n")
-                total_chars += len(extra)
-                if total_chars > _MAX_INPUT_CHARS:
-                    extra = extra[:max(0, _MAX_INPUT_CHARS - total_chars + len(extra))]
-                    drained.append(extra)
-                    break
-                drained.append(extra)
-            if drained:
-                _paste_counter += 1
-                _last_paste_lines = len(drained)
-                print(f"\001\033[1m\002{prompt}\001\033[0m\002", end="")
-                w = _term_width()
-                s = drained[0][:w - 14].replace("\n", " ")
-                if len(drained[0]) > w - 14:
-                    s += "..."
-                print(f"  {dim(s)}")
-                result = "\n".join(drained)
-                if readline is not None and result.strip():
-                    readline.add_history(result)
-                return result
+            _pbuf = array.array('i', [0])
+            fcntl.ioctl(sys.stdin, termios.FIONREAD, _pbuf, True)
+            _nbytes = _pbuf[0]
+        except (OSError, TypeError, termios.error, ImportError):
+            _nbytes = 0
+        if _nbytes > 0:
+            try:
+                _rawdata = _paste_os.read(sys.stdin.fileno(), min(_nbytes, _MAX_INPUT_CHARS + 1))
+                _fulltext = _rawdata.decode("utf-8", errors="replace")
+                # Split into lines, handle trailing newline
+                _parts = _fulltext.split("\n")
+                if _parts[-1] == "":
+                    _parts.pop()
+                if _parts:
+                    _paste_counter += 1
+                    _last_paste_lines = len(_parts)
+                    # Print clean prompt + one-line preview
+                    print(f"\001\033[1m\002{prompt}\001\033[0m\002", end="")
+                    w = _term_width()
+                    s = _parts[0][:w - 14].replace("\n", " ")
+                    if len(_parts[0]) > w - 14:
+                        s += "..."
+                    print(f"  {dim(s)}")
+                    result = "\n".join(_parts)
+                    if readline is not None and result.strip():
+                        readline.add_history(result)
+                    return result
+            except (OSError, TypeError, ValueError):
+                pass
 
         while True:
             try:
@@ -1419,11 +1412,15 @@ class CLITransport:
             raise
 
     def _print_turn_done(self):
-        """Print a turn-completion separator."""
-        w = _term_width()
-        print()
-        print(dim("─" * w))
-        print()
+        _print_separator()
+
+
+def _print_separator():
+    """Print a turn-completion separator."""
+    w = _term_width()
+    print()
+    print(dim("─" * w))
+    print()
 
 
 # ── Block renderers (used by _execute_turn for buffered output) ──────
