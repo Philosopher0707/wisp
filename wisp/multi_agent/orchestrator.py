@@ -284,6 +284,9 @@ Respond in JSON with a "plan" string and a "subtasks" array.
                     "dependencies": [],
                 }
             ]
+        finally:
+            if hasattr(planner, "close"):
+                planner.close()
 
         return plan, subtasks
 
@@ -1349,18 +1352,46 @@ class SubagentOrchestrator:
         total = len(results)
         passed = len(successful)
 
-        # Simple consensus: exact output match
+        # Robust consensus: group by normalized similarity
         from collections import Counter
-        outputs = [r.output.strip()[:500] for r in successful]  # first 500 chars for comparison
-        vote_counts = Counter(outputs)
-        most_common = vote_counts.most_common(1)
 
-        consensus_reached = False
-        winner = ""
-        count = 0
-        if most_common:
-            winner, count = most_common[0]
+        def _normalize(text: str) -> str:
+            """Normalize text for comparison: lowercase, strip, collapse whitespace."""
+            return " ".join(text.lower().strip().split())
+
+        def _similar(a: str, b: str) -> bool:
+            """Check if two outputs are semantically similar."""
+            na, nb = _normalize(a), _normalize(b)
+            if na == nb:
+                return True
+            # One contains the other (e.g. "yes, it's vulnerable" vs "yes")
+            if len(na) > len(nb):
+                return nb in na
+            return na in nb
+
+        # Group outputs by similarity
+        groups: list[list[str]] = []
+        for r in successful:
+            out = r.output.strip()[:500]
+            placed = False
+            for g in groups:
+                if _similar(out, g[0]):
+                    g.append(out)
+                    placed = True
+                    break
+            if not placed:
+                groups.append([out])
+
+        # Find largest group
+        if groups:
+            winner_group = max(groups, key=len)
+            winner = winner_group[0]
+            count = len(winner_group)
             consensus_reached = count / total >= consensus_threshold
+        else:
+            winner = ""
+            count = 0
+            consensus_reached = False
 
         # Build synthesized output
         lines = [
@@ -1373,7 +1404,7 @@ class SubagentOrchestrator:
         ]
         for i, r in enumerate(results):
             status = "✓" if r.success else "✗"
-            match = " (matches winner)" if r.success and r.output.strip()[:500] == winner else ""
+            match = " (matches winner)" if r.success and _similar(r.output.strip()[:500], winner) else ""
             lines.append(f"{status} Agent {i+1} ({r.task_id}):{match}")
             if r.error:
                 lines.append(f"   Error: {r.error}")
