@@ -76,7 +76,7 @@ def test_contract_defaults():
     assert c.worktree_isolated is True
 
 
-def contract_overrides():
+def test_contract_overrides():
     c = SubagentContract(
         task="research",
         tools=["read_file", "web_fetch"],
@@ -488,3 +488,93 @@ async def test_token_budget_remaining(orch):
     assert remaining is not None
     assert remaining < 1000
     assert remaining >= 0
+
+
+# ── AgentRegistry persistence tests ──────────────────────────────────────
+
+def test_agent_registry_save_load(tmp_path):
+    """Registry state survives save/load round-trip."""
+    from wisp.multi_agent.registry import AgentRegistry, AgentRecord, AgentStatus
+
+    reg = AgentRegistry()
+    reg.register(AgentRecord(
+        agent_id="agent-1",
+        role="coder",
+        status=AgentStatus.WORKING,
+        current_task="fix bug",
+        files_locked=["/tmp/test.py"],
+        total_tasks_completed=5,
+        total_tasks_failed=1,
+    ))
+    reg.register(AgentRecord(
+        agent_id="agent-2",
+        role="reviewer",
+        status=AgentStatus.IDLE,
+    ))
+
+    path = tmp_path / "registry.json"
+    reg.save(path)
+
+    # Verify file exists and has content
+    assert path.exists()
+    data = json.loads(path.read_text())
+    assert data["version"] == 1
+    assert len(data["agents"]) == 2
+
+    # Load into fresh registry
+    reg2 = AgentRegistry()
+    reg2.load(path)
+
+    assert reg2.count_active() == 2
+    agents = {a.agent_id: a for a in reg2.list_agents()}
+    assert "agent-1" in agents
+    assert "agent-2" in agents
+
+    a1 = agents["agent-1"]
+    assert a1.role == "coder"
+    assert a1.status == AgentStatus.WORKING
+    assert a1.current_task == "fix bug"
+    assert a1.files_locked == ["/tmp/test.py"]
+    assert a1.total_tasks_completed == 5
+    assert a1.total_tasks_failed == 1
+
+    a2 = agents["agent-2"]
+    assert a2.role == "reviewer"
+    assert a2.status == AgentStatus.IDLE
+
+
+def test_agent_registry_load_missing_file(tmp_path):
+    """Loading a non-existent file is a no-op."""
+    from wisp.multi_agent.registry import AgentRegistry
+
+    reg = AgentRegistry()
+    reg.load(tmp_path / "does_not_exist.json")
+    assert reg.count_active() == 0
+
+
+def test_agent_registry_from_dict():
+    """Registry can be reconstructed from a dictionary."""
+    from wisp.multi_agent.registry import AgentRegistry, AgentStatus
+
+    data = {
+        "agents": [
+            {
+                "agent_id": "a-1",
+                "role": "tester",
+                "status": "WORKING",
+                "current_task": None,
+                "files_locked": [],
+                "spawned_at": "2024-01-01T00:00:00+00:00",
+                "last_heartbeat": None,
+                "total_tasks_completed": 3,
+                "total_tasks_failed": 0,
+            }
+        ]
+    }
+    reg = AgentRegistry.from_dict(data)
+    assert reg.count_active() == 1
+    a = reg.get("a-1")
+    assert a is not None
+    assert a.role == "tester"
+    assert a.status == AgentStatus.WORKING
+    assert a.total_tasks_completed == 3

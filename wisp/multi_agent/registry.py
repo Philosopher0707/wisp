@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
+from pathlib import Path
 from typing import Optional
 
 
@@ -46,6 +48,21 @@ class AgentRecord:
             "total_tasks_completed": self.total_tasks_completed,
             "total_tasks_failed": self.total_tasks_failed,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> AgentRecord:
+        """Reconstruct an AgentRecord from a dictionary."""
+        return cls(
+            agent_id=data["agent_id"],
+            role=data["role"],
+            status=AgentStatus[data["status"]],
+            current_task=data.get("current_task"),
+            files_locked=data.get("files_locked", []),
+            spawned_at=data.get("spawned_at", datetime.now(timezone.utc).isoformat()),
+            last_heartbeat=data.get("last_heartbeat"),
+            total_tasks_completed=data.get("total_tasks_completed", 0),
+            total_tasks_failed=data.get("total_tasks_failed", 0),
+        )
 
 
 class AgentRegistry:
@@ -133,3 +150,35 @@ class AgentRegistry:
                 "total": len(self._agents),
                 "active": self.count_active(),
             }
+
+    def save(self, path: str | Path) -> None:
+        """Persist registry state to a JSON file."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock:
+            data = {
+                "agents": [a.to_dict() for a in self._agents.values()],
+                "version": 1,
+            }
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    def load(self, path: str | Path) -> None:
+        """Restore registry state from a JSON file."""
+        path = Path(path)
+        if not path.exists():
+            return
+        data = json.loads(path.read_text(encoding="utf-8"))
+        with self._lock:
+            self._agents.clear()
+            for agent_data in data.get("agents", []):
+                record = AgentRecord.from_dict(agent_data)
+                self._agents[record.agent_id] = record
+
+    @classmethod
+    def from_dict(cls, data: dict) -> AgentRegistry:
+        """Reconstruct an AgentRegistry from a dictionary."""
+        registry = cls()
+        for agent_data in data.get("agents", []):
+            record = AgentRecord.from_dict(agent_data)
+            registry._agents[record.agent_id] = record
+        return registry
