@@ -555,42 +555,102 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
         lines: list[str] = []
         total_chars = 0
 
-        # ── Early paste detection: check stdin before any input() call ──
-        # If data is already available in the stdin buffer, the user is
-        # pasting (not typing).  Bypass readline entirely to avoid the
-        # ugly echo of long paste content inside the input box.
-        # Uses FIONREAD ioctl for precise byte count — no timing issues.
-        try:
-            import fcntl, termios, array
-            import os as _os  # avoid shadowing
-            buf = array.array('i', [0])
-            fcntl.ioctl(sys.stdin, termios.FIONREAD, buf, True)
-            nbytes = buf[0]
-            if nbytes > 0:
-                raw_data = _os.read(sys.stdin.fileno(), min(nbytes, _MAX_INPUT_CHARS + 1))
-                full_text = raw_data.decode("utf-8", errors="replace")
-                raw_lines = full_text.split("\n")
-                lines = [l for l in raw_lines if l or raw_lines.index(l) < len(raw_lines) - 1]
-                if not lines[-1]:
-                    lines = lines[:-1]
-                if lines:
-                    _paste_counter += 1
-                    _last_paste_lines = len(lines)
-                    # Print clean prompt with first-line preview
-                    print(f"\001\033[1m\002{prompt}\001\033[0m\002", end="")
-                    w = _term_width()
-                    summary = lines[0][: w - 14].replace("\n", " ")
-                    if len(lines[0]) > w - 14:
-                        summary += "..."
-                    print(f"  {dim(summary)}")
-                    result = "\n".join(lines)
-                    if readline is not None and result.strip():
-                        readline.add_history(result)
-                    return result
-        except (ImportError, OSError, TypeError, termios.error):
-            pass
-        except ImportError:
-            pass
+        while True:
+            try:
+                if not lines:
+                    rl_prompt = f"\001\033[1m\002{prompt}\001\033[0m\002"
+                else:
+                    depth = sum(1 for c in "\n".join(lines) if c in "([{")
+                    rl_prompt = _continuation_prompt(depth)
+                line = input(rl_prompt)
+            except KeyboardInterrupt:
+                print()
+                raise
+            except EOFError:
+                if not lines:
+                    raise
+                break
+            except (OSError, UnicodeDecodeError):
+                return ""
+
+            total_chars += len(line)
+            if total_chars > _MAX_INPUT_CHARS:
+                print(warning(f"\n  \u26a0\ufe0f  Input truncated at {_MAX_INPUT_CHARS} chars."))
+                line = line[: max(0, _MAX_INPUT_CHARS - total_chars + len(line))]
+                lines.append(line)
+                break
+
+            stripped = line.rstrip()
+            if allow_multiline and stripped.endswith("\\"):
+                lines.append(stripped[:-1])
+                continue
+
+            lines.append(line)
+            combined = "\n".join(lines)
+
+            if allow_multiline and _has_unclosed_brackets(combined):
+                continue
+
+            # Paste detection: after typing one line, check if more data
+            # is queued in stdin. If so, drain it all from raw buffer.
+            if allow_multiline and lines:
+                try:
+                    import select
+                    ready, _, _ = select.select([sys.stdin], [], [], 0.02)
+                    if ready:
+                        _drained_something = False
+                        attempts = 0
+                        while attempts < 200:
+                            ready2, _, _ = select.select([sys.stdin], [], [], 0.01)
+                            if not ready2:
+                                if _drained_something:
+                                    break
+                                attempts += 1
+                                continue
+                            _drained_something = True
+                            attempts = 0
+                            try:
+                                raw = sys.stdin.buffer.readline()
+                                if not raw:
+                                    break
+                                extra_line = raw.decode("utf-8", errors="replace").rstrip("\n")
+                            except (EOFError, OSError):
+                                break
+                            total_chars += len(extra_line)
+                            if total_chars > _MAX_INPUT_CHARS:
+                                print(warning(f"\n  \u26a0\ufe0f  Input truncated at {_MAX_INPUT_CHARS} chars."))
+                                extra_line = extra_line[: max(0, _MAX_INPUT_CHARS - total_chars + len(extra_line))]
+                                lines.append(extra_line)
+                                break
+                            lines.append(extra_line)
+                        # Track paste for input area indicator
+                        _paste_counter += 1
+                        _last_paste_lines = len(lines)
+
+                        # The first line was already echoed by readline's input() call.
+                        # Clear it (and any wrap lines) using ANSI escape.
+                        w = _term_width()
+                        first_line = lines[0]
+                        # Calculate how many terminal lines the first line wrapped into
+                        wrapped_lines = max(1, (len(first_line) + len(rl_prompt)) // w)
+                        for _ in range(wrapped_lines + 1):
+                            print("\033[F\033[K", end="", flush=True)
+                        # Print clean prompt + one-line preview
+                        print(f"\001\033[1m\002{prompt}\001\033[0m\002", end="")
+                        summary = first_line[: w - 14].replace("\n", " ")
+                        if len(first_line) > w - 14:
+                            summary += "..."
+                        print(f"  {dim(summary)}")
+                        return "\n".join(lines)
+                except (ImportError, OSError):
+                    pass
+
+            break
+
+        result = "\n".join(lines)
+        if readline is not None and result.strip():
+            readline.add_history(result)
+        return result
 
         while True:
             try:
