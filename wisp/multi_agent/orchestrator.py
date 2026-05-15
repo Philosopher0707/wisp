@@ -833,7 +833,7 @@ class SubagentOrchestrator:
 
             # ── Structured output validation ───────────────────────────
             if contract.output_schema and subagent_result.success:
-                subagent_result = self._validate_output(subagent_result, contract)
+                subagent_result = await self._validate_output(subagent_result, contract)
 
             # ── Emit completion event ────────────────────────────────
             if contract.progress_callback:
@@ -1187,7 +1187,7 @@ class SubagentOrchestrator:
 
         logger.debug("Worktree cleanup complete: %s", worktree_path)
 
-    def _validate_output(
+    async def _validate_output(
         self, result: SubagentResult, contract: SubagentContract
     ) -> SubagentResult:
         """Validate subagent output against a JSON schema.
@@ -1207,13 +1207,13 @@ class SubagentOrchestrator:
         except json.JSONDecodeError as e:
             logger.warning("Subagent %s output is not valid JSON: %s", contract.name, e)
             if contract.auto_retry_parse and result.retry_count == 0:
-                return self._retry_with_parse_error(result, contract, str(e))
+                return await self._retry_with_parse_error(result, contract, str(e))
             result.error = f"Output is not valid JSON: {e}"
             return result
         except jsonschema.ValidationError as e:
             logger.warning("Subagent %s output failed schema validation: %s", contract.name, e.message)
             if contract.auto_retry_parse and result.retry_count == 0:
-                return self._retry_with_parse_error(result, contract, e.message)
+                return await self._retry_with_parse_error(result, contract, e.message)
             result.error = f"Schema validation failed: {e.message}"
             return result
         except ImportError:
@@ -1224,7 +1224,7 @@ class SubagentOrchestrator:
                 pass
             return result
 
-    def _retry_with_parse_error(
+    async def _retry_with_parse_error(
         self, result: SubagentResult, contract: SubagentContract, error_msg: str
     ) -> SubagentResult:
         """Retry the subagent once with the parse error injected into context."""
@@ -1241,11 +1241,7 @@ class SubagentOrchestrator:
             }
         )
         retry_contract.retry_count = result.retry_count + 1
-        # Note: This is a sync call inside an async context.
-        # In practice this should be awaited, but _validate_output is called
-        # from run() which is already async. We'll handle this by making
-        # _validate_output async in a follow-up.
-        return result  # Placeholder — full async retry in Phase 2
+        return await self.run(retry_contract)
 
     async def _emit(
         self,
