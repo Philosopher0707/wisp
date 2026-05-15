@@ -1,19 +1,17 @@
 """Subagent spawning — delegate tasks to child agents with contracts and timeouts.
 
-A subagent is a fresh WispAgent instance that handles a scoped task
-(research, coding, testing) and returns a structured result to the parent.
-Subagents run in-process (threaded) with hard timeout enforcement.
-
-Safety:
-- Subagents cannot spawn subagents (max depth = 1)
-- Dangerous commands are ALWAYS blocked in subagents (no interactive user to confirm)
-- Subagent edits happen in the same workspace (parent can review)
+.. deprecated::
+    This module is deprecated. Use ``wisp.multi_agent.SubagentOrchestrator``
+    for new code. The types and classes here are kept as aliases for backward
+    compatibility and will be removed in v2.0.
 """
 
+import copy
 import logging
+import threading
 import time
+import warnings
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
-from dataclasses import dataclass, field
 from typing import Optional
 
 from wisp.agent import WispAgent
@@ -22,84 +20,31 @@ from wisp.core.agent import _coerce_tool_data
 from wisp.tools import execute_tool, ToolError
 from wisp.colors import success, error, warning, info, dim, accent
 
+# Unified types — aliases for backward compatibility
+from wisp.multi_agent.task import SubagentContract, SubagentResult
+
 logger = logging.getLogger(__name__)
 
-
-@dataclass
-class SubagentContract:
-    """Defines the scope and constraints of a subagent task."""
-
-    task: str
-    """The instruction given to the subagent. Be specific."""
-
-    tools: list[str] = field(default_factory=lambda: ["all"])
-    """Tool names the subagent may use. ["all"] means inherit parent's full toolset."""
-
-    max_iterations: int = 15
-    """Maximum agent loop iterations before forced stop."""
-
-    timeout_seconds: int = 120
-    """Hard wall-clock timeout. Subagent is killed after this."""
-
-    output_format: str = "text"
-    """How the subagent should format its final answer: text | json | markdown | report."""
-
-    model: Optional[str] = None
-    """Ollama model override. None = inherit parent's model."""
-
-    workspace: Optional[str] = None
-    """Working directory. None = inherit parent's workspace."""
-
-    system_prompt_extra: str = ""
-    """Additional system prompt text appended after the default."""
-
-    auto_approve: bool = True
-    """If False, dangerous commands (sudo, rm -rf, etc.) are blocked instead of executed."""
-
-    max_output_chars: int = 8000
-    """Truncate subagent output to this length before returning to parent."""
-
-
-# Unified type available at wisp.multi_agent.task.SubagentResult
-# This local definition kept for backward compatibility — prefer the unified type for new code.
-
-@dataclass
-class SubagentResult:
-    """Structured output from a completed (or timed-out) subagent.
-
-    For new code, prefer wisp.multi_agent.task.SubagentResult which
-    is the unified type shared across all multi-agent systems.
-    """
-
-    success: bool
-    """True if the subagent completed within budget and timeout."""
-
-    output: str
-    """The subagent's final answer or partial result."""
-
-    messages: list[dict]
-    """Full conversation history for audit / replay."""
-
-    elapsed_seconds: float
-    """Wall-clock time consumed."""
-
-    iterations_used: int
-    """Number of agent loop iterations actually executed."""
-
-    timed_out: bool = False
-    """True if the subagent hit the hard timeout."""
-
-    hit_iteration_limit: bool = False
-    """True if the subagent hit max_iterations."""
-
-    files_changed: list[str] = field(default_factory=list)
-    """Paths the subagent reported modifying (best-effort, not guaranteed)."""
+warnings.warn(
+    "wisp.subagent is deprecated. Use wisp.multi_agent.SubagentOrchestrator for new code.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 
 class SubagentRunner:
-    """Spawns and manages child WispAgent instances."""
+    """Spawns and manages child WispAgent instances.
+
+    .. deprecated::
+        Use ``wisp.multi_agent.SubagentOrchestrator`` for new code.
+    """
 
     def __init__(self, parent_agent: WispAgent):
+        warnings.warn(
+            "SubagentRunner is deprecated. Use SubagentOrchestrator for new code.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.parent = parent_agent
 
     def spawn(self, contract: SubagentContract) -> SubagentResult:
@@ -118,8 +63,17 @@ class SubagentRunner:
         child = WispAgent(config=child_config)
         # Reuse parent's HTTP session for connection pooling — avoids
         # creating a new TCP connection to Ollama for every subagent.
-        child.client._session = self.parent.client._session
+        if hasattr(self.parent.client, "_session"):
+            child.client._session = self.parent.client._session
         child.max_iterations = contract.max_iterations
+
+        # Share parent's file lock so parent and child don't deadlock on
+        # the same files (the child is an extension of the parent).
+        child.file_lock = self.parent.file_lock
+
+        # Cancellation flag — set by parent when timeout fires so the worker
+        # thread stops as soon as possible instead of leaking indefinitely.
+        child._cancelled = threading.Event()
 
         # Prevent infinite recursion: subagents cannot spawn subagents
         child._subagent_depth = getattr(self.parent, "_subagent_depth", 0) + 1
@@ -162,9 +116,11 @@ class SubagentRunner:
         except FutureTimeoutError:
             elapsed = time.monotonic() - start
             logger.warning("Subagent timed out after %.1fs", elapsed)
-            # Snapshot messages before the thread modifies them further
-            # (ThreadPoolExecutor doesn't kill threads on timeout)
-            messages_snapshot = list(child.messages)
+            # Signal the worker thread to stop at the next safe checkpoint.
+            child._cancelled.set()
+            # Deep-copy messages so the snapshot is immutable even if the
+            # worker thread continues mutating child.messages after timeout.
+            messages_snapshot = copy.deepcopy(child.messages)
             partial = self._extract_partial_output_from_snapshot(messages_snapshot)
             return SubagentResult(
                 success=False,

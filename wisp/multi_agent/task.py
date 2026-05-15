@@ -1,6 +1,6 @@
 """Unified task and result types for all multi-agent systems in Wisp.
 
-This is the single source of truth for SubagentTask, SubagentResult, and
+This is the single source of truth for SubagentContract, SubagentResult, and
 OrchestratorEvent. All other modules (protocol.py, subagent.py, subagent_runner.py)
 alias their types here.
 """
@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 import time as _time_module
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from .protocol import EventType as _EventType  # lazy to avoid circular import, resolve below
 
@@ -23,36 +23,100 @@ def _now_ts() -> float:
     return _time_module.monotonic()
 
 
-# ── Task ──────────────────────────────────────────────────────────────────
+# ── Contract ──────────────────────────────────────────────────────────────
 
 
 @dataclass
-class SubagentTask:
-    """A unit of work assigned to a single agent."""
+class SubagentContract:
+    """Single source of truth for all subagent invocations.
 
-    id: str = field(default_factory=_new_id)
-    role: str = ""
-    description: str = ""
-    expected_output: str = ""
-    max_iterations: int = 10
-    timeout_seconds: int = 120
+    Merges fields from the legacy subagent system (subagent.py),
+    the parallel runner (subagent_runner.py), and the swarm orchestrator.
+    """
+
+    # ── Identity ──
+    name: str = "subagent"
+    """Human-readable identifier for this subagent instance."""
+
+    role: str = "generalist"
+    """Agent role — maps to ROLE_CONFIGS in roles.py."""
+
+    # ── Task ──
+    task: str = ""
+    """The instruction / prompt given to the subagent."""
+
+    system_prompt: Optional[str] = None
+    """Override the default role-based system prompt."""
+
+    # ── Tools & Capabilities ──
     tools: list[str] = field(default_factory=lambda: ["all"])
-    context: dict[str, Any] = field(default_factory=dict)
+    """Allowed tool names. ["all"] means inherit parent's full toolset."""
 
-    # ── subagent.py compat ──
-    output_format: str = "text"
-    model: Optional[str] = None
-    workspace: Optional[str] = None
-    system_prompt_extra: str = ""
-    auto_approve: bool = True
+    allowed_skills: list[str] = field(default_factory=list)
+    """Skill names the subagent may use."""
+
+    # ── Budgets ──
+    max_iterations: int = 15
+    """Maximum agent loop iterations before forced stop."""
+
+    timeout_seconds: float = 120.0
+    """Hard wall-clock timeout."""
+
+    max_tokens: Optional[int] = None
+    """Hard token budget (enforced by context trim). None = inherit from parent."""
+
     max_output_chars: int = 8000
+    """Truncate subagent output to this length before returning to parent."""
 
-    # ── subagent_runner.py compat ──
-    name: str = ""
-    prompt: str = ""
-    system_prompt: str = ""
+    # ── Output ──
+    output_format: str = "text"
+    """How the subagent should format its final answer: text | json | markdown | report."""
+
+    output_schema: Optional[dict] = None
+    """JSON schema for validating structured output."""
+
+    auto_retry_parse: bool = True
+    """If True and output_schema is set, retry once on schema validation failure."""
+
+    # ── Environment ──
+    model: Optional[str] = None
+    """Ollama model override. None = inherit parent's model."""
+
+    workspace: Optional[str] = None
+    """Working directory. None = inherit parent's workspace."""
+
     worktree_isolated: bool = True
+    """Run in an isolated git worktree. When False the subagent shares the workspace."""
+
+    auto_approve: bool = True
+    """If False, dangerous commands are blocked instead of executed."""
+
+    # ── Observability ──
+    progress_callback: Optional[Callable[[OrchestratorEvent], None]] = None
+    """Optional callback receiving real-time progress events."""
+
+    # ── Backward compat: subagent.py fields ──
+    system_prompt_extra: str = ""
+    """Additional system prompt text appended after the default."""
+
+    # ── Backward compat: subagent_runner.py fields ──
+    prompt: str = ""
+    """Alias for task — kept for backward compatibility."""
+
     context_files: list[str] = field(default_factory=list)
+    """Specific file paths to mention in the subagent's context."""
+
+    def __post_init__(self):
+        """Normalize backward-compat aliases."""
+        if self.prompt and not self.task:
+            self.task = self.prompt
+        if self.system_prompt_extra and self.system_prompt is None:
+            # Build a default system prompt from role + extra
+            pass  # Will be handled by orchestrator
+
+
+# ── Backward compat alias ──
+SubagentTask = SubagentContract
 
 
 # ── Result ─────────────────────────────────────────────────────────────────
@@ -70,26 +134,34 @@ class SubagentResult:
     elapsed_seconds: float = 0.0
     iterations_used: int = 0
     retry_count: int = 0
-
-    # ── protocol.py compat (TaskResult) ──
-    # task_id maps to task_id
-    # success  → success
-    # output   → output
-    # files_changed → files_changed
-    # elapsed_seconds → elapsed_seconds
-    # iterations_used → iterations_used
-    # error → error
-
-    # ── subagent.py compat ──
-    messages: list[dict] = field(default_factory=list)
     timed_out: bool = False
     hit_iteration_limit: bool = False
 
-    # ── subagent_runner.py compat ──
-    spec: Any = None  # SubagentSpec, avoids circular import
+    # ── Audit trail ──
+    messages: list[dict] = field(default_factory=list)
+    """Full conversation history for replay / debugging."""
+
     tool_calls: list[dict] = field(default_factory=list)
+    """Summary of tool calls made (name + arg preview per call)."""
+
+    # ── Structured output ──
+    validated_output: Optional[Any] = None
+    """Parsed JSON object if output_schema was provided and validation succeeded."""
+
+    # ── Backward compat: subagent_runner.py fields ──
+    spec: Any = None
+    """The contract/spec that produced this result."""
+
     duration_seconds: float = 0.0
+    """Alias for elapsed_seconds — kept for backward compatibility."""
+
     session_id: str = ""
+    """Session ID persisted to the session store for audit."""
+
+    def __post_init__(self):
+        """Normalize backward-compat aliases."""
+        if self.duration_seconds and not self.elapsed_seconds:
+            self.elapsed_seconds = self.duration_seconds
 
 
 # ── Orchestrator Event (for streaming) ────────────────────────────────────

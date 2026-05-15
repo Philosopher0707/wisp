@@ -22,8 +22,8 @@ from .bus import MessageBus
 from .roles import AgentRole, ROLE_CONFIGS
 from .agent_factory import AgentFactory
 from .workspace_lock import WorkspaceLock
-from .orchestrator import SwarmOrchestrator, SwarmResult
-from .task import (SubagentTask, SubagentResult as UnifiedSubagentResult,
+from .orchestrator import SwarmOrchestrator, SwarmResult, SubagentOrchestrator
+from .task import (SubagentTask, SubagentContract, SubagentResult as UnifiedSubagentResult,
                    OrchestratorEvent, EventKind)
 
 __all__ = [
@@ -41,7 +41,9 @@ __all__ = [
     "WorkspaceLock",
     "SwarmOrchestrator",
     "SwarmResult",
+    "SubagentOrchestrator",
     "SubagentTask",
+    "SubagentContract",
     "UnifiedSubagentResult",
     "OrchestratorEvent",
     "EventKind",

@@ -1,23 +1,10 @@
 """Parallel multi-agent orchestration system for Wisp.
+"""Parallel multi-agent orchestration system for Wisp.
 
-Provides SubagentRunner — an async orchestrator that spawns multiple WispAgentCore
-instances in parallel, each optionally running in an isolated git worktree, with
-concurrency control, timeouts, and structured result aggregation.
-
-Usage:
-    from wisp.subagent_runner import SubagentRunner, SubagentSpec
-    from wisp.config import WispConfig
-
-    config = WispConfig()
-    runner = SubagentRunner(config, Path.cwd())
-
-    specs = [
-        runner.security_auditor(["src/auth.py", "src/api.py"]),
-        runner.test_writer(["src/auth.py"]),
-    ]
-
-    results = await runner.run_parallel(specs, max_concurrent=2)
-    summary = runner.format_results_for_llm(results)
+.. deprecated::
+    This module is deprecated. Use ``wisp.multi_agent.SubagentOrchestrator``
+    for new code. The types and classes here are kept as aliases for backward
+    compatibility and will be removed in v2.0.
 """
 
 from __future__ import annotations
@@ -28,6 +15,7 @@ import os
 import shutil
 import time
 import uuid
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -35,7 +23,16 @@ from typing import Optional
 from wisp.config import WispConfig
 from wisp.session import Session, SessionManager
 
+# Unified types — aliases for backward compatibility
+from wisp.multi_agent.task import SubagentContract as SubagentSpec, SubagentResult
+
 logger = logging.getLogger(__name__)
+
+warnings.warn(
+    "wisp.subagent_runner is deprecated. Use wisp.multi_agent.SubagentOrchestrator for new code.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 # ── Environment-driven defaults ────────────────────────────────────────
 
@@ -54,70 +51,9 @@ _WORKTREES_DIR_NAME = ".wisp/worktrees"
 
 # ── Data types ─────────────────────────────────────────────────────────
 
-
-@dataclass
-class SubagentSpec:
-    """Specification for a single subagent to be spawned."""
-
-    name: str
-    """Agent name, e.g.  "security-auditor", "test-writer"."""
-
-    prompt: str
-    """Task description / instruction for the subagent."""
-
-    model: str | None = None
-    """Model override.  None = inherit from parent config."""
-
-    tools: list[str] = field(default_factory=list)
-    """Allowed tool names.  Empty list = all tools."""
-
-    system_prompt: str = ""
-    """Specific system prompt for this subagent.  If empty, a short default
-    is built from the name and prompt."""
-
-    worktree_isolated: bool = True
-    """Run in an isolated git worktree.  When False the subagent shares the
-    workspace but with its own session isolation."""
-
-    context_files: list[str] = field(default_factory=list)
-    """Specific file paths to mention in the subagent's context."""
-
-
-# Unified type available at wisp.multi_agent.task.SubagentResult
-# This local definition kept for backward compatibility — prefer the unified type for new code.
-
-@dataclass
-class SubagentResult:
-    """Structured output from a subagent run.
-
-    For new code, prefer wisp.multi_agent.task.SubagentResult which
-    is the unified type shared across all multi-agent systems.
-    """
-
-    spec: SubagentSpec
-    """The spec that produced this result."""
-
-    success: bool
-    """True if the subagent completed within budget and timeout."""
-
-    output: str
-    """Final message content returned by the subagent."""
-
-    tool_calls: list[dict] = field(default_factory=list)
-    """Summary of tool calls made (name + arg preview per call)."""
-
-    duration_seconds: float = 0.0
-    """Wall-clock time consumed."""
-
-    error: str | None = None
-    """Exception message if the subagent crashed."""
-
-    session_id: str = ""
-    """Session ID persisted to the session store for audit."""
-
-    files_changed: list[str] = field(default_factory=list)
-    """File paths the subagent reported modifying."""
-
+# SubagentSpec and SubagentResult are now aliases imported from
+# wisp.multi_agent.task for backward compatibility.
+# See wisp/multi_agent/task.py for the unified definitions.
 
 # ── Runner ─────────────────────────────────────────────────────────────
 
@@ -141,6 +77,11 @@ class SubagentRunner:
             Path to the repository root.  Worktrees are created underneath
             ``<workspace>/.wisp/worktrees/``.
         """
+        warnings.warn(
+            "SubagentRunner is deprecated. Use SubagentOrchestrator for new code.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.config = config
         self.workspace = workspace.resolve()
         self._worktrees_root = self.workspace / _WORKTREES_DIR_NAME

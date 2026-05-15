@@ -1256,7 +1256,7 @@ class WispAgentCore:
                     logger.warning("Post-tool hook failed for %s: %s", func_name, e)
 
     def _spawn_subagent(self, args: dict, workspace: str) -> str:
-        from wisp.subagent import SubagentRunner, SubagentContract
+        from wisp.multi_agent import SubagentOrchestrator, SubagentContract
         depth = getattr(self, "_subagent_depth", 0)
         if depth >= 1:
             return "[Error: subagents cannot spawn subagents (max depth = 1)]"
@@ -1269,8 +1269,33 @@ class WispAgentCore:
             workspace=workspace,
             auto_approve=self.config.auto_approve,
         )
-        runner = SubagentRunner(self)
-        result = runner.spawn(contract)
+        orch = SubagentOrchestrator(parent_agent=self)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            result = asyncio.run(orch.run(contract))
+            return result.output
+        # Already inside a running loop — need a dedicated thread
+        import threading
+        result_holder: dict[str, Any] = {}
+        def _target():
+            nloop = asyncio.new_event_loop()
+            try:
+                result_holder["result"] = nloop.run_until_complete(orch.run(contract))
+            except Exception as exc:
+                result_holder["error"] = exc
+            finally:
+                nloop.close()
+        t = threading.Thread(target=_target)
+        t.start()
+        t.join(timeout=contract.timeout_seconds + 10)
+        if t.is_alive():
+            return "[Error: subagent thread timed out]"
+        if "error" in result_holder:
+            return f"[Error: {result_holder['error']}]"
+        result = result_holder.get("result")
+        if result is None:
+            return "[Error: subagent produced no result]"
         return result.output
 
     # ── Parallel subagents ───────────────────────────────────────────
@@ -1279,24 +1304,27 @@ class WispAgentCore:
         """Spawn parallel subagents for independent tasks.
 
         Args:
-            specs: A list of SubagentSpec objects describing each subagent's task.
+            specs: A list of SubagentContract objects describing each subagent's task.
 
         Returns:
             A list of SubagentResult objects, one per spec.
-            Returns an empty list if the subagent_runner module is unavailable.
         """
+        from wisp.multi_agent import SubagentOrchestrator, SubagentContract
         try:
-            from wisp.subagent_runner import SubagentRunner
-            runner = SubagentRunner(config=self.config, workspace=Path(self.config.workspace))
-            results = await runner.run_parallel(specs)
+            orch = SubagentOrchestrator(parent_agent=self)
+            contracts = []
+            for spec in specs:
+                if isinstance(spec, dict):
+                    contracts.append(SubagentContract(**spec))
+                else:
+                    contracts.append(spec)
+            results = await orch.run_parallel(contracts)
             for r in results:
                 logger.info(
                     "Subagent %s: success=%s, duration=%.1fs, files=%s",
-                    r.spec.name, r.success, r.duration_seconds, r.files_changed,
+                    r.task_id, r.success, r.elapsed_seconds, r.files_changed,
                 )
             return results
-        except ImportError:
-            logger.warning("subagent_runner module not available")
         except Exception as e:
             logger.error("Failed to spawn subagents: %s", e)
         return []

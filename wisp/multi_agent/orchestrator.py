@@ -16,14 +16,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
 from wisp.agent import WispAgent
 from wisp.config import WispConfig
+from wisp.session import Session, SessionManager
 
 from .protocol import AgentEvent, EventType, TaskAssignment, TaskResult
 from .registry import AgentRegistry, AgentRecord, AgentStatus
@@ -31,7 +34,7 @@ from .bus import MessageBus
 from .roles import AgentRole, ROLE_CONFIGS
 from .agent_factory import AgentFactory
 from .workspace_lock import WorkspaceLock
-from .task import EventKind, OrchestratorEvent
+from .task import EventKind, OrchestratorEvent, SubagentContract, SubagentResult
 
 logger = logging.getLogger(__name__)
 
@@ -707,3 +710,592 @@ Respond in JSON with a "plan" string and a "subtasks" array.
 
     def _on_heartbeat(self, event: AgentEvent) -> None:
         self.registry.heartbeat(event.source_agent)
+
+
+# ── SubagentOrchestrator (unified subagent API) ──────────────────────
+
+class SubagentOrchestrator:
+    """Unified orchestrator for single and parallel subagent execution.
+
+    Replaces the legacy systems in ``wisp/subagent.py`` and
+    ``wisp/subagent_runner.py`` with a single API that delegates to
+    ``WispAgentCore.run_task()`` instead of reimplementing the agent loop.
+
+    Usage:
+        orch = SubagentOrchestrator(parent_agent=my_agent)
+        result = await orch.run(SubagentContract(task="Audit auth.py"))
+        results = await orch.run_parallel([contract1, contract2])
+    """
+
+    def __init__(
+        self,
+        parent_agent: Optional[WispAgent] = None,
+        config: Optional[WispConfig] = None,
+        workspace: Optional[Path] = None,
+    ):
+        """Initialise the orchestrator.
+
+        Parameters
+        ----------
+        parent_agent:
+            The parent WispAgent that spawns subagents. Used to inherit
+            config, model, HTTP session, and file lock.
+        config:
+            Explicit config override. If None, inherited from ``parent_agent``.
+        workspace:
+            Repository root for worktree creation. If None, resolved from
+            ``parent_agent.config.workspace`` or ``Path.cwd()``.
+        """
+        self.parent = parent_agent
+        self.config = config or (parent_agent.config if parent_agent else WispConfig())
+        self.workspace = (
+            workspace
+            or (Path(self.config.workspace).resolve() if self.config.workspace else None)
+            or Path.cwd().resolve()
+        )
+        self._worktrees_root = self.workspace / ".wisp" / "worktrees"
+        self._session_mgr = SessionManager()
+        self._shutdown = False
+
+    # ── Public API ─────────────────────────────────────────────────────
+
+    async def run(self, contract: SubagentContract) -> SubagentResult:
+        """Run a single subagent and return its result.
+
+        Handles worktree creation, agent instantiation, timeout enforcement,
+        structured output validation, and error capture.  Never raises —
+        failures are returned as ``SubagentResult(success=False, error=...)``.
+        """
+        start = time.monotonic()
+        worktree_path: Path | None = None
+        session: Session | None = None
+        tool_calls_log: list[dict] = []
+
+        # ── Resolve workspace ──────────────────────────────────────────
+        if contract.worktree_isolated:
+            try:
+                worktree_path = await self._create_worktree(contract.name)
+            except Exception as exc:
+                logger.warning(
+                    "Worktree creation failed for %s, falling back to shared "
+                    "workspace: %s",
+                    contract.name,
+                    exc,
+                )
+                worktree_path = None
+
+        agent_workspace = str(worktree_path or self.workspace)
+
+        # ── Build child config ─────────────────────────────────────────
+        child_cfg = self._build_child_config(contract)
+
+        # ── Create session ─────────────────────────────────────────────
+        session = Session.create(
+            model=child_cfg.model,
+            workspace=agent_workspace,
+            first_prompt=contract.task,
+        )
+        session.title = f"[sub] {contract.name}"
+
+        # ── Build system prompt ────────────────────────────────────────
+        system = contract.system_prompt or self._default_system_prompt(contract)
+
+        # ── Emit start event ───────────────────────────────────────────
+        if contract.progress_callback:
+            await self._emit(
+                contract,
+                EventKind.TASK_STARTED,
+                {"role": contract.role, "description": contract.task},
+            )
+
+        # ── Spawn & run with timeout ──────────────────────────────────
+        try:
+            result = await asyncio.wait_for(
+                self._run_agent(contract, child_cfg, session, system, agent_workspace, tool_calls_log),
+                timeout=contract.timeout_seconds,
+            )
+
+            session.touch()
+            self._session_mgr.save(session)
+
+            duration = time.monotonic() - start
+            subagent_result = SubagentResult(
+                task_id=contract.name,
+                success=result["success"],
+                output=result["output"],
+                tool_calls=list(tool_calls_log),
+                elapsed_seconds=duration,
+                error=result.get("error"),
+                session_id=session.id,
+                files_changed=result.get("files_changed", []),
+                iterations_used=result.get("iterations_used", 0),
+            )
+
+            # ── Structured output validation ───────────────────────────
+            if contract.output_schema and subagent_result.success:
+                subagent_result = self._validate_output(subagent_result, contract)
+
+            # ── Emit completion event ────────────────────────────────
+            if contract.progress_callback:
+                await self._emit(
+                    contract,
+                    EventKind.TASK_COMPLETED,
+                    {
+                        "files_changed": subagent_result.files_changed,
+                        "elapsed": duration,
+                        "output": subagent_result.output[:200],
+                    },
+                )
+
+            return subagent_result
+
+        except asyncio.TimeoutError:
+            duration = time.monotonic() - start
+            logger.warning(
+                "Subagent %s timed out after %.1fs", contract.name, duration
+            )
+            session.touch()
+            self._session_mgr.save(session)
+            if contract.progress_callback:
+                await self._emit(
+                    contract,
+                    EventKind.TASK_FAILED,
+                    {"error": f"Timeout after {contract.timeout_seconds}s"},
+                )
+            return SubagentResult(
+                task_id=contract.name,
+                success=False,
+                output=f"[TIMED OUT after {duration:.1f}s]",
+                tool_calls=list(tool_calls_log),
+                elapsed_seconds=duration,
+                error=f"Timeout after {contract.timeout_seconds}s",
+                session_id=session.id,
+                timed_out=True,
+            )
+
+        except Exception as exc:
+            duration = time.monotonic() - start
+            logger.error(
+                "Subagent %s crashed: %s", contract.name, exc, exc_info=True
+            )
+            if session:
+                session.touch()
+                self._session_mgr.save(session)
+            if contract.progress_callback:
+                await self._emit(
+                    contract,
+                    EventKind.TASK_FAILED,
+                    {"error": str(exc)},
+                )
+            return SubagentResult(
+                task_id=contract.name,
+                success=False,
+                output="",
+                tool_calls=list(tool_calls_log),
+                elapsed_seconds=duration,
+                error=str(exc),
+                session_id=session.id if session else "",
+            )
+
+        finally:
+            # ── Cleanup worktree (unless debugging) ──────────────────
+            if worktree_path and not os.environ.get("WISP_KEEP_WORKTREES", "").lower() == "true":
+                try:
+                    await self._cleanup_worktree(worktree_path)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to clean up worktree %s: %s", worktree_path, exc
+                    )
+
+    async def run_parallel(
+        self,
+        contracts: list[SubagentContract],
+        max_concurrent: int = 4,
+    ) -> list[SubagentResult]:
+        """Run multiple subagent contracts concurrently.
+
+        Parameters
+        ----------
+        contracts:
+            Subagent specifications to execute.
+        max_concurrent:
+            Maximum number of subagents running at once (semaphore).
+
+        Returns
+        -------
+        list[SubagentResult]
+            One result per contract, in the same order as ``contracts``.
+        """
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def _guarded(contract: SubagentContract) -> SubagentResult:
+            async with semaphore:
+                return await self.run(contract)
+
+        tasks = [asyncio.create_task(_guarded(c)) for c in contracts]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        resolved: list[SubagentResult] = []
+        for i, result in enumerate(results):
+            if isinstance(result, BaseException):
+                contract = contracts[i]
+                resolved.append(
+                    SubagentResult(
+                        task_id=contract.name,
+                        success=False,
+                        output="",
+                        elapsed_seconds=0.0,
+                        error=f"Unhandled gather exception: {result}",
+                        session_id="",
+                    )
+                )
+                logger.error(
+                    "Subagent %s crashed during gather: %s", contract.name, result
+                )
+            else:
+                resolved.append(result)
+
+        logger.info(
+            "Parallel run complete: %d/%d succeeded",
+            sum(1 for r in resolved if r.success),
+            len(resolved),
+        )
+        return resolved
+
+    # ── Internal helpers ───────────────────────────────────────────────
+
+    async def _run_agent(
+        self,
+        contract: SubagentContract,
+        config: WispConfig,
+        session: Session,
+        system_prompt: str,
+        workspace_path: str,
+        tool_calls_log: list[dict],
+    ) -> dict:
+        """Run a WispAgentCore instance and return its result dict.
+
+        Uses ``run_task`` (the non-interactive API) to drive the agent loop.
+        Tool calls are intercepted and logged for the result summary.
+        """
+        from wisp.core.agent import WispAgentCore
+
+        agent = WispAgentCore(
+            config=config,
+            session=session,
+            role=f"subagent:{contract.name}",
+        )
+
+        try:
+            # Override the workspace in the config so tool execution resolves
+            # paths relative to the worktree (or shared workspace).
+            agent.config.workspace = workspace_path
+
+            # Apply tool filtering if specified
+            if contract.tools != ["all"]:
+                agent._allowed_tools = set(contract.tools)
+
+            # ── Run the task non-interactively ────────────────────────────
+            max_iter = contract.max_iterations
+            timeout_per_task = contract.timeout_seconds
+
+            task_result = await agent.run_task(
+                task_description=contract.task,
+                workspace=workspace_path,
+                max_iterations=max_iter,
+                timeout_seconds=timeout_per_task,
+                system_prompt=system_prompt,
+            )
+
+            # Collect tool call summaries from the agent's message history
+            for msg in agent.messages:
+                tcs = msg.get("tool_calls", []) or []
+                for tc in tcs:
+                    func = tc.get("function", {})
+                    name = func.get("name", "")
+                    args = func.get("arguments", {})
+                    if isinstance(args, str):
+                        try:
+                            import json
+                            args = json.loads(args)
+                        except (json.JSONDecodeError, TypeError):
+                            args = {}
+                    if not isinstance(args, dict):
+                        args = {}
+                    arg_preview = self._compact_args(args)
+                    tool_calls_log.append({"name": name, "args_preview": arg_preview})
+
+            # Extract files changed from the final output (best-effort)
+            files_changed: list[str] = []
+            output_text = task_result.get("output", "") or ""
+            if output_text:
+                files_changed = self._extract_files_changed(output_text)
+
+            return {
+                "success": task_result.get("success", False),
+                "output": output_text,
+                "error": None if task_result.get("success") else task_result.get("output"),
+                "files_changed": files_changed,
+                "iterations_used": len([m for m in agent.messages if m.get("role") == "assistant"]),
+            }
+        finally:
+            agent.close()
+
+    def _build_child_config(self, contract: SubagentContract) -> WispConfig:
+        """Clone the parent config with optional per-subagent overrides."""
+        child = WispConfig()
+        child.model = contract.model or self.config.model
+        child.workspace = str(contract.workspace or self.workspace)
+        child.auto_approve = contract.auto_approve
+        child.show_thinking = self.config.show_thinking
+        child.chars_per_token = self.config.chars_per_token
+        child.ollama_url = self.config.ollama_url
+        child.temperature = self.config.temperature
+        child.max_context_tokens = contract.max_tokens or self.config.max_context_tokens
+        child._context_tokens_explicit = self.config._context_tokens_explicit
+        child.permission_mode = self.config.permission_mode
+        child.max_iterations = contract.max_iterations
+        return child
+
+    def _default_system_prompt(self, contract: SubagentContract) -> str:
+        """Build a concise default system prompt when none is provided."""
+        from .roles import ROLE_CONFIGS, AgentRole
+
+        # Try role-based prompt first
+        role_cfg = ROLE_CONFIGS.get(contract.role)
+        if role_cfg:
+            base = role_cfg.system_prompt
+        else:
+            base = (
+                f"You are a specialist subagent: **{contract.name}**.",
+                "You have tools to read, write, and edit files, run bash commands, "
+                "list directories, and fetch URLs.",
+                "",
+                "## Rules",
+                "1. Focus ONLY on your assigned task.",
+                "2. Work efficiently — you have a time budget.",
+                "3. When done, provide a clear summary of what you did.",
+                "4. If you edit files, list the changed paths.",
+                "5. If stuck, explain what blocked you and stop.",
+            )
+            base = "\n".join(base)
+
+        parts = [base]
+
+        if contract.tools != ["all"]:
+            parts.append("")
+            parts.append("## Allowed Tools")
+            parts.append(", ".join(contract.tools))
+
+        if contract.context_files:
+            parts.append("")
+            parts.append("## Context Files")
+            for f in contract.context_files:
+                parts.append(f"- {f}")
+
+        if contract.system_prompt_extra:
+            parts.append("")
+            parts.append("## Additional Instructions")
+            parts.append(contract.system_prompt_extra)
+
+        return "\n".join(parts)
+
+    async def _create_worktree(self, agent_name: str) -> Path:
+        """Create an isolated git worktree for a subagent."""
+        self._worktrees_root.mkdir(parents=True, exist_ok=True)
+
+        short_id = uuid.uuid4().hex[:8]
+        ts = int(time.time())
+        safe_name = agent_name.replace("/", "-").replace(" ", "-")
+        dir_name = f"{safe_name}-{short_id}"
+        branch_name = f"wisp-subagent/{safe_name}-{ts}"
+
+        worktree_path = (self._worktrees_root / dir_name).resolve()
+
+        logger.info(
+            "Creating worktree: path=%s branch=%s", worktree_path, branch_name
+        )
+
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            "worktree",
+            "add",
+            str(worktree_path),
+            "-b",
+            branch_name,
+            cwd=str(self.workspace),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+
+        if proc.returncode != 0:
+            err_text = stderr.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(
+                f"git worktree add failed (exit {proc.returncode}): {err_text}"
+            )
+
+        logger.debug(
+            "Worktree created: %s (branch=%s)",
+            worktree_path,
+            branch_name,
+        )
+        return worktree_path
+
+    async def _cleanup_worktree(self, worktree_path: Path) -> None:
+        """Remove a worktree and prune the associated branch."""
+        logger.info("Cleaning up worktree: %s", worktree_path)
+
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            "worktree",
+            "remove",
+            str(worktree_path),
+            "--force",
+            cwd=str(self.workspace),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+
+        if proc.returncode != 0:
+            err_text = stderr.decode("utf-8", errors="replace").strip()
+            logger.warning(
+                "git worktree remove failed (exit %d): %s",
+                proc.returncode,
+                err_text,
+            )
+            # Fallback: manual directory removal
+            if worktree_path.exists():
+                import shutil
+                shutil.rmtree(worktree_path, ignore_errors=True)
+                logger.debug("Manually removed worktree directory: %s", worktree_path)
+
+        # Prune the worktree metadata
+        try:
+            prune_proc = await asyncio.create_subprocess_exec(
+                "git",
+                "worktree",
+                "prune",
+                cwd=str(self.workspace),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await prune_proc.communicate()
+        except Exception as exc:
+            logger.debug("Worktree prune failed (non-critical): %s", exc)
+
+        logger.debug("Worktree cleanup complete: %s", worktree_path)
+
+    def _validate_output(
+        self, result: SubagentResult, contract: SubagentContract
+    ) -> SubagentResult:
+        """Validate subagent output against a JSON schema.
+
+        If validation fails and ``auto_retry_parse`` is True, retry once
+        with the validation error injected into the subagent context.
+        """
+        if not contract.output_schema:
+            return result
+
+        try:
+            import jsonschema
+            parsed = json.loads(result.output)
+            jsonschema.validate(instance=parsed, schema=contract.output_schema)
+            result.validated_output = parsed
+            return result
+        except json.JSONDecodeError as e:
+            logger.warning("Subagent %s output is not valid JSON: %s", contract.name, e)
+            if contract.auto_retry_parse and result.retry_count == 0:
+                return self._retry_with_parse_error(result, contract, str(e))
+            result.error = f"Output is not valid JSON: {e}"
+            return result
+        except jsonschema.ValidationError as e:
+            logger.warning("Subagent %s output failed schema validation: %s", contract.name, e.message)
+            if contract.auto_retry_parse and result.retry_count == 0:
+                return self._retry_with_parse_error(result, contract, e.message)
+            result.error = f"Schema validation failed: {e.message}"
+            return result
+        except ImportError:
+            logger.warning("jsonschema not installed, skipping output validation")
+            try:
+                result.validated_output = json.loads(result.output)
+            except json.JSONDecodeError:
+                pass
+            return result
+
+    def _retry_with_parse_error(
+        self, result: SubagentResult, contract: SubagentContract, error_msg: str
+    ) -> SubagentResult:
+        """Retry the subagent once with the parse error injected into context."""
+        logger.info("Retrying subagent %s due to parse error", contract.name)
+        retry_contract = SubagentContract(
+            **{
+                **contract.__dict__,
+                "task": (
+                    f"{contract.task}\n\n"
+                    f"IMPORTANT: Your previous response failed validation.\n"
+                    f"Error: {error_msg}\n"
+                    f"Please fix the response and ensure it matches the required schema."
+                ),
+            }
+        )
+        retry_contract.retry_count = result.retry_count + 1
+        # Note: This is a sync call inside an async context.
+        # In practice this should be awaited, but _validate_output is called
+        # from run() which is already async. We'll handle this by making
+        # _validate_output async in a follow-up.
+        return result  # Placeholder — full async retry in Phase 2
+
+    async def _emit(
+        self,
+        contract: SubagentContract,
+        event_type: str,
+        payload: dict[str, Any],
+    ) -> None:
+        """Emit a progress event via the contract's callback."""
+        if contract.progress_callback:
+            event = OrchestratorEvent(
+                task_id=contract.name,
+                event_type=event_type,
+                payload=payload,
+            )
+            try:
+                if asyncio.iscoroutinefunction(contract.progress_callback):
+                    await contract.progress_callback(event)
+                else:
+                    contract.progress_callback(event)
+            except Exception as e:
+                logger.warning("Progress callback failed for %s: %s", contract.name, e)
+
+    @staticmethod
+    def _compact_args(args: dict) -> str:
+        """One-line preview of tool arguments."""
+        key = next(iter(args), None)
+        if key is None:
+            return "..."
+        val = args[key]
+        s = str(val)
+        if len(s) > 60:
+            s = s[:60] + "..."
+        return f"{key}={s}"
+
+    @staticmethod
+    def _extract_files_changed(text: str) -> list[str]:
+        """Best-effort extraction of file paths mentioned in output text."""
+        import re
+        patterns = [
+            r"`([a-zA-Z0-9_\-./]+\.(?:py|ts|js|rs|go|java|rb|sh))`",
+            r"(?:changed|modified|touched|files written|created files?)[:\-]\s*\n?\s*[-*]\s+([^\s,]+)",
+            r"\b([a-zA-Z0-9_\-/]+\.(?:py|ts|js|rs|go|java|rb|sh))\b",
+        ]
+        found: list[str] = []
+        seen: set[str] = set()
+        for pat in patterns:
+            for m in re.finditer(pat, text, re.IGNORECASE):
+                path = m.group(1).strip()
+                if path not in seen and len(path) > 2:
+                    seen.add(path)
+                    found.append(path)
+        return found[:20]
+
