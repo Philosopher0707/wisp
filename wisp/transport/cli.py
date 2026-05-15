@@ -630,6 +630,10 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
                                 lines.append(extra_line)
                                 break
                             lines.append(extra_line)
+                        # Track paste for input area indicator
+                        global _paste_counter, _last_paste_lines
+                        _paste_counter += 1
+                        _last_paste_lines = len(lines)
                         return "\n".join(lines)
                 except (ImportError, OSError):
                     pass

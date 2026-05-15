@@ -1385,9 +1385,11 @@ class WispAgentCore:
                 else:
                     contract = spec
                 # Apply production optimizations
-                contract.timeout_seconds = self._adaptive_subagent_timeout(
-                    contract.task, contract.timeout_seconds
-                )
+                # Respect explicit user timeout — don't override with adaptive
+                if contract.timeout_seconds < 30.0:
+                    contract.timeout_seconds = self._adaptive_subagent_timeout(
+                        contract.task, contract.timeout_seconds
+                    )
                 local_model = self._pick_local_model_for_subagent(contract.task)
                 if local_model:
                     contract.model = local_model
