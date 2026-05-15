@@ -801,6 +801,9 @@ def _run_subagent_worker(contract_dict: dict, result_path: str, parent_workspace
 
     start = _time.monotonic()
     contract = SubagentContract(**contract_dict)
+    # The worker already runs inside a dedicated process, so nested
+    # process isolation would cause recursion/hang. Force thread isolation.
+    contract.isolation = "thread"
 
     # Build a minimal orchestrator in the child process
     orch = SubagentOrchestrator(workspace=Path(parent_workspace))
@@ -1289,7 +1292,8 @@ class SubagentOrchestrator:
 
         try:
             process.start()
-            process.join(timeout=contract.timeout_seconds)
+            # Run join in thread pool to avoid blocking the event loop
+            await asyncio.to_thread(process.join, contract.timeout_seconds)
 
             if process.is_alive():
                 # Timeout — force kill
@@ -1299,14 +1303,14 @@ class SubagentOrchestrator:
                     contract.name, duration,
                 )
                 process.terminate()
-                process.join(timeout=5)
+                await asyncio.to_thread(process.join, 5)
                 if process.is_alive():
                     logger.error(
                         "Subagent %s process refused SIGTERM — sending SIGKILL",
                         contract.name,
                     )
                     process.kill()
-                    process.join(timeout=2)
+                    await asyncio.to_thread(process.join, 2)
 
                 if contract.progress_callback:
                     await self._emit(

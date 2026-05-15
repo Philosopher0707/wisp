@@ -202,11 +202,9 @@ async def test_run_parallel_success(orch):
 @pytest.mark.asyncio
 async def test_run_parallel_mixed_results(orch):
     class FlakyAgent(FakeWispAgentCore):
-        counter = 0
-
         async def run_task(self, **kwargs):
-            FlakyAgent.counter += 1
-            if FlakyAgent.counter == 2:
+            # Deterministic failure for a specific role (contract name)
+            if "task-1" in self.role:
                 raise RuntimeError("fail")
             return {"success": True, "output": "ok"}
 
