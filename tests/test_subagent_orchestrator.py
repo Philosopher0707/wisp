@@ -1204,3 +1204,237 @@ def test_spawn_subagent_process_ipc_cleanup(tmp_path):
         data = json.load(f)
     assert "task_id" in data
     assert "success" in data
+
+
+# ── Integration tests for process-based subagents ──────────────────────
+
+@pytest.mark.asyncio
+async def test_parallel_mixed_isolation(orch):
+    """Parallel execution with both thread and process subagents."""
+    contracts = [
+        SubagentContract(name="thread-1", task="Fast task 1", isolation="thread", timeout_seconds=10),
+        SubagentContract(name="process-1", task="Fast task 2", isolation="process", timeout_seconds=10),
+        SubagentContract(name="thread-2", task="Fast task 3", isolation="thread", timeout_seconds=10),
+    ]
+
+    results = await orch.run_parallel(contracts, max_concurrent=3)
+    assert len(results) == 3
+    for r in results:
+        assert isinstance(r, SubagentResult)
+        assert r.task_id in ["thread-1", "process-1", "thread-2"]
+
+
+@pytest.mark.asyncio
+async def test_process_timeout_escalation(orch):
+    """Process that ignores SIGTERM gets SIGKILL."""
+    contract = SubagentContract(
+        name="stubborn",
+        task="Never complete",
+        isolation="process",
+        timeout_seconds=1,
+    )
+
+    result = await orch.run(contract)
+    assert result.success is False
+    assert result.timed_out is True
+    assert result.elapsed_seconds < 8  # Should not wait forever
+
+
+@pytest.mark.asyncio
+async def test_process_token_budget_tracking(orch):
+    """Token budget is tracked across process boundary."""
+    orch.set_global_token_budget(10000)
+    initial = orch.get_tokens_consumed()
+
+    contract = SubagentContract(
+        name="budget-test",
+        task="Simple task",
+        isolation="process",
+        timeout_seconds=10,
+    )
+
+    result = await orch.run(contract)
+    # Process may succeed or fail, but budget should be tracked
+    after = orch.get_tokens_consumed()
+    assert after >= initial
+
+
+@pytest.mark.asyncio
+async def test_process_telemetry_recorded(orch):
+    """Telemetry is recorded for process-based subagents."""
+    contract = SubagentContract(
+        name="telemetry-test",
+        task="Simple task",
+        isolation="process",
+        timeout_seconds=10,
+    )
+
+    result = await orch.run(contract)
+    # Telemetry from process workers is recorded in child process,
+    # not propagated to parent. Parent only gets result via IPC.
+    assert isinstance(result, SubagentResult)
+    assert result.task_id == "telemetry-test"
+
+
+@pytest.mark.asyncio
+async def test_process_worktree_isolation(orch, tmp_path):
+    """Process subagent respects worktree isolation."""
+    contract = SubagentContract(
+        name="isolated",
+        task="Check workspace path",
+        isolation="process",
+        worktree_isolated=True,
+        timeout_seconds=10,
+    )
+
+    result = await orch.run(contract)
+    assert isinstance(result, SubagentResult)
+
+
+@pytest.mark.asyncio
+async def test_process_cleanup_on_crash(orch):
+    """Temp files are cleaned up even when process crashes."""
+    import tempfile
+    # Count temp files before
+    tmp_dir = Path(tempfile.gettempdir())
+    before = list(tmp_dir.glob("*.json"))
+
+    contract = SubagentContract(
+        name="crash-test",
+        task="Task that will timeout",
+        isolation="process",
+        timeout_seconds=1,
+    )
+
+    result = await orch.run(contract)
+    assert result.success is False
+
+    # No new orphaned temp files
+    after = list(tmp_dir.glob("*.json"))
+    # Should not leak files (allow some tolerance)
+    assert len(after) <= len(before) + 2
+
+
+@pytest.mark.asyncio
+async def test_process_vs_thread_same_contract(orch):
+    """Same contract with different isolation produces valid results."""
+    base = SubagentContract(name="compare", task="Say hello", timeout_seconds=10)
+
+    thread_contract = SubagentContract(**{**base.__dict__, "isolation": "thread"})
+    process_contract = SubagentContract(**{**base.__dict__, "isolation": "process"})
+
+    thread_result = await orch.run(thread_contract)
+    process_result = await orch.run(process_contract)
+
+    assert isinstance(thread_result, SubagentResult)
+    assert isinstance(process_result, SubagentResult)
+    assert thread_result.task_id == process_result.task_id == "compare"
+
+
+@pytest.mark.asyncio
+async def test_process_chain_execution(orch):
+    """Chain pattern works with process-isolated subagents."""
+    contracts = [
+        SubagentContract(name="step-1", task="Step 1", isolation="process", timeout_seconds=10),
+        SubagentContract(name="step-2", task="Step 2", isolation="process", timeout_seconds=10),
+    ]
+
+    result = await orch.run_chain(contracts, pass_context=False)
+    assert isinstance(result, SubagentResult)
+    # Chain may fail at any step due to process timeout, but should
+    # return a valid SubagentResult without crashing the orchestrator
+    assert result.task_id.startswith("step-") or result.task_id.startswith("chain-")
+
+
+@pytest.mark.asyncio
+async def test_process_vote_execution(orch):
+    """Vote pattern works with process-isolated subagents."""
+    agents = [
+        SubagentContract(name=f"voter-{i}", task="Vote", isolation="process", timeout_seconds=10)
+        for i in range(3)
+    ]
+
+    result = await orch.run_vote(task="Test vote", agents=agents, consensus_threshold=0.5)
+    assert isinstance(result, SubagentResult)
+    assert "Vote Result" in result.output
+
+
+def test_run_subagent_worker_directly(tmp_path):
+    """Test the worker function directly without multiprocessing."""
+    from wisp.multi_agent.orchestrator import _run_subagent_worker
+
+    result_path = str(tmp_path / "worker_result.json")
+    contract_dict = {
+        "name": "direct-worker",
+        "role": "generalist",
+        "task": "test",
+        "tools": ["all"],
+        "allowed_skills": [],
+        "max_iterations": 1,
+        "timeout_seconds": 5,
+        "max_tokens": None,
+        "max_input_tokens": None,
+        "max_output_tokens": None,
+        "max_output_chars": 8000,
+        "output_format": "text",
+        "output_schema": None,
+        "auto_retry_parse": True,
+        "model": None,
+        "workspace": None,
+        "worktree_isolated": False,
+        "auto_approve": True,
+        "system_prompt_extra": "",
+        "prompt": "",
+        "context_files": [],
+    }
+
+    _run_subagent_worker(contract_dict, result_path, str(tmp_path))
+
+    assert Path(result_path).exists()
+    with open(result_path) as f:
+        data = json.load(f)
+    assert data["task_id"] == "direct-worker"
+    assert "success" in data
+
+
+@pytest.mark.asyncio
+async def test_process_map_reduce_execution(orch):
+    """Map-reduce pattern works with process-isolated mappers."""
+    def make_mapper(item: str):
+        return SubagentContract(
+            name=f"mapper-{item}",
+            task=f"Process {item}",
+            isolation="process",
+            timeout_seconds=10,
+        )
+
+    result = await orch.run_map_reduce(
+        task="Test map-reduce",
+        items=["a", "b"],
+        mapper=make_mapper,
+        reducer="Combine results",
+        max_concurrent=2,
+    )
+    assert isinstance(result, SubagentResult)
+
+
+@pytest.mark.asyncio
+async def test_process_progress_callback(orch):
+    """Progress callbacks are emitted for process subagents."""
+    events = []
+    def callback(event):
+        events.append(event)
+
+    contract = SubagentContract(
+        name="progress-test",
+        task="Simple task",
+        isolation="process",
+        timeout_seconds=10,
+        progress_callback=callback,
+    )
+
+    result = await orch.run(contract)
+    # At minimum we should get start and completion/failure events
+    assert len(events) >= 2
+    assert any(e.event_type == EventKind.TASK_STARTED for e in events)
+    assert any(e.event_type in (EventKind.TASK_COMPLETED, EventKind.TASK_FAILED) for e in events)

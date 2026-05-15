@@ -412,10 +412,11 @@ def _has_unclosed_brackets(text: str) -> bool:
 
 def _continuation_prompt(depth: int) -> str:
     """Build a continuation prompt showing bracket nesting depth."""
+    # Use ╎ (box drawings light vertical) for visual grouping
     if depth <= 0:
-        return "... "
+        return "╎ "
     indent = "  " * min(depth, 4)
-    return f"{indent}... "
+    return f"{indent}╎ "
 
 
 def _input_line(prompt: str, allow_multiline: bool = True) -> str:
@@ -483,21 +484,33 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
                     import select
                     ready, _, _ = select.select([sys.stdin], [], [], 0.02)
                     if ready:
-                        while True:
+                        # Drain remaining lines from stdin buffer.
+                        # Use a small positive timeout (10ms) so the kernel has
+                        # time to deliver all pasted chunks.  Without this, large
+                        # pastes (8+ lines) can arrive in fragments and get
+                        # partially re-consumed by the outer loop.
+                        _drained_something = False
+                        attempts = 0
+                        while attempts < 200:  # ~2s worst-case guard
+                            ready2, _, _ = select.select([sys.stdin], [], [], 0.01)
+                            if not ready2:
+                                if _drained_something:
+                                    break
+                                attempts += 1
+                                continue
+                            _drained_something = True
+                            attempts = 0
                             try:
-                                ready2, _, _ = select.select([sys.stdin], [], [], 0)
-                                if not ready2:
-                                    break
                                 extra_line = input()
-                                total_chars += len(extra_line)
-                                if total_chars > _MAX_INPUT_CHARS:
-                                    print(warning(f"\n  ⚠️  Input truncated at {_MAX_INPUT_CHARS} chars."))
-                                    extra_line = extra_line[: max(0, _MAX_INPUT_CHARS - total_chars + len(extra_line))]
-                                    lines.append(extra_line)
-                                    break
-                                lines.append(extra_line)
                             except (EOFError, OSError):
                                 break
+                            total_chars += len(extra_line)
+                            if total_chars > _MAX_INPUT_CHARS:
+                                print(warning(f"\n  ⚠️  Input truncated at {_MAX_INPUT_CHARS} chars."))
+                                extra_line = extra_line[: max(0, _MAX_INPUT_CHARS - total_chars + len(extra_line))]
+                                lines.append(extra_line)
+                                break
+                            lines.append(extra_line)
                         return "\n".join(lines)
                 except (ImportError, OSError):
                     pass
@@ -878,13 +891,16 @@ class CLITransport:
 
     def _print_session_banner(self, loaded) -> None:
         """Print session continuation info — shared by run() and repl()."""
-        print(info(f"📋 Continuing session: {self.core.session.id}"))
+        lines = []
         if loaded.title:
-            print(f"   {dim('Title:')} {loaded.title}")
-        print(f"   {dim('Model:')} {self.core.config.model}")
+            lines.append(f"  Title:      {loaded.title}")
+        lines.append(f"  Model:      {self.core.config.model}")
         if loaded.model and loaded.model != self.core.config.model:
-            print(warning(f"   ⚠️  Session created with model '{loaded.model}'. Now using '{self.core.config.model}'."))
-        print(f"   {dim('Messages:')} {len(self.core.messages)}")
+            lines.append(f"  ⚠ Session created with model '{loaded.model}'. Now using '{self.core.config.model}'.")
+        lines.append(f"  Session:    {self.core.session.id}")
+        lines.append(f"  Messages:   {len(self.core.messages)}")
+        ws_display = self.core.config.workspace or "."
+        lines.append(f"  Workspace:  {ws_display}")
         last_user = None
         for m in reversed(self.core.messages):
             if m.get("role") == "user":
@@ -896,7 +912,10 @@ class CLITransport:
             preview = last_user[:100].replace("\n", " ")
             if len(last_user) > 100:
                 preview += "..."
-            print(f"   {dim('Last prompt:')} {preview}")
+            lines.append(f"  Last:       {preview}")
+        lines.append("")
+        lines.append("  /help for commands  ·  Ctrl+C/D to exit")
+        print(_box("\n".join(lines), title="📋 Continuing Session"))
         print()
 
     def repl(self, skill_name: Optional[str] = None, session_id: Optional[str] = None) -> None:
@@ -929,15 +948,21 @@ class CLITransport:
         _setup_readline_history()
 
         msg_count = len(self.core.messages)
-        w = _term_width()
-        print(info(f"🔮 Wisp (model: {self.core.config.model})"))
-        print(f"   {dim('Session:')} {accent(self.core.session.id)}")
+        ws_display = ws or "."
+
+        # ── Startup banner box ──
+        banner_lines = [
+            f"  Model:      {self.core.config.model}",
+            f"  Session:    {self.core.session.id}",
+            f"  Workspace:  {ws_display}",
+        ]
         if msg_count:
-            print(f"   {dim('History:')} {msg_count} messages")
+            banner_lines.append(f"  History:    {msg_count} messages")
         if skill_name:
-            print(f"   {dim('Skill:')} {skill_name}")
-        print()
-        print(dim("  /help for commands  ·  \\ or unclosed brackets for multiline  ·  Ctrl+C / Ctrl+D to exit"))
+            banner_lines.append(f"  Skill:      {skill_name}")
+        banner_lines.append("")
+        banner_lines.append("  /help for commands  ·  Ctrl+C/D to exit")
+        print(_box("\n".join(banner_lines), title="🔮 Wisp"))
         print()
 
         self._interrupted = False
@@ -957,6 +982,12 @@ class CLITransport:
                     if not _is_interactive():
                         break
                     continue
+
+                # Show line count for multiline input
+                if "\n" in user_input.rstrip("\n"):
+                    n = user_input.count("\n") + 1
+                    print(dim(f"  📝 {n} line{'s' if n > 1 else ''}"))
+                    print()
 
                 # Slash commands
                 from wisp.commands import dispatch, ExitREPL
