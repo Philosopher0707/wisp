@@ -864,6 +864,9 @@ class SubagentOrchestrator:
         self._tokens_consumed: int = 0
         self._global_token_budget: Optional[int] = None
         """Global token budget across all subagent runs. None = unlimited."""
+        # ── Telemetry ────────────────────────────────────────────────────
+        self._telemetry: dict[str, list[dict]] = {}
+        """Per-model telemetry: latency, success, tokens."""
 
     # ── Token budget API ───────────────────────────────────────────────
 
@@ -1047,6 +1050,17 @@ class SubagentOrchestrator:
                         + f"\n\n[OUTPUT TRUNCATED: exceeded {contract.max_output_tokens} output tokens]"
                     )
 
+            # ── Record telemetry ───────────────────────────────────────
+            model_used = contract.model or self.config.model or "unknown"
+            self._telemetry.setdefault(model_used, []).append({
+                "task_id": contract.name,
+                "success": subagent_result.success,
+                "elapsed_seconds": subagent_result.elapsed_seconds,
+                "tokens_used": subagent_result.tokens_used,
+                "iterations_used": subagent_result.iterations_used,
+                "timestamp": time.time(),
+            })
+
             # ── Structured output validation ───────────────────────────
             if contract.output_schema and subagent_result.success:
                 subagent_result = await self._validate_output(subagent_result, contract)
@@ -1177,6 +1191,28 @@ class SubagentOrchestrator:
             len(resolved),
         )
         return resolved
+
+    def get_telemetry(self) -> dict[str, list[dict]]:
+        """Return per-model telemetry: latency, success rate, token usage."""
+        return {k: list(v) for k, v in self._telemetry.items()}
+
+    def get_telemetry_summary(self) -> dict[str, dict]:
+        """Return aggregated telemetry per model."""
+        summary = {}
+        for model, records in self._telemetry.items():
+            if not records:
+                continue
+            latencies = [r["elapsed_seconds"] for r in records]
+            successes = [r["success"] for r in records]
+            tokens = [r["tokens_used"] for r in records]
+            summary[model] = {
+                "count": len(records),
+                "success_rate": sum(successes) / len(successes),
+                "avg_latency": sum(latencies) / len(latencies),
+                "max_latency": max(latencies),
+                "total_tokens": sum(tokens),
+            }
+        return summary
 
     # ── Composable patterns ────────────────────────────────────────────
 

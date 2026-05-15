@@ -1283,6 +1283,17 @@ class WispAgentCore:
             output_schema=args.get("output_schema"),
         )
 
+        # ── Check cache ────────────────────────────────────────────────
+        cache_key = self._subagent_cache_key(contract)
+        cache = getattr(self, "_subagent_cache", {})
+        cached = cache.get(cache_key)
+        if cached:
+            age = time.monotonic() - cached["ts"]
+            ttl = 300 if contract.output_format == "json" else 60  # 5min for structured, 1min for text
+            if age < ttl:
+                logger.info("[sub] Cache hit for %s (age=%.0fs)", contract.name, age)
+                return cached["output"]
+
         # ── Local model fallback for simple tasks ────────────────────
         local_model = self._pick_local_model_for_subagent(contract.task)
         if local_model:
@@ -1339,6 +1350,11 @@ class WispAgentCore:
         output = result.output
         if len(output) > 12000:
             output = output[:12000] + f"\n... [truncated: {len(result.output)} total chars]"
+        # ── Store in cache ─────────────────────────────────────────────
+        if result.success and len(output) < 50000:
+            cache[cache_key] = {"ts": time.monotonic(), "output": output}
+            self._subagent_cache = cache
+
         return output
 
     # ── Parallel subagents ───────────────────────────────────────────
@@ -1382,6 +1398,20 @@ class WispAgentCore:
         except Exception as e:
             logger.error("Failed to spawn subagents: %s", e)
         return []
+
+    def _subagent_cache_key(self, contract: SubagentContract) -> str:
+        """Build a cache key from contract fields that affect output."""
+        import hashlib
+        parts = [
+            contract.task,
+            ",".join(sorted(contract.tools)),
+            str(contract.model or ""),
+            str(contract.workspace or ""),
+            contract.output_format,
+            str(contract.output_schema or ""),
+        ]
+        raw = "|".join(parts)
+        return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
     # ── Local model fallback helper ──────────────────────────────────
 
