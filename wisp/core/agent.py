@@ -1309,13 +1309,17 @@ class WispAgentCore:
         workspace: str = ".",
         max_iterations: int = 10,
         timeout_seconds: float = 120.0,
+        system_prompt: Optional[str] = None,
     ) -> dict:
         """Run a full agent loop for a single task, non-interactively.
 
         Returns a dict with ``success`` (bool) and ``output`` (str) keys.
         """
         self._add_message("user", task_description)
-        system = self._build_system_prompt(workspace=workspace)
+        if system_prompt is not None:
+            system = system_prompt
+        else:
+            system = self._build_system_prompt(workspace=workspace)
         self._trim_context_if_needed(system)
 
         start = time.monotonic()

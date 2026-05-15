@@ -242,6 +242,10 @@ class SubagentRunner:
         available_tools = self._filter_tools(contract)
 
         for iteration in range(1, contract.max_iterations + 1):
+            # Cooperative cancellation — stop if parent timed us out.
+            if child._cancelled.is_set():
+                return "[Cancelled by parent due to timeout]", iteration - 1
+
             child._iteration_count = iteration
 
             # Generate response with progress dots (non-streaming = no feedback)
@@ -253,6 +257,10 @@ class SubagentRunner:
                 logger.error("Subagent generation failed: %s", e)
                 return f"[Error: generation failed — {e}]", iteration
             print("\r", end="", flush=True)  # clear the thinking line
+
+            # Check cancellation again after the potentially slow generate call.
+            if child._cancelled.is_set():
+                return "[Cancelled by parent due to timeout]", iteration
 
             msg = response.get("message", {})
             content = msg.get("content", "") or ""
@@ -268,6 +276,10 @@ class SubagentRunner:
 
             # Execute tools
             for tc in tool_calls:
+                # Cooperative cancellation between tool calls.
+                if child._cancelled.is_set():
+                    return "[Cancelled by parent due to timeout]", iteration
+
                 func = tc.get("function", {})
                 func_name = func.get("name", "")
                 func_args = func.get("arguments", "")

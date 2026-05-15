@@ -514,12 +514,14 @@ class OllamaClient:
                     time.sleep(delay)
                     continue
                 raise OllamaError(f"Ollama HTTP error: {e}")
-            except requests.exceptions.ConnectionError:
+            except requests.exceptions.ConnectionError as e:
                 if attempt < max_retries - 1 and not events_yielded:
                     delay = base_delay * (2 ** attempt)
                     logger.warning("Stream connection failed, retrying in %ds...", delay)
                     time.sleep(delay)
                     continue
+                if events_yielded:
+                    raise OllamaError(f"Stream dropped mid-response: {e}")
                 raise OllamaError(
                     f"Cannot connect to Ollama at {self.base_url}. Is Ollama running?"
                 )

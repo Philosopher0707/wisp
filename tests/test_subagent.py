@@ -44,6 +44,8 @@ class MockAgent:
         self._active_skill = None
         self._system_prompt_cache = {}
         self._subagent_depth = 0
+        self._cancelled = __import__("threading").Event()
+        self.file_lock = None
 
     def _build_system_prompt(self, *a, **k):
         return "You are Wisp."
@@ -178,6 +180,8 @@ def mock_wisp_agent(monkeypatch):
             self._system_prompt_cache = {}
             self._subagent_depth = 0
             self._iteration_count = 0
+            self._cancelled = __import__("threading").Event()
+            self.file_lock = None
 
         def _build_system_prompt(self, *a, **k):
             return "You are Wisp."

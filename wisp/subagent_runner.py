@@ -710,6 +710,7 @@ class SubagentRunner:
                 workspace=workspace_path,
                 max_iterations=max_iter,
                 timeout_seconds=timeout_per_task,
+                system_prompt=system,
             )
 
             # Collect tool call summaries from the agent's message history

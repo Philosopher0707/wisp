@@ -35,8 +35,8 @@ def _make_agent():
     return agent
 
 
-async def _mock_events(self, system=""):
-    """Async generator returning nothing — matches _run_turn_streaming_events signature."""
+def _mock_events(self, system=""):
+    """Sync generator returning nothing — matches _run_turn_streaming_events signature."""
     return
     yield
 

@@ -344,6 +344,7 @@ def tool_write_file(path: str, workspace: str, content: str, file_lock=None) -> 
         "metadata": {
             "path": path,
             "size": len(content),
+            "bytes_written": len(content),
             "diff": diff,
         },
     }
