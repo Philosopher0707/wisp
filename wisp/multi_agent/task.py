@@ -65,6 +65,12 @@ class SubagentContract:
     max_tokens: Optional[int] = None
     """Hard token budget (enforced by context trim). None = inherit from parent."""
 
+    max_input_tokens: Optional[int] = None
+    """Per-contract input token limit. None = no limit."""
+
+    max_output_tokens: Optional[int] = None
+    """Per-contract output token limit. None = no limit."""
+
     max_output_chars: int = 8000
     """Truncate subagent output to this length before returning to parent."""
 
@@ -143,6 +149,16 @@ class SubagentResult:
 
     tool_calls: list[dict] = field(default_factory=list)
     """Summary of tool calls made (name + arg preview per call)."""
+
+    # ── Token usage ──
+    tokens_used: int = 0
+    """Total tokens consumed (input + output)."""
+
+    input_tokens: int = 0
+    """Input tokens consumed."""
+
+    output_tokens: int = 0
+    """Output tokens consumed."""
 
     # ── Structured output ──
     validated_output: Optional[Any] = None

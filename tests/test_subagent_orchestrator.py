@@ -22,7 +22,11 @@ class FakeWispAgentCore:
         self.config.workspace = "/tmp"
         self.session = session
         self.role = role
-        self.messages = []
+        self.messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Do the task."},
+            {"role": "assistant", "content": "Fake output"},
+        ]
         self.closed = False
 
     async def run_task(self, **kwargs):
@@ -405,3 +409,82 @@ async def test_run_chain_failure_midway(orch):
     assert result.success is False
     assert "Chain Failed" in result.output
     assert "step1" in result.output  # failed step name
+
+
+# ── Token budget tests ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_global_token_budget_enforced(orch):
+    """When global budget is exhausted, subsequent runs fail fast."""
+    orch.set_global_token_budget(10)
+
+    # First run should succeed but consume tokens
+    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+        result1 = await orch.run(SubagentContract(name="first", task="hello"))
+
+    assert result1.success is True
+    assert orch.get_tokens_consumed() > 0
+
+    # Set budget to already-consumed amount to force exhaustion
+    orch.set_global_token_budget(orch.get_tokens_consumed())
+
+    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+        result2 = await orch.run(SubagentContract(name="second", task="world"))
+
+    assert result2.success is False
+    assert "TOKEN BUDGET EXCEEDED" in result2.output
+    assert "Global token budget exhausted" in result2.error
+
+
+@pytest.mark.asyncio
+async def test_token_estimation_tracked(orch):
+    """Token counts are estimated and tracked on the result."""
+    class MessageAgent(FakeWispAgentCore):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.messages = [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": "Hello there!"},
+                {"role": "assistant", "content": "Hi! How can I help?"},
+            ]
+
+    with patch("wisp.core.agent.WispAgentCore", MessageAgent):
+        result = await orch.run(SubagentContract(name="msg", task="hello"))
+
+    assert result.success is True
+    assert result.tokens_used > 0
+    assert result.input_tokens > 0
+    assert result.output_tokens > 0
+    assert result.tokens_used == result.input_tokens + result.output_tokens
+
+
+@pytest.mark.asyncio
+async def test_token_aggregation_in_chain(orch):
+    """Chain aggregates token usage across all steps."""
+    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+        result = await orch.run_chain([
+            SubagentContract(name="step1", task="Step 1"),
+            SubagentContract(name="step2", task="Step 2"),
+        ], pass_context=True)
+
+    assert result.success is True
+    assert result.tokens_used >= 0
+    assert "tokens:" in result.output
+
+
+@pytest.mark.asyncio
+async def test_token_budget_remaining(orch):
+    """get_token_budget_remaining reflects consumed tokens."""
+    assert orch.get_token_budget_remaining() is None  # no budget set
+
+    orch.set_global_token_budget(1000)
+    assert orch.get_token_budget_remaining() == 1000
+
+    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+        await orch.run(SubagentContract(name="t1", task="hello"))
+
+    remaining = orch.get_token_budget_remaining()
+    assert remaining is not None
+    assert remaining < 1000
+    assert remaining >= 0

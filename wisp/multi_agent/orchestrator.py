@@ -756,6 +756,82 @@ class SubagentOrchestrator:
         self._worktrees_root = self.workspace / ".wisp" / "worktrees"
         self._session_mgr = SessionManager()
         self._shutdown = False
+        # ── Token budget tracking ──────────────────────────────────────
+        self._tokens_consumed: int = 0
+        self._global_token_budget: Optional[int] = None
+        """Global token budget across all subagent runs. None = unlimited."""
+
+    # ── Token budget API ───────────────────────────────────────────────
+
+    def set_global_token_budget(self, budget: Optional[int]) -> None:
+        """Set a global token budget for all subagents spawned by this orchestrator.
+
+        Parameters
+        ----------
+        budget:
+            Maximum total tokens (input + output) across all runs.
+            None removes the budget.
+        """
+        self._global_token_budget = budget
+        logger.info("Global token budget set to %s", budget if budget else "unlimited")
+
+    def get_tokens_consumed(self) -> int:
+        """Return total tokens consumed so far."""
+        return self._tokens_consumed
+
+    def get_token_budget_remaining(self) -> Optional[int]:
+        """Return remaining global token budget, or None if unlimited."""
+        if self._global_token_budget is None:
+            return None
+        return max(0, self._global_token_budget - self._tokens_consumed)
+
+    def _estimate_tokens(self, messages: list[dict]) -> tuple[int, int, int]:
+        """Estimate token count from message history.
+
+        Returns (input_tokens, output_tokens, total_tokens).
+        Uses chars_per_token from config for estimation.
+        """
+        chars_per_token = getattr(self.config, "chars_per_token", 4)
+        input_chars = 0
+        output_chars = 0
+
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "") or ""
+            if isinstance(content, str):
+                text = content
+            else:
+                text = str(content)
+
+            if role in ("user", "system", "tool"):
+                input_chars += len(text)
+            elif role == "assistant":
+                output_chars += len(text)
+                # Also count tool_calls in assistant messages as output
+                for tc in msg.get("tool_calls", []) or []:
+                    func = tc.get("function", {})
+                    args = func.get("arguments", "")
+                    if isinstance(args, str):
+                        output_chars += len(args)
+                    else:
+                        output_chars += len(str(args))
+
+        input_tokens = input_chars // chars_per_token
+        output_tokens = output_chars // chars_per_token
+        return input_tokens, output_tokens, input_tokens + output_tokens
+
+    def _check_token_budget(self, contract: SubagentContract) -> Optional[str]:
+        """Check if running this contract would exceed token budgets.
+
+        Returns an error message if budget exceeded, None otherwise.
+        """
+        # Check global budget
+        remaining = self.get_token_budget_remaining()
+        if remaining is not None and remaining <= 0:
+            return f"Global token budget exhausted ({self._global_token_budget} tokens)"
+
+        # Per-contract budget checks are done post-run via truncation
+        return None
 
     # ── Public API ─────────────────────────────────────────────────────
 
@@ -770,6 +846,18 @@ class SubagentOrchestrator:
         worktree_path: Path | None = None
         session: Session | None = None
         tool_calls_log: list[dict] = []
+
+        # ── Token budget check ─────────────────────────────────────────
+        budget_error = self._check_token_budget(contract)
+        if budget_error:
+            logger.warning("Token budget check failed for %s: %s", contract.name, budget_error)
+            return SubagentResult(
+                task_id=contract.name,
+                success=False,
+                output=f"[TOKEN BUDGET EXCEEDED] {budget_error}",
+                error=budget_error,
+                elapsed_seconds=0.0,
+            )
 
         # ── Resolve workspace ──────────────────────────────────────────
         if contract.worktree_isolated:
@@ -830,6 +918,30 @@ class SubagentOrchestrator:
                 files_changed=result.get("files_changed", []),
                 iterations_used=result.get("iterations_used", 0),
             )
+
+            # ── Token estimation & budget tracking ───────────────────
+            messages = result.get("messages", [])
+            if messages:
+                in_tok, out_tok, total_tok = self._estimate_tokens(messages)
+                subagent_result.input_tokens = in_tok
+                subagent_result.output_tokens = out_tok
+                subagent_result.tokens_used = total_tok
+                self._tokens_consumed += total_tok
+                logger.debug(
+                    "Subagent %s tokens: %d in / %d out / %d total",
+                    contract.name, in_tok, out_tok, total_tok,
+                )
+
+                # Enforce per-contract output token limit
+                if contract.max_output_tokens and out_tok > contract.max_output_tokens:
+                    logger.warning(
+                        "Subagent %s output tokens %d exceed limit %d",
+                        contract.name, out_tok, contract.max_output_tokens,
+                    )
+                    subagent_result.output = (
+                        subagent_result.output[:contract.max_output_chars]
+                        + f"\n\n[OUTPUT TRUNCATED: exceeded {contract.max_output_tokens} output tokens]"
+                    )
 
             # ── Structured output validation ───────────────────────────
             if contract.output_schema and subagent_result.success:
@@ -1050,7 +1162,14 @@ class SubagentOrchestrator:
             worktree_isolated=False,  # reducer doesn't need isolation
         )
 
-        return await self.run(reducer_contract)
+        reducer_result = await self.run(reducer_contract)
+
+        # Aggregate token usage from mappers + reducer
+        mapper_tokens = sum(r.tokens_used for r in mapper_results)
+        reducer_result.input_tokens += sum(r.input_tokens for r in mapper_results)
+        reducer_result.output_tokens += sum(r.output_tokens for r in mapper_results)
+        reducer_result.tokens_used += mapper_tokens
+        return reducer_result
 
     async def run_vote(
         self,
@@ -1131,6 +1250,9 @@ class SubagentOrchestrator:
             elapsed_seconds=sum(r.elapsed_seconds for r in results),
             iterations_used=sum(r.iterations_used for r in results),
             files_changed=list(set(f for r in results for f in r.files_changed)),
+            input_tokens=sum(r.input_tokens for r in results),
+            output_tokens=sum(r.output_tokens for r in results),
+            tokens_used=sum(r.tokens_used for r in results),
         )
 
     async def run_chain(
@@ -1164,6 +1286,9 @@ class SubagentOrchestrator:
         all_files_changed = []
         total_elapsed = 0.0
         total_iterations = 0
+        total_input_tokens = 0
+        total_output_tokens = 0
+        total_tokens = 0
 
         for i, contract in enumerate(contracts):
             if pass_context and context_parts:
@@ -1181,6 +1306,9 @@ class SubagentOrchestrator:
             all_files_changed.extend(result.files_changed)
             total_elapsed += result.elapsed_seconds
             total_iterations += result.iterations_used
+            total_input_tokens += result.input_tokens
+            total_output_tokens += result.output_tokens
+            total_tokens += result.tokens_used
 
             if pass_context:
                 context_parts.append(
@@ -1204,6 +1332,9 @@ class SubagentOrchestrator:
                     elapsed_seconds=total_elapsed,
                     iterations_used=total_iterations,
                     files_changed=list(set(all_files_changed)),
+                    input_tokens=total_input_tokens,
+                    output_tokens=total_output_tokens,
+                    tokens_used=total_tokens,
                 )
 
         # Chain completed successfully
@@ -1220,10 +1351,14 @@ class SubagentOrchestrator:
             f"{last_result.output}\n\n"
             f"---\n"
             f"*Chain elapsed: {total_elapsed:.1f}s, "
-            f"iterations: {total_iterations}*"
+            f"iterations: {total_iterations}, "
+            f"tokens: {total_tokens}*"
         )
         last_result.elapsed_seconds = total_elapsed
         last_result.iterations_used = total_iterations
+        last_result.input_tokens = total_input_tokens
+        last_result.output_tokens = total_output_tokens
+        last_result.tokens_used = total_tokens
         last_result.files_changed = list(set(all_files_changed))
         return last_result
 
@@ -1302,6 +1437,7 @@ class SubagentOrchestrator:
                 "error": None if task_result.get("success") else task_result.get("output"),
                 "files_changed": files_changed,
                 "iterations_used": len([m for m in agent.messages if m.get("role") == "assistant"]),
+                "messages": agent.messages,
             }
         finally:
             agent.close()
