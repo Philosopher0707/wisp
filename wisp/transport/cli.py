@@ -945,6 +945,16 @@ class CLITransport:
         self._spinner = _spinner_gen()
         _transport_instances.add(self)
 
+    # ── Input area helpers ────────────────────────────────────────
+
+    def _use_input_box(self) -> bool:
+        """Whether to render the Kimi-style input box (borders + status bar)."""
+        return _use_box_mode(self.core.config)
+
+    def _status_bar(self) -> str:
+        """Render the status bar below the input area."""
+        return _render_status_bar(self.core)
+
     # ── Public API ─────────────────────────────────────────────────
 
     def run(self, prompt: str, skill_name: Optional[str] = None, session_id: Optional[str] = None) -> None:
@@ -1091,6 +1101,11 @@ class CLITransport:
         self._interrupted = False
         try:
             while not self._interrupted:
+                # ── Input area: top border ──
+                use_box = self._use_input_box()
+                if use_box:
+                    print(_input_box_top("input"))
+
                 try:
                     user_input = _input_line("➜ ")
                 except EOFError:
@@ -1104,13 +1119,23 @@ class CLITransport:
                 if not cmd:
                     if not _is_interactive():
                         break
+                    if use_box:
+                        print(_input_box_bottom())
+                        print(self._status_bar())
                     continue
 
-                # Show line count for multiline input
-                if "\n" in user_input.rstrip("\n"):
-                    n = user_input.count("\n") + 1
-                    print(dim(f"  📝 {n} line{'s' if n > 1 else ''}"))
-                    print()
+                # ── Input area: paste indicator + bottom border + status bar ──
+                global _paste_counter
+                was_paste = _paste_counter > 0 and _last_paste_lines > 1
+                if use_box:
+                    if was_paste:
+                        print(_paste_indicator(_paste_counter, _last_paste_lines))
+                    print(_input_box_bottom())
+                    print(self._status_bar())
+                elif was_paste:
+                    n = _last_paste_lines
+                    print(dim(f"  📝 {n} lines"))
+                print()
 
                 # Slash commands
                 from wisp.commands import dispatch, ExitREPL
@@ -1135,8 +1160,6 @@ class CLITransport:
                     or self.core.session.title in ("REPL session", "(untitled)")
                 ):
                     self.core.session.title = cmd[:60].strip()
-
-                print()
 
                 try:
                     system = self.core._build_system_prompt(skill_name, query=cmd)
