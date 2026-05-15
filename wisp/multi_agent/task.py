@@ -3,6 +3,30 @@
 This is the single source of truth for SubagentContract, SubagentResult, and
 OrchestratorEvent. All other modules (protocol.py, subagent.py, subagent_runner.py)
 alias their types here.
+
+Migration Guide (v3)
+--------------------
+**Old (deprecated):**
+    from wisp.subagent import SubagentTask, SubagentResult
+    from wisp.subagent_runner import SubagentRunner
+
+**New (unified):**
+    from wisp.multi_agent import SubagentContract, SubagentResult, SubagentOrchestrator
+
+    orch = SubagentOrchestrator(parent_agent=my_agent)
+    result = await orch.run(SubagentContract(task="Audit auth.py"))
+    results = await orch.run_parallel([contract1, contract2])
+    result = await orch.run_map_reduce(task="Review", items=[...], mapper=..., reducer=...)
+    result = await orch.run_vote(task="Is this safe?", agents=[...])
+    result = await orch.run_chain([contract1, contract2])
+
+Key Changes
+-----------
+- ``SubagentTask`` → ``SubagentContract`` (same fields, clearer name)
+- ``SubagentRunner`` → ``SubagentOrchestrator`` (unified API)
+- ``run_parallel`` replaces ``run_subagents`` and ``run_swarm``
+- Token budget tracking: ``set_global_token_budget()``, ``get_tokens_consumed()``
+- Composable patterns: ``run_map_reduce``, ``run_vote``, ``run_chain``
 """
 
 from __future__ import annotations

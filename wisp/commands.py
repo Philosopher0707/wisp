@@ -7,6 +7,7 @@ They receive the WispAgent instance and can mutate its state directly.
 import logging
 import os
 import subprocess
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -518,15 +519,15 @@ def cmd_spawn(agent, args: str):
         print(info("Usage: /spawn <task description>"))
         print(dim("Example: /spawn research the best Python HTTP client library"))
         return
-    from wisp.subagent import SubagentRunner, SubagentContract
+    from wisp.multi_agent import SubagentOrchestrator, SubagentContract
     contract = SubagentContract(
         task=args,
         timeout_seconds=120,
         max_iterations=15,
     )
-    runner = SubagentRunner(agent)
+    orch = SubagentOrchestrator(parent_agent=agent)
     print(accent(f"🧬 Spawning subagent: {args[:60]}..."))
-    result = runner.spawn(contract)
+    result = asyncio.run(orch.run(contract))
     status = success("✓") if result.success else error("✗")
     if result.timed_out:
         status = warning("⏱")

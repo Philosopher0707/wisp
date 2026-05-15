@@ -4,16 +4,45 @@ Spawn and orchestrate multiple specialized agents that communicate via
 a typed message bus, share a workspace with file locking, and coordinate
 through an orchestrator.
 
-Example:
-    from wisp.multi_agent import SwarmOrchestrator, AgentRole
+Unified Subagent API (v3)
+-------------------------
+``SubagentOrchestrator`` is the single entry point for all subagent execution:
 
-    orch = SwarmOrchestrator(workspace="/path/to/project")
-    orch.spawn_agents([
-        AgentRole.CODER,
-        AgentRole.REVIEWER,
-        AgentRole.TESTER,
-    ])
-    result = orch.run("Implement a REST API for user management")
+    from wisp.multi_agent import SubagentOrchestrator, SubagentContract
+
+    orch = SubagentOrchestrator(parent_agent=my_agent)
+
+    # Single subagent
+    result = await orch.run(SubagentContract(task="Audit auth.py"))
+
+    # Parallel subagents
+    results = await orch.run_parallel([contract1, contract2])
+
+    # Map-reduce
+    result = await orch.run_map_reduce(
+        task="Review codebase",
+        items=["src/auth.py", "src/api.py"],
+        mapper=lambda item: SubagentContract(task=f"Review {item}"),
+        reducer="Synthesize findings",
+    )
+
+    # Voting consensus
+    result = await orch.run_vote(
+        task="Is this vulnerable?",
+        agents=[SubagentContract(name=f"auditor-{i}") for i in range(3)],
+        consensus_threshold=0.6,
+    )
+
+    # Sequential chain with context passing
+    result = await orch.run_chain([
+        SubagentContract(name="writer", task="Implement feature"),
+        SubagentContract(name="reviewer", task="Review code"),
+    ], pass_context=True)
+
+Legacy API (deprecated)
+-----------------------
+``SwarmOrchestrator`` and ``SubagentRunner`` are deprecated. Use
+``SubagentOrchestrator`` for new code.
 """
 
 from .protocol import AgentEvent, EventType, TaskAssignment, TaskResult
@@ -23,7 +52,8 @@ from .roles import AgentRole, ROLE_CONFIGS
 from .agent_factory import AgentFactory
 from .workspace_lock import WorkspaceLock
 from .orchestrator import SwarmOrchestrator, SwarmResult, SubagentOrchestrator
-from .task import (SubagentTask, SubagentContract, SubagentResult as UnifiedSubagentResult,
+from .task import (SubagentTask, SubagentContract, SubagentResult,
+                   SubagentResult as UnifiedSubagentResult,
                    OrchestratorEvent, EventKind)
 
 __all__ = [
@@ -44,6 +74,7 @@ __all__ = [
     "SubagentOrchestrator",
     "SubagentTask",
     "SubagentContract",
+    "SubagentResult",
     "UnifiedSubagentResult",
     "OrchestratorEvent",
     "EventKind",

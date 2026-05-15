@@ -1,6 +1,8 @@
 """Async swarm orchestrator — spawns agents, assigns tasks, collects results.
 
-v2: async execution, multi-agent per role, streaming progress, retry with backoff.
+v3 (SubagentOrchestrator): unified single + parallel execution, composable
+patterns (map-reduce, vote, chain), token budget tracking, async schema
+validation, worktree isolation.
 
 The orchestrator is the conductor of the multi-agent system:
 1. Parses a high-level goal
@@ -9,6 +11,57 @@ The orchestrator is the conductor of the multi-agent system:
 4. Manages file locking to prevent conflicts
 5. Collects results, retries failures, synthesizes final answer
 6. Streams progress events for live UI
+
+Unified API (v3)
+----------------
+``SubagentOrchestrator`` replaces the legacy ``SubagentRunner`` (subagent.py)
+and ``SubagentRunner`` (subagent_runner.py) with a single class:
+
+    orch = SubagentOrchestrator(parent_agent=my_agent)
+
+    # Single subagent
+    result = await orch.run(SubagentContract(task="Audit auth.py"))
+
+    # Parallel subagents
+    results = await orch.run_parallel([contract1, contract2, contract3])
+
+    # Map-reduce
+    result = await orch.run_map_reduce(
+        task="Review codebase",
+        items=["src/auth.py", "src/api.py"],
+        mapper=lambda item: SubagentContract(task=f"Review {item}"),
+        reducer="Synthesize findings",
+    )
+
+    # Voting consensus
+    result = await orch.run_vote(
+        task="Is this vulnerable?",
+        agents=[SubagentContract(name=f"auditor-{i}") for i in range(3)],
+        consensus_threshold=0.6,
+    )
+
+    # Sequential chain with context passing
+    result = await orch.run_chain([
+        SubagentContract(name="writer", task="Implement feature"),
+        SubagentContract(name="reviewer", task="Review code"),
+    ], pass_context=True)
+
+Token Budgets
+-------------
+Set a global token budget across all subagent runs:
+
+    orch.set_global_token_budget(100_000)
+    result = await orch.run(contract)
+    print(orch.get_tokens_consumed())      # total so far
+    print(orch.get_token_budget_remaining())  # remaining budget
+
+Per-contract limits:
+
+    contract = SubagentContract(
+        task="...",
+        max_output_tokens=4_000,
+        max_input_tokens=8_000,
+    )
 """
 
 from __future__ import annotations
@@ -715,16 +768,67 @@ Respond in JSON with a "plan" string and a "subtasks" array.
 # ── SubagentOrchestrator (unified subagent API) ──────────────────────
 
 class SubagentOrchestrator:
-    """Unified orchestrator for single and parallel subagent execution.
+    """Unified orchestrator for single, parallel, and composable subagent execution.
 
     Replaces the legacy systems in ``wisp/subagent.py`` and
     ``wisp/subagent_runner.py`` with a single API that delegates to
     ``WispAgentCore.run_task()`` instead of reimplementing the agent loop.
 
-    Usage:
+    Core Methods
+    ------------
+    ``run(contract)`` — single subagent with worktree isolation, timeout,
+    schema validation, and progress events.
+
+    ``run_parallel(contracts, max_concurrent=4)`` — concurrent execution with
+    semaphore-controlled concurrency.
+
+    Composable Patterns
+    -------------------
+    ``run_map_reduce(task, items, mapper, reducer)`` — split work across
+    mappers, synthesize with a reducer. Includes token budget guards.
+
+    ``run_vote(task, agents, consensus_threshold=0.6)`` — ask multiple
+    independent agents the same question, take majority vote.
+
+    ``run_chain(contracts, pass_context=True)`` — sequential execution with
+    optional context passing between steps.
+
+    Token Budgets
+    -------------
+    ``set_global_token_budget(budget)`` — set a global token cap.
+    ``get_tokens_consumed()`` — total tokens used so far.
+    ``get_token_budget_remaining()`` — remaining budget (None = unlimited).
+
+    Usage
+    -----
         orch = SubagentOrchestrator(parent_agent=my_agent)
+
+        # Single subagent
         result = await orch.run(SubagentContract(task="Audit auth.py"))
+
+        # Parallel subagents
         results = await orch.run_parallel([contract1, contract2])
+
+        # Map-reduce
+        result = await orch.run_map_reduce(
+            task="Review codebase",
+            items=["src/auth.py", "src/api.py"],
+            mapper=lambda item: SubagentContract(task=f"Review {item}"),
+            reducer="Synthesize findings",
+        )
+
+        # Voting consensus
+        result = await orch.run_vote(
+            task="Is this vulnerable?",
+            agents=[SubagentContract(name=f"auditor-{i}") for i in range(3)],
+            consensus_threshold=0.6,
+        )
+
+        # Sequential chain with context passing
+        result = await orch.run_chain([
+            SubagentContract(name="writer", task="Implement feature"),
+            SubagentContract(name="reviewer", task="Review code"),
+        ], pass_context=True)
     """
 
     def __init__(

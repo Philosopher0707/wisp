@@ -28,7 +28,8 @@ class WispAgent(WispAgentCore):
     """The main agent — synchronous API, backward compatible with all existing code.
 
     Internally delegates logic to WispAgentCore and I/O to CLITransport.
-    ServerAgent and SubagentRunner subclass this.
+    ServerAgent subclasses this. SubagentRunner is deprecated — use
+    SubagentOrchestrator from wisp.multi_agent instead.
     """
 
     def __init__(
