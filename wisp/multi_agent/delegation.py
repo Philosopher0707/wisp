@@ -80,31 +80,31 @@ class DelegationAnalyzer:
 
         # Check 1: Prompt complexity (length + keywords)
         complexity_score = self._score_complexity(prompt_lower)
-        if complexity_score > 0.5:
-            score += complexity_score * 0.3
+        if complexity_score >= 0.05:
+            score += complexity_score * 0.4
             reasons.append(f"complexity({complexity_score:.2f})")
 
         # Check 2: Research orientation
         research_score = self._score_research(prompt_lower)
-        if research_score > 0.3:
-            score += research_score * 0.25
+        if research_score >= 0.05:
+            score += research_score * 0.35
             reasons.append(f"research({research_score:.2f})")
 
         # Check 3: Multi-file scope
         multi_file_score = self._score_multi_file(prompt_lower)
-        if multi_file_score > 0.3:
-            score += multi_file_score * 0.2
+        if multi_file_score >= 0.05:
+            score += multi_file_score * 0.3
             reasons.append(f"multi-file({multi_file_score:.2f})")
 
         # Check 4: Specialized knowledge
         specialized_score = self._score_specialized(prompt_lower)
-        if specialized_score > 0.3:
-            score += specialized_score * 0.15
+        if specialized_score >= 0.05:
+            score += specialized_score * 0.3
             reasons.append(f"specialized({specialized_score:.2f})")
 
         # Check 5: Iteration pressure (running out of iterations)
-        if current_iteration > max_iterations * 0.7:
-            score += 0.2
+        if current_iteration > max_iterations * 0.6:
+            score += 0.5
             reasons.append(f"iteration_pressure({current_iteration}/{max_iterations})")
 
         # Check 6: Explicit delegation request
@@ -113,7 +113,7 @@ class DelegationAnalyzer:
             reasons.append("explicit_request")
 
         # Determine if we should delegate
-        should_delegate = score >= 0.6
+        should_delegate = score >= 0.18
 
         if should_delegate:
             contracts = self._suggest_contracts(prompt, reasons)
@@ -134,33 +134,35 @@ class DelegationAnalyzer:
         # Length factor
         if len(prompt) > 200:
             score += 0.3
-        elif len(prompt) > 100:
-            score += 0.15
+        elif len(prompt) > 80:
+            score += 0.2
+        elif len(prompt) > 40:
+            score += 0.1
 
         # Keyword matches
         matches = sum(1 for kw in self.COMPLEXITY_INDICATORS if kw in prompt)
-        score += min(matches * 0.15, 0.5)
+        score += min(matches * 0.2, 0.6)
 
         # Word count
-        if len(words) > 30:
-            score += 0.2
+        if len(words) > 20:
+            score += 0.15
 
         return min(score, 1.0)
 
     def _score_research(self, prompt: str) -> float:
         """Score research orientation (0.0 to 1.0)."""
         matches = sum(1 for kw in self.RESEARCH_INDICATORS if kw in prompt)
-        return min(matches * 0.3, 1.0)
+        return min(matches * 0.4, 1.0)
 
     def _score_multi_file(self, prompt: str) -> float:
         """Score multi-file scope (0.0 to 1.0)."""
         matches = sum(1 for kw in self.MULTI_FILE_INDICATORS if kw in prompt)
-        return min(matches * 0.4, 1.0)
+        return min(matches * 0.5, 1.0)
 
     def _score_specialized(self, prompt: str) -> float:
         """Score specialized knowledge requirement (0.0 to 1.0)."""
         matches = sum(1 for kw in self.SPECIALIZED_INDICATORS if kw in prompt)
-        return min(matches * 0.2, 1.0)
+        return min(matches * 0.25, 1.0)
 
     def _suggest_contracts(self, prompt: str, reasons: list[str]) -> list[dict]:
         """Generate suggested subagent contracts based on the prompt."""
