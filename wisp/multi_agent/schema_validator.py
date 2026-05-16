@@ -152,6 +152,12 @@ def extract_json_from_markdown(text: str) -> Optional[dict]:
     Returns:
         Parsed JSON dict, or None if no valid JSON found
     """
+    # Try the whole text first (most common case: pure JSON output)
+    try:
+        return json.loads(text.strip())
+    except json.JSONDecodeError:
+        pass
+
     # Try to find JSON in code blocks
     import re
 
@@ -163,19 +169,14 @@ def extract_json_from_markdown(text: str) -> Optional[dict]:
         except json.JSONDecodeError:
             continue
 
-    # Look for inline JSON objects
+    # Look for inline JSON objects (prefer larger matches first)
     inline_json = re.findall(r'\{[^{}]*\}', text)
-    for candidate in inline_json:
+    # Sort by length descending to prefer larger matches
+    for candidate in sorted(inline_json, key=len, reverse=True):
         try:
             return json.loads(candidate)
         except json.JSONDecodeError:
             continue
-
-    # Try the whole text
-    try:
-        return json.loads(text.strip())
-    except json.JSONDecodeError:
-        pass
 
     return None
 

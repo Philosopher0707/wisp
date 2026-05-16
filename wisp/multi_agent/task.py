@@ -139,6 +139,12 @@ class SubagentContract:
     context_files: list[str] = field(default_factory=list)
     """Specific file paths to mention in the subagent's context."""
 
+    _subagent_depth: int = 0
+    """Current nesting depth. Prevents recursive subagent spawning beyond max_depth."""
+
+    retry_count: int = 0
+    """Number of schema validation retries attempted."""
+
     def __post_init__(self):
         """Normalize backward-compat aliases."""
         if self.prompt and not self.task:

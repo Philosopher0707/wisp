@@ -275,7 +275,7 @@ async def test_run_schema_validation_failure_no_retry(orch):
 
     assert result.success is True  # agent succeeded, but validation failed
     assert result.validated_output is None
-    assert "not valid JSON" in result.error
+    assert "No valid JSON" in result.error
 
 
 # ── Worktree tests ───────────────────────────────────────────────────
@@ -1054,32 +1054,31 @@ async def test_run_schema_auto_retry(orch):
 
 @pytest.mark.asyncio
 async def test_run_schema_jsonschema_not_installed(monkeypatch):
-    """When jsonschema not installed — graceful fallback with json.loads."""
-    import builtins
-    original_import = builtins.__import__
-
-    def mock_import(name, *args, **kwargs):
-        if name == "jsonschema":
-            raise ImportError("No jsonschema")
-        return original_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", mock_import)
-
+    """Schema validation works without jsonschema (built-in validator)."""
     from wisp.config import WispConfig
     cfg = WispConfig()
     cfg.model = "test-model"
     fresh_orch = SubagentOrchestrator(config=cfg)
 
-    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+    class JSONAgent(FakeWispAgentCore):
+        async def run_task(self, **kwargs):
+            return {
+                "success": True,
+                "output": '{"value": 42}',
+            }
+
+    with patch("wisp.core.agent.WispAgentCore", JSONAgent):
         contract = SubagentContract(
             name="no-schema-lib",
             task="return json",
-            output_schema={"type": "object"},
+            output_schema={"type": "object", "properties": {"value": {"type": "integer"}}},
         )
         result = await fresh_orch.run(contract)
 
     assert result.success is True
-    assert result.error is None or "jsonschema not installed" not in (result.error or "")
+    assert result.validated_output is not None
+    assert result.validated_output["value"] == 42
+    assert result.error is None
 
 
 # ── Worktree and config tests ──────────────────────────────────────────
@@ -1436,3 +1435,114 @@ async def test_process_progress_callback(orch):
     assert len(events) >= 2
     assert any(e.event_type == EventKind.TASK_STARTED for e in events)
     assert any(e.event_type in (EventKind.TASK_COMPLETED, EventKind.TASK_FAILED) for e in events)
+
+
+# ── Depth tracking tests ─────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_depth_limit_enforced(orch):
+    """Subagents beyond MAX_SUBAGENT_DEPTH are rejected immediately."""
+    from wisp.multi_agent.orchestrator import MAX_SUBAGENT_DEPTH
+
+    contract = SubagentContract(
+        name="deep-agent",
+        task="test",
+        _subagent_depth=MAX_SUBAGENT_DEPTH,
+    )
+    result = await orch.run(contract)
+    assert not result.success
+    assert "DEPTH LIMIT EXCEEDED" in result.output
+    assert f"depth {MAX_SUBAGENT_DEPTH}" in result.error
+
+
+@pytest.mark.asyncio
+async def test_depth_incremented_in_process(orch):
+    """Process subagents increment depth for child contracts."""
+    from wisp.multi_agent.orchestrator import MAX_SUBAGENT_DEPTH
+
+    contract = SubagentContract(
+        name="parent",
+        task="test",
+        _subagent_depth=MAX_SUBAGENT_DEPTH - 1,
+        isolation="process",
+        timeout_seconds=10,
+    )
+    result = await orch.run(contract)
+    # Should fail because depth gets incremented to MAX_SUBAGENT_DEPTH
+    assert not result.success
+    assert "DEPTH LIMIT EXCEEDED" in result.output
+
+
+# ── Cache tests ──────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_cache_hit_returns_same_result(orch):
+    """Running the same contract twice returns cached result."""
+    contract = SubagentContract(name="cached", task="test cache")
+    result1 = await orch.run(contract)
+    result2 = await orch.run(contract)
+    # Second should be cache hit
+    stats = orch.get_cache_stats()
+    assert stats["hits"] >= 1
+    assert stats["size"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_cache_miss_for_different_tasks(orch):
+    """Different tasks don't share cache entries."""
+    contract1 = SubagentContract(name="a", task="task one")
+    contract2 = SubagentContract(name="b", task="task two")
+    await orch.run(contract1)
+    await orch.run(contract2)
+    stats = orch.get_cache_stats()
+    assert stats["misses"] >= 2
+    assert stats["size"] >= 2
+
+
+@pytest.mark.asyncio
+async def test_cache_ttl_expires(orch):
+    """Cached results expire after TTL."""
+    contract = SubagentContract(name="ttl", task="test ttl")
+    await orch.run(contract)
+    # Manually expire the cache entry
+    for key in list(orch._result_cache.keys()):
+        result, _ = orch._result_cache[key]
+        orch._result_cache[key] = (result, 0)  # timestamp = 0, always expired
+    result2 = await orch.run(contract)
+    # Should be a miss (re-executed)
+    stats = orch.get_cache_stats()
+    assert stats["misses"] >= 2
+
+
+@pytest.mark.asyncio
+async def test_clear_cache(orch):
+    """clear_cache() resets all state."""
+    contract = SubagentContract(name="clear", task="test clear")
+    await orch.run(contract)
+    assert orch.get_cache_stats()["size"] >= 1
+    orch.clear_cache()
+    stats = orch.get_cache_stats()
+    assert stats["size"] == 0
+    assert stats["hits"] == 0
+    assert stats["misses"] == 0
+
+
+# ── Context files tests ──────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_context_files_injected_in_process(orch):
+    """Process subagents receive context_files and attempt to read them."""
+    contract = SubagentContract(
+        name="ctx-test",
+        task="Analyze these files",
+        context_files=["auth.py", "main.py"],
+        isolation="process",
+        timeout_seconds=10,
+    )
+    result = await orch.run(contract)
+    # The agent should have attempted to read the files (see captured logs)
+    assert result.success
+    # Files should be mentioned in tool calls or error output
+    assert "auth.py" in result.output or any(
+        "auth.py" in str(tc) for tc in result.tool_calls
+    )

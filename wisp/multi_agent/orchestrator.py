@@ -94,6 +94,9 @@ from .task import EventKind, OrchestratorEvent, SubagentContract, SubagentResult
 
 logger = logging.getLogger(__name__)
 
+# Maximum subagent nesting depth to prevent recursive explosion
+MAX_SUBAGENT_DEPTH = 2
+
 ProgressCallback = Optional[Callable[[OrchestratorEvent], Awaitable[None]]]
 
 
@@ -804,9 +807,47 @@ def _run_subagent_worker(contract_dict: dict, result_path: str, parent_workspace
 
     start = _time.monotonic()
     contract = SubagentContract(**contract_dict)
+
+    # ── Depth guard ──────────────────────────────────────────────────
+    if contract._subagent_depth >= MAX_SUBAGENT_DEPTH:
+        duration = _time.monotonic() - start
+        result = SubagentResult(
+            task_id=contract.name,
+            success=False,
+            output=f"[DEPTH LIMIT EXCEEDED] Max subagent depth is {MAX_SUBAGENT_DEPTH}",
+            error=f"Subagent depth {contract._subagent_depth} exceeds max {MAX_SUBAGENT_DEPTH}",
+            elapsed_seconds=duration,
+        )
+        with open(result_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "task_id": result.task_id,
+                "success": result.success,
+                "output": result.output,
+                "error": result.error,
+                "files_changed": result.files_changed,
+                "elapsed_seconds": result.elapsed_seconds,
+                "iterations_used": result.iterations_used,
+                "retry_count": result.retry_count,
+                "timed_out": result.timed_out,
+                "hit_iteration_limit": result.hit_iteration_limit,
+                "tokens_used": result.tokens_used,
+            }, f, indent=2)
+        return
+
     # The worker already runs inside a dedicated process, so nested
     # process isolation would cause recursion/hang. Force thread isolation.
     contract.isolation = "thread"
+
+    # ── Inject context files into task ─────────────────────────────────
+    if contract.context_files:
+        context_block = "\n".join(
+            f"- {f}" for f in contract.context_files
+        )
+        contract.task = (
+            f"{contract.task}\n\n"
+            f"## Relevant Context\n"
+            f"{context_block}"
+        )
 
     # Build a minimal orchestrator in the child process
     orch = SubagentOrchestrator(workspace=Path(parent_workspace))
@@ -946,6 +987,11 @@ class SubagentOrchestrator:
         # ── Telemetry ────────────────────────────────────────────────────
         self._telemetry: dict[str, list[dict]] = {}
         """Per-model telemetry: latency, success, tokens."""
+        # ── Result cache ───────────────────────────────────────────────────
+        self._result_cache: dict[str, tuple[SubagentResult, float]] = {}
+        """Cache: key → (result, timestamp). TTL = 60s text, 300s structured."""
+        self._cache_hits = 0
+        self._cache_misses = 0
 
     # ── Token budget API ───────────────────────────────────────────────
 
@@ -970,6 +1016,64 @@ class SubagentOrchestrator:
         if self._global_token_budget is None:
             return None
         return max(0, self._global_token_budget - self._tokens_consumed)
+
+    # ── Cache API ──────────────────────────────────────────────────────
+
+    def _cache_key(self, contract: SubagentContract) -> str:
+        """Build a cache key from contract fields that affect output."""
+        import hashlib
+        parts = [
+            contract.task,
+            contract.role,
+            ",".join(sorted(contract.tools)),
+            str(contract.model or ""),
+            str(contract.workspace or ""),
+            contract.output_format,
+            str(contract.output_schema or ""),
+            str(contract.system_prompt or ""),
+        ]
+        raw = "|".join(parts)
+        return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+    def _check_cache(self, contract: SubagentContract) -> Optional[SubagentResult]:
+        """Return cached result if valid, else None."""
+        key = self._cache_key(contract)
+        entry = self._result_cache.get(key)
+        if entry is None:
+            self._cache_misses += 1
+            return None
+        result, ts = entry
+        ttl = 300 if contract.output_format == "json" else 60
+        age = time.monotonic() - ts
+        if age > ttl:
+            del self._result_cache[key]
+            self._cache_misses += 1
+            return None
+        self._cache_hits += 1
+        logger.info("Cache hit for %s (age=%.0fs)", contract.name, age)
+        return result
+
+    def _store_cache(self, contract: SubagentContract, result: SubagentResult) -> None:
+        """Store result in cache with current timestamp."""
+        key = self._cache_key(contract)
+        self._result_cache[key] = (result, time.monotonic())
+
+    def get_cache_stats(self) -> dict[str, int]:
+        """Return cache hit/miss statistics."""
+        total = self._cache_hits + self._cache_misses
+        return {
+            "hits": self._cache_hits,
+            "misses": self._cache_misses,
+            "total": total,
+            "hit_rate": self._cache_hits / total if total else 0.0,
+            "size": len(self._result_cache),
+        }
+
+    def clear_cache(self) -> None:
+        """Clear all cached results."""
+        self._result_cache.clear()
+        self._cache_hits = 0
+        self._cache_misses = 0
 
     def _estimate_tokens(self, messages: list[dict]) -> tuple[int, int, int]:
         """Estimate token count from message history.
@@ -1028,6 +1132,21 @@ class SubagentOrchestrator:
         structured output validation, and error capture.  Never raises —
         failures are returned as ``SubagentResult(success=False, error=...)``.
         """
+        # ── Depth guard ────────────────────────────────────────────────
+        if contract._subagent_depth >= MAX_SUBAGENT_DEPTH:
+            return SubagentResult(
+                task_id=contract.name,
+                success=False,
+                output=f"[DEPTH LIMIT EXCEEDED] Max subagent depth is {MAX_SUBAGENT_DEPTH}",
+                error=f"Subagent depth {contract._subagent_depth} exceeds max {MAX_SUBAGENT_DEPTH}",
+                elapsed_seconds=0.0,
+            )
+
+        # ── Cache check ────────────────────────────────────────────────
+        cached = self._check_cache(contract)
+        if cached is not None:
+            return cached
+
         start = time.monotonic()
         worktree_path: Path | None = None
         session: Session | None = None
@@ -1083,11 +1202,15 @@ class SubagentOrchestrator:
             )
 
         # ── Dispatch by isolation level ──────────────────────────────
+        result: SubagentResult | None = None
         try:
             if contract.isolation == "process":
-                return await self._spawn_subagent_process(contract, start)
+                result = await self._spawn_subagent_process(contract, start)
             else:
-                return await self._spawn_subagent_thread(contract, start, agent_workspace, child_cfg, session, system, tool_calls_log)
+                result = await self._spawn_subagent_thread(contract, start, agent_workspace, child_cfg, session, system, tool_calls_log)
+            # Store successful/failed results in cache
+            self._store_cache(contract, result)
+            return result
         finally:
             # ── Cleanup worktree (unless debugging) ──────────────────
             if worktree_path and not os.environ.get("WISP_KEEP_WORKTREES", "").lower() == "true":
@@ -1286,6 +1409,7 @@ class SubagentOrchestrator:
             "system_prompt_extra": contract.system_prompt_extra,
             "prompt": contract.prompt,
             "context_files": contract.context_files,
+            "_subagent_depth": contract._subagent_depth + 1,
         }
 
         process = mp.Process(
@@ -2064,57 +2188,42 @@ class SubagentOrchestrator:
     ) -> SubagentResult:
         """Validate subagent output against a JSON schema.
 
+        Uses the built-in schema_validator (no external deps).
         If validation fails and ``auto_retry_parse`` is True, retry once
         with the validation error injected into the subagent context.
         """
         if not contract.output_schema:
             return result
 
-        try:
-            import jsonschema
-            parsed = json.loads(result.output)
-            jsonschema.validate(instance=parsed, schema=contract.output_schema)
-            result.validated_output = parsed
-            return result
-        except ImportError:
-            logger.warning("jsonschema not installed, skipping output validation")
-            try:
-                result.validated_output = json.loads(result.output)
-            except json.JSONDecodeError:
-                pass
-            return result
-        except json.JSONDecodeError as e:
-            logger.warning("Subagent %s output is not valid JSON: %s", contract.name, e)
-            if contract.auto_retry_parse and result.retry_count == 0:
-                return await self._retry_with_parse_error(result, contract, str(e))
-            result.error = f"Output is not valid JSON: {e}"
-            return result
-        except jsonschema.ValidationError as e:
-            logger.warning("jsonschema not installed, skipping output validation")
-            try:
-                result.validated_output = json.loads(result.output)
-            except json.JSONDecodeError:
-                pass
+        from wisp.multi_agent.schema_validator import validate_subagent_output, build_retry_prompt
+
+        is_valid, validated_data, errors = validate_subagent_output(
+            result.output, contract.output_schema, auto_retry=True
+        )
+
+        if is_valid and validated_data is not None:
+            result.validated_output = validated_data
+            logger.info("Subagent %s output validated against schema", contract.name)
             return result
 
-    async def _retry_with_parse_error(
-        self, result: SubagentResult, contract: SubagentContract, error_msg: str
-    ) -> SubagentResult:
-        """Retry the subagent once with the parse error injected into context."""
-        logger.info("Retrying subagent %s due to parse error", contract.name)
-        retry_contract = SubagentContract(
-            **{
-                **contract.__dict__,
-                "task": (
-                    f"{contract.task}\n\n"
-                    f"IMPORTANT: Your previous response failed validation.\n"
-                    f"Error: {error_msg}\n"
-                    f"Please fix the response and ensure it matches the required schema."
-                ),
-            }
+        logger.warning(
+            "Subagent %s output failed schema validation: %s",
+            contract.name, "; ".join(errors)
         )
-        retry_contract.retry_count = result.retry_count + 1
-        return await self.run(retry_contract)
+
+        if contract.auto_retry_parse and contract.retry_count == 0:
+            logger.info("Retrying subagent %s with schema feedback", contract.name)
+            retry_dict = {k: v for k, v in contract.__dict__.items()
+                          if k in SubagentContract.__dataclass_fields__}
+            retry_dict["task"] = build_retry_prompt(
+                contract.task, contract.output_schema, result.output, errors
+            )
+            retry_dict["retry_count"] = contract.retry_count + 1
+            retry_contract = SubagentContract(**retry_dict)
+            return await self.run(retry_contract)
+
+        result.error = f"Schema validation failed: {'; '.join(errors)}"
+        return result
 
     async def _emit(
         self,
