@@ -13,13 +13,9 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from wisp.colors import success, error, warning, info, dim, accent
+from wisp.exceptions import ExitREPL
 
 logger = logging.getLogger(__name__)
-
-
-class ExitREPL(Exception):
-    """Raised by /exit to signal graceful REPL termination."""
-    pass
 
 
 @dataclass(frozen=True)
@@ -691,10 +687,6 @@ def cmd_continue(agent, args: str):
     system = agent._build_system_prompt()
     ws = agent.config.workspace or "."
     agent._execute_loop(system, ws, agent.config.auto_approve)
-
-    # Print separator so the visual rhythm matches normal REPL turns
-    from wisp.transport.cli import _print_separator
-    _print_separator()
 
 
 @register("exit", "Exit Wisp", aliases=("quit", "q", "bye"), usage="/exit")

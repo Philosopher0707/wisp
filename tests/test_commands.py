@@ -6,9 +6,9 @@ from wisp.commands import (
     lookup,
     dispatch,
     all_commands,
-    ExitREPL,
     _REGISTRY,
 )
+from wisp.exceptions import ExitREPL
 
 
 class MockConfig:

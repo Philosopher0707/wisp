@@ -996,7 +996,8 @@ class CLITransport:
 
         # Slash commands
         if prompt.strip().startswith("/"):
-            from wisp.commands import dispatch, ExitREPL
+            from wisp.commands import dispatch
+            from wisp.exceptions import ExitREPL
             try:
                 if dispatch(prompt.strip(), self.core):
                     _restore_signal_handler()
@@ -1179,7 +1180,8 @@ class CLITransport:
                 print()
 
                 # Slash commands
-                from wisp.commands import dispatch, ExitREPL
+                from wisp.commands import dispatch
+                from wisp.exceptions import ExitREPL
                 try:
                     if dispatch(cmd, self.core):
                         # Skill loaded? Trigger an acknowledgment turn so the
