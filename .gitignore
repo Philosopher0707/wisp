@@ -57,3 +57,4 @@ android/build/
 # Test artifacts
 MagicMock/
 .wisp/worktrees/
+.wisp/subagent_results.jsonl
