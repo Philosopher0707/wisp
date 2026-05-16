@@ -894,14 +894,22 @@ def _run_subagent_worker(contract_dict: dict, conn, parent_workspace: str):
         "hit_iteration_limit": result.hit_iteration_limit,
         "tokens_used": result.tokens_used,
     }
-    # For very large outputs, fall back to temp file
+    # Compress large outputs to avoid pipe overflow
+    output_bytes = data["output"].encode("utf-8")
+    if len(output_bytes) > 10000:
+        import gzip
+        compressed = gzip.compress(output_bytes)
+        data["output"] = compressed.hex()
+        data["__compressed"] = True
+
     try:
         conn.send(data)
     except Exception:
-        # Pipe overflow — fall back to temp file
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump(data, f)
-            conn.send({"__fallback_path": f.name})
+        # Pipe overflow — fall back to temp file with compression
+        import gzip
+        with tempfile.NamedTemporaryFile(mode="wb", suffix=".json.gz", delete=False) as f:
+            f.write(gzip.compress(json.dumps(data).encode("utf-8")))
+            conn.send({"__fallback_path": f.name, "__compressed": True})
     conn.close()
 
 
@@ -1019,6 +1027,12 @@ class SubagentOrchestrator:
         self._shared_context: dict[str, Any] = {}
         """Shared key-value store for parallel subagents to coordinate."""
         self._shared_context_lock = asyncio.Lock()
+        # ── Agent pool ───────────────────────────────────────────────────
+        self._agent_pool_size: int = 4
+        """Maximum number of concurrent subagents in the pool."""
+        self._active_agents: int = 0
+        """Currently running subagents."""
+        self._pool_semaphore = asyncio.Semaphore(self._agent_pool_size)
 
     # ── Token budget API ───────────────────────────────────────────────
 
@@ -1043,6 +1057,63 @@ class SubagentOrchestrator:
         if self._global_token_budget is None:
             return None
         return max(0, self._global_token_budget - self._tokens_consumed)
+
+    # ── Cost estimation ────────────────────────────────────────────────
+
+    # Approximate pricing per 1K tokens (input + output averaged)
+    # Updated periodically; used for estimation only.
+    _MODEL_PRICING: dict[str, float] = {
+        "gpt-4o": 0.005,
+        "gpt-4o-mini": 0.00015,
+        "gpt-4-turbo": 0.01,
+        "gpt-4": 0.03,
+        "gpt-3.5-turbo": 0.0015,
+        "claude-3-5-sonnet": 0.003,
+        "claude-3-opus": 0.015,
+        "claude-3-haiku": 0.00025,
+        "llama3.1": 0.0,
+        "llama3.2": 0.0,
+        "mistral": 0.0,
+        "codellama": 0.0,
+        "default": 0.0,
+    }
+
+    def estimate_cost(self, tokens: int, model: str = "") -> float:
+        """Estimate USD cost for a given token count and model.
+
+        Returns 0.0 for local/unknown models.
+        """
+        model = model or self.config.model or "default"
+        # Normalize model name for lookup
+        model_key = model.lower().replace("-", "").replace(".", "")
+        # Build normalized pricing table
+        normalized_pricing = {
+            k.lower().replace("-", "").replace(".", ""): v
+            for k, v in self._MODEL_PRICING.items()
+        }
+        price_per_1k = normalized_pricing.get(model_key)
+        if price_per_1k is None:
+            # Try fuzzy match on original keys
+            for key, price in self._MODEL_PRICING.items():
+                norm_key = key.lower().replace("-", "").replace(".", "")
+                if norm_key in model_key or model_key in norm_key:
+                    price_per_1k = price
+                    break
+            else:
+                price_per_1k = self._MODEL_PRICING["default"]
+        return (tokens / 1000) * price_per_1k
+
+    def get_cost_summary(self) -> dict[str, float]:
+        """Return total estimated cost across all telemetry records."""
+        total = 0.0
+        per_model: dict[str, float] = {}
+        for model, records in self._telemetry.items():
+            model_total = sum(
+                self.estimate_cost(r["tokens_used"], model) for r in records
+            )
+            per_model[model] = model_total
+            total += model_total
+        return {"total_usd": total, "per_model": per_model}
 
     # ── Cache API ──────────────────────────────────────────────────────
 
@@ -1131,6 +1202,28 @@ class SubagentOrchestrator:
     def clear_shared_context(self) -> None:
         """Clear all shared context."""
         self._shared_context.clear()
+
+    def set_pool_size(self, size: int) -> None:
+        """Set the maximum number of concurrent subagents.
+
+        Parameters
+        ----------
+        size:
+            New pool size (must be >= 1).
+        """
+        if size < 1:
+            raise ValueError("Pool size must be >= 1")
+        self._agent_pool_size = size
+        self._pool_semaphore = asyncio.Semaphore(size)
+        logger.info("Subagent pool size set to %d", size)
+
+    def get_pool_status(self) -> dict[str, int]:
+        """Return current pool status."""
+        return {
+            "pool_size": self._agent_pool_size,
+            "active_agents": self._active_agents,
+            "available_slots": max(0, self._agent_pool_size - self._active_agents),
+        }
 
     def _persist_result(self, contract: SubagentContract, result: SubagentResult) -> None:
         """Persist a subagent result to the JSONL log."""
@@ -1245,6 +1338,18 @@ class SubagentOrchestrator:
                 elapsed_seconds=0.0,
             )
 
+        # ── Role validation ────────────────────────────────────────────
+        role_error = self._validate_role(contract)
+        if role_error:
+            logger.warning("Role validation failed for %s: %s", contract.name, role_error)
+            return SubagentResult(
+                task_id=contract.name,
+                success=False,
+                output=f"[ROLE VALIDATION FAILED] {role_error}",
+                error=role_error,
+                elapsed_seconds=0.0,
+            )
+
         # ── Cache check ────────────────────────────────────────────────
         cached = self._check_cache(contract)
         if cached is not None:
@@ -1306,27 +1411,30 @@ class SubagentOrchestrator:
 
         # ── Dispatch by isolation level ──────────────────────────────
         result: SubagentResult | None = None
-        try:
-            if contract.isolation == "process":
-                result = await self._spawn_subagent_process(contract, start)
-            else:
-                result = await self._spawn_subagent_thread(contract, start, agent_workspace, child_cfg, session, system, tool_calls_log)
-            # Store successful/failed results in cache
-            self._store_cache(contract, result)
-            # Persist result for audit trail
-            self._persist_result(contract, result)
-            return result
-        finally:
-            # ── Cleanup worktree (unless debugging) ──────────────────
-            if worktree_path and not os.environ.get("WISP_KEEP_WORKTREES", "").lower() == "true":
-                # Small delay to let process finish flushing files
-                await asyncio.sleep(0.5)
-                try:
-                    await self._cleanup_worktree(worktree_path)
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to clean up worktree %s: %s", worktree_path, exc
-                    )
+        async with self._pool_semaphore:
+            self._active_agents += 1
+            try:
+                if contract.isolation == "process":
+                    result = await self._spawn_subagent_process(contract, start)
+                else:
+                    result = await self._spawn_subagent_thread(contract, start, agent_workspace, child_cfg, session, system, tool_calls_log)
+                # Store successful/failed results in cache
+                self._store_cache(contract, result)
+                # Persist result for audit trail
+                self._persist_result(contract, result)
+                return result
+            finally:
+                self._active_agents -= 1
+                # ── Cleanup worktree (unless debugging) ──────────────────
+                if worktree_path and not os.environ.get("WISP_KEEP_WORKTREES", "").lower() == "true":
+                    # Small delay to let process finish flushing files
+                    await asyncio.sleep(0.5)
+                    try:
+                        await self._cleanup_worktree(worktree_path)
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to clean up worktree %s: %s", worktree_path, exc
+                        )
 
     async def _spawn_subagent_thread(
         self,
@@ -1650,12 +1758,22 @@ class SubagentOrchestrator:
                     # Handle fallback to temp file for large outputs
                     if isinstance(data, dict) and "__fallback_path" in data:
                         fallback_path = data["__fallback_path"]
-                        with open(fallback_path, "r", encoding="utf-8") as f:
-                            data = json.load(f)
+                        if data.get("__compressed"):
+                            import gzip
+                            with open(fallback_path, "rb") as f:
+                                data = json.loads(gzip.decompress(f.read()).decode("utf-8"))
+                        else:
+                            with open(fallback_path, "r", encoding="utf-8") as f:
+                                data = json.load(f)
                         try:
                             os.unlink(fallback_path)
                         except OSError:
                             pass
+                    # Decompress inline compressed output
+                    if data.get("__compressed"):
+                        import gzip
+                        data["output"] = gzip.decompress(bytes.fromhex(data["output"])).decode("utf-8")
+                        del data["__compressed"]
                 else:
                     parent_conn.close()
                     raise TimeoutError("No data received from subagent process")
@@ -2407,6 +2525,26 @@ class SubagentOrchestrator:
             }
         finally:
             agent.close()
+
+    def _validate_role(self, contract: SubagentContract) -> Optional[str]:
+        """Validate role configuration for a contract.
+
+        Returns an error message if invalid, None if valid.
+        """
+        from .roles import ROLE_CONFIGS
+
+        if not contract.role:
+            return "Role is required"
+
+        if contract.role not in ROLE_CONFIGS:
+            valid_roles = ", ".join(sorted(ROLE_CONFIGS.keys()))
+            return f"Unknown role '{contract.role}'. Valid roles: {valid_roles}"
+
+        role_cfg = ROLE_CONFIGS[contract.role]
+        if not role_cfg.system_prompt:
+            return f"Role '{contract.role}' has no system prompt configured"
+
+        return None
 
     def _build_child_config(self, contract: SubagentContract) -> WispConfig:
         """Clone the parent config with optional per-subagent overrides."""

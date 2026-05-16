@@ -17,6 +17,7 @@ class AgentRole:
     RESEARCHER = "researcher"
     PLANNER = "planner"
     DEBUGGER = "debugger"
+    GENERALIST = "generalist"
 
 
 @dataclass
@@ -187,5 +188,21 @@ Rules:
         ],
         max_iterations=12,
         timeout_seconds=180,
+    ),
+    AgentRole.GENERALIST: RoleConfig(
+        name=AgentRole.GENERALIST,
+        system_prompt="""You are a generalist subagent in a multi-agent swarm.
+Your job is to assist with a wide variety of tasks.
+
+Rules:
+- You have access to all tools.
+- Focus on the assigned task and work efficiently.
+- When done, provide a clear summary of what you did.
+- If you edit files, list the changed paths.
+- If stuck, explain what blocked you and stop.
+""",
+        allowed_tools=["all"],
+        max_iterations=10,
+        timeout_seconds=120,
     ),
 }

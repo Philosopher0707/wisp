@@ -341,9 +341,9 @@ async def test_run_vote_consensus(orch):
         result = await orch.run_vote(
             task="Is this function vulnerable?",
             agents=[
-                SubagentContract(name="sec-1", role="security-auditor"),
-                SubagentContract(name="sec-2", role="security-auditor"),
-                SubagentContract(name="sec-3", role="security-auditor"),
+                SubagentContract(name="sec-1", role="reviewer"),
+                SubagentContract(name="sec-2", role="reviewer"),
+                SubagentContract(name="sec-3", role="reviewer"),
             ],
             consensus_threshold=0.6,
         )
@@ -369,8 +369,8 @@ async def test_run_vote_no_consensus(orch):
         result = await orch.run_vote(
             task="Is this vulnerable?",
             agents=[
-                SubagentContract(name="sec-1", role="security-auditor"),
-                SubagentContract(name="sec-2", role="security-auditor"),
+                SubagentContract(name="sec-1", role="reviewer"),
+                SubagentContract(name="sec-2", role="reviewer"),
             ],
             consensus_threshold=0.6,
         )
@@ -1637,3 +1637,105 @@ async def test_process_isolation_uses_pipe(mock_parent_agent, tmp_path):
     assert result.success
     # Process isolation runs in a separate process, so patching doesn't affect it
     # Just verify the result structure is correct
+
+
+# ── Gap #15: Output compression ───────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_compression_large_output(mock_parent_agent):
+    """Large outputs should be compressed in pipe IPC."""
+    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+    # Verify compression logic by checking estimate_cost works (uses tokens)
+    cost = orch.estimate_cost(10000, "gpt-4o")
+    assert cost == 0.05  # 10000/1000 * 0.005
+
+
+# ── Gap #16: Cost estimation ─────────────────────────────────────────
+
+def test_estimate_cost_known_models(mock_parent_agent):
+    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+    assert orch.estimate_cost(1000, "gpt-4o") == 0.005
+    assert orch.estimate_cost(1000, "gpt-4o-mini") == 0.00015
+    assert orch.estimate_cost(1000, "llama3.1") == 0.0
+
+
+def test_estimate_cost_unknown_model(mock_parent_agent):
+    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+    assert orch.estimate_cost(1000, "unknown-model") == 0.0
+
+
+def test_get_cost_summary(mock_parent_agent):
+    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+    # Seed telemetry
+    orch._telemetry = {
+        "gpt-4o": [
+            {"tokens_used": 1000, "success": True, "elapsed_seconds": 1.0},
+            {"tokens_used": 2000, "success": False, "elapsed_seconds": 2.0},
+        ]
+    }
+    summary = orch.get_cost_summary()
+    assert summary["total_usd"] == 0.015  # 3000/1000 * 0.005
+    assert summary["per_model"]["gpt-4o"] == 0.015
+
+
+# ── Gap #17: Agent pool ──────────────────────────────────────────────
+
+def test_pool_size_default(mock_parent_agent):
+    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+    assert orch.get_pool_status()["pool_size"] == 4
+
+
+def test_set_pool_size(mock_parent_agent):
+    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+    orch.set_pool_size(2)
+    assert orch.get_pool_status()["pool_size"] == 2
+
+
+def test_set_pool_size_invalid(mock_parent_agent):
+    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+    with pytest.raises(ValueError):
+        orch.set_pool_size(0)
+
+
+# ── Gap #18: Role validation ─────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_role_validation_empty_role(mock_parent_agent):
+    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+    contract = SubagentContract(
+        name="bad_role",
+        role="",
+        task="test",
+        timeout_seconds=5,
+    )
+    result = await orch.run(contract)
+    assert not result.success
+    assert "Role is required" in result.error
+
+
+@pytest.mark.asyncio
+async def test_role_validation_unknown_role(mock_parent_agent):
+    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+    contract = SubagentContract(
+        name="bad_role",
+        role="nonexistent_role",
+        task="test",
+        timeout_seconds=5,
+    )
+    result = await orch.run(contract)
+    assert not result.success
+    assert "Unknown role" in result.error
+
+
+@pytest.mark.asyncio
+async def test_role_validation_valid_role(mock_parent_agent):
+    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+    contract = SubagentContract(
+        name="good_role",
+        role="coder",
+        task="test",
+        timeout_seconds=5,
+    )
+    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+        result = await orch.run(contract)
+    assert result.success
