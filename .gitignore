@@ -56,3 +56,4 @@ android/build/
 
 # Test artifacts
 MagicMock/
+.wisp/worktrees/

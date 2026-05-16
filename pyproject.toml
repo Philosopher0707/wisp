@@ -30,3 +30,8 @@ wisp = "wisp.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["wisp*"]
+
+[dependency-groups]
+dev = [
+    "pytest-asyncio>=1.3.0",
+]
