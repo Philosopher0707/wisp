@@ -1854,3 +1854,89 @@ async def test_worktree_name_sanitization(mock_parent_agent, tmp_path):
         result = await orch.run(contract)
     # Should succeed despite special chars in name
     assert result.success
+
+
+# ── Skill loading tests ────────────────────────────────────────────────
+
+def test_default_system_prompt_loads_skills(mock_parent_agent, tmp_path):
+    """Subagent system prompt should include discovered skills."""
+    from wisp import skills as skills_mod
+    original_global = skills_mod.GLOBAL_SKILL_DIRS
+    skills_mod.GLOBAL_SKILL_DIRS = []
+    try:
+        # Create a skill in the workspace
+        skill_dir = tmp_path / ".agents" / "skills" / "test-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: test-skill\ndescription: A test skill\n---\n# Test Skill\nDo test things."
+        )
+        orch = SubagentOrchestrator(parent_agent=mock_parent_agent, workspace=tmp_path)
+        contract = SubagentContract(name="skill-test", role="coder", task="test")
+        prompt = orch._default_system_prompt(contract)
+        assert "test-skill" in prompt
+        assert "A test skill" in prompt
+    finally:
+        skills_mod.GLOBAL_SKILL_DIRS = original_global
+
+
+def test_default_system_prompt_filters_allowed_skills(mock_parent_agent, tmp_path):
+    """Subagent should only include allowed skills when allowed_skills is set."""
+    from wisp import skills as skills_mod
+    original_global = skills_mod.GLOBAL_SKILL_DIRS
+    skills_mod.GLOBAL_SKILL_DIRS = []
+    try:
+        # Create two skills
+        for name, desc in [("skill-a", "Skill A"), ("skill-b", "Skill B")]:
+            skill_dir = tmp_path / ".agents" / "skills" / name
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                f"---\nname: {name}\ndescription: {desc}\n---\n# {name}\nInstructions."
+            )
+        orch = SubagentOrchestrator(parent_agent=mock_parent_agent, workspace=tmp_path)
+        contract = SubagentContract(
+            name="skill-test",
+            role="coder",
+            task="test",
+            allowed_skills=["skill-a"],
+        )
+        prompt = orch._default_system_prompt(contract)
+        assert "skill-a" in prompt
+        assert "Skill A" in prompt
+        assert "skill-b" not in prompt
+    finally:
+        skills_mod.GLOBAL_SKILL_DIRS = original_global
+
+
+def test_default_system_prompt_no_skills(mock_parent_agent, tmp_path):
+    """Subagent system prompt should not have skills section when none exist."""
+    from wisp import skills as skills_mod
+    original_global = skills_mod.GLOBAL_SKILL_DIRS
+    skills_mod.GLOBAL_SKILL_DIRS = []
+    try:
+        orch = SubagentOrchestrator(parent_agent=mock_parent_agent, workspace=tmp_path)
+        contract = SubagentContract(name="no-skill-test", role="coder", task="test")
+        prompt = orch._default_system_prompt(contract)
+        assert "Available Skills" not in prompt
+        assert "## Skills" not in prompt
+    finally:
+        skills_mod.GLOBAL_SKILL_DIRS = original_global
+
+
+@pytest.mark.asyncio
+async def test_subagent_uses_skills_in_run(mock_parent_agent, tmp_path):
+    """Subagent run should include skills in the system prompt."""
+    skill_dir = tmp_path / ".agents" / "skills" / "coder-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: coder-skill\ndescription: Coding best practices\n---\n# Coder Skill\nAlways write tests."
+    )
+    orch = SubagentOrchestrator(parent_agent=mock_parent_agent, workspace=tmp_path)
+    contract = SubagentContract(
+        name="skill-run-test",
+        role="coder",
+        task="test",
+        timeout_seconds=5,
+    )
+    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+        result = await orch.run(contract)
+    assert result.success

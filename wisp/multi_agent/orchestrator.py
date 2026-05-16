@@ -2625,7 +2625,11 @@ class SubagentOrchestrator:
         return child
 
     def _default_system_prompt(self, contract: SubagentContract) -> str:
-        """Build a concise default system prompt when none is provided."""
+        """Build a concise default system prompt when none is provided.
+
+        Loads skills from the workspace if allowed_skills is set or if
+        skills are discovered automatically.
+        """
         from .roles import ROLE_CONFIGS, AgentRole
 
         # Try role-based prompt first
@@ -2648,6 +2652,35 @@ class SubagentOrchestrator:
             base = "\n".join(base)
 
         parts = [base]
+
+        # ── Load skills ──────────────────────────────────────────────
+        workspace = str(contract.workspace or self.workspace)
+        try:
+            from wisp.skills import discover_skills
+            skills = discover_skills(workspace)
+            if skills:
+                if contract.allowed_skills:
+                    # Filter to only allowed skills
+                    filtered = [s for s in skills if s.name in contract.allowed_skills]
+                    if filtered:
+                        parts.append("")
+                        parts.append("## Skills")
+                        parts.append("You may use these skills when relevant:")
+                        for s in filtered:
+                            parts.append(f"- **{s.name}**: {s.description}")
+                        for s in filtered:
+                            parts.append("")
+                            parts.append(f"### {s.name}")
+                            parts.append(s.instructions)
+                else:
+                    # No restriction — list all available skills
+                    parts.append("")
+                    parts.append("## Available Skills")
+                    parts.append("You can invoke any of these skills when relevant:")
+                    for s in skills:
+                        parts.append(f"- {s.name}: {s.description}")
+        except Exception as exc:
+            logger.debug("Failed to load skills for subagent: %s", exc)
 
         if contract.tools != ["all"]:
             parts.append("")
