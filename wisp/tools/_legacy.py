@@ -22,6 +22,16 @@ from typing import Any, Optional
 
 import requests
 
+# Long-horizon task tools
+from wisp.tools.long_horizon import (
+    tool_run_long_task,
+    tool_resume_task,
+    tool_task_status,
+    tool_list_tasks,
+    tool_pause_task,
+    tool_cancel_task,
+)
+
 logger = logging.getLogger(__name__)
 
 # Per-agent context variables for multi-agent concurrency safety.
@@ -1825,6 +1835,94 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_long_task",
+            "description": "Create and start a new long-horizon task with automatic checkpointing and replanning. Use for complex goals requiring more than 5 steps or expected to take longer than 5 minutes. Returns a task_id for tracking progress.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {"type": "string", "description": "Detailed description of what to accomplish"},
+                    "max_iterations": {"type": "integer", "description": "Maximum total steps before forced failure", "default": 50},
+                    "step_timeout": {"type": "integer", "description": "Per-step timeout in seconds", "default": 300},
+                    "parallelize": {"type": "boolean", "description": "Allow independent steps to run in parallel", "default": True},
+                    "workspace": {"type": "string", "description": "Working directory", "default": "."},
+                },
+                "required": ["goal"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "resume_task",
+            "description": "Resume a previously started long-horizon task from its last checkpoint.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task ID from previous run_long_task"},
+                    "workspace": {"type": "string", "description": "Working directory", "default": "."},
+                },
+                "required": ["task_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "task_status",
+            "description": "Get the current status and progress of a long-horizon task.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task ID to query"},
+                },
+                "required": ["task_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_tasks",
+            "description": "List all long-horizon tasks with their statuses.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status_filter": {"type": "string", "description": "Filter by status (all, pending, running, paused, completed, failed)", "default": "all"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "pause_task",
+            "description": "Pause a running long-horizon task, saving its current checkpoint.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task ID to pause"},
+                },
+                "required": ["task_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cancel_task",
+            "description": "Cancel a long-horizon task, marking it as failed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task ID to cancel"},
+                },
+                "required": ["task_id"],
+            },
+        },
+    },
 ]
 
 def _tool_spawn_subagent_stub(**kwargs) -> str:
@@ -1880,6 +1978,12 @@ TOOL_IMPLS = {
     "web_search": tool_web_search,
     "search_codebase": tool_search_codebase,
     "run_tests": tool_run_tests,
+    "run_long_task": tool_run_long_task,
+    "resume_task": tool_resume_task,
+    "task_status": tool_task_status,
+    "list_tasks": tool_list_tasks,
+    "pause_task": tool_pause_task,
+    "cancel_task": tool_cancel_task,
 }
 
 

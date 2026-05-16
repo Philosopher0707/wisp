@@ -61,6 +61,7 @@ class Session:
     messages: list[dict] = field(default_factory=list)
     title: str = ""
     compaction_history: list[dict] = field(default_factory=list)
+    task_ids: list[str] = field(default_factory=list)  # Associated long-horizon tasks
 
     @classmethod
     def create(cls, model: str, workspace: str, first_prompt: str) -> "Session":
@@ -89,6 +90,7 @@ class Session:
             "messages": self.messages,
             "title": self.title,
             "compaction_history": self.compaction_history,
+            "task_ids": self.task_ids,
         }
 
     @classmethod
@@ -103,6 +105,7 @@ class Session:
             messages=data.get("messages", []),
             title=data.get("title", ""),
             compaction_history=data.get("compaction_history", []),
+            task_ids=data.get("task_ids", []),
         )
 
     def touch(self):
@@ -264,8 +267,23 @@ class SessionManager:
         _ensure_sessions_dir()
 
     def save(self, session: Session):
-        """Save a session to disk with cross-process locking."""
+        """Save a session to disk with cross-process locking.
+
+        Also checkpoints any running long-horizon tasks associated with this session.
+        """
         session.touch()
+
+        # Checkpoint running tasks
+        if session.task_ids:
+            from wisp.long_horizon.storage import TaskStorage
+            storage = TaskStorage()
+            for task_id in session.task_ids:
+                state = storage.load(task_id)
+                if state and state.status.value == "running":
+                    state.checkpoint()
+                    storage.save(state)
+                    logger.debug("Checkpointed task %s for session %s", task_id, session.id)
+
         path = _session_path(session.id)
         from filelock import FileLock
         lock = FileLock(str(path) + ".lock")
@@ -275,7 +293,7 @@ class SessionManager:
                     json.dumps(session.to_dict(), indent=2, ensure_ascii=False),
                     encoding="utf-8",
                 )
-                logger.debug("Saved session %s (%d messages)", session.id, len(session.messages))
+                logger.debug("Saved session %s (%d messages, %d tasks)", session.id, len(session.messages), len(session.task_ids))
         except OSError as e:
             logger.error("Failed to save session %s: %s", session.id, e)
             raise
@@ -325,6 +343,7 @@ class SessionManager:
                     "updated_at": data.get("updated_at", ""),
                     "msg_count": len(data.get("messages", [])),
                     "compactions": len(data.get("compaction_history", [])),
+                    "task_count": len(data.get("task_ids", [])),
                     "file": str(path),
                 })
             except (json.JSONDecodeError, OSError):

@@ -78,6 +78,19 @@ TYPE_STEERING_PAUSED = "steering_paused"
 TYPE_STEERING_INJECT = "steering_inject"
 TYPE_STEERING_RESUMED = "steering_resumed"
 
+# Long-horizon task events
+TYPE_TASK_STARTED = "task_started"
+TYPE_TASK_STEP_STARTED = "task_step_started"
+TYPE_TASK_STEP_COMPLETED = "task_step_completed"
+TYPE_TASK_STEP_FAILED = "task_step_failed"
+TYPE_TASK_REPLANNING = "task_replanning"
+TYPE_TASK_PAUSED = "task_paused"
+TYPE_TASK_RESUMED = "task_resumed"
+TYPE_TASK_COMPLETED = "task_completed"
+TYPE_TASK_FAILED = "task_failed"
+TYPE_TASK_PROGRESS = "task_progress"
+TYPE_TASK_ESCALATION = "task_escalation"
+
 # Human-readable descriptions
 _EVENT_DESCRIPTIONS: dict[str, str] = {
     TYPE_THINKING: "Model reasoning trace",
@@ -88,6 +101,17 @@ _EVENT_DESCRIPTIONS: dict[str, str] = {
     TYPE_DONE: "Turn complete",
     TYPE_SYSTEM: "System notification",
     TYPE_APPROVAL_REQUEST: "User approval required",
+    TYPE_TASK_STARTED: "Long-horizon task started",
+    TYPE_TASK_STEP_STARTED: "Task step started",
+    TYPE_TASK_STEP_COMPLETED: "Task step completed",
+    TYPE_TASK_STEP_FAILED: "Task step failed",
+    TYPE_TASK_REPLANNING: "Task replanning",
+    TYPE_TASK_PAUSED: "Task paused",
+    TYPE_TASK_RESUMED: "Task resumed",
+    TYPE_TASK_COMPLETED: "Task completed",
+    TYPE_TASK_FAILED: "Task failed",
+    TYPE_TASK_PROGRESS: "Task progress update",
+    TYPE_TASK_ESCALATION: "Task requires human intervention",
 }
 
 
@@ -143,6 +167,68 @@ def steering_feedback(text: str) -> AgentEvent:
 
 def approval_request(tool_name: str, args: dict[str, Any], reason: str = "") -> AgentEvent:
     return AgentEvent(TYPE_APPROVAL_REQUEST, {"name": tool_name, "arguments": args, "reason": reason})
+
+
+# ── Long-horizon task event builders ─────────────────────────────────
+
+def task_started(task_id: str, goal: str, total_steps: int) -> AgentEvent:
+    return AgentEvent(TYPE_TASK_STARTED, {"task_id": task_id, "goal": goal, "total_steps": total_steps})
+
+
+def task_step_started(task_id: str, step_id: str, step_index: int, description: str) -> AgentEvent:
+    return AgentEvent(TYPE_TASK_STEP_STARTED, {
+        "task_id": task_id, "step_id": step_id, "step_index": step_index, "description": description
+    })
+
+
+def task_step_completed(task_id: str, step_id: str, step_index: int, result: str, duration_ms: int) -> AgentEvent:
+    return AgentEvent(TYPE_TASK_STEP_COMPLETED, {
+        "task_id": task_id, "step_id": step_id, "step_index": step_index,
+        "result": result, "duration_ms": duration_ms,
+    })
+
+
+def task_step_failed(task_id: str, step_id: str, step_index: int, error: str, attempt: int) -> AgentEvent:
+    return AgentEvent(TYPE_TASK_STEP_FAILED, {
+        "task_id": task_id, "step_id": step_id, "step_index": step_index,
+        "error": error, "attempt": attempt,
+    })
+
+
+def task_replanning(task_id: str, reason: str, old_version: int, new_version: int) -> AgentEvent:
+    return AgentEvent(TYPE_TASK_REPLANNING, {
+        "task_id": task_id, "reason": reason, "old_version": old_version, "new_version": new_version,
+    })
+
+
+def task_paused(task_id: str, reason: str = "User paused") -> AgentEvent:
+    return AgentEvent(TYPE_TASK_PAUSED, {"task_id": task_id, "reason": reason})
+
+
+def task_resumed(task_id: str, step_index: int) -> AgentEvent:
+    return AgentEvent(TYPE_TASK_RESUMED, {"task_id": task_id, "step_index": step_index})
+
+
+def task_completed(task_id: str, goal: str, completed_steps: int, total_steps: int) -> AgentEvent:
+    return AgentEvent(TYPE_TASK_COMPLETED, {
+        "task_id": task_id, "goal": goal, "completed_steps": completed_steps, "total_steps": total_steps,
+    })
+
+
+def task_failed(task_id: str, goal: str, reason: str) -> AgentEvent:
+    return AgentEvent(TYPE_TASK_FAILED, {"task_id": task_id, "goal": goal, "reason": reason})
+
+
+def task_progress(task_id: str, step_index: int, total_steps: int, status: str) -> AgentEvent:
+    return AgentEvent(TYPE_TASK_PROGRESS, {
+        "task_id": task_id, "step_index": step_index, "total_steps": total_steps, "status": status,
+    })
+
+
+def task_escalation(task_id: str, step_id: str, reason: str, options: list[str]) -> AgentEvent:
+    return AgentEvent(TYPE_TASK_ESCALATION, {
+        "task_id": task_id, "step_id": step_id, "reason": reason, "options": options,
+    })
 
 
 # ── Simple in-memory event bus (for sync transports) ────────────────

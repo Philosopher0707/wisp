@@ -1,162 +1,121 @@
-"""Minimal Textual-based terminal app shell for Wisp."""
+"""Wisp Enterprise TUI — full Textual-based terminal application.
+
+Screens are composed directly in the app body with visibility toggling.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
+from textual.app import App, ComposeResult, ScreenStackError
+from textual.binding import Binding
+from textual.reactive import reactive
+from textual.widget import Widget
+
 from wisp.config import WispConfig
-from wisp.supervisor import WispSupervisor
 
-try:  # pragma: no cover - import path depends on environment
-    from textual.app import App, ComposeResult
-    from textual.containers import Horizontal, Vertical
-    from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, RichLog, Static
+CSS_DIR = Path(__file__).resolve().parent / "css"
 
-    TEXTUAL_AVAILABLE = True
-except ImportError:  # pragma: no cover - exercised through fallback behavior
-    TEXTUAL_AVAILABLE = False
 
-    class WispTUIApp:
-        """Fallback shim when Textual is unavailable in the environment."""
+class WispTUIApp(App):
+    """Enterprise-grade terminal UI for the Wisp coding agent."""
 
-        TITLE = "Wisp Terminal App"
+    TITLE = "Wisp"
+    SUB_TITLE = "Enterprise AI Coding Agent"
 
-        def __init__(self, config: WispConfig, supervisor: WispSupervisor | None = None):
-            self.config = config
-            self.supervisor = supervisor or WispSupervisor()
-            self.title = self.TITLE
+    CSS_PATH = [
+        CSS_DIR / "app.tcss",
+        CSS_DIR / "chat.tcss",
+    ]
 
-        def format_timeline_event(self, event):
-            return f"{event.event}: {event.payload}"
+    BINDINGS = [
+        Binding("ctrl+q", "quit", "Quit"),
+        Binding("ctrl+p", "toggle_command_palette", "Command palette"),
+        Binding("ctrl+backslash", "toggle_context_panel", "Toggle context"),
+        Binding("f1", "show_help", "Help"),
+    ]
 
-        async def submit_prompt(self, prompt: str):
-            raise RuntimeError(
-                "The terminal app requires the 'textual' package. "
-                "Install project dependencies to use `wisp tui`."
-            )
+    theme_mode: reactive[str] = reactive("dark")
+    current_screen_name: reactive[str] = reactive("splash")
 
-        def run(self):
-            raise RuntimeError(
-                "The terminal app requires the 'textual' package. "
-                "Install project dependencies to use `wisp tui`."
-            )
+    def __init__(
+        self,
+        config: WispConfig | None = None,
+        server_url: str = "http://localhost:8000",
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.wisp_config = config or WispConfig()
+        self.server_url = server_url
+        self.current_session_id: str | None = None
 
-else:
-    class WispTUIApp(App):
-        """Foundational full-screen terminal app for Wisp."""
+    def compose(self) -> ComposeResult:
+        from wisp.tui.screens.splash import SplashScreen
+        from wisp.tui.screens.session_picker import SessionPickerScreen
+        from wisp.tui.screens.workspace import WorkspaceScreen
 
-        TITLE = "Wisp Terminal App"
-        CSS = """
-        #body {
-            height: 1fr;
-        }
+        self._splash = SplashScreen(server_url=self.server_url, id="splash-screen")
+        self._session_picker = SessionPickerScreen(server_url=self.server_url, id="session-picker-screen")
+        self._workspace = WorkspaceScreen(
+            server_url=self.server_url, session_id=None, config=self.wisp_config, id="workspace-screen"
+        )
 
-        #threads-pane, #timeline-pane, #details-pane {
-            width: 1fr;
-            border: round $panel;
-            padding: 0 1;
-        }
+        self._splash.display = True
+        self._session_picker.display = False
+        self._workspace.display = False
 
-        .pane-title {
-            text-style: bold;
-            margin-bottom: 1;
-        }
+        yield self._splash
+        yield self._session_picker
+        yield self._workspace
 
-        #prompt {
-            dock: bottom;
-        }
-        """
+    def on_mount(self) -> None:
+        self.current_screen_name = "splash"
 
-        def __init__(self, config: WispConfig, supervisor: WispSupervisor | None = None):
-            super().__init__()
-            self.config = config
-            self.supervisor = supervisor or WispSupervisor()
+    def navigate(self, screen_name: str) -> None:
+        """Switch which composed screen is visible."""
+        self.current_screen_name = screen_name
 
-        def compose(self) -> ComposeResult:
-            yield Header()
-            with Horizontal(id="body"):
-                with Vertical(id="threads-pane"):
-                    yield Static("Threads", classes="pane-title")
-                    yield ListView(id="threads")
-                with Vertical(id="timeline-pane"):
-                    yield Static("Run Timeline", classes="pane-title")
-                    yield RichLog(id="timeline", wrap=True, highlight=True)
-                with Vertical(id="details-pane"):
-                    yield Static("Details", classes="pane-title")
-                    yield Static("", id="details")
-            yield Input(placeholder="Ask Wisp about this repository...", id="prompt")
-            yield Footer()
+        # Guard: if compose() hasn't run (e.g. in unit tests), be a no-op
+        if not hasattr(self, "_splash"):
+            return
 
-        def on_mount(self) -> None:
-            self.refresh_threads()
-            timeline = self.query_one("#timeline", RichLog)
-            details = self.query_one("#details", Static)
-            timeline.write(f"Workspace: {self.config.workspace}")
-            details.update(
-                "\n".join(
-                    [
-                        f"Provider: {self.config.provider}",
-                        f"Model: {self.config.model}",
-                        f"Workspace: {self.config.workspace}",
-                    ]
-                )
-            )
+        self._splash.display = (screen_name == "splash")
+        self._session_picker.display = (screen_name == "session_picker")
+        self._workspace.display = (screen_name == "workspace")
 
-        def refresh_threads(self) -> None:
-            thread_list = self.query_one("#threads", ListView)
-            thread_list.clear()
-            for thread in self.supervisor.list_threads():
-                thread_list.append(
-                    ListItem(
-                        Label(f"{thread.title}\n{thread.workspace}", id=f"thread-{thread.id}")
-                    )
-                )
+        if screen_name == "session_picker":
+            self._session_picker._load_sessions()
 
-        def format_timeline_event(self, event: object) -> str:
-            event_name = getattr(event, "event", "")
-            payload = getattr(event, "payload", {}) or {}
-            run_id = getattr(event, "run_id", "")
+        if screen_name == "workspace":
+            self._workspace.session_id = self.current_session_id
 
-            if event_name == "run.started":
-                return f"[run {run_id}] started: {payload.get('prompt', '')}"
-            if event_name == "agent.content":
-                return payload.get("text", "")
-            if event_name == "agent.thinking":
-                return f"thinking: {payload.get('text', '')}"
-            if event_name == "agent.tool_call":
-                return f"tool: {payload.get('name', '')}"
-            if event_name == "agent.tool_result":
-                return f"tool result: {payload.get('name', '')}"
-            if event_name == "run.completed":
-                return f"[run {run_id}] completed"
-            if event_name == "agent.error":
-                return f"error: {payload.get('message', '')}"
-            return f"{event_name}: {payload}"
+        if screen_name == "help":
+            from wisp.tui.screens.help import HelpScreen
+            self.push_screen(HelpScreen())
+        elif screen_name == "settings":
+            from wisp.tui.screens.settings import SettingsScreen
+            self.push_screen(SettingsScreen())
 
-        async def submit_prompt(self, prompt: str):
-            if not prompt:
-                return None
+    def action_toggle_command_palette(self) -> None:
+        scr = self._visible_screen()
+        if scr and hasattr(scr, "action_toggle_command_palette"):
+            scr.action_toggle_command_palette()
 
-            workspace = self.config.workspace or str(Path.cwd())
-            threads = self.supervisor.list_threads()
-            thread_id = threads[-1].id if threads else None
-            thread, run, events = await self.supervisor.execute_prompt(
-                self.config,
-                prompt,
-                thread_id=thread_id,
-            )
+    def action_toggle_context_panel(self) -> None:
+        scr = self._visible_screen()
+        if scr and hasattr(scr, "action_toggle_context_panel"):
+            scr.action_toggle_context_panel()
 
-            self.refresh_threads()
-            timeline = self.query_one("#timeline", RichLog)
-            for app_event in events:
-                timeline.write(self.format_timeline_event(app_event))
+    def action_show_help(self) -> None:
+        self.navigate("help")
 
-            return thread, run, events
-
-        async def on_input_submitted(self, event: Input.Submitted) -> None:
-            prompt = event.value.strip()
-            if not prompt:
-                return
-
-            await self.submit_prompt(prompt)
-            event.input.value = ""
+    def _visible_screen(self) -> Widget | None:
+        if not hasattr(self, "_splash"):
+            return None
+        if self._splash.display:
+            return self._splash
+        if self._session_picker.display:
+            return self._session_picker
+        if self._workspace.display:
+            return self._workspace
+        return None

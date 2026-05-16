@@ -18,4 +18,7 @@ warnings.warn(
 from wisp.multi_agent.task import SubagentContract as SubagentTask, SubagentResult
 from wisp.multi_agent.orchestrator import SubagentOrchestrator as SubagentRunner
 
-__all__ = ["SubagentTask", "SubagentResult", "SubagentRunner"]
+# Backward compatibility aliases
+SubagentContract = SubagentTask
+
+__all__ = ["SubagentContract", "SubagentTask", "SubagentResult", "SubagentRunner"]

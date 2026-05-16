@@ -1,0 +1,72 @@
+/* Chat pane styles */
+
+#chat-pane {
+    height: 1fr;
+    padding: 0 1;
+}
+
+MessageList {
+    height: 1fr;
+    overflow-y: auto;
+}
+
+.user-message-row {
+    padding: 1 0;
+    margin: 0 0 0 4;
+}
+
+.user-bubble {
+    background: #0c2d6b;
+    padding: 0 2;
+}
+
+.user-bubble Static {
+    color: #39c5cf;
+    text-style: bold;
+}
+
+AssistantMessage {
+    padding: 1 0;
+    margin: 0 2 0 0;
+}
+
+ThinkingBlock {
+    background: #341a00;
+    padding: 0 1;
+    margin-bottom: 1;
+    border-left: solid #d29922;
+}
+
+#thinking-header { text-style: italic; }
+
+#thinking-body {
+    color: #8b949e;
+    height: auto;
+    max-height: 10;
+    overflow-y: auto;
+}
+
+ContentBlock {
+    padding: 0 1;
+}
+
+#content-richtext {
+    height: auto;
+    min-height: 1;
+}
+
+ToolCallCard {
+    background: #161b22;
+    border: solid #21262d;
+    padding: 0 2;
+    margin: 1 0;
+}
+
+ToolCallCard .tool-name { color: #a371f7; }
+ToolCallCard .tool-duration { color: #484f58; }
+ToolCallCard .tool-result {
+    color: #8b949e;
+    height: auto;
+    max-height: 8;
+    overflow-y: auto;
+}

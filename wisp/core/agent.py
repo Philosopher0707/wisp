@@ -108,6 +108,12 @@ You have access to tools that let you read, write, and edit files, run bash comm
 - plan_task: Create a structured plan with subtasks and dependencies
 - mark_step_done: Mark a plan task as completed
 - update_plan: Update a plan task's status
+- run_long_task: Create a new long-horizon task with an initial plan for complex multi-step goals
+- task_status: Check the current status and progress of a long-horizon task
+- list_tasks: List all long-horizon tasks filtered by status
+- pause_task: Pause a running long-horizon task, saving its current state
+- resume_task: Resume a paused or crashed long-horizon task
+- cancel_task: Cancel a long-horizon task, marking it as failed
 """
 
 
@@ -1265,6 +1271,20 @@ class WispAgentCore:
 
             if func_name == "remember":
                 self._invalidate_system_prompt_cache()
+
+            # ── Associate long-horizon tasks with session ──
+            if func_name == "run_long_task" and self.session:
+                try:
+                    import re
+                    if isinstance(result, str):
+                        match = re.search(r"task-\d{8}-\d{6}-[a-f0-9]+", result)
+                        if match:
+                            task_id = match.group(0)
+                            if task_id not in self.session.task_ids:
+                                self.session.task_ids.append(task_id)
+                                logger.debug("Associated task %s with session %s", task_id, self.session.id)
+                except Exception:
+                    pass
 
             yield tool_result_event(func_name, result, duration_ms=duration_ms)
             # Extract human-readable summary for the LLM from structured dict results

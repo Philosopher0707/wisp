@@ -305,24 +305,3 @@ def run_all_tests(
     """Run the entire test suite."""
     ws = Path(workspace).resolve()
     return run_tests([str(ws)], workspace=ws, timeout=timeout)
-
-
-# ── Tool interface for agent integration ──────────────────────────────────
-
-def tool_run_tests(
-    files: list[str] | None = None,
-    workspace: str = ".",
-    timeout: int = 120,
-) -> str:
-    """Run tests for the given files, or all tests if no files specified.
-
-    If *files* is provided, only tests affected by those files are run.
-    If *files* is empty/None, the entire test suite is run.
-
-    Returns a formatted summary string suitable for LLM consumption.
-    """
-    if files:
-        summary = run_affected_tests(files, workspace, timeout=timeout)
-    else:
-        summary = run_all_tests(workspace, timeout=timeout)
-    return summary.format_for_llm()
