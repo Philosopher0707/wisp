@@ -1181,7 +1181,28 @@ class CLITransport:
                 # Slash commands
                 from wisp.commands import dispatch, ExitREPL
                 try:
-                    if dispatch(cmd, self.core):
+                    disp_result = dispatch(cmd, self.core)
+                    if disp_result:
+                        # Check if a skill needs acknowledgment
+                        skill_ack = getattr(self.core, "_skill_acknowledge", None)
+                        if skill_ack:
+                            del self.core._skill_acknowledge
+                            ack_prompt = (
+                                f"Acknowledge that the '{skill_ack}' skill is now active. "
+                                f"Briefly summarize (2-3 sentences) what this skill does and "
+                                f"how it changes your approach."
+                            )
+                            try:
+                                system = self.core._build_system_prompt(skill_ack, query=ack_prompt)
+                                self.core._add_message("user", ack_prompt)
+                                asyncio.run(self._execute_turn(system, ws))
+                            except KeyboardInterrupt:
+                                print(error("\n⏹  Turn interrupted."))
+                                self.core._interrupted = False
+                            except Exception as e:
+                                print(error(f"\n✗ Acknowledgment error: {e}"))
+                                logger.error("Skill acknowledgment failed", exc_info=True)
+                            continue
                         continue
                 except ExitREPL:
                     print(success("  👋 Goodbye."))

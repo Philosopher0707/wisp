@@ -243,27 +243,10 @@ def cmd_skill(agent, args: str):
     if hasattr(agent, "_system_prompt_cache"):
         agent._system_prompt_cache.clear()
 
-    print(success(f"✓ Skill loaded: {skill.name} — {skill.description}"))
+    print(success(f"✓ Skill loaded: {skill.name}"))
 
-    # ── Agent responds with skill summary ──────────────────────────
-    # Extract first paragraph of instructions as a summary
-    instructions = skill.instructions.strip()
-    first_para = instructions.split("\n\n")[0] if instructions else ""
-    if len(first_para) > 300:
-        first_para = first_para[:300] + "..."
-
-    print()
-    print(info(f"🧠 I'm now using the **{skill.name}** skill."))
-    if first_para:
-        print(dim(first_para))
-    print()
-
-    # Add a system message to the conversation so the agent remembers
-    if hasattr(agent, "messages"):
-        agent.messages.append({
-            "role": "system",
-            "content": f"[Skill loaded: {skill.name}] {skill.description}"
-        })
+    # Flag for REPL to trigger an agent acknowledgment turn
+    agent._skill_acknowledge = skill.name
 
 
 @register("session", "Show session info", usage="/session")
