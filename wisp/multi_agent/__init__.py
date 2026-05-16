@@ -98,3 +98,23 @@ __all__ = [
     "build_retry_prompt",
     "SchemaValidationError",
 ]
+
+try:
+    from .codebase_orchestrator import (
+        CodebaseOrchestrator,
+        ModuleInfo,
+        ModuleAnalysis,
+        WriteTask,
+        WriteResult,
+        CodebaseReport,
+    )
+    __all__.extend([
+        "CodebaseOrchestrator",
+        "ModuleInfo",
+        "ModuleAnalysis",
+        "WriteTask",
+        "WriteResult",
+        "CodebaseReport",
+    ])
+except ImportError:
+    pass  # codebase_orchestrator is optional
