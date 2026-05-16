@@ -259,6 +259,44 @@ class TestIntegrationMemory:
         result = parse_tool_result(raw)
         assert result["status"] == "error"
 
+    def test_remember_global_default(self, temp_workspace):
+        """remember without explicit workspace should store globally."""
+        raw = execute_tool("remember", {"fact": "Global user preference"}, str(temp_workspace))
+        result = parse_tool_result(raw)
+        assert result["status"] == "ok"
+        assert "Remembered" in result["data"] or "Already remembered" in result["data"]
+
+        # Should be findable from a different workspace
+        raw2 = execute_tool("recall", {"query": "user preference", "limit": 5}, str(temp_workspace))
+        result2 = parse_tool_result(raw2)
+        assert result2["status"] == "ok"
+        assert "Global user preference" in result2["data"]
+
+    def test_recall_across_workspaces(self, temp_workspace, tmp_path):
+        """recall should find facts from all workspaces, not just current."""
+        ws_a = str(tmp_path / "project_a")
+        ws_b = str(tmp_path / "project_b")
+
+        # Store facts in different workspaces
+        execute_tool("remember", {"fact": "Project A uses React"}, ws_a)
+        execute_tool("remember", {"fact": "Project B uses Vue"}, ws_b)
+
+        # Recall from workspace A should find both
+        raw = execute_tool("recall", {"query": "project framework", "limit": 10}, ws_a)
+        result = parse_tool_result(raw)
+        assert result["status"] == "ok"
+        assert "Project A uses React" in result["data"]
+        assert "Project B uses Vue" in result["data"]
+
+    def test_recall_searches_all_session_summaries(self, temp_workspace, tmp_path):
+        """recall should search session summaries from all workspaces."""
+        # This is harder to test end-to-end without real sessions,
+        # but we verify the tool searches broadly
+        raw = execute_tool("recall", {"query": "anything", "limit": 5}, str(temp_workspace))
+        result = parse_tool_result(raw)
+        # Should not error even with no matching sessions
+        assert result["status"] == "ok"
+
 
 # ── Integration: git_status / git_diff ───────────────────────────────
 

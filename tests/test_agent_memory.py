@@ -145,3 +145,71 @@ class TestAgentMemory:
         assert len(all_summaries) == 2
         assert all_summaries[0].session_id == "good"
         assert all_summaries[1].session_id == "good2"
+
+    # ── Global memory tests ────────────────────────────────────────────
+
+    def test_load_recent_global_returns_all_workspaces(self):
+        """load_recent_global should return summaries from every workspace."""
+        ws_a = str(Path("/tmp").resolve() / "ws-a")
+        ws_b = str(Path("/tmp").resolve() / "ws-b")
+        s1 = self._make_summary("sid-a", workspace=ws_a)
+        s2 = self._make_summary("sid-b", workspace=ws_b)
+        self.mem.save(s1)
+        self.mem.save(s2)
+
+        recent = self.mem.load_recent_global(limit=5)
+        assert len(recent) == 2
+        ids = {s.session_id for s in recent}
+        assert "sid-a" in ids
+        assert "sid-b" in ids
+
+    def test_load_recent_global_newest_first(self):
+        """load_recent_global should return newest first across all workspaces."""
+        ws_a = str(Path("/tmp").resolve() / "ws-a")
+        ws_b = str(Path("/tmp").resolve() / "ws-b")
+
+        s1 = self._make_summary("sid-1", workspace=ws_a)
+        s1.timestamp = "2026-01-01T00:00:00Z"
+        s2 = self._make_summary("sid-2", workspace=ws_b)
+        s2.timestamp = "2026-01-02T00:00:00Z"
+        s3 = self._make_summary("sid-3", workspace=ws_a)
+        s3.timestamp = "2026-01-03T00:00:00Z"
+
+        self.mem.save(s1)
+        self.mem.save(s2)
+        self.mem.save(s3)
+
+        recent = self.mem.load_recent_global(limit=3)
+        assert recent[0].session_id == "sid-3"  # newest
+        assert recent[1].session_id == "sid-2"
+        assert recent[2].session_id == "sid-1"  # oldest
+
+    def test_load_recent_global_limits(self):
+        """load_recent_global should respect the limit parameter."""
+        for i in range(5):
+            ws = str(Path("/tmp").resolve() / f"ws-{i}")
+            s = self._make_summary(f"sid-{i}", workspace=ws)
+            self.mem.save(s)
+
+        recent = self.mem.load_recent_global(limit=2)
+        assert len(recent) == 2
+
+    def test_load_recent_global_vs_load_recent(self):
+        """load_recent with workspace filter should exclude other workspaces,
+        but load_recent_global should include all."""
+        ws_a = str(Path("/tmp").resolve() / "ws-a")
+        ws_b = str(Path("/tmp").resolve() / "ws-b")
+
+        s1 = self._make_summary("sid-a", workspace=ws_a)
+        s2 = self._make_summary("sid-b", workspace=ws_b)
+        self.mem.save(s1)
+        self.mem.save(s2)
+
+        # load_recent with workspace filter
+        recent_a = self.mem.load_recent(workspace=ws_a, limit=5)
+        assert len(recent_a) == 1
+        assert recent_a[0].session_id == "sid-a"
+
+        # load_recent_global includes everything
+        global_recent = self.mem.load_recent_global(limit=5)
+        assert len(global_recent) == 2

@@ -248,6 +248,29 @@ def list_facts(workspace: Optional[str] = None) -> list[dict]:
     return results
 
 
+def list_all_facts() -> list[dict]:
+    """Return ALL facts across global + every workspace, sorted by importance → recency.
+
+    This makes memory work globally regardless of which directory the agent
+    is currently running in. Updates last_accessed and access_count on read.
+    """
+    memory = load_memory()
+    results: list[dict] = []
+
+    for f in memory.get("global_facts", []):
+        _touch(f)
+        results.append(f)
+
+    for ws_path, facts in memory.get("workspace_facts", {}).items():
+        for f in facts:
+            _touch(f)
+            results.append(f)
+
+    results.sort(key=_sort_key, reverse=True)
+    _save(memory)
+    return results
+
+
 def set_importance(content: str, important: bool,
                    workspace: Optional[str] = None) -> bool:
     """Mark or unmark a fact as important. Returns True if found."""
@@ -281,17 +304,22 @@ def clear_memory(workspace: Optional[str] = None):
 # ── System prompt formatting ────────────────────────────────────────────
 
 
-def format_memory_block(workspace: Optional[str] = None) -> str:
+def format_memory_block(workspace: Optional[str] = None, include_all: bool = True) -> str:
     """Format memory facts as a system prompt block.
 
-    Returns empty string if no facts exist. Only includes facts
-    accessed in the last 90 days to avoid stale clutter.
+    By default (include_all=True) includes ALL facts across every workspace
+    so memory works globally no matter which directory the agent is in.
+    Set include_all=False to scope to just the current workspace + global.
     """
-    facts = list_facts(workspace)
+    if include_all:
+        facts = list_all_facts()
+    else:
+        facts = list_facts(workspace)
+
     if not facts:
         return ""
 
-    lines = ["## Learned Preferences"]
+    lines = ["## Learned Preferences (Global Memory)"]
     shown = 0
     for f in facts:
         content = _fact_content(f)

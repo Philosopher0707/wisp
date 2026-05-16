@@ -218,10 +218,7 @@ class WispAgentCore:
         self.lsp = LSPManager(self.config.workspace or ".")
         from wisp.agent_memory import AgentMemory
         self.agent_memory = AgentMemory()
-        self._recent_summaries = self.agent_memory.load_recent(
-            workspace=self.config.workspace or ".",
-            limit=7,
-        )
+        self._recent_summaries = self.agent_memory.load_recent_global(limit=7)
         from wisp.file_lock import FileLock
         from wisp.change_tracker import ChangeTracker
         self.file_lock = FileLock(self.config.workspace or ".", self.agent_id)

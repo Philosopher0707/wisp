@@ -114,6 +114,15 @@ class AgentMemory:
 
         return summaries[:limit]
 
+    def load_recent_global(self, limit: int = 7) -> list[SessionSummary]:
+        """Load recent summaries across ALL workspaces.
+
+        Returns newest first (reverse chronological) regardless of directory.
+        """
+        summaries = self.load_all()
+        summaries.sort(key=lambda s: s.timestamp, reverse=True)
+        return summaries[:limit]
+
     def clear(self) -> None:
         """Delete all summaries."""
         if SESSIONS_FILE.exists():

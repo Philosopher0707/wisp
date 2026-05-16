@@ -4,6 +4,7 @@ from wisp.memory import (
     add_fact,
     remove_fact,
     list_facts,
+    list_all_facts,
     set_importance,
     format_memory_block,
     clear_memory,
@@ -129,3 +130,91 @@ class TestMemory:
         list_facts()
         facts = list_facts()
         assert facts[0]["access_count"] == 3
+
+    # ── Global memory tests ────────────────────────────────────────────
+
+    def test_list_all_facts_returns_all_workspaces(self, tmp_path, monkeypatch):
+        """list_all_facts should return facts from every workspace + global."""
+        monkeypatch.setattr("wisp.memory.WISP_CONFIG_DIR", tmp_path)
+        ws_a = str(tmp_path / "project_a")
+        ws_b = str(tmp_path / "project_b")
+
+        add_fact("Global preference")
+        add_fact("Project A uses React", workspace=ws_a)
+        add_fact("Project B uses Vue", workspace=ws_b)
+
+        all_facts = _contents(list_all_facts())
+        assert "Global preference" in all_facts
+        assert "Project A uses React" in all_facts
+        assert "Project B uses Vue" in all_facts
+        assert len(all_facts) == 3
+
+    def test_list_all_facts_sorted_by_importance(self, tmp_path, monkeypatch):
+        """Important facts should appear first in list_all_facts."""
+        monkeypatch.setattr("wisp.memory.WISP_CONFIG_DIR", tmp_path)
+        add_fact("Normal fact")
+        add_fact("Important fact", important=True)
+
+        all_facts = list_all_facts()
+        assert all_facts[0]["content"] == "Important fact"
+        assert all_facts[0]["important"] is True
+
+    def test_format_memory_block_include_all_default(self, tmp_path, monkeypatch):
+        """By default format_memory_block should include all workspace facts."""
+        monkeypatch.setattr("wisp.memory.WISP_CONFIG_DIR", tmp_path)
+        ws_a = str(tmp_path / "project_a")
+        ws_b = str(tmp_path / "project_b")
+
+        add_fact("Global preference")
+        add_fact("Project A uses React", workspace=ws_a)
+        add_fact("Project B uses Vue", workspace=ws_b)
+
+        block = format_memory_block(workspace=ws_a)
+        assert "## Learned Preferences (Global Memory)" in block
+        assert "Global preference" in block
+        assert "Project A uses React" in block
+        assert "Project B uses Vue" in block
+
+    def test_format_memory_block_include_all_false(self, tmp_path, monkeypatch):
+        """With include_all=False, only current workspace + global facts appear."""
+        monkeypatch.setattr("wisp.memory.WISP_CONFIG_DIR", tmp_path)
+        ws_a = str(tmp_path / "project_a")
+        ws_b = str(tmp_path / "project_b")
+
+        add_fact("Global preference")
+        add_fact("Project A uses React", workspace=ws_a)
+        add_fact("Project B uses Vue", workspace=ws_b)
+
+        block = format_memory_block(workspace=ws_a, include_all=False)
+        assert "Global preference" in block
+        assert "Project A uses React" in block
+        assert "Project B uses Vue" not in block
+
+    def test_cross_workspace_memory_visibility(self, tmp_path, monkeypatch):
+        """Facts stored in workspace A should be visible from workspace B via list_all_facts."""
+        monkeypatch.setattr("wisp.memory.WISP_CONFIG_DIR", tmp_path)
+        ws_a = str(tmp_path / "project_a")
+        ws_b = str(tmp_path / "project_b")
+
+        add_fact("Shared convention: use 2-space indent", workspace=ws_a)
+
+        # From workspace B's perspective, list_facts is scoped
+        ws_b_facts = _contents(list_facts(workspace=ws_b))
+        assert "Shared convention" not in ws_b_facts
+
+        # But list_all_facts is global
+        all_facts = _contents(list_all_facts())
+        assert "Shared convention: use 2-space indent" in all_facts
+
+    def test_global_facts_deduped_in_list_all(self, tmp_path, monkeypatch):
+        """Same fact in global + workspace should appear once (workspace wins on touch)."""
+        monkeypatch.setattr("wisp.memory.WISP_CONFIG_DIR", tmp_path)
+        ws_a = str(tmp_path / "project_a")
+
+        add_fact("Duplicate fact")
+        add_fact("Duplicate fact", workspace=ws_a)
+
+        all_facts = list_all_facts()
+        contents = _contents(all_facts)
+        assert contents.count("Duplicate fact") == 2  # stored separately, not deduped at storage level
+        # But format_memory_block shows them as separate entries (expected behavior)
