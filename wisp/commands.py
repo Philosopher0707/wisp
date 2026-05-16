@@ -536,7 +536,6 @@ def cmd_spawn(agent, args: str):
     print(result.output)
 
 
-@register("swarm", "Launch a multi-agent swarm for a complex task", aliases=("multi",), usage="/swarm <task description>")
 def _swarm_progress(event) -> None:
     """Print swarm progress updates to the terminal."""
     from wisp.multi_agent.task import EventKind
@@ -555,6 +554,7 @@ def _swarm_progress(event) -> None:
         print(warning(f"   🔄 {event.task_id} retry #{p.get('retry', 0)} (backoff {p.get('backoff_seconds', 0)}s)"))
 
 
+@register("swarm", "Launch a multi-agent swarm for a complex task", aliases=("multi",), usage="/swarm <task description>")
 def cmd_swarm(agent, args: str):
     if not args:
         print(info("Usage: /swarm <task description>"))
