@@ -196,6 +196,9 @@ class SubagentResult:
     output_tokens: int = 0
     """Output tokens consumed."""
 
+    model_used: str = ""
+    """Model identifier used for this task."""
+
     # ── Structured output ──
     validated_output: Optional[Any] = None
     """Parsed JSON object if output_schema was provided and validation succeeded."""

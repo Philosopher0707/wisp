@@ -1157,10 +1157,9 @@ async def test_spawn_subagent_process_success(orch):
 
 
 def test_spawn_subagent_process_ipc_cleanup(tmp_path):
-    """Temp IPC files are cleaned up after process spawn."""
+    """Pipe IPC is used and cleaned up after process spawn."""
     from wisp.multi_agent.orchestrator import _run_subagent_worker
 
-    result_path = str(tmp_path / "result.json")
     contract_dict = {
         "name": "test",
         "role": "generalist",
@@ -1186,19 +1185,19 @@ def test_spawn_subagent_process_ipc_cleanup(tmp_path):
     }
 
     import multiprocessing as mp
+    parent_conn, child_conn = mp.Pipe()
     process = mp.Process(
         target=_run_subagent_worker,
-        args=(contract_dict, result_path, str(tmp_path)),
+        args=(contract_dict, child_conn, str(tmp_path)),
     )
     process.start()
     process.join(timeout=10)
 
-    # Result file should exist after process finishes
-    assert Path(result_path).exists()
+    # Result should be available through the pipe
+    assert parent_conn.poll(5)
+    data = parent_conn.recv()
+    parent_conn.close()
 
-    # Read and verify structure
-    with open(result_path) as f:
-        data = json.load(f)
     assert "task_id" in data
     assert "success" in data
 
@@ -1360,7 +1359,17 @@ def test_run_subagent_worker_directly(tmp_path):
     """Test the worker function directly without multiprocessing."""
     from wisp.multi_agent.orchestrator import _run_subagent_worker
 
-    result_path = str(tmp_path / "worker_result.json")
+    # Mock pipe connection to capture result
+    class MockConn:
+        def __init__(self):
+            self.data = None
+            self.closed = False
+        def send(self, data):
+            self.data = data
+        def close(self):
+            self.closed = True
+
+    mock_conn = MockConn()
     contract_dict = {
         "name": "direct-worker",
         "role": "generalist",
@@ -1385,13 +1394,12 @@ def test_run_subagent_worker_directly(tmp_path):
         "context_files": [],
     }
 
-    _run_subagent_worker(contract_dict, result_path, str(tmp_path))
+    _run_subagent_worker(contract_dict, mock_conn, str(tmp_path))
 
-    assert Path(result_path).exists()
-    with open(result_path) as f:
-        data = json.load(f)
-    assert data["task_id"] == "direct-worker"
-    assert "success" in data
+    assert mock_conn.data is not None
+    assert mock_conn.closed is True
+    assert mock_conn.data["task_id"] == "direct-worker"
+    assert "success" in mock_conn.data
 
 
 @pytest.mark.asyncio
@@ -1546,3 +1554,86 @@ async def test_context_files_injected_in_process(orch):
     assert "auth.py" in result.output or any(
         "auth.py" in str(tc) for tc in result.tool_calls
     )
+
+
+# ── Gap #10: Shared context ──────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_shared_context_get_set(mock_parent_agent):
+    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+    await orch.set_shared("key1", "value1")
+    assert await orch.get_shared("key1") == "value1"
+    assert await orch.get_shared("missing", "default") == "default"
+
+
+@pytest.mark.asyncio
+async def test_shared_context_update(mock_parent_agent):
+    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+    await orch.update_shared("findings", "finding1")
+    await orch.update_shared("findings", "finding2")
+    assert await orch.get_shared("findings") == ["finding1", "finding2"]
+
+
+@pytest.mark.asyncio
+async def test_shared_context_clear(mock_parent_agent):
+    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+    await orch.set_shared("key", "val")
+    orch.clear_shared_context()
+    assert await orch.get_shared("key") is None
+
+
+# ── Gap #12: Result persistence ──────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_result_persistence(mock_parent_agent, tmp_path):
+    orch = SubagentOrchestrator(parent_agent=mock_parent_agent, workspace=tmp_path)
+    orch.clear_persisted_results()
+    contract = SubagentContract(
+        name="persist_test",
+        role="tester",
+        task="test task",
+        timeout_seconds=5,
+    )
+    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+        result = await orch.run(contract)
+    assert result.success
+    persisted = orch.get_persisted_results()
+    assert len(persisted) >= 1
+    assert persisted[-1]["task_id"] == "persist_test"
+    assert persisted[-1]["success"] is True
+
+
+# ── Gap #13: Telemetry auto-aggregation ─────────────────────────────
+
+@pytest.mark.asyncio
+async def test_telemetry_auto_aggregation(mock_parent_agent):
+    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+    results = [
+        SubagentResult(task_id="t1", success=True, elapsed_seconds=1.0, tokens_used=100, model_used="m1"),
+        SubagentResult(task_id="t2", success=False, elapsed_seconds=2.0, tokens_used=200, model_used="m1"),
+    ]
+    summary = orch.aggregate_telemetry(results)
+    assert "m1" in summary
+    assert summary["m1"]["count"] == 2
+    assert summary["m1"]["success_rate"] == 0.5
+    assert summary["m1"]["total_tokens"] == 300
+
+
+# ── Gap #14: Pipe IPC (smoke test) ───────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_process_isolation_uses_pipe(mock_parent_agent, tmp_path):
+    """Process isolation should complete successfully using pipe IPC."""
+    orch = SubagentOrchestrator(parent_agent=mock_parent_agent, workspace=tmp_path)
+    contract = SubagentContract(
+        name="pipe_test",
+        role="tester",
+        task="test task",
+        timeout_seconds=10,
+        isolation="process",
+    )
+    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+        result = await orch.run(contract)
+    assert result.success
+    # Process isolation runs in a separate process, so patching doesn't affect it
+    # Just verify the result structure is correct

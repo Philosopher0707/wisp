@@ -791,11 +791,11 @@ Respond in JSON with a "plan" string and a "subtasks" array.
 
 # ── Process-based subagent worker ────────────────────────────────────
 
-def _run_subagent_worker(contract_dict: dict, result_path: str, parent_workspace: str):
+def _run_subagent_worker(contract_dict: dict, conn, parent_workspace: str):
     """Standalone worker that runs in a separate process.
 
     Reconstructs a minimal orchestrator from the serialized contract dict,
-    runs the subagent, and writes the result to ``result_path`` as JSON.
+    runs the subagent, and sends the result through the pipe ``conn``.
     """
     import asyncio
     import time as _time
@@ -830,20 +830,20 @@ def _run_subagent_worker(contract_dict: dict, result_path: str, parent_workspace
             error=f"Subagent depth {contract._subagent_depth} exceeds max {MAX_SUBAGENT_DEPTH}",
             elapsed_seconds=duration,
         )
-        with open(result_path, "w", encoding="utf-8") as f:
-            json.dump({
-                "task_id": result.task_id,
-                "success": result.success,
-                "output": result.output,
-                "error": result.error,
-                "files_changed": result.files_changed,
-                "elapsed_seconds": result.elapsed_seconds,
-                "iterations_used": result.iterations_used,
-                "retry_count": result.retry_count,
-                "timed_out": result.timed_out,
-                "hit_iteration_limit": result.hit_iteration_limit,
-                "tokens_used": result.tokens_used,
-            }, f, indent=2)
+        conn.send({
+            "task_id": result.task_id,
+            "success": result.success,
+            "output": result.output,
+            "error": result.error,
+            "files_changed": result.files_changed,
+            "elapsed_seconds": result.elapsed_seconds,
+            "iterations_used": result.iterations_used,
+            "retry_count": result.retry_count,
+            "timed_out": result.timed_out,
+            "hit_iteration_limit": result.hit_iteration_limit,
+            "tokens_used": result.tokens_used,
+        })
+        conn.close()
         return
 
     # The worker already runs inside a dedicated process, so nested
@@ -880,21 +880,29 @@ def _run_subagent_worker(contract_dict: dict, result_path: str, parent_workspace
     finally:
         loop.close()
 
-    # Serialize result to file for IPC
-    with open(result_path, "w", encoding="utf-8") as f:
-        json.dump({
-            "task_id": result.task_id,
-            "success": result.success,
-            "output": result.output,
-            "error": result.error,
-            "files_changed": result.files_changed,
-            "elapsed_seconds": result.elapsed_seconds,
-            "iterations_used": result.iterations_used,
-            "retry_count": result.retry_count,
-            "timed_out": result.timed_out,
-            "hit_iteration_limit": result.hit_iteration_limit,
-            "tokens_used": result.tokens_used,
-        }, f, indent=2)
+    # Serialize result and send through pipe
+    data = {
+        "task_id": result.task_id,
+        "success": result.success,
+        "output": result.output,
+        "error": result.error,
+        "files_changed": result.files_changed,
+        "elapsed_seconds": result.elapsed_seconds,
+        "iterations_used": result.iterations_used,
+        "retry_count": result.retry_count,
+        "timed_out": result.timed_out,
+        "hit_iteration_limit": result.hit_iteration_limit,
+        "tokens_used": result.tokens_used,
+    }
+    # For very large outputs, fall back to temp file
+    try:
+        conn.send(data)
+    except Exception:
+        # Pipe overflow — fall back to temp file
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(data, f)
+            conn.send({"__fallback_path": f.name})
+    conn.close()
 
 
 # ── SubagentOrchestrator (unified subagent API) ──────────────────────
@@ -992,6 +1000,9 @@ class SubagentOrchestrator:
         self._worktrees_root = self.workspace / ".wisp" / "worktrees"
         self._session_mgr = SessionManager()
         self._shutdown = False
+        # ── Result persistence ───────────────────────────────────────────
+        self._persist_path = self.workspace / ".wisp" / "subagent_results.jsonl"
+        """Path to JSONL file for persisting subagent results."""
         # ── Token budget tracking ──────────────────────────────────────
         self._tokens_consumed: int = 0
         self._global_token_budget: Optional[int] = None
@@ -1004,6 +1015,10 @@ class SubagentOrchestrator:
         """Cache: key → (result, timestamp). TTL = 60s text, 300s structured."""
         self._cache_hits = 0
         self._cache_misses = 0
+        # ── Shared context for inter-subagent communication ────────────────
+        self._shared_context: dict[str, Any] = {}
+        """Shared key-value store for parallel subagents to coordinate."""
+        self._shared_context_lock = asyncio.Lock()
 
     # ── Token budget API ───────────────────────────────────────────────
 
@@ -1086,6 +1101,82 @@ class SubagentOrchestrator:
         self._result_cache.clear()
         self._cache_hits = 0
         self._cache_misses = 0
+
+    # ── Shared context API ─────────────────────────────────────────────
+
+    async def get_shared(self, key: str, default: Any = None) -> Any:
+        """Get a value from the shared context store."""
+        async with self._shared_context_lock:
+            return self._shared_context.get(key, default)
+
+    async def set_shared(self, key: str, value: Any) -> None:
+        """Set a value in the shared context store."""
+        async with self._shared_context_lock:
+            self._shared_context[key] = value
+
+    async def update_shared(self, key: str, value: Any) -> None:
+        """Update a value in the shared context store (append to list or set)."""
+        async with self._shared_context_lock:
+            if key not in self._shared_context:
+                self._shared_context[key] = []
+            if isinstance(self._shared_context[key], list):
+                self._shared_context[key].append(value)
+            else:
+                self._shared_context[key] = value
+
+    def get_shared_context(self) -> dict[str, Any]:
+        """Return a snapshot of the shared context."""
+        return dict(self._shared_context)
+
+    def clear_shared_context(self) -> None:
+        """Clear all shared context."""
+        self._shared_context.clear()
+
+    def _persist_result(self, contract: SubagentContract, result: SubagentResult) -> None:
+        """Persist a subagent result to the JSONL log."""
+        try:
+            self._persist_path.parent.mkdir(parents=True, exist_ok=True)
+            record = {
+                "timestamp": time.time(),
+                "task_id": result.task_id,
+                "role": contract.role,
+                "task": contract.task[:200],
+                "success": result.success,
+                "elapsed_seconds": result.elapsed_seconds,
+                "tokens_used": result.tokens_used,
+                "iterations_used": result.iterations_used,
+                "timed_out": result.timed_out,
+                "error": result.error,
+                "output_preview": result.output[:500] if result.output else "",
+            }
+            with open(self._persist_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record) + "\n")
+        except Exception as exc:
+            logger.debug("Failed to persist subagent result: %s", exc)
+
+    def get_persisted_results(self, limit: int = 100) -> list[dict]:
+        """Read persisted results from the JSONL log."""
+        results = []
+        try:
+            if not self._persist_path.exists():
+                return results
+            with open(self._persist_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        results.append(json.loads(line))
+            return results[-limit:]
+        except Exception as exc:
+            logger.warning("Failed to read persisted results: %s", exc)
+            return results
+
+    def clear_persisted_results(self) -> None:
+        """Clear the persisted results log."""
+        try:
+            if self._persist_path.exists():
+                self._persist_path.unlink()
+        except OSError as exc:
+            logger.warning("Failed to clear persisted results: %s", exc)
 
     def _estimate_tokens(self, messages: list[dict]) -> tuple[int, int, int]:
         """Estimate token count from message history.
@@ -1222,6 +1313,8 @@ class SubagentOrchestrator:
                 result = await self._spawn_subagent_thread(contract, start, agent_workspace, child_cfg, session, system, tool_calls_log)
             # Store successful/failed results in cache
             self._store_cache(contract, result)
+            # Persist result for audit trail
+            self._persist_result(contract, result)
             return result
         finally:
             # ── Cleanup worktree (unless debugging) ──────────────────
@@ -1246,6 +1339,9 @@ class SubagentOrchestrator:
         tool_calls_log: list[dict],
     ) -> SubagentResult:
         """Thread-based subagent execution (default, fast)."""
+        # Create heartbeat file for hung-thread detection
+        heartbeat_path = Path(tempfile.gettempdir()) / f"wisp_heartbeat_{contract.name}_{uuid.uuid4().hex[:8]}.txt"
+
         # Start heartbeat task for progress streaming
         heartbeat_task: asyncio.Task | None = None
         _done = [False]
@@ -1264,8 +1360,27 @@ class SubagentOrchestrator:
                         {"elapsed": elapsed, "status": "running"},
                     )
 
+        async def _health_monitor():
+            """Monitor heartbeat file for hung thread detection."""
+            while not _done[0]:
+                await asyncio.sleep(10)
+                if _done[0]:
+                    break
+                try:
+                    if heartbeat_path.exists():
+                        mtime = heartbeat_path.stat().st_mtime
+                        age = time.time() - mtime
+                        if age > 15:
+                            logger.warning(
+                                "Subagent %s heartbeat stale (%.0fs) — may be hung",
+                                contract.name, age,
+                            )
+                except OSError:
+                    pass
+
         if contract.progress_callback:
             heartbeat_task = asyncio.create_task(_heartbeat())
+        health_task = asyncio.create_task(_health_monitor())
 
         try:
             result = await asyncio.wait_for(
@@ -1277,6 +1392,7 @@ class SubagentOrchestrator:
                     system,
                     agent_workspace,
                     tool_calls_log,
+                    str(heartbeat_path),
                 ),
                 timeout=contract.timeout_seconds,
             )
@@ -1412,6 +1528,16 @@ class SubagentOrchestrator:
                     await heartbeat_task
                 except asyncio.CancelledError:
                     pass
+            health_task.cancel()
+            try:
+                await health_task
+            except asyncio.CancelledError:
+                pass
+            # Cleanup heartbeat file
+            try:
+                heartbeat_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     async def _spawn_subagent_process(
         self,
@@ -1424,9 +1550,8 @@ class SubagentOrchestrator:
         process is SIGTERM'd (and SIGKILL'd if necessary).  On crash the
         parent survives and reports the failure immediately.
         """
-        # Create temp file for IPC
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            result_path = f.name
+        # Create multiprocessing pipe for IPC
+        parent_conn, child_conn = mp.Pipe()
 
         # Serialize contract for the child process
         contract_dict = {
@@ -1457,7 +1582,7 @@ class SubagentOrchestrator:
 
         process = mp.Process(
             target=_run_subagent_worker,
-            args=(contract_dict, result_path, str(self.workspace)),
+            args=(contract_dict, child_conn, str(self.workspace)),
         )
 
         # Start heartbeat for progress streaming
@@ -1517,11 +1642,25 @@ class SubagentOrchestrator:
                     timed_out=True,
                 )
 
-            # Process finished — read result
+            # Process finished — read result from pipe
             try:
-                with open(result_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            except (json.JSONDecodeError, OSError) as exc:
+                if parent_conn.poll(5):
+                    data = parent_conn.recv()
+                    parent_conn.close()
+                    # Handle fallback to temp file for large outputs
+                    if isinstance(data, dict) and "__fallback_path" in data:
+                        fallback_path = data["__fallback_path"]
+                        with open(fallback_path, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                        try:
+                            os.unlink(fallback_path)
+                        except OSError:
+                            pass
+                else:
+                    parent_conn.close()
+                    raise TimeoutError("No data received from subagent process")
+            except Exception as exc:
+                parent_conn.close()
                 duration = time.monotonic() - start
                 logger.error(
                     "Failed to read subagent %s process result: %s",
@@ -1603,9 +1742,9 @@ class SubagentOrchestrator:
                     await heartbeat_task
                 except asyncio.CancelledError:
                     pass
-            # Cleanup temp file
+            # Close pipe connection
             try:
-                Path(result_path).unlink(missing_ok=True)
+                parent_conn.close()
             except OSError:
                 pass
 
@@ -1675,6 +1814,8 @@ class SubagentOrchestrator:
             sum(1 for r in resolved if r.success),
             len(resolved),
         )
+        # Auto-aggregate telemetry from this batch
+        self.aggregate_telemetry(resolved)
         return resolved
 
     def _adaptive_max_concurrent(self, requested: int, queue_size: int) -> int:
@@ -1735,6 +1876,21 @@ class SubagentOrchestrator:
                 "total_tokens": sum(tokens),
             }
         return summary
+
+    def aggregate_telemetry(self, results: list[SubagentResult]) -> dict[str, dict]:
+        """Auto-aggregate telemetry from a batch of subagent results.
+
+        Updates internal telemetry store and returns a summary.
+        """
+        for result in results:
+            if result.model_used:
+                self._telemetry.setdefault(result.model_used, []).append({
+                    "elapsed_seconds": result.elapsed_seconds,
+                    "success": result.success,
+                    "tokens_used": result.tokens_used,
+                    "timestamp": time.time(),
+                })
+        return self.get_telemetry_summary()
 
     # ── Composable patterns ────────────────────────────────────────────
 
@@ -2143,6 +2299,7 @@ class SubagentOrchestrator:
         system_prompt: str,
         workspace_path: str,
         tool_calls_log: list[dict],
+        heartbeat_path: str = "",
     ) -> dict:
         """Synchronous wrapper that runs the async _run_agent in a fresh event loop.
 
@@ -2153,7 +2310,7 @@ class SubagentOrchestrator:
         loop = asyncio.new_event_loop()
         try:
             return loop.run_until_complete(
-                self._run_agent(contract, config, session, system_prompt, workspace_path, tool_calls_log)
+                self._run_agent(contract, config, session, system_prompt, workspace_path, tool_calls_log, heartbeat_path)
             )
         finally:
             loop.close()
@@ -2166,6 +2323,7 @@ class SubagentOrchestrator:
         system_prompt: str,
         workspace_path: str,
         tool_calls_log: list[dict],
+        heartbeat_path: str = "",
     ) -> dict:
         """Run a WispAgentCore instance and return its result dict.
 
@@ -2189,6 +2347,13 @@ class SubagentOrchestrator:
             if contract.tools != ["all"]:
                 agent._allowed_tools = set(contract.tools)
 
+            # ── Touch heartbeat file before running ─────────────────────
+            if heartbeat_path:
+                try:
+                    Path(heartbeat_path).write_text(str(time.time()))
+                except OSError:
+                    pass
+
             # ── Run the task non-interactively ────────────────────────────
             max_iter = contract.max_iterations
             timeout_per_task = contract.timeout_seconds
@@ -2200,6 +2365,13 @@ class SubagentOrchestrator:
                 timeout_seconds=timeout_per_task,
                 system_prompt=system_prompt,
             )
+
+            # ── Touch heartbeat file after completion ───────────────────
+            if heartbeat_path:
+                try:
+                    Path(heartbeat_path).write_text(str(time.time()))
+                except OSError:
+                    pass
 
             # Collect tool call summaries from the agent's message history
             for msg in agent.messages:
