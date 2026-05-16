@@ -803,6 +803,13 @@ class WispAgentCore:
             for event in research_results:
                 yield event
 
+        # ── Auto-delegation for capability mismatch ────────────────────
+        if getattr(self.config, "auto_delegate", True):
+            delegation = await self._check_delegation(prompt)
+            if delegation:
+                for event in delegation:
+                    yield event
+
         # Steering checkpoint 1: after compact, before iteration loop
         inject = await self._check_steering()
         if inject is not None:
@@ -1327,10 +1334,32 @@ class WispAgentCore:
         orch = SubagentOrchestrator(parent_agent=self)
         max_retries = int(args.get("auto_retry", True)) * 2  # 0 or 2 retries
         last_error = ""
+        result = None
         for attempt in range(max_retries + 1):
             try:
                 result = await orch.run(contract)
                 if result.success:
+                    # ── Schema validation ──────────────────────────────
+                    if contract.output_schema:
+                        from wisp.multi_agent.schema_validator import validate_subagent_output
+                        is_valid, validated_data, errors = validate_subagent_output(
+                            result.output, contract.output_schema, auto_retry=True
+                        )
+                        if is_valid and validated_data is not None:
+                            result.validated_output = validated_data
+                            logger.info("Subagent %s output validated against schema", contract.name)
+                        else:
+                            logger.warning("Subagent %s output failed schema validation: %s",
+                                          contract.name, "; ".join(errors))
+                            if contract.auto_retry_parse and attempt < max_retries:
+                                from wisp.multi_agent.schema_validator import build_retry_prompt
+                                contract.task = build_retry_prompt(
+                                    contract.task, contract.output_schema, result.output, errors
+                                )
+                                contract.retry_count = getattr(contract, 'retry_count', 0) + 1
+                                logger.info("Retrying subagent %s with schema feedback", contract.name)
+                                last_error = f"Schema validation failed: {'; '.join(errors)}"
+                                continue
                     break
                 last_error = result.error or "subagent failed"
                 # Don't retry on timeout — it's a waste of time and tokens
@@ -1356,10 +1385,14 @@ class WispAgentCore:
             # All retries exhausted
             return f"[Error: subagent failed after {max_retries + 1} attempts: {last_error}]"
 
+        if result is None:
+            return f"[Error: subagent failed after {max_retries + 1} attempts: {last_error}]"
+
         # ── Return output (with size guard) ────────────────────────────
         output = result.output
         if len(output) > 12000:
             output = output[:12000] + f"\n... [truncated: {len(result.output)} total chars]"
+
         # ── Store in cache ─────────────────────────────────────────────
         if result.success and len(output) < 50000:
             cache[cache_key] = {"ts": time.monotonic(), "output": output}
@@ -1510,6 +1543,80 @@ class WispAgentCore:
             f"Research practical implementations and tools: {prompt}",
             f"Research limitations, challenges, and future directions: {prompt}",
         ]
+
+    async def _check_delegation(self, prompt: str) -> list:
+        """Check if the task should be auto-delegated to subagents.
+
+        Uses DelegationAnalyzer to detect capability mismatch and
+        automatically spawns appropriate subagents.
+        """
+        from wisp.multi_agent import get_delegation_analyzer, SubagentContract
+        from wisp.core.events import content as content_event
+
+        analyzer = get_delegation_analyzer()
+        signal = analyzer.analyze(prompt, current_iteration=0,
+                                  max_iterations=self.max_iterations)
+
+        if not signal.should_delegate:
+            return []
+
+        logger.info("Auto-delegation triggered: %s (confidence=%.2f)",
+                    signal.reason, signal.confidence)
+
+        events = []
+        events.append(content_event(
+            f"🔄 Auto-delegating: {signal.reason} (confidence: {signal.confidence:.0%})\n"
+        ))
+
+        # Build contracts from suggestions
+        contracts = []
+        for spec in signal.suggested_contracts:
+            contracts.append(SubagentContract(
+                name=spec.get("name", "subagent"),
+                task=spec.get("task", ""),
+                role=spec.get("role", "generalist"),
+                timeout_seconds=spec.get("timeout_seconds", 60),
+                max_iterations=spec.get("max_iterations", 5),
+                isolation="process",
+                output_format="markdown",
+                workspace=self.config.workspace,
+                auto_approve=self.config.auto_approve,
+            ))
+
+        if not contracts:
+            return []
+
+        events.append(content_event(f"  Spawning {len(contracts)} subagent(s)...\n"))
+
+        # Use context partitioning to pass only relevant context
+        from wisp.multi_agent import partition_context
+        for contract in contracts:
+            contract.context_files = partition_context(
+                self.messages, contract.task, max_messages=5
+            )
+
+        results = await self.spawn_subagents(contracts)
+
+        # Build synthesized context
+        synthesis = "\n## Delegated Task Results\n\n"
+        for r in results:
+            if r.success:
+                synthesis += f"### {r.task_id}\n{r.output[:1500]}\n\n"
+            elif r.timed_out:
+                synthesis += f"### {r.task_id}\n[Timed out after {r.elapsed_seconds:.0f}s]\n\n"
+            else:
+                synthesis += f"### {r.task_id}\n[Error: {r.error or 'unknown'}]\n\n"
+
+        # Inject as system context
+        self.messages.append({
+            "role": "system",
+            "content": f"[Auto-delegation completed]\n{synthesis}",
+        })
+
+        events.append(content_event(
+            f"  ✓ Delegation complete ({len([r for r in results if r.success])}/{len(results)} succeeded)\n"
+        ))
+        return events
 
     def _subagent_cache_key(self, contract: SubagentContract) -> str:
         """Build a cache key from contract fields that affect output."""
