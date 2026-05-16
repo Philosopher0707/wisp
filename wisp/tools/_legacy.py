@@ -774,11 +774,11 @@ def tool_search_symbols(query: str, workspace: str = ".", max_results: int = 20)
     return "\n".join(lines)
 
 
-def tool_remember(fact: str, workspace: str = ".") -> str:
+def tool_remember(fact: str, workspace: Optional[str] = None) -> str:
     """Store a fact in cross-session memory.
 
-    The fact will be remembered across conversations and injected into
-    the system prompt in future sessions.
+    The fact will be remembered across ALL conversations and injected into
+    the system prompt in future sessions regardless of which directory you are in.
     """
     _validate_string(fact, "fact", 500)
 
@@ -791,18 +791,18 @@ def tool_remember(fact: str, workspace: str = ".") -> str:
         return f"(Already remembered: {fact})"
 
 
-def tool_recall(query: str, workspace: str = ".", limit: int = 10) -> str:
+def tool_recall(query: str, workspace: Optional[str] = None, limit: int = 10) -> str:
     """Search cross-session memory and past session summaries for relevant facts.
 
     Use this when you need to actively recall something you may have learned
     in previous conversations, rather than relying only on what's in the
-    current context window.
+    current context window. Searches across ALL workspaces and ALL past sessions.
     """
     _validate_string(query, "query", 200)
     if limit < 1 or limit > 50:
         limit = 10
 
-    from wisp.memory import list_facts, load_memory
+    from wisp.memory import list_all_facts
     from wisp.agent_memory import AgentMemory
     from wisp.summarizer import SessionSummary
 
@@ -811,18 +811,20 @@ def tool_recall(query: str, workspace: str = ".", limit: int = 10) -> str:
 
     results: list[tuple[float, str]] = []
 
-    # ── Search memory facts ──
-    facts = list_facts(workspace)
-    for fact in facts:
+    # ── Search ALL memory facts across every workspace ──
+    all_facts = list_all_facts()
+    for fact in all_facts:
         content = fact["content"] if isinstance(fact, dict) else fact
         score = _relevance_score(content, query_lower, query_words)
         if score > 0:
             results.append((score, f"[Memory] {content}"))
 
-    # ── Search session summaries ──
+    # ── Search ALL session summaries across every workspace ──
     agent_mem = AgentMemory()
-    summaries = agent_mem.load_recent(workspace=workspace, limit=20)
-    for summary in summaries:
+    all_summaries = agent_mem.load_all()
+    # Sort newest first so recent sessions rank higher
+    all_summaries.sort(key=lambda s: s.timestamp, reverse=True)
+    for summary in all_summaries[:50]:  # cap to avoid overload
         texts = [
             (summary.summary, 1.0),
             (" ".join(summary.key_decisions), 1.5),
@@ -837,16 +839,6 @@ def tool_recall(query: str, workspace: str = ".", limit: int = 10) -> str:
                 if score >= 2.0:
                     score *= field_boost
                     results.append((score, f"[Session {summary.session_id[:20]}] {text[:200]}"))
-
-    # ── Search global memory (if workspace-specific didn't find much) ──
-    if len(results) < 3:
-        global_facts = list_facts(None)
-        for fact in global_facts:
-            content = fact["content"] if isinstance(fact, dict) else fact
-            if fact not in facts:  # avoid duplicates
-                score = _relevance_score(content, query_lower, query_words)
-                if score > 0:
-                    results.append((score, f"[Global] {content}"))
 
     if not results:
         return "No relevant memories found for this query."
