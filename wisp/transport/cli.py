@@ -1137,6 +1137,9 @@ class CLITransport:
         self._interrupted = False
         try:
             while not self._interrupted:
+                # Push input area up from bottom edge
+                print("\n" * 3)
+
                 # ── Input area: top border ──
                 use_box = self._use_input_box()
                 if use_box:
@@ -1391,8 +1394,6 @@ class CLITransport:
 
     def _print_turn_done(self):
         _print_separator()
-        # Add breathing room before next input
-        print("\n" * 2)
 
 
 def _print_separator():
