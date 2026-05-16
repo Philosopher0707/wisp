@@ -43,10 +43,11 @@ GLOBAL_SKILL_DIRS = [
 class Skill:
     """A parsed Warp-compatible skill from a SKILL.md file."""
 
-    def __init__(self, name: str, description: str, instructions: str, file_path: Path):
+    def __init__(self, name: str, description: str, instructions: str, triggers: list[str], file_path: Path):
         self.name = name
         self.description = description
         self.instructions = instructions
+        self.triggers = triggers  # trigger phrases for auto-detection
         self.file_path = file_path
 
     def __repr__(self):
@@ -93,6 +94,9 @@ def parse_skill(file_path: Path) -> Optional[Skill]:
 
     name = meta.get("name")
     description = meta.get("description", "")
+    triggers = meta.get("triggers", []) or []
+    if isinstance(triggers, str):
+        triggers = [t.strip() for t in triggers.split(",") if t.strip()]
 
     if not name:
         return None
@@ -101,6 +105,7 @@ def parse_skill(file_path: Path) -> Optional[Skill]:
         name=name,
         description=description,
         instructions=instructions,
+        triggers=triggers,
         file_path=file_path,
     )
 
@@ -157,6 +162,52 @@ def find_skill(name: str, workspace: str) -> Optional[Skill]:
         if skill.name == name:
             return skill
     return None
+
+
+def match_skills(query: str, workspace: str, min_score: float = 0.0) -> list[tuple[Skill, float]]:
+    """Match skills against a user query using trigger-based scoring.
+
+    Returns a list of (skill, score) tuples sorted by score (descending).
+    
+    Matching rules:
+    - Name exact or partial match: +3.0
+    - Trigger phrase found in query: +2.0 per phrase
+    - Description keyword overlap: +0.5 per keyword
+    
+    Only skills with score > min_score are returned.
+    """
+    import re
+    skills = discover_skills(workspace)
+    query_lower = query.lower()
+    query_words = set(re.findall(r"[a-zA-Z0-9]{2,}", query_lower))
+    
+    results: list[tuple[Skill, float]] = []
+    for skill in skills:
+        score = 0.0
+        
+        # Name match
+        name_lower = skill.name.lower()
+        if name_lower == query_lower:
+            score += 3.0
+        elif name_lower in query_lower:
+            score += 2.0
+        
+        # Trigger matches
+        for trigger in skill.triggers:
+            trigger_lower = trigger.lower()
+            if trigger_lower in query_lower:
+                score += 2.0
+        
+        # Description keyword overlap
+        desc_words = set(re.findall(r"[a-zA-Z0-9]{2,}", skill.description.lower()))
+        overlap = query_words & desc_words
+        score += len(overlap) * 0.5
+        
+        if score >= min_score:
+            results.append((skill, score))
+    
+    results.sort(key=lambda x: x[1], reverse=True)
+    return results
 
 
 # ── OntoSkills integration ──────────────────────────────────────────

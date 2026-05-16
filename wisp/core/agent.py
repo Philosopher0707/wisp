@@ -523,6 +523,21 @@ class WispAgentCore:
     def _build_system_prompt(self, skill_name: Optional[str] = None, workspace: Optional[str] = None, query: Optional[str] = None) -> str:
         ws = workspace or self.config.workspace or "."
         effective_skill = skill_name or self._active_skill
+
+        # ── Auto-detect skill from user query ──
+        auto_detected_skill_name: Optional[str] = None
+        if not effective_skill and query:
+            from wisp.skills import match_skills
+            matched = match_skills(query, ws, min_score=1.5)
+            if matched:
+                top_skill, score = matched[0]
+                effective_skill = top_skill.name
+                auto_detected_skill_name = top_skill.name
+                logger.info(
+                    "Auto-detected skill '%s' (score=%.1f) for query: %s",
+                    effective_skill, score, query[:80],
+                )
+
         cache_key = (effective_skill, ws, query)
         if not hasattr(self, "_system_prompt_cache"):
             self._system_prompt_cache = {}
@@ -599,7 +614,8 @@ class WispAgentCore:
         if effective_skill:
             skill = next((s for s in skills if s.name == effective_skill), None)
             if skill:
-                system += f"\n\n## Active Skill: {skill.name}\n{skill.description}\n\n{skill.instructions}"
+                auto_label = " (auto-detected)" if 'auto_detected_skill_name' in locals() and auto_detected_skill_name == skill.name else ""
+                system += f"\n\n## Active Skill: {skill.name}{auto_label}\n{skill.description}\n\n{skill.instructions}"
             else:
                 logger.warning("Skill '%s' not found in discovered skills", effective_skill)
 
@@ -661,10 +677,19 @@ class WispAgentCore:
     def _build_skills_block_from_skills(self, skills: list) -> str:
         if not skills:
             return ""
-        lines = ["\n## Available Skills", "You can invoke any of these skills when relevant:"]
+        lines = [
+            "",
+            "## Available Skills",
+            "To activate a skill: mention its name or any trigger phrase in your message.",
+        ]
         for s in skills:
-            lines.append(f"- {s.name}: {s.description}")
-        lines.append("To invoke a skill, mention its name and follow its instructions.")
+            triggers = ", ".join(s.triggers[:4]) if hasattr(s, "triggers") and s.triggers else ""
+            if triggers:
+                lines.append(f"- {s.name} [{triggers}] - {s.description}")
+            else:
+                lines.append(f"- {s.name} - {s.description}")
+        lines.append("")
+        lines.append("To manually activate: use /skill <name>")
         return "\n".join(lines)
 
     def _invalidate_system_prompt_cache(self):
