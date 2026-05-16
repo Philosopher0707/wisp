@@ -416,7 +416,10 @@ Respond in JSON with a "plan" string and a "subtasks" array.
 
         async def emit(event: OrchestratorEvent) -> None:
             if progress_callback:
-                await progress_callback(event)
+                if asyncio.iscoroutinefunction(progress_callback):
+                    await progress_callback(event)
+                else:
+                    progress_callback(event)
 
         # Spawn agents
         agent_ids = self.spawn_agents(roles, count_per_role)
