@@ -611,14 +611,6 @@ class WispAgentCore:
         if active_plan:
             system += f"\n\n{active_plan.format_for_prompt()}"
 
-        if effective_skill:
-            skill = next((s for s in skills if s.name == effective_skill), None)
-            if skill:
-                auto_label = " (auto-detected)" if 'auto_detected_skill_name' in locals() and auto_detected_skill_name == skill.name else ""
-                system += f"\n\n## Active Skill: {skill.name}{auto_label}\n{skill.description}\n\n{skill.instructions}"
-            else:
-                logger.warning("Skill '%s' not found in discovered skills", effective_skill)
-
         if self.config.plan_mode:
             system += (
                 "\n\n## PLAN MODE ACTIVE\n"
@@ -670,6 +662,26 @@ class WispAgentCore:
                     system = context + "\n\n" + system
             except Exception as e:
                 logger.warning("Failed to load context files: %s", e)
+
+        # ── MANDATORY SKILL MODE: absolute final instruction ──
+        # Placed LAST so recency bias gives it highest priority.
+        # This OVERRULES everything above — base prompt, workspace, repo map, etc.
+        if effective_skill:
+            skill = next((s for s in skills if s.name == effective_skill), None)
+            if skill:
+                auto_label = " (auto-detected)" if 'auto_detected_skill_name' in locals() and auto_detected_skill_name == skill.name else ""
+                system += "\n\n"
+                system += "==============================\n"
+                system += f"MANDATORY Mode: {skill.name}{auto_label}\n"
+                system += "==============================\n"
+                system += "\n"
+                system += "These rules override ALL earlier instructions. You MUST follow them.\n"
+                system += "Do NOT ask for confirmation — execute immediately.\n"
+                system += "\n"
+                system += skill.description + "\n\n"
+                system += skill.instructions
+            else:
+                logger.warning("Skill '%s' not found in discovered skills", effective_skill)
 
         self._system_prompt_cache[cache_key] = system
         return system
