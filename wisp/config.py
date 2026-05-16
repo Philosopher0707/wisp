@@ -310,14 +310,14 @@ class WispConfig:
         # Context files
         raw_context_files = get_setting(
             "context_files",
-            ["CLAUDE.md", "AGENTS.md", ".wisp/rules.md", "GEMINI.md"],
+            ["wisp.md", "CLAUDE.md", "AGENTS.md", ".wisp/rules.md", "GEMINI.md"],
         )
         if isinstance(raw_context_files, str):
             self.context_files: list[str] = [f.strip() for f in raw_context_files.split(",") if f.strip()]
         elif isinstance(raw_context_files, list):
             self.context_files = raw_context_files
         else:
-            self.context_files = ["CLAUDE.md", "AGENTS.md", ".wisp/rules.md", "GEMINI.md"]
+            self.context_files = ["wisp.md", "CLAUDE.md", "AGENTS.md", ".wisp/rules.md", "GEMINI.md"]
         self.loaded_context: str = ""
         self._context_mtimes: dict[str, float] = {}
         self._last_workspace_for_context: Optional[str] = None

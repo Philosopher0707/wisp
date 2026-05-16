@@ -349,3 +349,65 @@ def test_cmd_bash_dangerous_pipe_to_shell_noninteractive(agent, capsys, monkeypa
     captured = capsys.readouterr()
     assert "Blocked" in captured.out
     assert "remote code execution" in captured.out
+
+
+# ── /init command tests ──────────────────────────────────────────────
+
+
+def test_cmd_init_creates_wisp_md(agent, tmp_path, capsys):
+    """/init should generate wisp.md in the workspace."""
+    agent.config.workspace = str(tmp_path)
+    commands_module.cmd_init(agent, "")
+    captured = capsys.readouterr()
+    wisp_md = tmp_path / "wisp.md"
+    assert wisp_md.exists(), f"wisp.md not created. Output: {captured.out}"
+    content = wisp_md.read_text()
+    assert "#" in content
+    assert "Overview" in content or "File Structure" in content
+
+
+def test_cmd_init_skips_existing(agent, tmp_path, capsys):
+    """/init without overwrite should skip if wisp.md exists."""
+    agent.config.workspace = str(tmp_path)
+    wisp_md = tmp_path / "wisp.md"
+    wisp_md.write_text("existing")
+    commands_module.cmd_init(agent, "")
+    captured = capsys.readouterr()
+    assert "already exists" in captured.out
+    assert wisp_md.read_text() == "existing"  # not overwritten
+
+
+def test_cmd_init_overwrite(agent, tmp_path, capsys):
+    """/init overwrite should regenerate wisp.md."""
+    agent.config.workspace = str(tmp_path)
+    wisp_md = tmp_path / "wisp.md"
+    wisp_md.write_text("existing")
+    commands_module.cmd_init(agent, "overwrite")
+    captured = capsys.readouterr()
+    assert "Created wisp.md" in captured.out or "Analyzing" in captured.out
+    content = wisp_md.read_text()
+    assert content != "existing"
+    assert "Overview" in content or "File Structure" in content
+
+
+def test_cmd_init_content_structure(agent, tmp_path, capsys):
+    """Generated wisp.md should have expected sections."""
+    # Create a minimal project structure
+    (tmp_path / "main.py").write_text("def main(): pass\n")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_main.py").write_text("def test_main(): pass\n")
+
+    agent.config.workspace = str(tmp_path)
+    commands_module.cmd_init(agent, "overwrite")
+
+    wisp_md = tmp_path / "wisp.md"
+    content = wisp_md.read_text()
+
+    assert "#" in content
+    assert "## Overview" in content
+    assert "## File Structure" in content
+    assert "## Key Files" in content
+    assert "main.py" in content
+    assert "## Testing" in content or "tests/" in content
+    assert "## Conventions" in content
+    assert "Wisp Agent Notes" in content

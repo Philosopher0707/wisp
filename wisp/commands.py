@@ -692,3 +692,213 @@ def cmd_continue(agent, args: str):
 @register("exit", "Exit Wisp", aliases=("quit", "q", "bye"), usage="/exit")
 def cmd_exit(agent, args: str):
     raise ExitREPL
+
+
+# ── /init: Generate wisp.md ──────────────────────────────────────────
+
+@register("init", "Generate wisp.md for this codebase", aliases=(), usage="/init [overwrite]")
+def cmd_init(agent, args: str):
+    """Analyze the current workspace and generate a wisp.md file.
+
+    The generated file includes project overview, architecture, key files,
+    conventions, and dependencies — giving Wisp instant context whenever
+    it enters this project.
+    """
+    ws = Path(agent.config.workspace or ".").resolve()
+    wisp_md = ws / "wisp.md"
+
+    if wisp_md.exists() and "overwrite" not in args.lower():
+        print(warning(f"⚠ {wisp_md.name} already exists."))
+        print(dim(f"   Run '/init overwrite' to regenerate."))
+        return
+
+    print(info(f"🔍 Analyzing {ws.name}…"))
+
+    # ── Gather project metadata ──
+    from wisp.project_context import detect_project_context, format_context
+    ctx = detect_project_context(str(ws))
+
+    # ── Gather file structure ──
+    top_files = []
+    top_dirs = []
+    for item in sorted(ws.iterdir()):
+        if item.name.startswith(".") and item.name not in (".github", ".vscode"):
+            continue
+        if item.is_file():
+            top_files.append(item.name)
+        elif item.is_dir():
+            top_dirs.append(item.name + "/")
+
+    # ── Gather source file stats ──
+    from wisp.code_index import build_index
+    index = build_index(str(ws))
+    lang_list = sorted(index.languages) if index.languages else [ctx.language or "Unknown"]
+
+    # ── Find key source files (entry points, main modules) ──
+    key_files = []
+    for fname in top_files:
+        if fname.lower() in ("readme.md", "readme.rst", "readme.txt"):
+            key_files.append((fname, "Project documentation"))
+        elif fname.lower() in ("main.py", "app.py", "index.js", "main.rs", "main.go"):
+            key_files.append((fname, "Application entry point"))
+        elif fname in ("pyproject.toml", "package.json", "cargo.toml", "go.mod", "setup.py"):
+            key_files.append((fname, "Project configuration"))
+        elif fname in ("dockerfile", "docker-compose.yml", "compose.yaml"):
+            key_files.append((fname, "Docker configuration"))
+        elif fname in ("makefile", "justfile"):
+            key_files.append((fname, "Build automation"))
+        elif fname in ("requirements.txt", "poetry.lock", "yarn.lock", "cargo.lock"):
+            key_files.append((fname, "Dependency lock file"))
+
+    # ── Find test directories ──
+    test_dirs = [d for d in top_dirs if "test" in d.lower() or "spec" in d.lower()]
+
+    # ── Find CI/config directories ──
+    ci_dirs = [d for d in top_dirs if d in (".github/", ".gitlab/", ".circleci/")]
+
+    # ── Extract top-level symbols ──
+    top_symbols = []
+    for file_symbols in index.symbols.values():
+        for sym in file_symbols:
+            if sym.kind in ("class", "function", "struct", "trait", "interface"):
+                top_symbols.append(sym)
+    # Sort by file, then line; cap at 30
+    top_symbols.sort(key=lambda s: (s.file, s.line))
+    top_symbols = top_symbols[:30]
+
+    # ── Build wisp.md content ──
+    lines: list[str] = []
+    lines.append(f"# {ctx.project_name or ws.name}")
+    lines.append("")
+    lines.append("## Overview")
+    lines.append("")
+    if ctx.project_name:
+        lines.append(f"**Project:** {ctx.project_name}")
+    if ctx.language:
+        ver = f" {ctx.language_version}" if ctx.language_version else ""
+        lines.append(f"**Language:** {ctx.language}{ver}")
+    if ctx.framework:
+        lines.append(f"**Framework:** {ctx.framework}")
+    if ctx.build_system:
+        lines.append(f"**Build System:** {ctx.build_system}")
+    if ctx.project_type:
+        lines.append(f"**Type:** {ctx.project_type}")
+    lines.append("")
+
+    # File structure
+    lines.append("## File Structure")
+    lines.append("")
+    lines.append("```")
+    for d in top_dirs[:20]:
+        lines.append(d)
+    for f in top_files[:20]:
+        lines.append(f)
+    if len(top_dirs) > 20 or len(top_files) > 20:
+        lines.append("...")
+    lines.append("```")
+    lines.append("")
+
+    # Key files
+    if key_files:
+        lines.append("## Key Files")
+        lines.append("")
+        for fname, desc in key_files:
+            lines.append(f"- `{fname}` — {desc}")
+        lines.append("")
+
+    # Dependencies
+    if ctx.dependencies:
+        lines.append("## Dependencies")
+        lines.append("")
+        for dep in ctx.dependencies[:15]:
+            lines.append(f"- {dep}")
+        if len(ctx.dependencies) > 15:
+            lines.append(f"- …and {len(ctx.dependencies) - 15} more")
+        lines.append("")
+
+    # Dev dependencies
+    if ctx.dev_dependencies:
+        lines.append("## Dev Dependencies")
+        lines.append("")
+        for dep in ctx.dev_dependencies[:10]:
+            lines.append(f"- {dep}")
+        if len(ctx.dev_dependencies) > 10:
+            lines.append(f"- …and {len(ctx.dev_dependencies) - 10} more")
+        lines.append("")
+
+    # Architecture / Key Symbols
+    if top_symbols:
+        lines.append("## Architecture")
+        lines.append("")
+        lines.append("Key symbols defined in the codebase:")
+        lines.append("")
+        current_file = None
+        for sym in top_symbols:
+            if sym.file != current_file:
+                current_file = sym.file
+                lines.append(f"\n**{sym.file}**")
+            parent = f" (in {sym.parent})" if sym.parent else ""
+            lines.append(f"- `{sym.name}` — {sym.kind}{parent}")
+        lines.append("")
+
+    # Testing
+    if ctx.has_tests or test_dirs:
+        lines.append("## Testing")
+        lines.append("")
+        if ctx.test_framework:
+            lines.append(f"**Framework:** {ctx.test_framework}")
+        if test_dirs:
+            lines.append(f"**Directories:** {', '.join(test_dirs)}")
+        lines.append("")
+
+    # CI/CD
+    if ci_dirs:
+        lines.append("## CI / CD")
+        lines.append("")
+        lines.append(f"**Config directories:** {', '.join(ci_dirs)}")
+        lines.append("")
+
+    # Docker
+    if ctx.has_docker:
+        lines.append("## Docker")
+        lines.append("")
+        lines.append("This project includes Docker configuration.")
+        lines.append("")
+
+    # Conventions
+    lines.append("## Conventions")
+    lines.append("")
+    if ctx.language == "Python":
+        lines.append("- Follow PEP 8 style guidelines")
+        if "pytest" in str(ctx.test_framework).lower():
+            lines.append("- Use pytest for testing")
+    elif ctx.language == "JavaScript" or ctx.language == "TypeScript":
+        lines.append("- Follow the project's ESLint / Prettier configuration")
+    elif ctx.language == "Rust":
+        lines.append("- Follow Rust naming conventions and `cargo fmt`")
+    elif ctx.language == "Go":
+        lines.append("- Follow Go conventions: `gofmt`, `golint`")
+    lines.append("- Prefer targeted edits over full file rewrites")
+    lines.append("- Run tests after making changes")
+    lines.append("")
+
+    # Wisp-specific guidance
+    lines.append("## Wisp Agent Notes")
+    lines.append("")
+    lines.append("This file was auto-generated by `/init`. Update it as the project evolves.")
+    lines.append("- Use `search_symbols` to find functions/classes quickly")
+    lines.append("- Use `read_file` with offset/limit for large files")
+    lines.append("- Use `run_bash` for build/test commands")
+    if ctx.build_system:
+        lines.append(f"- Build/test via: {ctx.build_system}")
+    lines.append("")
+
+    content = "\n".join(lines)
+
+    # Write file
+    try:
+        wisp_md.write_text(content, encoding="utf-8")
+        print(success(f"✓ Created {wisp_md.name} ({len(content)} chars)"))
+        print(dim(f"   {len(top_dirs)} dirs, {len(top_files)} files, {index.total_symbols} symbols analyzed."))
+    except Exception as e:
+        print(error(f"✗ Failed to write {wisp_md.name}: {e}"))
