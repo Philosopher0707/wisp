@@ -222,7 +222,7 @@ def cmd_skill(agent, args: str):
     from wisp.skills import discover_skills, find_skill
 
     ws = agent.config.workspace or "."
-    if not args:
+    if not args or not args.strip():
         skills = discover_skills(ws)
         if not skills:
             print(dim("No skills found."))
