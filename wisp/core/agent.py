@@ -547,38 +547,12 @@ class WispAgentCore:
 
         ws_abs = Path(ws).resolve()
         system = DEFAULT_SYSTEM
-
-        # ── Priority Skill Mode (injected FIRST for maximum compliance) ──
-        skills = discover_skills(ws)
-        if effective_skill:
-            skill = next((s for s in skills if s.name == effective_skill), None)
-            if skill:
-                auto_label = " (auto-detected)" if 'auto_detected_skill_name' in locals() and auto_detected_skill_name == skill.name else ""
-                system += (
-                    "\n\n"
-                    "=== SKILL MODE ACTIVE: {name}{label} ===\n"
-                    "\n"
-                    "{desc}\n"
-                    "\n"
-                    "{instructions}\n"
-                    "\n"
-                    "=== END SKILL MODE ==="
-                ).format(
-                    name=skill.name,
-                    label=auto_label,
-                    desc=skill.description,
-                    instructions=skill.instructions,
-                )
-            else:
-                logger.warning("Skill '%s' not found in discovered skills", effective_skill)
-
         system += f"\n\n## Workspace\nYou are working in: {ws_abs}"
         if hasattr(self, "_role_system_extra") and self._role_system_extra:
             system += f"\n\n{self._role_system_extra}"
 
-        # Only show available skills list when NO skill is active (avoids distraction)
-        if not effective_skill:
-            system += self._build_skills_block_from_skills(skills)
+        skills = discover_skills(ws)
+        system += self._build_skills_block_from_skills(skills)
 
         # ── OntoSkills: inject deterministic skill context ──
         from wisp.skills import has_ontology, match_skill_via_ontology
@@ -637,7 +611,13 @@ class WispAgentCore:
         if active_plan:
             system += f"\n\n{active_plan.format_for_prompt()}"
 
-
+        if effective_skill:
+            skill = next((s for s in skills if s.name == effective_skill), None)
+            if skill:
+                auto_label = " (auto-detected)" if 'auto_detected_skill_name' in locals() and auto_detected_skill_name == skill.name else ""
+                system += f"\n\n## Active Skill: {skill.name}{auto_label}\n{skill.description}\n\n{skill.instructions}"
+            else:
+                logger.warning("Skill '%s' not found in discovered skills", effective_skill)
 
         if self.config.plan_mode:
             system += (
@@ -699,14 +679,17 @@ class WispAgentCore:
             return ""
         lines = [
             "",
-            "## Available Skills (name or trigger phrase activates)",
+            "## Available Skills",
+            "To activate a skill: mention its name or any trigger phrase in your message.",
         ]
         for s in skills:
             triggers = ", ".join(s.triggers[:4]) if hasattr(s, "triggers") and s.triggers else ""
             if triggers:
-                lines.append(f"- {s.name} [{triggers}] — {s.description}")
+                lines.append(f"- {s.name} [{triggers}] - {s.description}")
             else:
-                lines.append(f"- {s.name} — {s.description}")
+                lines.append(f"- {s.name} - {s.description}")
+        lines.append("")
+        lines.append("To manually activate: use /skill <name>")
         return "\n".join(lines)
 
     def _invalidate_system_prompt_cache(self):
