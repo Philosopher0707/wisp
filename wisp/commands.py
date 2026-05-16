@@ -245,9 +245,6 @@ def cmd_skill(agent, args: str):
 
     print(success(f"✓ Skill loaded: {skill.name}"))
 
-    # Flag for REPL to trigger an agent acknowledgment turn
-    agent._skill_acknowledge = skill.name
-
 
 @register("session", "Show session info", usage="/session")
 def cmd_session(agent, args: str):
