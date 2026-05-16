@@ -590,8 +590,10 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
 
             if allow_multiline and _has_unclosed_brackets(combined):
                 if len(lines) >= 2:
-                    # Paste detected. Drain remaining lines from libedit's
-                    # internal buffer via input("") in a threaded timeout loop.
+                    # Paste detected via bracket continuation. Drain remaining
+                    # lines from libedit's internal buffer via input("") loop.
+                    # Libedit will echo each line — unavoidable on macOS.
+                    # Data collection is correct; echo is cosmetic.
                     import threading as _th44
                     _flag44 = [False]
                     def _timeout44():
