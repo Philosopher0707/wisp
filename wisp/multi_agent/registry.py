@@ -70,19 +70,37 @@ class AgentRegistry:
 
     Used by the orchestrator to make scheduling decisions and by the
     CLI to show swarm status.
+
+    If ``persist_path`` is provided, the registry auto-saves on changes
+    and auto-loads on init for crash recovery.
     """
 
-    def __init__(self):
+    def __init__(self, persist_path: Optional[Path] = None):
         self._agents: dict[str, AgentRecord] = {}
         self._lock = threading.RLock()
+        self._persist_path = persist_path
+
+        # Auto-load on init if persistence file exists
+        if persist_path:
+            self.load(persist_path)
+
+    def _auto_save(self) -> None:
+        """Save registry state if persistence is enabled."""
+        if self._persist_path:
+            try:
+                self.save(self._persist_path)
+            except Exception as e:
+                logger.warning("Auto-save failed: %s", e)
 
     def register(self, record: AgentRecord) -> None:
         with self._lock:
             self._agents[record.agent_id] = record
+        self._auto_save()
 
     def unregister(self, agent_id: str) -> None:
         with self._lock:
             self._agents.pop(agent_id, None)
+        self._auto_save()
 
     def get(self, agent_id: str) -> Optional[AgentRecord]:
         with self._lock:
@@ -94,11 +112,50 @@ class AgentRegistry:
                 self._agents[agent_id].status = status
                 if task is not None:
                     self._agents[agent_id].current_task = task
+        self._auto_save()
 
     def heartbeat(self, agent_id: str) -> None:
         with self._lock:
             if agent_id in self._agents:
                 self._agents[agent_id].last_heartbeat = datetime.now(timezone.utc).isoformat()
+        self._auto_save()
+
+    def detect_stale_agents(self, max_stale_seconds: float = 60.0) -> list[str]:
+        """Mark agents as CRASHED if their heartbeat is older than threshold.
+
+        Returns list of agent IDs that were marked stale.
+        """
+        now = datetime.now(timezone.utc)
+        stale_ids: list[str] = []
+        with self._lock:
+            for agent_id, record in self._agents.items():
+                if record.status in (AgentStatus.STOPPED, AgentStatus.CRASHED):
+                    continue
+                if record.last_heartbeat is None:
+                    # Never heartbeated — check spawned_at instead
+                    try:
+                        spawned = datetime.fromisoformat(record.spawned_at)
+                        if (now - spawned).total_seconds() > max_stale_seconds:
+                            stale_ids.append(agent_id)
+                    except ValueError:
+                        stale_ids.append(agent_id)
+                else:
+                    try:
+                        last_hb = datetime.fromisoformat(record.last_heartbeat)
+                        if (now - last_hb).total_seconds() > max_stale_seconds:
+                            stale_ids.append(agent_id)
+                    except ValueError:
+                        stale_ids.append(agent_id)
+
+            for agent_id in stale_ids:
+                self._agents[agent_id].status = AgentStatus.CRASHED
+                self._agents[agent_id].files_locked = []
+
+        if stale_ids:
+            logger.warning("Marked %d agents as CRASHED due to stale heartbeat: %s", len(stale_ids), stale_ids)
+            self._auto_save()
+
+        return stale_ids
 
     def claim_file(self, agent_id: str, path: str) -> bool:
         """Claim a file for editing. Returns False if another agent already holds it."""

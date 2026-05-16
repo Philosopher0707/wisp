@@ -1,17 +1,20 @@
-"""In-memory message bus for agent-to-agent communication.
+""""In-memory message bus for agent-to-agent communication.
 
 Supports:
 - Broadcast (no target_agent)
 - Direct messaging (target_agent set)
 - Subscriptions by event type or source agent
 - History replay for late-joining agents
+- Optional disk persistence for crash recovery
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from collections import deque
+from pathlib import Path
 from typing import Callable, Optional
 
 from .protocol import AgentEvent, EventType
@@ -26,18 +29,62 @@ class MessageBus:
 
     Agents subscribe with callbacks; the bus delivers matching events.
     All operations are thread-safe.
+
+    If ``persist_path`` is provided, events are appended to a JSONL file
+    for crash recovery. On init, existing events are loaded from the file.
     """
 
-    def __init__(self, max_history: int = MAX_HISTORY):
+    def __init__(self, max_history: int = MAX_HISTORY, persist_path: Optional[Path] = None):
         self._history: deque[AgentEvent] = deque(maxlen=max_history)
         self._subscribers: list[tuple[Optional[EventType], Optional[str], Callable[[AgentEvent], None]]] = []
         self._lock = threading.RLock()
+        self._persist_path = persist_path
+        self._persist_lock = threading.Lock()
+
+        # Load persisted events on init
+        if persist_path:
+            self._load_persisted()
+
+    def _load_persisted(self) -> None:
+        """Load events from the persistence file on startup."""
+        if not self._persist_path or not self._persist_path.exists():
+            return
+        try:
+            with open(self._persist_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                        event = AgentEvent.from_dict(data)
+                        self._history.append(event)
+                    except Exception as e:
+                        logger.debug("Skipping corrupted persisted event: %s", e)
+            logger.info("Loaded %d persisted events from %s", len(self._history), self._persist_path)
+        except Exception as e:
+            logger.warning("Failed to load persisted events: %s", e)
+
+    def _persist_event(self, event: AgentEvent) -> None:
+        """Append a single event to the persistence file."""
+        if not self._persist_path:
+            return
+        try:
+            with self._persist_lock:
+                self._persist_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(self._persist_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(event.to_dict()) + "\n")
+        except Exception as e:
+            logger.warning("Failed to persist event %s: %s", event.event_id, e)
 
     def emit(self, event: AgentEvent) -> None:
         """Publish an event to all matching subscribers."""
         with self._lock:
             self._history.append(event)
             subs = list(self._subscribers)
+
+        # Persist before delivery so crash doesn't lose the event
+        self._persist_event(event)
 
         delivered = 0
         for event_type_filter, agent_filter, callback in subs:
@@ -102,6 +149,27 @@ class MessageBus:
             ][-limit:]
 
     def clear(self) -> None:
+        """Clear all history and subscribers. Also clears persistence file."""
         with self._lock:
             self._history.clear()
             self._subscribers.clear()
+        if self._persist_path and self._persist_path.exists():
+            try:
+                self._persist_path.unlink()
+            except OSError as e:
+                logger.warning("Failed to clear persistence file: %s", e)
+
+    def compact_persistence(self, max_events: int = MAX_HISTORY) -> None:
+        """Rewrite persistence file keeping only the last N events."""
+        if not self._persist_path:
+            return
+        with self._lock:
+            events = list(self._history)[-max_events:]
+        try:
+            with self._persist_lock:
+                with open(self._persist_path, "w", encoding="utf-8") as f:
+                    for event in events:
+                        f.write(json.dumps(event.to_dict()) + "\n")
+            logger.info("Compacted persistence to %d events", len(events))
+        except Exception as e:
+            logger.warning("Failed to compact persistence: %s", e)
