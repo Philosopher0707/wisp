@@ -590,35 +590,43 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
 
             if allow_multiline and _has_unclosed_brackets(combined):
                 if len(lines) >= 2:
-                    # Paste detected via bracket continuation. Drain remaining
-                    # lines from libedit's internal buffer via input("") loop.
-                    # Libedit will echo each line — unavoidable on macOS.
-                    # Data collection is correct; echo is cosmetic.
-                    import threading as _th44
-                    _flag44 = [False]
-                    def _timeout44():
-                        _flag44[0] = True
-                    _thr44 = _th44.Timer(0.1, _timeout44)
-                    _thr44.daemon = True
-                    _thr44.start()
-                    while not _flag44[0]:
-                        try:
-                            if _flag44[0]:
+                    # Nuclear option: redirect fd 1 (stdout, not sys.stdout)
+                    # to /dev/null so libedit's echo writes to nowhere.
+                    # Use threaded timer to detect when buffer is drained.
+                    import os as _os42, threading as _th42
+                    _devnull_fd = _os42.open(_os42.devnull, _os42.O_WRONLY)
+                    _saved_fd1 = _os42.dup(1)
+                    _os42.dup2(_devnull_fd, 1)
+                    _os42.close(_devnull_fd)
+                    _flag42 = [False]
+                    def _timeout42():
+                        _flag42[0] = True
+                    _thr42 = _th42.Timer(0.1, _timeout42)
+                    _thr42.daemon = True
+                    _thr42.start()
+                    try:
+                        while not _flag42[0]:
+                            if _flag42[0]:
                                 break
                             ex = input("")
-                        except (EOFError, OSError):
-                            break
-                        total_chars += len(ex)
-                        if total_chars > _MAX_INPUT_CHARS:
-                            ex = ex[:max(0, _MAX_INPUT_CHARS - total_chars + len(ex))]
+                            total_chars += len(ex)
+                            if total_chars > _MAX_INPUT_CHARS:
+                                ex = ex[:max(0, _MAX_INPUT_CHARS - total_chars + len(ex))]
+                                lines.append(ex)
+                                break
                             lines.append(ex)
-                            break
-                        lines.append(ex)
-                        _thr44.cancel()
-                        _thr44 = _th44.Timer(0.1, _timeout44)
-                        _thr44.daemon = True
-                        _thr44.start()
-                    _thr44.cancel()
+                            _thr42.cancel()
+                            _thr42 = _th42.Timer(0.1, _timeout42)
+                            _thr42.daemon = True
+                            _thr42.start()
+                        _thr42.cancel()
+                    finally:
+                        _os42.dup2(_saved_fd1, 1)
+                        _os42.close(_saved_fd1)
+                        # Restore cursor position — libedit may have left it
+                        # in an odd place after echo was suppressed
+                        sys.stdout.write("\r\033[J")
+                        sys.stdout.flush()
                     _paste_counter += 1
                     _last_paste_lines = len(lines)
                     result = "\n".join(lines)
