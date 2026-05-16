@@ -554,31 +554,26 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
     if sys.stdin.isatty():
         lines: list[str] = []
         total_chars = 0
-
-        # ── Paste state ──
-        # Once we detect paste during bracket continuation, we switch from
-        # input() (readline) to raw sys.stdin.buffer.readline() — no echo.
-        # _paste_silent = True means all remaining lines read silently.
+        _prev_ts = 0.0
         _paste_silent = False
-        _paste_echoed_count = 0  # how many lines were already echoed by input()
 
         while True:
             try:
                 if not lines:
                     rl_prompt = f"\001\033[1m\002{prompt}\001\033[0m\002"
                 elif _paste_silent:
-                    # Silent mode: read from raw buffer, no readline echo at all
                     rl_prompt = ""
                 else:
                     depth = sum(1 for c in "\n".join(lines) if c in "([{")
                     rl_prompt = _continuation_prompt(depth)
 
                 if _paste_silent:
-                    # Bypass readline entirely — silently read from raw buffer
                     raw = sys.stdin.buffer.readline()
                     if not raw:
                         break
                     line = raw.decode("utf-8", errors="replace").rstrip("\n")
+                    if not line and lines:
+                        break
                     if not line:
                         break
                 else:
@@ -592,6 +587,58 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
                 break
             except (OSError, UnicodeDecodeError):
                 return ""
+
+            import time as _tmod
+            _now = _tmod.monotonic()
+
+            # Timing check on SECOND line: <30ms from first => paste
+            if len(lines) == 1 and (_now - _prev_ts) < 0.03 and _has_unclosed_brackets("\n".join(lines + [""])):
+                _paste_silent = True
+                # Clear the first echoed line (prompt was "➜ ..." on previous iteration)
+                w = _term_width()
+                rows = max(1, (len(lines[0]) + 3) // w) + 1
+                for _ in range(rows):
+                    import sys as _sys
+                    _sys.stdout.write("\033[A\033[K")
+                _sys.stdout.flush()
+                # Continue silently — this call to buffer.readline() already returned
+                # line above (from the paste). We need to re-process it.
+                lines.append(line)
+                combined = "\n".join(lines)
+                # Drain more lines from raw buffer
+                try:
+                    import select
+                    while True:
+                        r2, _, _ = select.select([sys.stdin], [], [], 0.02)
+                        if not r2:
+                            break
+                        raw = sys.stdin.buffer.readline()
+                        if not raw:
+                            break
+                        extra = raw.decode("utf-8", errors="replace").rstrip("\n")
+                        if not extra:
+                            break
+                        total_chars += len(extra)
+                        if total_chars > _MAX_INPUT_CHARS:
+                            break
+                        lines.append(extra)
+                except ImportError:
+                    pass
+                _paste_counter += 1
+                _last_paste_lines = len(lines)
+                _sys.stdout.write("\033[J\r")
+                _sys.stdout.flush()
+                print(f"\001\033[1m\002{prompt}\001\033[0m\002", end="")
+                s = lines[0][:w - 14].replace("\n", " ")
+                if len(lines[0]) > w - 14:
+                    s += "..."
+                print(f"  {dim(s)}")
+                result = "\n".join(lines)
+                if readline is not None and result.strip():
+                    readline.add_history(result)
+                return result
+
+            _prev_ts = _now
 
             total_chars += len(line)
             if total_chars > _MAX_INPUT_CHARS:
@@ -610,19 +657,8 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
             combined = "\n".join(lines)
 
             if allow_multiline and _has_unclosed_brackets(combined):
-                # Detect paste: if already in silent mode OR this is the 5th
-                # continuation line (clear readline echo took too long) OR stdin
-                # has more data queued.
-                if not _paste_silent and len(lines) >= 5:
-                    _paste_silent = True
-                    _paste_echoed_count = len(lines)  # these lines were echoed
-                    continue  # silently read next lines
-
                 if _paste_silent:
-                    # Keep draining silently
                     continue
-
-                # Normal typing continuation (no paste detected yet)
                 continue
 
             if not _paste_silent and allow_multiline and lines:
@@ -653,11 +689,6 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
                     pass
 
             break
-
-        if _paste_silent and not _paste_echoed_count:
-            # Pure silent paste — no input() echoes at all
-            _paste_counter += 1
-            _last_paste_lines = len(lines)
 
         result = "\n".join(lines)
         if readline is not None and result.strip():
@@ -1115,6 +1146,9 @@ class CLITransport:
         self._interrupted = False
         try:
             while not self._interrupted:
+                # ── Input area: vertical spacing ──
+                print("\n" * 2)
+
                 # ── Input area: top border ──
                 use_box = self._use_input_box()
                 if use_box:
