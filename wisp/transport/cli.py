@@ -590,51 +590,35 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
 
             if allow_multiline and _has_unclosed_brackets(combined):
                 if len(lines) >= 2:
-                    # Paste detected. Drain remaining lines silently by
-                    # calling input("") in a tight loop. Each call returns
-                    # instantly from libedit's internal buffer. We set a
-                    # threading.Timer(100ms) as timeout guard.
-                    import threading as _th
-                    _flag = [False]
-                    def _timeout():
-                        _flag[0] = True
-                    _thr = _th.Timer(0.1, _timeout)
-                    _thr.daemon = True
-                    _thr.start()
-                    _echoed = 0
-                    while not _flag[0]:
+                    # Paste detected. Drain remaining lines from libedit's
+                    # internal buffer via input("") in a threaded timeout loop.
+                    import threading as _th44
+                    _flag44 = [False]
+                    def _timeout44():
+                        _flag44[0] = True
+                    _thr44 = _th44.Timer(0.1, _timeout44)
+                    _thr44.daemon = True
+                    _thr44.start()
+                    while not _flag44[0]:
                         try:
-                            if _flag[0]:
+                            if _flag44[0]:
                                 break
                             ex = input("")
                         except (EOFError, OSError):
                             break
-                        _echoed += 1
                         total_chars += len(ex)
                         if total_chars > _MAX_INPUT_CHARS:
                             ex = ex[:max(0, _MAX_INPUT_CHARS - total_chars + len(ex))]
                             lines.append(ex)
                             break
                         lines.append(ex)
-                        _thr.cancel()
-                        _thr = _th.Timer(0.1, _timeout)
-                        _thr.daemon = True
-                        _thr.start()
-                    _thr.cancel()
-                    # Clear ALL echoed lines — one \033[A per input("") call
-                    import sys as _s3
-                    for _ in range(_echoed + 1):  # +1 for the continuation prompt
-                        _s3.stdout.write("\033[A\033[K")
-                    _s3.stdout.flush()
-                    # Print clean prompt + first-line preview
+                        _thr44.cancel()
+                        _thr44 = _th44.Timer(0.1, _timeout44)
+                        _thr44.daemon = True
+                        _thr44.start()
+                    _thr44.cancel()
                     _paste_counter += 1
                     _last_paste_lines = len(lines)
-                    print(f"\001\033[1m\002{prompt}\001\033[0m\002", end="")
-                    w = _term_width()
-                    s = lines[0][:w - 14].replace("\n", " ")
-                    if len(lines[0]) > w - 14:
-                        s += "..."
-                    print(f"  {dim(s)}")
                     result = "\n".join(lines)
                     if readline is not None and result.strip():
                         readline.add_history(result)
