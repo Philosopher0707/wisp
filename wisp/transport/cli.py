@@ -554,24 +554,14 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
     if sys.stdin.isatty():
         lines: list[str] = []
         total_chars = 0
-        # When paste detected during bracket continuation, disable terminal
-        # echo so remaining input() calls read silently. We only clear
-        # the terminal after the final iteration (not per-line), using
-        # the echo-off state as our signal.
-        import termios as _ti, sys as _sys
-        _echo_off = False
-        _echo_saved = None
 
         while True:
             try:
                 if not lines:
                     rl_prompt = f"\001\033[1m\002{prompt}\001\033[0m\002"
                 else:
-                    if _echo_off:
-                        rl_prompt = ""  # no prompt, echo already off
-                    else:
-                        depth = sum(1 for c in "\n".join(lines) if c in "([{")
-                        rl_prompt = _continuation_prompt(depth)
+                    depth = sum(1 for c in "\n".join(lines) if c in "([{")
+                    rl_prompt = _continuation_prompt(depth)
                 line = input(rl_prompt)
             except KeyboardInterrupt:
                 print()
@@ -599,62 +589,69 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
             combined = "\n".join(lines)
 
             if allow_multiline and _has_unclosed_brackets(combined):
-                # After 2 continuation lines: disable echo, drain readline buffer
-                if not _echo_off and len(lines) >= 2:
-                    try:
-                        _echo_saved = _ti.tcgetattr(_sys.stdin.fileno())
-                        newattr = list(_echo_saved)
-                        newattr[3] = newattr[3] & ~_ti.ECHO
-                        _ti.tcsetattr(_sys.stdin.fileno(), _ti.TCSANOW, newattr)
-                        _echo_off = True
-                        # Drain remaining lines by calling input() in loop —
-                        # readline has already consumed them, they're in its
-                        # internal buffer. With echo off, they read silently.
-                        # We stop when input() takes >50ms (no more data).
-                        import select as _sel, time as _tt
-                        while True:
-                            try:
-                                r2, _, _ = _sel.select([_sys.stdin], [], [], 0.05)
-                            except (OSError, ValueError):
-                                break
-                            if not r2:
-                                break
-                            try:
-                                ex = input("")
-                            except (EOFError, OSError):
-                                break
-                            total_chars += len(ex)
-                            if total_chars > _MAX_INPUT_CHARS:
-                                ex = ex[:max(0, _MAX_INPUT_CHARS - total_chars + len(ex))]
-                                lines.append(ex)
-                                break
-                            lines.append(ex)
-                        _paste_counter += 1
-                        _last_paste_lines = len(lines)
+                if len(lines) >= 2:
+                    # Paste detected. Drain remaining lines silently by
+                    # calling input("") in a tight loop. Each call returns
+                    # instantly from libedit's internal buffer. We set a
+                    # threading.Timer(100ms) as timeout guard.
+                    import threading as _th
+                    _flag = [False]
+                    def _timeout():
+                        _flag[0] = True
+                    _thr = _th.Timer(0.1, _timeout)
+                    _thr.daemon = True
+                    _thr.start()
+                    _echoed = 0
+                    while not _flag[0]:
                         try:
-                            _ti.tcsetattr(_sys.stdin.fileno(), _ti.TCSANOW, _echo_saved)
-                            _echo_off = False
-                        except Exception:
-                            pass
-                        result = "\n".join(lines)
-                        if readline is not None and result.strip():
-                            readline.add_history(result)
-                        return result
-                    except Exception:
-                        pass
+                            if _flag[0]:
+                                break
+                            ex = input("")
+                        except (EOFError, OSError):
+                            break
+                        _echoed += 1
+                        total_chars += len(ex)
+                        if total_chars > _MAX_INPUT_CHARS:
+                            ex = ex[:max(0, _MAX_INPUT_CHARS - total_chars + len(ex))]
+                            lines.append(ex)
+                            break
+                        lines.append(ex)
+                        _thr.cancel()
+                        _thr = _th.Timer(0.1, _timeout)
+                        _thr.daemon = True
+                        _thr.start()
+                    _thr.cancel()
+                    # Clear ALL echoed lines — one \033[A per input("") call
+                    import sys as _s3
+                    for _ in range(_echoed + 1):  # +1 for the continuation prompt
+                        _s3.stdout.write("\033[A\033[K")
+                    _s3.stdout.flush()
+                    # Print clean prompt + first-line preview
+                    _paste_counter += 1
+                    _last_paste_lines = len(lines)
+                    print(f"\001\033[1m\002{prompt}\001\033[0m\002", end="")
+                    w = _term_width()
+                    s = lines[0][:w - 14].replace("\n", " ")
+                    if len(lines[0]) > w - 14:
+                        s += "..."
+                    print(f"  {dim(s)}")
+                    result = "\n".join(lines)
+                    if readline is not None and result.strip():
+                        readline.add_history(result)
+                    return result
                 continue
 
             # Fallback paste drain (no brackets)
-            if not _echo_off and allow_multiline and lines:
+            if allow_multiline and lines:
                 try:
-                    import select as _sel
-                    if _sel.select([_sys.stdin], [], [], 0.02)[0]:
+                    import select as _sel3
+                    if _sel3.select([sys.stdin], [], [], 0.02)[0]:
                         while True:
-                            r2, _, _ = _sel.select([_sys.stdin], [], [], 0.01)
+                            r2, _, _ = _sel3.select([sys.stdin], [], [], 0.01)
                             if not r2:
                                 break
                             try:
-                                raw = _sys.stdin.buffer.readline()
+                                raw = sys.stdin.buffer.readline()
                                 if not raw:
                                     break
                                 ex = raw.decode("utf-8", errors="replace").rstrip("\n")
@@ -674,12 +671,6 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
 
             break
 
-        if _echo_off:
-            try:
-                _ti.tcsetattr(_sys.stdin.fileno(), _ti.TCSANOW, _echo_saved)
-            except Exception:
-                pass
-            _echo_off = False
         result = "\n".join(lines)
         if readline is not None and result.strip():
             readline.add_history(result)
