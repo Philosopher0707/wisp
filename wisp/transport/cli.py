@@ -554,30 +554,25 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
     if sys.stdin.isatty():
         lines: list[str] = []
         total_chars = 0
-        _prev_ts = 0.0
-        _paste_silent = False
+        # When paste detected during bracket continuation, disable terminal
+        # echo so remaining input() calls read silently. We only clear
+        # the terminal after the final iteration (not per-line), using
+        # the echo-off state as our signal.
+        import termios as _ti, sys as _sys
+        _echo_off = False
+        _echo_saved = None
 
         while True:
             try:
                 if not lines:
                     rl_prompt = f"\001\033[1m\002{prompt}\001\033[0m\002"
-                elif _paste_silent:
-                    rl_prompt = ""
                 else:
-                    depth = sum(1 for c in "\n".join(lines) if c in "([{")
-                    rl_prompt = _continuation_prompt(depth)
-
-                if _paste_silent:
-                    raw = sys.stdin.buffer.readline()
-                    if not raw:
-                        break
-                    line = raw.decode("utf-8", errors="replace").rstrip("\n")
-                    if not line and lines:
-                        break
-                    if not line:
-                        break
-                else:
-                    line = input(rl_prompt)
+                    if _echo_off:
+                        rl_prompt = ""  # no prompt, echo already off
+                    else:
+                        depth = sum(1 for c in "\n".join(lines) if c in "([{")
+                        rl_prompt = _continuation_prompt(depth)
+                line = input(rl_prompt)
             except KeyboardInterrupt:
                 print()
                 raise
@@ -588,61 +583,8 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
             except (OSError, UnicodeDecodeError):
                 return ""
 
-            import time as _tmod
-            _now = _tmod.monotonic()
-
-            # Timing check on SECOND line: <30ms from first => paste
-            if len(lines) == 1 and (_now - _prev_ts) < 0.03 and _has_unclosed_brackets("\n".join(lines + [""])):
-                _paste_silent = True
-                # Clear the first echoed line (prompt was "➜ ..." on previous iteration)
-                w = _term_width()
-                rows = max(1, (len(lines[0]) + 3) // w) + 1
-                for _ in range(rows):
-                    import sys as _sys
-                    _sys.stdout.write("\033[A\033[K")
-                _sys.stdout.flush()
-                # Continue silently — this call to buffer.readline() already returned
-                # line above (from the paste). We need to re-process it.
-                lines.append(line)
-                combined = "\n".join(lines)
-                # Drain more lines from raw buffer
-                try:
-                    import select
-                    while True:
-                        r2, _, _ = select.select([sys.stdin], [], [], 0.02)
-                        if not r2:
-                            break
-                        raw = sys.stdin.buffer.readline()
-                        if not raw:
-                            break
-                        extra = raw.decode("utf-8", errors="replace").rstrip("\n")
-                        if not extra:
-                            break
-                        total_chars += len(extra)
-                        if total_chars > _MAX_INPUT_CHARS:
-                            break
-                        lines.append(extra)
-                except ImportError:
-                    pass
-                _paste_counter += 1
-                _last_paste_lines = len(lines)
-                _sys.stdout.write("\033[J\r")
-                _sys.stdout.flush()
-                print(f"\001\033[1m\002{prompt}\001\033[0m\002", end="")
-                s = lines[0][:w - 14].replace("\n", " ")
-                if len(lines[0]) > w - 14:
-                    s += "..."
-                print(f"  {dim(s)}")
-                result = "\n".join(lines)
-                if readline is not None and result.strip():
-                    readline.add_history(result)
-                return result
-
-            _prev_ts = _now
-
             total_chars += len(line)
             if total_chars > _MAX_INPUT_CHARS:
-                import time as _wt
                 print(warning(f"\n  \u26a0\ufe0f  Input truncated at {_MAX_INPUT_CHARS} chars."))
                 line = line[:max(0, _MAX_INPUT_CHARS - total_chars + len(line))]
                 lines.append(line)
@@ -657,20 +599,63 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
             combined = "\n".join(lines)
 
             if allow_multiline and _has_unclosed_brackets(combined):
-                if _paste_silent:
-                    continue
-                continue
-
-            if not _paste_silent and allow_multiline and lines:
-                try:
-                    import select
-                    if select.select([sys.stdin], [], [], 0.02)[0]:
+                # After 4 continuation lines: disable echo for remaining lines
+                if not _echo_off and len(lines) >= 2:
+                    try:
+                        _echo_saved = _ti.tcgetattr(_sys.stdin.fileno())
+                        newattr = list(_echo_saved)
+                        newattr[3] = newattr[3] & ~_ti.ECHO
+                        _ti.tcsetattr(_sys.stdin.fileno(), _ti.TCSANOW, newattr)
+                        _echo_off = True
+                        # Drain remaining lines from stdin buffer
+                        import select as _sel
                         while True:
-                            r2, _, _ = select.select([sys.stdin], [], [], 0.01)
+                            try:
+                                r2, _, _ = _sel.select([_sys.stdin], [], [], 0.02)
+                            except (OSError, ValueError):
+                                break
                             if not r2:
                                 break
                             try:
-                                raw = sys.stdin.buffer.readline()
+                                raw = _sys.stdin.buffer.readline()
+                                if not raw:
+                                    break
+                                ex = raw.decode("utf-8", errors="replace").rstrip("\n")
+                                if not ex:
+                                    break
+                                total_chars += len(ex)
+                                if total_chars > _MAX_INPUT_CHARS:
+                                    break
+                                lines.append(ex)
+                            except (EOFError, OSError):
+                                break
+                        _paste_counter += 1
+                        _last_paste_lines = len(lines)
+                        # Restore echo
+                        try:
+                            _ti.tcsetattr(_sys.stdin.fileno(), _ti.TCSANOW, _echo_saved)
+                            _echo_off = False
+                        except Exception:
+                            pass
+                        result = "\n".join(lines)
+                        if readline is not None and result.strip():
+                            readline.add_history(result)
+                        return result
+                    except Exception:
+                        pass
+                continue
+
+            # Fallback paste drain (no brackets)
+            if not _echo_off and allow_multiline and lines:
+                try:
+                    import select as _sel
+                    if _sel.select([_sys.stdin], [], [], 0.02)[0]:
+                        while True:
+                            r2, _, _ = _sel.select([_sys.stdin], [], [], 0.01)
+                            if not r2:
+                                break
+                            try:
+                                raw = _sys.stdin.buffer.readline()
                                 if not raw:
                                     break
                                 ex = raw.decode("utf-8", errors="replace").rstrip("\n")
@@ -690,6 +675,12 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
 
             break
 
+        if _echo_off:
+            try:
+                _ti.tcsetattr(_sys.stdin.fileno(), _ti.TCSANOW, _echo_saved)
+            except Exception:
+                pass
+            _echo_off = False
         result = "\n".join(lines)
         if readline is not None and result.strip():
             readline.add_history(result)
@@ -1146,9 +1137,6 @@ class CLITransport:
         self._interrupted = False
         try:
             while not self._interrupted:
-                # ── Input area: vertical spacing ──
-                print("\n" * 2)
-
                 # ── Input area: top border ──
                 use_box = self._use_input_box()
                 if use_box:
@@ -1403,6 +1391,8 @@ class CLITransport:
 
     def _print_turn_done(self):
         _print_separator()
+        # Add breathing room before next input
+        print("\n" * 2)
 
 
 def _print_separator():
