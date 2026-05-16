@@ -601,14 +601,23 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
                     _flag42 = [False]
                     def _timeout42():
                         _flag42[0] = True
-                    _thr42 = _th42.Timer(0.1, _timeout42)
+                    _thr42 = _th42.Timer(0.15, _timeout42)
                     _thr42.daemon = True
                     _thr42.start()
                     try:
                         while not _flag42[0]:
-                            if _flag42[0]:
+                            # Check if there's more input before blocking on input()
+                            try:
+                                import select as _sel42
+                                if not _sel42.select([sys.stdin], [], [], 0.05)[0]:
+                                    # No more input available — paste is done
+                                    break
+                            except (ImportError, OSError):
+                                pass
+                            try:
+                                ex = input("")
+                            except EOFError:
                                 break
-                            ex = input("")
                             total_chars += len(ex)
                             if total_chars > _MAX_INPUT_CHARS:
                                 ex = ex[:max(0, _MAX_INPUT_CHARS - total_chars + len(ex))]
@@ -616,7 +625,7 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
                                 break
                             lines.append(ex)
                             _thr42.cancel()
-                            _thr42 = _th42.Timer(0.1, _timeout42)
+                            _thr42 = _th42.Timer(0.15, _timeout42)
                             _thr42.daemon = True
                             _thr42.start()
                         _thr42.cancel()
