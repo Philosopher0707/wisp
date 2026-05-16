@@ -1547,41 +1547,60 @@ class WispAgentCore:
     async def _check_delegation(self, prompt: str) -> list:
         """Check if the task should be auto-delegated to subagents.
 
-        Uses DelegationAnalyzer to detect capability mismatch and
-        automatically spawns appropriate subagents.
+        Uses DelegationAnalyzer and CapabilityMatcher to detect capability
+        mismatch and automatically spawn appropriate subagents.
         """
         from wisp.multi_agent import get_delegation_analyzer, SubagentContract
+        from wisp.multi_agent.capability_matcher import CapabilityMatcher
         from wisp.core.events import content as content_event
 
+        events = []
+        contracts = []
+
+        # ── Check 1: DelegationAnalyzer (complexity/research/scope triggers) ──
         analyzer = get_delegation_analyzer()
         signal = analyzer.analyze(prompt, current_iteration=0,
                                   max_iterations=self.max_iterations)
 
-        if not signal.should_delegate:
-            return []
-
-        logger.info("Auto-delegation triggered: %s (confidence=%.2f)",
-                    signal.reason, signal.confidence)
-
-        events = []
-        events.append(content_event(
-            f"🔄 Auto-delegating: {signal.reason} (confidence: {signal.confidence:.0%})\n"
-        ))
-
-        # Build contracts from suggestions
-        contracts = []
-        for spec in signal.suggested_contracts:
-            contracts.append(SubagentContract(
-                name=spec.get("name", "subagent"),
-                task=spec.get("task", ""),
-                role=spec.get("role", "generalist"),
-                timeout_seconds=spec.get("timeout_seconds", 60),
-                max_iterations=spec.get("max_iterations", 5),
-                isolation="process",
-                output_format="markdown",
-                workspace=self.config.workspace,
-                auto_approve=self.config.auto_approve,
+        if signal.should_delegate:
+            logger.info("Auto-delegation triggered: %s (confidence=%.2f)",
+                        signal.reason, signal.confidence)
+            events.append(content_event(
+                f"🔄 Auto-delegating: {signal.reason} (confidence: {signal.confidence:.0%})\n"
             ))
+            for spec in signal.suggested_contracts:
+                contracts.append(SubagentContract(
+                    name=spec.get("name", "subagent"),
+                    task=spec.get("task", ""),
+                    role=spec.get("role", "generalist"),
+                    timeout_seconds=spec.get("timeout_seconds", 60),
+                    max_iterations=spec.get("max_iterations", 5),
+                    isolation="process",
+                    output_format="markdown",
+                    workspace=self.config.workspace,
+                    auto_approve=self.config.auto_approve,
+                ))
+
+        # ── Check 2: CapabilityMatcher (role/tool mismatch) ──
+        available_tools = list(self._allowed_tools) if self._allowed_tools else None
+        matcher = CapabilityMatcher()
+        mismatch = matcher.detect_mismatch(
+            current_role=self.role or "agent",
+            task=prompt,
+            available_tools=available_tools,
+        )
+        if mismatch and mismatch.should_delegate():
+            logger.info("Capability mismatch detected: %s (confidence=%.2f)",
+                        mismatch.reason, mismatch.confidence)
+            events.append(content_event(
+                f"🔄 Capability mismatch: {mismatch.reason} (confidence: {mismatch.confidence:.0%})\n"
+            ))
+            contract = matcher.build_delegation_contract(
+                mismatch, prompt, parent_context=self._system_prompt[:500]
+            )
+            contract.workspace = self.config.workspace
+            contract.auto_approve = self.config.auto_approve
+            contracts.append(contract)
 
         if not contracts:
             return []
