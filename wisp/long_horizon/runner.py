@@ -423,12 +423,15 @@ class LongHorizonRunner:
         if state.context_token_count > 4000:
             prompt = await self._compact_context(state) + "\n\n" + prompt
 
-        result = await self.agent.run_task(
-            prompt,
-            workspace=workspace,
-            max_iterations=5,
-            timeout_seconds=60,
-        )
+        try:
+            result = await self.agent.run_task(
+                prompt,
+                workspace=workspace,
+                max_iterations=5,
+                timeout_seconds=60,
+            )
+        except Exception as e:
+            raise ReplanError(f"Agent failed during replanning: {type(e).__name__}: {e}")
 
         if not result.get("success"):
             raise ReplanError(f"Agent failed to generate new plan: {result.get('output', 'unknown error')}")

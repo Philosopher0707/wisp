@@ -311,7 +311,7 @@ class TaskState:
     @property
     def progress_pct(self) -> float:
         if not self.plan.steps:
-            return 0.0
+            return 100.0 if self.is_complete else 0.0
         return (self.current_step_index / len(self.plan.steps)) * 100
 
     # ── Serialization ─────────────────────────────────────────────
@@ -377,6 +377,21 @@ class TaskState:
     def touch(self) -> None:
         """Update the updated_at timestamp."""
         self.updated_at = _now_iso()
+
+    def checkpoint(self) -> None:
+        """Record a checkpoint timestamp."""
+        self.touch()
+        self.last_checkpoint = _now_iso()
+
+    def add_step(self, description: str, dependencies: list[str] | None = None) -> Step:
+        """Add a new step to the plan."""
+        step = Step(
+            id=f"step-{len(self.plan.steps) + 1}",
+            description=description,
+            dependencies=dependencies or [],
+        )
+        self.plan.steps.append(step)
+        return step
 
     def advance(self) -> None:
         """Move to the next step."""

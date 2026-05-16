@@ -59,6 +59,7 @@ class TaskManager:
             storage=self.storage,
         )
         state = await runner._create_initial_state(goal, workspace)
+        state.set_status(TaskStatus.RUNNING)
         self.storage.save(state)
 
         # Start background execution
@@ -78,6 +79,9 @@ class TaskManager:
         state = self.storage.load(task_id)
         if state is None:
             raise ValueError(f"Task not found: {task_id}")
+
+        state.set_status(TaskStatus.RUNNING)
+        self.storage.save(state)
 
         runner = LongHorizonRunner(
             agent=self.agent,
