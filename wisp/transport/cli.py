@@ -599,7 +599,7 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
             combined = "\n".join(lines)
 
             if allow_multiline and _has_unclosed_brackets(combined):
-                # After 4 continuation lines: disable echo for remaining lines
+                # After 2 continuation lines: disable echo, drain readline buffer
                 if not _echo_off and len(lines) >= 2:
                     try:
                         _echo_saved = _ti.tcgetattr(_sys.stdin.fileno())
@@ -607,31 +607,30 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str:
                         newattr[3] = newattr[3] & ~_ti.ECHO
                         _ti.tcsetattr(_sys.stdin.fileno(), _ti.TCSANOW, newattr)
                         _echo_off = True
-                        # Drain remaining lines from stdin buffer
-                        import select as _sel
+                        # Drain remaining lines by calling input() in loop —
+                        # readline has already consumed them, they're in its
+                        # internal buffer. With echo off, they read silently.
+                        # We stop when input() takes >50ms (no more data).
+                        import select as _sel, time as _tt
                         while True:
                             try:
-                                r2, _, _ = _sel.select([_sys.stdin], [], [], 0.02)
+                                r2, _, _ = _sel.select([_sys.stdin], [], [], 0.05)
                             except (OSError, ValueError):
                                 break
                             if not r2:
                                 break
                             try:
-                                raw = _sys.stdin.buffer.readline()
-                                if not raw:
-                                    break
-                                ex = raw.decode("utf-8", errors="replace").rstrip("\n")
-                                if not ex:
-                                    break
-                                total_chars += len(ex)
-                                if total_chars > _MAX_INPUT_CHARS:
-                                    break
-                                lines.append(ex)
+                                ex = input("")
                             except (EOFError, OSError):
                                 break
+                            total_chars += len(ex)
+                            if total_chars > _MAX_INPUT_CHARS:
+                                ex = ex[:max(0, _MAX_INPUT_CHARS - total_chars + len(ex))]
+                                lines.append(ex)
+                                break
+                            lines.append(ex)
                         _paste_counter += 1
                         _last_paste_lines = len(lines)
-                        # Restore echo
                         try:
                             _ti.tcsetattr(_sys.stdin.fileno(), _ti.TCSANOW, _echo_saved)
                             _echo_off = False
@@ -1137,13 +1136,14 @@ class CLITransport:
         self._interrupted = False
         try:
             while not self._interrupted:
-                # Push input area up from bottom edge
-                print("\n" * 3)
-
                 # ── Input area: top border ──
                 use_box = self._use_input_box()
                 if use_box:
                     print(_input_box_top("input"))
+                    # Padding inside input box
+                    w = _term_width()
+                    print(dim("│" + " " * (w - 2) + "│"))
+                    print(dim("│" + " " * (w - 2) + "│"))
 
                 # Reset paste tracking before each input
                 global _last_paste_lines
@@ -1173,6 +1173,10 @@ class CLITransport:
                 if use_box:
                     if was_paste:
                         print(_paste_indicator(_paste_counter, _last_paste_lines))
+                    # Padding inside input box before bottom border
+                    w = _term_width()
+                    print(dim("│" + " " * (w - 2) + "│"))
+                    print(dim("│" + " " * (w - 2) + "│"))
                     print(_input_box_bottom())
                     print(self._status_bar())
                 elif was_paste:
