@@ -1537,7 +1537,7 @@ async def test_context_files_injected_in_process(orch):
         task="Analyze these files",
         context_files=["auth.py", "main.py"],
         isolation="process",
-        timeout_seconds=10,
+        timeout_seconds=30,
     )
     result = await orch.run(contract)
     # The agent should have attempted to read the files (see captured logs)

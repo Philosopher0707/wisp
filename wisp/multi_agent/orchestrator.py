@@ -808,6 +808,18 @@ def _run_subagent_worker(contract_dict: dict, result_path: str, parent_workspace
     start = _time.monotonic()
     contract = SubagentContract(**contract_dict)
 
+    # ── Resource limits (Unix only) ────────────────────────────────────
+    try:
+        import resource
+        # Memory limit: 2GB default
+        mem_limit = getattr(contract, "max_memory_mb", 2048) * 1024 * 1024
+        resource.setrlimit(resource.RLIMIT_AS, (mem_limit, mem_limit))
+        # CPU limit: timeout + 30s buffer
+        cpu_limit = int(contract.timeout_seconds + 30)
+        resource.setrlimit(resource.RLIMIT_CPU, (cpu_limit, cpu_limit))
+    except (ImportError, OSError, ValueError):
+        pass  # Not on Unix or limits not supported
+
     # ── Depth guard ──────────────────────────────────────────────────
     if contract._subagent_depth >= MAX_SUBAGENT_DEPTH:
         duration = _time.monotonic() - start
@@ -1214,6 +1226,8 @@ class SubagentOrchestrator:
         finally:
             # ── Cleanup worktree (unless debugging) ──────────────────
             if worktree_path and not os.environ.get("WISP_KEEP_WORKTREES", "").lower() == "true":
+                # Small delay to let process finish flushing files
+                await asyncio.sleep(0.5)
                 try:
                     await self._cleanup_worktree(worktree_path)
                 except Exception as exc:
@@ -1232,6 +1246,27 @@ class SubagentOrchestrator:
         tool_calls_log: list[dict],
     ) -> SubagentResult:
         """Thread-based subagent execution (default, fast)."""
+        # Start heartbeat task for progress streaming
+        heartbeat_task: asyncio.Task | None = None
+        _done = [False]
+
+        async def _heartbeat():
+            """Emit periodic progress events while subagent runs."""
+            while not _done[0]:
+                await asyncio.sleep(5)
+                if _done[0]:
+                    break
+                elapsed = time.monotonic() - start
+                if contract.progress_callback:
+                    await self._emit(
+                        contract,
+                        EventKind.TASK_PROGRESS,
+                        {"elapsed": elapsed, "status": "running"},
+                    )
+
+        if contract.progress_callback:
+            heartbeat_task = asyncio.create_task(_heartbeat())
+
         try:
             result = await asyncio.wait_for(
                 asyncio.to_thread(
@@ -1369,6 +1404,14 @@ class SubagentOrchestrator:
                 error=str(exc),
                 session_id=session.id if session else "",
             )
+        finally:
+            _done[0] = True
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
+                try:
+                    await heartbeat_task
+                except asyncio.CancelledError:
+                    pass
 
     async def _spawn_subagent_process(
         self,
@@ -1416,6 +1459,26 @@ class SubagentOrchestrator:
             target=_run_subagent_worker,
             args=(contract_dict, result_path, str(self.workspace)),
         )
+
+        # Start heartbeat for progress streaming
+        heartbeat_task: asyncio.Task | None = None
+        _done = [False]
+
+        async def _heartbeat():
+            while not _done[0]:
+                await asyncio.sleep(5)
+                if _done[0]:
+                    break
+                elapsed = time.monotonic() - start
+                if contract.progress_callback:
+                    await self._emit(
+                        contract,
+                        EventKind.TASK_PROGRESS,
+                        {"elapsed": elapsed, "status": "running"},
+                    )
+
+        if contract.progress_callback:
+            heartbeat_task = asyncio.create_task(_heartbeat())
 
         try:
             process.start()
@@ -1533,6 +1596,13 @@ class SubagentOrchestrator:
             )
 
         finally:
+            _done[0] = True
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
+                try:
+                    await heartbeat_task
+                except asyncio.CancelledError:
+                    pass
             # Cleanup temp file
             try:
                 Path(result_path).unlink(missing_ok=True)
@@ -1543,6 +1613,7 @@ class SubagentOrchestrator:
         self,
         contracts: list[SubagentContract],
         max_concurrent: int = 4,
+        adaptive: bool = True,
     ) -> list[SubagentResult]:
         """Run multiple subagent contracts concurrently.
 
@@ -1552,13 +1623,25 @@ class SubagentOrchestrator:
             Subagent specifications to execute.
         max_concurrent:
             Maximum number of subagents running at once (semaphore).
+        adaptive:
+            If True, adjust max_concurrent based on system load and token budget.
 
         Returns
         -------
         list[SubagentResult]
             One result per contract, in the same order as ``contracts``.
         """
-        semaphore = asyncio.Semaphore(max_concurrent)
+        # ── Adaptive load balancing ──────────────────────────────────
+        effective_max = max_concurrent
+        if adaptive:
+            effective_max = self._adaptive_max_concurrent(max_concurrent, len(contracts))
+            if effective_max != max_concurrent:
+                logger.info(
+                    "Adaptive load balancing: max_concurrent %d → %d",
+                    max_concurrent, effective_max,
+                )
+
+        semaphore = asyncio.Semaphore(effective_max)
 
         async def _guarded(contract: SubagentContract) -> SubagentResult:
             async with semaphore:
@@ -1594,6 +1677,43 @@ class SubagentOrchestrator:
         )
         return resolved
 
+    def _adaptive_max_concurrent(self, requested: int, queue_size: int) -> int:
+        """Adjust max_concurrent based on system load and token budget.
+
+        Returns a value between 1 and requested.
+        """
+        import os
+
+        # Start with requested value
+        effective = requested
+
+        # Check token budget
+        remaining = self.get_token_budget_remaining()
+        if remaining is not None:
+            # If budget is tight, reduce concurrency
+            budget_ratio = remaining / max(self._global_token_budget, 1)
+            if budget_ratio < 0.1:
+                effective = min(effective, 1)
+            elif budget_ratio < 0.3:
+                effective = min(effective, 2)
+
+        # Check CPU load (Unix only)
+        try:
+            cpu_count = os.cpu_count() or 4
+            load_avg = os.getloadavg()[0]  # 1-minute load
+            # If load > CPU count, reduce concurrency
+            if load_avg > cpu_count * 1.5:
+                effective = min(effective, 1)
+            elif load_avg > cpu_count:
+                effective = min(effective, max(1, effective // 2))
+        except (AttributeError, OSError):
+            pass  # Not on Unix
+
+        # Don't exceed queue size
+        effective = min(effective, queue_size)
+
+        return max(1, effective)
+
     def get_telemetry(self) -> dict[str, list[dict]]:
         """Return per-model telemetry: latency, success rate, token usage."""
         return {k: list(v) for k, v in self._telemetry.items()}
@@ -1625,6 +1745,7 @@ class SubagentOrchestrator:
         mapper: Callable[[str], SubagentContract],
         reducer: str,
         max_concurrent: int = 4,
+        retry_failed: bool = True,
     ) -> SubagentResult:
         """Map-reduce: split work across mappers, then synthesize with a reducer.
 
@@ -1640,6 +1761,8 @@ class SubagentOrchestrator:
             Task description for the reducer subagent.
         max_concurrent:
             Maximum number of mapper subagents running at once.
+        retry_failed:
+            If True, retry failed mappers once before reducing.
 
         Returns
         -------
@@ -1649,6 +1772,34 @@ class SubagentOrchestrator:
         # ── Map phase ────────────────────────────────────────────────
         mapper_contracts = [mapper(item) for item in items]
         mapper_results = await self.run_parallel(mapper_contracts, max_concurrent)
+
+        # ── Retry failed mappers ─────────────────────────────────────
+        if retry_failed:
+            retry_contracts = []
+            retry_indices = []
+            for i, r in enumerate(mapper_results):
+                if not r.success and not r.timed_out:
+                    contract = mapper_contracts[i]
+                    retry_contract = SubagentContract(
+                        **{
+                            **{k: v for k, v in contract.__dict__.items()
+                               if k in SubagentContract.__dataclass_fields__},
+                            "task": (
+                                f"{contract.task}\n\n"
+                                f"IMPORTANT: Previous attempt failed: {r.error or 'unknown'}. "
+                                f"Please try again with a different approach."
+                            ),
+                        }
+                    )
+                    retry_contracts.append(retry_contract)
+                    retry_indices.append(i)
+
+            if retry_contracts:
+                logger.info("Retrying %d failed mapper(s)", len(retry_contracts))
+                retry_results = await self.run_parallel(retry_contracts, max_concurrent)
+                for idx, r_result in zip(retry_indices, retry_results):
+                    if r_result.success:
+                        mapper_results[idx] = r_result
 
         # ── Build reducer input ──────────────────────────────────────
         successful = [r for r in mapper_results if r.success]
@@ -1790,6 +1941,36 @@ class SubagentOrchestrator:
             winner = winner_group[0]
             count = len(winner_group)
             consensus_reached = count / total >= consensus_threshold
+
+            # Tie-breaker: if two groups are equal size, run a decider
+            if len(groups) >= 2:
+                sorted_groups = sorted(groups, key=len, reverse=True)
+                if len(sorted_groups[0]) == len(sorted_groups[1]):
+                    logger.info("Vote tie detected (%d-%d), running tie-breaker",
+                                len(sorted_groups[0]), len(sorted_groups[1]))
+                    tie_contract = SubagentContract(
+                        name="tie-breaker",
+                        role="generalist",
+                        task=(
+                            f"Break this tie vote.\n\n"
+                            f"Question: {task}\n\n"
+                            f"Option A ({len(sorted_groups[0])} votes):\n"
+                            f"{sorted_groups[0][0][:500]}\n\n"
+                            f"Option B ({len(sorted_groups[1])} votes):\n"
+                            f"{sorted_groups[1][0][:500]}\n\n"
+                            f"Which option is better? Respond with 'A' or 'B' and a brief reason."
+                        ),
+                        timeout_seconds=30,
+                        max_iterations=5,
+                    )
+                    tie_result = await self.run(tie_contract)
+                    if tie_result.success and "A" in tie_result.output.upper():
+                        winner = sorted_groups[0][0]
+                        count = len(sorted_groups[0])
+                    elif tie_result.success and "B" in tie_result.output.upper():
+                        winner = sorted_groups[1][0]
+                        count = len(sorted_groups[1])
+                    consensus_reached = count / total >= consensus_threshold
         else:
             winner = ""
             count = 0
@@ -1834,6 +2015,7 @@ class SubagentOrchestrator:
         contracts: list[SubagentContract],
         pass_context: bool = True,
         max_concurrent: int = 1,
+        continue_on_error: bool = False,
     ) -> SubagentResult:
         """Chain: run subagents sequentially, optionally passing context forward.
 
@@ -1846,6 +2028,8 @@ class SubagentOrchestrator:
         max_concurrent:
             For chains this is typically 1 (sequential). Higher values
             allow parallel steps but break context passing.
+        continue_on_error:
+            If True, continue the chain even if a step fails.
 
         Returns
         -------
@@ -1863,6 +2047,7 @@ class SubagentOrchestrator:
         total_input_tokens = 0
         total_output_tokens = 0
         total_tokens = 0
+        failed_steps = []
 
         for i, contract in enumerate(contracts):
             if pass_context and context_parts:
@@ -1894,27 +2079,29 @@ class SubagentOrchestrator:
                 )
 
             if not result.success:
-                # Chain broke — return partial result
-                output = (
-                    f"## Chain Failed at Step {i+1}/{len(contracts)}\n\n"
-                    f"**Failed step:** {contract.name}\n"
-                    f"**Error:** {result.error or 'unknown error'}\n\n"
-                    f"### Completed Steps\n"
-                    + "\n\n".join(context_parts[:-1] if context_parts else [])
-                )
-                return SubagentResult(
-                    task_id=f"chain-failed-at-{i+1}",
-                    success=False,
-                    output=output,
-                    elapsed_seconds=total_elapsed,
-                    iterations_used=total_iterations,
-                    files_changed=list(set(all_files_changed)),
-                    input_tokens=total_input_tokens,
-                    output_tokens=total_output_tokens,
-                    tokens_used=total_tokens,
-                )
+                failed_steps.append((i + 1, contract.name, result.error))
+                if not continue_on_error:
+                    # Chain broke — return partial result
+                    output = (
+                        f"## Chain Failed at Step {i+1}/{len(contracts)}\n\n"
+                        f"**Failed step:** {contract.name}\n"
+                        f"**Error:** {result.error or 'unknown error'}\n\n"
+                        f"### Completed Steps\n"
+                        + "\n\n".join(context_parts[:-1] if context_parts else [])
+                    )
+                    return SubagentResult(
+                        task_id=f"chain-failed-at-{i+1}",
+                        success=False,
+                        output=output,
+                        elapsed_seconds=total_elapsed,
+                        iterations_used=total_iterations,
+                        files_changed=list(set(all_files_changed)),
+                        input_tokens=total_input_tokens,
+                        output_tokens=total_output_tokens,
+                        tokens_used=total_tokens,
+                    )
 
-        # Chain completed successfully
+        # Chain completed (possibly with failures if continue_on_error=True)
         if last_result is None:
             return SubagentResult(
                 task_id="chain-empty",
@@ -1923,20 +2110,27 @@ class SubagentOrchestrator:
             )
 
         # Augment final result with chain metadata
-        last_result.output = (
-            f"## Chain Complete ({len(contracts)} steps)\n\n"
-            f"{last_result.output}\n\n"
-            f"---\n"
+        success = len(failed_steps) == 0
+        output_lines = [f"## Chain Complete ({len(contracts)} steps)"]
+        if failed_steps:
+            output_lines.append(f"\n**Failed steps:** {len(failed_steps)}")
+            for step_num, name, error in failed_steps:
+                output_lines.append(f"- Step {step_num} ({name}): {error or 'unknown'}")
+        output_lines.append(f"\n{last_result.output}")
+        output_lines.append(
+            f"\n---\n"
             f"*Chain elapsed: {total_elapsed:.1f}s, "
             f"iterations: {total_iterations}, "
             f"tokens: {total_tokens}*"
         )
+        last_result.output = "\n".join(output_lines)
         last_result.elapsed_seconds = total_elapsed
         last_result.iterations_used = total_iterations
         last_result.input_tokens = total_input_tokens
         last_result.output_tokens = total_output_tokens
         last_result.tokens_used = total_tokens
         last_result.files_changed = list(set(all_files_changed))
+        last_result.success = success
         return last_result
 
     # ── Internal helpers ───────────────────────────────────────────────

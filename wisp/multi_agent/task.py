@@ -145,6 +145,9 @@ class SubagentContract:
     retry_count: int = 0
     """Number of schema validation retries attempted."""
 
+    max_memory_mb: int = 2048
+    """Maximum memory limit for process subagents (Unix only)."""
+
     def __post_init__(self):
         """Normalize backward-compat aliases."""
         if self.prompt and not self.task:
