@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 class AgentStatus(Enum):
