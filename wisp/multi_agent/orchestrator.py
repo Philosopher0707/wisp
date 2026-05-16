@@ -1715,6 +1715,7 @@ class SubagentOrchestrator:
             "prompt": contract.prompt,
             "context_files": contract.context_files,
             "_subagent_depth": contract._subagent_depth + 1,
+            "_subagent_branch_count": getattr(contract, "_subagent_branch_count", 0) + 1,
         }
 
         process = mp.Process(
@@ -2496,6 +2497,12 @@ class SubagentOrchestrator:
         This ensures the work can be cancelled by asyncio.wait_for via
         asyncio.to_thread, which is not possible when a sync blocking call
         is nested inside an async coroutine.
+
+        WARNING: This creates a nested event loop (parent loop → to_thread →
+        new loop). This is an anti-pattern but necessary because _run_agent
+        calls async code (run_task) that may spawn subagents. Always cancel
+        pending tasks before closing to avoid "Task was destroyed but it is
+        pending!" warnings.
         """
         loop = asyncio.new_event_loop()
         try:

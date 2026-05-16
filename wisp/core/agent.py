@@ -1303,9 +1303,17 @@ class WispAgentCore:
         from wisp.multi_agent import SubagentOrchestrator, SubagentContract
         from wisp.multi_agent.task import EventKind, OrchestratorEvent
 
+        # ── Depth and branching limits ─────────────────────────────────
+        MAX_SUBAGENT_DEPTH = 2
+        MAX_SUBAGENT_BRANCHING = 3
+
         depth = getattr(self, "_subagent_depth", 0)
-        if depth >= 1:
-            return "[Error: subagents cannot spawn subagents (max depth = 1)]"
+        if depth >= MAX_SUBAGENT_DEPTH:
+            return f"[Error: subagent depth {depth} exceeds max {MAX_SUBAGENT_DEPTH}]"
+
+        branch_count = getattr(self, "_subagent_branch_count", 0)
+        if branch_count >= MAX_SUBAGENT_BRANCHING:
+            return f"[Error: subagent branching {branch_count} exceeds max {MAX_SUBAGENT_BRANCHING}]"
 
         # ── Build contract from tool args ──────────────────────────────
         contract = SubagentContract(
@@ -1319,6 +1327,8 @@ class WispAgentCore:
             worktree_isolated=args.get("worktree_isolated", False),
             max_tokens=args.get("max_tokens"),
             output_schema=args.get("output_schema"),
+            _subagent_depth=depth + 1,
+            _subagent_branch_count=branch_count + 1,
         )
 
         # ── Check cache ────────────────────────────────────────────────
@@ -1549,19 +1559,22 @@ class WispAgentCore:
         return events
 
     def _research_angles(self, prompt: str) -> list[str]:
-        """Break a research prompt into parallel investigation angles."""
+        """Break a research prompt into parallel investigation angles.
+
+        Loads domain-specific angles from config if available,
+        otherwise falls back to a generic 4-angle template.
+        """
         prompt_lower = prompt.lower()
 
-        # KV caching research
-        if "kv cache" in prompt_lower or "kv caching" in prompt_lower:
-            return [
-                "Research the foundational problem: why KV caching is needed in transformers, memory complexity of attention",
-                "Research architectural improvements: Multi-Query Attention, Grouped-Query Attention, FlashAttention optimizations",
-                "Research compression methods: quantization, eviction policies, H2O, SnapKV, dynamic compression",
-                "Research system-level optimizations: vLLM PagedAttention, continuous batching, memory paging",
-            ]
+        # ── Config-driven domain angles ──────────────────────────────────
+        # Load from config if user has defined custom research angles
+        config_angles = getattr(self.config, "research_angles", {})
+        if isinstance(config_angles, dict):
+            for keyword, angles in config_angles.items():
+                if keyword.lower() in prompt_lower:
+                    return [a.format(prompt=prompt) for a in angles]
 
-        # Generic research breakdown
+        # ── Generic research breakdown ───────────────────────────────────
         return [
             f"Research the core concepts and fundamentals: {prompt}",
             f"Research recent advances and state-of-the-art: {prompt}",
@@ -1746,11 +1759,11 @@ class WispAgentCore:
         # Clamp: never less than 30s, never more than 300s
         adaptive = max(30.0, min(estimated_seconds, 300.0))
 
-        # Respect explicit user request — don't override with larger adaptive timeout
-        # User knows their constraints better than our heuristic
+        # Respect explicit user request — but enforce the 300s cap
+        # to prevent resource exhaustion and cascading timeouts
         if requested >= 30.0:
-            return requested
-        return max(adaptive, requested)
+            return min(requested, 300.0)
+        return adaptive
 
     # ── Non-interactive task runner ──────────────────────────────────
 
@@ -1782,7 +1795,12 @@ class WispAgentCore:
                 return {"success": False, "output": f"[Task timed out after {timeout_seconds:.0f}s]"}
 
             try:
-                response = self._run_turn_streaming(system)
+                # Offload sync streaming to thread pool to avoid blocking
+                # the event loop during long model calls
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None, self._run_turn_streaming, system
+                )
             except Exception as e:
                 return {"success": False, "output": f"[Error during task execution: {e}]"}
 

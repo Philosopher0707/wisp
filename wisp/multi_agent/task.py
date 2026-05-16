@@ -142,6 +142,9 @@ class SubagentContract:
     _subagent_depth: int = 0
     """Current nesting depth. Prevents recursive subagent spawning beyond max_depth."""
 
+    _subagent_branch_count: int = 0
+    """Number of subagents spawned by this agent. Prevents exponential explosion."""
+
     retry_count: int = 0
     """Number of schema validation retries attempted."""
 

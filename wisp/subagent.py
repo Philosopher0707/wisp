@@ -77,6 +77,7 @@ class SubagentRunner:
 
         # Prevent infinite recursion: subagents cannot spawn subagents
         child._subagent_depth = getattr(self.parent, "_subagent_depth", 0) + 1
+        child._subagent_branch_count = getattr(self.parent, "_subagent_branch_count", 0) + 1
 
         # Build specialized system prompt
         system = self._build_subagent_system(contract, child)
@@ -85,8 +86,9 @@ class SubagentRunner:
         child.messages.append({"role": "user", "content": contract.task})
 
         logger.info(
-            "Spawning subagent (depth=%d, timeout=%ds, iterations=%d)",
+            "Spawning subagent (depth=%d, branch=%d, timeout=%ds, iterations=%d)",
             child._subagent_depth,
+            child._subagent_branch_count,
             contract.timeout_seconds,
             contract.max_iterations,
         )
