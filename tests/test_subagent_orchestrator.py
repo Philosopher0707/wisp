@@ -1540,10 +1540,14 @@ async def test_clear_cache(orch):
 @pytest.mark.asyncio
 async def test_context_files_injected_in_process(orch):
     """Process subagents receive context_files and attempt to read them."""
+    # Create the context files in the orch workspace so the agent can read them
+    workspace = Path(orch.workspace)
+    (workspace / "auth.py").write_text("# auth module")
+    (workspace / "main.py").write_text("# main module")
     contract = SubagentContract(
         name="ctx-test",
         task="Analyze these files",
-        context_files=["auth.py", "main.py"],
+        context_files=[str(workspace / "auth.py"), str(workspace / "main.py")],
         isolation="process",
         timeout_seconds=30,
     )
@@ -1738,4 +1742,115 @@ async def test_role_validation_valid_role(mock_parent_agent):
     )
     with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
         result = await orch.run(contract)
+    assert result.success
+
+
+# ── Edge Cases ───────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_run_parallel_empty_contracts(mock_parent_agent):
+    """run_parallel with empty list should return empty results."""
+    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+    results = await orch.run_parallel([])
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_run_map_reduce_empty_items(mock_parent_agent):
+    """run_map_reduce with empty items should fail gracefully."""
+    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+    result = await orch.run_map_reduce(
+        task="Analyze",
+        items=[],
+        mapper=lambda x: SubagentContract(name=x, role="coder", task=x),
+        reducer="Summarize",
+    )
+    assert not result.success
+    assert "No items provided" in result.error
+
+
+@pytest.mark.asyncio
+async def test_run_vote_empty_agents(mock_parent_agent):
+    """run_vote with empty agents should fail gracefully."""
+    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+    result = await orch.run_vote(
+        task="Is this good?",
+        agents=[],
+        consensus_threshold=0.5,
+    )
+    assert not result.success
+    assert "No agents provided" in result.error
+
+
+@pytest.mark.asyncio
+async def test_run_chain_empty_contracts(mock_parent_agent):
+    """run_chain with empty contracts should return empty result."""
+    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+    result = await orch.run_chain(contracts=[])
+    assert result.task_id == "chain-empty"
+    assert result.output == "(empty chain)"
+
+
+@pytest.mark.asyncio
+async def test_contract_timeout_zero(mock_parent_agent):
+    """Contract with timeout=0 should be rejected."""
+    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+    contract = SubagentContract(
+        name="bad-timeout",
+        role="coder",
+        task="test",
+        timeout_seconds=0,
+    )
+    result = await orch.run(contract)
+    assert not result.success
+    assert "timeout_seconds must be > 0" in result.error
+
+
+@pytest.mark.asyncio
+async def test_contract_max_iterations_zero(mock_parent_agent):
+    """Contract with max_iterations=0 should be rejected."""
+    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+    contract = SubagentContract(
+        name="bad-iter",
+        role="coder",
+        task="test",
+        timeout_seconds=5,
+        max_iterations=0,
+    )
+    result = await orch.run(contract)
+    assert not result.success
+    assert "max_iterations must be > 0" in result.error
+
+
+def test_persisted_results_corrupted_jsonl(mock_parent_agent, tmp_path):
+    """Corrupted JSONL lines should be skipped, not crash."""
+    orch = SubagentOrchestrator(parent_agent=mock_parent_agent, workspace=tmp_path)
+    # Write a corrupted JSONL file
+    persist_file = tmp_path / ".wisp" / "subagent_results.jsonl"
+    persist_file.parent.mkdir(parents=True, exist_ok=True)
+    persist_file.write_text(
+        '{"task_id": "good", "success": true}\n'
+        'this is not json\n'
+        '{"task_id": "good2", "success": false}\n'
+    )
+    results = orch.get_persisted_results()
+    assert len(results) == 2
+    assert results[0]["task_id"] == "good"
+    assert results[1]["task_id"] == "good2"
+
+
+@pytest.mark.asyncio
+async def test_worktree_name_sanitization(mock_parent_agent, tmp_path):
+    """Worktree names with special chars should be sanitized."""
+    orch = SubagentOrchestrator(parent_agent=mock_parent_agent, workspace=tmp_path)
+    contract = SubagentContract(
+        name="task/with\\special:chars*?\"<>|",
+        role="coder",
+        task="test",
+        timeout_seconds=5,
+        worktree_isolated=True,
+    )
+    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+        result = await orch.run(contract)
+    # Should succeed despite special chars in name
     assert result.success

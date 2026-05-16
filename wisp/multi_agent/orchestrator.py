@@ -1254,10 +1254,16 @@ class SubagentOrchestrator:
             if not self._persist_path.exists():
                 return results
             with open(self._persist_path, "r", encoding="utf-8") as f:
-                for line in f:
+                for line_num, line in enumerate(f, 1):
                     line = line.strip()
-                    if line:
+                    if not line:
+                        continue
+                    try:
                         results.append(json.loads(line))
+                    except json.JSONDecodeError as exc:
+                        logger.debug(
+                            "Skipping corrupted JSONL line %d: %s", line_num, exc
+                        )
             return results[-limit:]
         except Exception as exc:
             logger.warning("Failed to read persisted results: %s", exc)
@@ -1347,6 +1353,24 @@ class SubagentOrchestrator:
                 success=False,
                 output=f"[ROLE VALIDATION FAILED] {role_error}",
                 error=role_error,
+                elapsed_seconds=0.0,
+            )
+
+        # ── Contract parameter validation ──────────────────────────────
+        if contract.timeout_seconds <= 0:
+            return SubagentResult(
+                task_id=contract.name,
+                success=False,
+                output="[CONTRACT INVALID] timeout_seconds must be > 0",
+                error="timeout_seconds must be > 0",
+                elapsed_seconds=0.0,
+            )
+        if contract.max_iterations <= 0:
+            return SubagentResult(
+                task_id=contract.name,
+                success=False,
+                output="[CONTRACT INVALID] max_iterations must be > 0",
+                error="max_iterations must be > 0",
                 elapsed_seconds=0.0,
             )
 
@@ -1751,6 +1775,22 @@ class SubagentOrchestrator:
                 )
 
             # Process finished — read result from pipe
+            exit_code = process.exitcode
+            if exit_code is not None and exit_code != 0:
+                duration = time.monotonic() - start
+                logger.error(
+                    "Subagent %s process exited with code %d",
+                    contract.name, exit_code,
+                )
+                parent_conn.close()
+                return SubagentResult(
+                    task_id=contract.name,
+                    success=False,
+                    output=f"[PROCESS EXITED {exit_code}]",
+                    elapsed_seconds=duration,
+                    error=f"Process exited with code {exit_code}",
+                )
+
             try:
                 if parent_conn.poll(5):
                     data = parent_conn.recv()
@@ -2043,6 +2083,15 @@ class SubagentOrchestrator:
         SubagentResult
             The reducer's synthesized result.
         """
+        if not items:
+            return SubagentResult(
+                task_id="map-reduce",
+                success=False,
+                output="[MAP-REDUCE FAILED] No items provided to process.",
+                error="No items provided",
+                elapsed_seconds=0.0,
+            )
+
         # ── Map phase ────────────────────────────────────────────────
         mapper_contracts = [mapper(item) for item in items]
         mapper_results = await self.run_parallel(mapper_contracts, max_concurrent)
@@ -2164,6 +2213,15 @@ class SubagentOrchestrator:
             A synthesized result with vote metadata in the output.
         """
         # Override each agent's task with the voting task
+        if not agents:
+            return SubagentResult(
+                task_id="vote",
+                success=False,
+                output="[VOTE FAILED] No agents provided for voting.",
+                error="No agents provided",
+                elapsed_seconds=0.0,
+            )
+
         voting_contracts = []
         for agent in agents:
             c = SubagentContract(**{**agent.__dict__, "task": task})
@@ -2175,6 +2233,15 @@ class SubagentOrchestrator:
         successful = [r for r in results if r.success]
         total = len(results)
         passed = len(successful)
+
+        if total == 0:
+            return SubagentResult(
+                task_id="vote",
+                success=False,
+                output="[VOTE FAILED] No voting agents executed.",
+                error="No results from voting agents",
+                elapsed_seconds=0.0,
+            )
 
         # Robust consensus: group by normalized similarity
         from collections import Counter
@@ -2606,7 +2673,12 @@ class SubagentOrchestrator:
 
         short_id = uuid.uuid4().hex[:8]
         ts = int(time.time())
-        safe_name = agent_name.replace("/", "-").replace(" ", "-")
+        # Sanitize name for filesystem and git branch safety
+        import re
+        safe_name = re.sub(r'[^a-zA-Z0-9_-]', '-', agent_name)[:32]
+        safe_name = safe_name.strip('-')
+        if not safe_name:
+            safe_name = "subagent"
         dir_name = f"{safe_name}-{short_id}"
         branch_name = f"wisp-subagent/{safe_name}-{ts}"
 
