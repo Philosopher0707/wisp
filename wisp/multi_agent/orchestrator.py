@@ -1663,12 +1663,12 @@ class SubagentOrchestrator:
                 heartbeat_task.cancel()
                 try:
                     await heartbeat_task
-                except asyncio.CancelledError:
+                except (asyncio.CancelledError, RuntimeError):
                     pass
             health_task.cancel()
             try:
                 await health_task
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, RuntimeError):
                 pass
             # Cleanup heartbeat file
             try:
@@ -2503,6 +2503,17 @@ class SubagentOrchestrator:
                 self._run_agent(contract, config, session, system_prompt, workspace_path, tool_calls_log, heartbeat_path)
             )
         finally:
+            # Cancel all pending tasks before closing the loop to avoid
+            # "Task was destroyed but it is pending!" warnings
+            try:
+                pending = asyncio.all_tasks(loop)
+                if pending:
+                    for task in pending:
+                        task.cancel()
+                    # Give tasks a moment to cancel gracefully
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            except Exception:
+                pass
             loop.close()
 
     async def _run_agent(
