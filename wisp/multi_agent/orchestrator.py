@@ -1479,11 +1479,16 @@ class SubagentOrchestrator:
         _done = [False]
 
         async def _heartbeat():
-            """Emit periodic progress events while subagent runs."""
+            """Emit periodic progress events and touch heartbeat file."""
             while not _done[0]:
                 await asyncio.sleep(5)
                 if _done[0]:
                     break
+                # Touch heartbeat file to show subagent parent is alive
+                try:
+                    heartbeat_path.write_text(str(time.time()), encoding="utf-8")
+                except OSError:
+                    pass
                 elapsed = time.monotonic() - start
                 if contract.progress_callback:
                     await self._emit(
@@ -1502,10 +1507,10 @@ class SubagentOrchestrator:
                     if heartbeat_path.exists():
                         mtime = heartbeat_path.stat().st_mtime
                         age = time.time() - mtime
-                        if age > 15:
+                        if age > min(60.0, max(15.0, contract.timeout_seconds * 0.8)):
                             logger.warning(
-                                "Subagent %s heartbeat stale (%.0fs) — may be hung",
-                                contract.name, age,
+                                "Subagent %s heartbeat stale \u2014 may be hung (%.0fs stale, threshold %.0fs)",
+                                contract.name, age, min(60.0, max(15.0, contract.timeout_seconds * 0.8)),
                             )
                 except OSError:
                     pass
@@ -2713,7 +2718,7 @@ class SubagentOrchestrator:
         if not safe_name:
             safe_name = "subagent"
         dir_name = f"{safe_name}-{short_id}"
-        branch_name = f"wisp-subagent/{safe_name}-{ts}"
+        branch_name = f"wisp-subagent/{safe_name}-{short_id}-{ts}"
 
         worktree_path = (self._worktrees_root / dir_name).resolve()
 
@@ -2748,8 +2753,23 @@ class SubagentOrchestrator:
         return worktree_path
 
     async def _cleanup_worktree(self, worktree_path: Path) -> None:
-        """Remove a worktree and prune the associated branch."""
+        """Remove a worktree and delete the associated branch."""
         logger.info("Cleaning up worktree: %s", worktree_path)
+
+        # Derive branch name from worktree path metadata (stored in .git/worktrees/)
+        git_dir = self.workspace / ".git" / "worktrees"
+        branch_name: str | None = None
+        try:
+            for entry in git_dir.iterdir():
+                if entry.is_dir() and worktree_path.name in str(entry.name):
+                    head_file = entry / "HEAD"
+                    if head_file.exists():
+                        head_text = head_file.read_text().strip()
+                        if head_text.startswith("ref: "):
+                            branch_name = head_text.replace("ref: refs/heads/", "")
+                            break
+        except Exception as exc:
+            logger.debug("Could not determine branch for %s: %s", worktree_path, exc)
 
         proc = await asyncio.create_subprocess_exec(
             "git",
@@ -2775,6 +2795,26 @@ class SubagentOrchestrator:
                 import shutil
                 shutil.rmtree(worktree_path, ignore_errors=True)
                 logger.debug("Manually removed worktree directory: %s", worktree_path)
+
+        # Delete the orphan branch (best effort)
+        if branch_name and branch_name.startswith("wisp-subagent/"):
+            try:
+                branch_proc = await asyncio.create_subprocess_exec(
+                    "git",
+                    "branch",
+                    "-D",
+                    branch_name,
+                    cwd=str(self.workspace),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await branch_proc.communicate()
+                if branch_proc.returncode == 0:
+                    logger.debug("Deleted branch %s", branch_name)
+                else:
+                    logger.debug("Branch delete %s may already be gone", branch_name)
+            except Exception as exc:
+                logger.debug("Branch delete failed (non-critical): %s", exc)
 
         # Prune the worktree metadata
         try:
