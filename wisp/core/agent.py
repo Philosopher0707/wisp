@@ -104,6 +104,7 @@ You have access to tools that let you read, write, and edit files, run bash comm
 - lsp_hover: Get type info and docstring for a symbol
 - lsp_symbols: List all symbols in a file as an outline tree
 - diagnose: Diagnose errors from test output, tracebacks, or command failures
+- run_tests: Run tests for changed files or the full test suite
 - plan_task: Create a structured plan with subtasks and dependencies
 - mark_step_done: Mark a plan task as completed
 - update_plan: Update a plan task's status

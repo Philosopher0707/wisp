@@ -1346,6 +1346,30 @@ def tool_search_codebase(query: str, top_k: int = 5, workspace: str = ".") -> st
         return f"Semantic search error: {e}"
 
 
+def tool_run_tests(
+    files: list[str] | None = None,
+    workspace: str = ".",
+    timeout: int = 120,
+) -> str:
+    """Run tests for the given files, or all tests if no files specified.
+
+    If *files* is provided, only tests affected by those files are run.
+    If *files* is empty/None, the entire test suite is run.
+
+    Returns a formatted summary string suitable for LLM consumption.
+    """
+    try:
+        from wisp.test_runner import run_affected_tests, run_all_tests, UnitTestRunSummary
+    except ImportError as exc:
+        return f"Test runner not available: {exc}"
+
+    if files:
+        summary = run_affected_tests(files, workspace, timeout=timeout)
+    else:
+        summary = run_all_tests(workspace, timeout=timeout)
+    return summary.format_for_llm()
+
+
 # ── Tool schema definitions (Ollama tool-calling format) ──
 
 TOOL_SCHEMAS = [
@@ -1785,6 +1809,22 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_tests",
+            "description": "Run tests for the given files, or all tests if no files specified. If files are provided, only tests affected by those files are run using import-graph analysis. Returns a formatted summary with pass/fail counts and failure details.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "files": {"type": "array", "items": {"type": "string"}, "description": "List of changed source files to find affected tests for. If empty/omitted, runs the full test suite."},
+                    "workspace": {"type": "string", "description": "Workspace directory containing the tests", "default": "."},
+                    "timeout": {"type": "integer", "description": "Maximum seconds to wait for tests", "default": 120},
+                },
+                "required": [],
+            },
+        },
+    },
 ]
 
 def _tool_spawn_subagent_stub(**kwargs) -> str:
@@ -1839,6 +1879,7 @@ TOOL_IMPLS = {
     "lsp_symbols": tool_lsp_symbols,
     "web_search": tool_web_search,
     "search_codebase": tool_search_codebase,
+    "run_tests": tool_run_tests,
 }
 
 
