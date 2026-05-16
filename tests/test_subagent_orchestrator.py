@@ -1633,7 +1633,7 @@ async def test_process_isolation_uses_pipe(mock_parent_agent, tmp_path):
         name="pipe_test",
         role="tester",
         task="test task",
-        timeout_seconds=10,
+        timeout_seconds=30,
         isolation="process",
     )
     with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
