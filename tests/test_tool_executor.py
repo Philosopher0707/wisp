@@ -24,6 +24,7 @@ def config():
     cfg.workspace = "/tmp"
     cfg.auto_approve = True
     cfg.plan_mode = False
+    cfg.permission_mode = "full"
     return cfg
 
 

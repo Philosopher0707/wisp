@@ -45,6 +45,25 @@ class MCPTool:
     description: str
     input_schema: dict[str, Any]
     server_name: str
+    def prefixed_name(self) -> str:
+        """Canonical prefixed name: mcp:server/name."""
+        return f"mcp:{self.server_name}/{self.name}"
+
+
+# Set of built-in tool names that an MCP tool must NOT shadow.
+_SHADOW_BUILTIN_TOOLS: frozenset[str] = frozenset({
+    "read_file", "write_file", "edit_file", "edit_file_multi",
+    "run_bash", "list_files", "web_fetch", "web_search",
+    "search_symbols", "search_codebase",
+    "remember", "recall",
+    "spawn_subagent",
+    "git_status", "git_diff", "git_branch", "git_commit", "git_push",
+    "gh_pr_create",
+    "lsp_diagnostics", "lsp_definition", "lsp_references",
+    "lsp_hover", "lsp_symbols",
+    "diagnose", "run_tests",
+    "plan_task", "mark_step_done", "update_plan",
+})
 
 
 @dataclass
@@ -602,25 +621,60 @@ class MCPManager:
     def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> str:
         """Call a tool by name across all connected servers.
 
-        Searches all servers for a tool with the given name.
+        Accepts plain tool names (legacy) or the canonical prefixed form
+        ``mcp:server_name/tool_name``.
         """
         self.initialize()
+        # Canonical form: mcp:server/tool
+        if tool_name.startswith("mcp:"):
+            _, rest = tool_name.split(":", 1)
+            if "/" in rest:
+                target_server, bare_name = rest.split("/", 1)
+                for server in self.servers:
+                    if server.config.name == target_server:
+                        for tool in server.tools:
+                            if tool.name == bare_name:
+                                return call_tool(server, bare_name, arguments)
+                raise ValueError(
+                    f"MCP tool '{tool_name}' not found on server '{target_server}'"
+                )
+        # Legacy plain-name search (deprecated, kept for compatibility)
         for server in self.servers:
             for tool in server.tools:
                 if tool.name == tool_name:
+                    logger.warning(
+                        "MCP tool '%s' called without prefix — prefer '%s'",
+                        tool_name,
+                        tool.prefixed_name(),
+                    )
                     return call_tool(server, tool_name, arguments)
         raise ValueError(f"MCP tool '{tool_name}' not found on any connected server")
 
     def get_tool_schemas(self) -> list[dict]:
-        """Convert MCP tools to Ollama-compatible tool schemas."""
+        """Convert MCP tools to Ollama-compatible tool schemas.
+
+        Every MCP tool name is prefixed with ``mcp:server_name/`` so it
+        cannot collide with built-in tools.
+        """
         self.initialize()
-        schemas = []
+        schemas: list[dict] = []
         for server in self.servers:
             for tool in server.tools:
+                # Warn if the bare name shadows a built-in (user won't see
+                # the collision because we prefix, but they should know).
+                if tool.name in _SHADOW_BUILTIN_TOOLS:
+                    logger.warning(
+                        "MCP server '%s' exposes tool '%s' which shadows a built-in. "
+                        "Invoked via '%s' instead.",
+                        tool.server_name,
+                        tool.name,
+                        tool.prefixed_name(),
+                    )
+                name = tool.prefixed_name()
                 schema = {
                     "type": "function",
                     "function": {
-                        "name": tool.name,
+                        "name": name,
                         "description": f"[MCP/{tool.server_name}] {tool.description}",
                         "parameters": tool.input_schema,
                     },

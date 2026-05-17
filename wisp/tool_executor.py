@@ -404,11 +404,14 @@ class ToolExecutor:
         approval handler).
 
         Hard blocks (no approval_handler can override):
-          read_only -> all write/edit/bash/git operations
+          read_only -> all write/edit/bash/git operations AND all MCP tools
         """
         mode = getattr(self.config, "permission_mode", PermissionMode.AUTO_EDIT)
         if mode == PermissionMode.READ_ONLY and func_name in _WRITE_TOOLS:
             return f"[Blocked: read_only mode - {func_name} is not allowed]"
+        # MCP tools are external code — always gated in READ_ONLY mode
+        if mode == PermissionMode.READ_ONLY and func_name.startswith("mcp:"):
+            return f"[Blocked: read_only mode - MCP tool {func_name} is not allowed]"
         return None
 
     def _needs_forced_approval(self, func_name: str) -> bool:
@@ -420,7 +423,13 @@ class ToolExecutor:
           auto_edit -> bash and git writes need approval (file ops are free)
           full      -> auto_approve governs normally
           read_only -> already caught by hard block above
+
+        MCP tools are treated as ALWAYS requiring approval because the agent
+        cannot inspect their internal behavior; they are external code.
         """
+        # MCP tools = external code = always require explicit approval
+        if func_name.startswith("mcp:"):
+            return True
         mode = getattr(self.config, "permission_mode", PermissionMode.AUTO_EDIT)
         if mode == PermissionMode.ASK_ALL:
             return func_name in _WRITE_TOOLS
@@ -479,9 +488,17 @@ class ToolExecutor:
         return result, duration_ms
 
     def _is_mcp_tool(self, name: str) -> bool:
-        """Check if a tool name belongs to an MCP server."""
+        """Check if a tool name belongs to an MCP server.
+
+        Accepts both the canonical prefixed form ``mcp:server/tool``
+        and legacy bare names.
+        """
         if not self.mcp:
             return False
+        # Fast path: canonical namespace prefix
+        if name.startswith("mcp:"):
+            return True
+        # Legacy bare-name search — must match a tool on some MCP server
         try:
             for tool in self.mcp.get_all_tools():
                 if getattr(tool, "name", None) == name:
