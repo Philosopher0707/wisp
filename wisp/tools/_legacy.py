@@ -32,6 +32,8 @@ from wisp.tools.long_horizon import (
     tool_cancel_task,
     tool_cleanup_tasks,
     tool_task_output,
+    tool_export_task,
+    tool_import_task,
 )
 
 from wisp.tools.errors import ToolError
@@ -111,7 +113,7 @@ class _TextExtractor(HTMLParser):
 _MAX_READ_SIZE = 50 * 1024 * 1024       # 50 MB
 _MAX_WRITE_SIZE = 100 * 1024 * 1024     # 100 MB
 _MAX_BASH_OUTPUT = 50_000               # chars of output to return to model
-_MAX_CMD_LENGTH = 4096                  # max command length for safety
+_MAX_CMD_LENGTH = 16384                 # max command length for safety
 _MAX_OLD_TEXT_LENGTH = 5_000_000          # max length for old_text in edit operations
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
 
@@ -1951,6 +1953,35 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "export_task",
+            "description": "Export a long-horizon task checkpoint to a JSON file for backup or transfer.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task ID to export"},
+                    "output_path": {"type": "string", "description": "Destination file path (default: task_id.json)", "default": ""},
+                },
+                "required": ["task_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "import_task",
+            "description": "Import a long-horizon task checkpoint from a JSON file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the exported task JSON file"},
+                },
+                "required": ["path"],
+            },
+        },
+    },
 ]
 
 def _tool_spawn_subagent_stub(**kwargs) -> str:
@@ -2014,6 +2045,8 @@ TOOL_IMPLS = {
     "cancel_task": tool_cancel_task,
     "cleanup_tasks": tool_cleanup_tasks,
     "task_output": tool_task_output,
+    "export_task": tool_export_task,
+    "import_task": tool_import_task,
 }
 
 

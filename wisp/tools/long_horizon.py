@@ -406,3 +406,78 @@ def tool_task_output(
             "total_steps": state.total_steps,
         },
     })
+
+
+def tool_export_task(
+    task_id: str,
+    output_path: str = "",
+) -> str:
+    """Export a long-horizon task checkpoint to a JSON file.
+
+    Args:
+        task_id: Task ID to export.
+        output_path: Destination file path (default: task_id.json in cwd).
+    """
+    storage = TaskStorage()
+    state = storage.load(task_id)
+
+    if state is None:
+        return json.dumps({
+            "status": "error",
+            "tool": "export_task",
+            "data": f"Task not found: {task_id}",
+            "metadata": {},
+        })
+
+    import os
+    dest = output_path or f"{task_id}.json"
+    try:
+        with open(dest, "w", encoding="utf-8") as f:
+            f.write(state.to_json(indent=2))
+        return json.dumps({
+            "status": "ok",
+            "tool": "export_task",
+            "data": f"Task {task_id} exported to {dest}",
+            "metadata": {"task_id": task_id, "path": dest},
+        })
+    except Exception as e:
+        return json.dumps({
+            "status": "error",
+            "tool": "export_task",
+            "data": f"Export failed: {e}",
+            "metadata": {},
+        })
+
+
+def tool_import_task(
+    path: str,
+) -> str:
+    """Import a long-horizon task checkpoint from a JSON file.
+
+    Args:
+        path: Path to the exported task JSON file.
+    """
+    storage = TaskStorage()
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+        state = TaskState.from_json(text)
+        storage.save(state)
+        return json.dumps({
+            "status": "ok",
+            "tool": "import_task",
+            "data": f"Task {state.task_id} imported from {path}",
+            "metadata": {
+                "task_id": state.task_id,
+                "goal": state.goal,
+                "status": state.status.value,
+            },
+        })
+    except Exception as e:
+        return json.dumps({
+            "status": "error",
+            "tool": "import_task",
+            "data": f"Import failed: {e}",
+            "metadata": {},
+        })

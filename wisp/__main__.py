@@ -891,8 +891,36 @@ def cmd_task(args: list[str]):
             print(error(parsed["data"]))
         return
 
+    if sub == "export":
+        if not rest:
+            print(error("✗ Usage: wisp task export <task-id> [output-path]"))
+            return
+        task_id = rest[0]
+        output_path = rest[1] if len(rest) > 1 else ""
+        from wisp.tools.long_horizon import tool_export_task
+        result = tool_export_task(task_id=task_id, output_path=output_path)
+        parsed = json.loads(result)
+        if parsed["status"] == "ok":
+            print(success(parsed["data"]))
+        else:
+            print(error(parsed["data"]))
+        return
+
+    if sub == "import":
+        if not rest:
+            print(error("✗ Usage: wisp task import <path>"))
+            return
+        from wisp.tools.long_horizon import tool_import_task
+        result = tool_import_task(path=rest[0])
+        parsed = json.loads(result)
+        if parsed["status"] == "ok":
+            print(success(parsed["data"]))
+        else:
+            print(error(parsed["data"]))
+        return
+
     print(error(f"✗ Unknown task subcommand: {sub}"))
-    print(dim("  Try: list, status <id>, start <goal>, pause <id>, resume <id>, cancel <id>, output <id>, cleanup [status] [--force] [--days N]"))
+    print(dim("  Try: list, status <id>, start <goal>, pause <id>, resume <id>, cancel <id>, output <id>, export <id> [path], import <path>, cleanup [status] [--force] [--days N]"))
 
 
 # ── Session commands ─────────────────────────────────────────────────

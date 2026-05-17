@@ -199,9 +199,14 @@ class TestToolRunBash:
         result = tool_run_bash("echo err >&2", str(temp_workspace))
         assert "err" in result
 
+    def test_command_within_new_limit(self, temp_workspace):
+        # 11000 chars should pass with 16KB limit
+        result = tool_run_bash("echo " + "x" * 10950, str(temp_workspace))
+        assert "x" * 100 in result
+
     def test_command_too_long(self, temp_workspace):
         with pytest.raises(ToolError, match="too long"):
-            tool_run_bash("x" * 5000, str(temp_workspace))
+            tool_run_bash("x" * 17000, str(temp_workspace))
 
     def test_output_truncated(self, temp_workspace):
         result = tool_run_bash("python3 -c \"print('a'*60000)\"", str(temp_workspace))

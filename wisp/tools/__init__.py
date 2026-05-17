@@ -69,6 +69,8 @@ from wisp.tools.long_horizon import (
     tool_cancel_task,
     tool_cleanup_tasks,
     tool_task_output,
+    tool_export_task,
+    tool_import_task,
 )
 
 # Override legacy implementations with submodule versions where available
@@ -108,6 +110,8 @@ _SUBMODULE_OVERRIDES = {
     "cancel_task": tool_cancel_task,
     "cleanup_tasks": tool_cleanup_tasks,
     "task_output": tool_task_output,
+    "export_task": tool_export_task,
+    "import_task": tool_import_task,
 }
 
 # Apply overrides to the legacy registry

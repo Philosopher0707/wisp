@@ -117,6 +117,8 @@ You have access to tools that let you read, write, and edit files, run bash comm
 - cancel_task: Cancel a long-horizon task, marking it as failed
 - cleanup_tasks: Clean up old completed/failed tasks by age
 - task_output: Get full output and artifacts from a completed task
+- export_task: Export a task checkpoint to JSON for backup
+- import_task: Import a task checkpoint from JSON
 """
 
 

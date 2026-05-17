@@ -77,7 +77,7 @@ class _TextExtractor(HTMLParser):
 _MAX_READ_SIZE = 50 * 1024 * 1024       # 50 MB
 _MAX_WRITE_SIZE = 100 * 1024 * 1024     # 100 MB
 _MAX_BASH_OUTPUT = 50_000               # chars of output to return to model
-_MAX_CMD_LENGTH = 4096                  # max command length for safety
+_MAX_CMD_LENGTH = 16384                 # max command length for safety
 _MAX_OLD_TEXT_LENGTH = 5_000_000          # max length for old_text in edit operations
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
 
