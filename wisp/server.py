@@ -1031,8 +1031,9 @@ async def _launch_swarm_ws(
 _SWARM_TTL_SECONDS = 600  # auto-evict finished runs after 10 minutes
 # SwarmStateStore is a dict-like SQLite-backed store for multi-process safety
 _swarm_store = SwarmStateStore(str(WORKSPACE_ROOT))
-# SQLite WAL handles concurrent reads/writes — no explicit lock needed
-_swarm_lock = None  # placeholder: SQLite WAL replaces lock
+# Orchestrator objects are process-local (not serializable). Only the worker
+# that starts a swarm keeps a handle for cancellation.
+_swarm_orchestrators: dict[str, Any] = {}
 
 
 @app.post("/api/swarm/run", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
@@ -1336,8 +1337,8 @@ async def get_diagnostics(path: str):
     if not target.exists():
         raise HTTPException(status_code=404, detail="File not found")
     try:
-        from wisp.lsp.manager import LSPManager
-        lsp = LSPManager(str(WORKSPACE_ROOT))
+        from wisp.lsp.manager import get_lsp_manager
+        lsp = get_lsp_manager(str(WORKSPACE_ROOT))
         diags = lsp.get_diagnostics(str(target))
         return {"path": path, "diagnostics": diags, "count": len(diags)}
     except Exception as e:
@@ -1348,8 +1349,8 @@ async def get_diagnostics(path: str):
 async def get_suggestions():
     """Return files changed since last poll with diagnostic counts."""
     try:
-        from wisp.lsp.manager import LSPManager
-        lsp = LSPManager(str(WORKSPACE_ROOT))
+        from wisp.lsp.manager import get_lsp_manager
+        lsp = get_lsp_manager(str(WORKSPACE_ROOT))
         watcher = _get_suggestion_watcher()
         suggestions = watcher.get_suggestions(lsp)
         return {
