@@ -850,8 +850,35 @@ def cmd_task(args: list[str]):
         print(info(parsed["data"]))
         return
 
+    if sub == "cleanup":
+        status_filter = rest[0] if rest else "completed"
+        older_than = 7
+        dry_run = True
+        # Parse flags: --force, --days N
+        i = 1 if rest else 0
+        while i < len(rest):
+            if rest[i] == "--force":
+                dry_run = False
+            elif rest[i] == "--days" and i + 1 < len(rest):
+                try:
+                    older_than = int(rest[i + 1])
+                    i += 1
+                except ValueError:
+                    pass
+            i += 1
+        from wisp.tools.long_horizon import tool_cleanup_tasks
+        result = tool_cleanup_tasks(
+            status_filter=status_filter,
+            older_than_days=older_than,
+            dry_run=dry_run,
+        )
+        parsed = json.loads(result)
+        print(info(parsed["data"]))
+        if dry_run and parsed["metadata"]["removed"] > 0:
+            print(dim(f"\n  Run with --force to actually delete."))
+
     print(error(f"✗ Unknown task subcommand: {sub}"))
-    print(dim("  Try: list, status <id>, start <goal>, pause <id>, resume <id>, cancel <id>"))
+    print(dim("  Try: list, status <id>, start <goal>, pause <id>, resume <id>, cancel <id>, cleanup [status] [--force] [--days N]"))
 
 
 # ── Session commands ─────────────────────────────────────────────────

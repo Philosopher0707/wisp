@@ -263,3 +263,92 @@ def tool_cancel_task(
             "status": "failed",
         },
     })
+
+
+def tool_cleanup_tasks(
+    status_filter: str = "completed",
+    older_than_days: int = 7,
+    dry_run: bool = True,
+) -> str:
+    """Clean up old long-horizon tasks.
+
+    Args:
+        status_filter: Remove tasks with this status (completed, failed, all).
+        older_than_days: Only remove tasks older than this many days.
+        dry_run: If True, show what would be removed without deleting.
+    """
+    import time
+    from pathlib import Path
+
+    storage = TaskStorage()
+    tasks_dir = Path(storage.tasks_dir)
+    if not tasks_dir.exists():
+        return json.dumps({
+            "status": "ok",
+            "tool": "cleanup_tasks",
+            "data": "No tasks directory found.",
+            "metadata": {"removed": 0},
+        })
+
+    cutoff = time.time() - (older_than_days * 86400)
+    removed = []
+    skipped = []
+
+    for task_file in tasks_dir.glob("*.json"):
+        try:
+            import json
+            data = json.loads(task_file.read_text())
+            status = data.get("status", "")
+            updated = data.get("updated_at", "")
+
+            # Parse updated_at timestamp
+            try:
+                from datetime import datetime
+                updated_ts = datetime.fromisoformat(updated).timestamp()
+            except Exception:
+                updated_ts = task_file.stat().st_mtime
+
+            # Check status filter
+            if status_filter != "all" and status != status_filter:
+                skipped.append((task_file.stem, status, "status mismatch"))
+                continue
+
+            # Check age
+            if updated_ts > cutoff:
+                skipped.append((task_file.stem, status, "too recent"))
+                continue
+
+            if dry_run:
+                removed.append((task_file.stem, status, updated))
+            else:
+                task_file.unlink()
+                removed.append((task_file.stem, status, updated))
+        except Exception as e:
+            skipped.append((task_file.stem, "?", f"error: {e}"))
+
+    lines = []
+    if dry_run:
+        lines.append(f"DRY RUN — {len(removed)} task(s) would be removed:")
+    else:
+        lines.append(f"Removed {len(removed)} task(s):")
+
+    for tid, status, updated in removed:
+        lines.append(f"  {tid} ({status}) — {updated[:19]}")
+
+    if skipped:
+        lines.append(f"\nSkipped {len(skipped)} task(s):")
+        for tid, status, reason in skipped[:10]:
+            lines.append(f"  {tid} ({status}) — {reason}")
+        if len(skipped) > 10:
+            lines.append(f"  ... and {len(skipped) - 10} more")
+
+    return json.dumps({
+        "status": "ok",
+        "tool": "cleanup_tasks",
+        "data": "\n".join(lines) if lines else "No tasks to clean up.",
+        "metadata": {
+            "removed": len(removed),
+            "skipped": len(skipped),
+            "dry_run": dry_run,
+        },
+    })
