@@ -31,6 +31,15 @@ export function useKeybindings() {
         sendMessage({ type: 'new_session' });
         dispatch({ type: 'NEW_SESSION' });
       }
+      if (input === 'b') {
+        dispatch({ type: 'SCROLL_UP', lines: 5 });
+      }
+      if (input === 'f') {
+        dispatch({ type: 'SCROLL_DOWN', lines: 5 });
+      }
+      if (input === 'e') {
+        dispatch({ type: 'SCROLL_BOTTOM' });
+      }
       return;
     }
 

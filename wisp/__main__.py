@@ -86,10 +86,11 @@ def cmd_tui(model=None, workspace=None, show_thinking=False, auto_approve=False,
             subprocess.run(['node', mjs_path, '--server', server_url], env=env, check=True)
         except FileNotFoundError:
             print(error("✗ Node.js not found. Install Node.js to use the React TUI."))
-        except subprocess.CalledProcessError as e:
-            if e.returncode != 0:
-                # Normal exit (ctrl+c)
-                pass
+        except KeyboardInterrupt:
+            pass  # Ctrl+C is the normal way to exit the TUI
+        except subprocess.CalledProcessError:
+            # Non-zero exit from node — usually a real error was already printed
+            pass
         return
 
     config = WispConfig()

@@ -1108,6 +1108,7 @@ class CLITransport:
                     self._print_turn_done()
 
             print()
+            self.core._save_session()
             if self.core.session:
                 print(success(f"📋 Session {self.core.session.id} saved."))
                 print(dim(f"   Continue with: wisp repl -S {self.core.session.id}"))

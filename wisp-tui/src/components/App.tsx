@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Text } from 'ink';
+import { Box } from 'ink';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 import { useKeybindings } from '../hooks/useKeybindings.js';
 import { AppContext } from '../state/context.js';
@@ -40,9 +40,7 @@ export const App: React.FC<Props> = ({ serverUrl }) => {
           <>
             <Header />
             <Box flexDirection="row" flexGrow={1}>
-              {/* Left sidebar — always visible */}
               <SidePanel />
-              {/* Main chat area — takes remaining width */}
               <Box flexDirection="column" flexGrow={1} borderStyle="single" borderColor="gray">
                 <ChatPane />
                 {state.approvalPending && <ApprovalPrompt />}

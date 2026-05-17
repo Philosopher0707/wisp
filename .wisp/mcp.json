@@ -24,5 +24,16 @@
     ],
     "description": "Browser automation via Playwright (Chrome DevTools Protocol). DISABLED by default — startup adds 2-3s. Enable by setting disabled: false.",
     "disabled": true
+  },
+  {
+    "name": "arxiv",
+    "command": "npx",
+    "args": [
+      "-y",
+      "@fre4x/arxiv"
+    ],
+    "description": "arXiv academic paper search, metadata retrieval, and full-text reading. Search by keyword, paper ID, or author. Returns title, authors, abstract, and PDF URL.",
+    "always_load": false,
+    "disabled": false
   }
 ]

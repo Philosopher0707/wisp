@@ -78,6 +78,7 @@ export interface AppState {
   selectedModel: string;
   viewMode: ViewMode;
   autoApprove: boolean;
+  scrollOffset: number;
 }
 
 let _msgCounter = 0;
@@ -101,6 +102,7 @@ export function createInitialState(serverUrl: string): AppState {
     selectedModel: '',
     viewMode: 'session-picker',
     autoApprove: false,
+    scrollOffset: 0,
   };
 }
 
@@ -130,7 +132,10 @@ export type Action =
   | { type: 'TOGGLE_THINKING' }
   | { type: 'CLEAR_CHAT' }
   | { type: 'SET_INPUT'; value: string }
-  | { type: 'INTERRUPT' };
+  | { type: 'INTERRUPT' }
+  | { type: 'SCROLL_UP'; lines?: number }
+  | { type: 'SCROLL_DOWN'; lines?: number }
+  | { type: 'SCROLL_BOTTOM' };
 
 export function appReducer(state: AppState, action: Action): AppState {
   switch (action.type) {
@@ -298,6 +303,20 @@ export function appReducer(state: AppState, action: Action): AppState {
 
     case 'INTERRUPT':
       return { ...state, isStreaming: false, approvalPending: null };
+
+    case 'SCROLL_UP': {
+      const lines = action.lines || 3;
+      const maxOffset = Math.max(0, state.messages.length - 1);
+      return { ...state, scrollOffset: Math.min(state.scrollOffset + lines, maxOffset) };
+    }
+
+    case 'SCROLL_DOWN': {
+      const lines = action.lines || 3;
+      return { ...state, scrollOffset: Math.max(state.scrollOffset - lines, 0) };
+    }
+
+    case 'SCROLL_BOTTOM':
+      return { ...state, scrollOffset: 0 };
 
     default:
       return state;
