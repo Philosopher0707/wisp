@@ -2245,7 +2245,7 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(default="")
                     config.workspace = str(WORKSPACE_ROOT)
                     config.auto_approve = False
                     config.show_thinking = msg.get("show_thinking", True)
-                    config.permission_mode = msg.get("permission_mode", "full")
+                    config.permission_mode = msg.get("permission_mode", "auto_edit")
                     config.plan_mode = msg.get("plan_mode", False)
                     config.plan_context = msg.get("plan_context")
 
