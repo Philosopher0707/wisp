@@ -18,7 +18,7 @@ from wisp.tools._utils import (
     _get_dependents,
     _fuzzy_find_text,
 )
-from wisp.tools._legacy import ToolError
+from wisp.tools.errors import ToolError
 
 logger = logging.getLogger(__name__)
 
