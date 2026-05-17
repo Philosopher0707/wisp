@@ -8,7 +8,44 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from enum import StrEnum
+from typing import Any, Callable, Optional, Union
+
+
+class EventType(StrEnum):
+    """Type-safe event type constants.
+
+    Backward-compatible with existing TYPE_* string constants.
+    Can be used anywhere a string is expected.
+    """
+    THINKING = "thinking"
+    TOOL_CALL = "tool_call"
+    TOOL_RESULT = "tool_result"
+    CONTENT = "content"
+    ERROR = "error"
+    DONE = "done"
+    SYSTEM = "system"
+    APPROVAL_REQUEST = "approval_request"
+    STEERING_PAUSED = "steering_paused"
+    STEERING_INJECT = "steering_inject"
+    STEERING_RESUMED = "steering_resumed"
+
+
+# ── Backward-compatible aliases ──────────────────────────────────────
+# These are kept for compatibility with existing code. New code should
+# prefer EventType.* for type safety and IDE autocomplete.
+
+TYPE_THINKING = EventType.THINKING
+TYPE_TOOL_CALL = EventType.TOOL_CALL
+TYPE_TOOL_RESULT = EventType.TOOL_RESULT
+TYPE_CONTENT = EventType.CONTENT
+TYPE_ERROR = EventType.ERROR
+TYPE_DONE = EventType.DONE
+TYPE_SYSTEM = EventType.SYSTEM
+TYPE_APPROVAL_REQUEST = EventType.APPROVAL_REQUEST
+TYPE_STEERING_PAUSED = EventType.STEERING_PAUSED
+TYPE_STEERING_INJECT = EventType.STEERING_INJECT
+TYPE_STEERING_RESUMED = EventType.STEERING_RESUMED
 
 
 @dataclass(frozen=True)
@@ -16,12 +53,12 @@ class AgentEvent:
     """A single event emitted by the agent during a turn.
 
     Attributes:
-        type: Event category — one of the TYPE_* constants below.
+        type: Event category — one of the EventType enum values.
         data: Payload dict (structure depends on type).
         timestamp: Monotonic timestamp for ordering and latency tracking.
     """
 
-    type: str
+    type: Union[str, EventType]
     data: dict[str, Any] = field(default_factory=dict)
     timestamp: float = field(default_factory=time.monotonic)
 
@@ -49,7 +86,7 @@ class AgentEvent:
         WebSocket, HTTP, or other protocols.
         """
         return {
-            "type": self.type,
+            "type": str(self.type),
             "data": self.data,
             "timestamp": self.timestamp,
         }
@@ -64,37 +101,22 @@ class AgentEvent:
         )
 
 
-# ── Event type constants ─────────────────────────────────────────────
-
-TYPE_THINKING = "thinking"
-TYPE_TOOL_CALL = "tool_call"
-TYPE_TOOL_RESULT = "tool_result"
-TYPE_CONTENT = "content"
-TYPE_ERROR = "error"
-TYPE_DONE = "done"
-TYPE_SYSTEM = "system"          # meta: model changed, session compacted, etc.
-TYPE_APPROVAL_REQUEST = "approval_request"  # transport should prompt user
-TYPE_STEERING_PAUSED = "steering_paused"
-TYPE_STEERING_INJECT = "steering_inject"
-TYPE_STEERING_RESUMED = "steering_resumed"
-
-
 # Human-readable descriptions
 _EVENT_DESCRIPTIONS: dict[str, str] = {
-    TYPE_THINKING: "Model reasoning trace",
-    TYPE_TOOL_CALL: "Tool invocation",
-    TYPE_TOOL_RESULT: "Tool execution result",
-    TYPE_CONTENT: "Assistant text response",
-    TYPE_ERROR: "Error occurred",
-    TYPE_DONE: "Turn complete",
-    TYPE_SYSTEM: "System notification",
-    TYPE_APPROVAL_REQUEST: "User approval required",
+    EventType.THINKING: "Model reasoning trace",
+    EventType.TOOL_CALL: "Tool invocation",
+    EventType.TOOL_RESULT: "Tool execution result",
+    EventType.CONTENT: "Assistant text response",
+    EventType.ERROR: "Error occurred",
+    EventType.DONE: "Turn complete",
+    EventType.SYSTEM: "System notification",
+    EventType.APPROVAL_REQUEST: "User approval required",
 }
 
 
-def describe_event_type(event_type: str) -> str:
+def describe_event_type(event_type: Union[str, EventType]) -> str:
     """Return a human description for an event type."""
-    return _EVENT_DESCRIPTIONS.get(event_type, "Unknown event")
+    return _EVENT_DESCRIPTIONS.get(str(event_type), "Unknown event")
 
 
 # ── Event builders (convenience factories) ─────────────────────────
@@ -146,3 +168,30 @@ def approval_request(tool_name: str, args: dict[str, Any], reason: str = "") -> 
     return AgentEvent(TYPE_APPROVAL_REQUEST, {"name": tool_name, "arguments": args, "reason": reason})
 
 
+__all__ = [
+    "AgentEvent",
+    "EventType",
+    "TYPE_THINKING",
+    "TYPE_TOOL_CALL",
+    "TYPE_TOOL_RESULT",
+    "TYPE_CONTENT",
+    "TYPE_ERROR",
+    "TYPE_DONE",
+    "TYPE_SYSTEM",
+    "TYPE_APPROVAL_REQUEST",
+    "TYPE_STEERING_PAUSED",
+    "TYPE_STEERING_INJECT",
+    "TYPE_STEERING_RESUMED",
+    "describe_event_type",
+    "thinking",
+    "tool_call",
+    "tool_result",
+    "content",
+    "error",
+    "done",
+    "system",
+    "steering_paused",
+    "steering_resumed",
+    "steering_feedback",
+    "approval_request",
+]
