@@ -73,21 +73,17 @@ class TestAutoRoutingDetection:
 
     @pytest.mark.asyncio
     async def test_long_prompt_auto_routed(self, mock_agent):
-        """Complex prompts should trigger auto-routing."""
-        # Patch run_long_task to avoid actual execution
-        mock_events = [
-            AgentEvent(TYPE_TASK_STARTED, {"task_id": "test-123", "goal": "Migrate Flask", "total_steps": 3}),
-            AgentEvent(TYPE_TASK_COMPLETED, {"task_id": "test-123", "goal": "Migrate Flask", "completed_steps": 3, "total_steps": 3}),
-        ]
+        """Complex prompts should trigger auto-routing in background mode."""
+        events = []
+        async for event in mock_agent.run("Migrate Flask to FastAPI"):
+            events.append(event)
 
-        with patch.object(mock_agent, 'run_long_task', return_value=async_iter(mock_events)):
-            events = []
-            async for event in mock_agent.run("Migrate Flask to FastAPI"):
-                events.append(event)
-
-            types = [e.type for e in events]
-            assert TYPE_SYSTEM in types  # Should explain routing
-            assert TYPE_TASK_STARTED in types
+        types = [e.type for e in events]
+        assert TYPE_SYSTEM in types  # Should explain routing
+        assert TYPE_TASK_STARTED in types  # Task started in background
+        # Background mode: no step events yielded
+        assert TYPE_TASK_STEP_STARTED not in types
+        assert TYPE_TASK_STEP_COMPLETED not in types
 
     @pytest.mark.asyncio
     async def test_auto_routing_disabled(self, mock_agent):
@@ -104,19 +100,13 @@ class TestAutoRoutingDetection:
     @pytest.mark.asyncio
     async def test_system_event_explains_routing(self, mock_agent):
         """Should yield a system event explaining why it routed."""
-        mock_events = [
-            AgentEvent(TYPE_TASK_STARTED, {"task_id": "test-123", "goal": "Refactor", "total_steps": 2}),
-            AgentEvent(TYPE_TASK_COMPLETED, {"task_id": "test-123", "goal": "Refactor", "completed_steps": 2, "total_steps": 2}),
-        ]
+        events = []
+        async for event in mock_agent.run("Refactor the auth module"):
+            events.append(event)
 
-        with patch.object(mock_agent, 'run_long_task', return_value=async_iter(mock_events)):
-            events = []
-            async for event in mock_agent.run("Refactor the auth module"):
-                events.append(event)
-
-            system_events = [e for e in events if e.type == TYPE_SYSTEM]
-            assert len(system_events) >= 1
-            assert "long-horizon" in system_events[0].data.get("message", "").lower()
+        system_events = [e for e in events if e.type == TYPE_SYSTEM]
+        assert len(system_events) >= 1
+        assert "long-horizon" in system_events[0].data.get("message", "").lower()
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -186,12 +176,8 @@ class TestIntegrationWithNormalFlow:
     @pytest.mark.asyncio
     async def test_auto_route_skips_normal_loop(self, mock_agent):
         """When auto-routed, should not enter the normal iteration loop."""
-        mock_events = [
-            AgentEvent(TYPE_TASK_STARTED, {"task_id": "t1", "goal": "G", "total_steps": 1}),
-            AgentEvent(TYPE_TASK_COMPLETED, {"task_id": "t1", "goal": "G", "completed_steps": 1, "total_steps": 1}),
-        ]
-
-        with patch.object(mock_agent, 'run_long_task', return_value=async_iter(mock_events)):
+        # Patch run_long_task to return empty to avoid real execution
+        with patch.object(mock_agent, 'run_long_task', return_value=async_iter([])):
             # Track if _run_turn_streaming_events is called (normal loop)
             with patch.object(mock_agent, '_run_turn_streaming_events') as mock_stream:
                 events = []
@@ -229,7 +215,9 @@ class TestEdgeCases:
 
     @pytest.mark.asyncio
     async def test_failed_task_event_propagated(self, mock_agent):
-        """Task failure events should be yielded to the transport."""
+        """Task failure events should be yielded to the transport.
+        Note: In background mode, failures happen async and are not yielded.
+        This test verifies foreground mode still works."""
         mock_events = [
             AgentEvent(TYPE_TASK_STARTED, {"task_id": "t1", "goal": "G", "total_steps": 2}),
             AgentEvent(TYPE_TASK_FAILED, {"task_id": "t1", "goal": "G", "reason": "Step timeout"}),

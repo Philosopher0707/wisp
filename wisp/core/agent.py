@@ -861,7 +861,11 @@ class WispAgentCore:
                     f"Routing to persistent multi-step execution with checkpoints.",
                     level="info",
                 )
-                async for event in self.run_long_task(goal=prompt, workspace=self.config.workspace or "."):
+                async for event in self.run_long_task(
+                    goal=prompt,
+                    workspace=self.config.workspace or ".",
+                    background=True,
+                ):
                     yield event
                 return  # Skip normal single-turn flow
 
@@ -1898,6 +1902,7 @@ class WispAgentCore:
         goal: str,
         workspace: str = ".",
         resume_from: str | None = None,
+        background: bool = False,
     ) -> AsyncIterator[AgentEvent]:
         """Run a long-horizon task, yielding progress events.
 
@@ -1908,17 +1913,61 @@ class WispAgentCore:
             goal: Task description. Ignored if resume_from is provided.
             workspace: Working directory for tool execution.
             resume_from: Task ID to resume from checkpoint.
+            background: If True, start task in background and yield only
+                the initial task_started event. The task continues running
+                independently. Use `wisp task status <id>` to check progress.
 
         Yields:
             AgentEvent for each state change (step started, completed, failed, etc.)
+            When background=True, yields only task_started and a system event.
         """
         from wisp.long_horizon.runner import LongHorizonRunner
         from wisp.long_horizon.storage import TaskStorage
+        from wisp.long_horizon.state import TaskState, TaskStatus
+        from wisp.core.events import task_started
 
+        storage = TaskStorage()
         runner = LongHorizonRunner(
             agent=self,
-            storage=TaskStorage(),
+            storage=storage,
         )
 
+        if background:
+            # Create or load state
+            if resume_from:
+                state = storage.load(resume_from)
+                if state is None:
+                    yield system_event(f"Task not found: {resume_from}", level="error")
+                    return
+                state.set_status(TaskStatus.RUNNING)
+                storage.save(state)
+                task_id = resume_from
+            else:
+                state = await runner._create_initial_state(goal, workspace)
+                state.set_status(TaskStatus.RUNNING)
+                storage.save(state)
+                task_id = state.task_id
+
+            # Start background execution
+            async def _bg_run():
+                try:
+                    async for _event in runner._run_loop(state, workspace):
+                        pass  # Events are logged by the runner
+                except asyncio.CancelledError:
+                    state.set_status(TaskStatus.PAUSED)
+                    storage.save(state)
+                    raise
+
+            asyncio.create_task(_bg_run(), name=f"long-task-{task_id}")
+
+            yield task_started(task_id, state.goal, state.total_steps)
+            yield system_event(
+                f"Task {task_id} running in background. "
+                f"Use `wisp task status {task_id}` to check progress.",
+                level="info",
+            )
+            return
+
+        # Foreground mode: stream all events
         async for event in runner.run(goal=goal, resume_from=resume_from, workspace=workspace):
             yield event
