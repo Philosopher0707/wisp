@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { Dispatch } from 'react';
+import WebSocket from 'ws';
 import type { Action } from '../state/types.js';
 import type { ServerMessage, ClientMessage } from '../state/types.js';
 
@@ -26,7 +27,7 @@ export function useWebSocket(
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
-    ws.onopen = () => {
+    ws.on('open', () => {
       attemptRef.current = 0;
       dispatch({ type: 'CONNECT' });
       pingRef.current = setInterval(() => {
@@ -34,11 +35,11 @@ export function useWebSocket(
           ws.send(JSON.stringify({ type: 'ping' }));
         }
       }, 30_000);
-    };
+    });
 
-    ws.onmessage = (event) => {
+    ws.on('message', (data) => {
       try {
-        const msg: ServerMessage = JSON.parse(event.data as string);
+        const msg: ServerMessage = JSON.parse(data.toString());
         switch (msg.type) {
           case 'token':
             if (msg.phase && msg.text) {
@@ -91,9 +92,9 @@ export function useWebSocket(
       } catch {
         // ignore parse errors
       }
-    };
+    });
 
-    ws.onclose = () => {
+    ws.on('close', () => {
       dispatch({ type: 'DISCONNECT' });
       if (pingRef.current) {
         clearInterval(pingRef.current);
@@ -102,11 +103,11 @@ export function useWebSocket(
       const delay = Math.min(1000 * Math.pow(2, attemptRef.current), 30_000);
       attemptRef.current += 1;
       reconnectRef.current = setTimeout(connect, delay);
-    };
+    });
 
-    ws.onerror = () => {
+    ws.on('error', () => {
       dispatch({ type: 'CONNECTION_ERROR', error: 'WebSocket connection failed' });
-    };
+    });
   }, [serverUrl, dispatch]);
 
   useEffect(() => {

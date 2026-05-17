@@ -7,7 +7,9 @@ export const StatusBar: React.FC = () => {
 
   const connColor = state.connection === 'connected' ? 'green' : state.connection === 'connecting' ? 'yellow' : 'red';
   const streamLabel = state.isStreaming ? ' STREAMING' : '';
-  const tokenEstimate = Math.round(state.messages.reduce((n, m) => n + m.content.length + (m.thinking?.length || 0), 0) / 4);
+  // Approximate tokens: ~4 chars per token, display as K (thousands)
+  const totalChars = state.messages.reduce((n, m) => n + m.content.length + (m.thinking?.length || 0), 0);
+  const tokenEstimate = Math.round(totalChars / 4000 * 10) / 10; // Round to 1 decimal
 
   return (
     <Box flexDirection="row" paddingX={1}>

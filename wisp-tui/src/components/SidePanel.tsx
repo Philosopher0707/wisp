@@ -3,7 +3,7 @@ import { Box, Text } from 'ink';
 import { useAppState } from '../state/context.js';
 
 export const SidePanel: React.FC = () => {
-  const { state, dispatch, sendMessage } = useAppState();
+  const { state, dispatch } = useAppState();
   const sessions = state.sessions;
 
   useEffect(() => {

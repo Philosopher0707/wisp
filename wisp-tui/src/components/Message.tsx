@@ -5,6 +5,7 @@ import { ToolCallBanner } from './ToolCallBanner.js';
 
 interface Props {
   msg: UIMessage;
+  showThinking: boolean;
 }
 
 function renderMarkdown(text: string): string {
@@ -16,9 +17,7 @@ function renderMarkdown(text: string): string {
     .replace(/^#{1,6}\s/gm, '');
 }
 
-export const Message: React.FC<Props> = ({ msg }) => {
-  const roleColor = msg.role === 'user' ? 'cyan' : msg.role === 'system' ? 'yellow' : undefined;
-
+export const Message: React.FC<Props> = ({ msg, showThinking }) => {
   return (
     <Box flexDirection="column" marginY={1}>
       {msg.role === 'user' && (
@@ -29,7 +28,7 @@ export const Message: React.FC<Props> = ({ msg }) => {
 
       {msg.role === 'assistant' && (
         <Box flexDirection="column">
-          {msg.thinking && (
+          {msg.thinking && showThinking && (
             <Box>
               <Text dimColor>[thinking] {renderMarkdown(msg.thinking.slice(-200))}</Text>
             </Box>

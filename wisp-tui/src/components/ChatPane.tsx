@@ -6,7 +6,7 @@ import { Message } from './Message.js';
 export const ChatPane: React.FC = () => {
   const { state } = useAppState();
 
-  // Show last N messages that fit in the terminal
+  // Show all messages (no truncation for now)
   const visibleMessages = state.messages;
 
   return (
@@ -17,7 +17,7 @@ export const ChatPane: React.FC = () => {
         </Box>
       )}
       {visibleMessages.map((msg) => (
-        <Message key={msg.id} msg={msg} />
+        <Message key={msg.id} msg={msg} showThinking={state.showThinking} />
       ))}
     </Box>
   );

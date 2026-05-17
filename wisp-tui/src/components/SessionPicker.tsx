@@ -3,7 +3,7 @@ import { Box, Text, useInput } from 'ink';
 import { useAppState } from '../state/context.js';
 
 export const SessionPicker: React.FC = () => {
-  const { state, dispatch, sendMessage } = useAppState();
+  const { state, dispatch } = useAppState();
   const [selectedIdx, setSelectedIdx] = React.useState(0);
 
   useEffect(() => {
@@ -47,13 +47,23 @@ export const SessionPicker: React.FC = () => {
     if (input === 'q') process.exit(0);
   });
 
+  function connectionLabel(): string {
+    switch (state.connection) {
+      case 'connected': return 'connected';
+      case 'connecting': return 'connecting...';
+      case 'disconnected': return 'disconnected';
+      case 'error': return 'error';
+      default: return state.connection;
+    }
+  }
+
   return (
     <Box flexDirection="column" padding={1}>
       <Box flexDirection="column" marginBottom={1}>
         <Text bold>Wisp — Sessions</Text>
         <Text dimColor>Arrow keys to select, Enter to load, [n] new session, [q] quit</Text>
         <Text dimColor>
-          Server: {state.serverUrl} ({state.connection === 'connected' ? 'connected' : 'connecting...'})
+          Server: {state.serverUrl} ({connectionLabel()})
         </Text>
       </Box>
       <Box flexDirection="column">
