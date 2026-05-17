@@ -11,7 +11,7 @@ from textual.widgets import Static
 class StatusBar(Widget):
     """Bottom bar with live session metrics."""
 
-    connection_state = reactive("connected", recompose=True)
+    connection_state = reactive("disconnected", recompose=True)
     is_streaming = reactive(False, recompose=True)
     token_count = reactive(0, recompose=True)
     active_agents = reactive(0, recompose=True)

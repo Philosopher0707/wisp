@@ -203,6 +203,15 @@ class BestOfNRequest(BaseModel):
     n: int = Field(default=2, ge=2, le=4, description="Number of parallel reviews")
     prompt: Optional[str] = None
 
+
+class PluginInstallRequest(BaseModel):
+    path: str = Field(..., min_length=1, description="Local path to plugin directory")
+
+
+class PluginToggleRequest(BaseModel):
+    enable: bool = Field(..., description="True to enable, False to disable")
+
+
 # ── Auth ─────────────────────────────────────────────────────────────
 
 async def verify_api_key(
@@ -1455,31 +1464,97 @@ async def jsonrpc_handler(request: dict):
 
 # ── Plugin Management Endpoints ────────────────────────────────────────
 
+_plugin_registry = None
+
+
+def _get_plugin_registry():
+    global _plugin_registry
+    if _plugin_registry is None:
+        from wisp.plugins.registry import PluginRegistry
+        _plugin_registry = PluginRegistry()
+    return _plugin_registry
+
 
 @app.get("/api/plugins", dependencies=[Depends(verify_api_key)])
 async def list_plugins():
-    return {"plugins": []}
+    registry = _get_plugin_registry()
+    installed = registry.list_installed()
+    state = registry._read_state()
+    return {
+        "plugins": [
+            {
+                "name": p.name,
+                "version": p.version,
+                "description": p.description,
+                "author": p.author,
+                "license": p.license,
+                "namespace": p.namespace,
+                "enabled": state.get(p.name, {}).get("enabled", True),
+                "installed_at": state.get(p.name, {}).get("installed_at"),
+            }
+            for p in installed
+        ]
+    }
 
 
 @app.post("/api/plugins/install", dependencies=[Depends(verify_api_key)])
-async def install_plugin(request: dict):
-    return {"ok": False, "message": "Plugin installation not yet implemented"}
+async def install_plugin(req: PluginInstallRequest):
+    from pathlib import Path
+    registry = _get_plugin_registry()
+    plugin_path = Path(req.path).expanduser().resolve()
+    if not plugin_path.exists():
+        raise HTTPException(status_code=404, detail=f"Plugin path not found: {req.path}")
+    if not plugin_path.is_dir():
+        raise HTTPException(status_code=400, detail=f"Plugin path is not a directory: {req.path}")
+    try:
+        manifest = registry.install(plugin_path)
+        return {
+            "ok": True,
+            "plugin": {
+                "name": manifest.name,
+                "version": manifest.version,
+                "description": manifest.description,
+                "namespace": manifest.namespace,
+            },
+        }
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Plugin install failed")
+        raise HTTPException(status_code=500, detail=f"Install failed: {e}")
 
 
 @app.delete("/api/plugins/{name}", dependencies=[Depends(verify_api_key)])
 async def delete_plugin(name: str):
-    return {"ok": False, "message": f"Plugin '{name}' not found"}
+    registry = _get_plugin_registry()
+    if not registry.get(name):
+        raise HTTPException(status_code=404, detail=f"Plugin '{name}' not installed")
+    ok = registry.uninstall(name)
+    if not ok:
+        raise HTTPException(status_code=500, detail=f"Failed to uninstall plugin '{name}'")
+    return {"ok": True, "message": f"Plugin '{name}' uninstalled"}
 
 
 @app.post("/api/plugins/{name}/toggle", dependencies=[Depends(verify_api_key)])
-async def toggle_plugin(name: str, request: dict):
-    enable = request.get("enable", False)
-    return {"ok": False, "message": f"Plugin '{name}' toggle not yet implemented", "enabled": enable}
+async def toggle_plugin(name: str, req: PluginToggleRequest):
+    registry = _get_plugin_registry()
+    if not registry.get(name):
+        raise HTTPException(status_code=404, detail=f"Plugin '{name}' not installed")
+    if req.enable:
+        registry.enable(name)
+    else:
+        registry.disable(name)
+    return {"ok": True, "plugin": name, "enabled": req.enable}
 
 
 @app.get("/api/plugins/marketplace", dependencies=[Depends(verify_api_key)])
 async def plugin_marketplace():
-    return {"plugins": []}
+    return {
+        "plugins": [],
+        "message": "Marketplace not yet available. Install plugins locally via POST /api/plugins/install",
+    }
 
 
 # ── MCP Management Endpoints ───────────────────────────────────────────

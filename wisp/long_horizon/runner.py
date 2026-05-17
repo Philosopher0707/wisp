@@ -163,7 +163,11 @@ class LongHorizonRunner:
     # ── State creation ────────────────────────────────────────────────
 
     async def _create_initial_state(self, goal: str, workspace: str) -> TaskState:
-        """Create a new TaskState with an initial plan from the agent."""
+        """Create a new TaskState with an initial plan.
+
+        First checks for a matching template; if none found, generates
+        a plan via the agent.
+        """
         state = TaskState.create(
             goal=goal,
             max_iterations=self.max_iterations,
@@ -171,6 +175,16 @@ class LongHorizonRunner:
             replan_on_failure=self.replan_on_failure,
             max_replans=self.max_replans,
         )
+
+        # Try template matching first
+        from wisp.long_horizon.templates import match_template, apply_template
+        template_key = match_template(goal)
+        if template_key:
+            steps = apply_template(template_key, goal)
+            state.plan.steps = steps
+            state.plan.created_at = state.created_at
+            logger.info("Applied template '%s' for goal: %s", template_key, goal[:60])
+            return state
 
         # Generate initial plan via agent
         plan_result = await self._generate_plan(goal, workspace)

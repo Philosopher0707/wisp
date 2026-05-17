@@ -57,12 +57,27 @@ class WispWSClient:
                     if self.on_status:
                         await self.on_status("Connected", "info")
                     await self._listen(ws)
+            except ConnectionRefusedError:
+                logger.debug("WebSocket connection refused — server not running")
+                if self._running and self.on_status:
+                    await self.on_status("Server not running — retrying...", "warning")
+                    await asyncio.sleep(3)
+            except OSError as e:
+                import errno
+                err_name = errno.errorcode.get(e.errno, f"errno {e.errno}") if e.errno else ""
+                reason = f"{err_name}: {e.strerror}" if err_name else str(e)
+                logger.debug("WebSocket OS error: %s", reason)
+                if self._running and self.on_status:
+                    await self.on_status(f"Connection failed ({reason}) — retrying...", "warning")
+                    await asyncio.sleep(3)
             except Exception as e:
-                logger.warning("WebSocket connection error: %s", e)
+                logger.debug("WebSocket connection attempt: %s", e)
+                err_type = type(e).__name__
+                reason = getattr(e, 'strerror', None) or str(e)
                 if self._running:
                     if self.on_status:
-                        await self.on_status("Disconnected — retrying...", "warning")
-                    await asyncio.sleep(2)
+                        await self.on_status("Server unavailable — retrying...", "warning")
+                    await asyncio.sleep(3)
             finally:
                 self._ws = None
 
