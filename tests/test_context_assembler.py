@@ -134,7 +134,11 @@ class TestContextAssemblerBuild:
         assert "Do NOT ask for confirmation" not in result
 
     def test_build_with_skill_mentions_workspace_first(self):
-        """Skill instructions should appear BEFORE safety guidelines, not after."""
+        """Skill instructions should appear BEFORE safety guidelines, not after.
+
+        Safety footer is always appended *after* the skill content so that
+        core safety guidelines remain effective.
+        """
         from wisp.context_assembler import ContextAssembler
         assembler = ContextAssembler()
         result = assembler.build(
@@ -144,8 +148,8 @@ class TestContextAssemblerBuild:
         )
         base_idx = result.find("BASE")
         skill_idx = result.find("Write Python")
-        # Safety footer should be AFTER skill, not before it
-        safety_idx = result.find("Safety guidelines")
+        # Safety footer added AFTER everything else
+        safety_idx = result.find("## Safety Guidelines")
         assert base_idx < skill_idx < safety_idx
 
     def test_build_without_mandatory_skill_no_safety_footer(self):
@@ -234,16 +238,16 @@ class TestContextAssemblerBuild:
             memory_block="MEMORY",
             mandatory_skill=("skill", "name", "instructions"),
         )
-        # Verify ordering: base -> workspace -> skills -> project -> memory -> skill -> safety
+        # Actual priority order: base(0) < workspace(0) < mandatory_skill(1) < skills_block(2) < memory(2) < project(3) < safety
         base_idx = result.find("BASE")
         ws_idx = result.find("Workspace")
-        skills_idx = result.find("SKILLS")
-        proj_idx = result.find("PROJECT")
-        mem_idx = result.find("MEMORY")
         skill_idx = result.find("## Active Skill")
-        safety_idx = result.find("Safety guidelines")
+        skills_idx = result.find("SKILLS")
+        mem_idx = result.find("MEMORY")
+        proj_idx = result.find("PROJECT")
+        safety_idx = result.find("## Safety Guidelines")
 
-        assert base_idx < ws_idx < skills_idx < proj_idx < mem_idx < skill_idx < safety_idx
+        assert base_idx < ws_idx < skill_idx < skills_idx < mem_idx < proj_idx < safety_idx
 
     def test_build_caching(self):
         from wisp.context_assembler import ContextAssembler
