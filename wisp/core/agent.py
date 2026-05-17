@@ -41,6 +41,7 @@ from wisp.tree_sitter_index import build_index as build_ts_index, is_tree_sitter
 from wisp.mcp import MCPManager
 from wisp.memory import format_memory_block
 from wisp.core.message_format import extract_text
+from wisp.tool_executor import ToolExecutor
 from wisp.core.events import (
     AgentEvent,
     TYPE_CONTENT,
@@ -256,6 +257,17 @@ class WispAgentCore:
             logger.debug("wisp.hooks module not available — hooks disabled")
         except Exception as e:
             logger.warning("Failed to initialize HookManager: %s", e)
+
+        # ── ToolExecutor ──
+        self.tool_executor = ToolExecutor(
+            config=self.config,
+            hook_manager=self.hook_manager,
+            metrics=self.metrics,
+            circuit_breaker=self._circuit_breaker,
+            mcp=self.mcp,
+            file_lock=self.file_lock,
+            lsp_manager=self.lsp,
+        )
 
     def close(self) -> None:
         """Release resources: MCP connections, LSP servers, and save session state.
@@ -1140,8 +1152,8 @@ class WispAgentCore:
     ) -> AsyncIterator[AgentEvent]:
         """Execute tool calls and yield result events.
 
-        Dangerous commands yield approval_request events; the transport
-        layer must call the returned future to approve/deny.
+        Delegates to ToolExecutor for guards, hooks, and execution.
+        Handles message appending and cache invalidation here.
         """
         for tc in tool_calls:
             if self._interrupted:
@@ -1171,157 +1183,39 @@ class WispAgentCore:
             if not isinstance(func_args, dict):
                 func_args = {}
 
-            # ── Pre-tool hooks ──
-            if self.hook_manager:
-                try:
-                    from wisp.hooks import HookEvent
-                    context = {
-                        "tool_name": func_name,
-                        "tool_args": func_args,
-                        "workspace": self.config.workspace,
-                        "session_id": self.session.id if self.session else "",
-                        "cwd": str(Path(self.config.workspace)),
-                    }
-                    hook_results = await self.hook_manager.run_hooks(HookEvent.PRE_TOOL_USE, context)
-                    if _should_block_hook(hook_results):
-                        blocked_msg = f"[Blocked by hook: {_collect_hook_messages(hook_results)}]"
-                        yield tool_result_event(func_name, blocked_msg)
-                        self.messages.append({
-                            "role": "tool", "content": blocked_msg, "name": func_name,
-                            **({"tool_call_id": tc.get("id")} if tc.get("id") is not None else {}),
-                        })
-                        continue
-                    modified = _get_modified_args(hook_results)
-                    if modified is not None:
-                        func_args = modified
-                except ImportError:
-                    pass
-                except Exception as e:
-                    logger.warning("Pre-tool hook failed for %s: %s", func_name, e)
+            # Delegate to ToolExecutor (lazy init for tests that bypass __init__)
+            if not hasattr(self, "tool_executor"):
+                # Avoid creating CircuitBreaker with mocked config in tests
+                cb = getattr(self, "_circuit_breaker", None)
+                self.tool_executor = ToolExecutor(
+                    config=self.config,
+                    hook_manager=getattr(self, "hook_manager", None),
+                    metrics=getattr(self, "metrics", None),
+                    circuit_breaker=cb,
+                    mcp=getattr(self, "mcp", None),
+                    file_lock=getattr(self, "file_lock", None),
+                    lsp_manager=getattr(self, "lsp", None),
+                )
+            async for event in self.tool_executor.execute(
+                tool_name=func_name,
+                tool_args=func_args,
+                workspace=workspace,
+                tool_call_id=tc.get("id"),
+                approval_handler=approval_handler,
+            ):
+                yield event
 
-            # ── Plan mode guard (plan mode blocks all writes) ──
-            write_tools = {
-                "write_file", "edit_file", "edit_file_multi", "run_bash",
-                "git_branch", "git_commit", "git_push", "gh_pr_create",
-                "plan_task", "mark_step_done", "update_plan",
-            }
-            if self.config.plan_mode and func_name in write_tools:
-                blocked = f"[Blocked: plan mode — {func_name} requires write access]"
-                yield tool_result_event(func_name, blocked)
-                self.messages.append({
-                    "role": "tool", "content": blocked, "name": func_name,
-                    **({"tool_call_id": tc.get("id")} if tc.get("id") is not None else {}),
-                })
-                continue
-
-            # Dangerous command auto-block (no prompt — just block silently)
-            if func_name == "run_bash":
-                from wisp.tools import check_dangerous_command
-                danger_reason = check_dangerous_command(func_args.get("command", ""))
-                if danger_reason:
-                    blocked = f"[Blocked: dangerous command — {danger_reason}]"
-                    yield tool_result_event(func_name, blocked)
-                    self.messages.append({
-                        "role": "tool", "content": blocked, "name": func_name,
-                        **({"tool_call_id": tc.get("id")} if tc.get("id") is not None else {}),
-                    })
-                    continue
-
-            # ── Circuit breaker ──
-            if hasattr(self, "circuit_breaker"):
-                if self.circuit_breaker.is_open(func_name):
-                    blocked_msg = (
-                        f"[Circuit breaker open for {func_name}: "
-                        f"{self.circuit_breaker.status(func_name)}]"
-                    )
-                    self.metrics.record_tool_block()
-                    yield tool_result_event(func_name, blocked_msg)
-                    continue
-
-            # ── Approval gating ──
-            needs_approval = func_name in {
-                "write_file", "edit_file", "edit_file_multi", "run_bash",
-                "git_branch", "git_commit", "git_push", "gh_pr_create",
-            }
-            if needs_approval and approval_handler and not getattr(self.config, "auto_approve", False):
-                reason = f"{func_name} modifies workspace state"
-                yield approval_request(func_name, func_args, reason)
-                approved, modified = await approval_handler(func_name, func_args, reason)
-                if modified is not None:
-                    func_args = modified
-                if not approved:
-                    blocked = f"[Blocked: user declined {func_name}]"
-                    yield tool_result_event(func_name, blocked)
-                    self.messages.append({
-                        "role": "tool", "content": blocked, "name": func_name,
-                        **({"tool_call_id": tc.get("id")} if tc.get("id") is not None else {}),
-                    })
-                    continue
-
-            # Execute tool
-            start = time.monotonic()
-            if func_name == "spawn_subagent":
-                try:
-                    result = await self._spawn_subagent(func_args, workspace)
-                except Exception as e:
-                    result = f"Subagent spawn failed: {e}"
-                    logger.error("Subagent spawn failed: %s", e, exc_info=True)
-            elif self._is_mcp_tool(func_name):
-                try:
-                    result = self.mcp.call_tool(func_name, func_args)
-                    if len(result) > 8000:
-                        result = result[:8000] + f"\n... [truncated {len(result)} total chars]"
-                except Exception as e:
-                    result = f"MCP error: {e}"
-            else:
-                try:
-                    result = execute_tool(func_name, func_args, workspace, max_data_chars=8000, file_lock=self.file_lock, lsp_manager=self.lsp)
-                except ToolError as e:
-                    result = f"Error: {e}"
-                except Exception as e:
-                    result = f"Unexpected error: {e}"
-
-            duration_ms = (time.monotonic() - start) * 1000
+            # Build and append the tool message for the conversation
+            msg = await self.tool_executor.build_tool_message(
+                tool_name=func_name,
+                tool_args=func_args,
+                workspace=workspace,
+                tool_call_id=tc.get("id"),
+            )
+            self.messages.append(msg)
 
             if func_name == "remember":
                 self._invalidate_system_prompt_cache()
-
-            yield tool_result_event(func_name, result, duration_ms=duration_ms)
-            # Extract human-readable summary for the LLM from structured dict results
-            if isinstance(result, dict) and "data" in result:
-                msg_content = str(result["data"])
-            else:
-                msg_content = str(result)
-            self.messages.append({
-                "role": "tool",
-                "content": msg_content,
-                "name": func_name,
-                **({"tool_call_id": tc.get("id")} if tc.get("id") is not None else {}),
-            })
-
-            # ── Post-tool hooks ──
-            if hasattr(self, "metrics"):
-                ok = (isinstance(result, str) and '"status": "ok"' in result) or (isinstance(result, str) and not result.startswith("["))
-                self.metrics.record_tool(func_name, duration_ms, success=ok)
-                if hasattr(self, "circuit_breaker"):
-                    self.circuit_breaker.record(func_name, success=ok)
-
-            if self.hook_manager:
-                try:
-                    from wisp.hooks import HookEvent
-                    post_context = {
-                        "tool_name": func_name,
-                        "tool_args": func_args,
-                        "tool_result": str(result),
-                        "duration_ms": duration_ms,
-                        "workspace": self.config.workspace,
-                        "session_id": self.session.id if self.session else "",
-                    }
-                    await self.hook_manager.run_hooks(HookEvent.POST_TOOL_USE, post_context)
-                except ImportError:
-                    pass
-                except Exception as e:
-                    logger.warning("Post-tool hook failed for %s: %s", func_name, e)
 
     async def _spawn_subagent(self, args: dict, workspace: str) -> str:
         """Spawn a single subagent and return its output.
