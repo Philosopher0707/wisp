@@ -193,6 +193,21 @@ class WispAgentCore:
         self.provider = get_provider(self.config)
         # Backward-compatible alias while the rest of the codebase migrates.
         self.client = self.provider
+
+        # Health check on startup
+        try:
+            healthy = self.provider.check_health()
+            if not healthy:
+                logger.warning(
+                    "Provider '%s' at %s is unreachable. "
+                    "Check that the service is running and the model '%s' is available.",
+                    self.config.provider,
+                    getattr(self.config, "ollama_url", "unknown"),
+                    self.config.model,
+                )
+        except Exception as e:
+            logger.warning("Provider health check failed: %s", e)
+
         if not self.config._context_tokens_explicit:
             try:
                 detected = self.client.get_context_length()

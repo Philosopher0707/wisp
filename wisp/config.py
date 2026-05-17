@@ -76,6 +76,12 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Auto-approve tool calls without prompting",
         "env_var": "WISP_AUTO_APPROVE",
     },
+    "permission_mode": {
+        "type": str,
+        "default": "full",
+        "description": "Permission level: full | ask_all | auto_edit | read_only",
+        "env_var": "WISP_PERMISSION_MODE",
+    },
     "show_thinking": {
         "type": bool,
         "default": True,
