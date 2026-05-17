@@ -420,45 +420,76 @@ class SemanticIndex:
     # ── Search ───────────────────────────────────────────────────────
 
     def search(self, query: str, top_k: int = 5) -> list[SearchResult]:
-        """Semantic search: embed query, compute cosine similarity, return top-k chunks."""
+        """Semantic search: embed query, compute cosine similarity, return top-k chunks.
+
+        Uses numpy vectorised cosine similarity for speed.
+        """
+        import numpy as np
+
         embeddings = self._embed([query])
         if not embeddings or not embeddings[0]:
             return []
 
-        query_vec = embeddings[0]
-        if all(v == 0.0 for v in query_vec):
+        query_vec = np.array(embeddings[0], dtype=np.float64)
+        if np.allclose(query_vec, 0.0):
             return []
 
-        import struct
-        results: list[tuple[float, int]] = []
-
-        # Compute cosine similarity against all stored embeddings
+        # Load all embeddings as a single numpy matrix
+        # Load all embeddings as a single numpy matrix
         rows = self.conn.execute(
-            "SELECT e.chunk_id, e.embedding FROM embeddings e"
+            "SELECT chunk_id, embedding FROM embeddings"
         ).fetchall()
 
+        if not rows:
+            return []
+
+        dim = len(query_vec)
+        chunk_ids = []
+        emb_list = []
+
         for chunk_id, emb_bytes in rows:
-            dim = len(query_vec)
-            stored = struct.unpack(f"<{dim}d", emb_bytes[:dim * 8]) if len(emb_bytes) >= dim * 8 else None
-            if stored is None:
-                continue
+            if len(emb_bytes) >= dim * 8:
+                vec = np.frombuffer(emb_bytes[: dim * 8], dtype=np.float64)
+                chunk_ids.append(chunk_id)
+                emb_list.append(vec)
+            else:
+                # Dimension mismatch — skip malformed row
+                pass
 
-            # Cosine similarity
-            dot = sum(a * b for a, b in zip(query_vec, stored))
-            norm_q = sum(a * a for a in query_vec) ** 0.5
-            norm_s = sum(b * b for b in stored) ** 0.5
-            if norm_q == 0 or norm_s == 0:
-                continue
-            score = dot / (norm_q * norm_s)
-            results.append((score, chunk_id))
+        if not emb_list:
+            return []
 
-        # Sort by score descending, take top_k
-        results.sort(key=lambda x: x[0], reverse=True)
-        top = results[:top_k]
+        # Stack into matrix (n_chunks × dim)
+        M = np.vstack(emb_list)
 
-        # Fetch chunk data
+        # Vectorised cosine similarity — suppress benign warnings from NaN/Inf rows
+        with np.errstate(divide="ignore", invalid="ignore"):
+            dot = M @ query_vec          # (n_chunks,)
+            norm_m = np.linalg.norm(M, axis=1)  # (n_chunks,)
+            norm_q = np.linalg.norm(query_vec)
+            scores = dot / (norm_m * norm_q)    # (n_chunks,)
+
+        # Guard against division by zero (zero-norm embeddings)
+        valid_mask = norm_m > 0
+        if not np.any(valid_mask):
+            return []
+
+        scores[~valid_mask] = -np.inf
+
+        # Top-k via np.argpartition (O(n) instead of O(n log n))
+        k = min(top_k, len(scores))
+        if k <= 0:
+            return []
+
+        top_indices = np.argpartition(-scores, kth=k - 1)[:k]
+        top_indices = top_indices[np.argsort(-scores[top_indices])]
+
+        top_ids = [chunk_ids[int(i)] for i in top_indices]
+        top_scores = [round(float(scores[int(i)]), 4) for i in top_indices]
+
+        # Fetch chunk data for top-k
         output: list[SearchResult] = []
-        for score, chunk_id in top:
+        for chunk_id, score in zip(top_ids, top_scores):
             row = self.conn.execute(
                 "SELECT file_path, start_line, end_line, content, symbol_name FROM chunks WHERE id = ?",
                 (chunk_id,),
@@ -470,7 +501,7 @@ class SemanticIndex:
                     end_line=row[2],
                     content=row[3],
                     symbol_name=row[4],
-                    score=round(score, 4),
+                    score=score,
                 ))
 
         return output

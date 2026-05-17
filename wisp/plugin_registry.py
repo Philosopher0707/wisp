@@ -134,9 +134,15 @@ def register_tool(
 ) -> None:
     """Register a custom tool at runtime.
 
+    SECURITY WARNING: Plugin tools run in the **same process** with full
+    filesystem and network access. There is no sandbox. Only load plugins
+    from trusted sources.
+
     Args:
-        name: Tool function name.  Must be unique; conflicts with existing
-              tools raise `ValueError`. Use unregister_tool() first to override.
+        name: Tool function name.  Must be unique; conflicts silently
+              override the previous registration with a logged warning.
+              Namespace isolation (e.g. ``plugin__read_file``) is NOT
+              enforced by this function — callers must prefix themselves.
         impl: The synchronous function that implements the tool.  Parameter
               names must match the schema.  Can auto-return dict/status.
         schema: Ollama-style ``{"type": "function", "function": {...}}`` dict.

@@ -742,6 +742,18 @@ class WispAgentCore:
         except Exception as e:
             logger.warning("Failed to get MCP tool schemas: %s", e)
 
+        # Deduplicate by tool name — built-ins have absolute precedence.
+        # Plugin/MCP schemas that share a name with built-ins are silently
+        # dropped so the LLM never sees duplicate tool definitions.
+        seen: set[str] = set()
+        deduped: list[dict] = []
+        for s in schemas:
+            name = s.get("function", {}).get("name")
+            if name and name not in seen:
+                seen.add(name)
+                deduped.append(s)
+        schemas = deduped
+
         if hasattr(self, "_allowed_tools") and self._allowed_tools is not None:
             allowed = self._allowed_tools
             schemas = [

@@ -626,7 +626,9 @@ def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0,
     so the LLM can parse results programmatically.
     """
     impl = TOOL_IMPLS.get(name)
-    # ── Try plugin tools first (user-registered take priority) ──
+    # ── Plugin tools are fallback (built-ins take absolute precedence) ──
+    # Built-ins checked first; plugins only run if no built-in tool exists.
+    # Security: plugin tools run in-process with no sandbox.
     from wisp.plugin_registry import has_plugin_tool, execute_plugin_tool
     if not impl and has_plugin_tool(name):
         try:

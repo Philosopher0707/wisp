@@ -127,24 +127,20 @@ You have access to tools that let you read, write, and edit files, run bash comm
 
         sections: list[tuple[str, int, str]] = []
         # (label, priority, content) — lower priority number = more important
-        # Priority tiers: 0=critical, 1=important, 2=contextual, 3=optional
-        sections.append(("default_system", 0, default_system or self.default_system))
-        sections.append(("workspace",      0, f"## Workspace\nYou are working in: {ws_abs}"))
+        # Priority tiers: -1=prepend 0=critical, 1=important, 2=contextual, 3=optional
 
         if context_files:
-            sections.append(("context_files", 1, context_files))
+            sections.append(("context_files", -1, context_files))
+
+        sections.append(("default_system", 0, default_system or self.default_system))
+        sections.append(("workspace",      0, f"## Workspace\nYou are working in: {ws_abs}"))
 
         if mandatory_skill:
             name, description, instructions = mandatory_skill
             mandatory_txt = (
-                "==============================\n"
-                f"MANDATORY Mode: {name}\n"
-                "==============================\n"
-                "\n"
-                "These rules override ALL earlier instructions. You MUST follow them.\n"
-                "Do NOT ask for confirmation — execute immediately.\n"
-                "\n"
-                f"{description}\n\n{instructions}"
+                f"## Active Skill: {name}\n"
+                f"{description}\n\n"
+                f"{instructions}"
             )
             sections.append(("mandatory_skill", 1, mandatory_txt))
 
@@ -190,6 +186,21 @@ You have access to tools that let you read, write, and edit files, run bash comm
             sections.append(("repo_map", 3, repo_map))
 
         system, usage = self._fit_sections(sections, max_tokens)
+
+        # ── Safety footer ────────────────────────────────────────────────
+        # Always appended after everything else so that base safety
+        # guidelines remain effective regardless of which skills are active.
+        # Skills are NOT permitted to override these.
+        if mandatory_skill:
+            safety_footer = (
+                "\n\n## Safety Guidelines\n"
+                "Remember to follow your core safety guidelines at all times. "
+                "Do not run destructive commands without user confirmation. "
+                "Respect user preferences and workspace safety."
+            )
+            system += safety_footer
+            usage += self._estimate_tokens(safety_footer)
+
         logger.debug("ContextAssembler: built prompt with %d/%d tokens", usage, max_tokens)
         self._cache[cache_key] = system
         return system

@@ -112,8 +112,52 @@ class TestContextAssemblerBuild:
             default_system="You are Wisp.",
             context_files="# Rules\nBe concise",
         )
-        # Context files are prepended
+        # Context files are prepended before everything (priority -1)
         assert result.startswith("# Rules")
+        assert "Be concise" in result
+        assert "You are Wisp." in result
+
+    def test_build_with_skill_instructions_not_override(self):
+        """Skill instructions should be present but NOT claim to override
+        earlier instructions. The word 'MANDATORY' must not appear."""
+        from wisp.context_assembler import ContextAssembler
+        assembler = ContextAssembler()
+        result = assembler.build(
+            workspace="/tmp",
+            default_system="You are Wisp.",
+            mandatory_skill=("test-skill", "Test skill", "Do testing"),
+        )
+        assert "Do testing" in result
+        # The old dangerous language
+        assert "MANDATORY Mode: test-skill" not in result
+        assert "override ALL earlier instructions" not in result
+        assert "Do NOT ask for confirmation" not in result
+
+    def test_build_with_skill_mentions_workspace_first(self):
+        """Skill instructions should appear BEFORE safety guidelines, not after."""
+        from wisp.context_assembler import ContextAssembler
+        assembler = ContextAssembler()
+        result = assembler.build(
+            workspace="/tmp",
+            default_system="BASE",
+            mandatory_skill=("coder", "Code well", "Write Python."),
+        )
+        base_idx = result.find("BASE")
+        skill_idx = result.find("Write Python")
+        # Safety footer should be AFTER skill, not before it
+        safety_idx = result.find("Safety guidelines")
+        assert base_idx < skill_idx < safety_idx
+
+    def test_build_without_mandatory_skill_no_safety_footer(self):
+        """No safety footer when no skill is active — don't waste context."""
+        from wisp.context_assembler import ContextAssembler
+        assembler = ContextAssembler()
+        result = assembler.build(
+            workspace="/tmp",
+            default_system="You are Wisp.",
+        )
+        assert "## Active Skill" not in result
+        assert "Safety guidelines" not in result
 
     def test_build_with_mandatory_skill(self):
         from wisp.context_assembler import ContextAssembler
@@ -123,8 +167,9 @@ class TestContextAssemblerBuild:
             default_system="You are Wisp.",
             mandatory_skill=("test-skill", "Test skill", "Do testing"),
         )
-        assert "MANDATORY Mode: test-skill" in result
+        assert "test-skill" in result
         assert "Do testing" in result
+        assert "MANDATORY Mode: test-skill" not in result  # no dangerous language
 
     def test_build_with_plan_mode(self):
         from wisp.context_assembler import ContextAssembler
@@ -189,15 +234,16 @@ class TestContextAssemblerBuild:
             memory_block="MEMORY",
             mandatory_skill=("skill", "name", "instructions"),
         )
-        # Verify ordering: base -> workspace -> skills -> project -> memory -> mandatory
+        # Verify ordering: base -> workspace -> skills -> project -> memory -> skill -> safety
         base_idx = result.find("BASE")
         ws_idx = result.find("Workspace")
         skills_idx = result.find("SKILLS")
         proj_idx = result.find("PROJECT")
         mem_idx = result.find("MEMORY")
-        mand_idx = result.find("MANDATORY")
+        skill_idx = result.find("## Active Skill")
+        safety_idx = result.find("Safety guidelines")
 
-        assert base_idx < ws_idx < skills_idx < proj_idx < mem_idx < mand_idx
+        assert base_idx < ws_idx < skills_idx < proj_idx < mem_idx < skill_idx < safety_idx
 
     def test_build_caching(self):
         from wisp.context_assembler import ContextAssembler

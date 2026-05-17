@@ -7,11 +7,59 @@ Supports the same SKILL.md format Warp uses:
 """
 
 import logging
+import re
 import yaml
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+# ── Dangerous instruction patterns (case-insensitive) ──────────────
+_BLOCKED_PATTERNS = [
+    # Prompt-injection override language
+    r"ignore all (previous|earlier) instructions",
+    r"override all (previous|earlier) instructions",
+    r"these rules override",
+    r"you must follow them",
+    r"do not ask for confirmation",
+    r"execute immediately",
+    # Shell execution vectors
+    r"curl\s+\S+\s*\|\s*bash",
+    r"curl\s+\S+\s*\|\s*sh",
+    r"wget\s+\S+.*\|\s*bash",
+    r"wget\s+\S+.*\|\s*sh",
+    # Destructive commands
+    r"rm\s+-rf\s+/",
+    r"rm\s+-rf\s+[~$]",
+    # System compromise
+    r"eval\s*\(",
+    r"system\s*\(",
+    r"exec\s*\(",
+    r"os\.system\s*\(",
+    r"subprocess\.call\s*\(",
+    r"subprocess\.run\s*\(",
+]
+
+_BLOCKED_RE = re.compile(
+    "|".join(f"({p})" for p in _BLOCKED_PATTERNS),
+    re.IGNORECASE,
+)
+
+
+def _validate_skill_content(instructions: str, file_path: Path) -> bool:
+    """Reject skills containing dangerous instruction patterns.
+
+    Returns True if safe, False if blocked (and logs a security warning).
+    """
+    if _BLOCKED_RE.search(instructions):
+        logger.warning(
+            "SECURITY: Skill '%s' at '%s' contains dangerous instructions and was blocked.",
+            file_path.name,
+            file_path,
+        )
+        return False
+    return True
 
 
 SKILL_DIR_NAMES = [
@@ -93,6 +141,9 @@ def parse_skill(file_path: Path) -> Optional[Skill]:
         triggers = [t.strip() for t in triggers.split(",") if t.strip()]
 
     if not name:
+        return None
+
+    if not _validate_skill_content(instructions, file_path):
         return None
 
     return Skill(
