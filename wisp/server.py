@@ -250,6 +250,7 @@ class HookCreateRequest(BaseModel):
 
 async def verify_api_key(
     x_api_key: str | None = Query(None, alias="api-key"),
+    x_api_key_header: str | None = Header(None, alias="X-API-Key"),
     authorization: str | None = Header(None),
 ):
     if authorization and authorization.lower().startswith("bearer "):
@@ -258,6 +259,8 @@ async def verify_api_key(
             return auth_key
     if x_api_key and x_api_key == API_KEY:
         return x_api_key
+    if x_api_key_header and x_api_key_header == API_KEY:
+        return x_api_key_header
     raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 class RateLimiter:
@@ -2279,21 +2282,22 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(default="")
                     async def _run():
                         try:
                             await conn.transport.run(prompt, images=images)
-                        except BaseException as e:
-                            # KeyboardInterrupt / CancelledError / anything else
-                            # — log and notify client before re-raising or killing
-                            logger.warning("Agent task terminating for %s: %s (%s)", client_id, type(e).__name__, e)
+                        except KeyboardInterrupt:
+                            # KeyboardInterrupt is a BaseException, not an Exception.
+                            # Log and notify the client before re-raising so the
+                            # event loop is not silently killed.
+                            logger.warning("Agent task interrupted for %s", client_id)
                             try:
-                                await conn.send({"type": "error", "message": f"Server interrupted: {type(e).__name__}"})
+                                await conn.send({"type": "error", "message": "Server interrupted: KeyboardInterrupt"})
                             except Exception:
                                 pass  # WebSocket may already be closed
-                            raise  # Re-raise so asyncio sees the failure
+                            raise
                         except Exception as e:
                             logger.error("Agent error for %s: %s", client_id, e)
                             try:
                                 await conn.send({"type": "error", "message": str(e)})
                             except Exception:
-                                pass
+                                pass  # WebSocket may already be closed
                         finally:
                             sid = core.session.id if core.session else (session_id or "")
                             if config.plan_mode:
