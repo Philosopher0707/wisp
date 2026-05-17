@@ -646,6 +646,9 @@ class WispAgentCore:
                 logger.warning("Skill '%s' not found in discovered skills", effective_skill)
 
         # ── Delegate assembly ────────────────────────────────────
+        # Cap the system prompt at ~40% of the context window so conversation
+        # history still has room (trim_conversation handles message trimming).
+        sys_budget = max(2000, self.config.max_context_tokens // 3)
         system = self.context_assembler.build(
             workspace=ws,
             default_system=DEFAULT_SYSTEM,
@@ -662,7 +665,17 @@ class WispAgentCore:
             repo_map=repo_map or None,
             context_files=context_files or None,
             mandatory_skill=mandatory_skill,
+            max_tokens=sys_budget,
         )
+
+        # Log if truncation actually happened
+        final_est = self._estimate_tokens([{"content": system}])
+        if sys_budget and final_est > sys_budget * 0.9:
+            logger.warning(
+                "System prompt is %d/%d tokens after truncation. "
+                "Consider reducing context sections.",
+                final_est, sys_budget,
+            )
 
         self._system_prompt_cache[cache_key] = system
         return system
