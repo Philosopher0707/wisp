@@ -2163,9 +2163,18 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(default="")
     conn = await manager.connect(websocket, client_id)
     _first_message = True
 
+    # WebSocket idle timeout: close after 10 minutes of no messages
+    _WS_IDLE_TIMEOUT = 600.0
+
     try:
         while True:
-            raw = await websocket.receive_text()
+            try:
+                raw = await asyncio.wait_for(websocket.receive_text(), timeout=_WS_IDLE_TIMEOUT)
+            except asyncio.TimeoutError:
+                logger.info("WebSocket idle timeout — closing %s", client_id)
+                await conn.send({"type": "error", "message": "Connection closed after 10 minutes of inactivity"})
+                await websocket.close(code=4001, reason="Idle timeout")
+                return
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError:
@@ -2270,9 +2279,21 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(default="")
                     async def _run():
                         try:
                             await conn.transport.run(prompt, images=images)
+                        except BaseException as e:
+                            # KeyboardInterrupt / CancelledError / anything else
+                            # — log and notify client before re-raising or killing
+                            logger.warning("Agent task terminating for %s: %s (%s)", client_id, type(e).__name__, e)
+                            try:
+                                await conn.send({"type": "error", "message": f"Server interrupted: {type(e).__name__}"})
+                            except Exception:
+                                pass  # WebSocket may already be closed
+                            raise  # Re-raise so asyncio sees the failure
                         except Exception as e:
                             logger.error("Agent error for %s: %s", client_id, e)
-                            await conn.send({"type": "error", "message": str(e)})
+                            try:
+                                await conn.send({"type": "error", "message": str(e)})
+                            except Exception:
+                                pass
                         finally:
                             sid = core.session.id if core.session else (session_id or "")
                             if config.plan_mode:

@@ -82,6 +82,8 @@ def tool_run_bash(command: str, workspace: str, timeout: int = 60) -> str:
     except subprocess.TimeoutExpired:
         logger.warning("Command timed out after %ds: %.100s", timeout_val, command)
         raise ToolError(f"Command timed out after {timeout_val}s: {command[:100]}...")
+    except KeyboardInterrupt:
+        raise  # Let the signal propagate; do NOT bury it as a ToolError
     except OSError as e:
         logger.error("Command failed with OSError: %s", e)
         raise ToolError(f"Command failed: {e}")
