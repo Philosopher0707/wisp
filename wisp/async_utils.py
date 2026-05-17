@@ -2,6 +2,11 @@
 
 Provides run_sync() and run_sync_coro() to consume async code from sync
 contexts without creating nested event loops.
+
+NEW: ``sync_gen_iter()`` bridges synchronous generators so they can be consumed
+without blocking the asyncio event loop.  This is the minimal correct fix
+for the _arun blocking bug: the synchronous requests.post(...) chain runs in
+a thread and yields events via an asyncio.Queue.
 """
 
 from __future__ import annotations
@@ -9,9 +14,10 @@ from __future__ import annotations
 import asyncio
 import threading
 from concurrent.futures import Future
-from typing import Any, AsyncIterator, TypeVar
+from typing import Any, AsyncIterator, TypeVar, Iterator
 
 T = TypeVar("T")
+
 
 # ── Persistent background thread + loop ──────────────────────────────────
 
@@ -62,6 +68,98 @@ def _ensure_background_loop() -> asyncio.AbstractEventLoop:
 def get_background_thread() -> threading.Thread | None:
     """Return the background worker thread, if it has been started."""
     return _loop_thread
+
+
+# ── sync generator → async iterator bridge ──────────────────────────
+
+async def sync_gen_iter(
+    gen_factory: callable,
+    executor: Any | None = None,
+) -> AsyncIterator[Any]:
+    """Consume a synchronous generator factory in a thread; yield items
+    asynchronously without blocking the event loop.
+
+    This is the minimal correct fix for the _arun blocking bug.  The
+    synchronous requests.post(...) chain (via _run_turn_streaming_events
+    → generate_stream_events → _post_stream) runs in a thread and yields
+    events via an asyncio.Queue.
+
+    Args:
+        gen_factory: A zero-argument callable that returns a **fresh**
+            synchronous iterator / generator.  Must be callable so that the
+            bridge can create a new instance in the thread.
+        executor: Optional ThreadPoolExecutor / asyncio executor.  If None
+            ``asyncio.to_thread`` is used.
+
+    Yields:
+        Each item produced by the synchronous generator.
+
+    Raises:
+        Exception from the sync generator — propagated faithfully.
+    """
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[tuple[bool, Any]] = asyncio.Queue()
+    sentinel = object()
+    stop_event = threading.Event()
+
+    def _enqueue(ok: bool, item: Any) -> None:
+        """Thread-safe fire-and-forget queue put."""
+        try:
+            asyncio.run_coroutine_threadsafe(queue.put((ok, item)), loop)
+        except RuntimeError:
+            pass  # event loop closed — nothing to do
+
+    def _thread_target() -> None:
+        """Consumes the sync generator in a thread and enqueues items."""
+        try:
+            gen = gen_factory()
+            for item in gen:
+                if stop_event.is_set():
+                    break
+                _enqueue(True, item)
+            if not stop_event.is_set():
+                _enqueue(False, sentinel)
+        except Exception as exc:
+            if not stop_event.is_set():
+                _enqueue(False, exc)
+
+    # Start the consumer thread
+    t = threading.Thread(target=_thread_target, name="wisp-sync-gen", daemon=True)
+    t.start()
+
+    try:
+        while True:
+            # Wait for next item with a check-cancellable timeout
+            try:
+                ok, item = await queue.get()
+            except asyncio.CancelledError:
+                stop_event.set()
+                raise
+
+            if not ok:
+                # Completed or exception
+                if isinstance(item, Exception):
+                    raise item
+                break  # sentinel, done
+
+            yield item
+    finally:
+        # Ensure the thread terminates even if consumer is cancelled
+        stop_event.set()
+        # Drain any remaining items so the thread's queue.put() doesn't block
+        # (important because run_coroutine_threadsafe().result() can hang if
+        # the loop is gone by the time the coroutine runs).
+        try:
+            while not queue.empty():
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+        except Exception:
+            pass
+
+
+# ── run_sync variants ─────────────────────────────────────────────────
 
 
 def run_sync_coro(coro) -> Any:

@@ -849,9 +849,12 @@ class WispAgentCore:
             if inject is not None:
                 yield inject
 
-            # Forward streaming token events
+            # Forward streaming token events — run the synchronous generator
+            # in a background thread so that the asyncio event loop stays
+            # free for concurrent WebSocket clients, approvals, and interrupts.
+            from wisp.async_utils import sync_gen_iter  # local import avoids top-level cycle
             streamed_content = False
-            for event in self._run_turn_streaming_events(system):
+            async for event in sync_gen_iter(lambda: self._run_turn_streaming_events(system)):
                 if self._interrupted:
                     completion_reason = "interrupted"
                     break
