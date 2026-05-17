@@ -53,15 +53,16 @@ def tool_run_bash(command: str, workspace: str, timeout: int = 60) -> str:
             text=True,
             timeout=timeout_val,
         )
+        # Build output with exit code at the TOP so truncation never loses it
         output = ""
+        if result.returncode != 0:
+            output = f"[exit code: {result.returncode}]\n"
         if result.stdout:
             output += result.stdout
         if result.stderr:
             if result.stdout:
                 output += "\n--- stderr ---\n"
             output += result.stderr
-        if result.returncode != 0:
-            output += f"\n[exit code: {result.returncode}]"
 
         # Strip ANSI escape codes
         output = _ANSI_RE.sub('', output)

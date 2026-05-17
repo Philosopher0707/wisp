@@ -158,7 +158,6 @@ class Session:
 
         # ── Turn-symmetry guard ─────────────────────────────────────
         # Ensure the kept window starts with a user message.
-        # If it starts with assistant/tool, expand until we hit a user.
         adjusted = keep_recent
         while adjusted < len(self.messages):
             first_kept = self.messages[-adjusted]
@@ -166,19 +165,62 @@ class Session:
                 break
             adjusted += 1
 
-        # Ensure the kept window ends with an assistant message (complete turn).
-        # If the last message is not an assistant, search backward for the nearest
-        # assistant and expand to include it. If no assistant exists in the
-        # entire history, leave the window as-is (degenerate case).
+        # Ensure the kept window ends with an assistant message that LOOKS
+        # like a complete thought (synthesis), not mid-reasoning. An incomplete
+        # assistant message at the window edge leaves the model with a dangling
+        # chain of thought that references deleted context.
+        def _is_complete_assistant(msg: dict) -> bool:
+            """Check if an assistant message is a completed thought."""
+            role = msg.get("role", "")
+            if role != "assistant":
+                return False
+            content = (msg.get("content", "") or "").lower().strip()
+            if not content:
+                return False
+            # Tool-calling messages are always "complete" — they represent
+            # an action taken, not reasoning in progress.
+            if msg.get("tool_calls"):
+                return True
+            # Ending with a terminal punctuation or markdown/code block closure
+            # signals the thought is finished.
+            if content:
+                last_char = content[-1]
+                if last_char in ".!?`}":
+                    return True
+                # Ellipsis is NOT terminal — it's mid-thought trailing off
+                if content.endswith("..."):
+                    return False
+            # Incomplete reasoning markers
+            _INCOMPLETE = (
+                "let me think", "i'll", "let me check", "first i need",
+                "i need to", "plan:", "approach:", "step 1", "step 2",
+                "working on", "let me", "i should", "not yet", "pending",
+                "still need", "in progress",
+            )
+            for marker in _INCOMPLETE:
+                if content.rfind(marker) > max(0, len(content) - 80):
+                    # Marker appears near the end → likely mid-thought
+                    return False
+            return True
+
         if self.messages[-1].get("role") != "assistant":
-            found = False
+            # Search backward for the nearest *complete* assistant,
+            # skipping mid-thought dangling messages.
+            candidate_i = None
             for i in range(adjusted, len(self.messages) + 1):
                 idx = len(self.messages) - i
-                if idx >= 0 and self.messages[idx].get("role") == "assistant":
-                    adjusted = i
-                    found = True
+                if idx < 0:
                     break
-            # If no assistant found, don't expand further
+                if self.messages[idx].get("role") == "assistant":
+                    if _is_complete_assistant(self.messages[idx]):
+                        candidate_i = i
+                        break
+                    # If incomplete, keep searching backward for an earlier
+                    # complete assistant, but remember the nearest as fallback.
+                    if candidate_i is None:
+                        candidate_i = i
+            if candidate_i is not None:
+                adjusted = candidate_i
 
         old_messages = self.messages[:-adjusted]
         recent_messages = self.messages[-adjusted:]

@@ -28,7 +28,7 @@ Structure:
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -49,8 +49,12 @@ def _normalize(content: str) -> str:
 
 
 def _resolve_workspace(workspace: str) -> str:
-    """Absolute path without symlink resolution. Avoids macOS /tmp→/private/tmp issues."""
-    return os.path.normpath(os.path.abspath(workspace))
+    """Canonical path with symlink resolution for stable workspace keys.
+
+    Uses os.path.realpath so that /tmp/project and /private/tmp/project
+    (macOS) resolve to the same key, preventing memory fragmentation.
+    """
+    return os.path.realpath(workspace)
 
 
 # ── File I/O ────────────────────────────────────────────────────────────
@@ -324,7 +328,12 @@ def format_memory_block(workspace: Optional[str] = None, include_all: bool = Tru
     for f in facts:
         content = _fact_content(f)
         marker = "⭐ " if f.get("important") else ""
-        lines.append(f"- {marker}{content}")
+        added = f.get("added", "")
+        # Render YYYY-MM-DD prefix so model knows recency
+        date_prefix = ""
+        if added and len(added) >= 10:
+            date_prefix = f"[{added[:10]}] "
+        lines.append(f"- {marker}{date_prefix}{content}")
         shown += 1
         if shown >= 20:
             break
@@ -352,7 +361,12 @@ def _count_facts(memory: dict) -> int:
 
 
 def _evict_one(memory: dict) -> bool:
-    """Evict the least-recently-used non-important fact. Returns True if evicted."""
+    """Evict the least-recently-used fact, with important facts getting a bonus.
+
+    Important facts receive a 30-day recency bonus: they are treated as if
+    they were accessed 30 days more recently than their actual last_accessed.
+    This means important facts survive longer but are NOT immortal.
+    """
     all_facts: list[tuple[dict, str | None]] = []
     for f in memory.get("global_facts", []):
         all_facts.append((f, None))
@@ -360,12 +374,29 @@ def _evict_one(memory: dict) -> bool:
         for f in facts:
             all_facts.append((f, ws_path))
 
-    # Only evict non-important facts, oldest first
-    candidates = [(f, ws) for f, ws in all_facts if not f.get("important")]
-    if not candidates:
+    if not all_facts:
         return False
 
-    oldest = min(candidates, key=lambda x: x[0].get("last_accessed", ""))
+    now = datetime.now(timezone.utc)
+    bonus = timedelta(days=30)
+
+    def _effective_age(item: tuple[dict, str | None]) -> timedelta:
+        fact, _ = item
+        last_str = fact.get("last_accessed", "")
+        if not last_str:
+            return timedelta.max
+        try:
+            last = datetime.fromisoformat(last_str)
+        except ValueError:
+            return timedelta.max
+        age = now - last
+        # Important facts appear younger by 30 days
+        if fact.get("important"):
+            age -= bonus
+        return age
+
+    # Evict the fact with the largest effective age (oldest)
+    oldest = max(all_facts, key=_effective_age)
     fact, ws = oldest
 
     if ws:

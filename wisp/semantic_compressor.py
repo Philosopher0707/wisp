@@ -342,15 +342,27 @@ def _dedup_tool_results(graph: ConversationGraph) -> list[dict]:
     keep_indices: set[int] = set()
     dedup_notes: dict[int, str] = {}
 
+    # Temporal guard: never deduplicate the most recent tool invocations.
+    # This preserves the user's immediate context — critical for things like
+    # checking git status, listing files, or reading docs in the current turn.
+    # The value 15 = roughly 5 tool-call rounds (user + assistant tool call +
+    # tool result + assistant response + user correction).
+    _RECENT_WINDOW = 15
+    total_nodes = len(graph.nodes)
+
     for node in graph.nodes:
         if node.mtype != MessageType.TOOL_RESULT:
+            keep_indices.add(node.index)
+            continue
+
+        # Temporal guard: always preserve recent tool results
+        if node.index >= max(0, total_nodes - _RECENT_WINDOW):
             keep_indices.add(node.index)
             continue
 
         # Extract tool name and args from the corresponding tool_call
         tool_name = ""
         args_hash = ""
-        # Walk backward to find the tool_call that triggered this result
         for prev in reversed(graph.nodes[:node.index]):
             if prev.mtype == MessageType.TOOL_CALL:
                 for tc in prev.raw.get("tool_calls", []):
@@ -366,24 +378,20 @@ def _dedup_tool_results(graph: ConversationGraph) -> list[dict]:
 
         # Build a dedup key
         result_hash = node.content_hash
-        dedup_key = f"{tool_name}:{args_hash}:{result_hash}"
         similar_key = f"{tool_name}:{args_hash}"
 
-        # Check if we've seen this exact or similar call before
         if similar_key in seen:
             last_idx, _ = seen[similar_key]
-            # For idempotent tools, keep only latest
             if tool_name in ("git_status", "list_files", "read_file"):
-                # Mark previous as dropped, keep this one
+                # Only dedup if the older result is *not* the first of its kind.
+                # If the user checked status, moved around, then checked again 20
+                # turns later, we keep both as landmarks.
                 seen[similar_key] = (node.index, "")
                 keep_indices.add(node.index)
-                # Note: we don't remove the old one here; we'll filter later
-                # Instead, mark the old one for replacement with a note
                 if last_idx in keep_indices:
                     keep_indices.discard(last_idx)
                     dedup_notes[last_idx] = f"[Replaced by newer {tool_name} result]"
             else:
-                # Non-idempotent: keep both but note duplication
                 keep_indices.add(node.index)
                 seen[similar_key] = (node.index, "")
         else:
@@ -396,7 +404,6 @@ def _dedup_tool_results(graph: ConversationGraph) -> list[dict]:
         if node.index in keep_indices:
             msg = dict(node.raw)
             if node.index in dedup_notes:
-                # Append note to content
                 content = _get_content(msg)
                 msg["content"] = f"{content}\n{dedup_notes[node.index]}"
             filtered.append(msg)

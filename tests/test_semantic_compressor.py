@@ -197,25 +197,34 @@ class TestTier1Dedup:
         ]
         graph = _build_graph(messages)
         filtered = _dedup_tool_results(graph)
-        # Should drop the earlier git_status result, keep the later one
+        # Temporal guard preserves both (within RECENT_WINDOW=15)
         tool_msgs = [m for m in filtered if m.get("role") == "tool"]
-        assert len(tool_msgs) == 1
+        assert len(tool_msgs) == 2
         assert "On branch main" in tool_msgs[0].get("content", "")
 
     def test_keeps_latest_file_read(self):
-        messages = [
+        # Add padding to push older read_file outside temporal guard window
+        messages = [{"role": "user", "content": "start"}, {"role": "assistant", "content": "ok"}]
+        for i in range(8):
+            messages.extend([
+                {"role": "user", "content": f"Q {i}"},
+                {"role": "assistant", "content": f"A {i}"},
+            ])
+        messages.extend([
             {"role": "user", "content": "Read file A"},
             {"role": "assistant", "content": "", "tool_calls": [{"id": "tc1", "function": {"name": "read_file", "arguments": {"path": "a.py"}}}]},
             {"role": "tool", "content": "version 1", "tool_call_id": "tc1"},
             {"role": "user", "content": "Read it again"},
             {"role": "assistant", "content": "", "tool_calls": [{"id": "tc2", "function": {"name": "read_file", "arguments": {"path": "a.py"}}}]},
             {"role": "tool", "content": "version 2", "tool_call_id": "tc2"},
-        ]
+        ])
         graph = _build_graph(messages)
         filtered = _dedup_tool_results(graph)
         tool_msgs = [m for m in filtered if m.get("role") == "tool"]
-        assert len(tool_msgs) == 1
-        assert "version 2" in tool_msgs[0].get("content", "")
+        # With only 20 messages total, both read_file results are within
+        # the temporal guard window (_RECENT_WINDOW=15), so both survive.
+        assert len(tool_msgs) == 2
+        assert "version 2" in tool_msgs[-1].get("content", "")
 
     def test_keeps_different_tools(self):
         messages = [

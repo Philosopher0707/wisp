@@ -41,6 +41,10 @@ Sessions auto-compact when they grow too long — old messages get summarized in
 - **`remember`** — Store facts across sessions (preferences, decisions, conventions)
 - **`recall`** — Actively search memory and past session summaries for relevant context
 
+Memory facts include timestamps in the system prompt so the model knows recency.
+Important facts survive ~30 days longer than normal facts during LRU eviction,
+but are no longer immortal — stale important facts can still be evicted.
+
 ### 📱 Native Android App
 Control your coding agent from anywhere. Features:
 - **Real-time chat** with thinking stream

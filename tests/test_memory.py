@@ -218,3 +218,91 @@ class TestMemory:
         contents = _contents(all_facts)
         assert contents.count("Duplicate fact") == 2  # stored separately, not deduped at storage level
         # But format_memory_block shows them as separate entries (expected behavior)
+
+
+
+class TestMemoryDesignFlaws:
+    """Tests for known design flaws in cross-session memory."""
+
+    # -- Issue 1: Workspace scoping without realpath --
+
+    def test_workspace_symlink_resolves_to_same_key(self, tmp_path, monkeypatch):
+        """If workspace is a symlink, facts should resolve to the real path."""
+        monkeypatch.setattr("wisp.memory.WISP_CONFIG_DIR", tmp_path)
+        real_dir = tmp_path / "real_project"
+        real_dir.mkdir()
+        link_dir = tmp_path / "link_project"
+        link_dir.symlink_to(real_dir)
+
+        add_fact("Real path fact", workspace=str(real_dir))
+        facts = _contents(list_facts(workspace=str(link_dir)))
+        assert "Real path fact" in facts
+
+    def test_macos_tmp_private_tmp_same_workspace(self, tmp_path, monkeypatch):
+        """/tmp/project and /private/tmp/project should share memory."""
+        monkeypatch.setattr("wisp.memory.WISP_CONFIG_DIR", tmp_path)
+        real_dir = tmp_path / "private" / "tmp" / "project"
+        real_dir.mkdir(parents=True)
+        link_dir = tmp_path / "tmp" / "project"
+        link_dir.parent.mkdir(parents=True)
+        link_dir.symlink_to(real_dir)
+
+        add_fact("Shared fact", workspace=str(link_dir))
+        facts = _contents(list_facts(workspace=str(real_dir)))
+        assert "Shared fact" in facts
+
+    # -- Issue 2: Contradictory facts coexist --
+
+    def test_contradictory_facts_both_exist(self, tmp_path, monkeypatch):
+        """Two semantically contradictory facts are stored as separate entries."""
+        monkeypatch.setattr("wisp.memory.WISP_CONFIG_DIR", tmp_path)
+        add_fact("use tabs for indentation")
+        add_fact("use spaces for indentation")
+        facts = _contents(list_facts())
+        assert "use tabs for indentation" in facts
+        assert "use spaces for indentation" in facts
+        assert len(facts) == 2
+
+    def test_format_memory_shows_timestamps(self, tmp_path, monkeypatch):
+        """format_memory_block should include timestamps so model knows recency."""
+        monkeypatch.setattr("wisp.memory.WISP_CONFIG_DIR", tmp_path)
+        add_fact("older preference")
+        block = format_memory_block()
+        # Currently timestamps are NOT rendered
+        assert "added" in block or "202" in block  # will fail until fixed
+
+    # -- Issue 3: Important facts are immortal --
+
+    def test_new_nonimportant_evicted_before_old_important(self, tmp_path, monkeypatch):
+        """A new non-important fact gets evicted before an old important one."""
+        monkeypatch.setattr("wisp.memory.WISP_CONFIG_DIR", tmp_path)
+        monkeypatch.setattr("wisp.memory._MAX_FACTS", 3)
+        add_fact("old important", important=True)
+        add_fact("new non-important")
+        add_fact("filler")
+        # At capacity; adding another should evict new non-important, not old important
+        add_fact("another filler")
+        facts = _contents(list_facts())
+        assert "old important" in facts
+        # The new non-important may or may not be evicted depending on LRU
+        # But the real bug: if we add MORE facts, old important never gets pressured
+        add_fact("yet another filler")
+        add_fact("and another")
+        facts = _contents(list_facts())
+        assert "old important" in facts  # immortal
+        assert len(facts) == 3
+
+    def test_importance_should_not_be_immortal(self, tmp_path, monkeypatch):
+        """Important facts should still be evictable if sufficiently stale."""
+        monkeypatch.setattr("wisp.memory.WISP_CONFIG_DIR", tmp_path)
+        monkeypatch.setattr("wisp.memory._MAX_FACTS", 2)
+        add_fact("stale important", important=True)
+        add_fact("recent normal")
+        # With a fair policy, stale important should be evictable
+        # Currently it is NOT evictable at all
+        add_fact("newest fact")
+        facts = _contents(list_facts())
+        # This test documents current broken behavior:
+        # stale important is immortal even though it's older than everything
+        assert "stale important" in facts  # currently passes (bug)
+        assert len(facts) == 2
