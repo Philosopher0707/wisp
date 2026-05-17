@@ -29,7 +29,7 @@ def cmd_server(host="0.0.0.0", port=8000, no_auth=False):
     server_main(host=host, port=port, no_auth=no_auth)
 
 
-def cmd_run(prompt, model=None, skill=None, workspace=None, auto_approve=False, session_id=None, show_thinking=False):
+def cmd_run(prompt, model=None, skill=None, workspace=None, auto_approve=False, session_id=None, show_thinking=False, long_task=False):
     """Run Wisp with a prompt."""
     config = WispConfig()
     if model:
@@ -42,10 +42,18 @@ def cmd_run(prompt, model=None, skill=None, workspace=None, auto_approve=False, 
         config.show_thinking = True
 
     agent = WispAgent(config)
+    
+    # Force long-task mode if requested
+    if long_task:
+        from wisp.tools.long_horizon import tool_run_long_task
+        result = tool_run_long_task(goal=prompt)
+        print(result)
+        return
+    
     agent.run(prompt, skill_name=skill, session_id=session_id)
 
 
-def cmd_repl(model=None, skill=None, workspace=None, session_id=None, show_thinking=False, auto_approve=False):
+def cmd_repl(model=None, skill=None, workspace=None, session_id=None, show_thinking=False, auto_approve=False, long_task=False):
     """Run Wisp in interactive REPL mode."""
     config = WispConfig()
     if model:
@@ -58,7 +66,7 @@ def cmd_repl(model=None, skill=None, workspace=None, session_id=None, show_think
         config.auto_approve = True
 
     agent = WispAgent(config)
-    agent.repl(skill_name=skill, session_id=session_id)
+    agent.repl(skill_name=skill, session_id=session_id, force_long_task=long_task)
 
 
 def cmd_tui(model=None, workspace=None, show_thinking=False, auto_approve=False):
@@ -992,6 +1000,7 @@ Options:
   --print <prompt>         Headless mode: run prompt, print JSON result, exit
   --output-format <fmt>    Output format for --print: json | stream-json (default: json)
   --quiet                  Suppress all output except final result
+  --long-task              Force long-horizon task mode for this prompt
   --version                Show version
 
 Subcommands:
@@ -1060,11 +1069,12 @@ def main():
     flags_print = None
     flags_output_format = "json"
     flags_quiet = False
+    flags_long_task = False
 
     def extract_global_flags(args):
         """Extract global flags from args list, return remaining args."""
         nonlocal flags_model, flags_skill, flags_session, flags_workspace, flags_auto, flags_show_thinking
-        nonlocal flags_print, flags_output_format, flags_quiet
+        nonlocal flags_print, flags_output_format, flags_quiet, flags_long_task
         result = []
         i = 0
         while i < len(args):
@@ -1096,6 +1106,9 @@ def main():
             elif a == "--quiet":
                 flags_quiet = True
                 i += 1
+            elif a == "--long-task":
+                flags_long_task = True
+                i += 1
             else:
                 result.append(a)
                 i += 1
@@ -1108,10 +1121,10 @@ def main():
             if not rest:
                 print("✗ Please provide a prompt.")
                 return
-            cmd_run(" ".join(rest), flags_model, flags_skill, flags_workspace, flags_auto, flags_session, flags_show_thinking)
+            cmd_run(" ".join(rest), flags_model, flags_skill, flags_workspace, flags_auto, flags_session, flags_show_thinking, flags_long_task)
 
         elif first == "repl":
-            cmd_repl(flags_model, flags_skill, flags_workspace, flags_session, flags_show_thinking, flags_auto)
+            cmd_repl(flags_model, flags_skill, flags_workspace, flags_session, flags_show_thinking, flags_auto, flags_long_task)
 
         elif first == "tui":
             cmd_tui(flags_model, flags_workspace, flags_show_thinking, flags_auto)

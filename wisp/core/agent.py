@@ -552,6 +552,19 @@ class WispAgentCore:
         ws_abs = Path(ws).resolve()
         system = DEFAULT_SYSTEM
         system += f"\n\n## Workspace\nYou are working in: {ws_abs}"
+
+        # ── Auto-detect long-horizon tasks ──
+        if query:
+            from wisp.long_horizon.trigger import detect_long_task
+            is_long, reason = detect_long_task(query, ws)
+            if is_long:
+                system += (
+                    f"\n\n## Task Assessment\n"
+                    f"The user's request appears to be a complex, multi-step goal: {reason}. "
+                    f"Consider using run_long_task to create a persistent plan with checkpoints."
+                )
+                logger.info("Auto-detected long-horizon task: %s", reason)
+
         if hasattr(self, "_role_system_extra") and self._role_system_extra:
             system += f"\n\n{self._role_system_extra}"
 
