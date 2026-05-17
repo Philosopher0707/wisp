@@ -1273,7 +1273,33 @@ class CLITransport:
                     dispatch("/help", self.core)
                     continue
 
-                # ── Long-task command ──
+                # ── Long-task commands ──
+                if cmd == "/tasks":
+                    from wisp.tools.long_horizon import tool_list_tasks
+                    result = tool_list_tasks()
+                    import json
+                    parsed = json.loads(result)
+                    if parsed["status"] == "ok":
+                        print(info(parsed["data"]))
+                    else:
+                        print(error(parsed["data"]))
+                    continue
+
+                if cmd.startswith("/task status "):
+                    task_id = cmd[13:].strip()
+                    if task_id:
+                        from wisp.tools.long_horizon import tool_task_status
+                        result = tool_task_status(task_id=task_id)
+                        import json
+                        parsed = json.loads(result)
+                        if parsed["status"] == "ok":
+                            print(info(parsed["data"]))
+                        else:
+                            print(error(parsed["data"]))
+                    else:
+                        print(error("✗ Usage: /task status <task-id>"))
+                    continue
+
                 if cmd.startswith("/task "):
                     goal = cmd[6:].strip()
                     if goal:
