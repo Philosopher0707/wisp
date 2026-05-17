@@ -205,10 +205,13 @@ class WispAgentCore:
         self._allowed_tools: Optional[set[str]] = None
         self._circuit_breaker = None
         self._metrics = None
-        self.mcp = MCPManager(self.config.workspace or ".")
+        # Use singleton managers to avoid spawning duplicate child processes
+        # (e.g. 5 subagents × 3 MCP servers = 15 orphaned-style processes).
+        from wisp.mcp import get_mcp_manager
+        self.mcp = get_mcp_manager(self.config.workspace or ".")
         self._mcp_initialized = False
-        from wisp.lsp.manager import LSPManager
-        self.lsp = LSPManager(self.config.workspace or ".")
+        from wisp.lsp.manager import get_lsp_manager
+        self.lsp = get_lsp_manager(self.config.workspace or ".")
         from wisp.agent_memory import get_agent_memory
         self.agent_memory = get_agent_memory()
         self._recent_summaries = self.agent_memory.load_recent_global(limit=7)

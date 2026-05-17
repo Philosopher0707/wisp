@@ -569,6 +569,59 @@ def _send_http_request(config: MCPServerConfig, request: dict) -> dict:
     return response.get("result", {})
 
 
+# ── Module-level singleton (prevents process multiplication) ──────────────────
+
+_GLOBAL_MCP: Optional["MCPManager"] = None
+_GLOBAL_MCP_LOCK = threading.Lock()
+
+
+def get_mcp_manager(workspace: str) -> "MCPManager":
+    """Return the module-level singleton MCPManager, creating it if needed.
+
+    This avoids spawning N copies of every MCP server process when multiple
+    agents share the same workspace (e.g. subagents in a swarm).
+    """
+    global _GLOBAL_MCP
+    with _GLOBAL_MCP_LOCK:
+        if _GLOBAL_MCP is None or _GLOBAL_MCP.workspace != workspace:
+            if _GLOBAL_MCP is not None:
+                logger.debug(
+                    "MCPManager workspace changed (%s -> %s) — shutting down old.",
+                    _GLOBAL_MCP.workspace,
+                    workspace,
+                )
+                try:
+                    _GLOBAL_MCP.shutdown()
+                except Exception:
+                    pass
+            _GLOBAL_MCP = MCPManager(workspace)
+            _GLOBAL_MCP.initialize()
+            logger.info("MCPManager singleton created for workspace: %s", workspace)
+        return _GLOBAL_MCP
+
+
+def shutdown_global_mcp_manager() -> None:
+    """Shut down the module-level singleton MCPManager.
+
+    Safe to call multiple times (idempotent). Intended for FastAPI
+    lifespan teardown, agent ``close()``, and ``atexit`` handlers.
+    """
+    global _GLOBAL_MCP
+    with _GLOBAL_MCP_LOCK:
+        if _GLOBAL_MCP is not None:
+            try:
+                _GLOBAL_MCP.shutdown()
+            except Exception:
+                pass
+            _GLOBAL_MCP = None
+
+
+# ── Safety: ensure child processes are killed on interpreter exit ──
+
+import atexit
+atexit.register(shutdown_global_mcp_manager)
+
+
 # ── Integration with Wisp ────────────────────────────────────────────
 
 
