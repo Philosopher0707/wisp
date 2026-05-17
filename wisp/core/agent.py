@@ -1202,6 +1202,8 @@ class WispAgentCore:
             auto_retry=args.get("auto_retry", True),
             workspace=workspace,
             auto_approve=self.config.auto_approve,
+            depth=getattr(self, "_subagent_depth", 0),
+            branch_count=getattr(self, "_subagent_branch_count", 0),
         )
 
     # ── Parallel subagents ───────────────────────────────────────────
@@ -1218,7 +1220,11 @@ class WispAgentCore:
         Returns:
             A list of SubagentResult objects, one per spec.
         """
-        return await self._orchestrator.spawn_parallel_with_guards(specs)
+        return await self._orchestrator.spawn_parallel_with_guards(
+            specs,
+            depth=getattr(self, "_subagent_depth", 0),
+            branch_count=getattr(self, "_subagent_branch_count", 0),
+        )
 
     # ── Auto parallel research ───────────────────────────────────────
 

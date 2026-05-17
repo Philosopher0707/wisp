@@ -489,17 +489,21 @@ class SubagentOrchestrator:
         auto_retry: bool = True,
         workspace: Optional[str] = None,
         auto_approve: bool = True,
+        depth: int = 0,
+        branch_count: int = 0,
     ) -> str:
         """Spawn a single subagent with full guard logic.
+
+        Args:
+            depth: Current subagent nesting depth (0 = top-level agent).
+            branch_count: Current number of sibling subagents spawned.
 
         Returns the subagent output as a string, or an error message.
         """
         # ── Depth and branching limits ─────────────────────────────────
-        depth = getattr(self.parent, "_subagent_depth", 0) if self.parent else 0
         if depth >= MAX_SUBAGENT_DEPTH:
             return f"[Error: subagent depth {depth} exceeds max {MAX_SUBAGENT_DEPTH}]"
 
-        branch_count = getattr(self.parent, "_subagent_branch_count", 0) if self.parent else 0
         if branch_count >= MAX_SUBAGENT_BRANCHING:
             return f"[Error: subagent branching {branch_count} exceeds max {MAX_SUBAGENT_BRANCHING}]"
 
@@ -601,263 +605,42 @@ class SubagentOrchestrator:
     async def spawn_parallel_with_guards(
         self,
         specs: list[SubagentContract | dict],
+        depth: int = 0,
+        branch_count: int = 0,
     ) -> list[SubagentResult]:
         """Spawn parallel subagents with optimizations applied to each.
 
         Args:
             specs: A list of SubagentContract objects or dicts describing each subagent's task.
+            depth: Current subagent nesting depth (0 = top-level agent).
+            branch_count: Current number of sibling subagents spawned.
 
         Returns:
             A list of SubagentResult objects, one per spec.
-        """
-        contracts: list[SubagentContract] = []
-        for spec in specs:
-            if isinstance(spec, dict):
-                contract = SubagentContract(**spec)
-            else:
-                contract = spec
-            # Apply production optimizations
-            if contract.timeout_seconds < 30.0:
-                contract.timeout_seconds = self._adaptive_subagent_timeout(
-                    contract.task, contract.timeout_seconds
-                )
-            local_model = self._pick_local_model_for_subagent(contract.task)
-            if local_model:
-                contract.model = local_model
-            contracts.append(contract)
-
-        results = await self.run_parallel(contracts)
-        for r in results:
-            logger.info(
-                "Subagent %s: success=%s, duration=%.1fs, files=%s, tokens=%d",
-                r.task_id, r.success, r.elapsed_seconds, r.files_changed, r.tokens_used,
-            )
-        return results
-
-    # ── Internal helpers (moved from WispAgentCore) ──────────────────
-
-    def _subagent_cache_key(self, contract: SubagentContract) -> str:
-        """Build a cache key from contract fields that affect output."""
-        parts = [
-            contract.task,
-            ",".join(sorted(contract.tools)),
-            str(contract.model or ""),
-            str(contract.workspace or ""),
-            contract.output_format,
-            str(contract.output_schema or ""),
-        ]
-        return hashlib.sha256("|".join(parts).encode()).hexdigest()[:32]
-
-    def _pick_local_model_for_subagent(self, task: str) -> Optional[str]:
-        """Return a fast local model name if the task is simple enough."""
-        parent_model = getattr(self.parent, "config", None)
-        parent_model = getattr(parent_model, "model", "") if parent_model else ""
-        if not parent_model or ":cloud" not in parent_model:
-            return None
-        fast_locals = ["llama3.2", "llama3.1", "qwen2.5", "phi4", "gemma2"]
-        available = self._list_local_models()
-        for candidate in fast_locals:
-            for name in available:
-                if candidate in name.lower():
-                    return name
-        return None
-
-    def _list_local_models(self) -> list[str]:
-        """Query Ollama for locally available models. Cached for 60s."""
-        now = time.monotonic()
-        cache = getattr(self, "_local_model_cache", None)
-        if cache and now - cache["ts"] < 60:
-            return cache["models"]
-        try:
-            import requests
-            url = getattr(self.parent, "config", None)
-            url = getattr(url, "ollama_url", "http://localhost:11434") if url else "http://localhost:11434"
-            resp = requests.get(f"{url}/api/tags", timeout=5)
-            if resp.status_code == 200:
-                models = [m["name"] for m in resp.json().get("models", [])]
-                self._local_model_cache = {"ts": now, "models": models}
-                return models
-        except Exception:
-            pass
-        return []
-
-    def _adaptive_subagent_timeout(self, task: str, requested: float) -> float:
-        """Compute adaptive timeout based on task complexity and model latency."""
-        parent_model = getattr(self.parent, "config", None)
-        parent_model = getattr(parent_model, "model", "") if parent_model else ""
-        is_cloud = ":cloud" in parent_model or "https://" in getattr(
-            getattr(self.parent, "config", None), "ollama_url", ""
-        )
-        base_per_turn = 25.0 if is_cloud else 8.0
-
-        estimated_iterations = 3
-        if len(task) > 200:
-            estimated_iterations += 1
-        if len(task) > 500:
-            estimated_iterations += 1
-        tool_keywords = ["read", "write", "edit", "list", "search", "run"]
-        tool_mentions = sum(1 for kw in tool_keywords if kw in task.lower())
-        estimated_iterations += min(tool_mentions, 3)
-
-        estimated_seconds = estimated_iterations * base_per_turn + 10
-        adaptive = max(30.0, min(estimated_seconds, 300.0))
-
-        if requested >= 30.0:
-            return min(requested, 300.0)
-        return adaptive
-
-    def _research_angles(self, prompt: str) -> list[str]:
-        """Break a research prompt into parallel investigation angles."""
-        prompt_lower = prompt.lower()
-        config_angles = getattr(self.parent, "config", None)
-        config_angles = getattr(config_angles, "research_angles", {}) if config_angles else {}
-        if isinstance(config_angles, dict):
-            for keyword, angles in config_angles.items():
-                if keyword.lower() in prompt_lower:
-                    return [a.format(prompt=prompt) for a in angles]
-        return [
-            f"Research the core concepts and fundamentals: {prompt}",
-            f"Research recent advances and state-of-the-art: {prompt}",
-            f"Research practical implementations and tools: {prompt}",
-            f"Research limitations, challenges, and future directions: {prompt}",
-        ]
-
-    # ── Spawn with guards (moved from WispAgentCore) ───────────────────
-
-    async def spawn_with_guards(
-        self,
-        task: str,
-        tools: Optional[list[str]] = None,
-        max_iterations: int = 15,
-        timeout_seconds: float = 120.0,
-        output_format: str = "text",
-        worktree_isolated: bool = False,
-        max_tokens: Optional[int] = None,
-        output_schema: Optional[dict] = None,
-        auto_retry: bool = True,
-        workspace: Optional[str] = None,
-        auto_approve: bool = True,
-    ) -> str:
-        """Spawn a single subagent with full guard logic.
-
-        Returns the subagent output as a string, or an error message.
         """
         # ── Depth and branching limits ─────────────────────────────────
-        depth = getattr(self.parent, "_subagent_depth", 0) if self.parent else 0
         if depth >= MAX_SUBAGENT_DEPTH:
-            return f"[Error: subagent depth {depth} exceeds max {MAX_SUBAGENT_DEPTH}]"
+            return [
+                SubagentResult(
+                    task_id=getattr(spec, "name", "unknown"),
+                    success=False,
+                    output=f"[Error: subagent depth {depth} exceeds max {MAX_SUBAGENT_DEPTH}]",
+                    elapsed_seconds=0.0,
+                )
+                for spec in specs
+            ]
 
-        branch_count = getattr(self.parent, "_subagent_branch_count", 0) if self.parent else 0
         if branch_count >= MAX_SUBAGENT_BRANCHING:
-            return f"[Error: subagent branching {branch_count} exceeds max {MAX_SUBAGENT_BRANCHING}]"
+            return [
+                SubagentResult(
+                    task_id=getattr(spec, "name", "unknown"),
+                    success=False,
+                    output=f"[Error: subagent branching {branch_count} exceeds max {MAX_SUBAGENT_BRANCHING}]",
+                    elapsed_seconds=0.0,
+                )
+                for spec in specs
+            ]
 
-        # ── Build contract ─────────────────────────────────────────────
-        contract = SubagentContract(
-            task=task,
-            tools=tools or ["all"],
-            max_iterations=max_iterations,
-            timeout_seconds=timeout_seconds,
-            output_format=output_format,
-            workspace=workspace or str(self.workspace),
-            auto_approve=auto_approve,
-            worktree_isolated=worktree_isolated,
-            max_tokens=max_tokens,
-            output_schema=output_schema,
-            _subagent_depth=depth + 1,
-            _subagent_branch_count=branch_count + 1,
-        )
-
-        # ── Check cache ────────────────────────────────────────────────
-        cache_key = self._subagent_cache_key(contract)
-        cache = getattr(self, "_subagent_cache", {})
-        cached = cache.get(cache_key)
-        if cached:
-            age = time.monotonic() - cached["ts"]
-            ttl = 300 if contract.output_format == "json" else 60
-            if age < ttl:
-                logger.info("[sub] Cache hit for %s (age=%.0fs)", contract.name, age)
-                return cached["output"]
-
-        # ── Local model fallback ───────────────────────────────────────
-        local_model = self._pick_local_model_for_subagent(contract.task)
-        if local_model:
-            contract.model = local_model
-            logger.info("Using local model %s for subagent %s", local_model, contract.name)
-
-        # ── Adaptive timeout ─────────────────────────────────────────
-        contract.timeout_seconds = self._adaptive_subagent_timeout(
-            contract.task, contract.timeout_seconds
-        )
-
-        # ── Progress callback ──────────────────────────────────────────
-        async def _progress(event: OrchestratorEvent) -> None:
-            if event.event_type == EventKind.TASK_STARTED:
-                logger.info("[sub] %s started", event.task_id)
-            elif event.event_type == EventKind.TASK_COMPLETED:
-                logger.info("[sub] %s completed", event.task_id)
-            elif event.event_type == EventKind.TASK_FAILED:
-                logger.warning("[sub] %s failed: %s", event.task_id, event.payload.get("error", ""))
-
-        contract.progress_callback = _progress
-
-        # ── Run with retry ───────────────────────────────────────────
-        max_retries = int(auto_retry) * 2
-        last_error = ""
-        result: Optional[SubagentResult] = None
-        for attempt in range(max_retries + 1):
-            try:
-                result = await self.run(contract)
-                if result.success:
-                    break
-                last_error = result.error or "subagent failed"
-                if result.timed_out or "timeout" in last_error.lower():
-                    logger.warning("Subagent %s timed out — not retrying", contract.name)
-                    break
-                if attempt < max_retries:
-                    backoff = 2 ** attempt
-                    logger.warning("Subagent %s failed (attempt %d/%d), retrying in %ds: %s",
-                                   contract.name, attempt + 1, max_retries + 1, backoff, last_error)
-                    await asyncio.sleep(backoff)
-            except Exception as exc:
-                last_error = str(exc)
-                if attempt < max_retries:
-                    backoff = 2 ** attempt
-                    logger.warning("Subagent %s crashed (attempt %d/%d), retrying in %ds: %s",
-                                   contract.name, attempt + 1, max_retries + 1, backoff, last_error)
-                    await asyncio.sleep(backoff)
-                else:
-                    logger.error("Subagent %s crashed: %s", contract.name, exc, exc_info=True)
-                    return f"[Error: subagent crashed after {max_retries + 1} attempts: {exc}]"
-        else:
-            return f"[Error: subagent failed after {max_retries + 1} attempts: {last_error}]"
-
-        if result is None:
-            return f"[Error: subagent failed after {max_retries + 1} attempts: {last_error}]"
-
-        # ── Return output (with size guard) ────────────────────────────
-        output = result.output
-        if len(output) > 12000:
-            output = output[:12000] + f"\n... [truncated: {len(result.output)} total chars]"
-
-        # ── Store in cache ─────────────────────────────────────────────
-        if result.success and len(output) < 50000:
-            cache[cache_key] = {"ts": time.monotonic(), "output": output}
-            self._subagent_cache = cache
-
-        return output
-
-    async def spawn_parallel_with_guards(
-        self,
-        specs: list[SubagentContract | dict],
-    ) -> list[SubagentResult]:
-        """Spawn parallel subagents with optimizations applied to each.
-
-        Args:
-            specs: A list of SubagentContract objects or dicts describing each subagent's task.
-
-        Returns:
-            A list of SubagentResult objects, one per spec.
-        """
         contracts: list[SubagentContract] = []
         for spec in specs:
             if isinstance(spec, dict):
@@ -898,8 +681,7 @@ class SubagentOrchestrator:
 
     def _pick_local_model_for_subagent(self, task: str) -> Optional[str]:
         """Return a fast local model name if the task is simple enough."""
-        parent_model = getattr(self.parent, "config", None)
-        parent_model = getattr(parent_model, "model", "") if parent_model else ""
+        parent_model = getattr(self.config, "model", "")
         if not parent_model or ":cloud" not in parent_model:
             return None
         fast_locals = ["llama3.2", "llama3.1", "qwen2.5", "phi4", "gemma2"]
@@ -918,8 +700,7 @@ class SubagentOrchestrator:
             return cache["models"]
         try:
             import requests
-            url = getattr(self.parent, "config", None)
-            url = getattr(url, "ollama_url", "http://localhost:11434") if url else "http://localhost:11434"
+            url = getattr(self.config, "ollama_url", "http://localhost:11434")
             resp = requests.get(f"{url}/api/tags", timeout=5)
             if resp.status_code == 200:
                 models = [m["name"] for m in resp.json().get("models", [])]
@@ -931,11 +712,8 @@ class SubagentOrchestrator:
 
     def _adaptive_subagent_timeout(self, task: str, requested: float) -> float:
         """Compute adaptive timeout based on task complexity and model latency."""
-        parent_model = getattr(self.parent, "config", None)
-        parent_model = getattr(parent_model, "model", "") if parent_model else ""
-        is_cloud = ":cloud" in parent_model or "https://" in getattr(
-            getattr(self.parent, "config", None), "ollama_url", ""
-        )
+        parent_model = getattr(self.config, "model", "")
+        is_cloud = ":cloud" in parent_model or "https://" in getattr(self.config, "ollama_url", "")
         base_per_turn = 25.0 if is_cloud else 8.0
 
         estimated_iterations = 3
@@ -957,8 +735,7 @@ class SubagentOrchestrator:
     def _research_angles(self, prompt: str) -> list[str]:
         """Break a research prompt into parallel investigation angles."""
         prompt_lower = prompt.lower()
-        config_angles = getattr(self.parent, "config", None)
-        config_angles = getattr(config_angles, "research_angles", {}) if config_angles else {}
+        config_angles = getattr(self.config, "research_angles", {})
         if isinstance(config_angles, dict):
             for keyword, angles in config_angles.items():
                 if keyword.lower() in prompt_lower:
@@ -969,3 +746,4 @@ class SubagentOrchestrator:
             f"Research practical implementations and tools: {prompt}",
             f"Research limitations, challenges, and future directions: {prompt}",
         ]
+
