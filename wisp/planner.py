@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
@@ -21,6 +22,10 @@ logger = logging.getLogger(__name__)
 
 PLANS_DIR = WISP_CONFIG_DIR / "plans"
 _MAX_PLANS = 10  # Keep last N plans
+
+# Module-level write lock — every PlanStore writes to the *same* global PLANS_DIR,
+# so a per-instance lock is insufficient to prevent concurrent corruption.
+_PLAN_LOCK = threading.RLock()
 
 
 @dataclass
@@ -212,15 +217,20 @@ class PlanStore:
 
     def save(self, plan: Plan) -> None:
         path = PLANS_DIR / f"{plan.id}.json"
+        data = json.dumps(plan.to_dict(), indent=2, ensure_ascii=False)
         try:
-            path.write_text(
-                json.dumps(plan.to_dict(), indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
-            logger.debug("Saved plan %s (%d tasks)", plan.id, len(plan.tasks))
-            self._rotate()
+            with _PLAN_LOCK:
+                self._save_atomic(path, data)
+                logger.debug("Saved plan %s (%d tasks)", plan.id, len(plan.tasks))
+                self._rotate()
         except OSError as e:
             logger.error("Failed to save plan %s: %s", plan.id, e)
+
+    def _save_atomic(self, path: Path, data: str) -> None:
+        """Write data to *path* atomically via tmp + rename."""
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(data, encoding="utf-8")
+        tmp.replace(path)
 
     def load(self, plan_id: str) -> Optional[Plan]:
         path = PLANS_DIR / f"{plan_id}.json"
@@ -278,11 +288,17 @@ class PlanStore:
         return plans
 
     def _rotate(self) -> None:
-        plans = sorted(PLANS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-        if len(plans) > _MAX_PLANS:
-            for old in plans[_MAX_PLANS:]:
-                old.unlink()
-                logger.info("Rotated old plan: %s", old.stem)
+        # Already running inside _PLAN_LOCK from save(), but guard for callers
+        # that might rotate directly (none currently exist).
+        with _PLAN_LOCK:
+            plans = sorted(PLANS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+            if len(plans) > _MAX_PLANS:
+                for old in plans[_MAX_PLANS:]:
+                    try:
+                        old.unlink()
+                        logger.info("Rotated old plan: %s", old.stem)
+                    except OSError:
+                        pass  # Another thread already deleted it?
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
