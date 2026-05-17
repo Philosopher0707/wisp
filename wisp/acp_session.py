@@ -179,31 +179,129 @@ class AcpSession:
             message_count=len(self.messages),
         )
 
+    def to_session(self) -> "Session":
+        """Convert this ACP session to a persistent Session object."""
+        from wisp.session import Session
+        return Session(
+            id=self.session_id,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+            model=getattr(self.config, "model", "unknown"),
+            workspace=self.workspace,
+            messages=self.messages.copy(),
+            title=self.title or "Wisp Session",
+            compaction_history=[],
+            task_ids=[],
+        )
+
+    @classmethod
+    def from_session(cls, session: "Session", config: WispConfig) -> "AcpSession":
+        """Restore an ACP session from a persistent Session object."""
+        acp = cls(session.id, session.workspace, config)
+        acp.messages = session.messages.copy()
+        acp.title = session.title
+        acp.created_at = session.created_at
+        acp.updated_at = session.updated_at
+        return acp
+
 
 class AcpSessionManager:
-    """Manages multiple ACP sessions."""
+    """Manages multiple ACP sessions with optional disk persistence."""
 
-    def __init__(self):
-        self.sessions: dict[str, AcpSession] = {}
+    def __init__(self, store: "UnifiedSessionStore" | None = None):
+        self._store = store
+        self._active: dict[str, AcpSession] = {}
+
+    def _get_store(self) -> "UnifiedSessionStore":
+        if self._store is None:
+            from wisp.session_store import get_store
+            self._store = get_store()
+        return self._store
 
     def create(self, workspace: str, config: WispConfig, title: str = "") -> AcpSession:
         session_id = f"wisp-{uuid.uuid4().hex[:12]}"
         session = AcpSession(session_id, workspace, config)
         session.title = title or "Wisp Session"
-        self.sessions[session_id] = session
+        self._active[session_id] = session
+
+        # Persist to disk
+        store = self._get_store()
+        store.create_session(
+            model=getattr(config, "model", "unknown"),
+            workspace=workspace,
+            title=session.title,
+            session_id=session_id,
+        )
         logger.info("Created ACP session %s", session_id)
         return session
 
     def get(self, session_id: str) -> Optional[AcpSession]:
-        return self.sessions.get(session_id)
+        # Check active sessions first
+        if session_id in self._active:
+            return self._active[session_id]
+        # Try loading from disk
+        return self.load(session_id)
 
     def list(self) -> list[SessionInfo]:
-        return [s.to_info() for s in self.sessions.values()]
+        # Merge active sessions with persisted sessions
+        store = self._get_store()
+        persisted = {s["id"]: s for s in store.list_sessions()}
+
+        # Add active sessions
+        for s in self._active.values():
+            persisted[s.session_id] = {
+                "id": s.session_id,
+                "title": s.title,
+                "created_at": s.created_at,
+                "updated_at": s.updated_at,
+                "msg_count": len(s.messages),
+            }
+
+        # Convert to SessionInfo
+        infos = []
+        for data in persisted.values():
+            infos.append(SessionInfo(
+                id=data["id"],
+                title=data.get("title", "Wisp Session"),
+                created_at=data.get("created_at", ""),
+                updated_at=data.get("updated_at", ""),
+                message_count=data.get("msg_count", 0),
+            ))
+        return sorted(infos, key=lambda i: i.updated_at, reverse=True)
 
     def load(self, session_id: str) -> Optional[AcpSession]:
-        # For now, just return from memory
-        # TODO: Load from disk via SessionManager
-        return self.sessions.get(session_id)
+        # Check active first
+        if session_id in self._active:
+            return self._active[session_id]
+
+        # Load from disk
+        store = self._get_store()
+        session = store.load_session(session_id)
+        if session is None:
+            return None
+
+        # Need config to restore — use default
+        from wisp.config import WispConfig
+        config = WispConfig()
+        config.workspace = session.workspace
+        acp = AcpSession.from_session(session, config)
+        self._active[session_id] = acp
+        return acp
+
+    def save(self, session_id: str) -> bool:
+        """Persist an active session to disk."""
+        acp = self._active.get(session_id)
+        if acp is None:
+            return False
+        store = self._get_store()
+        store.save_session(acp.to_session())
+        return True
+
+    def delete(self, session_id: str) -> bool:
+        """Delete a session from memory and disk."""
+        self._active.pop(session_id, None)
+        store = self._get_store()
+        return store.delete_session(session_id)
 
 
 def _now_iso() -> str:

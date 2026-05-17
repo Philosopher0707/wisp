@@ -134,11 +134,6 @@ class UnifiedSessionStore:
 
     def load_session(self, session_id: str) -> Session | None:
         """Load a session by ID. Returns None if not found."""
-        # Try legacy SessionManager first (handles fragment resolution)
-        session = self._legacy_mgr.load(session_id)
-        if session is not None:
-            return session
-        # Try direct path
         path = self._session_path(session_id)
         if path.exists():
             try:
@@ -146,11 +141,15 @@ class UnifiedSessionStore:
                 return Session.from_dict(data)
             except (json.JSONDecodeError, OSError) as e:
                 logger.error("Corrupt session file %s: %s", session_id, e)
+        # Try fragment resolution
+        resolved = self.resolve_session_id(session_id)
+        if resolved:
+            return self.load_session(resolved)
         return None
 
     def save_session(self, session: Session) -> None:
         """Save a session (and any attached runs)."""
-        self._legacy_mgr.save(session)
+        self._save(session)
 
     def delete_session(self, session_id: str) -> bool:
         """Delete a session and all its runs."""
@@ -161,15 +160,50 @@ class UnifiedSessionStore:
                 path.unlink()
             runs_dir.rmdir()
         # Delete session
-        return self._legacy_mgr.delete(session_id)
+        path = self._session_path(session_id)
+        if path.exists():
+            path.unlink()
+            return True
+        return False
 
     def list_sessions(self, limit: int = 50) -> list[dict]:
         """List sessions with metadata, newest first."""
-        return self._legacy_mgr.list_sessions(limit=limit)
+        sessions = []
+        if not self.sessions_dir.exists():
+            return sessions
+
+        for path in sorted(self.sessions_dir.glob("*.json"), reverse=True):
+            if len(sessions) >= limit:
+                break
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                sessions.append({
+                    "id": data.get("id", path.stem),
+                    "title": data.get("title", "")[:80],
+                    "model": data.get("model", "?"),
+                    "created_at": data.get("created_at", ""),
+                    "updated_at": data.get("updated_at", ""),
+                    "msg_count": len(data.get("messages", [])),
+                    "compactions": len(data.get("compaction_history", [])),
+                    "task_count": len(data.get("task_ids", [])),
+                    "file": str(path),
+                })
+            except (json.JSONDecodeError, OSError):
+                continue
+
+        return sessions
 
     def resolve_session_id(self, fragment: str) -> str | None:
         """Resolve a partial session ID to a full ID."""
-        return self._legacy_mgr.get_session_id_from_fragment(fragment)
+        if not self.sessions_dir.exists():
+            return None
+        best = None
+        for path in self.sessions_dir.glob(f"{fragment}*.json"):
+            if best is not None:
+                logger.warning("Ambiguous session prefix '%s' matches multiple", fragment)
+                return None
+            best = path.stem
+        return best
 
     # ── Run CRUD ─────────────────────────────────────────────────────
 
@@ -319,8 +353,20 @@ class UnifiedSessionStore:
         return self.sessions_dir / session_id / "runs"
 
     def _save(self, session: Session) -> None:
-        """Save session via legacy manager (handles locking)."""
-        self._legacy_mgr.save(session)
+        """Save session to the store's sessions_dir with locking."""
+        session.touch()
+        path = self._session_path(session.id)
+        try:
+            from filelock import FileLock
+            lock = FileLock(str(path) + ".lock")
+            with lock:
+                path.write_text(
+                    json.dumps(session.to_dict(), indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+        except OSError as e:
+            logger.error("Failed to save session %s: %s", session.id, e)
+            raise
 
     def _save_run(self, run: Run) -> None:
         """Save a run to its session's runs directory."""

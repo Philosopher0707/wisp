@@ -1,4 +1,7 @@
-"""Supervisor layer for the terminal app runtime."""
+"""Supervisor layer for the terminal app runtime.
+
+Uses UnifiedSessionStore for session/run/event persistence.
+"""
 
 from __future__ import annotations
 
@@ -9,8 +12,8 @@ from typing import Callable
 from wisp.config import WISP_CONFIG_DIR
 from wisp.core.agent import WispAgentCore
 from wisp.core.events import TYPE_DONE, TYPE_ERROR, AgentEvent
-from wisp.persistence.sqlite_store import RunRecord, SQLiteStateStore, ThreadRecord
 from wisp.runtime_protocol import AppEvent
+from wisp.session_store import UnifiedSessionStore, Run, get_store
 
 
 class WispSupervisor:
@@ -18,24 +21,24 @@ class WispSupervisor:
 
     def __init__(
         self,
-        store: SQLiteStateStore | None = None,
+        store: UnifiedSessionStore | None = None,
         artifacts_dir: Path | None = None,
         agent_factory: Callable = WispAgentCore,
     ):
-        self.store = store or SQLiteStateStore(WISP_CONFIG_DIR / "app.db")
+        self.store = store or get_store()
         self.artifacts_dir = Path(artifacts_dir or (WISP_CONFIG_DIR / "artifacts"))
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
         self.agent_factory = agent_factory
 
-    def create_thread(self, workspace: str, title: str | None = None) -> ThreadRecord:
+    def create_thread(self, workspace: str, title: str | None = None):
         thread_title = title or Path(workspace).name or "Workspace thread"
-        return self.store.create_thread(title=thread_title, workspace=workspace)
+        return self.store.create_session(model="unknown", workspace=workspace, title=thread_title)
 
-    def list_threads(self) -> list[ThreadRecord]:
-        return self.store.list_threads()
+    def list_threads(self):
+        return self.store.list_sessions()
 
-    def start_run(self, thread_id: str, prompt: str) -> RunRecord:
-        run = self.store.create_run(thread_id=thread_id, prompt=prompt, status="queued")
+    def start_run(self, thread_id: str, prompt: str):
+        run = self.store.create_run(session_id=thread_id, prompt=prompt)
         self.run_log_path(run.id).touch()
         return run
 
@@ -84,9 +87,9 @@ class WispSupervisor:
         prompt: str,
         thread_id: str | None = None,
         title: str | None = None,
-    ) -> tuple[ThreadRecord, RunRecord, list[AppEvent]]:
+    ):
         workspace = config.workspace or "."
-        thread = self.store.get_thread(thread_id) if thread_id else None
+        thread = self.store.load_session(thread_id) if thread_id else None
         if thread is None:
             thread = self.create_thread(workspace=workspace, title=title)
 
