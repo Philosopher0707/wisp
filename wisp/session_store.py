@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
@@ -104,6 +105,11 @@ class UnifiedSessionStore:
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         self._legacy_mgr = SessionManager()
         self._migrated = False
+        # Per-instance write lock — prevents concurrent read-modify-write races
+        # on the same run file (e.g. two async append_event calls).  filelock
+        # would also work, but threading.RLock is lighter-weight for asyncio
+        # where the same process does all the work.
+        self._write_lock = threading.RLock()
 
     # ── Session CRUD ─────────────────────────────────────────────────
 
@@ -381,14 +387,37 @@ class UnifiedSessionStore:
             raise
 
     def _save_run(self, run: Run) -> None:
-        """Save a run to its session's runs directory."""
+        """Save a run to its session's runs directory with locking + atomic write.
+
+        Uses a per-run filelock (same pattern as _save) plus an in-process
+        threading.RLock to prevent read-modify-write corruption when two
+        coroutines append events concurrently.
+        """
         runs_dir = self._runs_dir(run.session_id)
         runs_dir.mkdir(parents=True, exist_ok=True)
         path = runs_dir / f"{run.id}.json"
-        path.write_text(
-            json.dumps(run.to_dict(), indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        data = json.dumps(run.to_dict(), indent=2, ensure_ascii=False)
+
+        # In-process lock prevents two async tasks from reading the same snapshot,
+        # appending different events, and having the second write overwrite the first.
+        with self._write_lock:
+            try:
+                from filelock import FileLock
+            except ImportError:
+                logger.warning("filelock not installed — saving run %s without lock", run.id)
+                path.write_text(data, encoding="utf-8")
+                return
+
+            lock = FileLock(str(path) + ".lock")
+            # Atomic write: temp file + rename avoids corrupt reads during write
+            tmp = path.with_suffix(".tmp")
+            try:
+                with lock:
+                    tmp.write_text(data, encoding="utf-8")
+                    tmp.replace(path)
+            except OSError as e:
+                logger.error("Failed to save run %s: %s", run.id, e)
+                raise
 
 
 # ── Module-level singleton ─────────────────────────────────────────────
