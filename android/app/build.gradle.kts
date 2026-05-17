@@ -73,6 +73,9 @@ dependencies {
     // DataStore
     implementation("androidx.datastore:datastore-preferences:1.0.0")
 
+    // Encrypted storage for API key
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+
     // Ktor client (HTTP + WebSocket)
     implementation("io.ktor:ktor-client-core:2.3.8")
     implementation("io.ktor:ktor-client-cio:2.3.8")

@@ -67,6 +67,12 @@ data class PingMessage(
 ) : WispMessage()
 
 @Serializable
+data class AuthMessage(
+    override val type: String = "auth",
+    val api_key: String
+) : WispMessage()
+
+@Serializable
 data class PongMessage(
     override val type: String = "pong"
 ) : WispMessage()

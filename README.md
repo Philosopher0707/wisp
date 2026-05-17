@@ -208,7 +208,8 @@ cd android
 - **Tool approval/denial** cards
 - **Markdown rendering** for assistant messages
 - **File browser** — navigate workspace, view file contents
-- **DataStore** encrypted preferences for settings
+- **EncryptedSharedPreferences** for API key (AES256-GCM, keyed from Android Keystore)
+- **DataStore** for non-sensitive settings (server URL, model)
 - **Connection status** badge in top bar
 
 ### Configure

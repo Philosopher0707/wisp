@@ -59,6 +59,7 @@ class WispWebSocketClient {
         this.autoReconnect = enableAutoReconnect
         this.reconnectAttempt = 0
         cancelReconnect()
+        this._sessionIdForReconnect = null
 
         _connectionState.value = ConnectionState.Connecting
         scope.launch {
@@ -66,10 +67,27 @@ class WispWebSocketClient {
         }
     }
 
+    private var _sessionIdForReconnect: String? = null
+
+    // Idle timeout: disconnect after 15 minutes of no user activity
+    private var idleTimeoutJob: Job? = null
+    private val IDLE_TIMEOUT_MS = 15 * 60 * 1000L
+
+    fun resetIdleTimer() {
+        idleTimeoutJob?.cancel()
+        idleTimeoutJob = scope.launch {
+            delay(IDLE_TIMEOUT_MS)
+            disconnect()
+            _connectionState.value = ConnectionState.Error("Disconnected after 15 min idle", willRetry = false)
+        }
+    }
+
     private suspend fun doConnect() {
         try {
             val wsUrl = serverUrl.replace("https://", "wss://").replace("http://", "ws://")
-            val fullUrl = "$wsUrl/ws/agent?api_key=$apiKey"
+            // API key is NOT sent as a query parameter — it leaks in logs.
+            // Auth happens via a type:"auth" frame immediately after connection.
+            val fullUrl = "$wsUrl/ws/agent"
 
             client = HttpClient(CIO) {
                 install(WebSockets)
@@ -80,12 +98,23 @@ class WispWebSocketClient {
                     requestTimeoutMillis = 30000
                     connectTimeoutMillis = 10000
                 }
+                // Explicit TLS 1.2+ requirement (CIO default trusts system CA store)
+                engine {
+                    https {
+                        tlsVersion = io.ktor.network.tls.TLSVersion.TLS12
+                    }
+                }
             }
 
             client!!.webSocket(fullUrl) {
                 session = this
                 reconnectAttempt = 0
+
+                // Authenticate via first-message auth frame — not query param
+                send(Frame.Text(json.encodeToString(AuthMessage(api_key = apiKey))))
+
                 _connectionState.value = ConnectionState.Connected()
+                resetIdleTimer()
 
                 // Send ping every 30s to keep alive
                 val pingJob = launch {
@@ -180,6 +209,7 @@ class WispWebSocketClient {
     }
 
     fun sendPrompt(prompt: String, model: String? = null, sessionId: String? = null, showThinking: Boolean = true) {
+        resetIdleTimer()
         scope.launch {
             try {
                 val msg = PromptMessage(
@@ -196,6 +226,7 @@ class WispWebSocketClient {
     }
 
     fun approveTool(callId: String, approved: Boolean, reason: String? = null) {
+        resetIdleTimer()
         scope.launch {
             try {
                 val msg = ToolApprovalMessage(
@@ -258,8 +289,9 @@ class WispRestClient(private val serverUrl: String, private val apiKey: String) 
             requestTimeoutMillis = 30000
             connectTimeoutMillis = 10000
         }
+        // Send API key as query param on every request to match server's verify_api_key()
         defaultRequest {
-            header("X-API-Key", apiKey)
+            parameter("api-key", apiKey)
         }
     }
 

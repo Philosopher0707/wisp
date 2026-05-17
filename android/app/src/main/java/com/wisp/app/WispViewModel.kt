@@ -1,9 +1,13 @@
 package com.wisp.app
 
+import android.content.Context
+import android.content.SharedPreferences
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import androidx.datastore.core.DataStore
@@ -11,17 +15,33 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import android.content.Context
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "wisp_settings")
+
+/**
+ * Encrypted storage for the API key.
+ * Uses AES256-GCM with a key stored in the Android Keystore.
+ */
+fun Context.encryptedApiKeyPrefs(): SharedPreferences {
+    val masterKey = MasterKey.Builder(this)
+        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+        .build()
+    return EncryptedSharedPreferences.create(
+        this,
+        "wisp_api_key_secure",
+        masterKey,
+        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+    )
+}
 
 class WispViewModel(context: Context) : ViewModel() {
 
     private val dataStore = context.dataStore
+    private val securePrefs = context.encryptedApiKeyPrefs()
 
-    // Settings
+    // Settings — API key stored in encrypted prefs, rest in DataStore
     private val SERVER_URL_KEY = stringPreferencesKey("server_url")
-    private val API_KEY_KEY = stringPreferencesKey("api_key")
     private val MODEL_KEY = stringPreferencesKey("model")
 
     val serverUrl = MutableStateFlow("")
@@ -68,13 +88,15 @@ class WispViewModel(context: Context) : ViewModel() {
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
     init {
+        // Load non-sensitive settings from DataStore
         viewModelScope.launch {
             dataStore.data.collect { prefs ->
                 serverUrl.value = prefs[SERVER_URL_KEY] ?: ""
-                apiKey.value = prefs[API_KEY_KEY] ?: ""
                 selectedModel.value = prefs[MODEL_KEY] ?: ""
             }
         }
+        // Load API key from EncryptedSharedPreferences
+        apiKey.value = securePrefs.getString("api_key", "") ?: ""
 
         // Collect WebSocket messages
         viewModelScope.launch {
@@ -185,13 +207,16 @@ class WispViewModel(context: Context) : ViewModel() {
 
     // Settings
     fun saveSettings(url: String, key: String, model: String) {
+        // Store non-sensitive settings in unencrypted DataStore
         viewModelScope.launch {
             dataStore.edit { prefs ->
                 prefs[SERVER_URL_KEY] = url
-                prefs[API_KEY_KEY] = key
                 prefs[MODEL_KEY] = model
             }
         }
+        // Store API key in EncryptedSharedPreferences (AES256-GCM, keyed from Android Keystore)
+        securePrefs.edit().putString("api_key", key).apply()
+        apiKey.value = key
     }
 
     // File operations
