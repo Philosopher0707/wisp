@@ -67,6 +67,20 @@ def _coerce_tool_data(value: object) -> object:
     return value
 
 
+def _maybe_to_thread(sync_callable: Callable[..., Any], *args: Any) -> Any:
+    """Run *sync_callable* in a thread if an event loop is running,
+    otherwise call it synchronously.
+
+    This is the minimal correct fix for running ``requests``-based code
+    inside ``async def WispAgentCore.__init__`` without blocking the
+    event loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return sync_callable(*args)
+    return asyncio.to_thread(sync_callable, *args)
+
+
 DEFAULT_SYSTEM = """You are Wisp, a helpful coding agent.
 
 You have access to tools that let you read, write, and edit files, run bash commands, and list directories.
@@ -164,9 +178,10 @@ class WispAgentCore:
         # Backward-compatible alias while the rest of the codebase migrates.
         self.client = self.provider
 
-        # Health check on startup
+        # Health check on startup — use to_thread when called from async context
+        # so we do not block the event loop for 5-10 seconds (Issue 20).
         try:
-            healthy = self.provider.check_health()
+            healthy = _maybe_to_thread(self.provider.check_health)
             if not healthy:
                 logger.warning(
                     "Provider '%s' at %s is unreachable. "
@@ -180,7 +195,7 @@ class WispAgentCore:
 
         if not self.config._context_tokens_explicit:
             try:
-                detected = self.client.get_context_length()
+                detected = _maybe_to_thread(self.client.get_context_length)
                 if detected != self.config.max_context_tokens:
                     logger.info(
                         "Auto-detected context window for %s: %d tokens",
