@@ -523,17 +523,6 @@ class SubagentOrchestrator:
             _subagent_branch_count=branch_count + 1,
         )
 
-        # ── Check cache ────────────────────────────────────────────────
-        cache_key = self._subagent_cache_key(contract)
-        cache = getattr(self, "_subagent_cache", {})
-        cached = cache.get(cache_key)
-        if cached:
-            age = time.monotonic() - cached["ts"]
-            ttl = 300 if contract.output_format == "json" else 60
-            if age < ttl:
-                logger.info("[sub] Cache hit for %s (age=%.0fs)", contract.name, age)
-                return cached["output"]
-
         # ── Local model fallback ───────────────────────────────────────
         local_model = self._pick_local_model_for_subagent(contract.task)
         if local_model:
@@ -594,12 +583,6 @@ class SubagentOrchestrator:
         output = result.output
         if len(output) > 12000:
             output = output[:12000] + f"\n... [truncated: {len(result.output)} total chars]"
-
-        # ── Store in cache ─────────────────────────────────────────────
-        if result.success and len(output) < 50000:
-            cache[cache_key] = {"ts": time.monotonic(), "output": output}
-            self._subagent_cache = cache
-
         return output
 
     async def spawn_parallel_with_guards(
@@ -666,18 +649,6 @@ class SubagentOrchestrator:
         return results
 
     # ── Internal helpers (moved from WispAgentCore) ──────────────────
-
-    def _subagent_cache_key(self, contract: SubagentContract) -> str:
-        """Build a cache key from contract fields that affect output."""
-        parts = [
-            contract.task,
-            ",".join(sorted(contract.tools)),
-            str(contract.model or ""),
-            str(contract.workspace or ""),
-            contract.output_format,
-            str(contract.output_schema or ""),
-        ]
-        return hashlib.sha256("|".join(parts).encode()).hexdigest()[:32]
 
     def _pick_local_model_for_subagent(self, task: str) -> Optional[str]:
         """Return a fast local model name if the task is simple enough."""
