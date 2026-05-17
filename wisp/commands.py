@@ -694,6 +694,59 @@ def cmd_exit(agent, args: str):
     raise ExitREPL
 
 
+# ── /task: Long-horizon task management ──────────────────────────────
+
+@register("task", "Create or manage a long-horizon task", aliases=(), usage="/task <goal> | /task status <id>")
+def cmd_task(agent, args: str):
+    """Create a long-horizon task or check task status."""
+    if not args:
+        print(error("✗ Usage: /task <goal>  or  /task status <task-id>"))
+        return
+
+    if args.startswith("status "):
+        task_id = args[7:].strip()
+        if task_id:
+            from wisp.tools.long_horizon import tool_task_status
+            import json
+            result = tool_task_status(task_id=task_id)
+            parsed = json.loads(result)
+            if parsed["status"] == "ok":
+                print(info(parsed["data"]))
+            else:
+                print(error(parsed["data"]))
+        else:
+            print(error("✗ Usage: /task status <task-id>"))
+        return
+
+    # Default: create and start a background task
+    goal = args
+    ws = agent.config.workspace or "."
+
+    import asyncio
+    async def _start():
+        async for event in agent.run_long_task(goal=goal, workspace=ws, background=True):
+            if event.type == "task_started":
+                print(success(f"🎯 Task started: {event.data.get('task_id', '')}"))
+                print(info(f"   Goal: {event.data.get('goal', '')[:60]}"))
+                print(dim(f"   Use `/task status <id>` to check progress."))
+            elif event.type == "system":
+                print(info(f"   {event.data.get('message', '')}"))
+    asyncio.run(_start())
+
+
+@register("tasks", "List all long-horizon tasks", aliases=(), usage="/tasks")
+def cmd_tasks(agent, args: str):
+    """List all long-horizon tasks with their statuses."""
+    from wisp.tools.long_horizon import tool_list_tasks
+    import json
+    result = tool_list_tasks()
+    parsed = json.loads(result)
+    if parsed["status"] == "ok":
+        print(info(parsed["data"]))
+    else:
+        print(error(parsed["data"]))
+
+
 # ── /init: Generate wisp.md ──────────────────────────────────────────
 
 @register("init", "Generate wisp.md for this codebase", aliases=(), usage="/init [overwrite]")

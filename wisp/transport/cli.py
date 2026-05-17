@@ -1273,50 +1273,6 @@ class CLITransport:
                     dispatch("/help", self.core)
                     continue
 
-                # ── Long-task commands ──
-                if cmd == "/tasks":
-                    from wisp.tools.long_horizon import tool_list_tasks
-                    result = tool_list_tasks()
-                    import json
-                    parsed = json.loads(result)
-                    if parsed["status"] == "ok":
-                        print(info(parsed["data"]))
-                    else:
-                        print(error(parsed["data"]))
-                    continue
-
-                if cmd.startswith("/task status "):
-                    task_id = cmd[13:].strip()
-                    if task_id:
-                        from wisp.tools.long_horizon import tool_task_status
-                        result = tool_task_status(task_id=task_id)
-                        import json
-                        parsed = json.loads(result)
-                        if parsed["status"] == "ok":
-                            print(info(parsed["data"]))
-                        else:
-                            print(error(parsed["data"]))
-                    else:
-                        print(error("✗ Usage: /task status <task-id>"))
-                    continue
-
-                if cmd.startswith("/task "):
-                    goal = cmd[6:].strip()
-                    if goal:
-                        # Start task in background via agent
-                        async def _start_bg_task():
-                            async for event in self.core.run_long_task(goal=goal, workspace=ws, background=True):
-                                if event.type == TYPE_TASK_STARTED:
-                                    print(success(f"🎯 Task started: {event.data.get('task_id', '')}"))
-                                    print(info(f"   Goal: {event.data.get('goal', '')[:60]}"))
-                                    print(dim(f"   Use `wisp task status <id>` to check progress."))
-                                elif event.type == TYPE_SYSTEM:
-                                    print(info(f"   {event.data.get('message', '')}"))
-                        asyncio.run(_start_bg_task())
-                    else:
-                        print(error("✗ Usage: /task <goal>"))
-                    continue
-
                 # Update session title
                 if self.core.session and (
                     not self.core.session.title
