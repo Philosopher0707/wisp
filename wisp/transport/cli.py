@@ -614,36 +614,110 @@ def _prompt_approve(func_name: str) -> bool:
         return True
 
 
-def _prompt_dangerous(func_name: str, reason: str) -> bool:
-    """Prompt user to approve a dangerous tool call. Requires typing 'yes'."""
+def _is_benign_bash_command(args: dict) -> bool:
+    """Test / lint / build / query commands that don't modify workspace."""
+    cmd: str = args.get("command", "").strip()
+    if not cmd:
+        return True
+    cmd_lower = cmd.lower()
+
+    # 1. Version queries are always benign (read-only)
+    if cmd_lower.endswith((" --version", " -version", " version")):
+        return True
+
+    # 2. Safe prefixes
+    safe_starts = ("pytest", "python -m pytest", "python3 -m pytest",
+                   "python -m unittest", "python3 -m unittest",
+                   "python -", "python3 -",
+                   "pip list", "pip show", "pip freeze",
+                   "git status", "git log", "git diff", "git branch --list",
+                   "git branch -v", "git branch -a", "git branch -vv", "git branch -r",
+                   "git remote -v", "ls ", "ls -", "ls",
+                   "cat ", "head ", "tail ", "grep ", "find ", "wc ",
+                   "echo ", "which ", "whoami", "pwd", "uname -a",
+                   "npm list", "npm view", "pnpm list",
+                   "cargo check", "cargo test --no-run", "cargo --version",
+                   "go test -run=", "go test -count=0",
+                   "javac -version",
+                   "make --version",
+                   "node --version", "node -e ",
+                   "curl -" )
+    for prefix in safe_starts:
+        if cmd_lower.startswith(prefix):
+            return True
+    return False
+
+
+def _prompt_with_session_options(func_name: str, reason: str) -> tuple[bool, bool]:
+    """Prompt user with session-scoped approval options.
+
+    Returns:
+        (approved_for_this_call, remember_for_session)
+    """
     if not _is_interactive():
-        return False
+        return (False, False)
+    try:
+        print(warning(f"     ⚠️  {reason}"))
+        prompt = f"     Approve {func_name}? [y=once / a=all session / n=deny]: "
+        choice = input(prompt).strip().lower()
+        if choice in ("y", "yes", ""):
+            return (True, False)
+        if choice == "a":
+            return (True, True)
+        return (False, False)
+    except KeyboardInterrupt:
+        print()
+        return (False, False)
+    except (EOFError, OSError):
+        logger.warning("Stdin unavailable, auto-declining")
+        return (False, False)
+
+
+def _prompt_dangerous(func_name: str, reason: str) -> tuple[bool, bool]:
+    """Prompt user to approve a dangerous tool call. Requires typing 'yes'.
+
+    Returns:
+        (approved_for_this_call, remember_for_session)
+    """
+    if not _is_interactive():
+        return (False, False)
     try:
         print(warning(f"     ⚠️  DANGEROUS: {reason}"))
         choice = input(f"     Type 'yes' to approve {func_name}: ").strip().lower()
-        return choice == "yes"
+        if choice == "yes":
+            return (True, False)
+        # Also accept 'a' as "yes + remember" for consistency
+        if choice == "a":
+            return (True, True)
+        return (False, False)
     except KeyboardInterrupt:
         print()
-        return False
+        return (False, False)
     except (EOFError, OSError):
         logger.warning("Stdin unavailable, auto-declining dangerous command")
-        return False
+        return (False, False)
 
 
-def _prompt_edit_approval(func_name: str, reason: str) -> bool:
-    """Prompt user to approve a file edit. Diff already shown above."""
+def _prompt_edit_approval(func_name: str, reason: str) -> tuple[bool, bool]:
+    """Prompt user to approve a file edit. Diff already shown above.
+
+    Returns:
+        (approved_for_this_call, remember_for_session)
+    """
     if not _is_interactive():
-        return True
+        return (True, False)
     try:
-        choice = input(f"     Apply this change? [Enter=yes / s=skip / n=reject]: ").strip().lower()
-        if choice == 'n':
-            return False
-        return choice != 's'  # Enter or 'y' = approve; 's' = skip
+        choice = input(f"     Apply this change? [Enter=yes / a=all session / s=skip / n=deny]: ").strip().lower()
+        if choice == 'a':
+            return (True, True)
+        if choice in ("y", "yes", ""):
+            return (True, False)
+        return (False, False)
     except KeyboardInterrupt:
         print()
-        return False
+        return (False, False)
     except (EOFError, OSError):
-        return True
+        return (True, False)
 
 
 
@@ -1163,10 +1237,40 @@ class CLITransport:
         width = _term_width()  # snapshot once per turn — prevents jagged boxes on resize
 
         async def _cli_approval(name: str, args: dict, reason: str) -> tuple[bool, Optional[dict]]:
+            # ── 1. Session-level cache check ──
+            if name in self._denied_session:
+                return (False, None)
+            if name in self._approved_session:
+                return (True, None)
+
+            # ── 2. Benign bash commands: auto-approve without prompting ──
+            if name == "run_bash" and _is_benign_bash_command(args):
+                return (True, None)
+
+            # ── 3. File edits: show diff + session options ──
             if name in ("write_file", "edit_file", "edit_file_multi"):
-                approved = _prompt_edit_approval(name, reason)
-            else:
-                approved = _prompt_dangerous(name, reason)
+                approved, remember = _prompt_edit_approval(name, reason)
+                if approved and remember:
+                    self._approved_session.add(name)
+                return (approved, None)
+
+            # ── 4. Dangerous commands (rm -rf, curl | bash, etc): require explicit 'yes' ──
+            # Check if this is truly dangerous
+            from wisp.tools import check_dangerous_command
+            if name == "run_bash":
+                danger_reason = check_dangerous_command(args.get("command", ""))
+                if danger_reason:
+                    approved, remember = _prompt_dangerous(name, danger_reason)
+                    if approved and remember:
+                        self._approved_session.add(name)
+                    return (approved, None)
+
+            # ── 5. Everything else: standard prompt with session options ──
+            approved, remember = _prompt_with_session_options(name, reason)
+            if approved and remember:
+                self._approved_session.add(name)
+            elif not approved:
+                self._denied_session.add(name)
             return (approved, None)
 
         thinking_buf: list[str] = []
