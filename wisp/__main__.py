@@ -850,7 +850,7 @@ def cmd_session_compact(session_id: str, keep: int = 6):
         return
 
     print(info(f"Compacting session {session.id} ({len(session.messages)} messages, keeping last {keep})..."))
-    result = session.compact(keep_recent=keep)
+    result = session.compact(keep_recent=keep,max_context_tokens=256000,)
 
     if result.get("compacted"):
         mgr.save(session)

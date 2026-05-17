@@ -451,3 +451,107 @@ class TestSemanticCompressor:
         assert isinstance(ss, SessionSummary)
         assert ss.session_id == "sid"
         assert ss.workspace == "/ws"
+
+
+class TestTier3Reachability:
+    """Regression: Tier 3 must actually fire when old messages exceed trigger threshold."""
+
+    def test_tier3_fires_when_over_trigger(self, monkeypatch):
+        from wisp.semantic_compressor import _llm_summarize, CompressionResult
+
+        def fake_summarize(messages):
+            return CompressionResult(
+                summary="Fake LLM summary",
+                key_decisions=["A"],
+                compression_stats={"tier": 3, "model_used": "fake"},
+            )
+
+        monkeypatch.setattr(
+            "wisp.semantic_compressor._llm_summarize", fake_summarize
+        )
+
+        comp = SemanticCompressor()
+        # Create messages that are ~100 tokens (400 chars) each
+        messages = [
+            {"role": "user", "content": "x" * 200},
+            {"role": "assistant", "content": "y" * 200},
+        ] * 10  # 4000 chars total = ~1000 tokens at 4 chars/token
+
+        # Trigger at 500 tokens → fires. max_context_tokens=2000.
+        result = comp.compress(
+            messages,
+            chars_per_token=4,
+            max_context_tokens=2000,
+            tier3_trigger_tokens=500,
+        )
+        assert result.compression_stats["tier"] == 3
+        assert result.summary == "Fake LLM summary"
+        assert result.compression_stats["tier3_threshold"] == 500
+
+    def test_tier3_skips_when_under_trigger(self):
+        comp = SemanticCompressor()
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+        ]
+        result = comp.compress(
+            messages,
+            chars_per_token=4,
+            max_context_tokens=2000,
+            tier3_trigger_tokens=500,
+        )
+        # Should stay at Tier 2, not invoke LLM
+        assert result.compression_stats["tier"] == 2
+        assert result.compression_stats["tier3_threshold"] == 500
+
+    def test_default_tier3_threshold_is_quarter_of_budget(self, monkeypatch):
+        from wisp.semantic_compressor import _llm_summarize, CompressionResult
+
+        def fake_summarize(messages):
+            return CompressionResult(
+                summary="tier3",
+                compression_stats={"tier": 3, "model_used": "fake"},
+            )
+
+        monkeypatch.setattr(
+            "wisp.semantic_compressor._llm_summarize", fake_summarize
+        )
+
+        comp = SemanticCompressor()
+        messages = [
+            {"role": "user", "content": "x" * 200},
+            {"role": "assistant", "content": "y" * 200},
+        ] * 10
+        result = comp.compress(
+            messages,
+            chars_per_token=4,
+            max_context_tokens=2000,
+            # tier3_trigger_tokens defaults to 0 → max_context_tokens // 4 = 500
+        )
+        assert result.compression_stats["tier3_threshold"] == 500
+
+    def test_session_compact_passes_max_context_tokens(self, monkeypatch):
+        from wisp.session import Session
+        from wisp.semantic_compressor import CompressionResult
+
+        calls = []
+
+        def fake_compress(*args, **kwargs):
+            calls.append(kwargs)
+            return CompressionResult(
+                summary="test",
+                compression_stats={"tier": 2, "before_messages": 10, "after_messages": 5},
+            )
+
+        monkeypatch.setattr(
+            "wisp.semantic_compressor.SemanticCompressor.compress", fake_compress
+        )
+
+        s = Session.create("m", ".", "test")
+        for i in range(10):
+            s.messages.append({"role": "user", "content": f"u{i}"})
+            s.messages.append({"role": "assistant", "content": f"a{i}"})
+
+        s.compact(keep_recent=4, max_context_tokens=4096)
+        assert calls
+        assert calls[0]["max_context_tokens"] == 4096

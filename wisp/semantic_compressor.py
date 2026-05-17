@@ -704,11 +704,22 @@ class SemanticCompressor:
         messages: list[dict],
         chars_per_token: int = 4,
         max_context_tokens: int = 256000,
+        tier3_trigger_tokens: int = 0,
         use_llm: bool = True,
     ) -> CompressionResult:
         """Compress a message history using all three tiers.
 
-        Returns a CompressionResult with summary, decisions, tasks, etc.
+        Args:
+            messages: Raw message list to compress.
+            chars_per_token: Rough characters per token estimate.
+            max_context_tokens: Overall model context window (for stats/reporting).
+            tier3_trigger_tokens: Absolute token threshold at which to invoke
+                Tier 3 LLM abstractive summary. If 0 (default), uses
+                ``max_context_tokens // 4``.
+            use_llm: Whether Tier 3 LLM fallback is allowed.
+
+        Returns:
+            A CompressionResult with summary, decisions, tasks, etc.
         """
         if not messages:
             return CompressionResult(
@@ -735,8 +746,10 @@ class SemanticCompressor:
         tier2_chars = sum(len(_get_content(m)) for m in messages)
         estimated_tokens = tier2_chars // chars_per_token
 
+        tier3_threshold = tier3_trigger_tokens if tier3_trigger_tokens > 0 else max_context_tokens // 4
+
         # Tier 3: LLM abstractive summary (only if still over budget)
-        if use_llm and estimated_tokens > max_context_tokens * 0.75:
+        if use_llm and estimated_tokens > tier3_threshold:
             llm_result = _llm_summarize(messages)
             if llm_result:
                 llm_result.compression_stats.update({
@@ -747,6 +760,7 @@ class SemanticCompressor:
                     "after_chars": tier2_chars,
                     "tier1_saved_chars": before_chars - tier1_chars,
                     "tier2_saved_chars": tier1_chars - tier2_chars,
+                    "tier3_threshold": tier3_threshold,
                 })
                 return llm_result
 
@@ -754,7 +768,7 @@ class SemanticCompressor:
         # Use extractive heuristics for the structured fields
         result = self._build_result_from_graph(graph, messages)
         result.compression_stats = {
-            "tier": 2 if estimated_tokens <= max_context_tokens * 0.75 else 1,
+            "tier": 3 if (use_llm and estimated_tokens > tier3_threshold) else 2,
             "before_messages": before_count,
             "after_messages": len(messages),
             "before_chars": before_chars,
@@ -762,6 +776,7 @@ class SemanticCompressor:
             "tier1_saved_chars": before_chars - tier1_chars,
             "tier2_saved_chars": tier1_chars - tier2_chars,
             "estimated_tokens": estimated_tokens,
+            "tier3_threshold": tier3_threshold,
         }
         return result
 

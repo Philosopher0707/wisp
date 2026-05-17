@@ -139,7 +139,12 @@ class Session:
                 total += len(msg.get("content", "") or "")
         return total // chars_per_token
 
-    def compact(self, keep_recent: int = 10, chars_per_token: int = 4) -> dict:
+    def compact(
+        self,
+        keep_recent: int = 10,
+        chars_per_token: int = 4,
+        max_context_tokens: int = 256000,
+    ) -> dict:
         """Compact the session by summarizing old messages and keeping recent ones.
 
         Returns a dict with compaction metadata (before_count, after_count, summary).
@@ -230,6 +235,7 @@ class Session:
         compression = compressor.compress(
             messages=old_messages,
             chars_per_token=chars_per_token,
+            max_context_tokens=max_context_tokens,
         )
         summary_obj = compression.to_session_summary(self.id, self.workspace)
 

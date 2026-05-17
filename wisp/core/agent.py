@@ -766,6 +766,7 @@ class WispAgentCore:
         result = self.session.compact(
             keep_recent=self.config.compact_keep_recent,
             chars_per_token=self.config.chars_per_token,
+            max_context_tokens=self.config.max_context_tokens,
         )
 
         if result.get("compacted"):
