@@ -851,6 +851,20 @@ class WispAgentCore:
         # Hard trim only if compaction wasn't sufficient
         self._trim_context_if_needed(system)
 
+        # ── Auto long-horizon task routing ─────────────────────────────
+        if getattr(self.config, "auto_long_task", True):
+            from wisp.long_horizon.trigger import detect_long_task
+            is_long, reason = detect_long_task(prompt, self.config.workspace or ".")
+            if is_long:
+                yield system_event(
+                    f"🎯 Auto-detected long-horizon task: {reason}. "
+                    f"Routing to persistent multi-step execution with checkpoints.",
+                    level="info",
+                )
+                async for event in self.run_long_task(goal=prompt, workspace=self.config.workspace or "."):
+                    yield event
+                return  # Skip normal single-turn flow
+
         # ── Auto parallel research for complex queries ─────────────────
         research_results = await self._auto_parallel_research(prompt)
         if research_results:
@@ -1876,3 +1890,35 @@ class WispAgentCore:
             return {"success": False, "output": final_content}
 
         return {"success": True, "output": final_content}
+
+    # ── Long-horizon task runner ─────────────────────────────────────
+
+    async def run_long_task(
+        self,
+        goal: str,
+        workspace: str = ".",
+        resume_from: str | None = None,
+    ) -> AsyncIterator[AgentEvent]:
+        """Run a long-horizon task, yielding progress events.
+
+        Creates a LongHorizonRunner and streams all task events.
+        Use this for complex multi-step goals that need checkpointing.
+
+        Args:
+            goal: Task description. Ignored if resume_from is provided.
+            workspace: Working directory for tool execution.
+            resume_from: Task ID to resume from checkpoint.
+
+        Yields:
+            AgentEvent for each state change (step started, completed, failed, etc.)
+        """
+        from wisp.long_horizon.runner import LongHorizonRunner
+        from wisp.long_horizon.storage import TaskStorage
+
+        runner = LongHorizonRunner(
+            agent=self,
+            storage=TaskStorage(),
+        )
+
+        async for event in runner.run(goal=goal, resume_from=resume_from, workspace=workspace):
+            yield event
