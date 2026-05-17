@@ -35,6 +35,17 @@ try:
 except ImportError:
     readline = None
 
+from wisp.transport.renderer import (
+    format_duration as _format_duration,
+    format_arg_value as _format_arg_value,
+    wrap_text as _wrap_text,
+    render_tool_call as _render_tool_call,
+    render_thinking_block as _render_thinking_block,
+    render_content_block as _render_content_block,
+    render_done_reason as _render_done_reason,
+    _box,
+    _rule,
+)
 from wisp.core.agent import WispAgentCore, _coerce_tool_data
 from wisp.core.message_format import extract_text
 from wisp.core.events import (
@@ -260,104 +271,6 @@ def _use_box_mode(config: object) -> bool:
     if _term_width() < _MIN_BOX_WIDTH:
         return False
     return True
-
-
-def _wrap_text(text: str, width: int, indent: str = "") -> list[str]:
-    """Wrap text to a given width, with an optional indent on each line after the first."""
-    if not text:
-        return [""]
-    lines = []
-    for paragraph in text.split("\n"):
-        if not paragraph.strip():
-            lines.append("")
-            continue
-        wrapped = textwrap.wrap(paragraph, width=width)
-        if indent and len(lines) > 0:
-            wrapped = [wrapped[0]] + [indent + w for w in wrapped[1:]]
-        lines.extend(wrapped)
-    return lines
-
-
-def _box(content: str, title: str = "", style: str = "dim",
-         double: bool = False, width: Optional[int] = None) -> str:
-    """Wrap content in a box-drawn panel.
-
-    Args:
-        content: The text to box.
-        title: Optional title shown in the top border.
-        style: 'dim' for regular, 'error' for red, 'success' for green.
-        double: Use double-line chars (for errors).
-        width: Explicit width; auto-detected from terminal if None.
-    """
-    if width is None:
-        width = _term_width()
-    inner_width = width - 4  # borders + padding
-
-    style_fn = {"dim": dim, "error": error, "success": success, "muted": muted}.get(style, dim)
-
-    if double:
-        tl, tr, bl, br, hz, vt = "╔", "╗", "╚", "╝", "═", "║"
-    else:
-        tl, tr, bl, br, hz, vt = "┌", "┐", "└", "┘", "─", "│"
-
-    # Title in top border
-    if title:
-        title_text = f" {title} "
-        available = width - 2  # corners
-        if len(title_text) > available:
-            title_text = title_text[:available]
-        top = tl + title_text + hz * (width - 2 - len(title_text)) + tr
-    else:
-        top = tl + hz * (width - 2) + tr
-
-    bottom = bl + hz * (width - 2) + br
-
-    lines = content.split("\n")
-    result_lines = [style_fn(top)]
-
-    # Padding line at top for breathing room in response panels
-    if title:
-        result_lines.append(style_fn(f"{vt} {' ' * inner_width} {vt}"))
-
-    for line in lines:
-        if not line.strip():
-            result_lines.append(style_fn(f"{vt} {' ' * inner_width} {vt}"))
-            continue
-        # Wrap long lines
-        wrapped = textwrap.wrap(line, width=inner_width)
-        for w in wrapped:
-            padded = w.ljust(inner_width)
-            result_lines.append(style_fn(f"{vt} {padded} {vt}"))
-
-    # Padding line at bottom for breathing room
-    if title:
-        result_lines.append(style_fn(f"{vt} {' ' * inner_width} {vt}"))
-
-    result_lines.append(style_fn(bottom))
-    return "\n".join(result_lines)
-
-
-def _rule(char: str = "─", label: str = "", style_fn=None,
-          width: Optional[int] = None) -> str:
-    """Draw a horizontal rule, optionally with a label.
-
-    Args:
-        char: Rule character.
-        label: Optional label placed left of center.
-        style_fn: Color function (e.g. dim).
-        width: Explicit width.
-    """
-    if width is None:
-        width = _term_width()
-    style_fn = style_fn or dim
-
-    if label:
-        label_str = f" {label} "
-        remaining = width - len(label_str)
-        left = char * (remaining // 2)
-        right = char * (remaining - len(left))
-        return style_fn(f"{left}{label_str}{right}")
-    return style_fn(char * width)
 
 
 def _spinner_gen() -> Generator[str, None, None]:
@@ -837,37 +750,6 @@ def _render_event(event: AgentEvent, show_thinking: bool = False,
             return error("\n✗ Stream error — turn aborted.")
         return None
 
-def _render_tool_call(name: str, args: dict, box_mode: bool) -> str:
-    """Render a tool call with structured argument display."""
-    lines = [dim(f"  🔧 {name}")]
-    if args:
-        for key, value in args.items():
-            val_str = _format_arg_value(key, value)
-            lines.append(dim(f"  │  {key}: {val_str}"))
-    return "\n".join(lines)
-
-
-def _format_arg_value(key: str, value) -> str:
-    """Format a single argument value for display."""
-    if key in ("path", "command", "pattern", "filepath"):
-        s = str(value)
-        if len(s) > 60:
-            s = s[:57] + "..."
-        return s
-    if key in ("content", "text", "old", "new"):
-        if isinstance(value, str):
-            return f"({len(value)} chars)"
-        return str(value)[:60]
-    if key in ("arguments", "args"):
-        if isinstance(value, dict):
-            return f"({len(value)} keys)"
-        return str(value)[:40]
-    s = str(value)
-    if len(s) > 80:
-        s = s[:77] + "..."
-    return s
-
-
 def _render_tool_result(name: str, result, duration_ms, 
                         show_tool_output: bool, box_mode: bool, width: int) -> str:
     """Render a tool result. Extracts and renders diffs for write/edit tools."""
@@ -936,23 +818,6 @@ def _render_tool_result(name: str, result, duration_ms,
     header = dim(f"  {status_icon} {name} ({duration_str}) " + "·" * max(0, width - len(f"  {status_icon} {name} ({duration_str}) ") - 2))
     return f"{header}\n" + dim(f"     → {preview}")
 
-
-def _format_duration(duration_ms) -> str:
-    """Format a duration in milliseconds to a human-readable string."""
-    if duration_ms is None:
-        return ""
-    if duration_ms < 1:
-        return f"{duration_ms * 1000:.0f}μs"
-    if duration_ms < 1000:
-        return f"{duration_ms:.0f}ms"
-    if duration_ms < 60000:
-        return f"{duration_ms / 1000:.1f}s"
-    mins = int(duration_ms / 60000)
-    secs = (duration_ms % 60000) / 1000
-    return f"{mins}m {secs:.0f}s"
-
-
-# ── CLITransport ─────────────────────────────────────────────────────
 
 class CLITransport:
     """Terminal transport for WispAgentCore.
@@ -1418,44 +1283,3 @@ def _print_separator():
 
 
 # ── Block renderers (used by _execute_turn for buffered output) ──────
-
-def _render_thinking_block(text: str, box_mode: bool, width: int) -> Optional[str]:
-    """Render buffered thinking text as a block."""
-    if not text.strip():
-        return None
-    inner_w = width - 4
-    wrapped = _wrap_text(text.strip(), inner_w)
-    if box_mode:
-        header = _rule("·", "🧠 Reasoning", style_fn=dim, width=width)
-        body = "\n".join(dim(f"  {line}") for line in wrapped)
-        return f"{header}\n{body}"
-    else:
-        header = _rule("─", "🧠 Reasoning", style_fn=dim, width=width)
-        body = "\n".join(dim(f"  {line}") for line in wrapped)
-        return f"{header}\n{body}"
-
-
-def _render_content_block(text: str, box_mode: bool, width: int) -> Optional[str]:
-    """Render buffered content text as a block."""
-    if not text.strip():
-        return None
-    inner_w = width - 4
-    wrapped = _wrap_text(text.strip(), inner_w)
-    if box_mode:
-        return _box("\n".join(wrapped), title="Response", style="muted", width=width)
-    else:
-        return "\n".join(wrapped)
-
-
-def _render_done_reason(event: AgentEvent, iterations: int) -> Optional[str]:
-    """Render the turn completion reason."""
-    reason = event.data.get("reason", "")
-    if reason == "max_iterations":
-        return warning(f"\n  ⚠️  Max iterations ({iterations}) reached. Type 'continue' or increase --max-iterations.")
-    elif reason == "max_reflections":
-        return warning(f"\n  🔄  Reflective loop detected after {iterations} iterations.")
-    elif reason == "interrupted":
-        return dim("\n  ⏹  Interrupted.")
-    elif reason == "error":
-        return error("\n  ✗ Stream error — turn aborted.")
-    return None
