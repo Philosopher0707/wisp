@@ -212,6 +212,21 @@ class PluginToggleRequest(BaseModel):
     enable: bool = Field(..., description="True to enable, False to disable")
 
 
+class MCPServerAddRequest(BaseModel):
+    name: str = Field(..., min_length=1, description="Unique server name")
+    command: Optional[str] = Field(default=None, description="Command for stdio transport")
+    args: list[str] = Field(default_factory=list, description="Arguments for stdio transport")
+    url: Optional[str] = Field(default=None, description="URL for HTTP/SSE transport")
+    transport: str = Field(default="stdio", description="stdio | sse | streamable-http")
+    always_load: bool = Field(default=False, description="Auto-connect on agent start")
+    auth: str = Field(default="none", description="none | bearer_token | oauth_client_credentials | x509_certificate")
+    auth_config: Optional[dict[str, Any]] = Field(default=None, description="Auth-specific configuration")
+    timeout_seconds: int = Field(default=30, ge=1, le=300)
+    headers: Optional[dict[str, str]] = Field(default=None, description="Extra HTTP headers")
+    disabled_tools: Optional[list[str]] = Field(default=None, description="Tools to exclude")
+    env: dict[str, str] = Field(default_factory=dict, description="Environment variables")
+
+
 # ── Auth ─────────────────────────────────────────────────────────────
 
 async def verify_api_key(
@@ -1559,25 +1574,116 @@ async def plugin_marketplace():
 
 # ── MCP Management Endpoints ───────────────────────────────────────────
 
+_mcp_manager = None
+
+
+def _get_mcp_manager():
+    global _mcp_manager
+    if _mcp_manager is None:
+        from wisp.mcp import MCPManager
+        _mcp_manager = MCPManager(str(WORKSPACE_ROOT))
+    return _mcp_manager
+
 
 @app.get("/api/mcp/servers", dependencies=[Depends(verify_api_key)])
 async def list_mcp_servers():
-    return {"servers": []}
+    manager = _get_mcp_manager()
+    configs = manager.load_server_configs()
+    return {
+        "servers": [
+            {
+                "name": c.name,
+                "command": c.command,
+                "args": c.args,
+                "url": c.url,
+                "transport": c.transport,
+                "always_load": c.always_load,
+                "auth": c.auth.value,
+                "timeout_seconds": c.timeout_seconds,
+                "headers": c.headers,
+                "disabled_tools": c.disabled_tools,
+                "env": c.env,
+            }
+            for c in configs
+        ]
+    }
 
 
 @app.post("/api/mcp/servers", dependencies=[Depends(verify_api_key)])
-async def add_mcp_server(request: dict):
-    return {"ok": False, "message": "MCP server management not yet implemented"}
+async def add_mcp_server(req: MCPServerAddRequest):
+    from wisp.mcp import MCPAuthMethod, MCPServerConfig
+    manager = _get_mcp_manager()
+    configs = manager.load_server_configs()
+    existing = [c for c in configs if c.name == req.name]
+    if existing:
+        raise HTTPException(status_code=409, detail=f"MCP server '{req.name}' already exists")
+
+    try:
+        auth_method = MCPAuthMethod(req.auth)
+    except ValueError:
+        auth_method = MCPAuthMethod.NONE
+
+    config = MCPServerConfig(
+        name=req.name,
+        command=req.command,
+        args=req.args,
+        url=req.url,
+        env=req.env,
+        transport=req.transport,
+        always_load=req.always_load,
+        auth=auth_method,
+        auth_config=req.auth_config,
+        timeout_seconds=req.timeout_seconds,
+        headers=req.headers,
+        disabled_tools=req.disabled_tools,
+    )
+
+    manager._server_configs[req.name] = config
+    manager.save_server_configs()
+
+    # Optionally connect if always_load is set
+    if req.always_load:
+        try:
+            from wisp.mcp import connect_server
+            server = connect_server(config)
+            manager.servers.append(server)
+        except Exception as e:
+            logger.warning("Failed to connect MCP server '%s' during add: %s", req.name, e)
+
+    return {"ok": True, "server": {"name": req.name, "transport": req.transport}}
 
 
 @app.delete("/api/mcp/servers/{name}", dependencies=[Depends(verify_api_key)])
 async def delete_mcp_server(name: str):
-    return {"ok": False, "message": f"MCP server '{name}' not found"}
+    manager = _get_mcp_manager()
+    configs = manager.load_server_configs()
+    if not any(c.name == name for c in configs):
+        raise HTTPException(status_code=404, detail=f"MCP server '{name}' not found")
+
+    # Disconnect if connected
+    for server in list(manager.servers):
+        if server.config.name == name:
+            try:
+                from wisp.mcp import disconnect_server
+                disconnect_server(server)
+            except Exception as e:
+                logger.warning("Error disconnecting MCP server '%s': %s", name, e)
+            manager.servers.remove(server)
+
+    manager._server_configs.pop(name, None)
+    manager.save_server_configs()
+    return {"ok": True, "message": f"MCP server '{name}' deleted"}
 
 
 @app.post("/api/mcp/servers/{name}/test", dependencies=[Depends(verify_api_key)])
 async def test_mcp_server(name: str):
-    return {"ok": False, "message": f"MCP server '{name}' test not yet implemented"}
+    manager = _get_mcp_manager()
+    configs = manager.load_server_configs()
+    if not any(c.name == name for c in configs):
+        raise HTTPException(status_code=404, detail=f"MCP server '{name}' not found")
+
+    result = await manager.health_check(name)
+    return {"ok": result["status"] == "ok", "health": result}
 
 
 # ── Hook Management Endpoints ──────────────────────────────────────────
