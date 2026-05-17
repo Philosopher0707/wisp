@@ -113,13 +113,9 @@ class MockProvider(BaseProvider):
 
         # Yield tool calls
         if tool_calls:
-            checksum = hashlib.sha256(
-                json.dumps(tool_calls, sort_keys=True).encode()
-            ).hexdigest()[:16]
             yield ToolCallBatch(
                 phase="tool_calls",
                 calls=tool_calls,
-                checksum=checksum,
             )
 
         # Build response for message history

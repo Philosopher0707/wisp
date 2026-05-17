@@ -35,13 +35,6 @@ class ToolCallBatch(StreamEvent):
     """Tool calls from the model."""
     phase: Literal["tool_calls"]
     calls: list[dict]
-    checksum: str  # SHA-256 of serialized calls for validation
-    
-    def __post_init__(self):
-        # Validate checksum
-        expected = hashlib.sha256(json.dumps(self.calls, sort_keys=True).encode()).hexdigest()[:16]
-        if self.checksum != expected:
-            raise ValueError(f"ToolCallBatch checksum mismatch: {self.checksum} != {expected}")
 
 
 @dataclass(frozen=True)

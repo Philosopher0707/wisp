@@ -208,7 +208,7 @@ class OllamaClient:
 
         Yields typed events instead of raw strings:
         - TokenBatch: Batched thinking/content tokens (reduces I/O)
-        - ToolCallBatch: Tool calls from model (with checksum validation)
+        - ToolCallBatch: Tool calls from model
         - Checkpoint: Periodic integrity checkpoints (not from LLM, from our state)
         - StreamComplete: Successful completion with validation
         - StreamError: Error occurred
@@ -373,15 +373,9 @@ class OllamaClient:
                     # Flush any pending batches before tool calls
                     for event in batcher.flush_all():
                         yield event
-                    # Emit tool calls with checksum
-                    import hashlib
-                    checksum = hashlib.sha256(
-                        json.dumps(tool_calls, sort_keys=True).encode()
-                    ).hexdigest()[:16]
                     yield ToolCallBatch(
                         phase="tool_calls",
                         calls=tool_calls,
-                        checksum=checksum
                     )
 
                 # ── Checkpoint ──────────────────────────────────────
