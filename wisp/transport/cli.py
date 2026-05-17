@@ -845,6 +845,10 @@ class CLITransport:
         self._interrupted = False
         self._pending_approval = None
         self._spinner = _spinner_gen()
+        # Session-level approval caches — avoid prompting for the same tool every time
+        self._approved_once: set[str] = set()
+        self._approved_session: set[str] = set()
+        self._denied_session: set[str] = set()
         _transport_instances.add(self)
 
     # ── Input area helpers ────────────────────────────────────────

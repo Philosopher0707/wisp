@@ -463,6 +463,11 @@ def _connect_http(server: MCPServer):
     pass  # Connection is stateless for HTTP
 
 
+async def _send_request_async(server: MCPServer, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Thread-safe variant of _send_request for use inside async contexts."""
+    return await asyncio.to_thread(_send_request, server, method, params)
+
+
 def _send_request(server: MCPServer, method: str, params: dict[str, Any]) -> dict[str, Any]:
     """Send a JSON-RPC request to an MCP server and return the response."""
     request_id = server._next_request_id()
@@ -653,7 +658,7 @@ class MCPManager:
                 continue
 
             try:
-                server = connect_server(config)
+                server = await asyncio.to_thread(connect_server, config)
                 self.servers.append(server)
                 self._server_configs[config.name] = config
                 connected_count += 1
@@ -692,8 +697,7 @@ class MCPManager:
 
         try:
             start = time.monotonic()
-            # Send a lightweight ping via tools/list
-            response = _send_request(server, "tools/list", {})
+            response = await _send_request_async(server, "tools/list", {})
             elapsed_ms = (time.monotonic() - start) * 1000
 
             tools_data = response.get("tools", [])
@@ -744,8 +748,7 @@ class MCPManager:
 
         for attempt in range(max_retries + 1):
             try:
-                # Send a lightweight ping to verify connectivity
-                _send_request(server, "tools/list", {})
+                await _send_request_async(server, "tools/list", {})
                 logger.debug(
                     "Retry attempt %d for '%s' succeeded",
                     attempt, server_name,
@@ -809,7 +812,7 @@ class MCPManager:
             )
 
         try:
-            server = connect_server(config)
+            server = await asyncio.to_thread(connect_server, config)
             self.servers.append(server)
             self._server_configs[config.name] = config
             logger.info(

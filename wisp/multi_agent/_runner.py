@@ -217,6 +217,10 @@ class SubagentRunner:
             role=f"subagent:{contract.name}",
         )
 
+        # Propagate guard state so recursive subagents don't reset depth
+        agent._subagent_depth = getattr(contract, "_subagent_depth", 0)
+        agent._subagent_branch_count = getattr(contract, "_subagent_branch_count", 0)
+
         try:
             agent.config.workspace = workspace_path
 

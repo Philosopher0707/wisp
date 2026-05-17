@@ -15,6 +15,7 @@ Yields AgentEvent instances for tool_result and approval_request.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -148,18 +149,35 @@ class ToolExecutor:
             yield _tool_result_event(func_name, circuit_block_msg)
             return
 
+        # ── Permission mode guard ──
+        perm_block_msg = self._check_permission_mode(func_name)
+        if perm_block_msg:
+            yield _tool_result_event(func_name, perm_block_msg)
+            return
+
         # ── Approval gating ──
         needs_approval = func_name in _WRITE_TOOLS
-        if needs_approval and not getattr(self.config, "auto_approve", False) and approval_handler:
-            reason = f"{func_name} modifies workspace state"
-            yield _approval_request_event(func_name, func_args, reason)
-            approved, modified = await approval_handler(func_name, func_args, reason)
-            if modified is not None:
-                func_args.clear()
-                func_args.update(modified)
-            if not approved:
-                yield _tool_result_event(func_name, f"[Blocked: user declined {func_name}]")
-                return
+        forced_approval = self._needs_forced_approval(func_name)
+        if needs_approval and (not getattr(self.config, "auto_approve", False) or forced_approval):
+            if not approval_handler:
+                if forced_approval:
+                    yield _tool_result_event(
+                        func_name,
+                        f"[Blocked: {getattr(self.config, 'permission_mode', 'auto_edit')} mode "
+                        f"requires approval for {func_name}, but no approval handler is available]",
+                    )
+                    return
+                # auto_approve=True + no handler + not forced = pass through
+            else:
+                reason = f"{func_name} modifies workspace state"
+                yield _approval_request_event(func_name, func_args, reason)
+                approved, modified = await approval_handler(func_name, func_args, reason)
+                if modified is not None:
+                    func_args.clear()
+                    func_args.update(modified)
+                if not approved:
+                    yield _tool_result_event(func_name, f"[Blocked: user declined {func_name}]")
+                    return
 
         # ── Event-specific pre-hooks (PRE_BASH, PRE_FILE_WRITE) ──
         if func_name == "run_bash":
@@ -378,6 +396,38 @@ class ToolExecutor:
             return f"[Circuit breaker open for {func_name}: {status}]"
         return None
 
+    def _check_permission_mode(self, func_name: str) -> str | None:
+        """Check permission mode guard.
+
+        Returns a block message if the tool is hard-blocked by the current
+        permission mode, or None to allow (possibly falling through to the
+        approval handler).
+
+        Hard blocks (no approval_handler can override):
+          read_only -> all write/edit/bash/git operations
+        """
+        mode = getattr(self.config, "permission_mode", PermissionMode.AUTO_EDIT)
+        if mode == PermissionMode.READ_ONLY and func_name in _WRITE_TOOLS:
+            return f"[Blocked: read_only mode - {func_name} is not allowed]"
+        return None
+
+    def _needs_forced_approval(self, func_name: str) -> bool:
+        """Return True if this tool must go through the approval handler,
+        even when auto_approve is True.
+
+        This lets permission modes override the auto_approve shortcut:
+          ask_all   -> all write tools need approval
+          auto_edit -> bash and git writes need approval (file ops are free)
+          full      -> auto_approve governs normally
+          read_only -> already caught by hard block above
+        """
+        mode = getattr(self.config, "permission_mode", PermissionMode.AUTO_EDIT)
+        if mode == PermissionMode.ASK_ALL:
+            return func_name in _WRITE_TOOLS
+        if mode == PermissionMode.AUTO_EDIT:
+            return func_name in ("run_bash", "git_branch", "git_commit", "git_push", "gh_pr_create")
+        return False
+
     async def _execute_tool(
         self, func_name: str, func_args: dict, workspace: str
     ) -> tuple[str | dict, float]:
@@ -405,7 +455,7 @@ class ToolExecutor:
         if func_name == "spawn_subagent":
             result = await self._spawn_subagent(func_args, workspace)
         elif self._is_mcp_tool(func_name):
-            result = self._call_mcp_tool(func_name, func_args)
+            result = await self._call_mcp_tool(func_name, func_args)
         else:
             try:
                 result = execute_tool(
@@ -440,12 +490,12 @@ class ToolExecutor:
             pass
         return False
 
-    def _call_mcp_tool(self, func_name: str, func_args: dict) -> str:
-        """Call an MCP tool and truncate if needed."""
+    async def _call_mcp_tool(self, func_name: str, func_args: dict) -> str:
+        """Call an MCP tool and truncate if needed.  Runs in a thread so stdio doesn't block the loop."""
         if not self.mcp:
             return f"MCP error: no MCP manager"
         try:
-            result = self.mcp.call_tool(func_name, func_args)
+            result = await asyncio.to_thread(self.mcp.call_tool, func_name, func_args)
             if isinstance(result, str) and len(result) > 8000:
                 result = result[:8000] + f"\n... [truncated {len(result)} total chars]"
             return result

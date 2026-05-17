@@ -1,8 +1,9 @@
 """Arena Mode — blind A/B comparison of models on real tasks.
 
-Creates two isolated git worktrees, runs the same prompt with two different
-models, returns side-by-side diffs with hidden identities. User votes before
-seeing which model is which. Tracks per-project leaderboard.
+Creates two isolated git worktrees (or temp directories for non-git workspaces),
+runs the same prompt with two different models, returns side-by-side diffs with
+hidden identities. User votes before seeing which model is which. Tracks per-project
+leaderboard.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import logging
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -25,6 +27,7 @@ from wisp.core.events import (
     AgentEvent, TYPE_CONTENT, TYPE_DONE, TYPE_ERROR,
     TYPE_TOOL_CALL, TYPE_TOOL_RESULT,
 )
+from wisp.multi_agent._worktree_manager import WorktreeManager
 
 logger = logging.getLogger(__name__)
 
@@ -123,14 +126,43 @@ class ArenaRunner:
 
         ws = Path(request.workspace).resolve()
 
-        # Run both models in parallel
-        results = await asyncio.gather(
-            self._run_side(ws, request.prompt, request.model_a),
-            self._run_side(ws, request.prompt, request.model_b),
-        )
+        # Create isolated worktrees for each side
+        worktree_mgr = WorktreeManager(ws)
+        wt_a: Path | None = None
+        wt_b: Path | None = None
 
-        (entry.a_summary, entry.a_diff, entry.a_files_changed, entry.a_duration_ms) = results[0]
-        (entry.b_summary, entry.b_diff, entry.b_files_changed, entry.b_duration_ms) = results[1]
+        try:
+            try:
+                wt_a = await worktree_mgr.create("arena-a")
+                wt_b = await worktree_mgr.create("arena-b")
+            except RuntimeError:
+                # Not a git repo or worktree creation failed — fall back to temp dirs
+                logger.warning("Git worktree creation failed, falling back to temp directories")
+                wt_a = Path(tempfile.mkdtemp(prefix="arena-a-", dir=ws))
+                wt_b = Path(tempfile.mkdtemp(prefix="arena-b-", dir=ws))
+
+            # Run both models in parallel, each in their own directory
+            results = await asyncio.gather(
+                self._run_side(wt_a, request.prompt, request.model_a),
+                self._run_side(wt_b, request.prompt, request.model_b),
+            )
+
+            (entry.a_summary, entry.a_diff, entry.a_files_changed, entry.a_duration_ms) = results[0]
+            (entry.b_summary, entry.b_diff, entry.b_files_changed, entry.b_duration_ms) = results[1]
+        finally:
+            # Always clean up worktrees / temp dirs
+            for wt in (wt_a, wt_b):
+                if wt is None:
+                    continue
+                try:
+                    if wt.name.startswith("arena-") and (wt / ".git").exists():
+                        # It's a git worktree
+                        await worktree_mgr.cleanup(wt)
+                    elif wt.name.startswith("arena-"):
+                        # It's a temp directory fallback
+                        shutil.rmtree(wt, ignore_errors=True)
+                except Exception as exc:
+                    logger.warning("Failed to clean up arena worktree %s: %s", wt, exc)
 
         self._entries[entry_id] = entry
         self._save_leaderboard(ws)
@@ -146,7 +178,7 @@ class ArenaRunner:
             config = WispConfig()
             config.model = model
             config.workspace = str(workspace)
-            config.permission_mode = "auto_edit"
+            config.permission_mode = "full"
             config.auto_approve = True
 
             core = WispAgentCore(config=config)
