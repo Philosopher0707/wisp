@@ -33,7 +33,8 @@ from wisp.stream_events import (
 )
 from wisp.tools import TOOL_SCHEMAS, execute_tool, ToolError
 from wisp.skills import discover_skills
-from wisp.session import Session, SessionManager
+from wisp.session import Session
+from wisp.session_store import get_store
 from wisp.project_context import detect_project_context, format_context
 from wisp.code_index import build_index as build_regex_index, format_index_summary
 from wisp.tree_sitter_index import build_index as build_ts_index, is_tree_sitter_available
@@ -223,7 +224,7 @@ class WispAgentCore:
                     self.config.max_context_tokens = detected
             except OllamaError:
                 pass
-        self.session_mgr = SessionManager()
+        self.session_mgr = get_store()
         self.session = session
         self.messages: list[dict] = []
         self.max_iterations = self.config.max_iterations
@@ -573,17 +574,6 @@ class WispAgentCore:
         system = DEFAULT_SYSTEM
         system += f"\n\n## Workspace\nYou are working in: {ws_abs}"
 
-        # ── Auto-detect long-horizon tasks ──
-        if query:
-            from wisp.long_horizon.trigger import detect_long_task
-            is_long, reason = detect_long_task(query, ws)
-            if is_long:
-                system += (
-                    f"\n\n## Task Assessment\n"
-                    f"The user's request appears to be a complex, multi-step goal: {reason}. "
-                    f"Consider using run_long_task to create a persistent plan with checkpoints."
-                )
-                logger.info("Auto-detected long-horizon task: %s", reason)
 
         if hasattr(self, "_role_system_extra") and self._role_system_extra:
             system += f"\n\n{self._role_system_extra}"
@@ -871,23 +861,6 @@ class WispAgentCore:
         # Hard trim only if compaction wasn't sufficient
         self._trim_context_if_needed(system)
 
-        # ── Auto long-horizon task routing ─────────────────────────────
-        if getattr(self.config, "auto_long_task", True):
-            from wisp.long_horizon.trigger import detect_long_task
-            is_long, reason = detect_long_task(prompt, self.config.workspace or ".")
-            if is_long:
-                yield system_event(
-                    f"🎯 Auto-detected long-horizon task: {reason}. "
-                    f"Routing to persistent multi-step execution with checkpoints.",
-                    level="info",
-                )
-                async for event in self.run_long_task(
-                    goal=prompt,
-                    workspace=self.config.workspace or ".",
-                    background=True,
-                ):
-                    yield event
-                return  # Skip normal single-turn flow
 
         # ── Auto parallel research for complex queries ─────────────────
         research_results = await self._auto_parallel_research(prompt)
