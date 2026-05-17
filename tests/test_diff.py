@@ -337,3 +337,59 @@ class TestEndToEndEdit:
         assert result.success is True
         # BOM should be preserved
         assert f.read_bytes().startswith(b"\xef\xbb\xbf")
+
+
+# ── Non-ASCII / Unicode regression tests ──────────────────────────────
+
+class TestNonAsciiEdits:
+    def test_fullwidth_numbers_match_via_fuzzy(self):
+        """Fullwidth ５００ should match when searching for straight '500'."""
+        content = 'timeout = ５００\n'
+        base, new, fuzzy = apply_edits_to_content(
+            content,
+            [EditOp(old_text='timeout = 500', new_text='timeout = 1000')]
+        )
+        assert fuzzy is True
+        assert 'timeout = ５００' not in new
+        assert 'timeout = 1000' in new
+
+    def test_smart_quotes_in_code_match_straight_quotes(self):
+        """Smart quotes in file should match straight-quote old_text from LLM."""
+        content = 'def greet():\n    msg = f\u201cHello\u201d\n    return msg\n'
+        base, new, fuzzy = apply_edits_to_content(
+            content,
+            [EditOp(old_text='    msg = f"Hello"', new_text='    msg = f"Goodbye"')]
+        )
+        assert fuzzy is True
+        assert 'msg = f\u201cHello\u201d' not in new
+        assert 'msg = f"Goodbye"' in new
+
+    def test_cjk_comment_preserved_when_editing_nearby_code(self):
+        """CJK comment text should survive untouched while nearby code is edited."""
+        content = 'def calc():\n    # 計算結果を返す\n    result = １\n    return result\n'
+        base, new, fuzzy = apply_edits_to_content(
+            content,
+            [EditOp(old_text='    result = 1', new_text='    result = 42')]
+        )
+        assert fuzzy is True
+        assert '計算結果を返す' in new, "CJK comment was corrupted"
+        assert 'result = 42' in new
+        assert 'result = １' not in new
+
+    def test_nfkc_collision_is_caught(self):
+        """If fullwidth 'a' would match regular 'a' and map to wrong text,
+        the safety check should reject rather than silently corrupt."""
+        # Two contexts where regular 'a' (U+0061) and fullwidth 'ａ' (U+FF41)
+        # are both present. Searching for 'a' should NOT drift to fullwidth.
+        content = (
+            'alpha = "valid"\n'   # regular 'a'
+            'beta = "\uff41lert"\n'  # fullwidth 'ａ' in "ａlert"
+        )
+        # The old_text uses regular 'a'. It should match alpha= not beta=.
+        base, new, fuzzy = apply_edits_to_content(
+            content,
+            [EditOp(old_text='alpha = "valid"', new_text='alpha = "changed"')]
+        )
+        assert fuzzy is False  # exact match
+        assert 'alpha = "changed"' in new
+        assert '"\uff41lert"' in new  # fullwidth line untouched

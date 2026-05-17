@@ -327,64 +327,6 @@ def _get_dependents(path: str, workspace: str) -> list[str]:
     return []
 
 
-def _fuzzy_find_text(content: str, old_text: str, threshold: float = 0.85) -> tuple[Optional[int], Optional[str], float]:
-    """Find the best fuzzy match of old_text in content.
-
-    Uses character-level similarity (Dice coefficient on bigrams) to find
-    the closest match when exact matching fails.
-
-    Returns:
-        Tuple of (start_index, actual_matched_text, similarity) if a match
-        above threshold is found, or (None, None, best_similarity) if no
-        match meets the threshold.
-    """
-    if not old_text or not content:
-        return None, None, 0.0
-
-    # Compute bigram similarity between two strings
-    def _bigram_sim(a: str, b: str) -> float:
-        if not a or not b:
-            return 0.0
-        # Build bigram sets
-        bigrams_a = {a[i:i+2] for i in range(len(a) - 1)}
-        bigrams_b = {b[i:i+2] for i in range(len(b) - 1)}
-        if not bigrams_a or not bigrams_b:
-            return 0.0
-        intersection = bigrams_a & bigrams_b
-        # Dice coefficient
-        return 2.0 * len(intersection) / (len(bigrams_a) + len(bigrams_b))
-
-    old_lines = old_text.splitlines(keepends=True)
-    content_lines = content.splitlines(keepends=True)
-
-    best_score = 0.0
-    best_start = None
-    best_match = None
-
-    # Slide a window of the same line count over content
-    window_size = len(old_lines)
-    if window_size == 0:
-        return None, None, 0.0
-
-    for start in range(len(content_lines) - window_size + 1):
-        candidate = "".join(content_lines[start:start + window_size])
-
-        # Quick length check — skip wildly different lengths
-        len_ratio = len(candidate) / len(old_text) if old_text else 0
-        if len_ratio < 0.5 or len_ratio > 2.0:
-            continue
-
-        sim = _bigram_sim(candidate, old_text)
-        if sim > best_score:
-            best_score = sim
-            best_start = len("".join(content_lines[:start]))
-            best_match = candidate
-
-    if best_score >= threshold and best_start is not None and best_match is not None:
-        return best_start, best_match, best_score
-    return None, None, best_score
-
-
 def _relevance_score(text: str, query_lower: str, query_words: list[str]) -> float:
     """Relevance score for memory retrieval. Exact matches score highest.
     Partial word matches score lower to avoid generic text pollution.
