@@ -718,7 +718,8 @@ def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0,
     except KeyboardInterrupt:
         raise  # Let user interruption propagate; do NOT bury it in JSON
 
-    except BaseException as e:
+    except Exception as e:
+        """Catch actual tool bugs (ValueError, TypeError, etc.) and JSON-serialize them."""
         logger.error("Unexpected error in tool %s: %s", name, e, exc_info=True)
         structured = {
             "status": "error",
@@ -727,3 +728,6 @@ def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0,
             "metadata": _build_tool_metadata(name, args, ""),
         }
         return json.dumps(structured, ensure_ascii=False)
+
+    except BaseException:
+        raise  # Propagate SystemExit, GeneratorExit (and KeyboardInterrupt) uncaught

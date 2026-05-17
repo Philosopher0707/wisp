@@ -1,11 +1,10 @@
-"""Regression: KeyboardInterrupt must propagate through the tool chain, not be swallowed.
+"""Regression: BaseException traps (SystemExit, GeneratorExit) must propagate, not be swallowed.
 
-The issue: tool_run_bash called subprocess.run inside try/except Exception.
-When a user pressed Ctrl+C during a long-running bash command, Python raised
-KeyboardInterrupt — but the broad except Exception swallowed it, converting it
-into a ToolError / JSON error string.  The user never saw the signal, and in
-server mode the exception propagated past the WebSocket handler because it
-caught only Exception, crashing the entire event loop.
+Previous code used `except BaseException as e:` in execute_tool's final handler,
+which caught SystemExit (from sys.exit) and GeneratorExit (from generator cleanup)
+and buried them in a JSON error string.  These must propagate uncaught.
+
+KeyboardInterrupt was already handled correctly via explicit re-raise.
 """
 
 import json
@@ -21,6 +20,14 @@ def _fake_raising_kb(*, command: str, workspace: str = ".", timeout: int = 60):
 
 def _fake_error(*, command: str, workspace: str = ".", timeout: int = 60):
     raise ValueError("Simulated tool bug")
+
+
+def _fake_system_exit(*, command: str, workspace: str = ".", timeout: int = 60):
+    raise SystemExit(0)
+
+
+def _fake_generator_exit(*, command: str, workspace: str = ".", timeout: int = 60):
+    raise GeneratorExit
 
 
 class TestKeyboardInterruptPropagates:
@@ -53,11 +60,31 @@ class TestKeyboardInterruptPropagates:
         assert "Simulated tool bug" in data["data"]
 
 
-class TestServerWebsocketHandlesKeyboardInterrupt:
-    """WebSocket handler must catch BaseException, not crash the event loop."""
+class TestBaseExceptionMustPropagate:
+    """SystemExit and GeneratorExit must NOT be swallowed by execute_tool."""
 
-    def test_server_run_catches_base_exception(self):
-        """The inner _run() must catch BaseException and attempt graceful cleanup."""
+    def test_system_exit_escapes_registry(self):
+        """A tool that calls sys.exit(0) must propagate — not buried as JSON error."""
+        with patch("wisp.tools.registry.TOOL_IMPLS", {"run_bash": _fake_system_exit}):
+            with pytest.raises(SystemExit):
+                execute_tool("run_bash", {"command": "x"}, "/tmp")
+
+    def test_generator_exit_escapes_registry(self):
+        """GeneratorExit raised during tool execution must propagate uncaught."""
+        with patch("wisp.tools.registry.TOOL_IMPLS", {"run_bash": _fake_generator_exit}):
+            with pytest.raises(GeneratorExit):
+                execute_tool("run_bash", {"command": "x"}, "/tmp")
+
+
+class TestServerWebsocketHandlesException:
+    """WebSocket handler must catch Exception, not swallow signals (BaseException)."""
+
+    def test_server_run_catches_exception(self):
+        """The inner _run() catches Exception so KeyboardInterrupt/SystemExit propagate.
+
+        The server intentionally does NOT catch BaseException — signals and
+        clean-exit requests must escape to the event loop, not be swallowed.
+        """
         import ast
         from pathlib import Path
 
@@ -70,7 +97,7 @@ class TestServerWebsocketHandlesKeyboardInterrupt:
                 for item in node.body:
                     if isinstance(item, ast.Try):
                         for handler in item.handlers:
-                            if isinstance(handler.type, ast.Name) and handler.type.id == "BaseException":
+                            if isinstance(handler.type, ast.Name) and handler.type.id == "Exception":
                                 found = True
                                 break
-        assert found, "WebSocket handler must catch BaseException (not just Exception)"
+        assert found, "WebSocket handler must catch Exception (BaseException must NOT be caught — signals must escape)"
