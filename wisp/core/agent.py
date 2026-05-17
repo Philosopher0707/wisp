@@ -350,6 +350,19 @@ class WispAgentCore:
             msg["thinking"] = thinking
         self.messages.append(msg)
 
+    def _inject_system_note(self, note: str) -> None:
+        """Insert a system note as an assistant message, never as trailing system.
+
+        Appending a system message mid-conversation is undefined behavior
+        for most LLM APIs.  We instead emit it as an assistant "context"
+        message so the model sees it as part of the assistant turn rather
+        than corrupting the conversation format.
+        """
+        self.messages.append({
+            "role": "assistant",
+            "content": [{"type": "text", "text": f"[{note}]"}],
+        })
+
     # ── Continuation expansion ───────────────────────────────────────
 
     # Single-word/single-phrase triggers are safe because we only fire the
@@ -865,20 +878,6 @@ class WispAgentCore:
         # Hard trim only if compaction wasn't sufficient
         self._trim_context_if_needed(system)
 
-
-        # ── Auto parallel research for complex queries ─────────────────
-        research_results = await self._auto_parallel_research(prompt)
-        if research_results:
-            for event in research_results:
-                yield event
-
-        # ── Auto-delegation for capability mismatch ────────────────────
-        if getattr(self.config, "auto_delegate", True):
-            delegation = await self._check_delegation(prompt)
-            if delegation:
-                for event in delegation:
-                    yield event
-
         # Steering checkpoint 1: after compact, before iteration loop
         inject = await self._check_steering()
         if inject is not None:
@@ -1311,207 +1310,6 @@ class WispAgentCore:
         )
 
     # ── Auto parallel research ───────────────────────────────────────
-
-    async def _auto_parallel_research(self, prompt: str) -> list:
-        """Automatically spawn parallel subagents for complex research queries.
-
-        Detects research-oriented prompts and breaks them into parallel
-        sub-tasks. Returns AgentEvent list for yielding.
-        """
-        # Only trigger for research-like queries
-        research_keywords = [
-            "research", "compare", "analyze", "survey", "overview",
-            "explain", "what is", "how does", "pros and cons",
-            "differences between", "similarities between",
-        ]
-        prompt_lower = prompt.lower()
-        is_research = any(kw in prompt_lower for kw in research_keywords)
-
-        # Don't trigger for simple queries
-        if not is_research or len(prompt) < 40:
-            return []
-
-        # Don't trigger if already in a subagent
-        if getattr(self, "_subagent_depth", 0) > 0:
-            return []
-
-        # Check if auto-research is enabled (default: True)
-        if not getattr(self.config, "auto_parallel_research", True):
-            return []
-
-        logger.info("Auto-parallel research triggered for: %s", prompt[:60])
-
-        # Break into parallel research angles
-        angles = self._orchestrator._research_angles(prompt)
-        if len(angles) < 2:
-            return []
-
-        from wisp.multi_agent import SubagentContract
-        from wisp.core.events import content as content_event
-
-        from wisp.multi_agent.roles import AgentRole
-
-        contracts = [
-            SubagentContract(
-                name=f"research-{i+1}",
-                role=AgentRole.RESEARCHER,
-                task=angle,
-                timeout_seconds=90,
-                isolation="process",
-                max_iterations=10,
-                output_format="markdown",
-                max_tokens=4000,
-                workspace=self.config.workspace,
-                auto_approve=self.config.auto_approve,
-            )
-            for i, angle in enumerate(angles[:4])  # Max 4 parallel
-        ]
-
-        events = []
-        events.append(content_event(f"🔍 Researching: {prompt[:80]}...\n"))
-        events.append(content_event(f"  Spawning {len(contracts)} parallel subagents...\n"))
-
-        results = await self.spawn_subagents(contracts)
-
-        # Build synthesized context
-        synthesis = "\n## Research Results\n\n"
-        for r in results:
-            if r.success:
-                synthesis += f"### {r.task_id}\n{r.output[:2000]}\n\n"
-            elif r.timed_out:
-                synthesis += f"### {r.task_id}\n[Timed out after {r.elapsed_seconds:.0f}s]\n\n"
-            else:
-                synthesis += f"### {r.task_id}\n[Error: {r.error or 'unknown'}]\n\n"
-
-        # Inject as assistant context (not a real assistant message)
-        self.messages.append({
-            "role": "system",
-            "content": f"[Parallel research completed]\n{synthesis}",
-        })
-
-        n_succeeded = len([r for r in results if r.success])
-        icon = "✓" if n_succeeded > 0 else "✗"
-        events.append(content_event(f"  {icon} Research complete ({n_succeeded}/{len(results)} succeeded)\n"))
-        return events
-
-    def _research_angles(self, prompt: str) -> list[str]:
-        """Break a research prompt into parallel investigation angles.
-
-        Loads domain-specific angles from config if available,
-        otherwise falls back to a generic 4-angle template.
-        """
-        prompt_lower = prompt.lower()
-
-        # ── Config-driven domain angles ──────────────────────────────────
-        # Load from config if user has defined custom research angles
-        config_angles = getattr(self.config, "research_angles", {})
-        if isinstance(config_angles, dict):
-            for keyword, angles in config_angles.items():
-                if keyword.lower() in prompt_lower:
-                    return [a.format(prompt=prompt) for a in angles]
-
-        # ── Generic research breakdown ───────────────────────────────────
-        return [
-            f"Research the core concepts and fundamentals: {prompt}",
-            f"Research recent advances and state-of-the-art: {prompt}",
-            f"Research practical implementations and tools: {prompt}",
-            f"Research limitations, challenges, and future directions: {prompt}",
-        ]
-
-    async def _check_delegation(self, prompt: str) -> list:
-        """Check if the task should be auto-delegated to subagents.
-
-        Uses DelegationAnalyzer and CapabilityMatcher to detect capability
-        mismatch and automatically spawn appropriate subagents.
-        """
-        from wisp.multi_agent import get_delegation_analyzer, SubagentContract
-        from wisp.multi_agent.capability_matcher import CapabilityMatcher
-        from wisp.core.events import content as content_event
-
-        events = []
-        contracts = []
-
-        # ── Check 1: DelegationAnalyzer (complexity/research/scope triggers) ──
-        analyzer = get_delegation_analyzer()
-        signal = analyzer.analyze(prompt, current_iteration=0,
-                                  max_iterations=self.max_iterations)
-
-        if signal.should_delegate:
-            logger.info("Auto-delegation triggered: %s (confidence=%.2f)",
-                        signal.reason, signal.confidence)
-            events.append(content_event(
-                f"🔄 Auto-delegating: {signal.reason} (confidence: {signal.confidence:.0%})\n"
-            ))
-            for spec in signal.suggested_contracts:
-                contracts.append(SubagentContract(
-                    name=spec.get("name", "subagent"),
-                    task=spec.get("task", ""),
-                    role=spec.get("role", "generalist"),
-                    timeout_seconds=spec.get("timeout_seconds", 180),
-                    max_iterations=spec.get("max_iterations", 15),
-                    isolation="process",
-                    output_format="markdown",
-                    workspace=self.config.workspace,
-                    auto_approve=self.config.auto_approve,
-                ))
-
-        # ── Check 2: CapabilityMatcher (role/tool mismatch) ──
-        available_tools = list(self._allowed_tools) if self._allowed_tools else None
-        matcher = CapabilityMatcher()
-        mismatch = matcher.detect_mismatch(
-            current_role=self.role or "agent",
-            task=prompt,
-            available_tools=available_tools,
-        )
-        if mismatch and mismatch.should_delegate():
-            logger.info("Capability mismatch detected: %s (confidence=%.2f)",
-                        mismatch.reason, mismatch.confidence)
-            events.append(content_event(
-                f"🔄 Capability mismatch: {mismatch.reason} (confidence: {mismatch.confidence:.0%})\n"
-            ))
-            contract = matcher.build_delegation_contract(
-                mismatch, prompt, parent_context=self._system_prompt[:500]
-            )
-            contract.workspace = self.config.workspace
-            contract.auto_approve = self.config.auto_approve
-            contracts.append(contract)
-
-        if not contracts:
-            return []
-
-        events.append(content_event(f"  Spawning {len(contracts)} subagent(s)...\n"))
-
-        # Use context partitioning to pass only relevant context
-        from wisp.multi_agent import partition_context
-        for contract in contracts:
-            contract.context_files = partition_context(
-                self.messages, contract.task, max_messages=5
-            )
-
-        results = await self.spawn_subagents(contracts)
-
-        # Build synthesized context
-        synthesis = "\n## Delegated Task Results\n\n"
-        for r in results:
-            if r.success:
-                synthesis += f"### {r.task_id}\n{r.output[:1500]}\n\n"
-            elif r.timed_out:
-                synthesis += f"### {r.task_id}\n[Timed out after {r.elapsed_seconds:.0f}s]\n\n"
-            else:
-                synthesis += f"### {r.task_id}\n[Error: {r.error or 'unknown'}]\n\n"
-
-        # Inject as system context
-        self.messages.append({
-            "role": "system",
-            "content": f"[Auto-delegation completed]\n{synthesis}",
-        })
-
-        n_succeeded_del = len([r for r in results if r.success])
-        icon_del = "✓" if n_succeeded_del > 0 else "✗"
-        events.append(content_event(
-            f"  {icon_del} Delegation complete ({n_succeeded_del}/{len(results)} succeeded)\n"
-        ))
-        return events
 
     # ── Non-interactive task runner ──────────────────────────────────
 
