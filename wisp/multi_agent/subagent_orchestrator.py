@@ -249,7 +249,6 @@ class SubagentOrchestrator:
 
         # ── Cleanup worktree ───────────────────────────────────────────
         if worktree_path and not os.environ.get("WISP_KEEP_WORKTREES", "").lower() == "true":
-            await asyncio.sleep(0.5)
             try:
                 await self._worktree_mgr.cleanup(worktree_path)
             except Exception as exc:

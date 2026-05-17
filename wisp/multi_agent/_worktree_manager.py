@@ -70,17 +70,31 @@ class WorktreeManager:
         except Exception as exc:
             logger.debug("Could not determine branch for %s: %s", worktree_path, exc)
 
-        proc = await asyncio.create_subprocess_exec(
-            "git", "worktree", "remove", str(worktree_path), "--force",
-            cwd=str(self.workspace),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
+        max_attempts = 5
+        backoff = 0.05  # Start with 50ms
+        for attempt in range(max_attempts):
+            proc = await asyncio.create_subprocess_exec(
+                "git", "worktree", "remove", str(worktree_path), "--force",
+                cwd=str(self.workspace),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
 
-        if proc.returncode != 0:
+            if proc.returncode == 0:
+                break
+
             err_text = stderr.decode("utf-8", errors="replace").strip()
-            logger.warning("git worktree remove failed (exit %d): %s", proc.returncode, err_text)
+            logger.warning(
+                "git worktree remove failed (attempt %d/%d, exit %d): %s",
+                attempt + 1, max_attempts, proc.returncode, err_text
+            )
+
+            if attempt < max_attempts - 1:
+                await asyncio.sleep(backoff)
+                backoff *= 2
+        else:
+            # Fallback manual removal
             if worktree_path.exists():
                 shutil.rmtree(worktree_path, ignore_errors=True)
                 logger.debug("Manually removed worktree directory: %s", worktree_path)
