@@ -1273,13 +1273,16 @@ class WispAgentCore:
         from wisp.multi_agent import SubagentContract
         from wisp.core.events import content as content_event
 
+        from wisp.multi_agent.roles import AgentRole
+
         contracts = [
             SubagentContract(
                 name=f"research-{i+1}",
+                role=AgentRole.RESEARCHER,
                 task=angle,
-                timeout_seconds=180,
+                timeout_seconds=90,
                 isolation="process",
-                max_iterations=15,
+                max_iterations=10,
                 output_format="markdown",
                 max_tokens=4000,
                 workspace=self.config.workspace,
@@ -1310,7 +1313,9 @@ class WispAgentCore:
             "content": f"[Parallel research completed]\n{synthesis}",
         })
 
-        events.append(content_event(f"  ✓ Research complete ({len([r for r in results if r.success])}/{len(results)} succeeded)\n"))
+        n_succeeded = len([r for r in results if r.success])
+        icon = "✓" if n_succeeded > 0 else "✗"
+        events.append(content_event(f"  {icon} Research complete ({n_succeeded}/{len(results)} succeeded)\n"))
         return events
 
     def _research_angles(self, prompt: str) -> list[str]:
@@ -1425,8 +1430,10 @@ class WispAgentCore:
             "content": f"[Auto-delegation completed]\n{synthesis}",
         })
 
+        n_succeeded_del = len([r for r in results if r.success])
+        icon_del = "✓" if n_succeeded_del > 0 else "✗"
         events.append(content_event(
-            f"  ✓ Delegation complete ({len([r for r in results if r.success])}/{len(results)} succeeded)\n"
+            f"  {icon_del} Delegation complete ({n_succeeded_del}/{len(results)} succeeded)\n"
         ))
         return events
 

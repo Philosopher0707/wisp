@@ -126,6 +126,7 @@ Rules:
 - Do NOT re-fetch URLs you already have or confirm things you already know.
 - Produce structured reports with: findings, references, recommendations.
 - If you have enough to answer, STOP and output. Do not keep searching.
+- **FAIL FAST:** If web_fetch returns 404, HTTP error, DNS resolution failure, or connection error for 2 consecutive URLs, STOP immediately. Do NOT keep trying new URLs. Produce your report with what you have (even if that's nothing found). You are on a strict time budget — chasing dead URLs wastes it.
 """,
         allowed_tools=[
             "read_file",

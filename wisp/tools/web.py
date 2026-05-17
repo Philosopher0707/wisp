@@ -73,11 +73,26 @@ def tool_web_fetch(url: str, workspace: str = ".", max_chars: int = 10000) -> st
         return f"✓ Fetched {url}\n\n{text}"
         
     except requests.exceptions.Timeout:
-        raise ToolError(f"Request timed out after 30s: {url}")
+        raise ToolError(f"[WEB_FETCH_FAILED] Timeout after 30s: {url}. The server is too slow or unreachable.")
     except requests.exceptions.ConnectionError as e:
-        raise ToolError(f"Connection error: {e}")
+        err_str = str(e)
+        if "Failed to resolve" in err_str or "nodename nor servname" in err_str:
+            msg = f"[WEB_FETCH_FAILED] DNS resolution failed for {url}. The domain does not exist or cannot be reached. Try a different URL or search for the content instead."
+        elif "Connection refused" in err_str:
+            msg = f"[WEB_FETCH_FAILED] Connection refused by {url}. The server is down or blocking requests."
+        else:
+            msg = f"[WEB_FETCH_FAILED] Cannot reach {url} (connection error). The site may be down or your network may be restricted. Try a different URL."
+        raise ToolError(msg)
     except requests.exceptions.HTTPError as e:
-        raise ToolError(f"HTTP error {e.response.status_code}: {url}")
+        status = e.response.status_code
+        if status == 404:
+            raise ToolError(f"[WEB_FETCH_FAILED] HTTP 404: {url} does not exist. The page may have moved or been deleted. Do NOT retry the same URL. Try searching for the content instead.")
+        elif status == 403:
+            raise ToolError(f"[WEB_FETCH_FAILED] HTTP 403: Access denied to {url}. The server is blocking automated requests. Try a different source.")
+        elif status == 429:
+            raise ToolError(f"[WEB_FETCH_FAILED] HTTP 429: Rate limited by {url}. Wait before trying again or use a different source.")
+        else:
+            raise ToolError(f"[WEB_FETCH_FAILED] HTTP {status}: Server returned error for {url}. Try a different URL or search for the content.")
     except requests.exceptions.RequestException as e:
         raise ToolError(f"Request failed: {e}")
 
