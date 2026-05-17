@@ -39,11 +39,7 @@ export function useWebSocket(
 
     const httpUrl = serverUrl.replace(/\/$/, '');
     const wsUrl = httpUrl.replace(/^http/, 'ws') + '/ws/agent';
-
-    const params = new URLSearchParams();
-    // api_key intentionally NOT sent as query param (leaks to logs).
-    // Auth is done via first-message auth frame.
-    const fullUrl = params.toString() ? wsUrl + '?' + params.toString() : wsUrl;
+    const fullUrl = wsUrl;
 
     const ws = new WebSocket(fullUrl);
     wsRef.current = ws;
@@ -120,7 +116,7 @@ export function useWebSocket(
               try {
                 const base = serverUrl.replace(/\/$/, '');
                 const params = '';
-                const resp = await fetch(`${base}/api/git${params}`, {
+                const resp = await fetch(`${base}/api/git`, {
                   headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
                 });
                 if (resp.ok) {

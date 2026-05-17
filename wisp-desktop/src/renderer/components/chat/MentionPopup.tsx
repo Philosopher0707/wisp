@@ -34,7 +34,7 @@ export const MentionPopup: React.FC<Props> = ({
       const base = serverUrl.replace(/\/$/, '');
       const p = workspacePath || '';
       const params = new URLSearchParams();
-      if (apiKey) params.set('api-key', apiKey);
+      
       params.set('path', p);
       const resp = await fetch(`${base}/api/files?${params.toString()}`, {
         headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,

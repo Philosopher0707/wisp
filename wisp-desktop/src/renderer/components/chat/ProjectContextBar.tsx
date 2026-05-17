@@ -11,9 +11,9 @@ export const ProjectContextBar: React.FC = () => {
       const dirPath = await window.wisp.selectDirectory();
       if (!dirPath) return;
       const baseUrl = state.serverUrl.replace(/\/$/, '');
-      const params = state.apiKey ? `?api-key=${encodeURIComponent(state.apiKey)}` : '';
+
       try {
-        const resp = await fetch(`${baseUrl}/api/workspace${params}`, {
+        const resp = await fetch(`${baseUrl}/api/workspace`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

@@ -73,8 +73,8 @@ export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
       return;
     }
     const baseUrl = serverUrl.replace(/\/$/, '');
-    const params = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
-    const url = `${baseUrl}/api/sessions/${encodeURIComponent(persisted.lastSessionId)}${params}`;
+
+    const url = `${baseUrl}/api/sessions/${encodeURIComponent(persisted.lastSessionId)}`;
     console.log('[App] Fetching session:', url);
     fetch(url, {
       headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
@@ -173,10 +173,10 @@ export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
   // Initial API fetches (models, workspace)
   React.useEffect(() => {
     const baseUrl = serverUrl.replace(/\/$/, '');
-    const params = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
+
     const headers = apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined;
 
-    fetch(`${baseUrl}/api/models${params}`, { headers })
+    fetch(`${baseUrl}/api/models`, { headers })
       .then((r) => r.json())
       .then((data) => {
         if (data.models?.length > 0) {
@@ -185,7 +185,7 @@ export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
       })
       .catch(() => {});
 
-    fetch(`${baseUrl}/api/workspace${params}`, { headers })
+    fetch(`${baseUrl}/api/workspace`, { headers })
       .then((r) => r.json())
       .then((data: { path?: string }) => {
         if (data.path) {
@@ -216,11 +216,11 @@ export const App: React.FC<Props> = ({ serverUrl, apiKey }) => {
   React.useEffect(() => {
     if (!state.suggestionsPanelOpen || state.connection !== 'connected') return;
     const baseUrl = serverUrl.replace(/\/$/, '');
-    const params = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
+
     const headers = apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined;
 
     const poll = () => {
-      fetch(`${baseUrl}/api/suggestions${params}`, { headers })
+      fetch(`${baseUrl}/api/suggestions`, { headers })
         .then((r) => r.json())
         .then((data: { suggestions?: Array<{ path: string; mtime: number; diagnostic_count: number; severities: Record<string, number> }> }) => {
           if (data.suggestions) {

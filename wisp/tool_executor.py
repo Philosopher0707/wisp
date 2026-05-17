@@ -479,6 +479,41 @@ class ToolExecutor:
             result = await self._spawn_subagent(func_args, workspace)
         elif self._is_mcp_tool(func_name):
             result = await self._call_mcp_tool(func_name, func_args)
+        elif func_name == "run_bash":
+            try:
+                from wisp.tools.bash import tool_run_bash
+                from wisp.tools.registry import _build_tool_metadata
+                raw_result = await tool_run_bash(
+                    command=func_args.get("command", ""),
+                    workspace=workspace,
+                    timeout=int(func_args.get("timeout", 60)),
+                )
+                metadata = _build_tool_metadata(func_name, func_args, raw_result)
+                structured = {
+                    "status": "ok",
+                    "tool": func_name,
+                    "data": raw_result,
+                    "metadata": metadata,
+                }
+                result = json.dumps(structured, ensure_ascii=False)
+            except ToolError as e:
+                from wisp.tools.registry import _build_tool_metadata
+                structured = {
+                    "status": "error",
+                    "tool": func_name,
+                    "data": str(e),
+                    "metadata": _build_tool_metadata(func_name, func_args, ""),
+                }
+                result = json.dumps(structured, ensure_ascii=False)
+            except Exception as e:
+                from wisp.tools.registry import _build_tool_metadata
+                structured = {
+                    "status": "error",
+                    "tool": func_name,
+                    "data": f"Unexpected error: {e}",
+                    "metadata": _build_tool_metadata(func_name, func_args, ""),
+                }
+                result = json.dumps(structured, ensure_ascii=False)
         else:
             try:
                 result = await asyncio.to_thread(

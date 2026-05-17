@@ -36,10 +36,10 @@ class TestKeyboardInterruptPropagates:
     def test_keyboard_interrupt_escapes_run_bash(self):
         """tool_run_bash must re-raise KeyboardInterrupt, not bury it."""
 
-        def fake_run(*args, **kwargs):
+        async def fake_create_subprocess_shell(*args, **kwargs):
             raise KeyboardInterrupt("Simulated Ctrl+C from subprocess")
 
-        with patch("subprocess.run", side_effect=fake_run):
+        with patch("asyncio.create_subprocess_shell", side_effect=fake_create_subprocess_shell):
             with pytest.raises(KeyboardInterrupt):
                 from wisp.tools.bash import tool_run_bash
                 tool_run_bash(command="sleep 100", workspace="/tmp")

@@ -48,8 +48,7 @@ export class WispClient extends EventEmitter {
 
     const wsUrl = this._serverUrl
       .replace(/^http/, 'ws')
-      + '/ws/agent'
-      + (this._apiKey ? `?api_key=${encodeURIComponent(this._apiKey)}` : '');
+      + '/ws/agent';
 
     this._outputChannel.appendLine(`Wisp: connecting to ${wsUrl}`);
 
@@ -64,6 +63,12 @@ export class WispClient extends EventEmitter {
     this._ws.on('open', () => {
       this._connected = true;
       this._outputChannel.appendLine('Wisp: connected');
+      if (this._apiKey) {
+        this._send({
+          type: 'auth',
+          api_key: this._apiKey,
+        });
+      }
       this.emit('connected');
     });
 
@@ -222,14 +227,16 @@ export class WispClient extends EventEmitter {
   }
 
   private async _httpGet<T = unknown>(path: string): Promise<T> {
-    const url = `${this._apiBase()}${path}${path.includes('?') ? '&' : '?'}api-key=${encodeURIComponent(this._apiKey)}`;
-    const resp = await fetch(url);
+    const url = `${this._apiBase()}${path}`;
+    const resp = await fetch(url, {
+      headers: this._headers(),
+    });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
     return resp.json() as T;
   }
 
   private async _httpPost<T = unknown>(path: string, body: Record<string, unknown>): Promise<T> {
-    const url = `${this._apiBase()}${path}${path.includes('?') ? '&' : '?'}api-key=${encodeURIComponent(this._apiKey)}`;
+    const url = `${this._apiBase()}${path}`;
     const resp = await fetch(url, {
       method: 'POST',
       headers: this._headers(),

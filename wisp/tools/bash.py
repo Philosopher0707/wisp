@@ -4,8 +4,10 @@ Security-hardened with dangerous command detection, timeout enforcement,
 and output size limits.
 """
 
+import asyncio
 import logging
-import subprocess
+import os
+import signal
 import time
 from pathlib import Path
 
@@ -22,7 +24,7 @@ from wisp.tools._utils import (
 logger = logging.getLogger(__name__)
 
 
-def tool_run_bash(command: str, workspace: str, timeout: int = 60) -> str:
+async def async_tool_run_bash(command: str, workspace: str, timeout: int = 60) -> str:
     """Run a bash command in the workspace directory.
 
     Security: validates command length, checks for dangerous commands,
@@ -44,25 +46,33 @@ def tool_run_bash(command: str, workspace: str, timeout: int = 60) -> str:
     logger.info("Running bash (timeout=%ds): %.100s", timeout_val, command)
 
     start_time = time.time()
+    proc = None
     try:
-        result = subprocess.run(
+        proc = await asyncio.create_subprocess_shell(
             command,
-            shell=True,
             cwd=cwd,
-            capture_output=True,
-            text=True,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            preexec_fn=os.setpgrp,
+        )
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(),
             timeout=timeout_val,
         )
+        stdout_str = stdout.decode("utf-8", errors="replace")
+        stderr_str = stderr.decode("utf-8", errors="replace")
+        returncode = proc.returncode
+
         # Build output with exit code at the TOP so truncation never loses it
         output = ""
-        if result.returncode != 0:
-            output = f"[exit code: {result.returncode}]\n"
-        if result.stdout:
-            output += result.stdout
-        if result.stderr:
-            if result.stdout:
+        if returncode != 0:
+            output = f"[exit code: {returncode}]\n"
+        if stdout_str:
+            output += stdout_str
+        if stderr_str:
+            if stdout_str:
                 output += "\n--- stderr ---\n"
-            output += result.stderr
+            output += stderr_str
 
         # Strip ANSI escape codes
         output = _ANSI_RE.sub('', output)
@@ -76,17 +86,60 @@ def tool_run_bash(command: str, workspace: str, timeout: int = 60) -> str:
         duration_ms = round((time.time() - start_time) * 1000)
         logger.info(
             "Bash execution — workspace=%s command=%.100s exit_code=%d output_len=%d duration_ms=%d",
-            workspace, command, result.returncode, len(output), duration_ms,
+            workspace, command, returncode, len(output), duration_ms,
         )
         return output or "(no output)"
-    except subprocess.TimeoutExpired:
+    except asyncio.TimeoutError:
         logger.warning("Command timed out after %ds: %.100s", timeout_val, command)
         raise ToolError(f"Command timed out after {timeout_val}s: {command[:100]}...")
-    except KeyboardInterrupt:
-        raise  # Let the signal propagate; do NOT bury it as a ToolError
+    except asyncio.CancelledError:
+        logger.warning("Command execution cancelled: %.100s", command)
+        raise
     except OSError as e:
         logger.error("Command failed with OSError: %s", e)
         raise ToolError(f"Command failed: {e}")
     except Exception as e:
         logger.error("Unexpected error in run_bash: %s", e)
         raise ToolError(f"Command failed: {e}")
+    finally:
+        if proc and proc.returncode is None:
+            # Terminate the entire process group
+            try:
+                pgid = os.getpgid(proc.pid)
+                os.killpg(pgid, signal.SIGTERM)
+                # Wait up to 2 seconds for clean exit, otherwise SIGKILL
+                for _ in range(20):
+                    try:
+                        await asyncio.wait_for(proc.wait(), timeout=0.1)
+                        break
+                    except asyncio.TimeoutError:
+                        pass
+                else:
+                    try:
+                        os.killpg(pgid, signal.SIGKILL)
+                        await proc.wait()
+                    except ProcessLookupError:
+                        pass
+            except ProcessLookupError:
+                pass
+            except Exception as e:
+                logger.warning("Error terminating process group: %s", e)
+
+
+def tool_run_bash(command: str, workspace: str, timeout: int = 60) -> str:
+    """Run a bash command in the workspace directory (synchronous compatibility wrapper)."""
+    coro = async_tool_run_bash(command, workspace, timeout)
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(asyncio.run, coro)
+            return future.result()
+    else:
+        return asyncio.run(coro)
+
+

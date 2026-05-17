@@ -47,8 +47,8 @@ export const ArenaPanel: React.FC = () => {
 
     try {
       const base = state.serverUrl.replace(/\/$/, '');
-      const params = state.apiKey ? `?api-key=${encodeURIComponent(state.apiKey)}` : '';
-      const resp = await fetch(`${base}/api/arena/compare${params}`, {
+
+      const resp = await fetch(`${base}/api/arena/compare`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -80,8 +80,8 @@ export const ArenaPanel: React.FC = () => {
     if (!result) return;
     try {
       const base = state.serverUrl.replace(/\/$/, '');
-      const params = state.apiKey ? `?api-key=${encodeURIComponent(state.apiKey)}` : '';
-      const resp = await fetch(`${base}/api/arena/vote${params}`, {
+
+      const resp = await fetch(`${base}/api/arena/vote`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

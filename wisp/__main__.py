@@ -191,7 +191,9 @@ def cmd_print(prompt, model=None, session_id=None, output_format="json", quiet=F
     # Try local server first
     try:
         api_key = os.environ.get("WISP_API_KEY", "")
-        params = {"api-key": api_key} if api_key else {}
+        headers = {}
+        if api_key:
+            headers["X-API-Key"] = api_key
         resp = requests.post(
             "http://127.0.0.1:8000/api/prompt",
             json={
@@ -199,7 +201,7 @@ def cmd_print(prompt, model=None, session_id=None, output_format="json", quiet=F
                 "model": model,
                 "session_id": session_id,
             },
-            params=params,
+            headers=headers,
             timeout=600,
         )
         if resp.status_code == 200:

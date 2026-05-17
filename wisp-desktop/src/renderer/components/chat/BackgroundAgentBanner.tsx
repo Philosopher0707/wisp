@@ -27,8 +27,8 @@ export const BackgroundAgentBanner: React.FC = () => {
   const fetchRuns = useCallback(async () => {
     try {
       const base = serverUrl.replace(/\/$/, '');
-      const params = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
-      const resp = await fetch(`${base}/api/runs${params}`, {
+
+      const resp = await fetch(`${base}/api/runs`, {
         headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
       });
       if (!resp.ok) return;
@@ -69,8 +69,8 @@ export const BackgroundAgentBanner: React.FC = () => {
   const cancelRun = async (runId: string) => {
     try {
       const base = serverUrl.replace(/\/$/, '');
-      const params = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
-      await fetch(`${base}/api/run/${encodeURIComponent(runId)}${params}`, {
+
+      await fetch(`${base}/api/run/${encodeURIComponent(runId)}`, {
         method: 'DELETE',
         headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
       });

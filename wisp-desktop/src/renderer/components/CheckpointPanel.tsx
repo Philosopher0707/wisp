@@ -31,13 +31,12 @@ export const CheckpointPanel: React.FC = () => {
   const [dropping, setDropping] = useState(false);
 
   const base = state.serverUrl.replace(/\/$/, '');
-  const params = state.apiKey ? `?api-key=${encodeURIComponent(state.apiKey)}` : '';
 
   const fetchDiff = useCallback(async (id: string) => {
     setDiffLoading(true);
     setDiffContent(null);
     try {
-      const resp = await fetch(`${base}/api/checkpoints/${encodeURIComponent(id)}/diff${params}`, {
+      const resp = await fetch(`${base}/api/checkpoints/${encodeURIComponent(id)}/diff`, {
         headers: state.apiKey ? { Authorization: `Bearer ${state.apiKey}` } : undefined,
       });
       if (resp.ok) {
@@ -65,7 +64,7 @@ export const CheckpointPanel: React.FC = () => {
     setConfirm(null);
     setRestoring(true);
     try {
-      const resp = await fetch(`${base}/api/checkpoints/${encodeURIComponent(id)}/restore${params}`, {
+      const resp = await fetch(`${base}/api/checkpoints/${encodeURIComponent(id)}/restore`, {
         method: 'POST',
         headers: state.apiKey ? { Authorization: `Bearer ${state.apiKey}` } : undefined,
       });
@@ -80,7 +79,7 @@ export const CheckpointPanel: React.FC = () => {
     setConfirm(null);
     setDropping(true);
     try {
-      const resp = await fetch(`${base}/api/checkpoints/${encodeURIComponent(id)}${params}`, {
+      const resp = await fetch(`${base}/api/checkpoints/${encodeURIComponent(id)}`, {
         method: 'DELETE',
         headers: state.apiKey ? { Authorization: `Bearer ${state.apiKey}` } : undefined,
       });

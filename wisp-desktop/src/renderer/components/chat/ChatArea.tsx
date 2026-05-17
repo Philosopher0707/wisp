@@ -25,8 +25,8 @@ export const ChatArea: React.FC = () => {
     setCommitting(true);
     try {
       const base = state.serverUrl.replace(/\/$/, '');
-      const params = state.apiKey ? `?api-key=${encodeURIComponent(state.apiKey)}` : '';
-      const resp = await fetch(`${base}/api/git/commit${params}`, {
+
+      const resp = await fetch(`${base}/api/git/commit`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

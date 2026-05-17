@@ -68,8 +68,8 @@ export const InlineEdit: React.FC<InlineEditProps> = ({ visible, onClose }) => {
 
     try {
       const base = state.serverUrl.replace(/\/$/, '');
-      const params = state.apiKey ? `?api-key=${encodeURIComponent(state.apiKey)}` : '';
-      const resp = await fetch(`${base}/api/edit/inline${params}`, {
+
+      const resp = await fetch(`${base}/api/edit/inline`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -104,8 +104,8 @@ export const InlineEdit: React.FC<InlineEditProps> = ({ visible, onClose }) => {
 
     try {
       const base = state.serverUrl.replace(/\/$/, '');
-      const params = state.apiKey ? `?api-key=${encodeURIComponent(state.apiKey)}` : '';
-      const resp = await fetch(`${base}/api/files${params}&path=${encodeURIComponent(path.trim())}`, {
+
+      const resp = await fetch(`${base}/api/files&path=${encodeURIComponent(path.trim())}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

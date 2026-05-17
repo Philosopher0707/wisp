@@ -118,8 +118,8 @@ export const MessageBubble: React.FC<Props> = ({ msg, highlighted }) => {
     dispatch({ type: 'FORK_SESSION', messageId: msg.id });
     try {
       const base = state.serverUrl.replace(/\/$/, '');
-      const params = state.apiKey ? `?api-key=${encodeURIComponent(state.apiKey)}` : '';
-      const resp = await fetch(`${base}/api/sessions/fork${params}`, {
+
+      const resp = await fetch(`${base}/api/sessions/fork`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

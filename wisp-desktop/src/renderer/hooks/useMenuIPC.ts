@@ -19,9 +19,9 @@ export function useMenuIPC(
             // Update backend workspace via POST /api/workspace
             if (serverUrl) {
               const base = serverUrl.replace(/\/$/, '');
-              const params = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
+
               try {
-                const resp = await fetch(`${base}/api/workspace${params}`, {
+                const resp = await fetch(`${base}/api/workspace`, {
                   method: 'POST',
                   headers: {
                     'Content-Type': 'application/json',

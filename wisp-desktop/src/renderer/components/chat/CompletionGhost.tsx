@@ -27,8 +27,8 @@ export const CompletionGhost: React.FC<CompletionGhostProps> = ({ textareaRef })
 
     try {
       const base = state.serverUrl.replace(/\/$/, '');
-      const params = state.apiKey ? `?api-key=${encodeURIComponent(state.apiKey)}` : '';
-      const resp = await fetch(`${base}/api/complete${params}`, {
+
+      const resp = await fetch(`${base}/api/complete`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -43,8 +43,8 @@ export const TopBar: React.FC = () => {
   useEffect(() => {
     if (state.connection !== 'connected') return;
     const base = state.serverUrl.replace(/\/$/, '');
-    const params = state.apiKey ? `?api-key=${encodeURIComponent(state.apiKey)}` : '';
-    fetch(`${base}/api/sandbox/status${params}`, {
+
+    fetch(`${base}/api/sandbox/status`, {
       headers: state.apiKey ? { Authorization: `Bearer ${state.apiKey}` } : undefined,
     })
       .then((r) => r.json())

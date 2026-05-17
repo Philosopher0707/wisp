@@ -79,9 +79,9 @@ const CodeBlock: React.FC<{ code: string; lang: string }> = ({ code, lang }) => 
     setRunOutput(null);
     try {
       const base = serverUrl.replace(/\/$/, '');
-      const params = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
+
       const body = JSON.stringify({ command: code, cwd: workspacePath || '.' });
-      const resp = await fetch(`${base}/api/bash${params}`, {
+      const resp = await fetch(`${base}/api/bash`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -133,10 +133,9 @@ const CodeBlock: React.FC<{ code: string; lang: string }> = ({ code, lang }) => 
     setApplyStatus('saving');
     try {
       const base = serverUrl.replace(/\/$/, '');
-      const params = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
 
       // Fetch diff preview
-      const diffResp = await fetch(`${base}/api/diff${params}`, {
+      const diffResp = await fetch(`${base}/api/diff`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -163,8 +162,8 @@ const CodeBlock: React.FC<{ code: string; lang: string }> = ({ code, lang }) => 
     setApplyStatus('saving');
     try {
       const base = serverUrl.replace(/\/$/, '');
-      const params = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
-      const qs = `${params}${params ? '&' : '?'}path=${encodeURIComponent(diffPath)}`;
+
+      const qs = `${params ? '&' : '?'}path=${encodeURIComponent(diffPath)}`;
       const resp = await fetch(`${base}/api/files${qs}`, {
         method: 'POST',
         headers: {
