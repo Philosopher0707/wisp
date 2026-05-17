@@ -174,20 +174,20 @@ class TestTrimContext:
 class TestResolveSession:
 
     def test_exact_match(self, agent):
-        agent.session_mgr.load.return_value = MagicMock(id="20260430-120000-test")
+        agent.session_mgr.load_session.return_value = MagicMock(id="20260430-120000-test")
         result = agent._resolve_session("20260430-120000-test")
         assert result is not None
-        agent.session_mgr.load.assert_called_with("20260430-120000-test")
+        agent.session_mgr.load_session.assert_called_with("20260430-120000-test")
 
     def test_fragment_match(self, agent):
-        agent.session_mgr.load.side_effect = [None, MagicMock(id="20260430-120000-test")]
+        agent.session_mgr.load_session.side_effect = [None, MagicMock(id="20260430-120000-test")]
         agent.session_mgr.get_session_id_from_fragment.return_value = "20260430-120000-test"
         result = agent._resolve_session("20260430")
         assert result is not None
         agent.session_mgr.get_session_id_from_fragment.assert_called_with("20260430")
 
     def test_no_match(self, agent):
-        agent.session_mgr.load.return_value = None
+        agent.session_mgr.load_session.return_value = None
         agent.session_mgr.get_session_id_from_fragment.return_value = None
         result = agent._resolve_session("nope")
         assert result is None

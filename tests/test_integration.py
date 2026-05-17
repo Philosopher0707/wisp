@@ -515,7 +515,7 @@ class TestIntegrationSecurity:
         assert "access denied" in result["data"].lower()
 
     def test_command_length_limit(self, temp_workspace):
-        raw = execute_tool("run_bash", {"command": "x" * 5000}, str(temp_workspace))
+        raw = execute_tool("run_bash", {"command": "x" * 20000}, str(temp_workspace))
         result = parse_tool_result(raw)
         assert result["status"] == "error"
         assert "too long" in result["data"].lower()

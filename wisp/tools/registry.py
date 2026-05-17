@@ -558,11 +558,58 @@ TOOL_IMPLS = {
 
 def _build_tool_metadata(name: str, args: dict, result: str) -> dict:
     """Build metadata dict for structured tool results."""
-    return {
-        "tool": name,
-        "args": args,
-        "result_length": len(result),
-    }
+    meta: dict[str, Any] = {"tool": name, "args": dict(args), "result_length": len(result)}
+
+    # Flatten common args into metadata for easy consumption
+    for key in ("path", "command", "url", "query", "fact", "pattern", "timeout", "max_chars", "max_results", "limit", "offset"):
+        if key in args:
+            meta[key] = args[key]
+
+    if name == "read_file":
+        m = result.rsplit("\n--- [showing lines ", 1)
+        if len(m) == 2:
+            full_range = m[1].rstrip(" -]")
+            if " of " in full_range:
+                parts = full_range.split(" of ", 1)
+                meta["lines_shown"] = parts[0]
+                meta["total_lines"] = int(parts[1])
+            else:
+                meta["lines_shown"] = full_range
+
+    elif name == "write_file" and "path" in args:
+        meta["bytes_written"] = len(args.get("content", ""))
+
+    elif name == "edit_file":
+        old_text = args.get("old_text", "")
+        new_text = args.get("new_text", "")
+        meta["old_text_preview"] = old_text[:100]
+        meta["new_text_preview"] = new_text[:100]
+
+    elif name == "run_bash":
+        if "[exit code:" in result:
+            try:
+                exit_str = result.split("[exit code:")[1].split("]")[0].strip()
+                meta["exit_code"] = int(exit_str)
+            except (ValueError, IndexError):
+                pass
+        if "\n... [output truncated]" in result or result.endswith("... [output truncated]"):
+            meta["truncated"] = True
+
+    elif name == "list_files":
+        meta["entry_count"] = result.count("📄") + result.count("📁")
+
+    elif name == "web_fetch":
+        if "... [truncated" in result or result.endswith("... [truncated]"):
+            meta["truncated"] = True
+
+    elif name == "search_symbols":
+        # "Found N symbols" or similar
+        import re as _re
+        m = _re.search(r"[Ff]ound\s+(\d+)\s+(?:symbol|result)", result)
+        if m:
+            meta["results_count"] = int(m.group(1))
+
+    return meta
 
 
 def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0, file_lock=None, lsp_manager=None) -> str:
