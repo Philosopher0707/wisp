@@ -238,8 +238,22 @@ class ToolExecutor:
             result_event = events[-1]
             result = result_event.data.get("result", "")
 
-        # Extract human-readable summary from structured dict results
-        if isinstance(result, dict) and "data" in result:
+        # Extract human-readable summary from structured results.
+        # execute_tool returns JSON strings with {"status": ..., "data": ...};
+        # we parse them so the LLM sees the actual tool output, not the JSON wrapper.
+        msg_content: str
+        if isinstance(result, str) and result.strip().startswith("{"):
+            try:
+                parsed = json.loads(result)
+                if isinstance(parsed, dict) and "data" in parsed:
+                    msg_content = str(parsed["data"])
+                else:
+                    msg_content = result
+            except (json.JSONDecodeError, ValueError):
+                # Not actually JSON — pass through unchanged
+                msg_content = str(result)
+        elif isinstance(result, dict) and "data" in result:
+            # MCP tools and other paths may return a dict directly
             msg_content = str(result["data"])
         else:
             msg_content = str(result)
