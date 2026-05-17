@@ -31,11 +31,11 @@ def _pack(emb: list[float]) -> bytes:
 def _insert_chunks(index: SemanticIndex, chunks):
     """Insert chunks with embeddings directly into the DB."""
     conn = index.conn
-    for path, start, end, content, emb in chunks:
+    for i, (path, start, end, content, emb) in enumerate(chunks):
         c = conn.execute(
             "INSERT INTO chunks (file_path, start_line, end_line, content, symbol_name, content_hash) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (path, start, end, content, "", "hash"),
+            (path, start, end, content, "", f"hash{i}"),
         )
         chunk_id = c.lastrowid
         conn.execute(
@@ -60,8 +60,8 @@ class TestSearchCorrectness:
         # Create three chunks with known embeddings
         chunks = [
             ("a.py", 1, 5, "def alpha():", _make_embedding("alpha")),
-            ("b.py", 1, 5, "def beta():", _make_embedding("beta")),
-            ("c.py", 1, 5, "def gamma():", _make_embedding("gamma")),
+            ("b.py", 6, 10, "def beta():", _make_embedding("beta")),
+            ("c.py", 11, 15, "def gamma():", _make_embedding("gamma")),
         ]
         _insert_chunks(tmp_index, chunks)
 
@@ -115,7 +115,7 @@ class TestSearchCorrectness:
             # "hello" appears in content but embedding is orthogonal to query
             ("keyword_match.py", 1, 5, "hello world", emb_a),
             # "other" doesn't appear but embedding matches query
-            ("semantic_match.py", 1, 5, "other stuff", emb_b),
+            ("semantic_match.py", 6, 10, "other stuff", emb_b),
         ]
         _insert_chunks(tmp_index, chunks)
 
@@ -159,7 +159,7 @@ class TestSearchPerformance:
         # Highest score should be chunk500
         assert results[0].file_path == "f500.py"
 
-    def test_ten_thousand_chunks(self, tmp_index, benchmark):
+    def test_ten_thousand_chunks(self, tmp_index):
         dim = 768
         n = 10000
         chunks = []

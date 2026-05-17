@@ -463,7 +463,7 @@ class SemanticIndex:
         M = np.vstack(emb_list)
 
         # Vectorised cosine similarity — suppress benign warnings from NaN/Inf rows
-        with np.errstate(divide="ignore", invalid="ignore"):
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
             dot = M @ query_vec          # (n_chunks,)
             norm_m = np.linalg.norm(M, axis=1)  # (n_chunks,)
             norm_q = np.linalg.norm(query_vec)
