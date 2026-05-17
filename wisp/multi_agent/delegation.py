@@ -175,8 +175,8 @@ class DelegationAnalyzer:
                 "name": "researcher",
                 "role": "researcher",
                 "task": f"Research and analyze: {prompt[:200]}",
-                "timeout_seconds": 60,
-                "max_iterations": 5,
+                "timeout_seconds": 180,
+                "max_iterations": 15,
             })
 
         # Implementation contract
@@ -185,8 +185,8 @@ class DelegationAnalyzer:
                 "name": "implementer",
                 "role": "coder",
                 "task": f"Implement the solution for: {prompt[:200]}",
-                "timeout_seconds": 120,
-                "max_iterations": 10,
+                "timeout_seconds": 300,
+                "max_iterations": 20,
             })
 
         # Review contract
@@ -195,8 +195,8 @@ class DelegationAnalyzer:
                 "name": "reviewer",
                 "role": "reviewer",
                 "task": f"Review the approach for: {prompt[:200]}",
-                "timeout_seconds": 60,
-                "max_iterations": 5,
+                "timeout_seconds": 180,
+                "max_iterations": 15,
             })
 
         return contracts
