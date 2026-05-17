@@ -156,17 +156,6 @@ class TestContextAssemblerBuild:
         )
         assert "security auditor" in result
 
-    def test_build_with_ontology(self):
-        from wisp.context_assembler import ContextAssembler
-        assembler = ContextAssembler()
-        result = assembler.build(
-            workspace="/tmp",
-            default_system="You are Wisp.",
-            ontology_result={"name": "Security Audit", "context": "Check for SQL injection"},
-        )
-        assert "Security Audit" in result
-        assert "SQL injection" in result
-
     def test_build_with_recent_summaries(self):
         from wisp.context_assembler import ContextAssembler
         assembler = ContextAssembler()

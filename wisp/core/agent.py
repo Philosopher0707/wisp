@@ -557,14 +557,6 @@ class WispAgentCore:
         skills = discover_skills(ws)
         skills_block = self._build_skills_block_from_skills(skills)
 
-        ontology_result = None
-        from wisp.skills import has_ontology, match_skill_via_ontology
-        if has_ontology():
-            if hasattr(self, "_last_user_prompt") and self._last_user_prompt:
-                ontology_result = match_skill_via_ontology(self._last_user_prompt)
-            if ontology_result is None:
-                ontology_result = match_skill_via_ontology(str(ws_abs))
-
         project_ctx = detect_project_context(ws)
         project_context = format_context(project_ctx)
 
@@ -652,7 +644,6 @@ class WispAgentCore:
             default_system=DEFAULT_SYSTEM,
             role_extra=getattr(self, "_role_system_extra", None) or None,
             skills_block=skills_block or None,
-            ontology_result=ontology_result,
             project_context=project_context or None,
             code_index_summary=code_index_summary or None,
             memory_block=memory_block or None,

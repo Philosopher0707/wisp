@@ -52,7 +52,6 @@ You have access to tools that let you read, write, and edit files, run bash comm
         default_system: Optional[str] = None,
         role_extra: Optional[str] = None,
         skills_block: Optional[str] = None,
-        ontology_result: Optional[dict[str, str]] = None,
         project_context: Optional[str] = None,
         code_index_summary: Optional[str] = None,
         memory_block: Optional[str] = None,
@@ -72,7 +71,6 @@ You have access to tools that let you read, write, and edit files, run bash comm
             default_system: Base system prompt (falls back to self.default_system).
             role_extra: Additional role-specific instructions.
             skills_block: Markdown block of available skills.
-            ontology_result: Dict with 'name' and 'context' keys.
             project_context: Project detection context block.
             code_index_summary: Code index summary block.
             memory_block: Cross-session memory block.
@@ -93,7 +91,6 @@ You have access to tools that let you read, write, and edit files, run bash comm
             default_system,
             role_extra,
             skills_block,
-            ontology_result and ontology_result.get("name"),
             project_context,
             code_index_summary,
             memory_block,
@@ -120,9 +117,6 @@ You have access to tools that let you read, write, and edit files, run bash comm
 
         if skills_block:
             system += f"\n\n{skills_block}"
-
-        if ontology_result:
-            system += f"\n\n## {ontology_result['name']}\n{ontology_result['context']}"
 
         if project_context:
             system += f"\n\n{project_context}"
