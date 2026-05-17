@@ -1277,14 +1277,16 @@ class CLITransport:
                 if cmd.startswith("/task "):
                     goal = cmd[6:].strip()
                     if goal:
-                        from wisp.tools.long_horizon import tool_run_long_task
-                        result = tool_run_long_task(goal=goal)
-                        import json
-                        parsed = json.loads(result)
-                        if parsed["status"] == "ok":
-                            print(success(f"✓ {parsed['data']}"))
-                        else:
-                            print(error(f"✗ {parsed['data']}"))
+                        # Start task in background via agent
+                        async def _start_bg_task():
+                            async for event in self.core.run_long_task(goal=goal, workspace=ws, background=True):
+                                if event.type == TYPE_TASK_STARTED:
+                                    print(success(f"🎯 Task started: {event.data.get('task_id', '')}"))
+                                    print(info(f"   Goal: {event.data.get('goal', '')[:60]}"))
+                                    print(dim(f"   Use `wisp task status <id>` to check progress."))
+                                elif event.type == TYPE_SYSTEM:
+                                    print(info(f"   {event.data.get('message', '')}"))
+                        asyncio.run(_start_bg_task())
                     else:
                         print(error("✗ Usage: /task <goal>"))
                     continue
@@ -1295,23 +1297,6 @@ class CLITransport:
                     or self.core.session.title in ("REPL session", "(untitled)")
                 ):
                     self.core.session.title = cmd[:60].strip()
-
-                # ── Auto-detect long-horizon tasks ──
-                from wisp.long_horizon.trigger import detect_long_task
-                is_long, reason = detect_long_task(cmd, ws)
-                if force_long_task or is_long:
-                    if force_long_task:
-                        reason = "forced by --long-task flag"
-                    print(info(f"🔮 Long-horizon task detected: {reason}"))
-                    from wisp.tools.long_horizon import tool_run_long_task
-                    result = tool_run_long_task(goal=cmd)
-                    import json
-                    parsed = json.loads(result)
-                    if parsed["status"] == "ok":
-                        print(success(f"✓ {parsed['data']}"))
-                    else:
-                        print(error(f"✗ {parsed['data']}"))
-                    continue
 
                 try:
                     system = self.core._build_system_prompt(skill_name, query=cmd)
