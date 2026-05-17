@@ -248,8 +248,9 @@ You have access to tools that let you read, write, and edit files, run bash comm
                 # Drop section
                 logger.debug("ContextAssembler: dropped %s (%d tokens) to fit budget", label, size)
 
-        # Assemble final prompt
-        system = "\n\n".join(content for _, content in included)
+        # Assemble final prompt — coerce content to str in case tests pass MagicMock.
+        included_strings = [str(content) for _, content in included]
+        system = "\n\n".join(included_strings)
         if last_truncate_label:
             system += (
                 "\n\n[NOTE: Some sections were truncated or omitted "
