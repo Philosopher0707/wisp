@@ -18,12 +18,12 @@ For conversation across multiple prompts, pass auto_new_session=False:
 
 from __future__ import annotations
 
-import asyncio
 from typing import Iterator, Optional
 
 from wisp.core.agent import WispAgentCore
 from wisp.core.events import AgentEvent
 from wisp.config import WispConfig
+from wisp.async_utils import run_sync
 
 
 class Wisp:
@@ -62,7 +62,6 @@ class Wisp:
 
         self._core = WispAgentCore(config=config)
         self._skill_name = skill_name
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._closed = False
 
         # Session handling
@@ -93,20 +92,12 @@ class Wisp:
 
     def _run_impl(self, prompt: str) -> Iterator[AgentEvent]:
         """Implementation of run() as a generator — validation done in run()."""
-        if self._loop is None:
-            self._loop = asyncio.new_event_loop()
-        loop = self._loop
-
         system = self._core._build_system_prompt(self._skill_name)
-
         try:
             async_gen = self._core._arun(prompt, system=system)
-            while True:
-                try:
-                    event = loop.run_until_complete(async_gen.__anext__())
-                    yield event
-                except StopAsyncIteration:
-                    break
+            events = run_sync(async_gen)
+            for event in events:
+                yield event
         finally:
             self._core._save_session()
 
@@ -123,12 +114,10 @@ class Wisp:
             self._core.mcp.shutdown()
         except Exception:
             pass
-        if self._loop is not None:
-            try:
-                self._loop.close()
-            except Exception:
-                pass
-            self._loop = None
+        try:
+            self._core.close()
+        except Exception:
+            pass
 
     def __enter__(self):
         return self
