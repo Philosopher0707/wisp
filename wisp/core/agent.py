@@ -244,6 +244,10 @@ class WispAgentCore:
         )
         self.context_assembler = ContextAssembler()
 
+        # ── SubagentOrchestrator ──
+        from wisp.multi_agent import SubagentOrchestrator
+        self._orchestrator = SubagentOrchestrator(parent_agent=self)
+
     def close(self) -> None:
         """Release resources: MCP connections, LSP servers, and save session state.
 
@@ -1182,144 +1186,23 @@ class WispAgentCore:
     async def _spawn_subagent(self, args: dict, workspace: str) -> str:
         """Spawn a single subagent and return its output.
 
-        Async-native: delegates directly to SubagentOrchestrator.run()
-        without creating threads.  Progress events are streamed back
-        via the parent agent's event loop.
+        Thin delegate to SubagentOrchestrator.spawn_with_guards().
+        All guard logic (depth, cache, retry, adaptive timeout) lives
+        in the orchestrator.
         """
-        from wisp.multi_agent import SubagentOrchestrator, SubagentContract
-        from wisp.multi_agent.task import EventKind, OrchestratorEvent
-
-        # ── Depth and branching limits ─────────────────────────────────
-        MAX_SUBAGENT_DEPTH = 2
-        MAX_SUBAGENT_BRANCHING = 3
-
-        depth = getattr(self, "_subagent_depth", 0)
-        if depth >= MAX_SUBAGENT_DEPTH:
-            return f"[Error: subagent depth {depth} exceeds max {MAX_SUBAGENT_DEPTH}]"
-
-        branch_count = getattr(self, "_subagent_branch_count", 0)
-        if branch_count >= MAX_SUBAGENT_BRANCHING:
-            return f"[Error: subagent branching {branch_count} exceeds max {MAX_SUBAGENT_BRANCHING}]"
-
-        # ── Build contract from tool args ──────────────────────────────
-        contract = SubagentContract(
+        return await self._orchestrator.spawn_with_guards(
             task=args.get("task", ""),
             tools=args.get("tools", ["all"]),
             max_iterations=int(args.get("max_iterations", 15)),
             timeout_seconds=float(args.get("timeout_seconds", 120)),
             output_format=args.get("output_format", "text"),
-            workspace=workspace,
-            auto_approve=self.config.auto_approve,
             worktree_isolated=args.get("worktree_isolated", False),
             max_tokens=args.get("max_tokens"),
             output_schema=args.get("output_schema"),
-            _subagent_depth=depth + 1,
-            _subagent_branch_count=branch_count + 1,
+            auto_retry=args.get("auto_retry", True),
+            workspace=workspace,
+            auto_approve=self.config.auto_approve,
         )
-
-        # ── Check cache ────────────────────────────────────────────────
-        cache_key = self._subagent_cache_key(contract)
-        cache = getattr(self, "_subagent_cache", {})
-        cached = cache.get(cache_key)
-        if cached:
-            age = time.monotonic() - cached["ts"]
-            ttl = 300 if contract.output_format == "json" else 60  # 5min for structured, 1min for text
-            if age < ttl:
-                logger.info("[sub] Cache hit for %s (age=%.0fs)", contract.name, age)
-                return cached["output"]
-
-        # ── Local model fallback for simple tasks ────────────────────
-        local_model = self._pick_local_model_for_subagent(contract.task)
-        if local_model:
-            contract.model = local_model
-            logger.info("Using local model %s for subagent %s", local_model, contract.name)
-
-        # ── Adaptive timeout based on task complexity + model latency ──
-        timeout = self._adaptive_subagent_timeout(
-            contract.task, contract.timeout_seconds
-        )
-        contract.timeout_seconds = timeout
-
-        # ── Progress callback: stream subagent events to parent ──────
-        async def _progress(event: OrchestratorEvent) -> None:
-            if event.event_type == EventKind.TASK_STARTED:
-                logger.info("[sub] %s started", event.task_id)
-            elif event.event_type == EventKind.TASK_COMPLETED:
-                logger.info("[sub] %s completed", event.task_id)
-            elif event.event_type == EventKind.TASK_FAILED:
-                logger.warning("[sub] %s failed: %s", event.task_id, event.payload.get("error", ""))
-
-        contract.progress_callback = _progress
-
-        # ── Run subagent with retry ────────────────────────────────────
-        orch = SubagentOrchestrator(parent_agent=self)
-        max_retries = int(args.get("auto_retry", True)) * 2  # 0 or 2 retries
-        last_error = ""
-        result = None
-        for attempt in range(max_retries + 1):
-            try:
-                result = await orch.run(contract)
-                if result.success:
-                    # ── Schema validation ──────────────────────────────
-                    if contract.output_schema:
-                        from wisp.multi_agent.schema_validator import validate_subagent_output
-                        is_valid, validated_data, errors = validate_subagent_output(
-                            result.output, contract.output_schema, auto_retry=True
-                        )
-                        if is_valid and validated_data is not None:
-                            result.validated_output = validated_data
-                            logger.info("Subagent %s output validated against schema", contract.name)
-                        else:
-                            logger.warning("Subagent %s output failed schema validation: %s",
-                                          contract.name, "; ".join(errors))
-                            if contract.auto_retry_parse and attempt < max_retries:
-                                from wisp.multi_agent.schema_validator import build_retry_prompt
-                                contract.task = build_retry_prompt(
-                                    contract.task, contract.output_schema, result.output, errors
-                                )
-                                contract.retry_count = getattr(contract, 'retry_count', 0) + 1
-                                logger.info("Retrying subagent %s with schema feedback", contract.name)
-                                last_error = f"Schema validation failed: {'; '.join(errors)}"
-                                continue
-                    break
-                last_error = result.error or "subagent failed"
-                # Don't retry on timeout — it's a waste of time and tokens
-                if result.timed_out or "timeout" in last_error.lower():
-                    logger.warning("Subagent %s timed out — not retrying", contract.name)
-                    break
-                if attempt < max_retries:
-                    backoff = 2 ** attempt
-                    logger.warning("Subagent %s failed (attempt %d/%d), retrying in %ds: %s",
-                                   contract.name, attempt + 1, max_retries + 1, backoff, last_error)
-                    await asyncio.sleep(backoff)
-            except Exception as exc:
-                last_error = str(exc)
-                if attempt < max_retries:
-                    backoff = 2 ** attempt
-                    logger.warning("Subagent %s crashed (attempt %d/%d), retrying in %ds: %s",
-                                   contract.name, attempt + 1, max_retries + 1, backoff, last_error)
-                    await asyncio.sleep(backoff)
-                else:
-                    logger.error("Subagent %s crashed: %s", contract.name, exc, exc_info=True)
-                    return f"[Error: subagent crashed after {max_retries + 1} attempts: {exc}]"
-        else:
-            # All retries exhausted
-            return f"[Error: subagent failed after {max_retries + 1} attempts: {last_error}]"
-
-        if result is None:
-            return f"[Error: subagent failed after {max_retries + 1} attempts: {last_error}]"
-
-        # ── Return output (with size guard) ────────────────────────────
-        output = result.output
-        if len(output) > 12000:
-            output = output[:12000] + f"\n... [truncated: {len(result.output)} total chars]"
-
-        # ── Store in cache ─────────────────────────────────────────────
-        if result.success and len(output) < 50000:
-            cache[cache_key] = {"ts": time.monotonic(), "output": output}
-            self._subagent_cache = cache
-
-        return output
 
     # ── Parallel subagents ───────────────────────────────────────────
 
@@ -1335,35 +1218,7 @@ class WispAgentCore:
         Returns:
             A list of SubagentResult objects, one per spec.
         """
-        from wisp.multi_agent import SubagentOrchestrator, SubagentContract
-        try:
-            orch = SubagentOrchestrator(parent_agent=self)
-            contracts = []
-            for spec in specs:
-                if isinstance(spec, dict):
-                    contract = SubagentContract(**spec)
-                else:
-                    contract = spec
-                # Apply production optimizations
-                # Respect explicit user timeout — don't override with adaptive
-                if contract.timeout_seconds < 30.0:
-                    contract.timeout_seconds = self._adaptive_subagent_timeout(
-                        contract.task, contract.timeout_seconds
-                    )
-                local_model = self._pick_local_model_for_subagent(contract.task)
-                if local_model:
-                    contract.model = local_model
-                contracts.append(contract)
-            results = await orch.run_parallel(contracts)
-            for r in results:
-                logger.info(
-                    "Subagent %s: success=%s, duration=%.1fs, files=%s, tokens=%d",
-                    r.task_id, r.success, r.elapsed_seconds, r.files_changed, r.tokens_used,
-                )
-            return results
-        except Exception as e:
-            logger.error("Failed to spawn subagents: %s", e)
-        return []
+        return await self._orchestrator.spawn_parallel_with_guards(specs)
 
     # ── Auto parallel research ───────────────────────────────────────
 
@@ -1397,7 +1252,7 @@ class WispAgentCore:
         logger.info("Auto-parallel research triggered for: %s", prompt[:60])
 
         # Break into parallel research angles
-        angles = self._research_angles(prompt)
+        angles = self._orchestrator._research_angles(prompt)
         if len(angles) < 2:
             return []
 
@@ -1560,96 +1415,6 @@ class WispAgentCore:
             f"  ✓ Delegation complete ({len([r for r in results if r.success])}/{len(results)} succeeded)\n"
         ))
         return events
-
-    def _subagent_cache_key(self, contract: SubagentContract) -> str:
-        """Build a cache key from contract fields that affect output."""
-        import hashlib
-        parts = [
-            contract.task,
-            ",".join(sorted(contract.tools)),
-            str(contract.model or ""),
-            str(contract.workspace or ""),
-            contract.output_format,
-            str(contract.output_schema or ""),
-        ]
-        raw = "|".join(parts)
-        return hashlib.sha256(raw.encode()).hexdigest()[:32]
-
-    # ── Local model fallback helper ──────────────────────────────────
-
-    def _pick_local_model_for_subagent(self, task: str) -> Optional[str]:
-        """Return a fast local model name if the task is simple enough.
-
-        Simple tasks: read_file, list_files, short summaries.
-        Complex tasks: analysis, synthesis, multi-file edits.
-        """
-        # Only fall back if parent is using a cloud model
-        parent_model = getattr(self.config, "model", "")
-        if not parent_model or ":cloud" not in parent_model:
-            return None  # already local
-
-        # Check if any fast local model is available
-        fast_locals = ["llama3.2", "llama3.1", "qwen2.5", "phi4", "gemma2"]
-        available = self._list_local_models()
-        for candidate in fast_locals:
-            for name in available:
-                if candidate in name.lower():
-                    return name
-        return None
-
-    def _list_local_models(self) -> list[str]:
-        """Query Ollama for locally available models. Cached for 60s."""
-        now = time.monotonic()
-        cache = getattr(self, "_local_model_cache", None)
-        if cache and now - cache["ts"] < 60:
-            return cache["models"]
-        try:
-            import requests
-            url = getattr(self.config, "ollama_url", "http://localhost:11434")
-            resp = requests.get(f"{url}/api/tags", timeout=5)
-            if resp.status_code == 200:
-                models = [m["name"] for m in resp.json().get("models", [])]
-                self._local_model_cache = {"ts": now, "models": models}
-                return models
-        except Exception:
-            pass
-        return []
-
-    # ── Adaptive timeout helper ──────────────────────────────────────
-
-    def _adaptive_subagent_timeout(self, task: str, requested: float) -> float:
-        """Compute adaptive timeout based on task complexity and model latency.
-
-        Cloud models (e.g. deepseek-v4-pro:cloud) need longer timeouts than
-        local models.  Task length and tool count also affect duration.
-        """
-        model = getattr(self.config, "model", "")
-        is_cloud = ":cloud" in model or "https://" in getattr(self.config, "ollama_url", "")
-
-        # Base latency: local ~5s/turn, cloud ~15-30s/turn
-        base_per_turn = 25.0 if is_cloud else 8.0
-
-        # Estimate iterations needed from task complexity
-        estimated_iterations = 3  # minimum
-        if len(task) > 200:
-            estimated_iterations += 1
-        if len(task) > 500:
-            estimated_iterations += 1
-        # Tool-heavy tasks need more iterations
-        tool_keywords = ["read", "write", "edit", "list", "search", "run"]
-        tool_mentions = sum(1 for kw in tool_keywords if kw in task.lower())
-        estimated_iterations += min(tool_mentions, 3)
-
-        estimated_seconds = estimated_iterations * base_per_turn + 10  # overhead
-
-        # Clamp: never less than 30s, never more than 300s
-        adaptive = max(30.0, min(estimated_seconds, 300.0))
-
-        # Respect explicit user request — but enforce the 300s cap
-        # to prevent resource exhaustion and cascading timeouts
-        if requested >= 30.0:
-            return min(requested, 300.0)
-        return adaptive
 
     # ── Non-interactive task runner ──────────────────────────────────
 
