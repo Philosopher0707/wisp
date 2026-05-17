@@ -76,7 +76,7 @@ from wisp.core.events import (
     TYPE_APPROVAL_REQUEST,
 )
 from wisp.transport.server import ServerTransport
-from wisp.session import SessionManager
+from wisp.session_store import get_store
 
 logger = logging.getLogger(__name__)
 
@@ -453,10 +453,10 @@ async def _run_agent_headless(
 
     session = None
     if session_id:
-        sm = SessionManager()
+        sm = get_store()
         session = sm.load(session_id)
         if session is None:
-            resolved = sm.get_session_id_from_fragment(session_id)
+            resolved = sm.resolve_session_id(session_id)
             if resolved:
                 session = sm.load(resolved)
 
@@ -550,7 +550,7 @@ async def list_models():
 
 @app.get("/api/sessions", dependencies=[Depends(verify_api_key)])
 async def list_sessions():
-    sm = SessionManager()
+    sm = get_store()
     sessions = sm.list_sessions()
     # list_sessions returns list[dict]; strip non-serializable keys
     for s in sessions:
@@ -560,10 +560,10 @@ async def list_sessions():
 
 @app.get("/api/sessions/{session_id}", dependencies=[Depends(verify_api_key)])
 async def get_session(session_id: str):
-    sm = SessionManager()
+    sm = get_store()
     session = sm.load(session_id)
     if session is None:
-        resolved = sm.get_session_id_from_fragment(session_id)
+        resolved = sm.resolve_session_id(session_id)
         if resolved:
             session = sm.load(resolved)
     if session is None:
@@ -573,7 +573,7 @@ async def get_session(session_id: str):
 
 @app.delete("/api/sessions/{session_id}", dependencies=[Depends(verify_api_key)])
 async def delete_session(session_id: str):
-    sm = SessionManager()
+    sm = get_store()
     ok = sm.delete(session_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -586,7 +586,7 @@ class RenameRequest(BaseModel):
 
 @app.patch("/api/sessions/{session_id}", dependencies=[Depends(verify_api_key)])
 async def rename_session(session_id: str, req: RenameRequest):
-    sm = SessionManager()
+    sm = get_store()
     session = sm.load(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -605,7 +605,7 @@ async def fork_session(req: ForkRequest):
     from wisp.session import Session
     import copy, uuid
 
-    sm = SessionManager()
+    sm = get_store()
     now = _now_iso()
     if req.title:
         slug = req.title[:60].strip()
@@ -2200,10 +2200,10 @@ async def agent_websocket(websocket: WebSocket, api_key: str = Query(default="")
                     session_id = msg.get("session_id")
                     session = None
                     if session_id:
-                        sm = SessionManager()
+                        sm = get_store()
                         session = sm.load(session_id)
                         if session is None:
-                            resolved = sm.get_session_id_from_fragment(session_id)
+                            resolved = sm.resolve_session_id(session_id)
                             if resolved:
                                 session = sm.load(resolved)
 

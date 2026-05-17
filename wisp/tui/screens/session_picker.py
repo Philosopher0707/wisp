@@ -30,8 +30,8 @@ class SessionPickerScreen(Widget):
 
     def _load_sessions(self) -> None:
         try:
-            from wisp.session import SessionManager
-            mgr = SessionManager()
+            from wisp.session_store import get_store
+            mgr = get_store()
             self._all_sessions = mgr.list_sessions()
         except Exception:
             self._all_sessions = []

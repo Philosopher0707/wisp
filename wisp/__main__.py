@@ -9,7 +9,8 @@ from wisp.config import WispConfig, load_config, save_config
 from wisp.agent import WispAgent
 from wisp.providers import get_provider
 from wisp.skills import discover_skills
-from wisp.session import SessionManager, format_session_preview
+from wisp.session import format_session_preview
+from wisp.session_store import get_store
 from wisp.colors import success, error, warning, info, dim, accent
 
 
@@ -212,7 +213,7 @@ def cmd_print(prompt, model=None, session_id=None, output_format="json", quiet=F
             import asyncio
             from wisp.config import WispConfig as _WispConfig
             from wisp.core.agent import WispAgentCore as _WispAgentCore
-            from wisp.session import SessionManager as _SessionManager
+            from wisp.session_store import get_store as _get_store
             import time as _time
 
             config = _WispConfig()
@@ -225,10 +226,10 @@ def cmd_print(prompt, model=None, session_id=None, output_format="json", quiet=F
 
             s = None
             if session_id:
-                sm = _SessionManager()
+                sm = _get_store()
                 s = sm.load(session_id)
                 if s is None:
-                    resolved = sm.get_session_id_from_fragment(session_id)
+                    resolved = sm.resolve_session_id(session_id)
                     if resolved:
                         s = sm.load(resolved)
 
@@ -927,7 +928,7 @@ def cmd_task(args: list[str]):
 
 def cmd_session_list():
     """List all saved sessions."""
-    mgr = SessionManager()
+    mgr = get_store()
     sessions = mgr.list_sessions()
     if not sessions:
         print(dim("No saved sessions."))
@@ -952,7 +953,7 @@ def cmd_session_list():
         print()
 
 
-def _resolve_session_or_fragment(mgr: SessionManager, session_id: str):
+def _resolve_session_or_fragment(mgr, session_id: str):
     """Resolve a session ID, trying exact match then prefix fragment match."""
     session = mgr.load(session_id)
     if session is None:
@@ -964,7 +965,7 @@ def _resolve_session_or_fragment(mgr: SessionManager, session_id: str):
 
 def cmd_session_show(session_id: str):
     """Show details of a specific session."""
-    mgr = SessionManager()
+    mgr = get_store()
     session = _resolve_session_or_fragment(mgr, session_id)
     if session is None:
         print(error(f"✗ Session '{session_id}' not found."))
@@ -993,7 +994,7 @@ def cmd_session_show(session_id: str):
 
 def cmd_session_delete(session_id: str):
     """Delete a session."""
-    mgr = SessionManager()
+    mgr = get_store()
     session = _resolve_session_or_fragment(mgr, session_id)
     if session is None:
         print(error(f"✗ Session '{session_id}' not found."))
@@ -1005,7 +1006,7 @@ def cmd_session_delete(session_id: str):
 
 def cmd_session_compact(session_id: str, keep: int = 6):
     """Compact a session by summarizing old messages and keeping recent ones."""
-    mgr = SessionManager()
+    mgr = get_store()
     session = _resolve_session_or_fragment(mgr, session_id)
     if session is None:
         print(error(f"✗ Session '{session_id}' not found."))
@@ -1038,7 +1039,7 @@ def cmd_session_trim(session_id: str, keep: int = 10):
         print(error(f"✗ keep must be at least 1, got {keep}"))
         return
 
-    mgr = SessionManager()
+    mgr = get_store()
     session = _resolve_session_or_fragment(mgr, session_id)
     if session is None:
         print(error(f"✗ Session '{session_id}' not found."))

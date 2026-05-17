@@ -82,7 +82,8 @@ from typing import Any, Awaitable, Callable, Optional
 
 from wisp.agent import WispAgent
 from wisp.config import WispConfig
-from wisp.session import Session, SessionManager
+from wisp.session import Session
+from wisp.session_store import get_store
 
 from .protocol import AgentEvent, EventType, TaskAssignment, TaskResult
 from .registry import AgentRegistry, AgentRecord, AgentStatus
@@ -801,7 +802,8 @@ def _run_subagent_worker(contract_dict: dict, conn, parent_workspace: str):
     import time as _time
 
     from wisp.config import WispConfig
-    from wisp.session import Session, SessionManager
+    from wisp.session import Session
+    from wisp.session_store import get_store
     from wisp.multi_agent.orchestrator import SubagentOrchestrator
     from wisp.multi_agent.task import SubagentContract, SubagentResult
 
@@ -1006,7 +1008,7 @@ class SubagentOrchestrator:
             or Path.cwd().resolve()
         )
         self._worktrees_root = self.workspace / ".wisp" / "worktrees"
-        self._session_mgr = SessionManager()
+        self._session_mgr = get_store()
         self._shutdown = False
         # ── Result persistence ───────────────────────────────────────────
         self._persist_path = self.workspace / ".wisp" / "subagent_results.jsonl"

@@ -55,9 +55,9 @@ ACP_PROTOCOL_VERSION = "2025-03-26"
 class AcpAdapter:
     """Main ACP adapter that bridges Zed and Wisp."""
 
-    def __init__(self, workspace: str = "."):
+    def __init__(self, workspace: str = ".", session_mgr: Optional[AcpSessionManager] = None):
         self.workspace = workspace
-        self.session_mgr = AcpSessionManager()
+        self.session_mgr = session_mgr or AcpSessionManager()
         self.initialized = False
         self.client_capabilities: Optional[dict] = None
         self._lock = threading.Lock()

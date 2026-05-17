@@ -151,6 +151,9 @@ class UnifiedSessionStore:
         """Save a session (and any attached runs)."""
         self._save(session)
 
+    # Backward-compatible alias used by WispAgentCore
+    save = save_session
+
     def delete_session(self, session_id: str) -> bool:
         """Delete a session and all its runs."""
         # Delete runs first
