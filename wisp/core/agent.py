@@ -510,12 +510,12 @@ class WispAgentCore:
             logger.warning("Failed to save session summary: %s", e)
 
     def _resolve_session(self, session_id: str):
-        loaded = self.session_mgr.load(session_id)
+        loaded = self.session_mgr.load_session(session_id)
         if loaded is not None:
             return loaded
         resolved = self.session_mgr.get_session_id_from_fragment(session_id)
         if resolved:
-            return self.session_mgr.load(resolved)
+            return self.session_mgr.load_session(resolved)
         return None
 
     def _start_new_session(self):

@@ -8,6 +8,7 @@ with automatic reconnect via asyncio tasks.
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import logging
 from typing import Any, Awaitable, Callable
@@ -46,7 +47,8 @@ class WispWSClient:
         self._connect_task = asyncio.create_task(self._connect_loop())
 
     async def _connect_loop(self) -> None:
-        """Reconnect loop that runs in background."""
+        """Reconnect loop. Reports first failure once, then retries silently."""
+        _did_report = False
         while self._running:
             try:
                 import websockets
@@ -56,28 +58,27 @@ class WispWSClient:
                     self._ws = ws
                     if self.on_status:
                         await self.on_status("Connected", "info")
+                    _did_report = False
                     await self._listen(ws)
             except ConnectionRefusedError:
                 logger.debug("WebSocket connection refused — server not running")
-                if self._running and self.on_status:
-                    await self.on_status("Server not running — retrying...", "warning")
-                    await asyncio.sleep(3)
+                if self._running and self.on_status and not _did_report:
+                    await self.on_status("Server not running — run `wisp server` to start", "warning")
+                    _did_report = True
+                await asyncio.sleep(3)
             except OSError as e:
-                import errno
-                err_name = errno.errorcode.get(e.errno, f"errno {e.errno}") if e.errno else ""
-                reason = f"{err_name}: {e.strerror}" if err_name else str(e)
-                logger.debug("WebSocket OS error: %s", reason)
-                if self._running and self.on_status:
-                    await self.on_status(f"Connection failed ({reason}) — retrying...", "warning")
-                    await asyncio.sleep(3)
+                err_name = errno.errorcode.get(e.errno, f"errno {e.errno}") if e.errno else "?"
+                logger.debug("WebSocket OS error: %s: %s", err_name, e.strerror or str(e))
+                if self._running and self.on_status and not _did_report:
+                    await self.on_status("Server not running — run `wisp server` to start", "warning")
+                    _did_report = True
+                await asyncio.sleep(3)
             except Exception as e:
-                logger.debug("WebSocket connection attempt: %s", e)
-                err_type = type(e).__name__
-                reason = getattr(e, 'strerror', None) or str(e)
-                if self._running:
-                    if self.on_status:
-                        await self.on_status("Server unavailable — retrying...", "warning")
-                    await asyncio.sleep(3)
+                logger.debug("WebSocket error: %s: %s", type(e).__name__, e)
+                if self._running and self.on_status and not _did_report:
+                    await self.on_status("Server not running — run `wisp server` to start", "warning")
+                    _did_report = True
+                await asyncio.sleep(3)
             finally:
                 self._ws = None
 

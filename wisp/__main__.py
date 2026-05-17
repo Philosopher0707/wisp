@@ -61,7 +61,7 @@ def cmd_repl(model=None, skill=None, workspace=None, session_id=None, show_think
         config.auto_approve = True
 
     agent = WispAgent(config)
-    agent.repl(skill_name=skill, session_id=session_id, force_long_task=long_task)
+    agent.repl(skill_name=skill, session_id=session_id)
 
 
 def cmd_tui(model=None, workspace=None, show_thinking=False, auto_approve=False):
@@ -953,7 +953,7 @@ def main():
     def extract_global_flags(args):
         """Extract global flags from args list, return remaining args."""
         nonlocal flags_model, flags_skill, flags_session, flags_workspace, flags_auto, flags_show_thinking
-        nonlocal flags_print, flags_output_format, flags_quiet, flags_long_task
+        nonlocal flags_print, flags_output_format, flags_quiet
         result = []
         i = 0
         while i < len(args):
@@ -997,10 +997,10 @@ def main():
             if not rest:
                 print("✗ Please provide a prompt.")
                 return
-            cmd_run(" ".join(rest), flags_model, flags_skill, flags_workspace, flags_auto, flags_session, flags_show_thinking, flags_long_task)
+            cmd_run(" ".join(rest), flags_model, flags_skill, flags_workspace, flags_auto, flags_session, flags_show_thinking)
 
         elif first == "repl":
-            cmd_repl(flags_model, flags_skill, flags_workspace, flags_session, flags_show_thinking, flags_auto, flags_long_task)
+            cmd_repl(flags_model, flags_skill, flags_workspace, flags_session, flags_show_thinking, flags_auto)
 
         elif first == "tui":
             cmd_tui(flags_model, flags_workspace, flags_show_thinking, flags_auto)

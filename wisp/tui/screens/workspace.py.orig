@@ -108,10 +108,21 @@ class WorkspaceScreen(Widget):
         status.is_streaming = False
 
     async def _on_error(self, message: str) -> None:
-        pass
+        try:
+            status = self.query_one("#status-bar", StatusBar)
+            status.connection_state = f"error: {message}"
+            status.is_streaming = False
+        except Exception:
+            pass
 
     async def _on_status(self, message: str, level: str) -> None:
-        pass
+        try:
+            status = self.query_one("#status-bar", StatusBar)
+            status.connection_state = message
+            if level == "error":
+                status.is_streaming = False
+        except Exception:
+            pass
 
     def on_input_bar_submitted(self, event: InputBar.Submitted) -> None:
         chat = self.query_one("#chat-pane", MessageList)

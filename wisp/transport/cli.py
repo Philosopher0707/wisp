@@ -1078,7 +1078,7 @@ class CLITransport:
         print(_box("\n".join(lines), title="📋 Continuing Session"))
         print()
 
-    def repl(self, skill_name: Optional[str] = None, session_id: Optional[str] = None, force_long_task: bool = False) -> None:
+    def repl(self, skill_name: Optional[str] = None, session_id: Optional[str] = None) -> None:
         """Interactive REPL — continuous conversation until the user exits."""
         _install_signal_handler()
 

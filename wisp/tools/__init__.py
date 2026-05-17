@@ -90,8 +90,7 @@ _SUBMODULE_OVERRIDES = {
     "mark_step_done": tool_mark_step_done,
     "update_plan": tool_update_plan,
     "diagnose": tool_diagnose,
-    "cleanup_tasks": tool_cleanup_tasks,
-    }
+}
 
 # Apply overrides to the legacy registry
 for _name, _impl in _SUBMODULE_OVERRIDES.items():

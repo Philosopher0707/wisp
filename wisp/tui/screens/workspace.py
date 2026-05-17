@@ -42,6 +42,7 @@ class WorkspaceScreen(Widget):
         self.wisp_config = config or WispConfig()
         self._context_visible = False
         self._ws_client: WispWSClient | None = None
+        self._pending_prompt: str | None = None
 
     def compose(self) -> ComposeResult:
         yield TitleBar(id="title-bar")
@@ -95,7 +96,17 @@ class WorkspaceScreen(Widget):
         asyncio.create_task(self._ws_client.connect())
 
     async def _on_token(self, phase: str, text: str) -> None:
-        pass
+        try:
+            chat = self.query_one("#chat-pane", MessageList)
+            if chat.children:
+                last = chat.children[-1]
+                if isinstance(last, AssistantMessage):
+                    if phase == "thinking":
+                        last.thinking = (last.thinking or "") + text
+                    elif phase == "content":
+                        last.content = (last.content or "") + text
+        except Exception:
+            pass
 
     async def _on_tool_call(self, name: str, args: dict) -> None:
         pass
@@ -104,8 +115,11 @@ class WorkspaceScreen(Widget):
         pass
 
     async def _on_complete(self, session_id: str = "") -> None:
-        status = self.query_one("#status-bar", StatusBar)
-        status.is_streaming = False
+        try:
+            status = self.query_one("#status-bar", StatusBar)
+            status.is_streaming = False
+        except Exception:
+            pass
 
     async def _on_error(self, message: str) -> None:
         try:
@@ -123,18 +137,35 @@ class WorkspaceScreen(Widget):
                 status.is_streaming = False
         except Exception:
             pass
+        # If we have a pending prompt and just connected, flush it
+        if message == "Connected" and self._pending_prompt:
+            pending = self._pending_prompt
+            self._pending_prompt = None
+            if self._ws_client and self._ws_client._ws:
+                import asyncio
+                asyncio.create_task(
+                    self._ws_client.send_prompt(pending, session_id=self.session_id)
+                )
 
     def on_input_bar_submitted(self, event: InputBar.Submitted) -> None:
+        import asyncio
         chat = self.query_one("#chat-pane", MessageList)
         chat.mount(UserMessage(event.text))
         chat.mount(AssistantMessage())
+
+        if self._ws_client is None or self._ws_client._ws is None:
+            # Not connected — stash prompt and wait for connection
+            status = self.query_one("#status-bar", StatusBar)
+            self._pending_prompt = event.text
+            status.is_streaming = True
+            status.connection_state = "Waiting for server..."
+            return
+
         status = self.query_one("#status-bar", StatusBar)
         status.is_streaming = True
-        if self._ws_client:
-            import asyncio
-            asyncio.create_task(
-                self._ws_client.send_prompt(event.text, session_id=self.session_id)
-            )
+        asyncio.create_task(
+            self._ws_client.send_prompt(event.text, session_id=self.session_id)
+        )
 
     def on_activity_bar_icon_button_pressed(self, event) -> None:
         tabs = self.query_one("#tabs", TabbedContent)

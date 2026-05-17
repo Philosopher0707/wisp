@@ -61,6 +61,7 @@ class Session:
     messages: list[dict] = field(default_factory=list)
     title: str = ""
     compaction_history: list[dict] = field(default_factory=list)
+    task_ids: list[str] = field(default_factory=list)
 
     @classmethod
     def create(cls, model: str, workspace: str, first_prompt: str) -> "Session":

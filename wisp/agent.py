@@ -48,10 +48,10 @@ class WispAgent(WispAgentCore):
         transport = CLITransport(self)
         transport.run(prompt, skill_name=skill_name, session_id=session_id)
 
-    def repl(self, skill_name: Optional[str] = None, session_id: Optional[str] = None, force_long_task: bool = False):
+    def repl(self, skill_name: Optional[str] = None, session_id: Optional[str] = None):
         """Interactive REPL — continuous conversation until the user exits."""
         transport = CLITransport(self)
-        transport.repl(skill_name, session_id, force_long_task=force_long_task)
+        transport.repl(skill_name, session_id)
 
     def _run_turn_streaming(self, system: str) -> dict:
         """Backward compat: run one turn via core events, return raw response dict.

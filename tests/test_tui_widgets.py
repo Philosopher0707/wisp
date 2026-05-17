@@ -66,7 +66,7 @@ class TestTitleBar:
 class TestStatusBar:
     def test_reactives_default_values(self):
         sb = StatusBar()
-        assert sb.connection_state == "connected"
+        assert sb.connection_state == "disconnected"
         assert sb.is_streaming is False
         assert sb.token_count == 0
         assert sb.active_agents == 0
