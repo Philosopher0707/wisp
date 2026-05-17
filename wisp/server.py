@@ -397,10 +397,16 @@ class MemoryTransport:
         self.iterations: int = 0
 
     async def approval_handler(self, name: str, args: dict, reason: str) -> tuple[bool, Optional[dict]]:
-        """Auto-approve or deny tool calls based on permission mode.
+        """Headless approval handler.
 
-        In CI/headless mode, dangerous operations are denied unless
-        permission_mode is ``full``.
+        In headless mode there is no user to ask, so all tools that reach
+        this handler are denied unless permission_mode is ``full``.
+
+        The real enforcement matrix lives in ``ToolExecutor``:
+        - ``_check_permission_mode()`` — hard blocks (read_only blocks all writes)
+        - ``_needs_forced_approval()`` — forces certain tools through this
+          handler even when ``auto_approve=True`` (auto_edit→bash/git,
+          ask_all→all writes)
         """
         if self.permission_mode == "full":
             return (True, None)
@@ -1063,17 +1069,16 @@ async def swarm_run_api(req: SwarmRunRequest):
         }
         if ws_msg:
             entry["ws_message"] = ws_msg
-        # SQLite WAL handles concurrency - no explicit lock needed
-            event_log.append(entry)
+        event_log.append(entry)
 
-    # SQLite WAL handles concurrency - no explicit lock needed
-        _swarm_store[run_id] = {
-            "orchestrator": orch,
-            "event_log": event_log,
-            "goal": req.goal,
-            "roles": roles,
-            "start_time": time.monotonic(),
-        }
+    # Store initial metadata (orchestrator is process-local, not serializable to SQLite)
+    _swarm_store[run_id] = {
+        "orchestrator": orch,
+        "event_log": event_log,
+        "goal": req.goal,
+        "roles": roles,
+        "start_time": time.monotonic(),
+    }
 
     async def _run():
         try:
@@ -1087,11 +1092,10 @@ async def swarm_run_api(req: SwarmRunRequest):
         except Exception as e:
             logger.error("Swarm run %s error: %s", run_id, e)
         finally:
-            # SQLite WAL handles concurrency - no explicit lock needed
-                entry = _swarm_store.get(run_id)
-                if entry:
-                    entry["finished"] = True
-                    entry["end_time"] = time.monotonic()
+            entry = _swarm_store.get(run_id)
+            if entry:
+                entry["finished"] = True
+                entry["end_time"] = time.monotonic()
 
     asyncio.create_task(_run())
     return {"run_id": run_id, "status": "running", "roles": roles}
