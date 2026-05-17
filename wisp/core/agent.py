@@ -110,16 +110,6 @@ You have access to tools that let you read, write, and edit files, run bash comm
 - plan_task: Create a structured plan with subtasks and dependencies
 - mark_step_done: Mark a plan task as completed
 - update_plan: Update a plan task's status
-- run_long_task: Create a new long-horizon task with an initial plan for complex multi-step goals
-- task_status: Check the current status and progress of a long-horizon task
-- list_tasks: List all long-horizon tasks filtered by status
-- pause_task: Pause a running long-horizon task, saving its current state
-- resume_task: Resume a paused or crashed long-horizon task
-- cancel_task: Cancel a long-horizon task, marking it as failed
-- cleanup_tasks: Clean up old completed/failed tasks by age
-- task_output: Get full output and artifacts from a completed task
-- export_task: Export a task checkpoint to JSON for backup
-- import_task: Import a task checkpoint from JSON
 """
 
 
@@ -1296,20 +1286,6 @@ class WispAgentCore:
             if func_name == "remember":
                 self._invalidate_system_prompt_cache()
 
-            # ── Associate long-horizon tasks with session ──
-            if func_name == "run_long_task" and self.session:
-                try:
-                    import re
-                    if isinstance(result, str):
-                        match = re.search(r"task-\d{8}-\d{6}-[a-f0-9]+", result)
-                        if match:
-                            task_id = match.group(0)
-                            if task_id not in self.session.task_ids:
-                                self.session.task_ids.append(task_id)
-                                logger.debug("Associated task %s with session %s", task_id, self.session.id)
-                except Exception:
-                    pass
-
             yield tool_result_event(func_name, result, duration_ms=duration_ms)
             # Extract human-readable summary for the LLM from structured dict results
             if isinstance(result, dict) and "data" in result:
@@ -1888,99 +1864,3 @@ class WispAgentCore:
 
         return {"success": True, "output": final_content}
 
-    # ── Long-horizon task runner ─────────────────────────────────────
-
-    async def run_long_task(
-        self,
-        goal: str,
-        workspace: str = ".",
-        resume_from: str | None = None,
-        background: bool = False,
-    ) -> AsyncIterator[AgentEvent]:
-        """Run a long-horizon task, yielding progress events.
-
-        Creates a LongHorizonRunner and streams all task events.
-        Use this for complex multi-step goals that need checkpointing.
-
-        Args:
-            goal: Task description. Ignored if resume_from is provided.
-            workspace: Working directory for tool execution.
-            resume_from: Task ID to resume from checkpoint.
-            background: If True, start task in background and yield only
-                the initial task_started event. The task continues running
-                independently. Use `wisp task status <id>` to check progress.
-
-        Yields:
-            AgentEvent for each state change (step started, completed, failed, etc.)
-            When background=True, yields only task_started and a system event.
-        """
-        from wisp.long_horizon.runner import LongHorizonRunner
-        from wisp.long_horizon.storage import TaskStorage
-        from wisp.long_horizon.state import TaskState, TaskStatus
-        from wisp.core.events import task_started
-
-        storage = TaskStorage()
-        runner = LongHorizonRunner(
-            agent=self,
-            storage=storage,
-        )
-
-        if background:
-            # Create or load state
-            if resume_from:
-                state = storage.load(resume_from)
-                if state is None:
-                    yield system_event(f"Task not found: {resume_from}", level="error")
-                    return
-                state.set_status(TaskStatus.RUNNING)
-                storage.save(state)
-                task_id = resume_from
-            else:
-                state = await runner._create_initial_state(goal, workspace)
-                state.set_status(TaskStatus.RUNNING)
-                storage.save(state)
-                task_id = state.task_id
-
-            # Start background execution
-            async def _bg_run():
-                try:
-                    final_status = "unknown"
-                    async for event in runner._run_loop(state, workspace):
-                        # Log completion/failure for user visibility
-                        if event.type == "task_completed":
-                            final_status = "completed"
-                            print(
-                                f"\n✅ Task completed: {event.data.get('task_id', '')} "
-                                f"({event.data.get('completed_steps', 0)}/{event.data.get('total_steps', 0)} steps)",
-                                file=sys.stderr,
-                            )
-                        elif event.type == "task_failed":
-                            final_status = "failed"
-                            print(
-                                f"\n❌ Task failed: {event.data.get('task_id', '')} — {event.data.get('reason', '')[:100]}",
-                                file=sys.stderr,
-                            )
-                    if final_status == "unknown":
-                        # Loop finished without completion/failure event
-                        if state.is_complete:
-                            print(f"\n✅ Task completed: {task_id}", file=sys.stderr)
-                        elif state.is_failed:
-                            print(f"\n❌ Task failed: {task_id}", file=sys.stderr)
-                except asyncio.CancelledError:
-                    state.set_status(TaskStatus.PAUSED)
-                    storage.save(state)
-                    raise
-
-            asyncio.create_task(_bg_run(), name=f"long-task-{task_id}")
-
-            yield task_started(task_id, state.goal, state.total_steps)
-            yield system_event(
-                f"Task {task_id} running in background. "
-                f"Use `wisp task status {task_id}` to check progress.",
-                level="info",
-            )
-            return
-
-        # Foreground mode: stream all events
-        async for event in runner.run(goal=goal, resume_from=resume_from, workspace=workspace):
-            yield event

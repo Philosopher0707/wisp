@@ -30,7 +30,7 @@ def cmd_server(host="0.0.0.0", port=8000, no_auth=False):
     server_main(host=host, port=port, no_auth=no_auth)
 
 
-def cmd_run(prompt, model=None, skill=None, workspace=None, auto_approve=False, session_id=None, show_thinking=False, long_task=False):
+def cmd_run(prompt, model=None, skill=None, workspace=None, auto_approve=False, session_id=None, show_thinking=False):
     """Run Wisp with a prompt."""
     config = WispConfig()
     if model:
@@ -44,23 +44,11 @@ def cmd_run(prompt, model=None, skill=None, workspace=None, auto_approve=False, 
 
     agent = WispAgent(config)
     
-    # Force long-task mode if requested
-    if long_task:
-        import asyncio
-        async def _run_long():
-            async for event in agent.core.run_long_task(goal=prompt, workspace=config.workspace or ".", background=True):
-                if event.type == "task_started":
-                    print(f"🎯 Task started: {event.data.get('task_id', '')}")
-                    print(f"   Goal: {event.data.get('goal', '')[:60]}")
-                elif event.type == "system":
-                    print(f"   {event.data.get('message', '')}")
-        asyncio.run(_run_long())
-        return
     
     agent.run(prompt, skill_name=skill, session_id=session_id)
 
 
-def cmd_repl(model=None, skill=None, workspace=None, session_id=None, show_thinking=False, auto_approve=False, long_task=False):
+def cmd_repl(model=None, skill=None, workspace=None, session_id=None, show_thinking=False, auto_approve=False):
     """Run Wisp in interactive REPL mode."""
     config = WispConfig()
     if model:
@@ -757,175 +745,6 @@ def cmd_acp(args: list[str]):
     acp_main(args)
 
 
-# ── Task commands ─────────────────────────────────────────────────────
-
-def cmd_task(args: list[str]):
-    """Manage long-horizon tasks."""
-    from wisp.long_horizon.storage import TaskStorage
-    from wisp.long_horizon.state import TaskStatus
-
-    storage = TaskStorage()
-
-    if not args or args[0] == "list":
-        tasks = storage.list_all()
-        if not tasks:
-            print(dim("No long-horizon tasks."))
-            print(dim("  Create one: wisp task start 'migrate Flask to FastAPI'"))
-            return
-
-        print(info(f"Long-horizon tasks ({len(tasks)}):\n"))
-        for t in tasks:
-            tid = t["task_id"]
-            status = t["status"]
-            progress = f"{t.get('current_step', 0)}/{t.get('total_steps', 0)}"
-            goal = t["goal"][:50]
-            status_color = success if status == "completed" else error if status == "failed" else warning if status == "running" else info
-            print(f"  {status_color(status):12} {progress:>6}  {goal}")
-        return
-
-    sub = args[0]
-    rest = args[1:]
-
-    if sub == "status":
-        if not rest:
-            print(error("✗ Usage: wisp task status <task-id>"))
-            return
-        task_id = rest[0]
-        state = storage.load(task_id)
-        if state is None:
-            print(error(f"✗ Task not found: {task_id}"))
-            return
-
-        current = state.current_step
-        status_color = success if state.is_complete else error if state.is_failed else warning if state.status == TaskStatus.RUNNING else info
-        print(info(f"Task: {state.task_id}"))
-        print(f"  Goal:     {state.goal}")
-        print(f"  Status:   {status_color(state.status.value)}")
-        print(f"  Progress: {state.current_step_index}/{state.total_steps} ({round(state.progress_pct, 1)}%)")
-        print(f"  Completed: {state.completed_count}  Failed: {state.failed_count}")
-        print(f"  Plan version: {state.plan_version}")
-        if current:
-            print(f"  Current step: {current.description}")
-        if state.last_checkpoint:
-            print(f"  Last checkpoint: {state.last_checkpoint}")
-        return
-
-    if sub == "start":
-        if not rest:
-            print(error("✗ Usage: wisp task start <goal>"))
-            return
-        goal = " ".join(rest)
-        from wisp.tools.long_horizon import tool_run_long_task
-        result = tool_run_long_task(goal=goal)
-        parsed = json.loads(result)
-        print(success(f"✓ {parsed['data']}"))
-        return
-
-    if sub == "pause":
-        if not rest:
-            print(error("✗ Usage: wisp task pause <task-id>"))
-            return
-        from wisp.tools.long_horizon import tool_pause_task
-        result = tool_pause_task(task_id=rest[0])
-        parsed = json.loads(result)
-        print(info(parsed["data"]))
-        return
-
-    if sub == "resume":
-        if not rest:
-            print(error("✗ Usage: wisp task resume <task-id>"))
-            return
-        from wisp.tools.long_horizon import tool_resume_task
-        result = tool_resume_task(task_id=rest[0])
-        parsed = json.loads(result)
-        print(info(parsed["data"]))
-        return
-
-    if sub == "cancel":
-        if not rest:
-            print(error("✗ Usage: wisp task cancel <task-id>"))
-            return
-        from wisp.tools.long_horizon import tool_cancel_task
-        result = tool_cancel_task(task_id=rest[0])
-        parsed = json.loads(result)
-        print(info(parsed["data"]))
-        return
-
-    if sub == "cleanup":
-        status_filter = rest[0] if rest else "completed"
-        older_than = 7
-        dry_run = True
-        # Parse flags: --force, --days N
-        i = 1 if rest else 0
-        while i < len(rest):
-            if rest[i] == "--force":
-                dry_run = False
-            elif rest[i] == "--days" and i + 1 < len(rest):
-                try:
-                    older_than = int(rest[i + 1])
-                    i += 1
-                except ValueError:
-                    pass
-            i += 1
-        from wisp.tools.long_horizon import tool_cleanup_tasks
-        result = tool_cleanup_tasks(
-            status_filter=status_filter,
-            older_than_days=older_than,
-            dry_run=dry_run,
-        )
-        parsed = json.loads(result)
-        print(info(parsed["data"]))
-        if dry_run and parsed["metadata"]["removed"] > 0:
-            print(dim(f"\n  Run with --force to actually delete."))
-        return
-
-    if sub == "output":
-        if not rest:
-            print(error("✗ Usage: wisp task output <task-id>"))
-            return
-        from wisp.tools.long_horizon import tool_task_output
-        result = tool_task_output(task_id=rest[0])
-        parsed = json.loads(result)
-        if parsed["status"] == "ok":
-            print(info(parsed["data"]))
-        else:
-            print(error(parsed["data"]))
-        return
-
-    if sub == "export":
-        if not rest:
-            print(error("✗ Usage: wisp task export <task-id> [output-path]"))
-            return
-        task_id = rest[0]
-        output_path = rest[1] if len(rest) > 1 else ""
-        from wisp.tools.long_horizon import tool_export_task
-        result = tool_export_task(task_id=task_id, output_path=output_path)
-        parsed = json.loads(result)
-        if parsed["status"] == "ok":
-            print(success(parsed["data"]))
-        else:
-            print(error(parsed["data"]))
-        return
-
-    if sub == "import":
-        if not rest:
-            print(error("✗ Usage: wisp task import <path>"))
-            return
-        from wisp.tools.long_horizon import tool_import_task
-        result = tool_import_task(path=rest[0])
-        parsed = json.loads(result)
-        if parsed["status"] == "ok":
-            print(success(parsed["data"]))
-        else:
-            print(error(parsed["data"]))
-        return
-
-    print(error(f"✗ Unknown task subcommand: {sub}"))
-    print(dim("  Try: list, status <id>, start <goal>, pause <id>, resume <id>, cancel <id>, output <id>, export <id> [path], import <path>, cleanup [status] [--force] [--days N]"))
-
-
-# ── Session commands ─────────────────────────────────────────────────
-
 def cmd_session_list():
     """List all saved sessions."""
     mgr = get_store()
@@ -975,19 +794,6 @@ def cmd_session_show(session_id: str):
     print(format_session_preview(session))
     print()
 
-    # Show associated tasks
-    if session.task_ids:
-        from wisp.long_horizon.storage import TaskStorage
-        storage = TaskStorage()
-        print(info(f"Associated tasks ({len(session.task_ids)}):"))
-        for tid in session.task_ids:
-            t = storage.load(tid)
-            if t:
-                status_color = success if t.is_complete else error if t.is_failed else warning if t.status.value == "running" else info
-                print(f"  {status_color(t.status.value):12} {t.progress_pct:5.1f}%  {t.goal[:50]}")
-            else:
-                print(f"  {dim('(missing)')}      {tid}")
-        print()
 
     print(dim(f"  Continue: wisp -S {session.id} \"your next question\""))
 
@@ -1076,7 +882,6 @@ Options:
   --print <prompt>         Headless mode: run prompt, print JSON result, exit
   --output-format <fmt>    Output format for --print: json | stream-json (default: json)
   --quiet                  Suppress all output except final result
-  --long-task              Force long-horizon task mode for this prompt
   --version                Show version
 
 Subcommands:
@@ -1091,7 +896,6 @@ Subcommands:
   session compact <id> [n] Summarize old messages, keep last N (default: 6)
   task list                List all long-horizon tasks
   task status <id>         Show task progress and current step
-  task start <goal>        Start a new long-horizon task
   task pause <id>          Pause a running task
   task resume <id>         Resume a paused/crashed task
   task cancel <id>         Cancel a task
@@ -1145,7 +949,6 @@ def main():
     flags_print = None
     flags_output_format = "json"
     flags_quiet = False
-    flags_long_task = False
 
     def extract_global_flags(args):
         """Extract global flags from args list, return remaining args."""
@@ -1181,9 +984,6 @@ def main():
                 i += 2
             elif a == "--quiet":
                 flags_quiet = True
-                i += 1
-            elif a == "--long-task":
-                flags_long_task = True
                 i += 1
             else:
                 result.append(a)

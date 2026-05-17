@@ -60,18 +60,6 @@ from wisp.tools.memory import tool_remember, tool_recall
 from wisp.tools.search import tool_search_symbols, tool_search_codebase
 from wisp.tools.plan import tool_plan_task, tool_mark_step_done, tool_update_plan
 from wisp.tools.diagnose import tool_diagnose
-from wisp.tools.long_horizon import (
-    tool_run_long_task,
-    tool_resume_task,
-    tool_task_status,
-    tool_list_tasks,
-    tool_pause_task,
-    tool_cancel_task,
-    tool_cleanup_tasks,
-    tool_task_output,
-    tool_export_task,
-    tool_import_task,
-)
 
 # Override legacy implementations with submodule versions where available
 _SUBMODULE_OVERRIDES = {
@@ -102,17 +90,8 @@ _SUBMODULE_OVERRIDES = {
     "mark_step_done": tool_mark_step_done,
     "update_plan": tool_update_plan,
     "diagnose": tool_diagnose,
-    "run_long_task": tool_run_long_task,
-    "resume_task": tool_resume_task,
-    "task_status": tool_task_status,
-    "list_tasks": tool_list_tasks,
-    "pause_task": tool_pause_task,
-    "cancel_task": tool_cancel_task,
     "cleanup_tasks": tool_cleanup_tasks,
-    "task_output": tool_task_output,
-    "export_task": tool_export_task,
-    "import_task": tool_import_task,
-}
+    }
 
 # Apply overrides to the legacy registry
 for _name, _impl in _SUBMODULE_OVERRIDES.items():
@@ -130,4 +109,3 @@ from wisp.tools import memory
 from wisp.tools import search
 from wisp.tools import plan
 from wisp.tools import diagnose
-from wisp.tools import long_horizon

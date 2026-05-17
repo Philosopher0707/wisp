@@ -50,16 +50,6 @@ from wisp.core.events import (
     TYPE_STEERING_PAUSED,
     TYPE_STEERING_RESUMED,
     TYPE_STEERING_INJECT,
-    TYPE_TASK_STARTED,
-    TYPE_TASK_STEP_STARTED,
-    TYPE_TASK_STEP_COMPLETED,
-    TYPE_TASK_STEP_FAILED,
-    TYPE_TASK_REPLANNING,
-    TYPE_TASK_COMPLETED,
-    TYPE_TASK_FAILED,
-    TYPE_TASK_PROGRESS,
-    TYPE_TASK_PAUSED,
-    TYPE_TASK_RESUMED,
 )
 from wisp.colors import success, error, warning, info, dim, accent, muted, border, highlight
 from wisp.session import Session, SessionManager, format_session_preview
@@ -846,59 +836,6 @@ def _render_event(event: AgentEvent, show_thinking: bool = False,
         elif reason == "error":
             return error("\n✗ Stream error — turn aborted.")
         return None
-
-    # ── Long-horizon task events ─────────────────────────────────────
-    if etype == TYPE_TASK_STARTED:
-        goal = event.data.get("goal", "")
-        total = event.data.get("total_steps", 0)
-        return accent(f"\n🎯 Task started: {goal[:60]}\n   {total} step(s) planned")
-
-    if etype == TYPE_TASK_STEP_STARTED:
-        idx = event.data.get("step_index", 0)
-        desc = event.data.get("description", "")
-        return info(f"  ▶ Step {idx + 1}: {desc[:70]}")
-
-    if etype == TYPE_TASK_STEP_COMPLETED:
-        idx = event.data.get("step_index", 0)
-        duration = event.data.get("duration_ms", 0)
-        return success(f"  ✓ Step {idx + 1} completed ({duration}ms)")
-
-    if etype == TYPE_TASK_STEP_FAILED:
-        idx = event.data.get("step_index", 0)
-        err = event.data.get("error", "")
-        return error(f"  ✗ Step {idx + 1} failed: {err[:80]}")
-
-    if etype == TYPE_TASK_REPLANNING:
-        old_v = event.data.get("old_version", 0)
-        new_v = event.data.get("new_version", 0)
-        reason = event.data.get("reason", "")
-        return warning(f"  🔄 Replanning (v{old_v} → v{new_v}): {reason[:60]}")
-
-    if etype == TYPE_TASK_COMPLETED:
-        completed = event.data.get("completed_steps", 0)
-        total = event.data.get("total_steps", 0)
-        return success(f"\n✅ Task completed: {completed}/{total} steps done")
-
-    if etype == TYPE_TASK_FAILED:
-        reason = event.data.get("reason", "")
-        return error(f"\n❌ Task failed: {reason[:100]}")
-
-    if etype == TYPE_TASK_PROGRESS:
-        idx = event.data.get("step_index", 0)
-        total = event.data.get("total_steps", 0)
-        status = event.data.get("status", "")
-        pct = round((idx / total * 100), 1) if total > 0 else 0
-        return dim(f"  📊 Progress: {idx}/{total} ({pct}%) — {status}")
-
-    if etype == TYPE_TASK_PAUSED:
-        return warning(f"  ⏸ Task paused: {event.data.get('reason', '')}")
-
-    if etype == TYPE_TASK_RESUMED:
-        idx = event.data.get("step_index", 0)
-        return success(f"  ▶ Task resumed at step {idx + 1}")
-
-    return None
-
 
 def _render_tool_call(name: str, args: dict, box_mode: bool) -> str:
     """Render a tool call with structured argument display."""

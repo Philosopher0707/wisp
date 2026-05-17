@@ -22,20 +22,6 @@ from typing import Any, Optional
 
 import requests
 
-# Long-horizon task tools
-from wisp.tools.long_horizon import (
-    tool_run_long_task,
-    tool_resume_task,
-    tool_task_status,
-    tool_list_tasks,
-    tool_pause_task,
-    tool_cancel_task,
-    tool_cleanup_tasks,
-    tool_task_output,
-    tool_export_task,
-    tool_import_task,
-)
-
 from wisp.tools.errors import ToolError
 
 logger = logging.getLogger(__name__)
@@ -2037,14 +2023,6 @@ TOOL_IMPLS = {
     "web_search": tool_web_search,
     "search_codebase": tool_search_codebase,
     "run_tests": tool_run_tests,
-    "run_long_task": tool_run_long_task,
-    "resume_task": tool_resume_task,
-    "task_status": tool_task_status,
-    "list_tasks": tool_list_tasks,
-    "pause_task": tool_pause_task,
-    "cancel_task": tool_cancel_task,
-    "cleanup_tasks": tool_cleanup_tasks,
-    "task_output": tool_task_output,
     "export_task": tool_export_task,
     "import_task": tool_import_task,
 }
