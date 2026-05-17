@@ -1141,6 +1141,23 @@ class WispAgentCore:
                     file_lock=getattr(self, "file_lock", None),
                     lsp_manager=getattr(self, "lsp", None),
                 )
+
+            # Intercept spawn_subagent — agent core has the real implementation
+            if func_name == "spawn_subagent":
+                start = time.monotonic()
+                result = await self._spawn_subagent(func_args, workspace)
+                duration_ms = (time.monotonic() - start) * 1000
+                yield tool_result_event(func_name, result, duration_ms=duration_ms)
+                msg = {
+                    "role": "tool",
+                    "content": str(result),
+                    "name": func_name,
+                }
+                if tc.get("id") is not None:
+                    msg["tool_call_id"] = tc.get("id")
+                self.messages.append(msg)
+                continue
+
             async for event in self.tool_executor.execute(
                 tool_name=func_name,
                 tool_args=func_args,
