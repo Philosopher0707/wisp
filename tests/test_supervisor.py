@@ -4,26 +4,26 @@ import pytest
 
 from wisp.config import WispConfig
 from wisp.core.events import content, done
-from wisp.persistence.sqlite_store import SQLiteStateStore
+from wisp.session_store import UnifiedSessionStore
 from wisp.runtime_protocol import AppEvent
 from wisp.supervisor import WispSupervisor
 
 
 def test_supervisor_creates_and_lists_threads(tmp_path):
-    store = SQLiteStateStore(tmp_path / "wisp.db")
+    store = UnifiedSessionStore(sessions_dir=tmp_path / "sessions")
     supervisor = WispSupervisor(store=store, artifacts_dir=tmp_path / "artifacts")
     thread = supervisor.create_thread(workspace="/tmp/project", title="Project thread")
     threads = supervisor.list_threads()
-    assert [item.id for item in threads] == [thread.id]
-    assert threads[0].title == "Project thread"
+    assert [item["id"] for item in threads] == [thread.id]
+    assert threads[0]["title"] == "Project thread"
 
 
 def test_supervisor_creates_run_and_log_file(tmp_path):
-    store = SQLiteStateStore(tmp_path / "wisp.db")
+    store = UnifiedSessionStore(sessions_dir=tmp_path / "sessions")
     supervisor = WispSupervisor(store=store, artifacts_dir=tmp_path / "artifacts")
     thread = supervisor.create_thread(workspace="/tmp/project", title="Project thread")
     run = supervisor.start_run(thread.id, "Explain the repo")
-    assert run.thread_id == thread.id
+    assert run.session_id == thread.id
     assert supervisor.run_log_path(run.id).parent.exists()
 
 
@@ -38,7 +38,7 @@ class FakeAgent:
 
 @pytest.mark.asyncio
 async def test_supervisor_executes_prompt_and_persists_events(tmp_path):
-    store = SQLiteStateStore(tmp_path / "wisp.db")
+    store = UnifiedSessionStore(sessions_dir=tmp_path / "sessions")
     supervisor = WispSupervisor(
         store=store,
         artifacts_dir=tmp_path / "artifacts",

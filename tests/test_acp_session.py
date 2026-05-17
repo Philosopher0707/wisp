@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from wisp.acp_session import AcpSession, AcpSessionManager
+from wisp.session_store import UnifiedSessionStore
 from wisp.acp_protocol import TextContent, ToolCallContent, ToolResultContent
 
 
@@ -126,32 +127,36 @@ class TestAcpSession:
 class TestAcpSessionManager:
     """Unit tests for AcpSessionManager."""
 
-    def test_create(self):
-        mgr = AcpSessionManager()
-        session = mgr.create("/tmp", MagicMock(), title="Test")
+    @pytest.fixture
+    def store(self, tmp_path):
+        return UnifiedSessionStore(sessions_dir=tmp_path / "sessions")
+
+    def test_create(self, store):
+        mgr = AcpSessionManager(store=store)
+        cfg = MagicMock(); cfg.model = "llama3"; session = mgr.create("/tmp", cfg, title="Test")
         assert session.session_id.startswith("wisp-")
         assert session.title == "Test"
         assert session.workspace == "/tmp"
 
-    def test_get(self):
-        mgr = AcpSessionManager()
-        session = mgr.create("/tmp", MagicMock())
+    def test_get(self, store):
+        mgr = AcpSessionManager(store=store)
+        cfg = MagicMock(); cfg.model = "llama3"; session = mgr.create("/tmp", cfg)
         found = mgr.get(session.session_id)
         assert found is session
 
-    def test_get_not_found(self):
-        mgr = AcpSessionManager()
+    def test_get_not_found(self, store):
+        mgr = AcpSessionManager(store=store)
         assert mgr.get("nonexistent") is None
 
-    def test_list(self):
-        mgr = AcpSessionManager()
-        mgr.create("/tmp", MagicMock(), title="S1")
-        mgr.create("/tmp", MagicMock(), title="S2")
+    def test_list(self, store):
+        mgr = AcpSessionManager(store=store)
+        cfg = MagicMock(); cfg.model = "llama3"; mgr.create("/tmp", cfg, title="S1")
+        cfg = MagicMock(); cfg.model = "llama3"; mgr.create("/tmp", cfg, title="S2")
         sessions = mgr.list()
         assert len(sessions) == 2
 
-    def test_load(self):
-        mgr = AcpSessionManager()
-        session = mgr.create("/tmp", MagicMock())
+    def test_load(self, store):
+        mgr = AcpSessionManager(store=store)
+        cfg = MagicMock(); cfg.model = "llama3"; session = mgr.create("/tmp", cfg)
         loaded = mgr.load(session.session_id)
         assert loaded is session
