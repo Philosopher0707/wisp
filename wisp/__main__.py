@@ -452,10 +452,10 @@ def cmd_memory(args: list[str]):
 
 def _cmd_memory_summaries(args: list[str]):
     """Handle agent memory (session summaries) subcommands."""
-    from wisp.agent_memory import AgentMemory
+    from wisp.agent_memory import get_agent_memory
     import json
 
-    mem = AgentMemory()
+    mem = get_agent_memory()
 
     # Parse flags
     show_id = None

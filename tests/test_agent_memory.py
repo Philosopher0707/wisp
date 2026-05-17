@@ -213,3 +213,46 @@ class TestAgentMemory:
         # load_recent_global includes everything
         global_recent = self.mem.load_recent_global(limit=5)
         assert len(global_recent) == 2
+
+    # ── Cache behaviour ──────────────────────────────────────────────
+
+    def test_duplicate_save_is_skipped_via_cache(self):
+        """Saving the same session_id twice should only write once."""
+        s = self._make_summary("sid-dup")
+        self.mem.save(s)
+        self.mem.save(s)
+        lines = self._am.SESSIONS_FILE.read_text().strip().split("\n")
+        assert len(lines) == 1
+
+    def test_new_instance_shares_cache_via_disk(self):
+        """A fresh AgentMemory reading the same warmed file should see data."""
+        s = self._make_summary("sid-shared")
+        self.mem.save(s)
+        # Fresh instance — simulates what tools/memory.py does
+        mem2 = AgentMemory()
+        all_summaries = mem2.load_all()
+        assert len(all_summaries) == 1
+        assert all_summaries[0].session_id == "sid-shared"
+
+    def test_clear_resets_cache_and_seen_ids(self):
+        """clear() should empty both cache and seen_ids."""
+        s = self._make_summary("sid-gone")
+        self.mem.save(s)
+        self.mem.clear()
+        # File gone
+        assert not self._am.SESSIONS_FILE.exists()
+        # Fresh save should succeed, not skip
+        self.mem.save(s)
+        lines = self._am.SESSIONS_FILE.read_text().strip().split("\n")
+        assert len(lines) == 1
+
+    def test_load_all_after_save_returns_from_cache(self):
+        """load_all() should use the warmed cache, not re-parse from disk."""
+        s = self._make_summary("sid-cache")
+        self.mem.save(s)
+        # These calls should hit cache, not disk
+        all1 = self.mem.load_all()
+        all2 = self.mem.load_all()
+        assert all1 is not all2  # defensive copy, different list objects
+        assert all1 == all2
+        assert len(all1) == 1

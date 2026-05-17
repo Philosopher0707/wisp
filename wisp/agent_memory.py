@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -30,21 +29,62 @@ def _resolve_workspace(workspace: str) -> str:
 
 
 class AgentMemory:
-    """Store and retrieve session summaries."""
+    """Store and retrieve session summaries.
+
+    Holds an in-memory cache of all session IDs and summaries to avoid
+    re-reading the JSONL file on every save() call.
+    """
 
     def __init__(self):
         AGENT_MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+        self._seen_ids: set[str] = set()
+        self._summaries: list[SessionSummary] = []
+        self._loaded = False  # True once cache is warm
+
+    def _ensure_loaded(self) -> None:
+        """Populate in-memory cache from disk on first use."""
+        if self._loaded:
+            return
+        self._load_into_cache()
+
+    def _load_into_cache(self) -> None:
+        """Read the JSONL file and populate _summaries / _seen_ids."""
+        self._summaries = []
+        self._seen_ids = set()
+        if not SESSIONS_FILE.exists():
+            self._loaded = True
+            return
+
+        try:
+            with SESSIONS_FILE.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                        summary = SessionSummary.from_dict(data)
+                        self._summaries.append(summary)
+                        self._seen_ids.add(summary.session_id)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+        except OSError:
+            pass
+        self._loaded = True
 
     # ── Persistence ──
 
     def save(self, summary: SessionSummary) -> None:
         """Append a summary to sessions.jsonl. Skips if session_id already saved."""
-        if self._has_session(summary.session_id):
+        self._ensure_loaded()
+        if summary.session_id in self._seen_ids:
             logger.debug("Session %s already summarized — skipping", summary.session_id)
             return
         try:
             with SESSIONS_FILE.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(summary.to_dict(), ensure_ascii=False) + "\n")
+            self._summaries.append(summary)
+            self._seen_ids.add(summary.session_id)
             logger.info("Saved session summary for %s", summary.session_id)
             self._rotate()
         except OSError as e:
@@ -52,6 +92,10 @@ class AgentMemory:
 
     def _has_session(self, session_id: str) -> bool:
         """Check if a session_id already exists in the store."""
+        self._ensure_loaded()
+        if session_id in self._seen_ids:
+            return True
+        # Fallback: another process may have written it.
         if not SESSIONS_FILE.exists():
             return False
         try:
@@ -63,6 +107,7 @@ class AgentMemory:
                     try:
                         data = json.loads(line)
                         if data.get("session_id") == session_id:
+                            self._seen_ids.add(session_id)
                             return True
                     except json.JSONDecodeError:
                         continue
@@ -72,26 +117,8 @@ class AgentMemory:
 
     def load_all(self) -> list[SessionSummary]:
         """Load all summaries from disk, oldest first."""
-        summaries: list[SessionSummary] = []
-        if not SESSIONS_FILE.exists():
-            return summaries
-
-        try:
-            with SESSIONS_FILE.open("r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        data = json.loads(line)
-                        summaries.append(SessionSummary.from_dict(data))
-                    except (json.JSONDecodeError, TypeError) as e:
-                        logger.warning("Skipping corrupt summary line: %s", e)
-                        continue
-        except OSError as e:
-            logger.error("Failed to load session summaries: %s", e)
-
-        return summaries
+        self._ensure_loaded()
+        return list(self._summaries)
 
     def load_recent(
         self,
@@ -125,6 +152,9 @@ class AgentMemory:
 
     def clear(self) -> None:
         """Delete all summaries."""
+        self._summaries = []
+        self._seen_ids = set()
+        self._loaded = True
         if SESSIONS_FILE.exists():
             SESSIONS_FILE.unlink()
             logger.info("Cleared agent memory")
@@ -133,24 +163,18 @@ class AgentMemory:
 
     def _rotate(self) -> None:
         """If file exceeds _MAX_SUMMARIES, keep only the most recent."""
-        if not SESSIONS_FILE.exists():
+        if len(self._summaries) <= _MAX_SUMMARIES:
             return
 
-        try:
-            with SESSIONS_FILE.open("r", encoding="utf-8") as f:
-                lines = [l for l in f if l.strip()]
-        except OSError:
-            return
+        # Truncate in-memory cache
+        self._summaries = self._summaries[-_MAX_SUMMARIES:]
+        self._seen_ids = {s.session_id for s in self._summaries}
 
-        if len(lines) <= _MAX_SUMMARIES:
-            return
-
-        # Keep the most recent _MAX_SUMMARIES lines
-        keep = lines[-_MAX_SUMMARIES:]
         try:
             with SESSIONS_FILE.open("w", encoding="utf-8") as f:
-                f.writelines(keep)
-            logger.info("Rotated agent memory to %d summaries", len(keep))
+                for summary in self._summaries:
+                    f.write(json.dumps(summary.to_dict(), ensure_ascii=False) + "\n")
+            logger.info("Rotated agent memory to %d summaries", len(self._summaries))
         except OSError as e:
             logger.error("Failed to rotate agent memory: %s", e)
 
@@ -214,3 +238,34 @@ class AgentMemory:
                     lines.append(f"\n**Tool result** ({msg.get('name', 'unknown')}): {content[:300]}")
 
         return "\n".join(lines)
+
+
+# Module-level singleton for production use (avoids re-parsing JSONL
+# every time a new instance is created).  Tests should instantiate
+# AgentMemory directly so that they can monkey-patch paths.
+_agent_memory_singleton: AgentMemory | None = None
+
+
+def get_agent_memory() -> AgentMemory:
+    """Return the module-level singleton AgentMemory instance."""
+    global _agent_memory_singleton
+    if _agent_memory_singleton is None:
+        _agent_memory_singleton = AgentMemory()
+    return _agent_memory_singleton
+
+
+# ── Singleton ───────────────────────────────────────────────────────
+
+_agent_memory_singleton: AgentMemory | None = None
+
+
+def get_agent_memory() -> AgentMemory:
+    """Return the module-level singleton AgentMemory instance.
+
+    Production code should call this instead of instantiating AgentMemory
+    directly so that the in-memory cache persists across calls.
+    """
+    global _agent_memory_singleton
+    if _agent_memory_singleton is None:
+        _agent_memory_singleton = AgentMemory()
+    return _agent_memory_singleton

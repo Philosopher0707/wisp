@@ -209,8 +209,8 @@ class WispAgentCore:
         self._mcp_initialized = False
         from wisp.lsp.manager import LSPManager
         self.lsp = LSPManager(self.config.workspace or ".")
-        from wisp.agent_memory import AgentMemory
-        self.agent_memory = AgentMemory()
+        from wisp.agent_memory import get_agent_memory
+        self.agent_memory = get_agent_memory()
         self._recent_summaries = self.agent_memory.load_recent_global(limit=7)
         from wisp.file_lock import FileLock
         from wisp.change_tracker import ChangeTracker
@@ -579,11 +579,11 @@ class WispAgentCore:
 
         recent_summaries = None
         if hasattr(self, "_recent_summaries") and self._recent_summaries:
-            from wisp.agent_memory import AgentMemory
+            from wisp.agent_memory import get_agent_memory
             last_msgs = []
             if self.session and self.session.messages:
                 last_msgs = self.session.messages[-8:]
-            recent_summaries = AgentMemory().format_for_prompt(
+            recent_summaries = get_agent_memory().format_for_prompt(
                 self._recent_summaries, last_messages=last_msgs
             )
 
