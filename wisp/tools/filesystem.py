@@ -16,7 +16,6 @@ from wisp.tools._utils import (
     _file_lock_ctx,
     _change_tracker_ctx,
     _get_dependents,
-    _fuzzy_find_text,
     _is_hook_controlled_path,
 )
 from wisp.tools.errors import ToolError

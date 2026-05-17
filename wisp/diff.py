@@ -657,6 +657,20 @@ def apply_edits_to_content(
                 "The text must be unique. Please provide more context to make it unique."
             )
 
+        # ── Collision safety check ───────────────────────────────────
+        # When fuzzy matching, verify the matched original text actually
+        # normalizes to what we asked for. NFKC can cause false matches
+        # (e.g., fullwidth "ａ" collides with regular "a" in normalized
+        # space), mapping back to the wrong region of original content.
+        if match.used_fuzzy_match:
+            actual_original = content[match.original_index : match.original_index + match.original_match_length]
+            if normalize_for_fuzzy_match(actual_original) != normalize_for_fuzzy_match(edit.old_text):
+                raise ValueError(
+                    f"Fuzzy match resolved to unexpected text{suffix}. "
+                    f"The matched region does not match what was requested after normalization. "
+                    f"Provide more context to make the target unique."
+                )
+
         # Use original indices so replacements preserve untouched content
         matched_edits.append({
             "edit_index": i,
