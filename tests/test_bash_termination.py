@@ -7,7 +7,7 @@ import subprocess
 import time
 import pytest
 
-from wisp.tools.bash import tool_run_bash
+from wisp.tools.bash import async_tool_run_bash
 from wisp.tools._utils import ToolError
 
 
@@ -22,7 +22,7 @@ class TestBashTermination:
         async def run_and_cancel():
             # Run in workspace
             task = asyncio.create_task(
-                tool_run_bash(
+                async_tool_run_bash(
                     command=f"echo '{unique_marker}' && {cmd}",
                     workspace=".",
                     timeout=10,
