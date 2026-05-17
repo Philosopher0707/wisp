@@ -175,28 +175,35 @@ class ToolExecutor:
         tool_args: dict[str, Any],
         workspace: str,
         tool_call_id: str | None = None,
+        result: str | dict | None = None,
     ) -> dict[str, Any]:
         """Build the tool message dict for the conversation.
 
-        This runs the full execution pipeline but returns the message dict
-        instead of yielding events. Used when the caller needs synchronous
-        access to the result message.
+        If ``result`` is provided, uses it directly without re-executing the
+        tool. This is the normal path when the caller has already run
+        :meth:`execute` and captured the result. When ``result`` is *None*
+        (legacy path, mainly for external callers that don't go through
+        :meth:`execute` first), the method falls back to running the full
+        execution pipeline again.
         """
-        events: list[AgentEvent] = []
-        async for event in self.execute(
-            tool_name=tool_name,
-            tool_args=tool_args,
-            workspace=workspace,
-            tool_call_id=tool_call_id,
-        ):
-            events.append(event)
+        if result is None:
+            # Legacy fallback: re-run the tool.  **This should not happen**
+            # inside the normal agent loop because stateful tools (e.g.
+            # edit_file) would fail on the second run.
+            events: list[AgentEvent] = []
+            async for event in self.execute(
+                tool_name=tool_name,
+                tool_args=tool_args,
+                workspace=workspace,
+                tool_call_id=tool_call_id,
+            ):
+                events.append(event)
 
-        # The last event is always tool_result
-        if not events:
-            return {"role": "tool", "content": "[No result]", "name": tool_name}
+            if not events:
+                return {"role": "tool", "content": "[No result]", "name": tool_name}
 
-        result_event = events[-1]
-        result = result_event.data.get("result", "")
+            result_event = events[-1]
+            result = result_event.data.get("result", "")
 
         # Extract human-readable summary from structured dict results
         if isinstance(result, dict) and "data" in result:

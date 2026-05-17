@@ -1162,6 +1162,8 @@ class WispAgentCore:
                 self.messages.append(msg)
                 continue
 
+            # Run tool execution and capture the result for the conversation
+            tool_result: str | dict = ""
             async for event in self.tool_executor.execute(
                 tool_name=func_name,
                 tool_args=func_args,
@@ -1170,13 +1172,19 @@ class WispAgentCore:
                 approval_handler=approval_handler,
             ):
                 yield event
+                # Capture the result from the tool_result event
+                if isinstance(event, AgentEvent) and str(event.type) == "tool_result":
+                    tool_result = event.data.get("result", "")
 
-            # Build and append the tool message for the conversation
+            # Build and append the tool message for the conversation,
+            # reusing the captured result so tools that mutate the workspace
+            # are not executed a second time.
             msg = await self.tool_executor.build_tool_message(
                 tool_name=func_name,
                 tool_args=func_args,
                 workspace=workspace,
                 tool_call_id=tc.get("id"),
+                result=tool_result,
             )
             self.messages.append(msg)
 
