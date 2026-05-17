@@ -67,7 +67,7 @@ async def test_session_picker_has_search_input():
         app.navigate("session_picker")
         await pilot.pause()
         # Should have an Input with id session-search
-        search = app.query_one("#session-search")
+        search = app.screen.query_one("#session-search")
         assert search is not None
 
 
@@ -99,16 +99,16 @@ async def test_workspace_has_all_panels():
         await pilot.pause()
 
         # Core chrome
-        assert app.query_one("#title-bar") is not None
-        assert app.query_one("#status-bar") is not None
-        assert app.query_one("#activity-bar") is not None
-        assert app.query_one("#input-bar") is not None
+        assert app.screen.query_one("#title-bar") is not None
+        assert app.screen.query_one("#status-bar") is not None
+        assert app.screen.query_one("#activity-bar") is not None
+        assert app.screen.query_one("#input-bar") is not None
 
         # Tabs
-        assert app.query_one("#chat-tab") is not None
-        assert app.query_one("#files-tab") is not None
-        assert app.query_one("#agents-tab") is not None
-        assert app.query_one("#monitor-tab") is not None
+        assert app.screen.query_one("#chat-tab") is not None
+        assert app.screen.query_one("#files-tab") is not None
+        assert app.screen.query_one("#agents-tab") is not None
+        assert app.screen.query_one("#monitor-tab") is not None
 
 
 @pytest.mark.asyncio
@@ -120,7 +120,7 @@ async def test_workspace_context_panel_starts_hidden():
         app.navigate("workspace")
         await pilot.pause()
 
-        panel = app.query_one("#context-panel")
+        panel = app.screen.query_one("#context-panel")
         assert panel.has_class("hidden")
 
 
@@ -133,7 +133,7 @@ async def test_workspace_toggle_context_panel():
         app.navigate("workspace")
         await pilot.pause()
 
-        panel = app.query_one("#context-panel")
+        panel = app.screen.query_one("#context-panel")
         assert panel.has_class("hidden")
 
         # Toggle open
@@ -160,7 +160,7 @@ async def test_workspace_input_bar_present():
         app.navigate("workspace")
         await pilot.pause()
 
-        inp = app.query_one("#prompt-input")
+        inp = app.screen.query_one("#prompt-input")
         assert inp is not None
 
 
@@ -177,7 +177,7 @@ async def test_workspace_tabbed_content_starts_on_chat():
         app.navigate("workspace")
         await pilot.pause()
 
-        tabs = app.query_one("TabbedContent")
+        tabs = app.screen.query_one("TabbedContent")
         assert tabs.active == "chat-tab"
 
 
@@ -194,7 +194,7 @@ async def test_title_bar_model_update():
         app.navigate("workspace")
         await pilot.pause()
 
-        title_bar = app.query_one("#title-bar")
+        title_bar = app.screen.query_one("#title-bar")
         title_bar.model_name = "codellama"
         await pilot.pause()
         assert title_bar.model_name == "codellama"
@@ -213,7 +213,7 @@ async def test_status_bar_streaming_update():
         app.navigate("workspace")
         await pilot.pause()
 
-        status = app.query_one("#status-bar")
+        status = app.screen.query_one("#status-bar")
         assert status.is_streaming is False
 
         status.is_streaming = True
@@ -230,7 +230,7 @@ async def test_status_bar_token_count_update():
         app.navigate("workspace")
         await pilot.pause()
 
-        status = app.query_one("#status-bar")
+        status = app.screen.query_one("#status-bar")
         status.token_count = 4200
         await pilot.pause()
         assert status.token_count == 4200

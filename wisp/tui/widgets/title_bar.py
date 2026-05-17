@@ -17,7 +17,6 @@ class TitleBar(Widget):
     connection_state = reactive("connected", recompose=True)
 
     def compose(self) -> ComposeResult:
-        conn_color = "#3fb950" if self.connection_state == "connected" else "#f85149"
         yield Static(
             f" Wisp  │  {self.model_name}  │  {self.workspace_path}",
             classes="app-name",

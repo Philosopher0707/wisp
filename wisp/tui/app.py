@@ -1,13 +1,13 @@
 """Wisp Enterprise TUI — full Textual-based terminal application.
 
-Screens are composed directly in the app body with visibility toggling.
+Screens are installed by name and navigated via push_screen/switch_screen.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from textual.app import App, ComposeResult, ScreenStackError
+from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.reactive import reactive
 from textual.widget import Widget
@@ -15,6 +15,11 @@ from textual.widget import Widget
 from wisp.config import WispConfig
 
 CSS_DIR = Path(__file__).resolve().parent / "css"
+
+# Screen name constants
+SPLASH = "splash"
+SESSION_PICKER = "session_picker"
+WORKSPACE = "workspace"
 
 
 class WispTUIApp(App):
@@ -36,7 +41,7 @@ class WispTUIApp(App):
     ]
 
     theme_mode: reactive[str] = reactive("dark")
-    current_screen_name: reactive[str] = reactive("splash")
+    current_screen_name: reactive[str] = reactive(SPLASH)
 
     def __init__(
         self,
@@ -48,45 +53,44 @@ class WispTUIApp(App):
         self.wisp_config = config or WispConfig()
         self.server_url = server_url
         self.current_session_id: str | None = None
+        # Screen instances (set in on_mount)
+        self._splash: Widget | None = None
+        self._session_picker: Widget | None = None
+        self._workspace: Widget | None = None
 
-    def compose(self) -> ComposeResult:
+    def on_mount(self) -> None:
         from wisp.tui.screens.splash import SplashScreen
         from wisp.tui.screens.session_picker import SessionPickerScreen
         from wisp.tui.screens.workspace import WorkspaceScreen
 
-        self._splash = SplashScreen(server_url=self.server_url, id="splash-screen")
-        self._session_picker = SessionPickerScreen(server_url=self.server_url, id="session-picker-screen")
+        self._splash = SplashScreen(server_url=self.server_url)
+        self._session_picker = SessionPickerScreen(server_url=self.server_url)
         self._workspace = WorkspaceScreen(
-            server_url=self.server_url, session_id=None, config=self.wisp_config, id="workspace-screen"
+            server_url=self.server_url, session_id=None, config=self.wisp_config
         )
 
-        self._splash.display = True
-        self._session_picker.display = False
-        self._workspace.display = False
+        self.install_screen(self._splash, name=SPLASH)
+        self.install_screen(self._session_picker, name=SESSION_PICKER)
+        self.install_screen(self._workspace, name=WORKSPACE)
 
-        yield self._splash
-        yield self._session_picker
-        yield self._workspace
-
-    def on_mount(self) -> None:
-        self.current_screen_name = "splash"
+        self.push_screen(SPLASH)
+        self.current_screen_name = SPLASH
 
     def navigate(self, screen_name: str) -> None:
-        """Switch which composed screen is visible."""
+        """Switch to a named screen. No-op if app hasn't mounted yet."""
         self.current_screen_name = screen_name
 
-        # Guard: if compose() hasn't run (e.g. in unit tests), be a no-op
-        if not hasattr(self, "_splash"):
+        # Guard: if screens haven't been installed yet (bare-app unit tests)
+        if self._splash is None:
             return
 
-        self._splash.display = (screen_name == "splash")
-        self._session_picker.display = (screen_name == "session_picker")
-        self._workspace.display = (screen_name == "workspace")
+        if screen_name in (SPLASH, SESSION_PICKER, WORKSPACE):
+            self.switch_screen(screen_name)
 
-        if screen_name == "session_picker":
+        if screen_name == SESSION_PICKER:
             self._session_picker._load_sessions()
 
-        if screen_name == "workspace":
+        if screen_name == WORKSPACE:
             self._workspace.session_id = self.current_session_id
 
         if screen_name == "help":
@@ -97,25 +101,22 @@ class WispTUIApp(App):
             self.push_screen(SettingsScreen())
 
     def action_toggle_command_palette(self) -> None:
-        scr = self._visible_screen()
+        scr = self._active_screen()
         if scr and hasattr(scr, "action_toggle_command_palette"):
             scr.action_toggle_command_palette()
 
     def action_toggle_context_panel(self) -> None:
-        scr = self._visible_screen()
+        scr = self._active_screen()
         if scr and hasattr(scr, "action_toggle_context_panel"):
             scr.action_toggle_context_panel()
 
     def action_show_help(self) -> None:
         self.navigate("help")
 
-    def _visible_screen(self) -> Widget | None:
-        if not hasattr(self, "_splash"):
-            return None
-        if self._splash.display:
-            return self._splash
-        if self._session_picker.display:
-            return self._session_picker
-        if self._workspace.display:
+    def _active_screen(self) -> Widget | None:
+        """Return the currently relevant screen for action proxying."""
+        if self._workspace and self.screen is self._workspace:
             return self._workspace
+        if self._session_picker and self.screen is self._session_picker:
+            return self._session_picker
         return None

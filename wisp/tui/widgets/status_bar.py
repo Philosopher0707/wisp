@@ -18,7 +18,6 @@ class StatusBar(Widget):
 
     def compose(self) -> ComposeResult:
         stream_indicator = "⬤ streaming" if self.is_streaming else "○ idle"
-        stream_color = "#3fb950" if self.is_streaming else "#484f58"
         yield Static(
             f" {stream_indicator}  │  {self.token_count:,} tokens  │  {self.active_agents} agents  │  ● {self.connection_state}",
             classes="info-text",

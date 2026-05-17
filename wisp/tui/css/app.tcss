@@ -148,3 +148,70 @@ TabPane {
     margin-bottom: 1;
 }
 .card:hover { border: solid #58a6ff; }
+
+/* ── Splash Screen ── */
+SplashScreen {
+    align: center middle;
+}
+
+SplashScreen .app-name {
+    color: #58a6ff;
+    text-style: bold;
+    content-align: center middle;
+    width: 100%;
+}
+
+SplashScreen Vertical {
+    width: auto;
+    height: auto;
+    align: center middle;
+    content-align: center middle;
+}
+
+SplashScreen .info-text {
+    content-align: center middle;
+    width: 100%;
+    margin-top: 1;
+}
+
+/* ── Session Picker Screen ── */
+SessionPickerScreen {
+    align: center top;
+}
+
+SessionPickerScreen > Vertical {
+    width: 100%;
+    height: 100%;
+    padding: 2 4;
+}
+
+#session-search {
+    width: 100%;
+    margin: 1 0;
+    background: #21262d;
+    border: solid #30363d;
+    color: #e6edf3;
+}
+
+#session-list {
+    height: 1fr;
+    background: #0d1117;
+    border: solid #21262d;
+}
+
+#sessions {
+    height: 1fr;
+}
+
+#sessions ListItem {
+    padding: 0 1;
+}
+
+#sessions ListItem:hover {
+    background: #1c2128;
+}
+
+#sessions .--highlight {
+    background: #0c2d6b;
+    border-left: solid #58a6ff;
+}

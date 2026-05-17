@@ -1,11 +1,10 @@
-"""Multi-agent swarm system for Wisp.
+"""Multi-agent system for Wisp.
 
-Spawn and orchestrate multiple specialized agents that communicate via
-a typed message bus, share a workspace with file locking, and coordinate
-through an orchestrator.
+Spawn and orchestrate multiple specialized subagents with proper
+guards, caching, telemetry, and composable patterns.
 
-Unified Subagent API (v3)
--------------------------
+Unified Subagent API
+--------------------
 ``SubagentOrchestrator`` is the single entry point for all subagent execution:
 
     from wisp.multi_agent import SubagentOrchestrator, SubagentContract
@@ -38,55 +37,35 @@ Unified Subagent API (v3)
         SubagentContract(name="writer", task="Implement feature"),
         SubagentContract(name="reviewer", task="Review code"),
     ], pass_context=True)
-
-Legacy API (deprecated)
------------------------
-``SwarmOrchestrator`` and ``SubagentRunner`` are deprecated. Use
-``SubagentOrchestrator`` for new code.
 """
 
-from .protocol import AgentEvent, EventType, TaskAssignment, TaskResult
-from .registry import AgentRegistry, AgentRecord, AgentStatus
-from .bus import MessageBus
 from .roles import AgentRole, ROLE_CONFIGS
-from .agent_factory import AgentFactory
-from .workspace_lock import WorkspaceLock
-from .orchestrator import SwarmOrchestrator, SwarmResult, SubagentOrchestrator
-from .task import (SubagentTask, SubagentContract, SubagentResult,
-                   SubagentResult as UnifiedSubagentResult,
-                   OrchestratorEvent, EventKind)
+from .subagent_orchestrator import MAX_SUBAGENT_DEPTH, SubagentOrchestrator
+from .task import (
+    EventKind,
+    OrchestratorEvent,
+    SubagentContract,
+    SubagentResult,
+)
 from .delegation import DelegationAnalyzer, DelegationSignal, get_delegation_analyzer
 from .context_partition import ContextPartitioner, partition_context
 from .schema_validator import (
+    build_retry_prompt,
+    extract_json_from_markdown,
+    SchemaValidationError,
     validate_json_schema,
     validate_subagent_output,
-    extract_json_from_markdown,
-    build_retry_prompt,
-    SchemaValidationError,
 )
 
 __all__ = [
-    "AgentEvent",
-    "EventType",
-    "TaskAssignment",
-    "TaskResult",
-    "AgentRegistry",
-    "AgentRecord",
-    "AgentStatus",
-    "MessageBus",
     "AgentRole",
     "ROLE_CONFIGS",
-    "AgentFactory",
-    "WorkspaceLock",
-    "SwarmOrchestrator",
-    "SwarmResult",
+    "MAX_SUBAGENT_DEPTH",
     "SubagentOrchestrator",
-    "SubagentTask",
     "SubagentContract",
     "SubagentResult",
-    "UnifiedSubagentResult",
-    "OrchestratorEvent",
     "EventKind",
+    "OrchestratorEvent",
     "DelegationAnalyzer",
     "DelegationSignal",
     "get_delegation_analyzer",
@@ -98,23 +77,3 @@ __all__ = [
     "build_retry_prompt",
     "SchemaValidationError",
 ]
-
-try:
-    from .codebase_orchestrator import (
-        CodebaseOrchestrator,
-        ModuleInfo,
-        ModuleAnalysis,
-        WriteTask,
-        WriteResult,
-        CodebaseReport,
-    )
-    __all__.extend([
-        "CodebaseOrchestrator",
-        "ModuleInfo",
-        "ModuleAnalysis",
-        "WriteTask",
-        "WriteResult",
-        "CodebaseReport",
-    ])
-except ImportError:
-    pass  # codebase_orchestrator is optional

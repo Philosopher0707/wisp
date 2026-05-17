@@ -1,0 +1,111 @@
+"""WorktreeManager — git worktree lifecycle for isolated subagents."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+import shutil
+import time
+import uuid
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+
+class WorktreeManager:
+    """Create and cleanup git worktrees for subagent isolation."""
+
+    def __init__(self, workspace: Path):
+        self.workspace = workspace
+        self._worktrees_root = workspace / ".wisp" / "worktrees"
+
+    async def create(self, agent_name: str) -> Path:
+        """Create an isolated git worktree."""
+        self._worktrees_root.mkdir(parents=True, exist_ok=True)
+
+        short_id = uuid.uuid4().hex[:8]
+        ts = int(time.time())
+        safe_name = re.sub(r"[^a-zA-Z0-9_-]", "-", agent_name)[:32].strip("-")
+        if not safe_name:
+            safe_name = "subagent"
+        dir_name = f"{safe_name}-{short_id}"
+        branch_name = f"wisp-subagent/{safe_name}-{short_id}-{ts}"
+
+        worktree_path = (self._worktrees_root / dir_name).resolve()
+
+        logger.info("Creating worktree: path=%s branch=%s", worktree_path, branch_name)
+
+        proc = await asyncio.create_subprocess_exec(
+            "git", "worktree", "add", str(worktree_path), "-b", branch_name,
+            cwd=str(self.workspace),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+
+        if proc.returncode != 0:
+            err_text = stderr.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(f"git worktree add failed (exit {proc.returncode}): {err_text}")
+
+        logger.debug("Worktree created: %s (branch=%s)", worktree_path, branch_name)
+        return worktree_path
+
+    async def cleanup(self, worktree_path: Path) -> None:
+        """Remove a worktree and delete the associated branch."""
+        logger.info("Cleaning up worktree: %s", worktree_path)
+
+        # Derive branch name from git metadata
+        git_dir = self.workspace / ".git" / "worktrees"
+        branch_name: str | None = None
+        try:
+            for entry in git_dir.iterdir():
+                if entry.is_dir() and worktree_path.name in str(entry.name):
+                    head_file = entry / "HEAD"
+                    if head_file.exists():
+                        head_text = head_file.read_text().strip()
+                        if head_text.startswith("ref: "):
+                            branch_name = head_text.replace("ref: refs/heads/", "")
+                            break
+        except Exception as exc:
+            logger.debug("Could not determine branch for %s: %s", worktree_path, exc)
+
+        proc = await asyncio.create_subprocess_exec(
+            "git", "worktree", "remove", str(worktree_path), "--force",
+            cwd=str(self.workspace),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+
+        if proc.returncode != 0:
+            err_text = stderr.decode("utf-8", errors="replace").strip()
+            logger.warning("git worktree remove failed (exit %d): %s", proc.returncode, err_text)
+            if worktree_path.exists():
+                shutil.rmtree(worktree_path, ignore_errors=True)
+                logger.debug("Manually removed worktree directory: %s", worktree_path)
+
+        if branch_name and branch_name.startswith("wisp-subagent/"):
+            try:
+                branch_proc = await asyncio.create_subprocess_exec(
+                    "git", "branch", "-D", branch_name,
+                    cwd=str(self.workspace),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await branch_proc.communicate()
+            except Exception as exc:
+                logger.debug("Branch delete failed (non-critical): %s", exc)
+
+        try:
+            prune_proc = await asyncio.create_subprocess_exec(
+                "git", "worktree", "prune",
+                cwd=str(self.workspace),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await prune_proc.communicate()
+        except Exception as exc:
+            logger.debug("Worktree prune failed (non-critical): %s", exc)
+
+        logger.debug("Worktree cleanup complete: %s", worktree_path)

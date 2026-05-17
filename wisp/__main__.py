@@ -894,11 +894,6 @@ Subcommands:
   session delete <id>      Delete a session
   session trim <id> [n]    Trim session to last N exchanges (default: 10)
   session compact <id> [n] Summarize old messages, keep last N (default: 6)
-  task list                List all long-horizon tasks
-  task status <id>         Show task progress and current step
-  task pause <id>          Pause a running task
-  task resume <id>         Resume a paused/crashed task
-  task cancel <id>         Cancel a task
   skills                   List discovered skills
   config [--set k=v]       View or set configuration
   check                    Verify Ollama connectivity
@@ -936,7 +931,7 @@ def main():
         print_help()
         return
 
-    _SUBCOMMANDS = {"run", "repl", "tui", "skills", "config", "check", "models", "session", "memory", "mcp", "git", "plan", "progress", "diagnose", "locks", "changes", "acp", "server", "compact", "swarm", "agents", "task"}
+    _SUBCOMMANDS = {"run", "repl", "tui", "skills", "config", "check", "models", "session", "memory", "mcp", "git", "plan", "progress", "diagnose", "locks", "changes", "acp", "server", "compact", "swarm", "agents"}
     first = argv[0]
 
     # Global flags
@@ -1092,9 +1087,6 @@ def main():
             cmd_changes(rest)
         elif first == "acp":
             cmd_acp(rest)
-
-        elif first == "task":
-            cmd_task(rest)
 
         elif first == "server":
             host = "0.0.0.0"

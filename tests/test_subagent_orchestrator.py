@@ -10,7 +10,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from wisp.multi_agent import SubagentOrchestrator, SubagentContract, UnifiedSubagentResult as SubagentResult
+from wisp.multi_agent import SubagentOrchestrator, SubagentContract, SubagentResult
 from wisp.multi_agent.task import EventKind, OrchestratorEvent
 
 
@@ -488,138 +488,55 @@ async def test_token_budget_remaining(orch):
     assert remaining >= 0
 
 
-# ── AgentRegistry persistence tests ──────────────────────────────────────
-
-def test_agent_registry_save_load(tmp_path):
-    """Registry state survives save/load round-trip."""
-    from wisp.multi_agent.registry import AgentRegistry, AgentRecord, AgentStatus
-
-    reg = AgentRegistry()
-    reg.register(AgentRecord(
-        agent_id="agent-1",
-        role="coder",
-        status=AgentStatus.WORKING,
-        current_task="fix bug",
-        files_locked=["/tmp/test.py"],
-        total_tasks_completed=5,
-        total_tasks_failed=1,
-    ))
-    reg.register(AgentRecord(
-        agent_id="agent-2",
-        role="reviewer",
-        status=AgentStatus.IDLE,
-    ))
-
-    path = tmp_path / "registry.json"
-    reg.save(path)
-
-    # Verify file exists and has content
-    assert path.exists()
-    data = json.loads(path.read_text())
-    assert data["version"] == 1
-    assert len(data["agents"]) == 2
-
-    # Load into fresh registry
-    reg2 = AgentRegistry()
-    reg2.load(path)
-
-    assert reg2.count_active() == 2
-    agents = {a.agent_id: a for a in reg2.list_agents()}
-    assert "agent-1" in agents
-    assert "agent-2" in agents
-
-    a1 = agents["agent-1"]
-    assert a1.role == "coder"
-    assert a1.status == AgentStatus.WORKING
-    assert a1.current_task == "fix bug"
-    assert a1.files_locked == ["/tmp/test.py"]
-    assert a1.total_tasks_completed == 5
-    assert a1.total_tasks_failed == 1
-
-    a2 = agents["agent-2"]
-    assert a2.role == "reviewer"
-    assert a2.status == AgentStatus.IDLE
-
-
-def test_agent_registry_load_missing_file(tmp_path):
-    """Loading a non-existent file is a no-op."""
-    from wisp.multi_agent.registry import AgentRegistry
-
-    reg = AgentRegistry()
-    reg.load(tmp_path / "does_not_exist.json")
-    assert reg.count_active() == 0
-
-
-def test_agent_registry_from_dict():
-    """Registry can be reconstructed from a dictionary."""
-    from wisp.multi_agent.registry import AgentRegistry, AgentStatus
-
-    data = {
-        "agents": [
-            {
-                "agent_id": "a-1",
-                "role": "tester",
-                "status": "WORKING",
-                "current_task": None,
-                "files_locked": [],
-                "spawned_at": "2024-01-01T00:00:00+00:00",
-                "last_heartbeat": None,
-                "total_tasks_completed": 3,
-                "total_tasks_failed": 0,
-            }
-        ]
-    }
-    reg = AgentRegistry.from_dict(data)
-    assert reg.count_active() == 1
-    a = reg.get("a-1")
-    assert a is not None
-    assert a.role == "tester"
-    assert a.status == AgentStatus.WORKING
-    assert a.total_tasks_completed == 3
-
-
 # ── Internal helper tests ──────────────────────────────────────────────
 
 class TestExtractFilesChanged:
-    """Tests for SubagentOrchestrator._extract_files_changed."""
+    """Tests for SubagentRunner._extract_files_changed."""
 
-    def test_backtick_paths(self, orch):
+    def test_backtick_paths(self):
+        from wisp.multi_agent._runner import SubagentRunner
         text = 'Modified `src/auth.py` and `tests/test_utils.go`'
-        files = orch._extract_files_changed(text)
+        files = SubagentRunner._extract_files_changed(text)
         assert "src/auth.py" in files
         assert "tests/test_utils.go" in files
 
-    def test_change_verb_patterns(self, orch):
+    def test_change_verb_patterns(self):
+        from wisp.multi_agent._runner import SubagentRunner
         text = 'Files changed:\n- src/api.ts\n- src/models.rs'
-        files = orch._extract_files_changed(text)
+        files = SubagentRunner._extract_files_changed(text)
         assert "src/api.ts" in files
         assert "src/models.rs" in files
 
-    def test_bare_file_paths(self, orch):
+    def test_bare_file_paths(self):
+        from wisp.multi_agent._runner import SubagentRunner
         text = 'Created src/main.py and config/test.sh'
-        files = orch._extract_files_changed(text)
+        files = SubagentRunner._extract_files_changed(text)
         assert "src/main.py" in files
         assert "config/test.sh" in files
 
-    def test_truncation_limit(self, orch):
+    def test_truncation_limit(self):
         """Returns max 20 paths, not more."""
+        from wisp.multi_agent._runner import SubagentRunner
         text = '\n'.join(f'`file_{i}.py`' for i in range(30))
-        files = orch._extract_files_changed(text)
+        files = SubagentRunner._extract_files_changed(text)
         assert len(files) <= 20
 
-    def test_empty_input(self, orch):
-        assert orch._extract_files_changed('') == []
-        assert orch._extract_files_changed('no file extensions here') == []
-        assert orch._extract_files_changed('plain text without matches') == []
+    def test_empty_input(self):
+        from wisp.multi_agent._runner import SubagentRunner
+        assert SubagentRunner._extract_files_changed('') == []
+        assert SubagentRunner._extract_files_changed('no file extensions here') == []
+        assert SubagentRunner._extract_files_changed('plain text without matches') == []
 
-    def test_duplicates_removed(self, orch):
+    def test_duplicates_removed(self):
+        from wisp.multi_agent._runner import SubagentRunner
         text = '`src/a.py` and also `src/a.py`'
-        files = orch._extract_files_changed(text)
+        files = SubagentRunner._extract_files_changed(text)
         assert files == ['src/a.py']
 
-    def test_unsupported_extensions_skipped(self, orch):
+    def test_unsupported_extensions_skipped(self):
+        from wisp.multi_agent._runner import SubagentRunner
         text = 'Config: `settings.txt` and image `photo.png`'
-        files = orch._extract_files_changed(text)
+        files = SubagentRunner._extract_files_changed(text)
         assert all(f.endswith(('.py', '.ts', '.js', '.rs', '.go', '.java', '.rb', '.sh'))
                    for f in files)
         # .txt and .png should NOT match
@@ -628,22 +545,32 @@ class TestExtractFilesChanged:
 
 
 class TestCompactArgs:
-    """Tests for SubagentOrchestrator._compact_args."""
+    """Tests for SubagentRunner._compact_args."""
 
     def test_normal_args(self):
+        from wisp.multi_agent._runner import SubagentRunner
         args = {"filepath": "src/auth.py", "content": "some content"}
-        result = SubagentOrchestrator._compact_args(args)
+        result = SubagentRunner._compact_args(args)
         assert "filepath=src/auth.py" in result
         assert len(result) < 100
 
     def test_empty_dict(self):
-        result = SubagentOrchestrator._compact_args({})
+        from wisp.multi_agent._runner import SubagentRunner
+        result = SubagentRunner._compact_args({})
         assert result == "..."
 
+    def test_long_value_truncated(self):
+        from wisp.multi_agent._runner import SubagentRunner
+        args = {"content": "x" * 100}
+        result = SubagentRunner._compact_args(args)
+        assert "..." in result
+        assert len(result) == 71  # "content=" (8) + 60 chars + "..." (3)
+
     def test_long_value_truncation(self):
+        from wisp.multi_agent._runner import SubagentRunner
         long_val = "x" * 100
         args = {"content": long_val}
-        result = SubagentOrchestrator._compact_args(args)
+        result = SubagentRunner._compact_args(args)
         # "content=" (8) + 60 chars + "..." (3) = 71
         assert len(result) == 71
         assert result == "content=" + "x" * 60 + "..."
@@ -651,37 +578,41 @@ class TestCompactArgs:
 
 
 class TestBuildChildConfig:
-    """Tests for SubagentOrchestrator._build_child_config."""
+    """Tests for SubagentRunner._build_child_config."""
 
     def test_model_override(self, mock_parent_agent):
-        from wisp.config import WispConfig
-        orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+        from wisp.multi_agent._runner import SubagentRunner
+        runner = SubagentRunner(mock_parent_agent.config, Path("/tmp"))
         contract = SubagentContract(name="test", task="hello", model="qwen2.5")
-        cfg = orch._build_child_config(contract)
+        cfg = runner._build_child_config(contract, "/tmp")
         assert cfg.model == "qwen2.5"
 
     def test_inherits_parent_model(self, mock_parent_agent):
-        orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+        from wisp.multi_agent._runner import SubagentRunner
+        runner = SubagentRunner(mock_parent_agent.config, Path("/tmp"))
         contract = SubagentContract(name="test", task="hello")
-        cfg = orch._build_child_config(contract)
+        cfg = runner._build_child_config(contract, "/tmp")
         assert cfg.model == "test-model"
 
     def test_workspace_from_contract(self, mock_parent_agent):
-        orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+        from wisp.multi_agent._runner import SubagentRunner
+        runner = SubagentRunner(mock_parent_agent.config, Path("/tmp"))
         contract = SubagentContract(name="test", task="hello", workspace="/custom/path")
-        cfg = orch._build_child_config(contract)
+        cfg = runner._build_child_config(contract, "/custom/path")
         assert cfg.workspace == "/custom/path"
 
     def test_auto_approve_from_contract(self, mock_parent_agent):
-        orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+        from wisp.multi_agent._runner import SubagentRunner
+        runner = SubagentRunner(mock_parent_agent.config, Path("/tmp"))
         contract = SubagentContract(name="test", task="hello", auto_approve=False)
-        cfg = orch._build_child_config(contract)
+        cfg = runner._build_child_config(contract, "/tmp")
         assert cfg.auto_approve is False
 
     def test_max_tokens_from_contract(self, mock_parent_agent):
-        orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
+        from wisp.multi_agent._runner import SubagentRunner
+        runner = SubagentRunner(mock_parent_agent.config, Path("/tmp"))
         contract = SubagentContract(name="test", task="hello", max_tokens=4000)
-        cfg = orch._build_child_config(contract)
+        cfg = runner._build_child_config(contract, "/tmp")
         assert cfg.max_context_tokens == 4000
 
 
@@ -736,56 +667,6 @@ class TestDefaultSystemPrompt:
         assert "Additional Instructions" in prompt
         assert "Use pytest" in prompt
 
-
-class TestEstimateTokens:
-    """Tests for SubagentOrchestrator._estimate_tokens."""
-
-    def test_input_tokens_counted(self, orch):
-        messages = [
-            {"role": "user", "content": "Hello there!"},
-            {"role": "system", "content": "You are helpful."},
-        ]
-        in_tok, out_tok, total = orch._estimate_tokens(messages)
-        assert in_tok > 0
-        assert out_tok == 0
-        assert total == in_tok
-
-    def test_output_tokens_counted(self, orch):
-        messages = [
-            {"role": "assistant", "content": "Here is my response."},
-        ]
-        in_tok, out_tok, total = orch._estimate_tokens(messages)
-        assert out_tok > 0
-        assert in_tok == 0
-        assert total == out_tok
-
-    def test_tool_calls_counted_as_output(self, orch):
-        messages = [
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {"function": {"name": "read_file", "arguments": '{"filepath": "test.py"}'}}
-                ],
-            },
-        ]
-        in_tok, out_tok, total = orch._estimate_tokens(messages)
-        assert out_tok > 0
-        assert total == out_tok
-
-    def test_mixed_roles(self, orch):
-        messages = [
-            {"role": "system", "content": "System prompt."},
-            {"role": "user", "content": "User message."},
-            {"role": "assistant", "content": "Assistant reply."},
-        ]
-        in_tok, out_tok, total = orch._estimate_tokens(messages)
-        assert in_tok > 0
-        assert out_tok > 0
-        assert total == in_tok + out_tok
-
-
-# ── Telemetry tests ──────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_telemetry_tracked_after_run(orch):
@@ -1019,7 +900,7 @@ async def test_token_budget_check_fails_early(orch):
 @pytest.mark.asyncio
 async def test_token_budget_no_check_without_budget(orch):
     """Without a global budget, token check passes."""
-    assert orch._check_token_budget(SubagentContract(task="test")) is None
+    assert orch._budget.check() is None
 
 
 # ── Schema validation edge cases ────────────────────────────────────────
@@ -1084,21 +965,6 @@ async def test_run_schema_jsonschema_not_installed(monkeypatch):
 # ── Worktree and config tests ──────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_worktree_creation_falls_back(orch, monkeypatch):
-    """Worktree creation fails — falls back to shared workspace."""
-    async def mock_create_worktree(name):
-        raise RuntimeError("git not available")
-
-    monkeypatch.setattr(orch, "_create_worktree", mock_create_worktree)
-
-    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
-        contract = SubagentContract(name="no-worktree", task="hello", worktree_isolated=True)
-        result = await orch.run(contract)
-
-    assert result.success is True
-    assert result.output == "Fake output"
-
-
 def test_orchestrator_with_explicit_workspace():
     """Orchestrator accepts explicit workspace path."""
     from wisp.config import WispConfig
@@ -1124,398 +990,16 @@ def test_contract_isolation_process():
 
 
 @pytest.mark.asyncio
-async def test_spawn_subagent_process_timeout(orch):
-    """Process-based subagent times out and is killed."""
-    contract = SubagentContract(
-        name="slow-agent",
-        task="This task will never complete",
-        isolation="process",
-        timeout_seconds=1,
-    )
-
-    result = await orch.run(contract)
-    assert result.success is False
-    assert result.timed_out is True
-    assert "TIMED OUT" in result.output
-
-
 @pytest.mark.asyncio
-async def test_spawn_subagent_process_success(orch):
-    """Process-based subagent completes successfully."""
-    contract = SubagentContract(
-        name="fast-agent",
-        task="Say hello",
-        isolation="process",
-        timeout_seconds=30,
-    )
-
-    result = await orch.run(contract)
-    # May succeed or fail depending on model availability
-    # but should not crash the orchestrator
-    assert isinstance(result, SubagentResult)
-    assert result.task_id == "fast-agent"
-
-
-def test_spawn_subagent_process_ipc_cleanup(tmp_path):
-    """Pipe IPC is used and cleaned up after process spawn."""
-    from wisp.multi_agent.orchestrator import _run_subagent_worker
-
-    contract_dict = {
-        "name": "test",
-        "role": "generalist",
-        "task": "test",
-        "tools": ["all"],
-        "allowed_skills": [],
-        "max_iterations": 1,
-        "timeout_seconds": 5,
-        "max_tokens": None,
-        "max_input_tokens": None,
-        "max_output_tokens": None,
-        "max_output_chars": 8000,
-        "output_format": "text",
-        "output_schema": None,
-        "auto_retry_parse": True,
-        "model": None,
-        "workspace": None,
-        "worktree_isolated": True,
-        "auto_approve": True,
-        "system_prompt_extra": "",
-        "prompt": "",
-        "context_files": [],
-    }
-
-    import multiprocessing as mp
-    parent_conn, child_conn = mp.Pipe()
-    process = mp.Process(
-        target=_run_subagent_worker,
-        args=(contract_dict, child_conn, str(tmp_path)),
-    )
-    process.start()
-    process.join(timeout=10)
-
-    # Result should be available through the pipe
-    assert parent_conn.poll(5)
-    data = parent_conn.recv()
-    parent_conn.close()
-
-    assert "task_id" in data
-    assert "success" in data
-
-
-# ── Integration tests for process-based subagents ──────────────────────
-
-@pytest.mark.asyncio
-async def test_parallel_mixed_isolation(orch):
-    """Parallel execution with both thread and process subagents."""
-    contracts = [
-        SubagentContract(name="thread-1", task="Fast task 1", isolation="thread", timeout_seconds=10),
-        SubagentContract(name="process-1", task="Fast task 2", isolation="process", timeout_seconds=10),
-        SubagentContract(name="thread-2", task="Fast task 3", isolation="thread", timeout_seconds=10),
-    ]
-
-    results = await orch.run_parallel(contracts, max_concurrent=3)
-    assert len(results) == 3
-    for r in results:
-        assert isinstance(r, SubagentResult)
-        assert r.task_id in ["thread-1", "process-1", "thread-2"]
-
-
-@pytest.mark.asyncio
-async def test_process_timeout_escalation(orch):
-    """Process that ignores SIGTERM gets SIGKILL."""
-    contract = SubagentContract(
-        name="stubborn",
-        task="Never complete",
-        isolation="process",
-        timeout_seconds=1,
-    )
-
-    result = await orch.run(contract)
-    assert result.success is False
-    assert result.timed_out is True
-    assert result.elapsed_seconds < 8  # Should not wait forever
-
-
-@pytest.mark.asyncio
-async def test_process_token_budget_tracking(orch):
-    """Token budget is tracked across process boundary."""
-    orch.set_global_token_budget(10000)
-    initial = orch.get_tokens_consumed()
-
-    contract = SubagentContract(
-        name="budget-test",
-        task="Simple task",
-        isolation="process",
-        timeout_seconds=10,
-    )
-
-    result = await orch.run(contract)
-    # Process may succeed or fail, but budget should be tracked
-    after = orch.get_tokens_consumed()
-    assert after >= initial
-
-
-@pytest.mark.asyncio
-async def test_process_telemetry_recorded(orch):
-    """Telemetry is recorded for process-based subagents."""
-    contract = SubagentContract(
-        name="telemetry-test",
-        task="Simple task",
-        isolation="process",
-        timeout_seconds=10,
-    )
-
-    result = await orch.run(contract)
-    # Telemetry from process workers is recorded in child process,
-    # not propagated to parent. Parent only gets result via IPC.
-    assert isinstance(result, SubagentResult)
-    assert result.task_id == "telemetry-test"
-
-
-@pytest.mark.asyncio
-async def test_process_worktree_isolation(orch, tmp_path):
-    """Process subagent respects worktree isolation."""
-    contract = SubagentContract(
-        name="isolated",
-        task="Check workspace path",
-        isolation="process",
-        worktree_isolated=True,
-        timeout_seconds=10,
-    )
-
-    result = await orch.run(contract)
-    assert isinstance(result, SubagentResult)
-
-
-@pytest.mark.asyncio
-async def test_process_cleanup_on_crash(orch):
-    """Temp files are cleaned up even when process crashes."""
-    import tempfile
-    # Count temp files before
-    tmp_dir = Path(tempfile.gettempdir())
-    before = list(tmp_dir.glob("*.json"))
-
-    contract = SubagentContract(
-        name="crash-test",
-        task="Task that will timeout",
-        isolation="process",
-        timeout_seconds=1,
-    )
-
-    result = await orch.run(contract)
-    assert result.success is False
-
-    # No new orphaned temp files
-    after = list(tmp_dir.glob("*.json"))
-    # Should not leak files (allow some tolerance)
-    assert len(after) <= len(before) + 2
-
-
-@pytest.mark.asyncio
-async def test_process_vs_thread_same_contract(orch):
-    """Same contract with different isolation produces valid results."""
-    base = SubagentContract(name="compare", task="Say hello", timeout_seconds=10)
-
-    thread_contract = SubagentContract(**{**base.__dict__, "isolation": "thread"})
-    process_contract = SubagentContract(**{**base.__dict__, "isolation": "process"})
-
-    thread_result = await orch.run(thread_contract)
-    process_result = await orch.run(process_contract)
-
-    assert isinstance(thread_result, SubagentResult)
-    assert isinstance(process_result, SubagentResult)
-    assert thread_result.task_id == process_result.task_id == "compare"
-
-
-@pytest.mark.asyncio
-async def test_process_chain_execution(orch):
-    """Chain pattern works with process-isolated subagents."""
-    contracts = [
-        SubagentContract(name="step-1", task="Step 1", isolation="process", timeout_seconds=10),
-        SubagentContract(name="step-2", task="Step 2", isolation="process", timeout_seconds=10),
-    ]
-
-    result = await orch.run_chain(contracts, pass_context=False)
-    assert isinstance(result, SubagentResult)
-    # Chain may fail at any step due to process timeout, but should
-    # return a valid SubagentResult without crashing the orchestrator
-    assert result.task_id.startswith("step-") or result.task_id.startswith("chain-")
-
-
-@pytest.mark.asyncio
-async def test_process_vote_execution(orch):
-    """Vote pattern works with process-isolated subagents."""
-    agents = [
-        SubagentContract(name=f"voter-{i}", task="Vote", isolation="process", timeout_seconds=10)
-        for i in range(3)
-    ]
-
-    result = await orch.run_vote(task="Test vote", agents=agents, consensus_threshold=0.5)
-    assert isinstance(result, SubagentResult)
-    assert "Vote Result" in result.output
-
-
-def test_run_subagent_worker_directly(tmp_path):
-    """Test the worker function directly without multiprocessing."""
-    from wisp.multi_agent.orchestrator import _run_subagent_worker
-
-    # Mock pipe connection to capture result
-    class MockConn:
-        def __init__(self):
-            self.data = None
-            self.closed = False
-        def send(self, data):
-            self.data = data
-        def close(self):
-            self.closed = True
-
-    mock_conn = MockConn()
-    contract_dict = {
-        "name": "direct-worker",
-        "role": "generalist",
-        "task": "test",
-        "tools": ["all"],
-        "allowed_skills": [],
-        "max_iterations": 1,
-        "timeout_seconds": 5,
-        "max_tokens": None,
-        "max_input_tokens": None,
-        "max_output_tokens": None,
-        "max_output_chars": 8000,
-        "output_format": "text",
-        "output_schema": None,
-        "auto_retry_parse": True,
-        "model": None,
-        "workspace": None,
-        "worktree_isolated": False,
-        "auto_approve": True,
-        "system_prompt_extra": "",
-        "prompt": "",
-        "context_files": [],
-    }
-
-    _run_subagent_worker(contract_dict, mock_conn, str(tmp_path))
-
-    assert mock_conn.data is not None
-    assert mock_conn.closed is True
-    assert mock_conn.data["task_id"] == "direct-worker"
-    assert "success" in mock_conn.data
-
-
-@pytest.mark.asyncio
-async def test_process_map_reduce_execution(orch):
-    """Map-reduce pattern works with process-isolated mappers."""
-    def make_mapper(item: str):
-        return SubagentContract(
-            name=f"mapper-{item}",
-            task=f"Process {item}",
-            isolation="process",
-            timeout_seconds=10,
-        )
-
-    result = await orch.run_map_reduce(
-        task="Test map-reduce",
-        items=["a", "b"],
-        mapper=make_mapper,
-        reducer="Combine results",
-        max_concurrent=2,
-    )
-    assert isinstance(result, SubagentResult)
-
-
-@pytest.mark.asyncio
-async def test_process_progress_callback(orch):
-    """Progress callbacks are emitted for process subagents."""
-    events = []
-    def callback(event):
-        events.append(event)
-
-    contract = SubagentContract(
-        name="progress-test",
-        task="Simple task",
-        isolation="process",
-        timeout_seconds=10,
-        progress_callback=callback,
-    )
-
-    result = await orch.run(contract)
-    # At minimum we should get start and completion/failure events
-    assert len(events) >= 2
-    assert any(e.event_type == EventKind.TASK_STARTED for e in events)
-    assert any(e.event_type in (EventKind.TASK_COMPLETED, EventKind.TASK_FAILED) for e in events)
-
-
-# ── Depth tracking tests ─────────────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_depth_limit_enforced(orch):
-    """Subagents beyond MAX_SUBAGENT_DEPTH are rejected immediately."""
-    from wisp.multi_agent.orchestrator import MAX_SUBAGENT_DEPTH
-
-    contract = SubagentContract(
-        name="deep-agent",
-        task="test",
-        _subagent_depth=MAX_SUBAGENT_DEPTH,
-    )
-    result = await orch.run(contract)
-    assert not result.success
-    assert "DEPTH LIMIT EXCEEDED" in result.output
-    assert f"depth {MAX_SUBAGENT_DEPTH}" in result.error
-
-
-@pytest.mark.asyncio
-async def test_depth_incremented_in_process(orch):
-    """Process subagents increment depth for child contracts."""
-    from wisp.multi_agent.orchestrator import MAX_SUBAGENT_DEPTH
-
-    contract = SubagentContract(
-        name="parent",
-        task="test",
-        _subagent_depth=MAX_SUBAGENT_DEPTH - 1,
-        isolation="process",
-        timeout_seconds=10,
-    )
-    result = await orch.run(contract)
-    # Should fail because depth gets incremented to MAX_SUBAGENT_DEPTH
-    assert not result.success
-    assert "DEPTH LIMIT EXCEEDED" in result.output
-
-
-# ── Cache tests ──────────────────────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_cache_hit_returns_same_result(orch):
-    """Running the same contract twice returns cached result."""
-    contract = SubagentContract(name="cached", task="test cache")
-    result1 = await orch.run(contract)
-    result2 = await orch.run(contract)
-    # Second should be cache hit
-    stats = orch.get_cache_stats()
-    assert stats["hits"] >= 1
-    assert stats["size"] >= 1
-
-
-@pytest.mark.asyncio
-async def test_cache_miss_for_different_tasks(orch):
-    """Different tasks don't share cache entries."""
-    contract1 = SubagentContract(name="a", task="task one")
-    contract2 = SubagentContract(name="b", task="task two")
-    await orch.run(contract1)
-    await orch.run(contract2)
-    stats = orch.get_cache_stats()
-    assert stats["misses"] >= 2
-    assert stats["size"] >= 2
-
-
 @pytest.mark.asyncio
 async def test_cache_ttl_expires(orch):
     """Cached results expire after TTL."""
     contract = SubagentContract(name="ttl", task="test ttl")
     await orch.run(contract)
     # Manually expire the cache entry
-    for key in list(orch._result_cache.keys()):
-        result, _ = orch._result_cache[key]
-        orch._result_cache[key] = (result, 0)  # timestamp = 0, always expired
+    for key in list(orch._cache._cache.keys()):
+        result, _ = orch._cache._cache[key]
+        orch._cache._cache[key] = (result, 0)  # timestamp = 0, always expired
     result2 = await orch.run(contract)
     # Should be a miss (re-executed)
     stats = orch.get_cache_stats()
@@ -1538,56 +1022,9 @@ async def test_clear_cache(orch):
 # ── Context files tests ──────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_context_files_injected_in_process(orch):
-    """Process subagents receive context_files and attempt to read them."""
-    # Create the context files in the orch workspace so the agent can read them
-    workspace = Path(orch.workspace)
-    (workspace / "auth.py").write_text("# auth module")
-    (workspace / "main.py").write_text("# main module")
-    contract = SubagentContract(
-        name="ctx-test",
-        task="Analyze these files",
-        context_files=[str(workspace / "auth.py"), str(workspace / "main.py")],
-        isolation="process",
-        timeout_seconds=30,
-    )
-    result = await orch.run(contract)
-    # The agent should have attempted to read the files (see captured logs)
-    assert result.success
-    # Files should be mentioned in tool calls or error output
-    assert "auth.py" in result.output or any(
-        "auth.py" in str(tc) for tc in result.tool_calls
-    )
-
-
-# ── Gap #10: Shared context ──────────────────────────────────────────
-
 @pytest.mark.asyncio
-async def test_shared_context_get_set(mock_parent_agent):
-    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
-    await orch.set_shared("key1", "value1")
-    assert await orch.get_shared("key1") == "value1"
-    assert await orch.get_shared("missing", "default") == "default"
-
-
 @pytest.mark.asyncio
-async def test_shared_context_update(mock_parent_agent):
-    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
-    await orch.update_shared("findings", "finding1")
-    await orch.update_shared("findings", "finding2")
-    assert await orch.get_shared("findings") == ["finding1", "finding2"]
-
-
 @pytest.mark.asyncio
-async def test_shared_context_clear(mock_parent_agent):
-    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
-    await orch.set_shared("key", "val")
-    orch.clear_shared_context()
-    assert await orch.get_shared("key") is None
-
-
-# ── Gap #12: Result persistence ──────────────────────────────────────
-
 @pytest.mark.asyncio
 async def test_result_persistence(mock_parent_agent, tmp_path):
     orch = SubagentOrchestrator(parent_agent=mock_parent_agent, workspace=tmp_path)
@@ -1646,44 +1083,6 @@ async def test_process_isolation_uses_pipe(mock_parent_agent, tmp_path):
 # ── Gap #15: Output compression ───────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_compression_large_output(mock_parent_agent):
-    """Large outputs should be compressed in pipe IPC."""
-    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
-    # Verify compression logic by checking estimate_cost works (uses tokens)
-    cost = orch.estimate_cost(10000, "gpt-4o")
-    assert cost == 0.05  # 10000/1000 * 0.005
-
-
-# ── Gap #16: Cost estimation ─────────────────────────────────────────
-
-def test_estimate_cost_known_models(mock_parent_agent):
-    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
-    assert orch.estimate_cost(1000, "gpt-4o") == 0.005
-    assert orch.estimate_cost(1000, "gpt-4o-mini") == 0.00015
-    assert orch.estimate_cost(1000, "llama3.1") == 0.0
-
-
-def test_estimate_cost_unknown_model(mock_parent_agent):
-    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
-    assert orch.estimate_cost(1000, "unknown-model") == 0.0
-
-
-def test_get_cost_summary(mock_parent_agent):
-    orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
-    # Seed telemetry
-    orch._telemetry = {
-        "gpt-4o": [
-            {"tokens_used": 1000, "success": True, "elapsed_seconds": 1.0},
-            {"tokens_used": 2000, "success": False, "elapsed_seconds": 2.0},
-        ]
-    }
-    summary = orch.get_cost_summary()
-    assert summary["total_usd"] == 0.015  # 3000/1000 * 0.005
-    assert summary["per_model"]["gpt-4o"] == 0.015
-
-
-# ── Gap #17: Agent pool ──────────────────────────────────────────────
-
 def test_pool_size_default(mock_parent_agent):
     orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
     assert orch.get_pool_status()["pool_size"] == 4

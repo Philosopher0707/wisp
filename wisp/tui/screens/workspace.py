@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widget import Widget
+from textual.screen import Screen
 from textual.widgets import TabbedContent, TabPane
 
 from wisp.config import WispConfig
@@ -26,8 +27,14 @@ from wisp.tui.widgets.title_bar import TitleBar
 from wisp.tui.data.ws_client import WispWSClient
 
 
-class WorkspaceScreen(Widget):
-    """Primary widget containing all panels, tabs, and the chat interface."""
+class WorkspaceScreen(Screen):
+    """Primary screen containing all panels, tabs, and the chat interface."""
+
+    BINDINGS = [
+        Binding("escape", "go_back", "Session picker"),
+        Binding("ctrl+backslash", "toggle_context_panel", "Toggle context"),
+        Binding("ctrl+p", "toggle_command_palette", "Command palette"),
+    ]
 
     def __init__(
         self,
@@ -78,10 +85,13 @@ class WorkspaceScreen(Widget):
         yield StatusBar(id="status-bar")
 
     def on_mount(self) -> None:
-        title_bar = self.query_one("#title-bar", TitleBar)
-        title_bar.model_name = self.wisp_config.model
-        title_bar.workspace_path = self.wisp_config.workspace or "~"
-        title_bar.session_label = self.session_id or "new session"
+        try:
+            title_bar = self.query_one("#title-bar", TitleBar)
+            title_bar.model_name = self.wisp_config.model
+            title_bar.workspace_path = self.wisp_config.workspace or "~"
+            title_bar.session_label = self.session_id or "new session"
+        except Exception:
+            pass  # DOM not composed yet (install_screen phase)
         self._start_ws()
 
     def _start_ws(self) -> None:
@@ -102,9 +112,9 @@ class WorkspaceScreen(Widget):
                 last = chat.children[-1]
                 if isinstance(last, AssistantMessage):
                     if phase == "thinking":
-                        last.thinking = (last.thinking or "") + text
+                        last.append_thinking(text)
                     elif phase == "content":
-                        last.content = (last.content or "") + text
+                        last.append_content(text)
         except Exception:
             pass
 
@@ -167,14 +177,35 @@ class WorkspaceScreen(Widget):
             self._ws_client.send_prompt(event.text, session_id=self.session_id)
         )
 
-    def on_activity_bar_icon_button_pressed(self, event) -> None:
+    def on_icon_button_pressed(self, event) -> None:
         tabs = self.query_one("#tabs", TabbedContent)
         for tab_id in ["chat-tab", "files-tab", "agents-tab", "monitor-tab"]:
             if tab_id == f"{event.btn_name}-tab":
                 tabs.active = tab_id
 
     def action_toggle_command_palette(self) -> None:
-        pass
+        def _on_palette_result(result: str | None) -> None:
+            if not result:
+                return
+            if result == "new-session":
+                self.app.current_session_id = None
+                self.app.switch_screen("workspace")
+                return
+            if result == "go-back":
+                self.action_go_back()
+                return
+            if result == "show-help":
+                from wisp.tui.screens.help import HelpScreen
+                self.app.push_screen(HelpScreen())
+                return
+            if result == "quit":
+                self.app.exit()
+                return
+            # Tab switching
+            tabs = self.query_one("#tabs", TabbedContent)
+            tabs.active = result
+        from wisp.tui.screens.command_palette import CommandPaletteScreen
+        self.app.push_screen(CommandPaletteScreen(), _on_palette_result)
 
     def action_toggle_context_panel(self) -> None:
         self._context_visible = not self._context_visible
@@ -184,11 +215,5 @@ class WorkspaceScreen(Widget):
         else:
             panel.add_class("hidden")
 
-    def action_show_help(self) -> None:
-        self.app.action_show_help()
-
-    def action_quit(self) -> None:
-        if self._ws_client:
-            import asyncio
-            asyncio.create_task(self._ws_client.disconnect())
-        self.app.exit()
+    def action_go_back(self) -> None:
+        self.app.switch_screen("session_picker")
