@@ -237,3 +237,29 @@ def test_semantic_index_in_memory_cache():
         res3 = idx.search("hello", top_k=1)
         assert idx._cache_M is not cached_M_ref  # cache was re-loaded!
         assert idx._cache_key[1] == 200.0
+
+
+def test_context_assembler_accurate_token_math_and_markdown_safety():
+    """Verify that ContextAssembler uses tiktoken for accurate estimation, slices correctly, and fixes unclosed markdown code blocks."""
+    from wisp.context_assembler import ContextAssembler
+    assembler = ContextAssembler()
+    
+    # 1. Verify accurate token estimation on complex code vs simple text
+    code_text = "def fetch_data(url: str):\n    # TODO: implement this block\n    pass"
+    est = assembler._estimate_tokens(code_text)
+    
+    # Since tiktoken is installed in this test environment, it should use the tiktoken encoder
+    import tiktoken
+    encoder = tiktoken.get_encoding("cl100k_base")
+    expected_tokens = len(encoder.encode(code_text))
+    assert est == expected_tokens
+    
+    # 2. Verify markdown structure preservation on truncation
+    sections = [
+        ("default_system", 0, "BASE SYSTEM INSTRUCTION WITH OPEN CODE BLOCK:\n```python\ndef run_code():\n    return 42"),
+    ]
+    system, usage = assembler._fit_sections(sections, max_tokens=15)
+    
+    # Verify the code block was closed automatically with [Code block truncated]
+    assert "[Code block truncated]" in system
+    assert system.count("```") % 2 == 0

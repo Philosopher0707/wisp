@@ -149,7 +149,7 @@ class TestContextAssemblerBuild:
         base_idx = result.find("BASE")
         skill_idx = result.find("Write Python")
         # Safety footer added AFTER everything else
-        safety_idx = result.find("## Safety Guidelines")
+        safety_idx = result.find("## Safety Guardrails")
         assert base_idx < skill_idx < safety_idx
 
     def test_build_without_mandatory_skill_no_safety_footer(self):
@@ -160,8 +160,8 @@ class TestContextAssemblerBuild:
             workspace="/tmp",
             default_system="You are Wisp.",
         )
-        assert "## Active Skill" not in result
-        assert "Safety guidelines" not in result
+        assert "## Suggested Skill:" not in result
+        assert "Safety Guardrails" not in result
 
     def test_build_with_mandatory_skill(self):
         from wisp.context_assembler import ContextAssembler
@@ -241,11 +241,11 @@ class TestContextAssemblerBuild:
         # Actual priority order: base(0) < workspace(0) < mandatory_skill(1) < skills_block(2) < memory(2) < project(3) < safety
         base_idx = result.find("BASE")
         ws_idx = result.find("Workspace")
-        skill_idx = result.find("## Active Skill")
+        skill_idx = result.find("## Suggested Skill:")
         skills_idx = result.find("SKILLS")
         mem_idx = result.find("MEMORY")
         proj_idx = result.find("PROJECT")
-        safety_idx = result.find("## Safety Guidelines")
+        safety_idx = result.find("## Safety Guardrails")
 
         assert base_idx < ws_idx < skill_idx < skills_idx < mem_idx < proj_idx < safety_idx
 
