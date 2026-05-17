@@ -876,9 +876,23 @@ def cmd_task(args: list[str]):
         print(info(parsed["data"]))
         if dry_run and parsed["metadata"]["removed"] > 0:
             print(dim(f"\n  Run with --force to actually delete."))
+        return
+
+    if sub == "output":
+        if not rest:
+            print(error("✗ Usage: wisp task output <task-id>"))
+            return
+        from wisp.tools.long_horizon import tool_task_output
+        result = tool_task_output(task_id=rest[0])
+        parsed = json.loads(result)
+        if parsed["status"] == "ok":
+            print(info(parsed["data"]))
+        else:
+            print(error(parsed["data"]))
+        return
 
     print(error(f"✗ Unknown task subcommand: {sub}"))
-    print(dim("  Try: list, status <id>, start <goal>, pause <id>, resume <id>, cancel <id>, cleanup [status] [--force] [--days N]"))
+    print(dim("  Try: list, status <id>, start <goal>, pause <id>, resume <id>, cancel <id>, output <id>, cleanup [status] [--force] [--days N]"))
 
 
 # ── Session commands ─────────────────────────────────────────────────

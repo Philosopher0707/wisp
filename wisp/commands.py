@@ -783,6 +783,24 @@ def cmd_task_cleanup(agent, args: str):
         print(error(parsed["data"]))
 
 
+@register("task-output", "Show full output of a completed task", aliases=("to",), usage="/task-output <task-id>")
+def cmd_task_output(agent, args: str):
+    """Show the full output and artifacts of a completed task."""
+    task_id = args.strip()
+    if not task_id:
+        print(error("✗ Usage: /task-output <task-id>"))
+        return
+
+    from wisp.tools.long_horizon import tool_task_output
+    import json
+    result = tool_task_output(task_id=task_id)
+    parsed = json.loads(result)
+    if parsed["status"] == "ok":
+        print(info(parsed["data"]))
+    else:
+        print(error(parsed["data"]))
+
+
 # ── /init: Generate wisp.md ──────────────────────────────────────────
 
 @register("init", "Generate wisp.md for this codebase", aliases=(), usage="/init [overwrite]")

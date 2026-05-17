@@ -352,3 +352,57 @@ def tool_cleanup_tasks(
             "dry_run": dry_run,
         },
     })
+
+
+def tool_task_output(
+    task_id: str,
+) -> str:
+    """Get the full output and artifacts of a completed long-horizon task.
+
+    Returns the accumulated results from all completed steps.
+    """
+    storage = TaskStorage()
+    state = storage.load(task_id)
+
+    if state is None:
+        return json.dumps({
+            "status": "error",
+            "tool": "task_output",
+            "data": f"Task not found: {task_id}",
+            "metadata": {},
+        })
+
+    lines = [
+        f"Task: {state.task_id}",
+        f"Goal: {state.goal}",
+        f"Status: {state.status.value}",
+        f"Progress: {state.completed_count}/{state.total_steps} steps",
+        "",
+    ]
+
+    if state.completed_steps:
+        lines.append("=== Completed Steps ===")
+        for i, step_result in enumerate(state.completed_steps, 1):
+            lines.append(f"\n--- Step {i}: {step_result.step_id} ---")
+            lines.append(f"Description: {step_result.description}")
+            lines.append(f"Result:\n{step_result.result}")
+            if step_result.duration_ms:
+                lines.append(f"Duration: {step_result.duration_ms}ms")
+    else:
+        lines.append("No completed steps yet.")
+
+    if state.accumulated_context:
+        lines.append("\n=== Accumulated Context ===")
+        lines.append(state.accumulated_context)
+
+    return json.dumps({
+        "status": "ok",
+        "tool": "task_output",
+        "data": "\n".join(lines),
+        "metadata": {
+            "task_id": task_id,
+            "status": state.status.value,
+            "completed_steps": state.completed_count,
+            "total_steps": state.total_steps,
+        },
+    })

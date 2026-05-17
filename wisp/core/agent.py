@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import re
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -1951,8 +1952,28 @@ class WispAgentCore:
             # Start background execution
             async def _bg_run():
                 try:
-                    async for _event in runner._run_loop(state, workspace):
-                        pass  # Events are logged by the runner
+                    final_status = "unknown"
+                    async for event in runner._run_loop(state, workspace):
+                        # Log completion/failure for user visibility
+                        if event.type == "task_completed":
+                            final_status = "completed"
+                            print(
+                                f"\n✅ Task completed: {event.data.get('task_id', '')} "
+                                f"({event.data.get('completed_steps', 0)}/{event.data.get('total_steps', 0)} steps)",
+                                file=sys.stderr,
+                            )
+                        elif event.type == "task_failed":
+                            final_status = "failed"
+                            print(
+                                f"\n❌ Task failed: {event.data.get('task_id', '')} — {event.data.get('reason', '')[:100]}",
+                                file=sys.stderr,
+                            )
+                    if final_status == "unknown":
+                        # Loop finished without completion/failure event
+                        if state.is_complete:
+                            print(f"\n✅ Task completed: {task_id}", file=sys.stderr)
+                        elif state.is_failed:
+                            print(f"\n❌ Task failed: {task_id}", file=sys.stderr)
                 except asyncio.CancelledError:
                     state.set_status(TaskStatus.PAUSED)
                     storage.save(state)
