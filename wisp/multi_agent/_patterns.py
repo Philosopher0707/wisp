@@ -218,12 +218,15 @@ async def run_vote(
                     max_iterations=5,
                 )
                 tie_result = await orchestrator.run(tie_contract)
-                if tie_result.success and "A" in tie_result.output.upper():
-                    winner = sorted_groups[0][0]
-                    count = len(sorted_groups[0])
-                elif tie_result.success and "B" in tie_result.output.upper():
-                    winner = sorted_groups[1][0]
-                    count = len(sorted_groups[1])
+                if tie_result.success:
+                    if "A" in tie_result.output.upper():
+                        winner = sorted_groups[0][0]
+                        count = len(sorted_groups[0]) + 1
+                        total += 1
+                    elif "B" in tie_result.output.upper():
+                        winner = sorted_groups[1][0]
+                        count = len(sorted_groups[1]) + 1
+                        total += 1
                 consensus_reached = count / total >= consensus_threshold
     else:
         winner = ""
