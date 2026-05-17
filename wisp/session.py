@@ -318,14 +318,20 @@ class SessionManager:
         session.touch()
 
         path = _session_path(session.id)
-        from filelock import FileLock
+        data = json.dumps(session.to_dict(), indent=2, ensure_ascii=False)
+
+        try:
+            from filelock import FileLock
+        except ImportError:
+            logger.warning("filelock not installed — saving session %s without lock", session.id)
+            path.write_text(data, encoding="utf-8")
+            logger.debug("Saved session %s (%d messages) [unlocked]", session.id, len(session.messages))
+            return
+
         lock = FileLock(str(path) + ".lock")
         try:
             with lock:
-                path.write_text(
-                    json.dumps(session.to_dict(), indent=2, ensure_ascii=False),
-                    encoding="utf-8",
-                )
+                path.write_text(data, encoding="utf-8")
                 logger.debug("Saved session %s (%d messages)", session.id, len(session.messages))
         except OSError as e:
             logger.error("Failed to save session %s: %s", session.id, e)

@@ -20,6 +20,7 @@ dependencies = [
     "textual>=0.61",
     "rich>=13.0",
     "diff-match-patch>=20241021",
+    "filelock>=3.0",
 ]
 
 [project.optional-dependencies]
