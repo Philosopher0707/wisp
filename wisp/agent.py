@@ -6,9 +6,10 @@ that external code depends on and provides the synchronous run()/repl() API.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Optional
+
+from wisp.async_utils import run_sync_coro
 
 # Re-export helpers from transport layer for backward compatibility
 from wisp.transport.cli import (
@@ -74,30 +75,4 @@ class WispAgent(WispAgentCore):
 
     def _safe_run_sync(self, coro):
         """Run a coroutine, handling both standalone and nested event-loop contexts."""
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            # No loop running — safe to use asyncio.run()
-            return asyncio.run(coro)
-
-        # Already inside a running loop — need a dedicated thread
-        import threading
-
-        result: dict[str, object] = {}
-
-        def _target():
-            nloop = asyncio.new_event_loop()
-            try:
-                result["value"] = nloop.run_until_complete(coro)
-            except Exception as exc:
-                result["error"] = exc
-            finally:
-                nloop.close()
-
-        t = threading.Thread(target=_target)
-        t.start()
-        t.join()
-
-        if "error" in result:
-            raise result["error"]  # type: ignore[misc]
-        return result.get("value")
+        return run_sync_coro(coro)
