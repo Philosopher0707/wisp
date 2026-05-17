@@ -6,11 +6,18 @@ Run:
     wisp server --host 0.0.0.0 --port 8000
 
 Environment:
-    WISP_API_KEY        Pre-shared key for client auth (required)
-    WISP_WORKSPACE      Root workspace directory (default: ./workspace)
-    OLLAMA_HOST         Ollama URL (default: http://localhost:11434)
-    WISP_CORS_ORIGINS   Comma-separated allowed CORS origins (default: localhost dev)
-    WISP_RATE_LIMIT_RPS Requests per second cap for expensive endpoints (default: 10)
+    WISP_API_KEY                Pre-shared key for client auth (required)
+    WISP_WORKSPACE              Root workspace directory (default: ./workspace)
+    OLLAMA_HOST                 Ollama URL (default: http://localhost:11434)
+    WISP_CORS_ORIGINS           Comma-separated allowed CORS origins (default: localhost dev)
+    WISP_RATE_LIMIT_RPS         Requests per second cap for expensive endpoints (default: 10)
+    WISP_HEADLESS_AUTO_APPROVE  Set to "1" to allow /api/prompt to auto-approve write tools (DANGEROUS)
+
+Security note:
+    The /api/prompt endpoint defaults to permission_mode="auto_edit" and does NOT
+    auto-approve destructive tools. If you set WISP_HEADLESS_AUTO_APPROVE=1, any
+    client with the API key can execute arbitrary bash commands without confirmation.
+    Only enable this in isolated CI environments with short-lived API keys.
 """
 
 from __future__ import annotations
@@ -107,7 +114,7 @@ class PromptRequest(BaseModel):
     model: Optional[str] = None
     session_id: Optional[str] = None
     skill: Optional[str] = None
-    permission_mode: str = Field(default="full", description="full | ask_all | auto_edit | read_only")
+    permission_mode: str = Field(default="auto_edit", description="full | ask_all | auto_edit | read_only")
     images: list[str] = Field(default_factory=list, description="Base64 data URLs of images")
 
 class BashRequest(BaseModel):
@@ -345,12 +352,28 @@ manager = ConnectionManager()
 # ── Helpers ──────────────────────────────────────────────────────────
 
 def _resolve_path(path: str) -> Path:
+    """Resolve a path relative to WORKSPACE_ROOT, with security boundary enforcement.
+
+    Uses os.path.realpath to follow symlinks and verify the resolved path
+    is physically within the workspace directory. This prevents symlink
+    escapes where a link inside the workspace points outside it.
+
+    Returns the resolved absolute Path if it's within the workspace.
+    Raises HTTPException on path traversal or symlink escape attempts.
+    """
+    real_ws = os.path.realpath(str(WORKSPACE_ROOT))
     target = WORKSPACE_ROOT / path
-    try:
-        target.relative_to(WORKSPACE_ROOT)
-    except ValueError:
+    real_target = os.path.realpath(str(target))
+
+    # Exact match (e.g., path is "." or the workspace itself)
+    if real_target == real_ws:
+        return Path(real_target)
+
+    # Prefix check: target must be inside workspace, not a sibling
+    prefix = real_ws if real_ws.endswith(os.sep) else real_ws + os.sep
+    if not real_target.startswith(prefix):
         raise HTTPException(status_code=400, detail="Path traversal blocked")
-    return target
+    return Path(real_target)
 
 # ── MemoryTransport ────────────────────────────────────────────────────
 
@@ -448,7 +471,9 @@ async def _run_agent_headless(
     if model:
         config.model = model
     config.workspace = str(WORKSPACE_ROOT)
-    config.auto_approve = True
+    # Headless mode defaults to NOT auto-approving destructive tools.
+    # CI pipelines can opt in via WISP_HEADLESS_AUTO_APPROVE=1.
+    config.auto_approve = os.environ.get("WISP_HEADLESS_AUTO_APPROVE", "") == "1"
     config.show_thinking = True
     config.permission_mode = permission_mode
 
@@ -1440,6 +1465,11 @@ async def prompt_sync(req: PromptRequest):
 
     Runs the agent synchronously and returns the final result.
     No WebSocket needed. For CI/CD pipelines, scripting, and automation.
+
+    Security:
+        Defaults to permission_mode="auto_edit" and does NOT auto-approve
+        destructive tools. Set WISP_HEADLESS_AUTO_APPROVE=1 to opt in to
+        full auto-approval (dangerous — equivalent to remote shell access).
     """
     result = await _run_agent_headless(
         prompt=req.prompt,

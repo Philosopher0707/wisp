@@ -182,6 +182,10 @@ class NoopSandbox(SandboxProvider):
         return True
 
     async def run(self, command: str, cwd: str = "", timeout: int = 60) -> tuple[int, str, str]:
+        from wisp.tools._utils import check_dangerous_command
+        danger = check_dangerous_command(command)
+        if danger:
+            return (-1, "", f"Dangerous command blocked: {danger}")
         workdir = os.path.join(self.workspace, cwd) if cwd else self.workspace
         try:
             process = await asyncio.create_subprocess_exec(
@@ -239,7 +243,7 @@ def get_sandbox(workspace: str | None = None) -> SandboxProvider:
         logger.info("Sandbox: Docker (ubuntu:22.04, memory=%s, cpus=%s)", docker.memory, docker.cpus)
     else:
         _app_sandbox = NoopSandbox(ws)
-        logger.info("Sandbox: host (no Docker daemon available)")
+        logger.warning("Sandbox: host (no Docker daemon available) — commands execute directly on host")
 
     return _app_sandbox
 

@@ -247,12 +247,14 @@ wisp/
 
 ## Security
 
-- 🔒 **Dangerous commands blocked** — `rm -rf /`, `mkfs`, etc. blocked at API + agent layers
-- 🔒 **Path sandboxing** — File access restricted to `WISP_WORKSPACE`
+- 🔒 **Dangerous commands blocked** — `rm -rf /`, `mkfs`, `eval`, `bash -c`, encoded payloads, etc. blocked at API + agent + sandbox layers
+- 🔒 **Path sandboxing** — File access restricted to `WISP_WORKSPACE`; symlinks that escape the workspace are rejected
 - 🔒 **Bash timeout** — Commands killed after 60 seconds
 - 🔒 **CORS restricted** — Same-origin by default, configurable via `WISP_CORS_ORIGINS`
 - 🔒 **API key required** — Pre-shared key for all client connections
+- 🔒 **Headless mode hardened** — `/api/prompt` defaults to `auto_edit` permission mode and does NOT auto-approve destructive tools. Set `WISP_HEADLESS_AUTO_APPROVE=1` only in isolated CI environments
 - 🔒 **TLS recommended** — Use `wss://` in production (Let's Encrypt / Cloudflare)
+- 🔒 **Docker sandbox recommended** — `NoopSandbox` (host execution) is the fallback when Docker is unavailable; it now warns and still blocks dangerous commands
 
 ---
 
