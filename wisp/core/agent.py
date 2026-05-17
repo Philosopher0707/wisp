@@ -660,12 +660,12 @@ class WispAgentCore:
             except Exception as e:
                 logger.warning("Failed to load context files: %s", e)
 
-        mandatory_skill = None
+        active_skill_trio = None
         if effective_skill:
             skill = next((s for s in skills if s.name == effective_skill), None)
             if skill:
                 auto_label = " (auto-detected)" if auto_detected_skill_name == skill.name else ""
-                mandatory_skill = (
+                active_skill_trio = (
                     f"{skill.name}{auto_label}",
                     skill.description,
                     skill.instructions,
@@ -697,7 +697,7 @@ class WispAgentCore:
             plan_context=getattr(self.config, "plan_context", None) or None,
             repo_map=repo_map or None,
             context_files=context_files or None,
-            mandatory_skill=mandatory_skill,
+            mandatory_skill=active_skill_trio,
             max_tokens=sys_budget,
         )
 

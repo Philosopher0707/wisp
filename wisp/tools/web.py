@@ -7,7 +7,6 @@ import json as _json
 import logging
 import urllib.parse
 import urllib.request
-import urllib.robotparser
 from html.parser import HTMLParser
 
 import requests
@@ -28,16 +27,70 @@ logger = logging.getLogger(__name__)
 # robots.txt for every URL on the same domain.
 _robots_cache: dict[str, tuple[bool, float]] = {}
 _ROBOTS_TTL = 3600.0  # cache for 1 hour
+_ROBOTS_FETCH_TIMEOUT = 10.0  # seconds
 
 # Shared user-agent for all outgoing web requests
 _USER_AGENT = "Wisp-Agent/0.1.0 (Web Fetch Tool; Respects robots.txt)"
 
 
+def _parse_robots_txt(robots_text: str, user_agent: str, target_path: str) -> bool:
+    """Parse robots.txt content and return whether target_path is allowed.
+
+    Lightweight manual parser replacing ``urllib.robotparser.RobotFileParser``:
+
+    * Explicit timeout control (``_ROBOTS_FETCH_TIMEOUT``)
+    * No hidden blocking ``urlopen`` calls inside the parser
+    * Handles ``User-agent``, ``Disallow``, and ``Allow`` directives only
+    * Returns ``True`` (allow) when no matching rule is found
+    """
+    ua_lower = user_agent.lower().strip() or "*"
+    if not target_path.startswith("/"):
+        target_path = "/" + target_path
+
+    current_group_applies = False
+    result = True  # allow by default
+
+    for raw in robots_text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+
+        directive = line.lower()
+        if directive.startswith("user-agent:"):
+            # Check how the previous group ended before starting a new one
+            # A new user-agent line resets the "current group applies" flag.
+            ua_match = line.split(":", 1)[1].strip().lower()
+            current_group_applies = (ua_match == "*" or ua_match in ua_lower)
+            continue
+
+        if not current_group_applies:
+            continue
+
+        if directive.startswith("disallow:"):
+            path = line.split(":", 1)[1].strip()
+            if not path:
+                # Empty disallow → allow everything
+                result = True
+                continue
+            if target_path.startswith(path):
+                # Matched a disallow — tentatively deny
+                result = False
+
+        elif directive.startswith("allow:"):
+            path = line.split(":", 1)[1].strip()
+            if target_path.startswith(path):
+                # More specific allow overrides a previous disallow
+                result = True
+
+    return result
+
+
 def _check_robots_txt(target_url: str, user_agent: str = "*") -> bool:
     """Return True if fetching target_url is allowed by robots.txt.
 
-    Fetches the robots.txt for the target's netloc, parses it, and
-    checks whether the path is allowed for the given user-agent string.
+    Fetches the robots.txt for the target's netloc with an explicit
+    ``_ROBOTS_FETCH_TIMEOUT`` (default 10 s), parses it with
+    ``_parse_robots_txt``, and checks whether the path is allowed.
     Results are cached for ``_ROBOTS_TTL`` seconds.
 
     Returns True (allow) if robots.txt is unreachable, malformed, or
@@ -60,10 +113,25 @@ def _check_robots_txt(target_url: str, user_agent: str = "*") -> bool:
             return allowed
 
     try:
-        rp = urllib.robotparser.RobotFileParser()
-        rp.set_url(robots_url)
-        rp.read()
-        allowed = rp.can_fetch(user_agent, target_url)
+        resp = requests.get(
+            robots_url,
+            timeout=_ROBOTS_FETCH_TIMEOUT,
+            headers={"User-Agent": user_agent},
+            allow_redirects=True,
+        )
+        if resp.status_code == 404:
+            # No robots.txt → everything allowed
+            _robots_cache[cache_key] = (True, now)
+            return True
+        resp.raise_for_status()
+        robots_text = resp.text
+    except Exception as e:
+        logger.debug("robots.txt fetch failed for %s: %s", robots_url, e)
+        _robots_cache[cache_key] = (True, now)
+        return True
+
+    try:
+        allowed = _parse_robots_txt(robots_text, user_agent, parsed.path or "/")
         _robots_cache[cache_key] = (allowed, now)
         if not allowed:
             logger.info("robots.txt disallowed %s", target_url)

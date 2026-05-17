@@ -149,6 +149,14 @@ def register_tool(
                 If *None*, auto-generated from the function's signature.
         description: Fallback description for auto-generated schema.
     """
+    # Protect against collision shadowing built-in tools
+    try:
+        from wisp.tools.registry import TOOL_IMPLS
+        if name in TOOL_IMPLS:
+            raise ValueError(f"Cannot register plugin tool '{name}' — name is reserved by built-in tools.")
+    except ImportError:
+        pass
+
     if name in _plugin_tools:
         # Allow overriding with a warning (plugins are expected to be user-controlled)
         logger.warning("Overriding previously registered plugin tool '%s'", name)

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import contextlib
 import threading
 import uuid
 from dataclasses import dataclass, field, asdict
@@ -22,10 +23,43 @@ logger = logging.getLogger(__name__)
 
 PLANS_DIR = WISP_CONFIG_DIR / "plans"
 _MAX_PLANS = 10  # Keep last N plans
+_LOCK_PATH = PLANS_DIR / "plans.lock"
 
 # Module-level write lock — every PlanStore writes to the *same* global PLANS_DIR,
 # so a per-instance lock is insufficient to prevent concurrent corruption.
 _PLAN_LOCK = threading.RLock()
+
+
+@contextlib.contextmanager
+def file_lock(lock_path: Path):
+    """Acquire an exclusive OS-level cross-process file lock."""
+    # Ensure parent directory exists
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        f = open(lock_path, "w")
+    except OSError:
+        yield
+        return
+
+    # Try to lock using fcntl on Unix/Mac
+    try:
+        import fcntl
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        has_lock = True
+    except (ImportError, OSError):
+        has_lock = False
+
+    try:
+        yield
+    finally:
+        if has_lock:
+            try:
+                import fcntl
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+        f.close()
+
 
 
 @dataclass
@@ -220,9 +254,10 @@ class PlanStore:
         data = json.dumps(plan.to_dict(), indent=2, ensure_ascii=False)
         try:
             with _PLAN_LOCK:
-                self._save_atomic(path, data)
-                logger.debug("Saved plan %s (%d tasks)", plan.id, len(plan.tasks))
-                self._rotate()
+                with file_lock(_LOCK_PATH):
+                    self._save_atomic(path, data)
+                    logger.debug("Saved plan %s (%d tasks)", plan.id, len(plan.tasks))
+                    self._rotate()
         except OSError as e:
             logger.error("Failed to save plan %s: %s", plan.id, e)
 
@@ -237,8 +272,10 @@ class PlanStore:
         if not path.exists():
             return None
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            return Plan.from_dict(data)
+            with _PLAN_LOCK:
+                with file_lock(_LOCK_PATH):
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                    return Plan.from_dict(data)
         except (json.JSONDecodeError, OSError) as e:
             logger.error("Failed to load plan %s: %s", plan_id, e)
             return None
@@ -270,21 +307,23 @@ class PlanStore:
         plans = []
         if not PLANS_DIR.exists():
             return plans
-        for path in sorted(PLANS_DIR.glob("*.json"), reverse=True):
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                plans.append({
-                    "id": data.get("id", path.stem),
-                    "goal": data.get("goal", "")[:60],
-                    "workspace": data.get("workspace", ""),
-                    "status": data.get("status", "?"),
-                    "created_at": data.get("created_at", ""),
-                    "updated_at": data.get("updated_at", ""),
-                    "task_count": len(data.get("tasks", [])),
-                    "done_count": sum(1 for t in data.get("tasks", []) if t.get("status") == "done"),
-                })
-            except (json.JSONDecodeError, OSError):
-                continue
+        with _PLAN_LOCK:
+            with file_lock(_LOCK_PATH):
+                for path in sorted(PLANS_DIR.glob("*.json"), reverse=True):
+                    try:
+                        data = json.loads(path.read_text(encoding="utf-8"))
+                        plans.append({
+                            "id": data.get("id", path.stem),
+                            "goal": data.get("goal", "")[:60],
+                            "workspace": data.get("workspace", ""),
+                            "status": data.get("status", "?"),
+                            "created_at": data.get("created_at", ""),
+                            "updated_at": data.get("updated_at", ""),
+                            "task_count": len(data.get("tasks", [])),
+                            "done_count": sum(1 for t in data.get("tasks", []) if t.get("status") == "done"),
+                        })
+                    except (json.JSONDecodeError, OSError):
+                        continue
         return plans
 
     def _rotate(self) -> None:

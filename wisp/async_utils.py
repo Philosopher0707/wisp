@@ -13,10 +13,13 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, AsyncIterator, TypeVar, Iterator
 
 T = TypeVar("T")
+
+# Thread pool for synchronous generators to avoid spawning raw unmanaged threads per call
+_GEN_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="wisp-sync-gen")
 
 
 # ── Persistent background thread + loop ──────────────────────────────────
@@ -123,9 +126,8 @@ async def sync_gen_iter(
             if not stop_event.is_set():
                 _enqueue(False, exc)
 
-    # Start the consumer thread
-    t = threading.Thread(target=_thread_target, name="wisp-sync-gen", daemon=True)
-    t.start()
+    # Start the consumer thread using the thread pool executor
+    _GEN_EXECUTOR.submit(_thread_target)
 
     try:
         while True:

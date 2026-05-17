@@ -113,10 +113,21 @@ def discover_mcp_configs(workspace: str) -> list[MCPServerConfig]:
     configs: list[MCPServerConfig] = []
     seen_names: set[str] = set()
 
-    paths_to_check = [
-        Path(workspace) / ".wisp" / "mcp.json",
-        Path.home() / ".config" / "wisp" / "mcp.json",
-    ]
+    from wisp.trust import WorkspaceTrustManager
+
+    paths_to_check = []
+    workspace_mcp_path = Path(workspace) / ".wisp" / "mcp.json"
+    if workspace_mcp_path.exists():
+        if WorkspaceTrustManager.is_workspace_trusted(workspace):
+            paths_to_check.append(workspace_mcp_path)
+        else:
+            logger.warning(
+                "Skipping loading workspace-local MCP server configuration because the workspace is untrusted: %s. "
+                "To trust this workspace, add its path to trusted_workspaces.json.",
+                workspace
+            )
+
+    paths_to_check.append(Path.home() / ".config" / "wisp" / "mcp.json")
 
     for cfg_path in paths_to_check:
         if not cfg_path.exists():

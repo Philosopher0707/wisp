@@ -12,6 +12,7 @@ Usage::
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -21,9 +22,15 @@ from typing import Any
 class AgentMetrics:
     """In-memory counters for agent observability.
 
-    Thread-safe by virtue of CPython GIL (all operations are single-dict/list
-    ops).  Not designed for multi-process sharing.
+    NOT thread-safe by default: ``@dataclass`` mutable fields like
+    ``turns += 1`` are ``LOAD`` → ``ADD`` → ``STORE`` at bytecode level.
+    The GIL protects the individual bytecode opcodes, not the full
+    ``+=`` sequence.  Use the provided ``record_*`` helpers which
+    acquire ``self._lock`` before mutation.
+
+    Not designed for multi-process sharing.
     """
+    _lock: threading.RLock = field(default_factory=threading.RLock)
 
     # ── Turn-level ──
     turns: int = 0
@@ -45,74 +52,82 @@ class AgentMetrics:
 
     def record_turn(self, latency_s: float, prompt_chars: int, completion_chars: int, chars_per_token: int = 4) -> None:
         """Record completion of one user turn."""
-        self.turns += 1
-        self.latency_ms_total += latency_s * 1000
-        self.prompt_tokens += prompt_chars // chars_per_token
-        self.completion_tokens += completion_chars // chars_per_token
-        self.total_tokens = self.prompt_tokens + self.completion_tokens
+        with self._lock:
+            self.turns += 1
+            self.latency_ms_total += latency_s * 1000
+            self.prompt_tokens += prompt_chars // chars_per_token
+            self.completion_tokens += completion_chars // chars_per_token
+            self.total_tokens = self.prompt_tokens + self.completion_tokens
 
     def record_tool(self, name: str, duration_ms: float, success: bool = True) -> None:
         """Record a tool execution outcome."""
-        self.tool_calls_total += 1
-        if not success:
-            self.tool_errors_total += 1
-        self.tool_durations_ms.setdefault(name, []).append(duration_ms)
+        with self._lock:
+            self.tool_calls_total += 1
+            if not success:
+                self.tool_errors_total += 1
+            self.tool_durations_ms.setdefault(name, []).append(duration_ms)
 
     def record_tool_block(self) -> None:
-        self.tool_blocks += 1
+        with self._lock:
+            self.tool_blocks += 1
 
     def record_tool_approval(self, approved: bool) -> None:
-        if approved:
-            self.tool_approvals += 1
+        with self._lock:
+            if approved:
+                self.tool_approvals += 1
 
     def record_compaction(self) -> None:
-        self.compactions += 1
+        with self._lock:
+            self.compactions += 1
 
     def record_interruption(self) -> None:
-        self.interruptions += 1
+        with self._lock:
+            self.interruptions += 1
 
     def snapshot(self, chars_per_token: int = 4) -> dict[str, Any]:
         """Return a JSON-serializable dict of current counters."""
-        avg_latency = self.latency_ms_total / self.turns if self.turns else 0.0
-        tool_success_rate = (
-            (1 - self.tool_errors_total / self.tool_calls_total) * 100
-            if self.tool_calls_total else 100.0
-        )
-        avg_tool_dur: dict[str, float] = {}
-        for name, durs in self.tool_durations_ms.items():
-            avg_tool_dur[name] = sum(durs) / len(durs)
+        with self._lock:
+            avg_latency = self.latency_ms_total / self.turns if self.turns else 0.0
+            tool_success_rate = (
+                (1 - self.tool_errors_total / self.tool_calls_total) * 100
+                if self.tool_calls_total else 100.0
+            )
+            avg_tool_dur: dict[str, float] = {}
+            for name, durs in self.tool_durations_ms.items():
+                avg_tool_dur[name] = sum(durs) / len(durs)
 
-        return {
-            "turns": self.turns,
-            "total_tokens": self.total_tokens,
-            "prompt_tokens": self.prompt_tokens,
-            "completion_tokens": self.completion_tokens,
-            "avg_latency_ms": round(avg_latency, 1),
-            "total_latency_ms": round(self.latency_ms_total, 1),
-            "tool_calls": self.tool_calls_total,
-            "tool_errors": self.tool_errors_total,
-            "tool_success_rate": round(tool_success_rate, 1),
-            "avg_tool_duration_ms": avg_tool_dur,
-            "interruptions": self.interruptions,
-            "compactions": self.compactions,
-            "tool_blocks": self.tool_blocks,
-            "tool_approvals": self.tool_approvals,
-        }
+            return {
+                "turns": self.turns,
+                "total_tokens": self.total_tokens,
+                "prompt_tokens": self.prompt_tokens,
+                "completion_tokens": self.completion_tokens,
+                "avg_latency_ms": round(avg_latency, 1),
+                "total_latency_ms": round(self.latency_ms_total, 1),
+                "tool_calls": self.tool_calls_total,
+                "tool_errors": self.tool_errors_total,
+                "tool_success_rate": round(tool_success_rate, 1),
+                "avg_tool_duration_ms": avg_tool_dur,
+                "interruptions": self.interruptions,
+                "compactions": self.compactions,
+                "tool_blocks": self.tool_blocks,
+                "tool_approvals": self.tool_approvals,
+            }
 
     def reset(self) -> None:
         """Reset all counters to zero."""
-        self.turns = 0
-        self.total_tokens = 0
-        self.prompt_tokens = 0
-        self.completion_tokens = 0
-        self.latency_ms_total = 0.0
-        self.tool_calls_total = 0
-        self.tool_errors_total = 0
-        self.tool_durations_ms.clear()
-        self.interruptions = 0
-        self.compactions = 0
-        self.tool_blocks = 0
-        self.tool_approvals = 0
+        with self._lock:
+            self.turns = 0
+            self.total_tokens = 0
+            self.prompt_tokens = 0
+            self.completion_tokens = 0
+            self.latency_ms_total = 0.0
+            self.tool_calls_total = 0
+            self.tool_errors_total = 0
+            self.tool_durations_ms.clear()
+            self.interruptions = 0
+            self.compactions = 0
+            self.tool_blocks = 0
+            self.tool_approvals = 0
 
     def __repr__(self) -> str:
         return (

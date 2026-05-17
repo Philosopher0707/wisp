@@ -2,7 +2,7 @@
 
 Covers the full skill loading lifecycle:
 1. /skill command sets _active_skill and clears cache
-2. Skill system prompt injection (MANDATORY mode block)
+2. Skill system prompt injection (Active Skill suggestion block)
 3. Skill auto-detection from query via match_skills
 4. Skill not found handling (graceful fallback)
 5. Skill acknowledgment turn after /skill in REPL
@@ -53,7 +53,7 @@ class MockAgent:
         if skill_name:
             skill = next((s for s in skills if s.name == skill_name), None)
             if skill:
-                system += f"\n\nMANDATORY Mode: {skill.name}\n"
+                system += f"\n\n## Active Skill: {skill.name}\n"
                 system += skill.description + "\n\n"
                 system += skill.instructions
 
@@ -155,32 +155,32 @@ class TestSkillSystemPrompt:
         )
         agent._active_skill = "coder"
         system = agent._build_system_prompt(skill_name="coder")
-        assert "MANDATORY Mode: coder" in system
+        assert "## Active Skill: coder" in system
         assert "Write Python code" in system
         assert "Always use type hints" in system
 
     def test_no_skill_no_injection(self, agent):
-        """Without active skill, no MANDATORY block."""
+        """Without active skill, no Active Skill block."""
         system = agent._build_system_prompt()
-        assert "MANDATORY Mode" not in system
+        assert "Active Skill" not in system
 
     def test_skill_not_found_no_crash(self, agent):
         """Referencing non-existent skill should not crash."""
         agent._active_skill = "nonexistent"
         system = agent._build_system_prompt(skill_name="nonexistent")
-        assert "MANDATORY Mode" not in system
+        assert "Active Skill" not in system
 
     def test_skill_priority_over_other_context(self, agent):
-        """Skill instructions should be at the end (highest priority)."""
+        """Skill instructions appear after base prompt."""
         skill_dir = Path(agent.config.workspace) / ".agents" / "skills" / "coder"
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text(
-            "---\nname: coder\ndescription: Write code\n---\nOVERRIDE: use tabs"
+            "---\nname: coder\ndescription: Write code\n---\nPrefer tabs."
         )
         system = agent._build_system_prompt(skill_name="coder")
         # Skill content should be after base prompt
         base_pos = system.find("You are Wisp.")
-        skill_pos = system.find("OVERRIDE: use tabs")
+        skill_pos = system.find("Prefer tabs.")
         assert skill_pos > base_pos
 
     def test_skill_with_unicode_content(self, agent):
@@ -202,7 +202,7 @@ class TestSkillSystemPrompt:
             "---\nname: empty\ndescription: Empty skill\n---\n"
         )
         system = agent._build_system_prompt(skill_name="empty")
-        assert "MANDATORY Mode: empty" in system
+        assert "## Active Skill: empty" in system
 
 
 # ── 3. Skill Auto-Detection ────────────────────────────────────────
@@ -479,7 +479,7 @@ class TestSkillAcknowledgment:
             "---\nname: coder\ndescription: Write code\n---\nInstructions"
         )
         system = agent._build_system_prompt("coder", query="ack")
-        assert "MANDATORY Mode: coder" in system
+        assert "## Active Skill: coder" in system
 
 
 # ── 8. Skill Persistence Across Sessions ─────────────────────────────

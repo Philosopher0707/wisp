@@ -69,6 +69,9 @@ class SemanticIndex:
         self.ollama_url = ollama_url
         self._db_path = db_path or str(self.workspace / ".wisp" / "semantic_index.db")
         self._conn: Optional[sqlite3.Connection] = None
+        self._cache_key = None
+        self._cache_chunk_ids = []
+        self._cache_M = None
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -434,33 +437,42 @@ class SemanticIndex:
         if np.allclose(query_vec, 0.0):
             return []
 
-        # Load all embeddings as a single numpy matrix
-        # Load all embeddings as a single numpy matrix
-        rows = self.conn.execute(
-            "SELECT chunk_id, embedding FROM embeddings"
-        ).fetchall()
-
-        if not rows:
-            return []
+        # Load all embeddings as a single numpy matrix or use the cached matrix
+        try:
+            mtime_row = self.conn.execute("SELECT COUNT(*), COALESCE(MAX(mtime), 0.0) FROM files").fetchone()
+            current_key = (mtime_row[0], mtime_row[1]) if mtime_row else (0, 0.0)
+        except Exception:
+            current_key = (0, 0.0)
 
         dim = len(query_vec)
-        chunk_ids = []
-        emb_list = []
 
-        for chunk_id, emb_bytes in rows:
-            if len(emb_bytes) >= dim * 8:
-                vec = np.frombuffer(emb_bytes[: dim * 8], dtype=np.float64)
-                chunk_ids.append(chunk_id)
-                emb_list.append(vec)
-            else:
-                # Dimension mismatch — skip malformed row
-                pass
+        if self._cache_key != current_key or self._cache_M is None or len(self._cache_chunk_ids) == 0:
+            rows = self.conn.execute(
+                "SELECT chunk_id, embedding FROM embeddings"
+            ).fetchall()
 
-        if not emb_list:
-            return []
+            if not rows:
+                return []
 
-        # Stack into matrix (n_chunks × dim)
-        M = np.vstack(emb_list)
+            chunk_ids = []
+            emb_list = []
+
+            for chunk_id, emb_bytes in rows:
+                if len(emb_bytes) >= dim * 8:
+                    vec = np.frombuffer(emb_bytes[: dim * 8], dtype=np.float64)
+                    chunk_ids.append(chunk_id)
+                    emb_list.append(vec)
+
+            if not emb_list:
+                return []
+
+            # Stack and cache the matrix
+            self._cache_chunk_ids = chunk_ids
+            self._cache_M = np.vstack(emb_list)
+            self._cache_key = current_key
+
+        chunk_ids = self._cache_chunk_ids
+        M = self._cache_M
 
         # Vectorised cosine similarity — suppress benign warnings from NaN/Inf rows
         with np.errstate(divide="ignore", invalid="ignore", over="ignore"):

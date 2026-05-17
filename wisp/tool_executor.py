@@ -481,7 +481,8 @@ class ToolExecutor:
             result = await self._call_mcp_tool(func_name, func_args)
         else:
             try:
-                result = execute_tool(
+                result = await asyncio.to_thread(
+                    execute_tool,
                     func_name,
                     func_args,
                     workspace,

@@ -107,6 +107,12 @@ class TestRegisterTool:
         clear_plugin_tools()
         assert list_plugin_tools() == []
 
+    def test_shadowing_core_tool_raises_value_error(self):
+        clear_plugin_tools()
+        with pytest.raises(ValueError) as excinfo:
+            register_tool("run_bash", lambda: "shadowed")
+        assert "name is reserved by built-in tools" in str(excinfo.value)
+
 
 class TestSchemaFromSignature:
     """Auto-schema generation from Python signatures."""

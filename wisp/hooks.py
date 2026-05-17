@@ -456,11 +456,21 @@ class HookManager:
 
         # Project hooks directory
         project_hooks = self.workspace / self.HOOK_DIR
-        search_paths.append(project_hooks)
+        if project_hooks.is_dir():
+            from wisp.trust import WorkspaceTrustManager
+            if WorkspaceTrustManager.is_workspace_trusted(self.workspace):
+                search_paths.append(project_hooks)
+            else:
+                logger.warning(
+                    "Skipping loading workspace-local hooks because the workspace is untrusted: %s. "
+                    "To trust this workspace, add its path to trusted_workspaces.json.",
+                    self.workspace
+                )
 
         # User-global hooks directory
         user_hooks = Path.home() / ".config" / "wisp" / "hooks"
-        search_paths.append(user_hooks)
+        if user_hooks.is_dir():
+            search_paths.append(user_hooks)
 
         for hooks_dir in search_paths:
             if not hooks_dir.is_dir():
@@ -720,8 +730,50 @@ class HookManager:
         Returns:
             A HookResult representing the hook's decision.
         """
+        import time
+        start_time = time.time()
         async with self._lock:
-            return await self._execute_hook_impl(hook, context)
+            result = await self._execute_hook_impl(hook, context)
+        duration = time.time() - start_time
+        
+        self._audit_hook_execution(hook, context, result, duration)
+        return result
+
+    def _audit_hook_execution(
+        self,
+        hook: HookConfig,
+        context: dict[str, Any],
+        result: HookResult,
+        duration: float,
+    ) -> None:
+        """Audit hook execution by appending a structured log entry to .wisp/hooks_audit.jsonl."""
+        try:
+            from datetime import datetime, timezone
+            audit_dir = self.workspace / ".wisp"
+            audit_dir.mkdir(parents=True, exist_ok=True)
+            audit_file = audit_dir / "hooks_audit.jsonl"
+            
+            # Scrub sensitive tool arguments before logging (e.g. content)
+            tool_args = dict(context.get("tool_args", {})) if context.get("tool_args") else {}
+            for key in ("content", "text", "new_text", "old_text", "command"):
+                if key in tool_args:
+                    tool_args[key] = f"... [scrubbed {len(str(tool_args[key]))} chars]"
+                    
+            entry = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "hook_name": hook.name,
+                "event": hook.event.value,
+                "tool_name": context.get("tool_name", ""),
+                "tool_args": tool_args,
+                "action": result.action,
+                "message": result.message,
+                "duration_seconds": round(duration, 4),
+            }
+            
+            with open(audit_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception as e:
+            logger.warning("Failed to write hook audit log: %s", e)
 
     async def _execute_hook_impl(
         self,
