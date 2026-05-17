@@ -167,25 +167,32 @@ def check_dangerous_command(command: str) -> Optional[str]:
 def _resolve_path(path: str, workspace: str) -> Path:
     """Resolve a path relative to workspace, with security boundary enforcement.
 
+    Uses os.path.realpath to follow symlinks and verify the resolved path
+    is physically within the workspace directory. This prevents symlink
+    escapes where a link inside the workspace points outside it.
+
     Returns the resolved absolute Path if it's within the workspace.
-    Raises ToolError on path traversal attempts.
+    Raises ToolError on path traversal or symlink escape attempts.
     """
-    ws = Path(workspace).resolve()
-    # If path is relative, resolve it relative to workspace
+    real_ws = os.path.realpath(workspace)
     if Path(path).is_absolute():
-        resolved = Path(path).resolve()
+        real_target = os.path.realpath(path)
     else:
-        resolved = (ws / path).resolve()
-    try:
-        common = os.path.commonpath([str(resolved), str(ws)])
-    except ValueError:
-        raise ToolError(f"Access denied: cannot resolve path {path}")
-    if common != str(ws):
+        real_target = os.path.realpath(os.path.join(real_ws, path))
+
+    # Exact match (e.g., path is "." or the workspace itself)
+    if real_target == real_ws:
+        return Path(real_target)
+
+    # Prefix check: target must be inside workspace, not a sibling
+    # Use os.sep to avoid matching /workspace2 when workspace is /workspace
+    prefix = real_ws if real_ws.endswith(os.sep) else real_ws + os.sep
+    if not real_target.startswith(prefix):
         raise ToolError(
-            f"Access denied: {path} resolves to {resolved}, "
-            f"which is outside workspace {ws}"
+            f"Access denied: {path} resolves to {real_target}, "
+            f"which is outside workspace {real_ws}"
         )
-    return resolved
+    return Path(real_target)
 
 
 def _validate_string(value: Any, name: str, max_len: int = 4096, allow_empty: bool = False) -> str:
