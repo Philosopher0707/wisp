@@ -45,9 +45,15 @@ def cmd_run(prompt, model=None, skill=None, workspace=None, auto_approve=False, 
     
     # Force long-task mode if requested
     if long_task:
-        from wisp.tools.long_horizon import tool_run_long_task
-        result = tool_run_long_task(goal=prompt)
-        print(result)
+        import asyncio
+        async def _run_long():
+            async for event in agent.core.run_long_task(goal=prompt, workspace=config.workspace or ".", background=True):
+                if event.type == "task_started":
+                    print(f"🎯 Task started: {event.data.get('task_id', '')}")
+                    print(f"   Goal: {event.data.get('goal', '')[:60]}")
+                elif event.type == "system":
+                    print(f"   {event.data.get('message', '')}")
+        asyncio.run(_run_long())
         return
     
     agent.run(prompt, skill_name=skill, session_id=session_id)
