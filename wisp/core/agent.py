@@ -148,33 +148,6 @@ def _generate_agent_id() -> str:
     return f"wisp-{uuid.uuid4().hex[:8]}"
 
 
-def _should_block_hook(hook_results: list) -> bool:
-    """Check if any hook result should block execution."""
-    for r in (hook_results or []):
-        if getattr(r, "is_blocking", False) or getattr(r, "action", "") == "block":
-            return True
-    return False
-
-
-def _collect_hook_messages(hook_results: list) -> str:
-    """Collect messages from hook results into a single string."""
-    msgs: list[str] = []
-    for r in (hook_results or []):
-        msg = getattr(r, 'message', '') or str(r)
-        if msg:
-            msgs.append(msg)
-    return "; ".join(msgs)
-
-
-def _get_modified_args(hook_results: list) -> Optional[dict]:
-    """Return modified tool args from hook results, if any hook modified them."""
-    for r in (hook_results or []):
-        modified = getattr(r, 'modified_args', None)
-        if modified is not None:
-            return modified
-    return None
-
-
 class WispAgentCore:
     """Event-driven agent core — no print, no input, no global state."""
 
