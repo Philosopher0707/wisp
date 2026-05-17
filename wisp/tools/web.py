@@ -7,6 +7,7 @@ import json as _json
 import logging
 import urllib.parse
 import urllib.request
+import urllib.robotparser
 from html.parser import HTMLParser
 
 import requests
@@ -22,12 +23,65 @@ from wisp.tools._utils import (
 logger = logging.getLogger(__name__)
 
 
+# ── robots.txt support ──────────────────────────────────────────────────────
+# Simple TTL cache for robots.txt results so we don't refetch the same
+# robots.txt for every URL on the same domain.
+_robots_cache: dict[str, tuple[bool, float]] = {}
+_ROBOTS_TTL = 3600.0  # cache for 1 hour
+
+# Shared user-agent for all outgoing web requests
+_USER_AGENT = "Wisp-Agent/0.1.0 (Web Fetch Tool; Respects robots.txt)"
+
+
+def _check_robots_txt(target_url: str, user_agent: str = "*") -> bool:
+    """Return True if fetching target_url is allowed by robots.txt.
+
+    Fetches the robots.txt for the target's netloc, parses it, and
+    checks whether the path is allowed for the given user-agent string.
+    Results are cached for ``_ROBOTS_TTL`` seconds.
+
+    Returns True (allow) if robots.txt is unreachable, malformed, or
+    does not exist — this is standard behaviour (``robots.txt`` is a
+    voluntary protocol, not a security boundary).
+    """
+    parsed = urllib.parse.urlparse(target_url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return True
+
+    robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+    cache_key = robots_url
+    import time
+    now = time.time()
+
+    cached = _robots_cache.get(cache_key)
+    if cached is not None:
+        allowed, timestamp = cached
+        if now - timestamp < _ROBOTS_TTL:
+            return allowed
+
+    try:
+        rp = urllib.robotparser.RobotFileParser()
+        rp.set_url(robots_url)
+        rp.read()
+        allowed = rp.can_fetch(user_agent, target_url)
+        _robots_cache[cache_key] = (allowed, now)
+        if not allowed:
+            logger.info("robots.txt disallowed %s", target_url)
+        return allowed
+    except Exception:
+        _robots_cache[cache_key] = (True, now)
+        return True
+
+
 def tool_web_fetch(url: str, workspace: str = ".", max_chars: int = 10000) -> str:
     """Fetch content from a URL (web page, API endpoint, etc.).
     
     Fetches the URL and returns the content as text.
     For HTML pages, returns extracted text content.
-    Respects robots.txt and has reasonable timeouts.
+    
+    Checks robots.txt before fetching (with 1-hour TTL cache).
+    Falls back to allowing the fetch if robots.txt cannot be retrieved.
+    Uses a 30-second timeout and follows redirects.
     """
     from urllib.parse import urlparse
     
@@ -39,11 +93,20 @@ def tool_web_fetch(url: str, workspace: str = ".", max_chars: int = 10000) -> st
     if parsed.scheme not in ("http", "https"):
         raise ToolError(f"Unsupported URL scheme: {parsed.scheme}")
     
+    # ── robots.txt compliance ──
+    if not _check_robots_txt(url, user_agent=_USER_AGENT):
+        raise ToolError(
+            f"[WEB_FETCH_BLOCKED] The site {parsed.netloc} explicitly "
+            f"disallows automated fetching via robots.txt. "
+            f"Try a different source or ask the user for a direct link "
+            f"that is guaranteed to be allowed."
+        )
+    
     max_chars = _validate_int(max_chars, "max_chars", 100, 100000)
     
     try:
         headers = {
-            "User-Agent": "Wisp-Agent/0.1.0 (Web Fetch Tool)"
+            "User-Agent": _USER_AGENT
         }
         response = requests.get(url, headers=headers, timeout=30, allow_redirects=True)
         response.raise_for_status()
