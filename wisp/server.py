@@ -55,7 +55,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from wisp.config import WispConfig
-from wisp.multi_agent.orchestrator import SwarmOrchestrator
+# SwarmOrchestrator is imported lazily — the swarm subsystem may be unavailable
+# from wisp.multi_agent.orchestrator import SwarmOrchestrator
 from wisp.multi_agent.roles import AgentRole
 from wisp.transport.server import create_swarm_progress_callback
 from wisp.app_server import WispAppServer
@@ -303,7 +304,7 @@ class Connection:
         self.transport: Optional[ServerTransport] = None
         self._run_lock = asyncio.Lock()
         self.swarm_task: Optional[asyncio.Task] = None
-        self.swarm_orchestrator: Optional[SwarmOrchestrator] = None
+        self.swarm_orchestrator: Any = None
 
     async def send(self, msg: dict):
         try:
@@ -947,6 +948,13 @@ async def _launch_swarm_ws(
     config.workspace = str(WORKSPACE_ROOT)
     config.auto_approve = True
 
+    try:
+        from wisp.multi_agent.orchestrator import SwarmOrchestrator
+    except ImportError:
+        logger.error("Swarm subsystem unavailable: wisp.multi_agent.orchestrator module missing")
+        await conn.send({"type": "error", "message": "Swarm feature not available"})
+        return
+
     orch = SwarmOrchestrator(config, max_parallel=max_parallel)
     old_orch = conn.swarm_orchestrator
     conn.swarm_orchestrator = orch
@@ -1005,6 +1013,14 @@ async def swarm_run_api(req: SwarmRunRequest):
         config.model = req.model
     config.workspace = str(WORKSPACE_ROOT)
     config.auto_approve = True
+
+    try:
+        from wisp.multi_agent.orchestrator import SwarmOrchestrator
+    except ImportError:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Swarm subsystem unavailable"},
+        )
 
     orch = SwarmOrchestrator(config, max_parallel=req.max_parallel)
     run_id = f"swarm-{secrets.token_hex(6)}"

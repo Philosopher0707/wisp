@@ -1,8 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
-import { useAppState } from '../state/context.js';
-import { useKeybindings } from '../hooks/useKeybindings.js';
 import { useWebSocket } from '../hooks/useWebSocket.js';
+import { useKeybindings } from '../hooks/useKeybindings.js';
 import { AppContext } from '../state/context.js';
 import { appReducer, createInitialState } from '../state/types.js';
 import { SessionPicker } from './SessionPicker.js';
@@ -22,7 +21,11 @@ export const App: React.FC<Props> = ({ serverUrl }) => {
   const ws = useWebSocket(serverUrl, dispatch);
 
   const ctx = React.useMemo(
-    () => ({ state, dispatch, sendMessage: (msg: object) => ws.send(msg as never) }),
+    () => ({
+      state,
+      dispatch,
+      sendMessage: (msg: { type: string; [key: string]: unknown }) => ws.send(msg),
+    }),
     [state, dispatch, ws.send],
   );
 

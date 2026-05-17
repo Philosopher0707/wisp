@@ -9,9 +9,12 @@ await esbuild.build({
   entryPoints: ['src/app.tsx'],
   bundle: true,
   platform: 'node',
-  target: 'node20',
+  target: 'node22',
   format: 'esm',
   outfile: 'dist/wisp-tui.mjs',
+  banner: {
+    js: `import { createRequire } from 'module'; const require = createRequire(import.meta.url);`,
+  },
   alias: {
     'react-devtools-core': path.join(__dirname, 'stubs', 'react-devtools-core.js'),
   },

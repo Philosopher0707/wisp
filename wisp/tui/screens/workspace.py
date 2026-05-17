@@ -34,6 +34,10 @@ class WorkspaceScreen(Screen):
         Binding("escape", "go_back", "Session picker"),
         Binding("ctrl+backslash", "toggle_context_panel", "Toggle context"),
         Binding("ctrl+p", "toggle_command_palette", "Command palette"),
+        Binding("y", "approve_tool", "Approve tool"),
+        Binding("n", "deny_tool", "Deny tool"),
+        Binding("a", "approve_all", "Approve all"),
+        Binding("d", "deny_all", "Deny all"),
     ]
 
     def __init__(
@@ -50,6 +54,10 @@ class WorkspaceScreen(Screen):
         self._context_visible = False
         self._ws_client: WispWSClient | None = None
         self._pending_prompt: str | None = None
+        self._pending_approval_call_id: str | None = None
+        self._auto_approve = False
+        self._pending_approval_call_id: str | None = None
+        self._auto_approve: bool = False
 
     def compose(self) -> ComposeResult:
         yield TitleBar(id="title-bar")
@@ -102,8 +110,21 @@ class WorkspaceScreen(Screen):
         self._ws_client.on_complete = self._on_complete
         self._ws_client.on_error = self._on_error
         self._ws_client.on_status = self._on_status
+        self._ws_client.on_approval_request = self._on_approval_request
         import asyncio
         asyncio.create_task(self._ws_client.connect())
+
+    async def _on_approval_request(self, call_id: str, name: str, args: dict, reason: str) -> None:
+        if self._auto_approve:
+            if self._ws_client:
+                await self._ws_client.approve_tool(call_id, True)
+            return
+        self._pending_approval_call_id = call_id
+        try:
+            status = self.query_one("#status-bar", StatusBar)
+            status.connection_state = f"Approve {name}? [y]es [n]o [a]ll [d]eny"
+        except Exception:
+            pass
 
     async def _on_token(self, phase: str, text: str) -> None:
         try:
@@ -176,6 +197,32 @@ class WorkspaceScreen(Screen):
         asyncio.create_task(
             self._ws_client.send_prompt(event.text, session_id=self.session_id)
         )
+
+    def action_approve_tool(self) -> None:
+        if self._ws_client and self._pending_approval_call_id:
+            import asyncio
+            asyncio.create_task(self._ws_client.approve_tool(self._pending_approval_call_id, True))
+            self._pending_approval_call_id = None
+
+    def action_deny_tool(self) -> None:
+        if self._ws_client and self._pending_approval_call_id:
+            import asyncio
+            asyncio.create_task(self._ws_client.approve_tool(self._pending_approval_call_id, False))
+            self._pending_approval_call_id = None
+
+    def action_approve_all(self) -> None:
+        self._auto_approve = True
+        if self._ws_client and self._pending_approval_call_id:
+            import asyncio
+            asyncio.create_task(self._ws_client.approve_tool(self._pending_approval_call_id, True))
+            self._pending_approval_call_id = None
+
+    def action_deny_all(self) -> None:
+        self._auto_approve = False
+        if self._ws_client and self._pending_approval_call_id:
+            import asyncio
+            asyncio.create_task(self._ws_client.approve_tool(self._pending_approval_call_id, False))
+            self._pending_approval_call_id = None
 
     def on_icon_button_pressed(self, event) -> None:
         tabs = self.query_one("#tabs", TabbedContent)

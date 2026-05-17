@@ -17,7 +17,7 @@ export const InputBar: React.FC = () => {
       switch (cmd) {
         case 'help':
         case '?':
-          dispatch({ type: 'RECEIVE_STATUS', message: 'Commands: /new, /thinking, /model <name>, /clear, /quit', level: 'info' });
+          dispatch({ type: 'RECEIVE_STATUS', message: 'Commands: /new, /thinking, /model <name>, /auto [on|off], /clear, /quit', level: 'info' });
           return;
         case 'new':
         case 'session':
@@ -29,6 +29,18 @@ export const InputBar: React.FC = () => {
           return;
         case 'clear':
           dispatch({ type: 'CLEAR_CHAT' });
+          return;
+        case 'auto':
+          if (parts[1] === 'on') {
+            dispatch({ type: 'ENABLE_AUTO_APPROVE' });
+            dispatch({ type: 'RECEIVE_STATUS', message: 'Auto-approve enabled for this session', level: 'info' });
+          } else if (parts[1] === 'off') {
+            dispatch({ type: 'DISABLE_AUTO_APPROVE' });
+            dispatch({ type: 'RECEIVE_STATUS', message: 'Auto-approve disabled — you will be prompted for dangerous tools', level: 'info' });
+          } else {
+            const status = state.autoApprove ? 'ON' : 'OFF';
+            dispatch({ type: 'RECEIVE_STATUS', message: `Auto-approve is ${status}. Use /auto on|off to toggle.`, level: 'info' });
+          }
           return;
         case 'quit':
         case 'exit':
@@ -51,6 +63,7 @@ export const InputBar: React.FC = () => {
       session_id: state.sessionId || undefined,
       model: state.selectedModel || undefined,
       show_thinking: state.showThinking,
+      auto_approve: state.autoApprove,
     });
   };
 
@@ -62,7 +75,7 @@ export const InputBar: React.FC = () => {
         onChange={(v) => dispatch({ type: 'SET_INPUT', value: v })}
         onSubmit={handleSubmit}
         placeholder={state.isStreaming ? 'Waiting for agent...' : 'Type a message...'}
-        focus={!state.isStreaming}
+        focus={!state.isStreaming && !state.approvalPending}
       />
     </Box>
   );

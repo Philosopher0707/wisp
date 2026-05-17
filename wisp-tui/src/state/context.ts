@@ -4,7 +4,7 @@ import { AppState, Action, createInitialState } from './types.js';
 export interface AppContextType {
   state: AppState;
   dispatch: Dispatch<Action>;
-  sendMessage: (msg: object) => void;
+  sendMessage: (msg: { type: string; [key: string]: unknown }) => void;
 }
 
 export const AppContext = createContext<AppContextType>({

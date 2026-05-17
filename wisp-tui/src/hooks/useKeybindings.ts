@@ -7,12 +7,7 @@ export function useKeybindings() {
   useInput((input, key) => {
     if (key.escape) {
       if (state.approvalPending) {
-        sendMessage({
-          type: 'tool_approval',
-          id: state.approvalPending.callId,
-          approved: false,
-        });
-        dispatch({ type: 'DENY_TOOL', callId: state.approvalPending.callId });
+        _deny(dispatch, sendMessage, state.approvalPending.callId);
       }
       return;
     }
@@ -41,23 +36,50 @@ export function useKeybindings() {
 
     if (key.return) return;
 
-    // Approval keys when prompt is pending
+    // ── Approval keys ───────────────────────────────────────────────
     if (state.approvalPending) {
       if (input === 'y') {
-        sendMessage({
-          type: 'tool_approval',
-          id: state.approvalPending.callId,
-          approved: true,
-        });
-        dispatch({ type: 'APPROVE_TOOL', callId: state.approvalPending.callId });
+        // Approve once
+        _approve(dispatch, sendMessage, state.approvalPending.callId);
       } else if (input === 'n') {
-        sendMessage({
-          type: 'tool_approval',
-          id: state.approvalPending.callId,
-          approved: false,
-        });
-        dispatch({ type: 'DENY_TOOL', callId: state.approvalPending.callId });
+        // Deny once
+        _deny(dispatch, sendMessage, state.approvalPending.callId);
+      } else if (input === 'a') {
+        // Enable auto-approve for this session
+        dispatch({ type: 'ENABLE_AUTO_APPROVE' });
+        _approve(dispatch, sendMessage, state.approvalPending.callId);
+      } else if (input === 'd') {
+        // Disable auto-approve (deny + stop asking)
+        dispatch({ type: 'DISABLE_AUTO_APPROVE' });
+        _deny(dispatch, sendMessage, state.approvalPending.callId);
       }
+      return; // Don't let these fall through to input
     }
   });
+}
+
+function _approve(
+  dispatch: React.Dispatch<import('../state/types.js').Action>,
+  sendMessage: (msg: { type: string; [key: string]: unknown }) => void,
+  callId: string,
+) {
+  sendMessage({
+    type: 'tool_approval',
+    id: callId,
+    approved: true,
+  });
+  dispatch({ type: 'APPROVE_TOOL', callId });
+}
+
+function _deny(
+  dispatch: React.Dispatch<import('../state/types.js').Action>,
+  sendMessage: (msg: { type: string; [key: string]: unknown }) => void,
+  callId: string,
+) {
+  sendMessage({
+    type: 'tool_approval',
+    id: callId,
+    approved: false,
+  });
+  dispatch({ type: 'DENY_TOOL', callId });
 }

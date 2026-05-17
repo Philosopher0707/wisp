@@ -64,8 +64,34 @@ def cmd_repl(model=None, skill=None, workspace=None, session_id=None, show_think
     agent.repl(skill_name=skill, session_id=session_id)
 
 
-def cmd_tui(model=None, workspace=None, show_thinking=False, auto_approve=False):
+def cmd_tui(model=None, workspace=None, show_thinking=False, auto_approve=False, use_ink=False):
     """Run the experimental full-screen terminal app."""
+    if use_ink:
+        import subprocess
+        import os
+
+        wisp_tui_dir = os.path.join(os.path.dirname(__file__), '..', 'wisp-tui')
+        mjs_path = os.path.join(wisp_tui_dir, 'dist', 'wisp-tui.mjs')
+        if not os.path.exists(mjs_path):
+            print(error("✗ React TUI not built. Run: cd wisp-tui && npm run build"))
+            return
+        env = os.environ.copy()
+        if model:
+            # The React TUI doesn't take model directly, but server URL includes it
+            pass
+        if workspace:
+            env['WISP_WORKSPACE'] = workspace
+        server_url = env.get('WISP_SERVER', 'http://localhost:8000')
+        try:
+            subprocess.run(['node', mjs_path, '--server', server_url], env=env, check=True)
+        except FileNotFoundError:
+            print(error("✗ Node.js not found. Install Node.js to use the React TUI."))
+        except subprocess.CalledProcessError as e:
+            if e.returncode != 0:
+                # Normal exit (ctrl+c)
+                pass
+        return
+
     config = WispConfig()
     if model:
         config.model = model
@@ -888,6 +914,7 @@ Subcommands:
   run <prompt>             Single-shot agent with a prompt
   repl                     Interactive REPL mode (continuous chat)
   tui                      Full-screen terminal app (experimental)
+  tui --ink                Launch React/Ink TUI (requires Node.js)
   server                   Start cloud server for remote clients
   session list             List all saved sessions
   session show <id>        Show session details and recent messages
@@ -943,12 +970,12 @@ def main():
     flags_show_thinking = False
     flags_print = None
     flags_output_format = "json"
-    flags_quiet = False
+    flags_ink = False
 
     def extract_global_flags(args):
         """Extract global flags from args list, return remaining args."""
         nonlocal flags_model, flags_skill, flags_session, flags_workspace, flags_auto, flags_show_thinking
-        nonlocal flags_print, flags_output_format, flags_quiet
+        nonlocal flags_ink
         result = []
         i = 0
         while i < len(args):
@@ -977,6 +1004,9 @@ def main():
             elif a == "--output-format" and i + 1 < len(args):
                 flags_output_format = args[i + 1].lower()
                 i += 2
+            elif a == "--ink":
+                flags_ink = True
+                i += 1
             elif a == "--quiet":
                 flags_quiet = True
                 i += 1
@@ -998,7 +1028,7 @@ def main():
             cmd_repl(flags_model, flags_skill, flags_workspace, flags_session, flags_show_thinking, flags_auto)
 
         elif first == "tui":
-            cmd_tui(flags_model, flags_workspace, flags_show_thinking, flags_auto)
+            cmd_tui(flags_model, flags_workspace, flags_show_thinking, flags_auto, flags_ink)
 
         elif first == "session":
             if not rest:

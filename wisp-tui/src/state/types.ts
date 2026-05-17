@@ -77,6 +77,7 @@ export interface AppState {
   showThinking: boolean;
   selectedModel: string;
   viewMode: ViewMode;
+  autoApprove: boolean;
 }
 
 let _msgCounter = 0;
@@ -99,6 +100,7 @@ export function createInitialState(serverUrl: string): AppState {
     showThinking: false,
     selectedModel: '',
     viewMode: 'session-picker',
+    autoApprove: false,
   };
 }
 
@@ -122,6 +124,8 @@ export type Action =
   | { type: 'RECEIVE_STATUS'; message: string; level: string }
   | { type: 'APPROVE_TOOL'; callId: string }
   | { type: 'DENY_TOOL'; callId: string }
+  | { type: 'ENABLE_AUTO_APPROVE' }
+  | { type: 'DISABLE_AUTO_APPROVE' }
   | { type: 'SET_MODEL'; model: string }
   | { type: 'TOGGLE_THINKING' }
   | { type: 'CLEAR_CHAT' }
@@ -273,6 +277,12 @@ export function appReducer(state: AppState, action: Action): AppState {
     case 'APPROVE_TOOL':
     case 'DENY_TOOL':
       return { ...state, approvalPending: null };
+
+    case 'ENABLE_AUTO_APPROVE':
+      return { ...state, autoApprove: true, approvalPending: null };
+
+    case 'DISABLE_AUTO_APPROVE':
+      return { ...state, autoApprove: false, approvalPending: null };
 
     case 'SET_MODEL':
       return { ...state, selectedModel: action.model };

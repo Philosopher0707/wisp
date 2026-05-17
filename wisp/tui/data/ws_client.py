@@ -53,7 +53,7 @@ class WispWSClient:
             try:
                 import websockets
                 ws_url = self.server_url.replace("http://", "ws://").replace("https://", "wss://")
-                ws_url = f"{ws_url}/ws/tui"
+                ws_url = f"{ws_url}/ws/agent"
                 async with websockets.connect(ws_url) as ws:
                     self._ws = ws
                     if self.on_status:
