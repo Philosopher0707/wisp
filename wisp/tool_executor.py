@@ -343,7 +343,6 @@ class ToolExecutor:
             return
         ok = (
             (isinstance(result, str) and '"status": "ok"' in result)
-            or (isinstance(result, str) and not result.startswith("["))
             or (isinstance(result, dict) and result.get("status") == "ok")
         )
         if hasattr(self.metrics, "record_tool"):

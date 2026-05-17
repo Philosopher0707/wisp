@@ -755,8 +755,9 @@ def _render_tool_result(name: str, result, duration_ms,
     """Render a tool result. Extracts and renders diffs for write/edit tools."""
     duration_str = _format_duration(duration_ms)
 
-    # Parse JSON result if it's a string (execute_tool returns JSON string)
-    meta = None
+    # ── Parse JSON result and determine true success/error status ──
+    meta: dict | None = None
+    parsed: dict | None = None
     result_text: str
     if isinstance(result, str) and result.startswith("{"):
         try:
@@ -771,28 +772,22 @@ def _render_tool_result(name: str, result, duration_ms,
     else:
         result_text = str(result)
 
+    # Determine *true* success from the JSON status field, not by grepping
+    # for the string "Error" in the text which can give false negatives when
+    # the error message doesn't start with "Error:" (e.g. ToolError messages).
+    if isinstance(parsed, dict):
+        is_error = parsed.get("status") == "error"
+    else:
+        is_error = result_text.startswith("[") or result_text.startswith("Error")
+
     diff_text = (meta or {}).get("diff", "")
     is_edit_tool = name in ("write_file", "edit_file", "edit_file_multi")
 
-    # Full-output tools (non-edit): preserve multi-line formatting
-    if name in _FULL_OUTPUT_TOOLS and not is_edit_tool:
-        output_str = result_text
-        if not show_tool_output:
-            line_count = output_str.count("\n") + 1
-            return dim(f"  ✓ {name} ({duration_str}) — {line_count} lines of output · · · · · · · · · · · · · · · · · · ·")
-
-        if box_mode:
-            header = dim(f"  ✓ {name} ({duration_str}) " + "·" * max(0, width - len(f"  ✓ {name} ({duration_str}) ") - 2))
-            body = _box(output_str, width=width)
-            return f"{header}\n{body}"
-
-        header = dim(f"  ✓ {name} ({duration_str})")
-        body = dim(f"     → {name} result:\n{output_str}")
-        return f"{header}\n{body}"
-
-    # Edit tools: show summary + diff if available
+    # Edit tools with a diff: show diff regardless of success/failure,
+    # but change the icon to reflect the true status.
     if is_edit_tool and diff_text:
-        header = dim(f"  ✓ {name} ({duration_str}) " + "·" * max(0, width - len(f"  ✓ {name} ({duration_str}) ") - 2))
+        icon = "✗" if is_error else "✓"
+        header = dim(f"  {icon} {name} ({duration_str}) " + "·" * max(0, width - len(f"  {icon} {name} ({duration_str}) ") - 2))
         summary = dim(f"     → {result_text[:200].replace(chr(10), ' ')}")
         try:
             from wisp.diff_renderer import render_diff_box
@@ -803,22 +798,38 @@ def _render_tool_result(name: str, result, duration_ms,
         except ImportError:
             pass
 
-    # Regular / compact tool results
-    if not show_tool_output:
-        return dim(f"  ✓ {name} ({duration_str}) · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · ·")
+    # Full-output tools (non-edit): preserve multi-line formatting
+    if name in _FULL_OUTPUT_TOOLS and not is_edit_tool:
+        icon = "✗" if is_error else "✓"
+        output_str = result_text
+        if not show_tool_output:
+            line_count = output_str.count("\n") + 1
+            return dim(f"  {icon} {name} ({duration_str}) — {line_count} lines of output · · · · · · · · · · · · · · · · · · ·")
 
-    status_icon = "✓" if not result_text.startswith("Error") else "✗"
-    if result_text.startswith("Error"):
+        if box_mode:
+            header = dim(f"  {icon} {name} ({duration_str}) " + "·" * max(0, width - len(f"  {icon} {name} ({duration_str}) ") - 2))
+            body = _box(output_str, width=width)
+            return f"{header}\n{body}"
+
+        header = dim(f"  {icon} {name} ({duration_str})")
+        body = dim(f"     → {name} result:\n{output_str}")
+        return f"{header}\n{body}"
+
+    # Regular / compact tool results
+    icon = "✗" if is_error else "✓"
+    if not show_tool_output:
+        return dim(f"  {icon} {name} ({duration_str}) · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · ·")
+
+    # Detailed output
+    if is_error:
         preview = result_text[:200].replace("\n", " ")
         return dim(f"  ✗ {name} ({duration_str})") + "\n" + dim(f"     → {preview}")
 
     preview = result_text[:200].replace("\n", " ")
     if len(result_text) > 200:
         preview += "..."
-    header = dim(f"  {status_icon} {name} ({duration_str}) " + "·" * max(0, width - len(f"  {status_icon} {name} ({duration_str}) ") - 2))
+    header = dim(f"  ✓ {name} ({duration_str}) " + "·" * max(0, width - len(f"  ✓ {name} ({duration_str}) ") - 2))
     return f"{header}\n" + dim(f"     → {preview}")
-
-
 class CLITransport:
     """Terminal transport for WispAgentCore.
 

@@ -396,10 +396,13 @@ class TestToolExecutorMetrics:
 
     @pytest.mark.asyncio
     async def test_records_successful_tool(self, tool_executor, tmp_path):
+        # Create a real file so the tool actually succeeds
+        (tmp_path / "real.txt").write_text("hello")
+
         events = []
         async for event in tool_executor.execute(
             tool_name="read_file",
-            tool_args={"path": "any.txt"},
+            tool_args={"path": "real.txt"},
             workspace=str(tmp_path),
             tool_call_id="tc-1",
         ):
