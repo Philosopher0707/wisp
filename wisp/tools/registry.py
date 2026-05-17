@@ -566,15 +566,22 @@ def _build_tool_metadata(name: str, args: dict, result: str) -> dict:
             meta[key] = args[key]
 
     if name == "read_file":
-        m = result.rsplit("\n--- [showing lines ", 1)
-        if len(m) == 2:
-            full_range = m[1].rstrip(" -]")
-            if " of " in full_range:
-                parts = full_range.split(" of ", 1)
-                meta["lines_shown"] = parts[0]
-                meta["total_lines"] = int(parts[1])
-            else:
-                meta["lines_shown"] = full_range
+        # Parse the metadata header that read_file always includes:
+        # --- FILE: path | LINES: total | SHOWING: lo-hi ---
+        for line in result.splitlines()[:3]:
+            if line.startswith("--- FILE:"):
+                try:
+                    # Format: "--- FILE: path | LINES: 120 | SHOWING: 1-120 ---"
+                    parts = line.split(" | ")
+                    for part in parts[1:]:
+                        k, v = part.split(":", 1)
+                        if k.strip() == "LINES":
+                            meta["total_lines"] = int(v.strip())
+                        elif k.strip() == "SHOWING":
+                            meta["lines_shown"] = v.strip().rstrip(" -")
+                except (ValueError, IndexError):
+                    pass
+                break
 
     elif name == "write_file" and "path" in args:
         meta["bytes_written"] = len(args.get("content", ""))

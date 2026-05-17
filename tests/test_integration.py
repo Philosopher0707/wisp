@@ -424,7 +424,7 @@ class TestIntegrationExecuteToolErrors:
 
 class TestIntegrationToolMetadata:
     def test_metadata_read_file(self):
-        meta = _build_tool_metadata("read_file", {"path": "foo.py", "offset": 10, "limit": 50}, "content\n--- [showing lines 11-20 of 100] ---")
+        meta = _build_tool_metadata("read_file", {"path": "foo.py", "offset": 10, "limit": 50}, "--- FILE: foo.py | LINES: 100 | SHOWING: 11-20 ---\ncontent")
         assert meta["path"] == "foo.py"
         assert meta["offset"] == 10
         assert meta["limit"] == 50

@@ -48,12 +48,12 @@ def tool_read_file(path: str, workspace: str, offset: int = 0, limit: int = 1_00
     total = len(lines)
 
     selected = lines[offset:offset + limit]
-    result = "".join(selected)
-    if offset > 0 or limit < total:
-        shown = min(offset + limit, total)
-        result += (
-            f"\n--- [showing lines {offset+1}-{shown} of {total}] ---"
-        )
+    shown = min(offset + limit, total)
+    # Always include a header with file metadata so the agent knows
+    # the actual size and whether truncation occurred (either here or
+    # later in the pipeline).
+    header = f"--- FILE: {path} | LINES: {total} | SHOWING: {offset+1}-{shown} ---\n"
+    result = header + "".join(selected)
     logger.debug("Read %s (%d/%d lines)", path, len(selected), total)
     return result
 

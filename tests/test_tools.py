@@ -18,17 +18,17 @@ class TestToolReadFile:
 
     def test_read_whole_file(self, temp_workspace, sample_file):
         result = tool_read_file(str(sample_file.name), str(temp_workspace))
-        assert result.startswith("line 1\nline 2\n")
+        assert "line 1\nline 2\n" in result
 
     def test_read_with_offset(self, temp_workspace, sample_file):
         result = tool_read_file(str(sample_file.name), str(temp_workspace), offset=2)
-        assert result.startswith("line 3")
+        assert "line 3" in result
 
     def test_read_with_limit(self, temp_workspace, sample_file):
         result = tool_read_file(str(sample_file.name), str(temp_workspace), limit=2)
         assert "line 2" in result
         assert "line 3" not in result
-        assert "[showing lines 1-2 of 5]" in result
+        assert "LINES: 5" in result
 
     def test_read_nonexistent_file(self, temp_workspace):
         with pytest.raises(ToolError, match="File not found"):
