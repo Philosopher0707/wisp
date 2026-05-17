@@ -17,17 +17,14 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Optional
 
+from wisp.tools.errors import ToolError
+
 logger = logging.getLogger(__name__)
 
 # Per-agent context variables for multi-agent concurrency safety.
 _file_lock_ctx: contextvars.ContextVar = contextvars.ContextVar("file_lock", default=None)
 _change_tracker_ctx: contextvars.ContextVar = contextvars.ContextVar("change_tracker", default=None)
 _lsp_manager_ctx: contextvars.ContextVar = contextvars.ContextVar("lsp_manager", default=None)
-
-
-class ToolError(Exception):
-    """Raised when a tool execution fails."""
-    pass
 
 
 def set_collaboration_tools(file_lock=None, change_tracker=None):

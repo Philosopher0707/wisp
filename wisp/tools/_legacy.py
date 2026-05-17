@@ -34,6 +34,8 @@ from wisp.tools.long_horizon import (
     tool_task_output,
 )
 
+from wisp.tools.errors import ToolError
+
 logger = logging.getLogger(__name__)
 
 # Per-agent context variables for multi-agent concurrency safety.
@@ -53,11 +55,6 @@ def _get_dependents(path: str, workspace: str) -> list[str]:
     except Exception:
         pass
     return []
-
-
-class ToolError(Exception):
-    """Raised when a tool execution fails."""
-    pass
 
 
 def set_collaboration_tools(file_lock=None, change_tracker=None):

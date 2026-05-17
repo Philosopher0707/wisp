@@ -7,7 +7,6 @@ import logging
 from pathlib import Path
 
 from wisp.tools._utils import (
-    ToolError,
     _resolve_path,
     _validate_string,
     _validate_int,
@@ -19,6 +18,7 @@ from wisp.tools._utils import (
     _get_dependents,
     _fuzzy_find_text,
 )
+from wisp.tools._legacy import ToolError
 
 logger = logging.getLogger(__name__)
 

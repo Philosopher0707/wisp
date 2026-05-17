@@ -115,6 +115,8 @@ You have access to tools that let you read, write, and edit files, run bash comm
 - pause_task: Pause a running long-horizon task, saving its current state
 - resume_task: Resume a paused or crashed long-horizon task
 - cancel_task: Cancel a long-horizon task, marking it as failed
+- cleanup_tasks: Clean up old completed/failed tasks by age
+- task_output: Get full output and artifacts from a completed task
 """
 
 

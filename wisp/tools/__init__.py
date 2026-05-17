@@ -14,6 +14,23 @@ This package splits the monolithic wisp/tools.py into focused modules:
 Submodule implementations override legacy ones where available.
 """
 
+# ── Import legacy base FIRST to avoid circular imports ────────────────
+# Submodules import ToolError, check_dangerous_command, etc. from wisp.tools.
+# We must pull these from _legacy and _utils before importing submodules.
+from wisp.tools._legacy import (
+    TOOL_SCHEMAS,
+    TOOL_IMPLS,
+    execute_tool,
+    ToolError,
+    _build_tool_metadata,
+    check_dangerous_command,
+    _tool_spawn_subagent_stub,
+    tool_run_tests,
+    set_collaboration_tools,
+    set_lsp_manager,
+)
+from wisp.tools._utils import ToolError as _ToolError  # noqa: F811 — same class
+
 # ── Import submodule implementations (preferred) ───────────────────────
 from wisp.tools.filesystem import (
     tool_read_file,
@@ -52,18 +69,6 @@ from wisp.tools.long_horizon import (
     tool_cancel_task,
     tool_cleanup_tasks,
     tool_task_output,
-)
-
-# ── Import legacy registry and fallback tools ────────────────────────
-from wisp.tools._legacy import (
-    TOOL_SCHEMAS,
-    TOOL_IMPLS,
-    execute_tool,
-    ToolError,
-    _build_tool_metadata,
-    check_dangerous_command,
-    _tool_spawn_subagent_stub,
-    tool_run_tests,
 )
 
 # Override legacy implementations with submodule versions where available
