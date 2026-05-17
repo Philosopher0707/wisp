@@ -85,6 +85,7 @@ from wisp.core.events import (
 )
 from wisp.transport.server import ServerTransport
 from wisp.session_store import get_store
+from wisp.persistence.swarm_store import SwarmStateStore
 
 logger = logging.getLogger(__name__)
 
@@ -911,7 +912,7 @@ async def web_search(req: WebSearchRequest):
 async def start_background_run(req: BackgroundRunRequest):
     """Start an agent run in the background. Returns run ID for polling."""
     from wisp.background_agent import get_runner
-    runner = get_runner()
+    runner = get_runner(str(WORKSPACE_ROOT))
 
     model = req.model or os.environ.get("WISP_DEFAULT_MODEL", "claude-sonnet-4-6")
     run = runner.create(
@@ -928,7 +929,7 @@ async def start_background_run(req: BackgroundRunRequest):
 async def get_background_run(run_id: str):
     """Get the status and results of a background agent run."""
     from wisp.background_agent import get_runner
-    runner = get_runner()
+    runner = get_runner(str(WORKSPACE_ROOT))
     run = runner.get(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -939,7 +940,7 @@ async def get_background_run(run_id: str):
 async def list_background_runs():
     """List all background agent runs."""
     from wisp.background_agent import get_runner
-    runner = get_runner()
+    runner = get_runner(str(WORKSPACE_ROOT))
     return {"runs": [r.to_dict() for r in runner.list_runs()[:20]]}
 
 
@@ -947,7 +948,7 @@ async def list_background_runs():
 async def cancel_background_run(run_id: str):
     """Cancel a running background agent."""
     from wisp.background_agent import get_runner
-    runner = get_runner()
+    runner = get_runner(str(WORKSPACE_ROOT))
     ok = runner.cancel(run_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Run not found or not running")
@@ -1022,8 +1023,10 @@ async def _launch_swarm_ws(
 # ── Swarm HTTP API ────────────────────────────────────────────────────
 
 _SWARM_TTL_SECONDS = 600  # auto-evict finished runs after 10 minutes
-_swarm_store: dict[str, dict] = {}
-_swarm_lock = asyncio.Lock()
+# SwarmStateStore is a dict-like SQLite-backed store for multi-process safety
+_swarm_store = SwarmStateStore(str(WORKSPACE_ROOT))
+# SQLite WAL handles concurrent reads/writes — no explicit lock needed
+_swarm_lock = None  # placeholder: SQLite WAL replaces lock
 
 
 @app.post("/api/swarm/run", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
@@ -1060,10 +1063,10 @@ async def swarm_run_api(req: SwarmRunRequest):
         }
         if ws_msg:
             entry["ws_message"] = ws_msg
-        async with _swarm_lock:
+        # SQLite WAL handles concurrency - no explicit lock needed
             event_log.append(entry)
 
-    async with _swarm_lock:
+    # SQLite WAL handles concurrency - no explicit lock needed
         _swarm_store[run_id] = {
             "orchestrator": orch,
             "event_log": event_log,
@@ -1084,7 +1087,7 @@ async def swarm_run_api(req: SwarmRunRequest):
         except Exception as e:
             logger.error("Swarm run %s error: %s", run_id, e)
         finally:
-            async with _swarm_lock:
+            # SQLite WAL handles concurrency - no explicit lock needed
                 entry = _swarm_store.get(run_id)
                 if entry:
                     entry["finished"] = True
@@ -1108,9 +1111,8 @@ def _evict_stale_swarms() -> None:
 @app.get("/api/swarm/status/{run_id}", dependencies=[Depends(verify_api_key)])
 async def swarm_status_api(run_id: str):
     """Get status of a swarm run: agent list, counts, elapsed."""
-    async with _swarm_lock:
-        _evict_stale_swarms()
-        entry = _swarm_store.get(run_id)
+    _evict_stale_swarms()
+    entry = _swarm_store.get(run_id)
     if not entry:
         raise HTTPException(status_code=404, detail="Swarm run not found")
 
@@ -1133,8 +1135,7 @@ async def swarm_status_api(run_id: str):
 @app.get("/api/swarm/events/{run_id}", dependencies=[Depends(verify_api_key)])
 async def swarm_events_api(run_id: str):
     """Get accumulated event log for a swarm run (for polling clients)."""
-    async with _swarm_lock:
-        entry = _swarm_store.get(run_id)
+    entry = _swarm_store.get(run_id)
     if not entry:
         raise HTTPException(status_code=404, detail="Swarm run not found")
 

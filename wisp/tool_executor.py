@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
-from wisp.config import WispConfig
+from wisp.config import WispConfig, PermissionMode
 from wisp.core.events import (
     AgentEvent,
     TYPE_TOOL_RESULT,
@@ -161,11 +161,26 @@ class ToolExecutor:
                 yield _tool_result_event(func_name, f"[Blocked: user declined {func_name}]")
                 return
 
+        # ── Event-specific pre-hooks (PRE_BASH, PRE_FILE_WRITE) ──
+        if func_name == "run_bash":
+            event_block = await self._run_pre_bash_hooks(func_args, workspace)
+            if event_block:
+                yield _tool_result_event(func_name, event_block)
+                return
+        elif func_name in ("write_file", "edit_file", "edit_file_multi"):
+            event_block = await self._run_pre_file_hooks(func_name, func_args, workspace)
+            if event_block:
+                yield _tool_result_event(func_name, event_block)
+                return
+
         # ── Execute tool ──
         result, duration_ms = await self._execute_tool(func_name, func_args, workspace)
 
         # ── Post-tool metrics ──
         self._record_metrics(func_name, duration_ms, result)
+
+        # ── Post-tool event hooks (best-effort, non-blocking) ──
+        await self._run_post_tool_hooks(func_name, func_args, result, workspace)
 
         yield _tool_result_event(func_name, result, duration_ms=duration_ms)
 
@@ -220,6 +235,92 @@ class ToolExecutor:
             msg["tool_call_id"] = tool_call_id
         return msg
 
+    # ── Event-specific hook helpers ──────────────────────────────────────
+
+    async def _run_pre_bash_hooks(
+        self, func_args: dict, workspace: str
+    ) -> str | None:
+        """Run PRE_BASH hooks.  Returns block message or None."""
+        if not self.hook_manager:
+            return None
+        try:
+            from wisp.hooks import HookEvent, build_hook_context
+            context = build_hook_context(
+                event=HookEvent.PRE_BASH,
+                tool_name="run_bash",
+                tool_args=func_args,
+                workspace=self.config.workspace,
+                session_id="",
+                cwd=str(Path(self.config.workspace or ".")),
+            )
+            hook_results = await self.hook_manager.run_hooks(HookEvent.PRE_BASH, context)
+            if _should_block_hook(hook_results):
+                return f"[Blocked by PRE_BASH hook: {_collect_hook_messages(hook_results)}]"
+            modified = _get_modified_args(hook_results)
+            if modified is not None:
+                func_args.clear()
+                func_args.update(modified)
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.warning("PRE_BASH hook failed: %s", e)
+        return None
+
+    async def _run_pre_file_hooks(
+        self, func_name: str, func_args: dict, workspace: str
+    ) -> str | None:
+        """Run PRE_FILE_WRITE hooks.  Returns block message or None."""
+        if not self.hook_manager:
+            return None
+        try:
+            from wisp.hooks import HookEvent, build_hook_context
+            context = build_hook_context(
+                event=HookEvent.PRE_FILE_WRITE,
+                tool_name=func_name,
+                tool_args=func_args,
+                workspace=self.config.workspace,
+                session_id="",
+                cwd=str(Path(self.config.workspace or ".")),
+            )
+            hook_results = await self.hook_manager.run_hooks(HookEvent.PRE_FILE_WRITE, context)
+            if _should_block_hook(hook_results):
+                return f"[Blocked by PRE_FILE_WRITE hook: {_collect_hook_messages(hook_results)}]"
+            modified = _get_modified_args(hook_results)
+            if modified is not None:
+                func_args.clear()
+                func_args.update(modified)
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.warning("PRE_FILE_WRITE hook failed: %s", e)
+        return None
+
+    async def _run_post_tool_hooks(
+        self, func_name: str, func_args: dict, result: str | dict, workspace: str
+    ) -> None:
+        """Fire POST_TOOL_USE / POST_BASH hooks (best-effort — failures are logged)."""
+        if not self.hook_manager:
+            return
+        try:
+            from wisp.hooks import HookEvent, build_hook_context
+            ctx = build_hook_context(
+                event=HookEvent.POST_TOOL_USE,
+                tool_name=func_name,
+                tool_args=func_args,
+                workspace=self.config.workspace,
+                session_id="",
+                cwd=str(Path(self.config.workspace or ".")),
+                extra={"result": str(result)[:4000]},  # cap size
+            )
+            # POST_TOOL_USE always fires for every tool
+            await self.hook_manager.run_hooks(HookEvent.POST_TOOL_USE, ctx)
+            if func_name == "run_bash":
+                await self.hook_manager.run_hooks(HookEvent.POST_BASH, ctx)
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.debug("Post-tool hook failed: %s", e)
+
     # ── Internal guards ──────────────────────────────────────────────
 
     async def _run_pre_tool_hooks(
@@ -229,6 +330,10 @@ class ToolExecutor:
         if not self.hook_manager:
             return None
         try:
+            # Refresh hook registry before each tool call so that a
+            # hook written earlier this session can still fire.
+            if hasattr(self.hook_manager, "maybe_reload_hooks"):
+                self.hook_manager.maybe_reload_hooks()
             from wisp.hooks import HookEvent
             context = {
                 "tool_name": func_name,
@@ -280,6 +385,23 @@ class ToolExecutor:
         start = time.monotonic()
         result: str | dict = ""
 
+        # reload hooks on every tool call so new / removed files are picked up
+        if self.hook_manager:
+            try:
+                self.hook_manager.load_project_hooks()
+            except Exception:
+                pass
+
+        # event-specific pre-hooks
+        if func_name == "run_bash":
+            _block = await self._run_pre_bash_hooks(func_args, workspace)
+            if _block:
+                return _block, 0.0
+        if func_name in ("write_file", "edit_file", "edit_file_multi"):
+            _block = await self._run_pre_file_hooks(func_name, func_args, workspace)
+            if _block:
+                return _block, 0.0
+
         if func_name == "spawn_subagent":
             result = await self._spawn_subagent(func_args, workspace)
         elif self._is_mcp_tool(func_name):
@@ -300,6 +422,10 @@ class ToolExecutor:
                 result = f"Unexpected error: {e}"
 
         duration_ms = (time.monotonic() - start) * 1000
+
+        # fire post-hooks (non-blocking, best-effort)
+        await self._run_post_tool_hooks(func_name, func_args, result, workspace)
+
         return result, duration_ms
 
     def _is_mcp_tool(self, name: str) -> bool:

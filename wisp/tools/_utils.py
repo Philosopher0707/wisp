@@ -214,6 +214,52 @@ def check_dangerous_command(command: str) -> Optional[str]:
     return None
 
 
+# Path fragments that are hook-controlled and should never be written
+# to by agent tools, because hook scripts execute with the full process
+# environment and can be self-installed by the agent, creating a privilege
+# escalation path (write_file -> hook -> arbitrary code execution).
+_SENSITIVE_HOOK_DIR_FRAGMENTS: frozenset[str] = frozenset({
+    ".wisp/hooks",
+    ".wisp\\hooks",  # Windows
+})
+
+
+_SENSITIVE_ENV_KEYS: frozenset[str] = frozenset({
+    "WISP_API_KEY",
+    "OLLAMA_HOST",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AZURE_OPENAI_API_KEY",
+    "GOOGLE_API_KEY",
+    "HF_TOKEN",
+    "GITHUB_TOKEN",
+    "GITLAB_TOKEN",
+    "DOCKER_CONFIG",
+    "KUBECONFIG",
+    "HOME",  # prevents scripts that resolve via ~
+    "USER",
+    "SSH_AGENT_LAUNCHER",
+    "SSH_AUTH_SOCK",
+})
+
+
+def _is_hook_controlled_path(path: str) -> bool:
+    """Return True if the path resolves inside a hook-controlled directory."""
+    # Normalize separators (collapse double backslashes, then unify)
+    # Use os.path.normpath which handles both / and \\ on both platforms.
+    norm = os.path.normpath(path).replace("\\", "/")
+    # Must be inside the hooks/ directory, not just contain "hooks" as fragment
+    for frag in _SENSITIVE_HOOK_DIR_FRAGMENTS:
+        if frag in norm:
+            idx = norm.index(frag)
+            after = norm[idx + len(frag) :]
+            if after == "" or after.startswith("/"):
+                return True
+    return False
+
+
 def _resolve_path(path: str, workspace: str) -> Path:
     """Resolve a path relative to workspace, with security boundary enforcement.
 

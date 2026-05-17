@@ -1,6 +1,6 @@
-"""Persistence helpers for the terminal app runtime."""
+"""Persistence layer for Wisp - multi-process safe storage backends."""
 
-from .sqlite_store import SQLiteStateStore, ThreadRecord, RunRecord
-from wisp.session_store import UnifiedSessionStore, Run
+from wisp.persistence.swarm_store import SwarmStateStore
+from wisp.persistence.sqlite_store import SQLiteStateStore
 
-__all__ = ["SQLiteStateStore", "ThreadRecord", "RunRecord", "UnifiedSessionStore", "Run"]
+__all__ = ["SwarmStateStore", "SQLiteStateStore"]

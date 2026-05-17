@@ -29,6 +29,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, ClassVar, Optional
 
+from wisp.tools._utils_env import scrub_sensitive_env
+
 logger = logging.getLogger(__name__)
 
 
@@ -385,6 +387,42 @@ class HookManager:
         """Number of registered hooks (including disabled)."""
         return len(self._hooks)
 
+    def maybe_reload_hooks(self) -> int:
+        """Reload project hooks if the hook directory has been modified since
+        the last time hooks were loaded.
+
+        Only reloads if the hooks directory (or any of its direct children)
+        mtime is newer than the cached load time.  This allows users to
+        drop new hook scripts in while the server is running without requiring
+        a restart, while keeping the hot path cheap.
+        """
+        mtime = self._get_hooks_dir_mtime()
+        if mtime is not None and mtime > self._last_load_time:
+            logger.info("Hook directory changed — reloading hooks.")
+            # Clear existing hooks and rebuild from scratch to pick up
+            # removals, renames, and additions.
+            self._hooks.clear()
+            self._last_load_time = mtime
+            return self.load_project_hooks()
+        return 0
+
+    def _get_hooks_dir_mtime(self) -> float | None:
+        """Return the newest mtime from the project hook directory or None."""
+        hooks_dir = self.workspace / self.HOOK_DIR
+        if not hooks_dir.is_dir():
+            return None
+        newest = hooks_dir.stat().st_mtime
+        for entry in hooks_dir.iterdir():
+            try:
+                if entry.is_dir():
+                    continue
+                m = entry.stat().st_mtime
+                if m > newest:
+                    newest = m
+            except OSError:
+                pass
+        return newest
+
     # ── Hook discovery ────────────────────────────────────────────────
 
     def load_project_hooks(self) -> int:
@@ -443,6 +481,19 @@ class HookManager:
 
         return loaded_count
 
+    def reload_hooks(self) -> int:
+        """Re-discover hooks from disk by clearing the registry and re-loading.
+
+        This is called automatically by the ToolExecutor before every
+        tool invocation so that newly-installed hooks take effect without
+        restarting the agent.
+
+        Returns:
+            Total number of hooks loaded.
+        """
+        self._hooks.clear()
+        return self.load_project_hooks()
+
     def _load_json_hooks(self, hooks_dir: Path) -> int:
         """Load hooks from *.json files in a directory."""
         count = 0
@@ -478,20 +529,37 @@ class HookManager:
                 continue
 
             stem = script_file.stem  # e.g., "PRE_BASH_block-rm"
-            # Split on first underscore to get event name
-            parts = stem.split("_", 1)
-            if len(parts) < 2:
+
+            # Event names contain underscores (e.g., PRE_BASH, PRE_FILE_WRITE).
+            # We must try the longest possible event prefix first to avoid
+            # mis-parsing "PRE_BASH_block-rm" as event="PRE" name="BASH_block-rm".
+            event_str = ""
+            name = ""
+            for event_candidate in HookEvent:
+                candidate = event_candidate.name
+                # Must be followed by an underscore and then a non-empty name
+                prefix = candidate + "_"
+                if stem.startswith(prefix):
+                    potential_name = stem[len(prefix):]
+                    if potential_name and len(potential_name) > len(name):
+                        event_str = candidate
+                        name = potential_name
+
+            if not event_str:
                 logger.debug(
                     "Skipping hook script with non-convention name: %s",
                     script_file.name,
                 )
                 continue
 
-            event_str, name = parts
             if not name:
+                logger.debug(
+                    "Skipping hook script — no name after event: %s",
+                    script_file.name,
+                )
                 continue
 
-            # Validate event name
+            # Validate event name (redundant — we matched above, but belt+braces)
             try:
                 event = HookEvent[event_str]
             except KeyError:
@@ -661,8 +729,9 @@ class HookManager:
         context: dict[str, Any],
     ) -> HookResult:
         """Internal implementation of hook execution (lock already held)."""
-        # Build environment
-        env = os.environ.copy()
+        # Build environment — strip credentials and sensitive paths so that
+        # a compromised or self-installed hook cannot exfiltrate secrets.
+        env = scrub_sensitive_env(os.environ)
         env["WISP_HOOK_EVENT"] = hook.event.value
         env["WISP_TOOL_NAME"] = str(context.get("tool_name", ""))
         env["WISP_WORKSPACE"] = str(context.get("workspace", ""))

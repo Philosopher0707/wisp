@@ -17,6 +17,7 @@ from wisp.tools._utils import (
     _change_tracker_ctx,
     _get_dependents,
     _fuzzy_find_text,
+    _is_hook_controlled_path,
 )
 from wisp.tools.errors import ToolError
 
@@ -29,6 +30,15 @@ def tool_read_file(path: str, workspace: str, offset: int = 0, limit: int = 1_00
     offset = _validate_int(offset, "offset", 0)
     limit = _validate_int(limit, "limit", 1, 1_000_000)
     full_path = _resolve_path(path, workspace)
+
+    # ── Security: block edits to hook-controlled directories ──
+    if _is_hook_controlled_path(str(full_path)):
+        raise ToolError(
+            f"Access denied: {path} is inside a hook-controlled directory. "
+            f"Hooks are executed with the full process environment and cannot "
+            f"be created or modified by agent tools to prevent privilege escalation."
+        )
+
     if not full_path.exists():
         raise ToolError(f"File not found: {path}")
     if not full_path.is_file():
@@ -66,6 +76,14 @@ def tool_write_file(path: str, workspace: str, content: str, file_lock=None) -> 
     _validate_string(path, "path")
     _validate_string(content, "content", _MAX_WRITE_SIZE, allow_empty=True)
     full_path = _resolve_path(path, workspace)
+
+    # ── Security: block writes to hook-controlled directories ──
+    if _is_hook_controlled_path(str(full_path)):
+        raise ToolError(
+            f"Access denied: {path} is inside a hook-controlled directory. "
+            f"Hooks are executed with the full process environment and cannot "
+            f"be created or modified by agent tools to prevent privilege escalation."
+        )
 
     # Size check
     if len(content) > _MAX_WRITE_SIZE:
@@ -148,6 +166,15 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str, file
     _validate_string(old_text, "old_text", _MAX_OLD_TEXT_LENGTH)
     _validate_string(new_text, "new_text", _MAX_WRITE_SIZE, allow_empty=True)
     full_path = _resolve_path(path, workspace)
+
+    # ── Security: block edits to hook-controlled directories ──
+    if _is_hook_controlled_path(str(full_path)):
+        raise ToolError(
+            f"Access denied: {path} is inside a hook-controlled directory. "
+            f"Hooks are executed with the full process environment and cannot "
+            f"be created or modified by agent tools to prevent privilege escalation."
+        )
+
     if not full_path.exists():
         raise ToolError(f"File not found: {path}")
 

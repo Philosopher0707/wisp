@@ -7,8 +7,21 @@ Config file is stored at ~/.config/wisp/config.json.
 import os
 import json
 import logging
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Optional
+
+
+class PermissionMode(StrEnum):
+    """Permission levels for tool execution — enforced by ToolExecutor."""
+    FULL = "full"
+    """All tools allowed, no restrictions."""
+    ASK_ALL = "ask_all"
+    """Safe reads auto-approved; writes, edits, and bash require user approval."""
+    AUTO_EDIT = "auto_edit"
+    """File edits and writes auto-approved; bash and git writes require approval."""
+    READ_ONLY = "read_only"
+    """Only safe reads allowed; all write/edit/bash operations are blocked."""
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +91,7 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
     },
     "permission_mode": {
         "type": str,
-        "default": "full",
+        "default": PermissionMode.AUTO_EDIT,
         "description": "Permission level: full | ask_all | auto_edit | read_only",
         "env_var": "WISP_PERMISSION_MODE",
     },
@@ -284,8 +297,10 @@ class WispConfig:
         else:
             self.skill_dirs = [".agents/skills", ".warp/skills", ".claude/skills"]
         self.workspace: Optional[str] = get_setting("workspace", os.getcwd())
-        # Auto-approve tool calls by default (coding agent should flow)
-        self.auto_approve: bool = str(get_setting("auto_approve", "true")).lower() == "true"
+        # Auto-approve tool calls (default FALSE — require explicit opt-in).
+        # When false, every mutating tool call triggers an approval_request
+        # event and the transport layer must confirm before execution.
+        self.auto_approve: bool = str(get_setting("auto_approve", "false")).lower() == "true"
         # Show reasoning trace inline
         self.show_thinking: bool = str(get_setting("show_thinking", "true")).lower() == "true"
         # Show full tool output (when false, collapse to one-liners)
@@ -301,8 +316,8 @@ class WispConfig:
         self.max_context_tokens: int = int(raw_ctx) if raw_ctx is not None else DEFAULT_MAX_CONTEXT_TOKENS
         # Track whether user explicitly set context window (disables auto-detection)
         self._context_tokens_explicit: bool = raw_ctx is not None
-        # Permissions: full | ask_all | auto_edit | read_only
-        self.permission_mode: str = get_setting("permission_mode", "full")
+        # Permissions: full (all allowed) | ask_all (ask for writes) | auto_edit (ask for bash only) | read_only (no writes)
+        self.permission_mode: PermissionMode = PermissionMode(get_setting("permission_mode", PermissionMode.AUTO_EDIT))
         # Plan mode: agent plans only, no tool execution
         self.plan_mode: bool = str(get_setting("plan_mode", "false")).lower() == "true"
         # Plan context: approved plan injected into system prompt
@@ -451,10 +466,10 @@ class WispConfig:
             )
 
         # Permission mode
-        valid_modes = {"full", "ask_all", "auto_edit", "read_only"}
-        if self.permission_mode not in valid_modes:
+        valid_modes = {m.value for m in PermissionMode}
+        if self.permission_mode not in PermissionMode:
             errors.append(
-                f"permission_mode: '{self.permission_mode}' is not one of {valid_modes}"
+                f"permission_mode: '{self.permission_mode}' is not one of {[m.value for m in PermissionMode]}"
             )
 
         # Provider

@@ -1,8 +1,9 @@
 """Background agent execution — spawn and track long-running agent tasks.
 
-Runs agents in asyncio tasks, stores results for polling, and supports
-desktop notifications on completion. Simple in-process execution, not
-full cloud orchestration — leverages existing subagent infrastructure.
+Refactored for multi-process safety:
+  - BackgroundRun state is persisted to SQLite (cross-process reads)
+  - asyncio.Tasks stay in-process (cannot cross process boundaries)
+  - get()/list_runs() read from SQLite to find runs started by other workers
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ class BackgroundRun:
     prompt: str
     model: str
     workspace: str
-    status: str  # pending | running | done | failed
+    status: str  # pending | running | done | failed | cancelled
     created_at: float = field(default_factory=time.time)
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
@@ -60,14 +61,32 @@ class BackgroundRun:
             "duration_ms": round(((self.finished_at or time.time()) - (self.started_at or self.created_at)) * 1000) if self.started_at else 0,
         }
 
+    @classmethod
+    def from_db_row(cls, row: dict) -> "BackgroundRun":
+        """Reconstruct from a dict (SQLite result converted to dict)."""
+        return cls(
+            id=row["run_id"],
+            prompt=row.get("prompt", ""),
+            model=row.get("model", ""),
+            workspace=row.get("workspace", ""),
+            status=row.get("status", "pending"),
+            created_at=row.get("created_at", time.time()),
+            started_at=row.get("started_at"),
+            finished_at=row.get("finished_at"),
+            content=row.get("content", ""),
+            iterations=row.get("iterations", 0) or 0,
+            error=row.get("error"),
+        )
+
 
 class BackgroundRunner:
-    """Manages background agent execution with status tracking."""
+    """Manages background agent execution with cross-process state tracking."""
 
-    def __init__(self):
-        self._runs: dict[str, BackgroundRun] = {}
-        self._tasks: dict[str, asyncio.Task] = {}
-        self._callbacks: dict[str, asyncio.Task] = {}  # completion callbacks
+    def __init__(self, workspace: str = "."):
+        from wisp.persistence.swarm_store import SwarmStateStore
+        self._store = SwarmStateStore(workspace)
+        self._tasks: dict[str, asyncio.Task] = {}   # process-local only
+        self._callbacks: dict[str, asyncio.Task] = {} # process-local only
 
     def create(self, prompt: str, model: str, workspace: str,
                permission_mode: str = "auto_edit") -> BackgroundRun:
@@ -80,25 +99,29 @@ class BackgroundRunner:
             workspace=workspace,
             status="pending",
         )
-        self._runs[run_id] = run
+        self._store._bg_create(run.to_dict())
         return run
 
     def start(self, run_id: str):
-        """Begin execution of a pending run."""
-        run = self._runs.get(run_id)
-        if not run:
+        """Begin execution of a pending run on THIS worker."""
+        row = self._store._bg_get(run_id)
+        if not row:
             raise ValueError(f"Unknown run: {run_id}")
-        if run.status != "pending":
-            raise ValueError(f"Run {run_id} already started (status: {run.status})")
+        if row.get("status") != "pending":
+            raise ValueError(f"Run {run_id} already started (status: {row['status']})")
 
+        self._store._bg_update(run_id, status="running", started_at=time.time())
         task = asyncio.create_task(self._execute(run_id))
         self._tasks[run_id] = task
 
     async def _execute(self, run_id: str):
         """Execute the agent in background."""
-        run = self._runs[run_id]
-        run.status = "running"
-        run.started_at = time.time()
+        row = self._store._bg_get(run_id)
+        if not row:
+            logger.error("Run %s disappeared from store", run_id)
+            return
+
+        run = BackgroundRun.from_db_row(row)
 
         try:
             config = WispConfig()
@@ -149,33 +172,48 @@ class BackgroundRunner:
 
         finally:
             run.finished_at = time.time()
+            self._store._bg_update(
+                run_id,
+                status=run.status,
+                content=run.content,
+                error=run.error,
+                iterations=run.iterations,
+            )
 
     def get(self, run_id: str) -> Optional[BackgroundRun]:
-        return self._runs.get(run_id)
+        """Get a run by ID (reads from SQLite — works across processes)."""
+        row = self._store._bg_get(run_id)
+        if not row:
+            return None
+        return BackgroundRun.from_db_row(row)
 
     def list_runs(self) -> list[BackgroundRun]:
-        return sorted(self._runs.values(), key=lambda r: r.created_at, reverse=True)
+        """List all runs (reads from SQLite — works across processes)."""
+        rows = self._store._bg_list()
+        return [BackgroundRun.from_db_row(r) for r in rows]
 
     def cancel(self, run_id: str) -> bool:
-        """Cancel a running background task."""
+        """Cancel a running background task (must be called on the worker
+        that owns the asyncio Task). Returns False if run is on a
+different worker (caller should poll status instead)."""
         task = self._tasks.get(run_id)
         if task and not task.done():
             task.cancel()
-            run = self._runs.get(run_id)
-            if run:
-                run.status = "failed"
-                run.error = "Cancelled by user"
-                run.finished_at = time.time()
+            self._store._bg_update(
+run_id,
+                status="cancelled",
+                error="Cancelled by user",
+            )
             return True
         return False
 
 
-# Module-level singleton
+# Module-level singleton (per-process, but store is SQLite-backed)
 _runner: Optional[BackgroundRunner] = None
 
 
-def get_runner() -> BackgroundRunner:
+def get_runner(workspace: str = ".") -> BackgroundRunner:
     global _runner
     if _runner is None:
-        _runner = BackgroundRunner()
+        _runner = BackgroundRunner(workspace)
     return _runner
