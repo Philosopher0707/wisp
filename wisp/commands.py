@@ -517,14 +517,16 @@ def cmd_spawn(agent, args: str):
         print(dim("Example: /spawn research the best Python HTTP client library"))
         return
     from wisp.multi_agent import SubagentOrchestrator, SubagentContract
+    from wisp.async_utils import run_sync_coro
     contract = SubagentContract(
+        name="spawn",
         task=args,
         timeout_seconds=120,
         max_iterations=15,
     )
     orch = SubagentOrchestrator(parent_agent=agent)
     print(accent(f"🧬 Spawning subagent: {args[:60]}..."))
-    result = asyncio.run(orch.run(contract))
+    result = run_sync_coro(orch.run(contract))
     status = success("✓") if result.success else error("✗")
     if result.timed_out:
         status = warning("⏱")
@@ -558,25 +560,48 @@ def cmd_swarm(agent, args: str):
         print(dim("Example: /swarm add user authentication with JWT tokens"))
         return
 
-    # Lazy import to avoid circular dependencies
-    from wisp.multi_agent.orchestrator import SwarmOrchestrator
-    from wisp.multi_agent.roles import AgentRole
+    from wisp.multi_agent import SubagentOrchestrator, SubagentContract
+    from wisp.async_utils import run_sync_coro
 
-    roles = [AgentRole.CODER, AgentRole.REVIEWER, AgentRole.TESTER, AgentRole.RESEARCHER]
-    config = agent.config
+    roles = ["coder", "reviewer", "tester", "researcher"]
+
+    contracts = []
+    for role in roles:
+        contracts.append(
+            SubagentContract(
+                name=role,
+                task=args,
+                role=role,
+                timeout_seconds=120,
+                max_iterations=15,
+                progress_callback=_swarm_progress,
+            )
+        )
 
     print(info(f"🐝 Starting swarm with {len(roles)} agent(s)..."))
     print(dim(f"   Goal: {args}"))
     print(dim(f"   Roles: {', '.join(roles)}"))
     print()
 
-    orch = SwarmOrchestrator(config, parent_agent=agent)
+    orch = SubagentOrchestrator(parent_agent=agent)
     try:
-        result = orch.run(args, roles=roles, progress_callback=_swarm_progress)
+        results = run_sync_coro(orch.run_parallel(contracts, max_concurrent=4))
     except KeyboardInterrupt:
         print(warning("\n⚠ Interrupted. Stopping all agents..."))
-        orch.stop_all()
         raise
+
+    # Build a synthetic result object for the synthesizer
+    class _SwarmResult:
+        def __init__(self, goal, results):
+            self.goal = goal
+            self.agent_results = results
+            self.elapsed_seconds = sum(r.elapsed_seconds for r in results)
+            self.files_changed = []
+            self.success = any(r.success for r in results)
+            self.final_output = "\n\n".join(r.output for r in results if r.output)
+            self.plan = f"Parallel execution with {len(roles)} agents: {', '.join(roles)}"
+
+    result = _SwarmResult(args, results)
 
     # Synthesize a proper final answer using the agent's LLM
     print()
@@ -684,9 +709,8 @@ def cmd_continue(agent, args: str):
         print(info("⏩ Continuing previous response…"))
 
     agent._add_message("user", expanded)
-    system = agent._build_system_prompt()
-    ws = agent.config.workspace or "."
-    agent._execute_loop(system, ws, agent.config.auto_approve)
+    # Signal the REPL to auto-trigger the next turn
+    agent._pending_continue = True
 
 
 @register("exit", "Exit Wisp", aliases=("quit", "q", "bye"), usage="/exit")

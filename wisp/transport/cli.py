@@ -1062,6 +1062,14 @@ class CLITransport:
                                     asyncio.run(self._execute_turn(system, ws))
                                 except Exception as e:
                                     logger.warning("Skill acknowledgment failed: %s", e)
+                        # /continue sets _pending_continue — auto-trigger next turn
+                        if getattr(self.core, "_pending_continue", False):
+                            self.core._pending_continue = False
+                            try:
+                                system = self.core._build_system_prompt()
+                                asyncio.run(self._execute_turn(system, ws))
+                            except Exception as e:
+                                logger.warning("Continue turn failed: %s", e)
                         continue
                 except ExitREPL:
                     print(success("  👋 Goodbye."))
