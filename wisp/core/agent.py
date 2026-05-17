@@ -42,6 +42,7 @@ from wisp.mcp import MCPManager
 from wisp.memory import format_memory_block
 from wisp.core.message_format import extract_text
 from wisp.tool_executor import ToolExecutor
+from wisp.context_assembler import ContextAssembler
 from wisp.core.events import (
     AgentEvent,
     TYPE_CONTENT,
@@ -241,6 +242,7 @@ class WispAgentCore:
             file_lock=self.file_lock,
             lsp_manager=self.lsp,
         )
+        self.context_assembler = ContextAssembler()
 
     def close(self) -> None:
         """Release resources: MCP connections, LSP servers, and save session state.
@@ -521,6 +523,10 @@ class WispAgentCore:
     # ── System prompt ────────────────────────────────────────────────
 
     def _build_system_prompt(self, skill_name: Optional[str] = None, workspace: Optional[str] = None, query: Optional[str] = None) -> str:
+        """Build the system prompt for the current turn.
+
+        Delegates assembly to ContextAssembler after gathering context.
+        """
         ws = workspace or self.config.workspace or "."
         effective_skill = skill_name or self._active_skill
 
@@ -546,32 +552,21 @@ class WispAgentCore:
             return cached
 
         ws_abs = Path(ws).resolve()
-        system = DEFAULT_SYSTEM
-        system += f"\n\n## Workspace\nYou are working in: {ws_abs}"
 
-
-        if hasattr(self, "_role_system_extra") and self._role_system_extra:
-            system += f"\n\n{self._role_system_extra}"
-
+        # ── Gather context sections ──────────────────────────────
         skills = discover_skills(ws)
-        system += self._build_skills_block_from_skills(skills)
+        skills_block = self._build_skills_block_from_skills(skills)
 
-        # ── OntoSkills: inject deterministic skill context ──
+        ontology_result = None
         from wisp.skills import has_ontology, match_skill_via_ontology
         if has_ontology():
-            # Try user prompt first (most relevant), then workspace name
-            ontology_result = None
             if hasattr(self, "_last_user_prompt") and self._last_user_prompt:
                 ontology_result = match_skill_via_ontology(self._last_user_prompt)
             if ontology_result is None:
                 ontology_result = match_skill_via_ontology(str(ws_abs))
-            if ontology_result:
-                system += f"\n\n## {ontology_result['name']}\n{ontology_result['context']}"
 
         project_ctx = detect_project_context(ws)
-        ctx_block = format_context(project_ctx)
-        if ctx_block:
-            system += f"\n\n{ctx_block}"
+        project_context = format_context(project_ctx)
 
         if not hasattr(self, "_code_index_cache"):
             self._code_index_cache = {}
@@ -581,109 +576,95 @@ class WispAgentCore:
             else:
                 self._code_index_cache[ws] = build_regex_index(ws)
         code_index = self._code_index_cache[ws]
-        index_summary = format_index_summary(code_index)
-        if index_summary:
-            system += f"\n\n{index_summary}"
         self._code_index = code_index
+        code_index_summary = format_index_summary(code_index)
 
         memory_block = format_memory_block(ws)
-        if memory_block:
-            system += f"\n\n{memory_block}"
 
+        recent_summaries = None
         if hasattr(self, "_recent_summaries") and self._recent_summaries:
             from wisp.agent_memory import AgentMemory
             last_msgs = []
             if self.session and self.session.messages:
-                # Include up to 8 most recent messages from current session for continuity
                 last_msgs = self.session.messages[-8:]
-            summary_block = AgentMemory().format_for_prompt(
+            recent_summaries = AgentMemory().format_for_prompt(
                 self._recent_summaries, last_messages=last_msgs
             )
-            if summary_block:
-                system += f"\n\n{summary_block}"
 
         from wisp.git_context import format_git_context
-        git_block = format_git_context(ws)
-        if git_block:
-            system += f"\n\n{git_block}"
+        git_context = format_git_context(ws)
 
         from wisp.planner import PlanStore
-        plan_store = PlanStore()
-        active_plan = plan_store.load_active(ws)
-        if active_plan:
-            system += f"\n\n{active_plan.format_for_prompt()}"
+        active_plan = PlanStore().load_active(ws)
+        active_plan_str = active_plan.format_for_prompt() if active_plan else None
 
-        if self.config.plan_mode:
-            system += (
-                "\n\n## PLAN MODE ACTIVE\n"
-                "You are in plan mode. Your job is to produce a detailed implementation plan.\n"
-                "- Use read-only tools (read_file, list_files, search_symbols, lsp_*) to understand the codebase.\n"
-                "- Do NOT modify any files, run bash commands, or make git changes.\n"
-                "- Output a structured plan in markdown with: summary, files to touch, step-by-step approach, edge cases.\n"
-                "- End with '## Plan Complete' when finished."
-            )
-
-        if self.config.plan_context:
-            system += f"\n\n## Approved Plan\n{self.config.plan_context}\n\nFollow the approved plan above. Execute each step."
-
-        # ── Repo Map: inject structural overview of the codebase ──
+        repo_map = None
         try:
             from wisp.repo_map import RepoMap
             rm = RepoMap(ws_abs)
-            # Build full map (cached).  Skeleton caches are auto-upgraded.
             entries = rm.build(use_cache=True, fast_mode=False)
             if entries:
                 map_text = rm.format_for_llm(max_tokens=1200)
-                system += f"\n\n## Codebase Map\n{map_text}\n"
-                # Inject files relevant to the user's query for dynamic context
+                repo_map = f"## Codebase Map\n{map_text}\n"
                 if query:
                     relevant = rm.get_relevant_files(query, top_k=5)
                     if relevant:
-                        system += "\n## Files Relevant to Query\n"
+                        repo_map += "\n## Files Relevant to Query\n"
                         for f in relevant:
-                            system += f"- {f}\n"
-                        deps_extra = []
-                        for f in relevant:
-                            deps = rm.get_dependents(f)[:3]
-                            if deps:
-                                deps_extra.extend(deps)
-                        if deps_extra:
-                            system += "\n## Dependents of Relevant Files\n"
-                            for d in sorted(set(deps_extra))[:5]:
-                                system += f"- {d}\n"
+                            repo_map += f"- {f}\n"
+                    deps_extra = []
+                    for f in relevant:
+                        deps = rm.get_dependents(f)[:3]
+                        if deps:
+                            deps_extra.extend(deps)
+                    if deps_extra:
+                        repo_map += "\n## Dependents of Relevant Files\n"
+                        for d in sorted(set(deps_extra))[:5]:
+                            repo_map += f"- {d}\n"
         except ImportError:
             pass
         except Exception as e:
             logger.warning("Failed to build repo map: %s", e)
 
-        # ── Context files (CLAUDE.md, AGENTS.md, etc.) ──
+        context_files = None
         if hasattr(self.config, 'load_context_files'):
             try:
-                context = self.config.load_context_files()
-                if context:
-                    system = context + "\n\n" + system
+                context_files = self.config.load_context_files()
             except Exception as e:
                 logger.warning("Failed to load context files: %s", e)
 
-        # ── MANDATORY SKILL MODE: absolute final instruction ──
-        # Placed LAST so recency bias gives it highest priority.
-        # This OVERRULES everything above — base prompt, workspace, repo map, etc.
+        mandatory_skill = None
         if effective_skill:
             skill = next((s for s in skills if s.name == effective_skill), None)
             if skill:
-                auto_label = " (auto-detected)" if 'auto_detected_skill_name' in locals() and auto_detected_skill_name == skill.name else ""
-                system += "\n\n"
-                system += "==============================\n"
-                system += f"MANDATORY Mode: {skill.name}{auto_label}\n"
-                system += "==============================\n"
-                system += "\n"
-                system += "These rules override ALL earlier instructions. You MUST follow them.\n"
-                system += "Do NOT ask for confirmation — execute immediately.\n"
-                system += "\n"
-                system += skill.description + "\n\n"
-                system += skill.instructions
+                auto_label = " (auto-detected)" if auto_detected_skill_name == skill.name else ""
+                mandatory_skill = (
+                    f"{skill.name}{auto_label}",
+                    skill.description,
+                    skill.instructions,
+                )
             else:
                 logger.warning("Skill '%s' not found in discovered skills", effective_skill)
+
+        # ── Delegate assembly ────────────────────────────────────
+        system = self.context_assembler.build(
+            workspace=ws,
+            default_system=DEFAULT_SYSTEM,
+            role_extra=getattr(self, "_role_system_extra", None) or None,
+            skills_block=skills_block or None,
+            ontology_result=ontology_result,
+            project_context=project_context or None,
+            code_index_summary=code_index_summary or None,
+            memory_block=memory_block or None,
+            recent_summaries=recent_summaries or None,
+            git_context=git_context or None,
+            active_plan=active_plan_str or None,
+            plan_mode=getattr(self.config, "plan_mode", False),
+            plan_context=getattr(self.config, "plan_context", None) or None,
+            repo_map=repo_map or None,
+            context_files=context_files or None,
+            mandatory_skill=mandatory_skill,
+        )
 
         self._system_prompt_cache[cache_key] = system
         return system
