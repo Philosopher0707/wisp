@@ -208,6 +208,9 @@ class UnifiedSessionStore:
             best = path.stem
         return best
 
+    # Backward-compatible alias used by WispAgentCore
+    get_session_id_from_fragment = resolve_session_id
+
     # ── Run CRUD ─────────────────────────────────────────────────────
 
     def create_run(self, session_id: str, prompt: str) -> Run:
