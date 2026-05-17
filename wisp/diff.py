@@ -157,30 +157,83 @@ def fuzzy_find_text(content: str, old_text: str) -> FuzzyMatchResult:
     fuzzy_old_text = normalize_for_fuzzy_match(old_text)
     fuzzy_index = fuzzy_content.find(fuzzy_old_text)
 
-    if fuzzy_index == -1:
+    if fuzzy_index != -1:
+        # Map the normalized match region back to original indices
+        match_end = fuzzy_index + len(fuzzy_old_text) - 1
+        orig_start = mapping[fuzzy_index]
+        orig_end = mapping[match_end] + 1
         return FuzzyMatchResult(
-            found=False,
-            index=-1,
-            match_length=0,
-            used_fuzzy_match=False,
-            content_for_replacement=content,
-            original_index=-1,
-            original_match_length=0,
+            found=True,
+            index=fuzzy_index,
+            match_length=len(fuzzy_old_text),
+            used_fuzzy_match=True,
+            content_for_replacement=fuzzy_content,
+            original_index=orig_start,
+            original_match_length=orig_end - orig_start,
         )
 
-    # Map the normalized match region back to original indices
-    match_end = fuzzy_index + len(fuzzy_old_text) - 1
-    orig_start = mapping[fuzzy_index]
-    orig_end = mapping[match_end] + 1  # +1 because mapping gives start index of each char
+    # ── Fallback 2: strip common leading whitespace ──────────────────
+    # If old_text is indented differently than the file content,
+    # strip the common leading whitespace from both and retry.
+    def _dedent_lines(text: str) -> str:
+        lines = text.split("\n")
+        # Find minimum leading whitespace across non-empty lines
+        min_indent = min(
+            (len(line) - len(line.lstrip()) for line in lines if line.strip()),
+            default=0,
+        )
+        if min_indent > 0:
+            return "\n".join(line[min_indent:] if line.strip() else line for line in lines)
+        return text
+
+    dedented_old = _dedent_lines(fuzzy_old_text)
+    dedented_content = _dedent_lines(fuzzy_content)
+    if dedented_old != fuzzy_old_text:
+        dedented_index = dedented_content.find(dedented_old)
+        if dedented_index != -1:
+            # Map back to original indices via the fuzzy content mapping
+            match_end = dedented_index + len(dedented_old) - 1
+            orig_start = mapping[dedented_index]
+            orig_end = mapping[match_end] + 1
+            return FuzzyMatchResult(
+                found=True,
+                index=dedented_index,
+                match_length=len(dedented_old),
+                used_fuzzy_match=True,
+                content_for_replacement=fuzzy_content,
+                original_index=orig_start,
+                original_match_length=orig_end - orig_start,
+            )
+
+    # ── Fallback 3: approximate match with SequenceMatcher ────────────
+    # If the text is very similar (ratio > 0.85), accept the best match.
+    import difflib
+    matcher = difflib.SequenceMatcher(None, fuzzy_content, fuzzy_old_text)
+    match = matcher.find_longest_match(0, len(fuzzy_content), 0, len(fuzzy_old_text))
+    if match.size > 0:
+        ratio = match.size / len(fuzzy_old_text)
+        if ratio >= 0.85:
+            match_end = match.a + match.size - 1
+            orig_start = mapping[match.a]
+            orig_end = mapping[match_end] + 1
+            return FuzzyMatchResult(
+                found=True,
+                index=match.a,
+                match_length=match.size,
+                used_fuzzy_match=True,
+                content_for_replacement=fuzzy_content,
+                original_index=orig_start,
+                original_match_length=orig_end - orig_start,
+            )
 
     return FuzzyMatchResult(
-        found=True,
-        index=fuzzy_index,
-        match_length=len(fuzzy_old_text),
-        used_fuzzy_match=True,
-        content_for_replacement=fuzzy_content,
-        original_index=orig_start,
-        original_match_length=orig_end - orig_start,
+        found=False,
+        index=-1,
+        match_length=0,
+        used_fuzzy_match=False,
+        content_for_replacement=content,
+        original_index=-1,
+        original_match_length=0,
     )
 
 
