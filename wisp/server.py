@@ -249,16 +249,14 @@ class HookCreateRequest(BaseModel):
 # ── Auth ─────────────────────────────────────────────────────────────
 
 async def verify_api_key(
-    x_api_key: str | None = Query(None, alias="api-key"),
     x_api_key_header: str | None = Header(None, alias="X-API-Key"),
     authorization: str | None = Header(None),
 ):
+    """API key verification via header only (query param removed — leaks to logs)."""
     if authorization and authorization.lower().startswith("bearer "):
         auth_key = authorization[7:]
         if auth_key == API_KEY:
             return auth_key
-    if x_api_key and x_api_key == API_KEY:
-        return x_api_key
     if x_api_key_header and x_api_key_header == API_KEY:
         return x_api_key_header
     raise HTTPException(status_code=401, detail="Invalid or missing API key")
@@ -2147,20 +2145,13 @@ def _extract_json(text: str) -> Optional[str]:
 # ── WebSocket Agent ──────────────────────────────────────────────────
 
 @app.websocket("/ws/agent")
-async def agent_websocket(websocket: WebSocket, api_key: str = Query(default="")):
-    authenticated = False
-    # Immediate auth via query param (backward compat)
-    if api_key and API_KEY and api_key == API_KEY:
-        authenticated = True
-    elif not API_KEY:
-        authenticated = True  # open mode
+async def agent_websocket(websocket: WebSocket):
+    """WebSocket endpoint — auth via first-message AuthMessage frame only.
 
-    if API_KEY and not api_key:
-        # Allow first-message auth — don't reject yet
-        authenticated = False
-    elif API_KEY and api_key and api_key != API_KEY:
-        await websocket.close(code=4001, reason="Invalid API key")
-        return
+    Query-param auth removed: REST uses headers; WS uses a JSON frame
+    so the API key never appears in URL.
+    """
+    authenticated = not bool(API_KEY)
 
     client_id = f"{websocket.client.host}:{websocket.client.port}"
     conn = await manager.connect(websocket, client_id)
@@ -2403,10 +2394,10 @@ def main(host: str = "0.0.0.0", port: int = 8000, no_auth: bool = False):
 
         # HTTP: bypass api key check
         async def _noop_auth(
-            x_api_key: str | None = Query(None, alias="api-key"),
+            x_api_key_header: str | None = Header(None, alias="X-API-Key"),
             authorization: str | None = Header(None),
         ):
-            return x_api_key or authorization or ""
+            return x_api_key_header or authorization or ""
         app.dependency_overrides[verify_api_key] = _noop_auth
 
     logging.basicConfig(

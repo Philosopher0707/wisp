@@ -289,9 +289,9 @@ class WispRestClient(private val serverUrl: String, private val apiKey: String) 
             requestTimeoutMillis = 30000
             connectTimeoutMillis = 10000
         }
-        // Send API key as query param on every request to match server's verify_api_key()
+        // Send API key via header (query param removed — leaks to logs)
         defaultRequest {
-            parameter("api-key", apiKey)
+            header("X-API-Key", apiKey)
         }
     }
 

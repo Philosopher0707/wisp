@@ -138,7 +138,8 @@ function extractText(content: string | unknown[]): string {
 }
 
 export function useApi(serverUrl: string, apiKey: string): ApiClient {
-  const authParams = apiKey ? `?api-key=${encodeURIComponent(apiKey)}` : '';
+  // API key is sent via Authorization header, NOT query param (leaks to logs).
+  const authParams = '';
 
   const apiFetch = useCallback(
     async (path: string, opts?: { method?: string; body?: unknown }): Promise<unknown> => {
