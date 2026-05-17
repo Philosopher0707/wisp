@@ -401,6 +401,72 @@ class WispConfig:
         logger.debug("Loaded %d context file(s) for workspace %s", len(found_files), ws_path)
         return self.loaded_context
 
+    def validate(self) -> list[str]:
+        """Validate this config instance against the schema.
+
+        Returns a list of error messages (empty if valid).
+        """
+        errors: list[str] = []
+
+        # Temperature
+        if not (0.0 <= self.temperature <= 2.0):
+            errors.append(
+                f"temperature: {self.temperature} is out of range [0.0, 2.0]"
+            )
+
+        # Max iterations
+        if not (1 <= self.max_iterations <= 100):
+            errors.append(
+                f"max_iterations: {self.max_iterations} is out of range [1, 100]"
+            )
+
+        # Max reflections
+        if not (0 <= self.max_reflections <= 10):
+            errors.append(
+                f"max_reflections: {self.max_reflections} is out of range [0, 10]"
+            )
+
+        # Max context tokens
+        if self.max_context_tokens < 1024:
+            errors.append(
+                f"max_context_tokens: {self.max_context_tokens} is below minimum 1024"
+            )
+
+        # Chars per token
+        if not (1 <= self.chars_per_token <= 10):
+            errors.append(
+                f"chars_per_token: {self.chars_per_token} is out of range [1, 10]"
+            )
+
+        # Compact threshold
+        if not (10 <= self.compact_threshold_tokens <= 95):
+            errors.append(
+                f"compact_threshold_tokens: {self.compact_threshold_tokens} is out of range [10, 95]"
+            )
+
+        # Compact keep recent
+        if self.compact_keep_recent < 4:
+            errors.append(
+                f"compact_keep_recent: {self.compact_keep_recent} is below minimum 4"
+            )
+
+        # Permission mode
+        valid_modes = {"full", "ask_all", "auto_edit", "read_only"}
+        if self.permission_mode not in valid_modes:
+            errors.append(
+                f"permission_mode: '{self.permission_mode}' is not one of {valid_modes}"
+            )
+
+        # Provider
+        if not self.provider:
+            errors.append("provider: cannot be empty")
+
+        # Model
+        if not self.model:
+            errors.append("model: cannot be empty")
+
+        return errors
+
     def __repr__(self):
         return (
             f"WispConfig(provider={self.provider}, ollama_url={self.ollama_url}, model={self.model}, "
