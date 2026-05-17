@@ -1,7 +1,18 @@
-"""End-to-end integration tests for all Wisp tools.
+"""End-to-end integration tests for Wisp tool functions.
 
-Exercises every tool through execute_tool() with real filesystem operations,
-verifying structured JSON output, error handling, and security boundaries.
+Exercises every tool through execute_tool() — the low-level registry function
+that dispatches to individual tool implementations.  These tests verify that
+*tool functions* produce correct JSON output, handle errors gracefully, and
+enforce security boundaries.
+
+**What these tests DON'T cover (by design):**
+- ToolExecutor guard layers (pre-tool hooks, plan mode, dangerous command
+  blocking, circuit breaker, permission mode, approval gating) — see
+  test_tool_executor.py for those.
+- The production execution path (ToolExecutor.execute() → _execute_tool() →
+  build_tool_message()) — see test_integration_tool_executor.py for that.
+- JSON extraction into conversation history — see
+  test_integration_tool_executor.py::TestBuildToolMessageJSONExtraction.
 """
 
 import json
