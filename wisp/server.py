@@ -227,6 +227,16 @@ class MCPServerAddRequest(BaseModel):
     env: dict[str, str] = Field(default_factory=dict, description="Environment variables")
 
 
+class HookCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, description="Hook name")
+    event: str = Field(..., description="PRE_TOOL_USE | POST_TOOL_USE | PRE_BASH | POST_BASH | PRE_FILE_WRITE | SESSION_START | SESSION_END")
+    command: str = Field(..., min_length=1, description="Shell command or script path")
+    timeout_seconds: float = Field(default=30.0, ge=1.0, le=300.0)
+    enabled: bool = Field(default=True)
+    matcher: Optional[str] = Field(default=None, description="Regex pattern for tool name matching")
+    working_dir: Optional[str] = Field(default=None, description="Working directory for the hook subprocess")
+
+
 # ── Auth ─────────────────────────────────────────────────────────────
 
 async def verify_api_key(
@@ -1691,27 +1701,105 @@ async def test_mcp_server(name: str):
 
 @app.get("/api/hooks", dependencies=[Depends(verify_api_key)])
 async def list_hooks():
-    return {"hooks": []}
+    from wisp.hooks import HookManager
+    manager = HookManager(workspace=WORKSPACE_ROOT)
+    manager.load_project_hooks()
+    hooks = manager.list_hooks()
+    return {
+        "hooks": [
+            {
+                "name": h.name,
+                "event": h.event.value if hasattr(h.event, "value") else str(h.event),
+                "command": h.command,
+                "timeout_seconds": h.timeout_seconds,
+                "enabled": h.enabled,
+                "matcher": h.matcher,
+                "working_dir": h.working_dir,
+            }
+            for h in hooks
+        ]
+    }
 
 
 @app.post("/api/hooks", dependencies=[Depends(verify_api_key)])
-async def create_hook(request: dict):
-    return {"ok": False, "message": "Hook management not yet implemented"}
+async def create_hook(req: HookCreateRequest):
+    from wisp.hooks import HookConfig, HookEvent
+    import json as _json
+
+    hooks_dir = WORKSPACE_ROOT / ".wisp" / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        event = HookEvent[req.event.upper()]
+    except KeyError:
+        valid = [e.name for e in HookEvent]
+        raise HTTPException(status_code=400, detail=f"Invalid event '{req.event}'. Must be one of: {', '.join(valid)}")
+
+    hook = HookConfig(
+        name=req.name,
+        event=event,
+        command=req.command,
+        timeout_seconds=req.timeout_seconds,
+        enabled=req.enabled,
+        matcher=req.matcher,
+        working_dir=req.working_dir,
+    )
+
+    hook_file = hooks_dir / f"{req.name}.json"
+    hook_file.write_text(_json.dumps(hook.to_dict(), indent=2) + "\n", encoding="utf-8")
+
+    return {"ok": True, "hook": hook.to_dict()}
 
 
 @app.delete("/api/hooks/{name}", dependencies=[Depends(verify_api_key)])
 async def delete_hook(name: str):
-    return {"ok": False, "message": f"Hook '{name}' not found"}
+    hooks_dir = WORKSPACE_ROOT / ".wisp" / "hooks"
+    hook_file = hooks_dir / f"{name}.json"
+    if not hook_file.exists():
+        raise HTTPException(status_code=404, detail=f"Hook '{name}' not found")
+    hook_file.unlink()
+    return {"ok": True, "message": f"Hook '{name}' deleted"}
 
 
 @app.post("/api/hooks/{name}/test", dependencies=[Depends(verify_api_key)])
 async def test_hook(name: str, request: dict):
-    return {"result": "Hook test not yet implemented"}
+    from wisp.hooks import HookManager, HookEvent, build_hook_context
+    import asyncio
+
+    manager = HookManager(workspace=WORKSPACE_ROOT)
+    manager.load_project_hooks()
+    hook = manager.get_hook(name)
+    if hook is None:
+        raise HTTPException(status_code=404, detail=f"Hook '{name}' not found")
+
+    # Build a synthetic context for testing
+    event_type = hook.event
+    tool_name = request.get("tool_name", "run_bash")
+    tool_args = request.get("tool_args", {"command": "echo 'hook test'"})
+
+    context = build_hook_context(
+        event=event_type,
+        tool_name=tool_name,
+        tool_args=tool_args,
+        workspace=str(WORKSPACE_ROOT),
+        session_id="test-session",
+    )
+
+    try:
+        results = await manager.run_hooks(event_type, context)
+        return {
+            "ok": True,
+            "hook": name,
+            "results": [r.to_dict() for r in results],
+        }
+    except Exception as e:
+        logger.exception("Hook test failed")
+        raise HTTPException(status_code=500, detail=f"Hook test failed: {e}")
 
 
 @app.get("/api/hooks/logs", dependencies=[Depends(verify_api_key)])
 async def hook_logs():
-    return {"logs": []}
+    return {"logs": [], "message": "Hook execution logging not yet implemented"}
 
 
 # ── PR Review Endpoints ───────────────────────────────────────────────

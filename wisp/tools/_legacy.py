@@ -30,6 +30,8 @@ from wisp.tools.long_horizon import (
     tool_list_tasks,
     tool_pause_task,
     tool_cancel_task,
+    tool_cleanup_tasks,
+    tool_task_output,
 )
 
 logger = logging.getLogger(__name__)
@@ -1923,6 +1925,35 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "cleanup_tasks",
+            "description": "Clean up old long-horizon tasks by status and age. Defaults to dry-run; use dry_run=false to actually delete.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status_filter": {"type": "string", "description": "Status to clean up (completed, failed, all)", "default": "completed"},
+                    "older_than_days": {"type": "integer", "description": "Minimum age in days", "default": 7},
+                    "dry_run": {"type": "boolean", "description": "If true, show what would be removed without deleting", "default": True},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "task_output",
+            "description": "Get the full output and artifacts of a completed long-horizon task. Returns accumulated results from all completed steps.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task ID to retrieve output for"},
+                },
+                "required": ["task_id"],
+            },
+        },
+    },
 ]
 
 def _tool_spawn_subagent_stub(**kwargs) -> str:
@@ -1984,6 +2015,8 @@ TOOL_IMPLS = {
     "list_tasks": tool_list_tasks,
     "pause_task": tool_pause_task,
     "cancel_task": tool_cancel_task,
+    "cleanup_tasks": tool_cleanup_tasks,
+    "task_output": tool_task_output,
 }
 
 
