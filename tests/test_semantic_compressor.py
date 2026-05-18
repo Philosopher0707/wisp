@@ -459,7 +459,7 @@ class TestTier3Reachability:
     def test_tier3_fires_when_over_trigger(self, monkeypatch):
         from wisp.semantic_compressor import _llm_summarize, CompressionResult
 
-        def fake_summarize(messages):
+        def fake_summarize(messages, **kwargs):
             return CompressionResult(
                 summary="Fake LLM summary",
                 key_decisions=["A"],
@@ -507,7 +507,7 @@ class TestTier3Reachability:
     def test_default_tier3_threshold_is_quarter_of_budget(self, monkeypatch):
         from wisp.semantic_compressor import _llm_summarize, CompressionResult
 
-        def fake_summarize(messages):
+        def fake_summarize(messages, **kwargs):
             return CompressionResult(
                 summary="tier3",
                 compression_stats={"tier": 3, "model_used": "fake"},
