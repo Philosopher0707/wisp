@@ -181,6 +181,8 @@ class SubagentResult:
     retry_count: int = 0
     timed_out: bool = False
     hit_iteration_limit: bool = False
+    worktree_patch: Optional[str] = None
+    """git diff patch of uncommitted changes made in the isolated worktree before it was destroyed."""
 
     # ── Audit trail ──
     messages: list[dict] = field(default_factory=list)

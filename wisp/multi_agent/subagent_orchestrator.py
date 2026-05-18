@@ -248,12 +248,17 @@ class SubagentOrchestrator:
         self._telemetry.record(contract.model or self.config.model or "unknown", result)
 
         # ── Cleanup worktree ───────────────────────────────────────────
-        if worktree_path and not os.environ.get("WISP_KEEP_WORKTREES", "").lower() == "true":
+        if worktree_path:
             try:
-                await self._worktree_mgr.cleanup(worktree_path)
+                result.worktree_patch = await self._worktree_mgr.get_patch(worktree_path)
             except Exception as exc:
-                logger.warning("Failed to clean up worktree %s: %s", worktree_path, exc)
+                logger.warning("Failed to capture worktree patch for %s: %s", worktree_path, exc)
 
+            if not os.environ.get("WISP_KEEP_WORKTREES", "").lower() == "true":
+                try:
+                    await self._worktree_mgr.cleanup(worktree_path)
+                except Exception as exc:
+                    logger.warning("Failed to clean up worktree %s: %s", worktree_path, exc)
         return result
 
     async def run_parallel(

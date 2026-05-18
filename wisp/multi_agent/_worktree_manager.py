@@ -48,8 +48,76 @@ class WorktreeManager:
             err_text = stderr.decode("utf-8", errors="replace").strip()
             raise RuntimeError(f"git worktree add failed (exit {proc.returncode}): {err_text}")
 
-        logger.debug("Worktree created: %s (branch=%s)", worktree_path, branch_name)
+        # Sync parent workspace uncommitted tracked changes into the worktree
+        diff_proc = await asyncio.create_subprocess_exec(
+            "git", "diff", "HEAD",
+            cwd=str(self.workspace),
+            stdout=asyncio.subprocess.PIPE,
+        )
+        stdout_diff, _ = await diff_proc.communicate()
+        if stdout_diff.strip():
+            apply_proc = await asyncio.create_subprocess_exec(
+                "git", "apply",
+                cwd=str(worktree_path),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await apply_proc.communicate(input=stdout_diff)
+
+        # Sync untracked files from parent workspace
+        untracked_proc = await asyncio.create_subprocess_exec(
+            "git", "ls-files", "--others", "--exclude-standard",
+            cwd=str(self.workspace),
+            stdout=asyncio.subprocess.PIPE,
+        )
+        stdout_untracked, _ = await untracked_proc.communicate()
+        if stdout_untracked.strip():
+            for rel_file in stdout_untracked.decode("utf-8").splitlines():
+                if not rel_file.strip():
+                    continue
+                src = self.workspace / rel_file
+                dst = worktree_path / rel_file
+                if src.is_file():
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, dst)
+
+        logger.debug("Worktree created and synced: %s (branch=%s)", worktree_path, branch_name)
         return worktree_path
+
+    async def get_patch(self, worktree_path: Path) -> str:
+        """Capture all uncommitted changes (tracked & untracked) in the worktree as a patch string."""
+        if not worktree_path.exists():
+            return ""
+        
+        # Add all untracked files to index so they appear in diff
+        add_proc = await asyncio.create_subprocess_exec(
+            "git", "add", "-A",
+            cwd=str(worktree_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await add_proc.communicate()
+
+        # Generate a patch of all changes compared to HEAD
+        diff_proc = await asyncio.create_subprocess_exec(
+            "git", "diff", "HEAD",
+            cwd=str(worktree_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await diff_proc.communicate()
+        
+        # Reset the index to not leave the worktree in an awkward state if not destroyed
+        reset_proc = await asyncio.create_subprocess_exec(
+            "git", "reset", "HEAD",
+            cwd=str(worktree_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await reset_proc.communicate()
+
+        return stdout.decode("utf-8", errors="replace")
 
     async def cleanup(self, worktree_path: Path) -> None:
         """Remove a worktree and delete the associated branch."""
