@@ -23,7 +23,7 @@ from typing import AsyncIterator, Awaitable, Callable, Optional
 ApprovalHandler = Callable[[str, dict, str], Awaitable[tuple[bool, Optional[dict]]]]
 
 from wisp.config import WispConfig
-from wisp.ollama_client import OllamaClient, OllamaError
+from wisp.ollama_client import OllamaClient
 from wisp.providers import get_provider
 from wisp.stream_events import (
     TokenBatch,
@@ -179,9 +179,13 @@ class WispAgentCore:
         session: Optional[Session] = None,
         agent_id: Optional[str] = None,
         role: Optional[str] = None,
+        provider: Any = None,
     ):
         self.config = config or WispConfig()
-        self.provider = get_provider(self.config)
+        if provider is not None:
+            self.provider = provider
+        else:
+            self.provider = get_provider(self.config)
         # Backward-compatible alias while the rest of the codebase migrates.
         self.client = self.provider
 
@@ -209,7 +213,7 @@ class WispAgentCore:
                         self.config.model, detected,
                     )
                     self.config.max_context_tokens = detected
-            except OllamaError:
+            except Exception:
                 pass
         self.session_mgr = get_store()
         self.session = session
@@ -1229,14 +1233,6 @@ class WispAgentCore:
                     }
                     return
 
-        except OllamaError as e:
-            logger.error("Ollama error: %s", e)
-            self.client.stream_response = {
-                "message": {"role": "assistant", "content": "", "thinking": ""},
-                "_stream_error": True,
-                "_error_type": "OllamaError",
-                "_error_message": str(e),
-            }
         except Exception as e:
             logger.error("Unexpected error in streaming turn: %s", e, exc_info=True)
             self.client.stream_response = {
