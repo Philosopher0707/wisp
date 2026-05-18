@@ -114,6 +114,13 @@ async def sync_gen_iter(
 
     def _thread_target() -> None:
         """Consumes the sync generator in a thread and enqueues items."""
+        # Make the event loop visible to sync code that needs to yield
+        # (e.g. retry back-off in _post_stream).
+        try:
+            from wisp.ollama_client import _loop_local as _ll
+            _ll.loop = loop
+        except Exception:
+            pass  # defensive: ollama_client import may fail
         try:
             gen = gen_factory()
             for item in gen:

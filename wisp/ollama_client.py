@@ -8,8 +8,10 @@ Production-hardened with:
 - Batched token streaming with checkpoint validation
 """
 
+import asyncio
 import json
 import logging
+import threading
 import time
 from typing import Optional, Iterator
 
@@ -29,11 +31,49 @@ from wisp.stream_events import (
 from wisp.stream_parser import parse_stream, EventStreamError
 
 logger = logging.getLogger(__name__)
+_loop_local = threading.local()
 
 
 class OllamaError(Exception):
     """Raised when Ollama API calls fail after all retries."""
     pass
+
+
+
+def _async_sleep_if_in_loop(delay: float) -> None:
+    """Sleep *delay* seconds without pinning a thread-pool worker.
+
+    In async contexts (e.g. inside ``sync_gen_iter`` thread) this schedules
+    the sleep on the host event loop and frees the worker.  In plain sync
+    contexts it falls back to ordinary ``time.sleep``.
+    """
+    # 1) Already on the main event-loop thread — blocking is the only safe
+    #    option because sync code cannot ``await``.
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None and threading.current_thread() is threading.main_thread():
+        time.sleep(delay)
+        return
+
+    # 2) Inside a sync_gen_iter worker — the loop was stashed in a
+    #    thread-local by the bridge before the generator started.
+    if loop is None:
+        loop = getattr(_loop_local, "loop", None)
+        if loop is not None:
+            coro = asyncio.sleep(delay)
+            try:
+                future = asyncio.run_coroutine_threadsafe(coro, loop)
+                future.result(timeout=delay + 5)
+                return
+            except Exception:
+                coro.close()
+                pass
+
+    # 3) Fallback — we have no event loop to defer to.
+    time.sleep(delay)
 
 
 class OllamaClient:
@@ -139,21 +179,21 @@ class OllamaClient:
                     if attempt < max_retries - 1:
                         delay = base_delay * (2 ** attempt)
                         logger.warning("Server error %d, retrying in %ds...", e.response.status_code, delay)
-                        time.sleep(delay)
+                        _async_sleep_if_in_loop(delay)
                         continue
                 raise OllamaError(f"Ollama HTTP error: {e}")
             except requests.exceptions.ConnectionError:
                 if attempt < max_retries - 1:
                     delay = base_delay * (2 ** attempt)
                     logger.warning("Connection error, retrying in %ds...", delay)
-                    time.sleep(delay)
+                    _async_sleep_if_in_loop(delay)
                     continue
                 raise OllamaError(f"Cannot connect to Ollama at {self.base_url}. Is Ollama running?")
             except requests.exceptions.Timeout:
                 if attempt < max_retries - 1:
                     delay = base_delay * (2 ** attempt)
                     logger.warning("Request timed out, retrying in %ds...", delay)
-                    time.sleep(delay)
+                    _async_sleep_if_in_loop(delay)
                     continue
                 raise OllamaError(f"Ollama request timed out after {timeout}s")
 
@@ -505,14 +545,14 @@ class OllamaClient:
                 if e.response.status_code >= 500 and attempt < max_retries - 1 and not events_yielded:
                     delay = base_delay * (2 ** attempt)
                     logger.warning("Server error %d, retrying in %ds...", e.response.status_code, delay)
-                    time.sleep(delay)
+                    _async_sleep_if_in_loop(delay)
                     continue
                 raise OllamaError(f"Ollama HTTP error: {e}")
             except requests.exceptions.ConnectionError as e:
                 if attempt < max_retries - 1 and not events_yielded:
                     delay = base_delay * (2 ** attempt)
                     logger.warning("Stream connection failed, retrying in %ds...", delay)
-                    time.sleep(delay)
+                    _async_sleep_if_in_loop(delay)
                     continue
                 if events_yielded:
                     raise OllamaError(f"Stream dropped mid-response: {e}")
@@ -523,7 +563,7 @@ class OllamaClient:
                 if attempt < max_retries - 1 and not events_yielded:
                     delay = base_delay * (2 ** attempt)
                     logger.warning("Stream timed out, retrying in %ds...", delay)
-                    time.sleep(delay)
+                    _async_sleep_if_in_loop(delay)
                     continue
                 raise OllamaError(f"Ollama streaming request timed out after {timeout}s.")
             except requests.exceptions.RequestException as e:
