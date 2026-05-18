@@ -79,16 +79,16 @@ class TestShutdownGlobal:
         assert True
 
     def test_none_after_shutdown(self):
-        from wisp.lsp.manager import get_lsp_manager, shutdown_global_lsp_manager, _GLOBAL_LSP
+        import wisp.lsp.manager as mgr
+        from wisp.lsp.manager import get_lsp_manager, shutdown_global_lsp_manager
         shutdown_global_lsp_manager()
 
-        mgr = get_lsp_manager("/tmp/ws5")
-        assert _GLOBAL_LSP is not None
+        mgr_obj = get_lsp_manager("/tmp/ws5")
+        assert mgr._GLOBAL_LSP is not None
 
         shutdown_global_lsp_manager()
         # Must reset global to None
-        from wisp.lsp.manager import _GLOBAL_LSP
-        assert _GLOBAL_LSP is None
+        assert mgr._GLOBAL_LSP is None
 
 
 class TestAtexitRegistered:
@@ -96,17 +96,18 @@ class TestAtexitRegistered:
 
     def test_atexit_handler_registered(self):
         import atexit
-        from wisp.lsp.manager import shutdown_global_lsp_manager
+        from unittest.mock import patch
+        import importlib
+        import wisp.lsp.manager as mgr
 
-        funcs = [f for f in atexit._exithandlers if hasattr(f, '__name__') or hasattr(f, 'func')]
-        # atexit stores (func, args, kwargs, ...) tuples
-        handlers = atexit._exithandlers
-        found = any(
-            (callable(h) and shutdown_global_lsp_manager is h) or
-            (isinstance(h, tuple) and h[0] is shutdown_global_lsp_manager)
-            for h in handlers
-        )
-        assert found, "shutdown_global_lsp_manager must be in atexit handlers"
+        real_register = atexit.register
+        with patch.object(atexit, 'register', side_effect=real_register) as mock_register:
+            importlib.reload(mgr)
+            found = any(
+                call.args[0] is mgr.shutdown_global_lsp_manager
+                for call in mock_register.call_args_list
+            )
+            assert found, "shutdown_global_lsp_manager must be in atexit handlers"
 
 
 class TestEndpointDoesNotLeak:

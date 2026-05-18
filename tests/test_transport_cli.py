@@ -121,7 +121,7 @@ class TestPrompts:
 
     @patch("wisp.transport.cli._is_interactive", return_value=False)
     def test_prompt_dangerous_non_interactive(self, mock_interactive):
-        assert _prompt_dangerous("run_bash", "rm -rf /") is False
+        assert _prompt_dangerous("run_bash", "rm -rf /") == (False, False)
 
     @patch("wisp.transport.cli._is_interactive", return_value=True)
     @patch("builtins.input", return_value="")
@@ -136,7 +136,7 @@ class TestPrompts:
     @patch("wisp.transport.cli._is_interactive", return_value=True)
     @patch("builtins.input", return_value="yes")
     def test_prompt_dangerous_yes(self, mock_input, mock_interactive):
-        assert _prompt_dangerous("run_bash", "rm -rf /") is True
+        assert _prompt_dangerous("run_bash", "rm -rf /") == (True, False)
 
 
 class TestCLITransport:

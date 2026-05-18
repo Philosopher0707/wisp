@@ -20,6 +20,8 @@ class TestDiscoverMCPConfigs:
 
     def test_discover_from_wisp_dir(self, tmp_path):
         """Discover config from .wisp/mcp.json in workspace."""
+        from wisp.trust import WorkspaceTrustManager
+        WorkspaceTrustManager.trust_workspace(str(tmp_path))
         mcp_dir = tmp_path / ".wisp"
         mcp_dir.mkdir(parents=True)
         config_file = mcp_dir / "mcp.json"
@@ -37,6 +39,8 @@ class TestDiscoverMCPConfigs:
 
     def test_discover_multiple_servers(self, tmp_path):
         """Discover multiple MCP servers from config."""
+        from wisp.trust import WorkspaceTrustManager
+        WorkspaceTrustManager.trust_workspace(str(tmp_path))
         mcp_dir = tmp_path / ".wisp"
         mcp_dir.mkdir(parents=True)
         config_file = mcp_dir / "mcp.json"
@@ -56,6 +60,8 @@ class TestDiscoverMCPConfigs:
 
     def test_workspace_overrides_home(self, tmp_path, monkeypatch):
         """Workspace config takes priority over home config."""
+        from wisp.trust import WorkspaceTrustManager
+        WorkspaceTrustManager.trust_workspace(str(tmp_path))
         monkeypatch.setattr("wisp.mcp.Path.home", lambda: tmp_path / "home")
 
         # Home config

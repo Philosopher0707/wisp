@@ -130,7 +130,7 @@ class TestToolEditFileFuzzy:
         assert result["status"] == "ok"
         assert result["metadata"]["used_fuzzy_match"] is True
         content = f.read_text()
-        assert 'msg = f"Hi,' in content
+        assert 'msg = f"Hi,' in content  # straight quotes from replacement text
 
     def test_fuzzy_match_special_spaces(self, temp_workspace):
         """Fuzzy match handles special Unicode spaces."""

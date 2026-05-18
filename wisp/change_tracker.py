@@ -51,7 +51,7 @@ class ChangeTracker:
         path = self._resolve(filepath)
         size_before = self._get_size(path)
         size_after = len(content.encode("utf-8"))
-        rel_path = str(path.relative_to(self.workspace))
+        rel_path = self._rel_path(path)
 
         record = ChangeRecord(
             filepath=rel_path,
@@ -74,7 +74,7 @@ class ChangeTracker:
         size_after = len(new_text.encode("utf-8"))
         lines_before = old_text.count("\n")
         lines_after = new_text.count("\n")
-        rel_path = str(path.relative_to(self.workspace))
+        rel_path = self._rel_path(path)
 
         record = ChangeRecord(
             filepath=rel_path,
@@ -93,7 +93,7 @@ class ChangeTracker:
     def record_delete(self, filepath: str, description: str = "") -> None:
         """Record a file deletion."""
         path = self._resolve(filepath)
-        rel_path = str(path.relative_to(self.workspace))
+        rel_path = self._rel_path(path)
         record = ChangeRecord(
             filepath=rel_path,
             action="delete",
@@ -148,6 +148,14 @@ class ChangeTracker:
             indent=2,
             ensure_ascii=False,
         )
+
+    def _rel_path(self, filepath: str) -> str:
+        """Return filepath relative to workspace, falling back to basename."""
+        path = self._resolve(filepath)
+        try:
+            return str(path.relative_to(self.workspace))
+        except ValueError:
+            return str(path)
 
     def _resolve(self, filepath: str) -> Path:
         """Resolve a filepath relative to workspace."""

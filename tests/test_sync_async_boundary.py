@@ -88,6 +88,7 @@ class TestAsyncContextCompatibility:
 
         config = WispConfig()
         config.model = "mock"
+        config.auto_compact = False
         core = WispAgentCore(config=config)
         core.provider = MockProvider(responses=["Hello!"])
         core.client = core.provider
@@ -108,6 +109,7 @@ class TestAsyncContextCompatibility:
 
         config = WispConfig()
         config.model = "mock"
+        config.auto_compact = False
         core = WispAgentCore(config=config)
         core.provider = MockProvider(
             responses=["I'll read that", "Done!"],
@@ -130,6 +132,7 @@ class TestAsyncContextCompatibility:
 
         config = WispConfig()
         config.model = "mock"
+        config.auto_compact = False
         core = WispAgentCore(config=config)
         core.provider = MockProvider(responses=["Hello from sync wrapper!"])
         core.client = core.provider

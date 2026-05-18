@@ -32,7 +32,7 @@ class _MockToolExecutor:
     def set_result_events(self, events):
         self._result_events = list(events)
 
-    async def execute(self, **kwargs):
+    def execute(self, **kwargs):
         return _AsyncIteratorMock(self._result_events)
 
     async def build_tool_message(self, **kwargs):
@@ -106,7 +106,9 @@ class TestMaxIterationsNotWarnOnBreak:
             events = _evts_to_list(agent)
         types = [e.type for e in events]
         assert "done" in types
-        assert "system" not in types  # max-iter warning is typed "system"
+        done_reasons = [e.data.get("reason", "") for e in events if str(e.type) == "done"]
+        assert "max_iterations" not in done_reasons
+        assert "max_reflections" not in done_reasons
 
     def test_warning_when_loop_exhausts(self):
         """Model always returns tool calls — loop exhausts without break."""
@@ -117,20 +119,19 @@ class TestMaxIterationsNotWarnOnBreak:
                 "tool_calls": [{"function": {"name": "run_bash", "arguments": {}}}],
             },
         }
-        # Stream yields a tool_call event, then _run_tool_calls needs tool_result from execute
-        ev_stream = [MagicMock(type="tool_call", text="", data={"name": "run_bash", "arguments": {}})]
+        ev_stream = [MagicMock(type="tool_call", text="", data={})]
         agent.tool_executor.set_result_events([
             MagicMock(type="tool_result", text="", data={"result": "ok"}),
         ])
         with patch.object(agent, '_run_turn_streaming_events', side_effect=lambda s: iter(ev_stream)):
             events = _evts_to_list(agent)
-        types = [e.type for e in events]
-        # When loop exhausts we should see a max-iterations warning
-        assert "system" in types
+        done_reasons = [e.data.get("reason", "") for e in events if str(e.type) == "done"]
+        assert "max_iterations" in done_reasons
 
     def test_reflection_loop_detected(self):
         """Same tool call repeated > max_reflections triggers break."""
         agent = _make_agent()
+        agent.max_iterations = 100  # make sure max_iterations doesn't fire first
         agent.client.stream_response = {
             "message": {
                 "content": "",
@@ -143,9 +144,8 @@ class TestMaxIterationsNotWarnOnBreak:
         ])
         with patch.object(agent, '_run_turn_streaming_events', side_effect=lambda s: iter(ev_stream)):
             events = _evts_to_list(agent)
-        types = [e.type for e in events]
-        # Reflection guard should fire a system event
-        assert "system" in types
+        done_reasons = [e.data.get("reason", "") for e in events if str(e.type) == "done"]
+        assert "max_reflections" in done_reasons
 
     def test_reflection_disabled(self):
         """With max_reflections=0 we never detect loops."""
@@ -164,10 +164,7 @@ class TestMaxIterationsNotWarnOnBreak:
         ])
         with patch.object(agent, '_run_turn_streaming_events', side_effect=lambda s: iter(ev_stream)):
             events = _evts_to_list(agent)
+        done_reasons = [e.data.get("reason", "") for e in events if str(e.type) == "done"]
         # Should max out iterations but NOT emit reflection warning
-        types = [e.type for e in events]
-        assert "system" in types  # max-iter warning
-        # Make sure it's a max-iter warning, not reflection
-        warnings = [e for e in events if str(e.type) == "system"]
-        assert any("max-iter" in str(e.data) or "max iterations" in str(e.data).lower()
-                   for e in warnings)
+        assert "max_iterations" in done_reasons
+        assert "max_reflections" not in done_reasons

@@ -76,12 +76,12 @@ class TestServerTransportSerialization:
         assert msg["level"] == "info"
 
     def test_approval_request_event(self, transport):
+        """Approval requests return None from _event_to_json (handled inline)."""
         event = approval_request("run_bash", {"command": "rm -rf /"}, reason="dangerous")
         msg = transport._event_to_json(event)
-        assert msg["type"] == "tool_approval_request"
-        assert msg["name"] == "run_bash"
-        assert msg["reason"] == "dangerous"
-        assert "call_id" in msg
+        # Approval events are intentionally omitted from the event stream;
+        # they are handled by the approval_handler callback.
+        assert msg is None
 
     def test_done_event(self, transport):
         event = done("sid-123", 3)

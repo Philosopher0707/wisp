@@ -25,8 +25,8 @@ class TestEstimateTokens:
         assert assembler._estimate_tokens("a") == 1
 
     def test_boundary(self, assembler):
-        # 18 chars → 6 tokens (18 // 3)
-        assert assembler._estimate_tokens("a" * 18) == 6
+        # tiktoken: 18 'a' chars ≈ 3 tokens (cl100k_base packs ~6 chars per token)
+        assert assembler._estimate_tokens("a" * 18) == 3
 
     def test_whitespace_counts(self, assembler):
         assert assembler._estimate_tokens("   ") == 1

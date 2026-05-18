@@ -4,7 +4,7 @@ Chunks files by function/class boundaries, generates embeddings via a local
 model (Ollama's nomic-embed-text), and stores in sqlite-vec for cosine
 similarity retrieval.
 
-Design: local-first, incremental updates, zero external API calls.
+Design: local-first, incremental updates, no paid/cloud API calls.
 """
 
 from __future__ import annotations
@@ -449,9 +449,12 @@ class SemanticIndex:
         try:
             version_row = self.conn.execute("PRAGMA data_version").fetchone()
             data_version = version_row[0] if version_row else 0
-            current_key = (data_version, self.conn.total_changes)
+            total_changes = self.conn.total_changes
+            max_mtime_row = self.conn.execute("SELECT MAX(mtime) FROM files").fetchone()
+            max_mtime = max_mtime_row[0] if max_mtime_row and max_mtime_row[0] is not None else 0
+            current_key = (data_version, max_mtime, total_changes)
         except Exception:
-            current_key = (0, 0)
+            current_key = (0, 0, 0)
 
         dim = len(query_vec)
 

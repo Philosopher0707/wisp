@@ -167,14 +167,19 @@ class TestHookReload:
 
             original_count = mgr.hook_count
 
-            # Add a second hook on disk
+            # Add a second hook on disk (must temporarily make dir writable)
+            import stat
+            hooks_dir.chmod(hooks_dir.stat().st_mode | 0o200)
             (hooks_dir / "PRE_BASH_test2.sh").write_text("#!/bin/bash\necho '{\"action\":\"allow\"}'")
+            hooks_dir.chmod(hooks_dir.stat().st_mode & ~0o200)
             mgr.reload_hooks()
             assert mgr.hook_count >= original_count + 1
 
-            # Remove all hooks
+            # Remove all hooks (must temporarily make dir writable)
+            hooks_dir.chmod(hooks_dir.stat().st_mode | 0o200)
             (hooks_dir / "PRE_BASH_test.sh").unlink()
             (hooks_dir / "PRE_BASH_test2.sh").unlink()
+            hooks_dir.chmod(hooks_dir.stat().st_mode & ~0o200)
             mgr.reload_hooks()
             assert mgr.hook_count == 0
 

@@ -124,6 +124,7 @@ class TestMemory:
 
     def test_touch_on_access(self, tmp_path, monkeypatch):
         monkeypatch.setattr("wisp.memory.WISP_CONFIG_DIR", tmp_path)
+        monkeypatch.setattr("wisp.memory._SAVE_DEBOUNCE_SECONDS", 0)  # disable debounce
         add_fact("Touched fact")
         facts = list_facts()
         assert facts[0]["access_count"] == 1

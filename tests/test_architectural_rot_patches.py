@@ -58,6 +58,8 @@ def test_workspace_trust_manager():
     finally:
         if env_backup is not None:
             os.environ["WISP_TRUST_ALL_WORKSPACES"] = env_backup
+        else:
+            os.environ.pop("WISP_TRUST_ALL_WORKSPACES", None)
 
 
 @pytest.mark.asyncio

@@ -467,7 +467,7 @@ class WispConfig:
 
         # Permission mode
         valid_modes = {m.value for m in PermissionMode}
-        if self.permission_mode not in PermissionMode:
+        if self.permission_mode not in valid_modes:
             errors.append(
                 f"permission_mode: '{self.permission_mode}' is not one of {[m.value for m in PermissionMode]}"
             )

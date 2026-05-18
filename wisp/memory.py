@@ -121,6 +121,9 @@ def _schedule_save(memory: dict) -> None:
     Multiple calls within _SAVE_DEBOUNCE_SECONDS are coalesced into a
     single disk write.  The memory dict is kept in _memory_cache so we
     don't need to keep passing it around.
+
+    When _SAVE_DEBOUNCE_SECONDS is 0 (or negative) we flush
+    synchronously so that tests see a deterministic on-disk state.
     """
     global _memory_cache, _cache_dirty, _save_timer
     with _SAVE_LOCK:
@@ -128,8 +131,16 @@ def _schedule_save(memory: dict) -> None:
         _cache_dirty = True
         if _save_timer is not None:
             _save_timer.cancel()
-        _save_timer = threading.Timer(_SAVE_DEBOUNCE_SECONDS, _flush_from_timer)
-        _save_timer.start()
+        if _SAVE_DEBOUNCE_SECONDS <= 0:
+            # Synchronous flush avoids race between timer thread and load_memory()
+            try:
+                _flush_save(_memory_cache)
+            except Exception:
+                pass
+            _cache_dirty = False
+        else:
+            _save_timer = threading.Timer(_SAVE_DEBOUNCE_SECONDS, _flush_from_timer)
+            _save_timer.start()
 
 
 def _flush_from_timer() -> None:
