@@ -118,9 +118,6 @@ class SubagentContract:
     worktree_isolated: bool = True
     """Run in an isolated git worktree. When False the subagent shares the workspace."""
 
-    isolation: str = "thread"
-    """Execution isolation level: 'thread' (default, fast) or 'process' (sandboxed, killable)."""
-
     auto_approve: bool = True
     """If False, dangerous commands are blocked instead of executed."""
 

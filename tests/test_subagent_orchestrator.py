@@ -973,19 +973,7 @@ def test_orchestrator_with_explicit_workspace():
     assert str(orch.workspace) == "/custom/workspace"
 
 
-# ── Process isolation tests ────────────────────────────────────────────
-
-def test_contract_isolation_default():
-    """Default isolation is thread."""
-    c = SubagentContract(task="test")
-    assert c.isolation == "thread"
-
-
-def test_contract_isolation_process():
-    """Process isolation can be set."""
-    c = SubagentContract(task="test", isolation="process")
-    assert c.isolation == "process"
-
+# ── Removed process isolation tests ────────────────────────────────────
 
 @pytest.mark.asyncio
 @pytest.mark.asyncio
@@ -1058,26 +1046,7 @@ async def test_telemetry_auto_aggregation(mock_parent_agent):
     assert summary["m1"]["total_tokens"] == 300
 
 
-# ── Gap #14: Pipe IPC (smoke test) ───────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_process_isolation_uses_pipe(mock_parent_agent, tmp_path):
-    """Process isolation should complete successfully using pipe IPC."""
-    orch = SubagentOrchestrator(parent_agent=mock_parent_agent, workspace=tmp_path)
-    contract = SubagentContract(
-        name="pipe_test",
-        role="tester",
-        task="test task",
-        timeout_seconds=30,
-        isolation="process",
-    )
-    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
-        result = await orch.run(contract)
-    assert result.success
-    # Process isolation runs in a separate process, so patching doesn't affect it
-    # Just verify the result structure is correct
-
-
+# ── Removed Pipe IPC test ───────────────────────────────────────────
 # ── Gap #15: Output compression ───────────────────────────────────────
 
 @pytest.mark.asyncio
