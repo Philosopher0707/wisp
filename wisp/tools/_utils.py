@@ -25,19 +25,13 @@ logger = logging.getLogger(__name__)
 _file_lock_ctx: contextvars.ContextVar = contextvars.ContextVar("file_lock", default=None)
 _change_tracker_ctx: contextvars.ContextVar = contextvars.ContextVar("change_tracker", default=None)
 _lsp_manager_ctx: contextvars.ContextVar = contextvars.ContextVar("lsp_manager", default=None)
-
-
 def set_collaboration_tools(file_lock=None, change_tracker=None):
     """Set file lock and change tracker for the current agent context."""
     _file_lock_ctx.set(file_lock)
     _change_tracker_ctx.set(change_tracker)
-
-
 def set_lsp_manager(manager):
     """Set the LSP manager for the current agent context."""
     _lsp_manager_ctx.set(manager)
-
-
 class _TextExtractor(HTMLParser):
     """HTML text extractor for web_fetch tool. Defined at module level to avoid redefinition on every call."""
 
@@ -70,8 +64,6 @@ class _TextExtractor(HTMLParser):
         text = "".join(self.text)
         lines = [line.strip() for line in text.splitlines()]
         return "\n".join(line for line in lines if line)
-
-
 # ── Security constants ───────────────────────────────────────────────
 
 _MAX_READ_SIZE = 50 * 1024 * 1024       # 50 MB
@@ -80,8 +72,6 @@ _MAX_BASH_OUTPUT = 50_000               # chars of output to return to model
 _MAX_CMD_LENGTH = 16384                 # max command length for safety
 _MAX_OLD_TEXT_LENGTH = 5_000_000          # max length for old_text in edit operations
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
-
-
 def check_dangerous_command(command: str) -> Optional[str]:
     """Check if a shell command is potentially dangerous.
 
@@ -212,8 +202,6 @@ def check_dangerous_command(command: str) -> Optional[str]:
         return "encoded payload execution"
 
     return None
-
-
 # Path fragments that are hook-controlled and should never be written
 # to by agent tools, because hook scripts execute with the full process
 # environment and can be self-installed by the agent, creating a privilege
@@ -222,8 +210,6 @@ _SENSITIVE_HOOK_DIR_FRAGMENTS: frozenset[str] = frozenset({
     ".wisp/hooks",
     ".wisp\\hooks",  # Windows
 })
-
-
 _SENSITIVE_ENV_KEYS: frozenset[str] = frozenset({
     "WISP_API_KEY",
     "OLLAMA_HOST",
@@ -243,8 +229,6 @@ _SENSITIVE_ENV_KEYS: frozenset[str] = frozenset({
     "SSH_AGENT_LAUNCHER",
     "SSH_AUTH_SOCK",
 })
-
-
 def _is_hook_controlled_path(path: str) -> bool:
     """Return True if the path resolves inside a hook-controlled directory."""
     # Normalize separators (collapse double backslashes, then unify)
@@ -258,8 +242,6 @@ def _is_hook_controlled_path(path: str) -> bool:
             if after == "" or after.startswith("/"):
                 return True
     return False
-
-
 def _resolve_path(path: str, workspace: str) -> Path:
     """Resolve a path relative to workspace, with security boundary enforcement.
 
@@ -289,7 +271,87 @@ def _resolve_path(path: str, workspace: str) -> Path:
             f"which is outside workspace {real_ws}"
         )
     return Path(real_target)
+def _safe_open_read(path: str, workspace: str):
+    """Open a file for reading with TOCTOU-safe flags.
 
+    Uses O_NOFOLLOW so if a symlink swap occurs between resolution
+    and open, the call fails with ELOOP instead of following the
+    new link target.
+    """
+    resolved = _resolve_path(path, workspace)
+    try:
+        fd = os.open(str(resolved), os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as e:
+        if getattr(e, "errno", 0) == getattr(os, "ELOOP", 62):
+            raise ToolError(f"TOCTOU blocked: {resolved} was replaced by a symlink")
+        raise ToolError(f"Cannot open {resolved}: {e}")
+    return fd, resolved
+def _safe_read_bytes(path: str, workspace: str):
+    """Read file content using TOCTOU-safe fd-based I/O.
+
+    Returns (content_bytes, resolved_path).
+    Raises ToolError on symlink swaps, permission errors, or I/O failure.
+    """
+    fd, resolved = _safe_open_read(path, workspace)
+    try:
+        chunks = []
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"" .join(chunks), resolved
+    except OSError as e:
+        raise ToolError(f"Read failed for {resolved}: {e}")
+    finally:
+        os.close(fd)
+def _safe_read_text(path: str, workspace: str, *, encoding: str = "utf-8") -> str:
+    """Read and decode file text using TOCTOU-safe I/O."""
+    raw, resolved = _safe_read_bytes(path, workspace)
+    try:
+        return raw.decode(encoding, errors="replace")
+    except UnicodeDecodeError as e:
+        raise ToolError(f"Decode failed for {resolved}: {e}")
+def _safe_open_write(path: str, workspace: str):
+    """Open a file for writing with TOCTOU-safe flags.
+
+    Uses O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW.
+    If the resolved path is a symlink, the open fails with ELOOP.
+    """
+    resolved = _resolve_path(path, workspace)
+    try:
+        fd = os.open(str(resolved), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+    except OSError as e:
+        if getattr(e, "errno", 0) == getattr(os, "ELOOP", 62):
+            raise ToolError(f"TOCTOU blocked: {resolved} was replaced by a symlink")
+        raise ToolError(f"Cannot open {resolved} for write: {e}")
+    return fd, resolved
+def _safe_write_bytes(path: str, workspace: str, content: bytes):
+    """Write bytes to file using TOCTOU-safe fd-based I/O.
+
+    Returns the resolved Path.
+    Raises ToolError on symlink swaps or I/O failure.
+    """
+    fd, resolved = _safe_open_write(path, workspace)
+    try:
+        total = 0
+        while total < len(content):
+            written = os.write(fd, content[total:])
+            if written == 0:
+                raise ToolError(f"Write returned 0 for {resolved}")
+            total += written
+        return resolved
+    except OSError as e:
+        raise ToolError(f"Write failed for {resolved}: {e}")
+    finally:
+        os.close(fd)
+def _safe_write_text(path: str, workspace: str, content: str, *, encoding: str = "utf-8"):
+    """Write text to file using TOCTOU-safe I/O."""
+    try:
+        raw = content.encode(encoding)
+    except UnicodeEncodeError as e:
+        raise ToolError(f"Encode failed: {e}")
+    return _safe_write_bytes(path, workspace, raw)
 
 def _validate_string(value: Any, name: str, max_len: int = 4096, allow_empty: bool = False) -> str:
     """Validate that a value is a string within length limits."""
@@ -300,8 +362,6 @@ def _validate_string(value: Any, name: str, max_len: int = 4096, allow_empty: bo
     if len(value) > max_len:
         raise ToolError(f"{name} too long ({len(value)} > {max_len} chars)")
     return value
-
-
 def _validate_int(value: Any, name: str, min_val: int = 0, max_val: int = 10**6) -> int:
     """Validate that a value is an integer within range."""
     if not isinstance(value, (int, float)):
@@ -312,8 +372,6 @@ def _validate_int(value: Any, name: str, min_val: int = 0, max_val: int = 10**6)
     if val > max_val:
         raise ToolError(f"{name} too large ({val} > {max_val})")
     return val
-
-
 def _get_dependents(path: str, workspace: str) -> list[str]:
     """Find files that depend on the given file using the repo map."""
     try:
@@ -325,8 +383,6 @@ def _get_dependents(path: str, workspace: str) -> list[str]:
     except Exception:
         pass
     return []
-
-
 def _relevance_score(text: str, query_lower: str, query_words: list[str]) -> float:
     """Relevance score for memory retrieval. Exact matches score highest.
     Partial word matches score lower to avoid generic text pollution.
