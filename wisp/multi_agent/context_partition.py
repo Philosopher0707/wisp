@@ -63,15 +63,20 @@ class ContextPartitioner:
         # Sort back by original index to preserve order
         selected.sort(key=lambda x: x[1])
 
+        # Track indices to avoid dict equality traps
+        selected_indices = set()
+
         # Build result
         for score, idx, msg in selected:
             if msg.get("role") == "system" and not include_system:
                 continue
             result.append(msg)
+            selected_indices.add(idx)
 
         # Always ensure we have at least the last user message
         if messages and messages[-1].get("role") == "user":
-            if messages[-1] not in result:
+            last_idx = len(messages) - 1
+            if last_idx not in selected_indices:
                 result.append(messages[-1])
 
         return result
