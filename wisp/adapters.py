@@ -56,11 +56,23 @@ except ImportError:
             data = self._store.create_session(session_id, model, workspace, title)
             return Session.from_dict(data)
 
-        def save_session(self, session: dict) -> None:
-            self._store.save_session(session)
+        def save(self, session: Session) -> None:
+            """Backward-compatible save that accepts Session object."""
+            self._store.save_session(session.to_dict())
 
-        def load_session(self, session_id: str) -> dict | None:
-            return self._store.load_session(session_id)
+        def load_session(self, session_id: str) -> Session | None:
+            data = self._store.load_session(session_id)
+            if data is None:
+                return None
+            return Session.from_dict(data)
+
+        def get_session_id_from_fragment(self, fragment: str) -> str | None:
+            """Find session ID matching a fragment."""
+            sessions = self._store.list_sessions()
+            for s in sessions:
+                if fragment.lower() in s.get("id", "").lower():
+                    return s["id"]
+            return None
 
         def list_sessions(self, limit: int = 50) -> list[dict]:
             sessions = self._store.list_sessions(limit)
@@ -232,8 +244,8 @@ logger = logging.getLogger(__name__)
 _store_cache: dict[str, UnifiedStore] = {}
 
 
-def get_store(db_path: str | None = None) -> UnifiedStore:
-    """Get or create a UnifiedStore instance.
+def get_store(db_path: str | None = None) -> UnifiedSessionStore:
+    """Get or create a UnifiedSessionStore instance.
 
     Backward-compatible replacement for wisp.session_store.get_store().
     """
@@ -241,7 +253,7 @@ def get_store(db_path: str | None = None) -> UnifiedStore:
         db_path = str(Path.home() / ".config" / "wisp" / "wisp.db")
 
     if db_path not in _store_cache:
-        _store_cache[db_path] = UnifiedStore(db_path)
+        _store_cache[db_path] = UnifiedSessionStore(db_path=db_path)
     return _store_cache[db_path]
 
 

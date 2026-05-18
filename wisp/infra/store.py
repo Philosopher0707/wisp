@@ -105,6 +105,11 @@ class UnifiedStore:
                 CREATE INDEX IF NOT EXISTS idx_memory_created ON memory(created_at);
                 """
             )
+            # Schema migration: add title column if missing
+            try:
+                self._conn.execute("SELECT title FROM sessions LIMIT 1")
+            except sqlite3.OperationalError:
+                self._conn.execute("ALTER TABLE sessions ADD COLUMN title TEXT NOT NULL DEFAULT ''")
 
     def _list_tables(self) -> list[str]:
         cursor = self._conn.execute(
