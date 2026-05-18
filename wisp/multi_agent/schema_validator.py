@@ -169,16 +169,65 @@ def extract_json_from_markdown(text: str) -> Optional[dict]:
         except json.JSONDecodeError:
             continue
 
-    # Look for inline JSON objects (prefer larger matches first)
-    inline_json = re.findall(r'\{[^{}]*\}', text)
-    # Sort by length descending to prefer larger matches
-    for candidate in sorted(inline_json, key=len, reverse=True):
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
+    # Fall back to balanced-brace/bracket scanning for nested JSON
+    # This correctly handles arbitrarily deep nesting that flat regex can't.
+    for result in _scan_balanced_json(text):
+        return result
 
     return None
+
+
+def _scan_balanced_json(text: str):
+    """Yield parsed JSON values by scanning for balanced { } and [ ] spans.
+
+    Tries every position where a JSON container opens, prefers the largest
+    (outermost) match so nested structures are returned whole.
+    """
+    candidates: list[tuple[int, int]] = []  # (start, end) pairs
+
+    for opener, closer in (('{', '}'), ('[', ']')):
+        i = 0
+        while i < len(text):
+            start = text.find(opener, i)
+            if start == -1:
+                break
+            depth = 0
+            in_str = False
+            escape = False
+            j = start
+            while j < len(text):
+                ch = text[j]
+                if escape:
+                    escape = False
+                elif in_str:
+                    if ch == '\\':
+                        escape = True
+                    elif ch == '"':
+                        in_str = False
+                else:
+                    if ch == '"':
+                        in_str = True
+                    elif ch == opener:
+                        depth += 1
+                    elif ch == closer:
+                        depth -= 1
+                        if depth == 0:
+                            candidates.append((start, j + 1))
+                            break
+                j += 1
+            i = start + 1
+
+    # Sort longest-first so we return the outermost/richest match first
+    candidates.sort(key=lambda x: x[1] - x[0], reverse=True)
+    seen: set[tuple[int, int]] = set()
+    for start, end in candidates:
+        if (start, end) in seen:
+            continue
+        seen.add((start, end))
+        try:
+            yield json.loads(text[start:end])
+        except json.JSONDecodeError:
+            continue
 
 
 def validate_subagent_output(output: str, schema: dict,
