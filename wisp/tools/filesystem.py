@@ -8,6 +8,8 @@ from pathlib import Path
 
 from wisp.tools._utils import (
     _resolve_path,
+    _safe_read_text,
+    _safe_write_text,
     _validate_string,
     _validate_int,
     _MAX_READ_SIZE,
@@ -52,7 +54,7 @@ def tool_read_file(path: str, workspace: str, offset: int = 0, limit: int = 1_00
             f"Use offset/limit to read portions."
         )
 
-    content = full_path.read_text(encoding="utf-8", errors="replace")
+    content = _safe_read_text(path, workspace, encoding="utf-8")
     lines = content.splitlines(keepends=True)
     total = len(lines)
 
@@ -103,12 +105,12 @@ def tool_write_file(path: str, workspace: str, content: str, file_lock=None) -> 
     if full_path.exists():
         logger.warning("Overwriting existing file: %s (%d bytes)", path, full_path.stat().st_size)
         try:
-            old_content = full_path.read_text(encoding="utf-8")
+            old_content = _safe_read_text(path, workspace, encoding="utf-8")
         except Exception:
             pass  # Binary or unreadable — skip diff
 
     full_path.parent.mkdir(parents=True, exist_ok=True)
-    full_path.write_text(content, encoding="utf-8")
+    _safe_write_text(path, workspace, content, encoding="utf-8")
     logger.info("Wrote %d bytes to %s", len(content), path)
 
     # ── Collaborative editing: record change ──

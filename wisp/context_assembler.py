@@ -48,11 +48,24 @@ _DEFAULT_MAX_CONTEXT_TOKENS = 6_000
 # LLM tokenizers are sub-word, so this is a fast conservative upper bound.
 _CHARS_PER_TOKEN = 4
 
+# Known source-code extensions — restrict deduplication to actual files
+# rather than matching version strings (v1.2.3) or pytest node IDs.
+_KNOWN_SRC_EXTS = frozenset({
+    "py", "pyi", "js", "jsx", "ts", "tsx", "rs", "go", "java", "kt", "scala",
+    "c", "h", "cpp", "hpp", "cc", "cxx", "cs", "swift", "m", "mm",
+    "rb", "erb", "php", "pl", "pm", "sh", "bash", "zsh", "fish",
+    "sql", "r", "jl", "lua", "vim", "ps1", "bat", "cmd",
+    "yaml", "yml", "json", "toml", "ini", "cfg", "conf",
+    "md", "rst", "txt", "dockerfile", "makefile", "cmake",
+    "html", "htm", "css", "scss", "sass", "less", "xml", "svg",
+})
+
 # regex: match file names so we can detect overlap between code_index_summary
-# and repo_map.
+# and repo_map.  Requires a path boundary (quote, backtick, slash, or start
+# of line) and a known source extension.
 _DEDUP_FILE_RE = re.compile(
-    r"(?:^\s*|['\"`/])([a-zA-Z0-9_@./#&+-]+\.[a-zA-Z0-9_]+)\b",
-    re.MULTILINE,
+    r"(?:^\s*|['\"`\/])([a-zA-Z0-9_@./#&+-]+\.(" + "|".join(_KNOWN_SRC_EXTS) + r"))\b",
+    re.MULTILINE | re.IGNORECASE,
 )
 
 # Tree prefixes used by RepoMap.format_for_llm (e.g. "├─ ", "│  └─")

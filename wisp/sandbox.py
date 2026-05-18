@@ -230,19 +230,28 @@ def get_sandbox(workspace: str | None = None) -> SandboxProvider:
     """Get or create the global sandbox singleton.
 
     Tries Docker first, falls back to NoopSandbox (host execution).
+    If the workspace has changed since the last call, the old sandbox is
+    cleaned up and a new one is created so commands run in the correct
+    directory.
     """
     global _app_sandbox
-    if _app_sandbox is not None:
-        return _app_sandbox
-
     ws = workspace or os.getcwd()
+    ws_abs = os.path.abspath(ws)
 
-    docker = DockerSandbox(ws)
+    if _app_sandbox is not None:
+        current_ws = getattr(_app_sandbox, "workspace", None)
+        if current_ws == ws_abs:
+            return _app_sandbox
+        # Workspace changed — tear down the stale sandbox before creating a new one
+        logger.info("Sandbox workspace changed %s -> %s; recreating", current_ws, ws_abs)
+        reset_sandbox()
+
+    docker = DockerSandbox(ws_abs)
     if docker.is_available():
         _app_sandbox = docker
         logger.info("Sandbox: Docker (ubuntu:22.04, memory=%s, cpus=%s)", docker.memory, docker.cpus)
     else:
-        _app_sandbox = NoopSandbox(ws)
+        _app_sandbox = NoopSandbox(ws_abs)
         logger.warning("Sandbox: host (no Docker daemon available) — commands execute directly on host")
 
     return _app_sandbox

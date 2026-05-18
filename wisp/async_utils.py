@@ -120,7 +120,7 @@ async def sync_gen_iter(
             from wisp.ollama_client import _loop_local as _ll
             _ll.loop = loop
         except Exception:
-            pass  # defensive: ollama_client import may fail
+            _ll = None  # type: ignore[assignment]
         try:
             gen = gen_factory()
             for item in gen:
@@ -132,6 +132,14 @@ async def sync_gen_iter(
         except Exception as exc:
             if not stop_event.is_set():
                 _enqueue(False, exc)
+        finally:
+            # Prevent stale loop references from leaking across generator
+            # lifetimes (e.g. dead loops after test reloads).
+            if _ll is not None:
+                try:
+                    del _ll.loop
+                except AttributeError:
+                    pass
 
     # Start the consumer thread using the thread pool executor
     _GEN_EXECUTOR.submit(_thread_target)

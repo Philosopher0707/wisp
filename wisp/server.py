@@ -496,16 +496,40 @@ class SQLiteRateLimiter:
     async def __call__(self, request: Request):
         client_ip = request.client.host if request.client else "unknown"
         now = time.time()
-        # Trim stale entries and apply the limit
-        ts = self._get_timestamps(client_ip)
-        ts = [t for t in ts if now - t < self.window_seconds]
-        if len(ts) >= self.max_requests:
-            raise HTTPException(status_code=429, detail="Rate limit exceeded")
-        ts.append(now)
-        self._set_timestamps(client_ip, ts)
-        # Lazy: cleanup once per 100 requests is not worthwhile here since
-        # each call already trims per-client timestamps.  Evicting orphaned
-        # rows is best done in a background task; skip for simplicity.
+
+        # Atomic read-modify-write under BEGIN IMMEDIATE so concurrent
+        # requests from the same IP see each other's timestamps.
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT timestamps FROM rate_limits WHERE client_ip = ?",
+                    (client_ip,),
+                ).fetchone()
+                ts = json.loads(row["timestamps"]) if row else []
+                ts = [t for t in ts if now - t < self.window_seconds]
+                if len(ts) >= self.max_requests:
+                    conn.execute("ROLLBACK")
+                    raise HTTPException(status_code=429, detail="Rate limit exceeded")
+                ts.append(now)
+                conn.execute(
+                    """
+                    INSERT INTO rate_limits (client_ip, timestamps, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(client_ip) DO UPDATE SET
+                        timestamps = excluded.timestamps,
+                        updated_at = excluded.updated_at
+                    """,
+                    (client_ip, json.dumps(ts, separators=(",", ":")), now),
+                )
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+
+        # Probabilistic cleanup of orphaned rows (~1% chance per request).
+        if hash(client_ip + str(int(now))) % 100 == 0:
+            self._evict_stale()
 
     def count(self, client_ip: str) -> int:
         """Return number of requests from *client_ip* in the current window."""
@@ -639,14 +663,18 @@ class ConnectionManager:
     async def connect(self, websocket: WebSocket, client_id: str) -> Connection:
         await websocket.accept()
         conn = Connection(websocket, client_id)
+
+        # Swap under lock (fast), then clean up the stale connection
+        # *outside* the lock so a slow stop_tasks() doesn't block every
+        # other connect/disconnect/send operation.
         async with self._lock:
-            # If a prior Connection was already stored for this client_id,
-            # stop its tasks so we don't leak agent threads.
             stale = self._connections.get(client_id)
-            if stale is not None:
-                logger.warning("Replacing stale connection for %s", client_id)
-                await stale.stop_tasks(timeout=1.0)
             self._connections[client_id] = conn
+
+        if stale is not None:
+            logger.warning("Replacing stale connection for %s", client_id)
+            await stale.stop_tasks(timeout=1.0)
+
         logger.info("Client %s connected", client_id)
         return conn
 
@@ -853,12 +881,17 @@ def _get_headless_core(config: WispConfig) -> WispAgentCore:
     permission_mode, workspace)`` combination and reuses it for all
     subsequent requests.  The caller MUST NOT call ``.close()`` —
     lifecycle is managed by ``_shutdown_headless_pool``.
+
+    Each pooled core carries an ``asyncio.Lock`` so that concurrent
+    requests with the same key are serialised rather than corrupting
+    the shared ``messages`` / ``session`` state.
     """
     key = _headless_pool_key(config)
     with _HEADLESS_POOL_LOCK:
         core = _HEADLESS_POOL.get(key)
         if core is None:
             core = WispAgentCore(config=config)
+            core._pool_lock = asyncio.Lock()
             _HEADLESS_POOL[key] = core
             logger.info("Created headless core for key %s", key)
         return core
@@ -914,38 +947,40 @@ async def _run_agent_headless(
                 session = sm.load(resolved)
 
     core = _get_headless_core(config)
-    # Clone per-request state so the pool entry stays clean for the next
-    # caller with a different session.
-    core.session = session
-    if session is not None:
-        core.messages = list(session.messages)
-    else:
-        core.messages = []
-
     transport = MemoryTransport(permission_mode=permission_mode)
 
     # Pre-build system prompt if skill is specified
     system = core._build_system_prompt(skill_name=skill, workspace=config.workspace) if skill else None
 
-    try:
-        async for event in core.run(prompt, system=system, approval_handler=transport.approval_handler, images=images):
-            transport.collect(event)
-    except Exception as e:
-        logger.error("Headless agent error: %s", e)
-        transport.errors.append({"message": str(e), "recoverable": False})
-    finally:
-        # Persist session state without tearing down the pooled core.
+    # Serialise access to the pooled core so concurrent requests with the
+    # same key don't interleave messages / session state.
+    async with core._pool_lock:
+        core.session = session
+        if session is not None:
+            core.messages = list(session.messages)
+        else:
+            core.messages = []
+        core._invalidate_token_cache()
+
         try:
-            core._save_session()
-        except Exception:
-            pass
-        try:
-            core._save_session_summary()
-        except Exception:
-            pass
-        # Scrub request-specific state so the next call starts clean.
-        core.session = None
-        core.messages = []
+            async for event in core.run(prompt, system=system, approval_handler=transport.approval_handler, images=images):
+                transport.collect(event)
+        except Exception as e:
+            logger.error("Headless agent error: %s", e)
+            transport.errors.append({"message": str(e), "recoverable": False})
+        finally:
+            # Persist session state without tearing down the pooled core.
+            try:
+                core._save_session()
+            except Exception:
+                pass
+            try:
+                core._save_session_summary()
+            except Exception:
+                pass
+            # Scrub request-specific state so the next call starts clean.
+            core.session = None
+            core.messages = []
 
     result = transport.to_result()
 
@@ -2593,7 +2628,9 @@ async def agent_websocket(websocket: WebSocket):
     Query-param auth removed: REST uses headers; WS uses a JSON frame
     so the API key never appears in URL.
     """
-    authenticated = not _auth.required
+    # Auth state is checked dynamically on every iteration so that a
+    # mid-connection key rotation (e.g. admin API) is respected immediately.
+    _ws_authenticated = not _auth.required
 
     client_id = f"{websocket.client.host}:{websocket.client.port}"
     conn = await manager.connect(websocket, client_id)
@@ -2620,23 +2657,25 @@ async def agent_websocket(websocket: WebSocket):
             msg_type = msg.get("type")
 
             # First-message auth via `type: 'auth'` (desktop sends this after onopen)
-            if msg_type == "auth" and not authenticated:
+            if msg_type == "auth" and not _ws_authenticated:
                 auth_key = msg.get("api_key", "")
                 if _auth.required and auth_key == _auth.key:
-                    authenticated = True
+                    _ws_authenticated = True
                 elif _auth.required:
                     await conn.send({"type": "error", "message": "Invalid API key"})
                     await websocket.close(code=4001)
                     return
                 _first_message = False
                 continue
-            elif msg_type == "auth" and authenticated:
+            elif msg_type == "auth" and _ws_authenticated:
                 # Already authenticated — just acknowledge
                 continue
 
             _first_message = False
 
-            if not authenticated:
+            # Re-evaluate auth requirement every loop so that a mid-connection
+            # key rotation (e.g. admin API) is respected immediately.
+            if _auth.required and not _ws_authenticated:
                 await conn.send({"type": "error", "message": "Authentication required"})
                 await websocket.close(code=4001)
                 return

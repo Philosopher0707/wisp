@@ -262,6 +262,9 @@ class WispAgentCore:
         )
         self.context_assembler = ContextAssembler()
 
+        # ── Incremental token accounting (avoids O(n²) context trimming) ──
+        self._cached_token_estimate: int = 0
+
         # ── SubagentOrchestrator ──
         from wisp.multi_agent import SubagentOrchestrator
         self._orchestrator = SubagentOrchestrator(parent_agent=self)
@@ -349,6 +352,7 @@ class WispAgentCore:
         if thinking:
             msg["thinking"] = thinking
         self.messages.append(msg)
+        self._invalidate_token_cache()
 
     def _inject_system_note(self, note: str) -> None:
         """Insert a system note as an assistant message, never as trailing system.
@@ -362,6 +366,7 @@ class WispAgentCore:
             "role": "assistant",
             "content": [{"type": "text", "text": f"[{note}]"}],
         })
+        self._invalidate_token_cache()
 
     # ── Continuation expansion ───────────────────────────────────────
 
@@ -485,6 +490,15 @@ class WispAgentCore:
     # ── Token estimation ─────────────────────────────────────────────
 
     def _estimate_tokens(self, messages: list[dict]) -> int:
+        """Estimate token count for a message list.
+
+        When called with ``self.messages`` the result is cached so that
+        repeated calls (e.g. inside the trimming loop) are O(1) instead
+        of O(n²).
+        """
+        if messages is self.messages and getattr(self, "_cached_token_estimate", 0):
+            return self._cached_token_estimate
+
         total = 0
         for msg in messages:
             if msg.get("role") != "tool":
@@ -503,7 +517,15 @@ class WispAgentCore:
                     total += len(str(args))
             if msg.get("role") == "tool":
                 total += len(msg.get("content", "") or "")
-        return total // self.config.chars_per_token
+        result = total // self.config.chars_per_token
+        if messages is self.messages:
+            self._cached_token_estimate = result
+        return result
+
+    def _invalidate_token_cache(self) -> None:
+        """Clear the cached token estimate after any mutation of ``self.messages``."""
+        if hasattr(self, "_cached_token_estimate"):
+            self._cached_token_estimate = 0
 
     def _trim_context_if_needed(self, system_prompt: str = ""):
         budget = self.config.max_context_tokens
@@ -511,6 +533,7 @@ class WispAgentCore:
         user_count = sum(1 for m in self.messages if m.get("role") == "user")
         while user_count > 1 and self._estimate_tokens(self.messages) + overhead > budget:
             _remove_oldest_turn(self.messages)
+            self._invalidate_token_cache()
             user_count = sum(1 for m in self.messages if m.get("role") == "user")
 
     # ── Session management ─────────────────────────────────────────────
@@ -554,6 +577,7 @@ class WispAgentCore:
             first_prompt=prompt_text,
         )
         self.messages = [last_user_msg] if last_user_msg else []
+        self._invalidate_token_cache()
 
     # ── System prompt ────────────────────────────────────────────────
 
@@ -579,12 +603,22 @@ class WispAgentCore:
                     effective_skill, score, query[:80],
                 )
 
-        cache_key = (effective_skill, ws, query)
-        if not hasattr(self, "_system_prompt_cache"):
-            self._system_prompt_cache = {}
-        cached = self._system_prompt_cache.get(cache_key)
-        if cached is not None:
-            return cached
+        # Split cache: static parts (workspace, skills, project context,
+        # code index, memory, git, base repo map) are keyed by
+        # (effective_skill, ws) and shared across turns.  Query-specific
+        # additions (relevant files, dependents) are computed fresh each
+        # turn and appended to the static base.
+        static_key = (effective_skill, ws)
+        if not hasattr(self, "_static_system_prompt_cache"):
+            self._static_system_prompt_cache = {}
+        static_prompt = self._static_system_prompt_cache.get(static_key)
+
+        # Query-specific repo_map additions are cached separately so that
+        # repeated identical queries are instant, but different queries
+        # don't blow the static cache.
+        query_key = (ws, query) if query else (ws, None)
+        if not hasattr(self, "_query_repo_map_cache"):
+            self._query_repo_map_cache = {}
 
         ws_abs = Path(ws).resolve()
 
@@ -625,13 +659,11 @@ class WispAgentCore:
         active_plan = PlanStore().load_active(ws)
         active_plan_str = active_plan.format_for_prompt() if active_plan else None
 
+        # ── RepoMap: split static base from query-specific additions ──
         repo_map = None
+        query_repo_map = ""
         try:
             from wisp.repo_map import RepoMap
-            # Q10: Keep RepoMap instances alive across turns so we skip
-            # __init__ overhead (file list, tree-sitter init, etc.).
-            # build(use_cache=True) is ~10 ms when no files changed vs
-            # 2-5 s for a full _do_build() on 500-file workspaces.
             if not hasattr(self, "_repo_map_instances"):
                 self._repo_map_instances = {}
             if ws not in self._repo_map_instances:
@@ -639,33 +671,37 @@ class WispAgentCore:
             rm = self._repo_map_instances[ws]
             entries = rm.build(use_cache=True, fast_mode=False)
             if entries:
-                # Per-query cache for the formatted string (map + relevant
-                # files + dependents) so repeated queries are instant.
-                if not hasattr(self, "_repo_map_str_cache"):
-                    self._repo_map_str_cache = {}
-                query_key = (ws, query) if query else (ws, None)
-                cached_map = self._repo_map_str_cache.get(query_key)
-                if cached_map is not None:
-                    repo_map = cached_map
-                else:
+                # Static base map (no query-specific additions) — cached by ws
+                if not hasattr(self, "_repo_map_base_cache"):
+                    self._repo_map_base_cache = {}
+                base_map = self._repo_map_base_cache.get(ws)
+                if base_map is None:
                     map_text = rm.format_for_llm(max_tokens=1200)
-                    repo_map = f"## Codebase Map\n{map_text}\n"
-                    if query:
+                    base_map = f"## Codebase Map\n{map_text}\n"
+                    self._repo_map_base_cache[ws] = base_map
+                repo_map = base_map
+
+                # Query-specific additions — cached by (ws, query)
+                if query:
+                    query_repo_map = self._query_repo_map_cache.get(query_key, "")
+                    if query_repo_map == "":
+                        parts: list[str] = []
                         relevant = rm.get_relevant_files(query, top_k=5)
                         if relevant:
-                            repo_map += "\n## Files Relevant to Query\n"
+                            parts.append("\n## Files Relevant to Query\n")
                             for f in relevant:
-                                repo_map += f"- {f}\n"
+                                parts.append(f"- {f}\n")
                         deps_extra = []
                         for f in relevant:
                             deps = rm.get_dependents(f)[:3]
                             if deps:
                                 deps_extra.extend(deps)
                         if deps_extra:
-                            repo_map += "\n## Dependents of Relevant Files\n"
+                            parts.append("\n## Dependents of Relevant Files\n")
                             for d in sorted(set(deps_extra))[:5]:
-                                repo_map += f"- {d}\n"
-                    self._repo_map_str_cache[query_key] = repo_map
+                                parts.append(f"- {d}\n")
+                        query_repo_map = "".join(parts)
+                        self._query_repo_map_cache[query_key] = query_repo_map
         except ImportError:
             pass
         except Exception as e:
@@ -700,24 +736,33 @@ class WispAgentCore:
         except (TypeError, ValueError):
             _ctx_tokens = 8192  # sensible default when config is mocked
         sys_budget = max(2000, _ctx_tokens // 3)
-        system = self.context_assembler.build(
-            workspace=ws,
-            default_system=DEFAULT_SYSTEM,
-            role_extra=getattr(self, "_role_system_extra", None) or None,
-            skills_block=skills_block or None,
-            project_context=project_context or None,
-            code_index_summary=code_index_summary or None,
-            memory_block=memory_block or None,
-            recent_summaries=recent_summaries or None,
-            git_context=git_context or None,
-            active_plan=active_plan_str or None,
-            plan_mode=getattr(self.config, "plan_mode", False),
-            plan_context=getattr(self.config, "plan_context", None) or None,
-            repo_map=repo_map or None,
-            context_files=context_files or None,
-            mandatory_skill=active_skill_trio,
-            max_tokens=sys_budget,
-        )
+
+        if static_prompt is None:
+            static_prompt = self.context_assembler.build(
+                workspace=ws,
+                default_system=DEFAULT_SYSTEM,
+                role_extra=getattr(self, "_role_system_extra", None) or None,
+                skills_block=skills_block or None,
+                project_context=project_context or None,
+                code_index_summary=code_index_summary or None,
+                memory_block=memory_block or None,
+                recent_summaries=recent_summaries or None,
+                git_context=git_context or None,
+                active_plan=active_plan_str or None,
+                plan_mode=getattr(self.config, "plan_mode", False),
+                plan_context=getattr(self.config, "plan_context", None) or None,
+                repo_map=repo_map or None,
+                context_files=context_files or None,
+                mandatory_skill=active_skill_trio,
+                max_tokens=sys_budget,
+            )
+            self._static_system_prompt_cache[static_key] = static_prompt
+
+        # Append query-specific repo_map additions (if any) to the cached
+        # static prompt.  This is cheap — just string concatenation.
+        system = static_prompt
+        if query_repo_map:
+            system = static_prompt + query_repo_map
 
         # Log if truncation actually happened (skip when config is mocked in tests).
         if not isinstance(self.config.max_context_tokens, type(lambda: None)):
@@ -732,7 +777,6 @@ class WispAgentCore:
             except (TypeError, ValueError):
                 pass  # config was mocked — skip token estimation in tests
 
-        self._system_prompt_cache[cache_key] = system
         return system
 
     def _build_skills_block_from_skills(self, skills: list) -> str:
@@ -754,12 +798,14 @@ class WispAgentCore:
         return "\n".join(lines)
 
     def _invalidate_system_prompt_cache(self):
-        if hasattr(self, "_system_prompt_cache"):
-            self._system_prompt_cache.clear()
+        if hasattr(self, "_static_system_prompt_cache"):
+            self._static_system_prompt_cache.clear()
+        if hasattr(self, "_query_repo_map_cache"):
+            self._query_repo_map_cache.clear()
+        if hasattr(self, "_repo_map_base_cache"):
+            self._repo_map_base_cache.clear()
         if hasattr(self, "_code_index_cache"):
             self._code_index_cache.clear()
-        if hasattr(self, "_repo_map_str_cache"):
-            self._repo_map_str_cache.clear()
         # Do NOT clear _repo_map_instances here.  The RepoMap object holds
         # the parsed entries in memory; clearing it would force a full
         # _do_build() on the next turn.  The RepoMap.build(use_cache=True)
@@ -1294,6 +1340,7 @@ class WispAgentCore:
                 if tc.get("id") is not None:
                     msg["tool_call_id"] = tc.get("id")
                 self.messages.append(msg)
+                self._invalidate_token_cache()
                 continue
 
             # Run tool execution and capture the result for the conversation
@@ -1321,6 +1368,7 @@ class WispAgentCore:
                 result=tool_result,
             )
             self.messages.append(msg)
+            self._invalidate_token_cache()
 
             if func_name == "remember":
                 self._invalidate_system_prompt_cache()
