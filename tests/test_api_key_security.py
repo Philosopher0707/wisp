@@ -14,10 +14,8 @@ import wisp.server as ws_server
 
 def test_verify_api_key_rejects_query_parameters():
     """Verify that verify_api_key strictly rejects api-key query parameters and requires headers."""
-    # Backup current server API key
-    backup_key = ws_server.API_KEY
-    ws_server.API_KEY = "test-secret-key"
-    
+    # Q1 fix: _auth is the single source of truth — use set_key() / disable()
+    ws_server._auth.set_key("test-secret-key")
     try:
         from wisp.server import app
         client = TestClient(app)
@@ -35,7 +33,7 @@ def test_verify_api_key_rejects_query_parameters():
         assert response.status_code != 401
 
     finally:
-        ws_server.API_KEY = backup_key
+        ws_server._auth.disable()
 
 
 def test_cli_client_uses_headers_instead_of_query_params(monkeypatch):
@@ -76,8 +74,7 @@ def test_cli_client_uses_headers_instead_of_query_params(monkeypatch):
 
 def test_websocket_requires_auth_frame():
     """Verify that connecting to /ws/agent requires a type: auth JSON frame when API_KEY is set."""
-    backup_key = ws_server.API_KEY
-    ws_server.API_KEY = "test-secret-key"
+    ws_server._auth.set_key("test-secret-key")
     
     try:
         from wisp.server import app
@@ -101,4 +98,4 @@ def test_websocket_requires_auth_frame():
             assert "Authentication required" not in resp.get("message", "")
 
     finally:
-        ws_server.API_KEY = backup_key
+        ws_server._auth.disable()

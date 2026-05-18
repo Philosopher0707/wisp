@@ -92,13 +92,87 @@ logger = logging.getLogger(__name__)
 
 # ── Configuration ──────────────────────────────────────────────────────
 
-API_KEY = os.environ.get("WISP_API_KEY", "")
+# Q1: Mutable module-level API_KEY creates a race between import time
+# (where a random key is generated if WISP_API_KEY is absent) and
+# main(no_auth=True) which clears it.  Any request arriving during that
+# window would see the generated key instead of open access.
+#
+# Fix: _AuthConfig holds the raw key in a class so callers can query
+# the *current* value at request time, not capture a module global at
+# application-startup time.
+
+class _AuthConfig:
+    """Runtime-mutable auth key — query current value at request time.
+
+    Import-time defaults:
+      - env[WISP_API_KEY] if set -> required auth
+      - else empty -> auth disabled (dev mode, overridden by main())
+    """
+    def __init__(self):
+        self._key: str = os.environ.get("WISP_API_KEY", "")
+        self._no_auth: bool = False
+        if self._key:
+            logger.info("WISP_API_KEY set — server requires authentication")
+        else:
+            # Dev mode: no auth required.  main() may disable later.
+            self._no_auth = True
+            logger.info("WISP_API_KEY not set — authentication disabled (dev mode)")
+
+    def set_key(self, key: str) -> None:
+        self._key = key
+        self._no_auth = not bool(key)
+
+    def disable(self) -> None:
+        """Disable auth for this process."""
+        self._key = ""
+        self._no_auth = True
+        logger.info("Auth disabled (no-auth mode)")
+
+    @property
+    def key(self) -> str:
+        return self._key
+
+    @property
+    def required(self) -> bool:
+        """True if authentication is required right now."""
+        return not self._no_auth and bool(self._key)
+
+    # ── String back-compat for tests and downstream code ──────────────
+    def __str__(self) -> str:
+        return self._key
+
+    def __repr__(self) -> str:
+        return repr(self._key)
+
+    def __eq__(self, other):
+        if isinstance(other, str):
+            return self._key == other
+        if isinstance(other, _AuthConfig):
+            return self._key == other._key
+        return NotImplemented
+
+    def __hash__(self):
+        return hash(self._key)
+
+    def __bool__(self):
+        return bool(self._key)
+
+    def __len__(self):
+        return len(self._key)
+
+    def __contains__(self, item):
+        return item in self._key
+
+
+_auth = _AuthConfig()
+
+# Back-compat: external code accesses ws_server.API_KEY as a string.
+# _AuthConfig quacks like a string via __str__/__eq__/__bool__/__contains__.
+API_KEY = _auth
+API_KEY_STR = _auth.key
+
 WORKSPACE_ROOT = Path(os.environ.get("WISP_WORKSPACE", "./workspace")).resolve()
 MAX_BASH_OUTPUT = 50_000  # chars
-
-if not API_KEY:
-    API_KEY = secrets.token_urlsafe(32)
-    logger.warning("WISP_API_KEY not set — generated temporary key: %s", API_KEY)
 
 WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
 
@@ -254,11 +328,13 @@ async def verify_api_key(
     authorization: str | None = Header(None),
 ):
     """API key verification via header only (query param removed — leaks to logs)."""
+    if not _auth.required:
+        return x_api_key_header or authorization or ""
     if authorization and authorization.lower().startswith("bearer "):
         auth_key = authorization[7:]
-        if auth_key == API_KEY:
+        if auth_key == _auth.key:
             return auth_key
-    if x_api_key_header and x_api_key_header == API_KEY:
+    if x_api_key_header and x_api_key_header == _auth.key:
         return x_api_key_header
     raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
@@ -2517,7 +2593,7 @@ async def agent_websocket(websocket: WebSocket):
     Query-param auth removed: REST uses headers; WS uses a JSON frame
     so the API key never appears in URL.
     """
-    authenticated = not bool(API_KEY)
+    authenticated = not _auth.required
 
     client_id = f"{websocket.client.host}:{websocket.client.port}"
     conn = await manager.connect(websocket, client_id)
@@ -2546,9 +2622,9 @@ async def agent_websocket(websocket: WebSocket):
             # First-message auth via `type: 'auth'` (desktop sends this after onopen)
             if msg_type == "auth" and not authenticated:
                 auth_key = msg.get("api_key", "")
-                if API_KEY and auth_key == API_KEY:
+                if _auth.required and auth_key == _auth.key:
                     authenticated = True
-                elif API_KEY:
+                elif _auth.required:
                     await conn.send({"type": "error", "message": "Invalid API key"})
                     await websocket.close(code=4001)
                     return
@@ -2756,8 +2832,7 @@ def main(host: str = "0.0.0.0", port: int = 8000, no_auth: bool = False):
     import uvicorn
 
     if no_auth:
-        global API_KEY
-        API_KEY = ""
+        _auth.disable()
 
         # HTTP: bypass api key check
         async def _noop_auth(
