@@ -14,6 +14,18 @@ from unittest.mock import AsyncMock, patch
 class TestArenaIsolation:
     """Tests that ArenaRunner properly isolates Model A and Model B."""
 
+    @pytest.fixture(autouse=True)
+    def setup_git_repo(self, tmp_path, monkeypatch):
+        """Initialize a git repo in tmp_path for worktree support."""
+        import subprocess
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True)
+        # Create an initial commit so worktrees can be created
+        (tmp_path / "README").write_text("test")
+        subprocess.run(["git", "add", "README"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, capture_output=True)
+
     def test_arena_creates_isolated_worktrees(self, tmp_path, monkeypatch):
         """run_comparison should create two separate directories for A and B."""
         from wisp.arena import ArenaRunner, ArenaCompareRequest
