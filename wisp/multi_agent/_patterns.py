@@ -286,55 +286,83 @@ async def run_chain(
     total_tokens = 0
     failed_steps = []
 
-    for i, contract in enumerate(contracts):
-        if pass_context and context_parts:
-            context_block = "\n\n".join(context_parts)
-            augmented_task = (
-                f"{contract.task}\n\n"
-                f"## Previous Steps Context\n"
-                f"{context_block}"
-            )
+    shared_worktree_path = None
+    chain_patch = None
+    try:
+        any_isolated = any(c.worktree_isolated for c in contracts)
+        if any_isolated:
+            import uuid
+            short_id = str(uuid.uuid4())[:8]
+            try:
+                shared_worktree_path = await orchestrator._worktree_mgr.create(f"chain-{short_id}")
+            except Exception as exc:
+                logger.warning("Failed to create shared chain worktree, falling back to unisolated: %s", exc)
+
+        for i, contract in enumerate(contracts):
             copied = copy.deepcopy(contract.__dict__)
-            copied["task"] = augmented_task
+            
+            # Use the shared worktree for all steps in the chain
+            if shared_worktree_path and copied.get("worktree_isolated", True):
+                copied["worktree_isolated"] = False
+                copied["workspace"] = str(shared_worktree_path)
+
+            if pass_context and context_parts:
+                context_block = "\n\n".join(context_parts[-3:])
+                copied["task"] = (
+                    f"{copied['task']}\n\n"
+                    f"## Previous Steps Context\n"
+                    f"{context_block}"
+                )
+                
             contract = SubagentContract(**copied)
 
-        result = await orchestrator.run(contract)
-        last_result = result
-        all_files_changed.extend(result.files_changed)
-        total_elapsed += result.elapsed_seconds
-        total_iterations += result.iterations_used
-        total_input_tokens += result.input_tokens
-        total_output_tokens += result.output_tokens
-        total_tokens += result.tokens_used
+            result = await orchestrator.run(contract)
+            last_result = result
+            all_files_changed.extend(result.files_changed)
+            total_elapsed += result.elapsed_seconds
+            total_iterations += result.iterations_used
+            total_input_tokens += result.input_tokens
+            total_output_tokens += result.output_tokens
+            total_tokens += result.tokens_used
 
-        if pass_context:
-            context_parts.append(
-                f"### Step {i+1}: {contract.name}\n"
-                f"{result.output[:1500]}"
-            )
+            if pass_context:
+                context_parts.append(
+                    f"### Step {i+1}: {contract.name}\n"
+                    f"{result.output[:1500]}"
+                )
 
-        if not result.success:
-            failed_steps.append((i + 1, contract.name, result.error))
-            if not continue_on_error:
-                output = (
-                    f"## Chain Failed at Step {i+1}/{len(contracts)}\n\n"
-                    f"**Failed step:** {contract.name}\n"
-                    f"**Error:** {result.error or 'unknown error'}\n\n"
-                    f"### Completed Steps\n"
-                    + "\n\n".join(context_parts[:-1] if context_parts else [])
-                )
-                return SubagentResult(
-                    task_id=f"chain-failed-at-{i+1}",
-                    success=False,
-                    output=output,
-                    elapsed_seconds=total_elapsed,
-                    iterations_used=total_iterations,
-                    input_tokens=total_input_tokens,
-                    output_tokens=total_output_tokens,
-                    tokens_used=total_tokens,
-                    files_changed=list(set(all_files_changed)),
-                    error=result.error,
-                )
+            if not result.success:
+                failed_steps.append((i + 1, contract.name, result.error))
+                if not continue_on_error:
+                    output = (
+                        f"## Chain Failed at Step {i+1}/{len(contracts)}\n\n"
+                        f"**Failed step:** {contract.name}\n"
+                        f"**Error:** {result.error or 'unknown error'}\n\n"
+                        f"### Completed Steps\n"
+                        + "\n\n".join(context_parts[:-1] if context_parts else [])
+                    )
+                    last_result = SubagentResult(
+                        task_id=f"chain-failed-at-{i+1}",
+                        success=False,
+                        output=output,
+                        elapsed_seconds=total_elapsed,
+                        iterations_used=total_iterations,
+                        input_tokens=total_input_tokens,
+                        output_tokens=total_output_tokens,
+                        tokens_used=total_tokens,
+                        files_changed=list(set(all_files_changed)),
+                        error=result.error,
+                    )
+                    break
+    finally:
+        if shared_worktree_path:
+            import os
+            try:
+                chain_patch = await orchestrator._worktree_mgr.get_patch(shared_worktree_path)
+                if not os.environ.get("WISP_KEEP_WORKTREES", "").lower() == "true":
+                    await orchestrator._worktree_mgr.cleanup(shared_worktree_path)
+            except Exception as exc:
+                logger.warning("Failed to clean up shared chain worktree %s: %s", shared_worktree_path, exc)
 
     if last_result is None:
         return SubagentResult(
@@ -344,24 +372,27 @@ async def run_chain(
         )
 
     success = len(failed_steps) == 0
-    output_lines = [f"## Chain Complete ({len(contracts)} steps)"]
-    if failed_steps:
-        output_lines.append(f"\n**Failed steps:** {len(failed_steps)}")
-        for step_num, name, error in failed_steps:
-            output_lines.append(f"- Step {step_num} ({name}): {error or 'unknown'}")
-    output_lines.append(f"\n{last_result.output}")
-    output_lines.append(
-        f"\n---\n"
-        f"*Chain elapsed: {total_elapsed:.1f}s, "
-        f"iterations: {total_iterations}, "
-        f"tokens: {total_tokens}*"
-    )
-    last_result.output = "\n".join(output_lines)
-    last_result.elapsed_seconds = total_elapsed
-    last_result.iterations_used = total_iterations
-    last_result.input_tokens = total_input_tokens
-    last_result.output_tokens = total_output_tokens
-    last_result.tokens_used = total_tokens
-    last_result.files_changed = list(set(all_files_changed))
-    last_result.success = success
+    if not hasattr(last_result, "task_id") or not last_result.task_id.startswith("chain-failed"):
+        output_lines = [f"## Chain Complete ({len(contracts)} steps)"]
+        if failed_steps:
+            output_lines.append(f"\n**Failed steps:** {len(failed_steps)}")
+            for step_num, name, error in failed_steps:
+                output_lines.append(f"- Step {step_num} ({name}): {error or 'unknown'}")
+        output_lines.append(f"\n{last_result.output}")
+        output_lines.append(
+            f"\n---\n"
+            f"*Chain elapsed: {total_elapsed:.1f}s, "
+            f"iterations: {total_iterations}, "
+            f"tokens: {total_tokens}*"
+        )
+        last_result.output = "\n".join(output_lines)
+        last_result.elapsed_seconds = total_elapsed
+        last_result.iterations_used = total_iterations
+        last_result.input_tokens = total_input_tokens
+        last_result.output_tokens = total_output_tokens
+        last_result.tokens_used = total_tokens
+        last_result.files_changed = list(set(all_files_changed))
+        last_result.success = success
+    
+    last_result.worktree_patch = chain_patch
     return last_result
