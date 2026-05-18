@@ -535,12 +535,10 @@ class TestExtractFilesChanged:
 
     def test_unsupported_extensions_skipped(self):
         from wisp.multi_agent._runner import SubagentRunner
-        text = 'Config: `settings.txt` and image `photo.png`'
+        text = 'Output: `binary.exe` and image `photo.png`'
         files = SubagentRunner._extract_files_changed(text)
-        assert all(f.endswith(('.py', '.ts', '.js', '.rs', '.go', '.java', '.rb', '.sh'))
-                   for f in files)
-        # .txt and .png should NOT match
-        assert not any(f.endswith('.txt') for f in files)
+        # .exe and .png should NOT match
+        assert not any(f.endswith('.exe') for f in files)
         assert not any(f.endswith('.png') for f in files)
 
 
