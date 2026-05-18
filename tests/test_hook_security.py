@@ -18,6 +18,7 @@ from wisp.tools._utils import _is_hook_controlled_path
 from wisp.tools._utils_env import scrub_sensitive_env, _ALLOWED_ENV_KEYS
 from wisp.tools.errors import ToolError
 from wisp.tools.filesystem import tool_write_file, tool_edit_file
+from wisp.trust import WorkspaceTrustManager
 
 
 # ───────────────────────────────────────────────────────────────────────────────
@@ -159,6 +160,7 @@ class TestHookReload:
             # Create an initial hook
             (hooks_dir / "PRE_BASH_test.sh").write_text("#!/bin/bash\necho '{\"action\":\"allow\"}'")
 
+            WorkspaceTrustManager.trust_workspace(td)
             mgr = HookManager(workspace=Path(td))
             mgr.load_project_hooks()
             assert mgr.hook_count >= 1
@@ -206,6 +208,7 @@ class TestEventSpecificHooks:
                 'echo \'{"action":"allow"}\'\n'
             )
 
+            WorkspaceTrustManager.trust_workspace(td)
             cfg = WispConfig()
             cfg.auto_approve = True
             cfg.workspace = td
@@ -239,6 +242,7 @@ class TestEventSpecificHooks:
                 '#!/bin/bash\nread ctx\necho \'{"action":"allow"}\'\n'
             )
 
+            WorkspaceTrustManager.trust_workspace(td)
             cfg = WispConfig()
             cfg.auto_approve = True
             cfg.workspace = td
