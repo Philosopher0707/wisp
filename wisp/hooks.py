@@ -771,7 +771,26 @@ class HookManager:
             }
             
             with open(audit_file, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                import platform
+                is_windows = platform.system() == "Windows"
+                
+                # Apply cross-platform file lock
+                if is_windows:
+                    import msvcrt
+                    # Lock the first byte to act as a mutex
+                    msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                    
+                try:
+                    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                    f.flush()
+                finally:
+                    if is_windows:
+                        msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
         except Exception as e:
             logger.warning("Failed to write hook audit log: %s", e)
 

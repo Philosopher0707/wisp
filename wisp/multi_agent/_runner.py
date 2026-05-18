@@ -346,20 +346,100 @@ class SubagentRunner:
 
     @staticmethod
     def _extract_files_changed(text: str) -> list[str]:
-        """Best-effort extraction of file paths mentioned in output text."""
+        """Best-effort extraction of file paths mentioned in output text.
+
+        Three-pass strategy:
+        1. Backtick-quoted tokens — highest confidence.
+        2. Structured multi-line list items after change-verb keywords.
+        3. Bare word tokens that look like plausible file paths.
+
+        Markdown decoration (**bold**, *italic*, _italic_) is stripped in a
+        pre-processing step so that surrounded paths are still found.
+        Paths are accepted if they contain a dot or a slash (covers
+        extensionless files like Makefile / Dockerfile).
+        """
         import re
 
-        patterns = [
-            r"`([a-zA-Z0-9_\-./]+\.(?:py|ts|js|rs|go|java|rb|sh))`",
-            r"(?:changed|modified|touched|files written|created files?)[:\-]\s*\n?\s*[-*]\s+([^\s,]+)",
-            r"\b([a-zA-Z0-9_\-/]+\.(?:py|ts|js|rs|go|java|rb|sh))\b",
-        ]
+        # ── Known-good extensions ────────────────────────────────────────
+        _EXT = (
+            r"py|ts|js|jsx|tsx|mjs|cjs|"
+            r"rs|go|java|rb|sh|bash|zsh|fish|"
+            r"c|cpp|cc|h|hpp|"
+            r"json|yaml|yml|toml|ini|cfg|conf|env|"
+            r"md|rst|txt|csv|"
+            r"html|css|scss|sass|"
+            r"sql|proto|"
+            r"dockerfile|makefile|gemfile|rakefile"
+        )
+        _EXT_RE = re.compile(rf"\.(?:{_EXT})$", re.IGNORECASE)
+
+        # ── Pre-strip markdown decoration (keep backticks for Pass 1) ───
+        clean = text
+        clean = re.sub(r"\*\*([^*\n]+)\*\*", r"\1", clean)   # **bold**
+        clean = re.sub(r"\*([^*\n]+)\*",     r"\1", clean)   # *italic*
+        clean = re.sub(r"(?<!\w)_([^_\n]+)_(?!\w)", r"\1", clean)  # _italic_
+
+        # ── Helpers ──────────────────────────────────────────────────────
+        def _clean_token(raw: str) -> str:
+            s = raw.strip()
+            s = re.sub(r"^[`*_\[(<\"']+|[`*_\])>\"']+$", "", s)
+            return s.strip()
+
+        def _is_plausible(s: str) -> bool:
+            if not s or len(s) < 2 or len(s) > 260:
+                return False
+            if "." not in s and "/" not in s:
+                return False
+            if re.search(r'[<>:"|?*\x00-\x1f]', s):
+                return False
+            if _EXT_RE.search(s):
+                return True
+            if "/" in s:
+                return True
+            basename = s.rsplit("/", 1)[-1].lower()
+            return basename in {
+                "makefile", "dockerfile", "gemfile", "rakefile",
+                "procfile", "vagrantfile", "jenkinsfile", "brewfile",
+            }
+
         found: list[str] = []
         seen: set[str] = set()
-        for pat in patterns:
-            for m in re.finditer(pat, text, re.IGNORECASE):
-                path = m.group(1).strip()
-                if path not in seen and len(path) > 2:
-                    seen.add(path)
-                    found.append(path)
+
+        def _add(raw: str) -> None:
+            path = _clean_token(raw)
+            if path and path not in seen and _is_plausible(path):
+                seen.add(path)
+                found.append(path)
+
+        # ── Pass 1: backtick-quoted tokens (run on original text) ────────
+        for m in re.finditer(r"`([^`\n]{2,260})`", text):
+            _add(m.group(1))
+
+        # ── Pass 2: multi-line list blocks after change-verb keywords ────
+        # Capture everything after the colon/dash up to the next blank line
+        # or non-list line, then iterate over every bullet item inside.
+        verb_block_re = re.compile(
+            r"(?:changed|modified|touched|wrote|created|updated|deleted|removed)"
+            r"(?:\s+files?)?"
+            r"[:\-]"
+            r"((?:\s*\n\s*[-*•]\s+[^\n]+)+)",
+            re.IGNORECASE,
+        )
+        item_re = re.compile(r"[-*•]\s+([^\n]+)")
+        for block_m in verb_block_re.finditer(clean):
+            for item_m in item_re.finditer(block_m.group(1)):
+                _add(item_m.group(1))
+
+        # ── Pass 3: bare tokens with a known extension ───────────────────
+        bare_re = re.compile(
+            r"(?<![a-zA-Z0-9])"
+            r"((?:[a-zA-Z0-9_\-./]+/)?"
+            r"[a-zA-Z0-9_\-]+"
+            r"\.(?:" + _EXT + r"))"
+            r"(?![a-zA-Z0-9])",
+            re.IGNORECASE,
+        )
+        for m in bare_re.finditer(clean):
+            _add(m.group(1))
+
         return found[:20]

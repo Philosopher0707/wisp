@@ -125,8 +125,10 @@ async def test_hooks_audit_logging_and_scrubbing():
                 assert params["safe_key"] == "safe_value"
                 assert "command" in params
                 assert "[scrubbed" in params["command"]
+                assert "secret_password" not in params["command"]
                 assert "content" in params
                 assert "[scrubbed" in params["content"]
+                assert "secret_password" not in params["content"]
             finally:
                 WorkspaceTrustManager.TRUST_FILE = old_trust_file
     finally:
