@@ -120,7 +120,7 @@ export const SearchModal: React.FC = () => {
 
     // Search workspace files via /api/files/search
     const base = state.serverUrl.replace(/\/$/, '');
-    const params = state.apiKey ? `?api-key=${encodeURIComponent(state.apiKey)}&q=${encodeURIComponent(value)}` : `?q=${encodeURIComponent(value)}`;
+    const params = `?q=${encodeURIComponent(value)}`;
     fetch(`${base}/api/files/search`, {
       headers: state.apiKey ? { Authorization: `Bearer ${state.apiKey}` } : undefined,
     })

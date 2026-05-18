@@ -1340,7 +1340,9 @@ async def get_diagnostics(path: str):
     try:
         from wisp.lsp.manager import get_lsp_manager
         lsp = get_lsp_manager(str(WORKSPACE_ROOT))
-        diags = lsp.get_diagnostics(str(target))
+        # jsonrpc is synchronous — offload to thread so we don't block
+        # the event loop while pylsp/rust-analyzer responds.
+        diags = await asyncio.to_thread(lsp.get_diagnostics, str(target))
         return {"path": path, "diagnostics": diags, "count": len(diags)}
     except Exception as e:
         return {"path": path, "diagnostics": [], "count": 0, "error": str(e)}
@@ -1353,7 +1355,8 @@ async def get_suggestions():
         from wisp.lsp.manager import get_lsp_manager
         lsp = get_lsp_manager(str(WORKSPACE_ROOT))
         watcher = _get_suggestion_watcher()
-        suggestions = watcher.get_suggestions(lsp)
+        # Offload blocking LSP I/O to thread
+        suggestions = await asyncio.to_thread(watcher.get_suggestions, lsp)
         return {
             "suggestions": [
                 {
