@@ -73,6 +73,32 @@ def get_background_thread() -> threading.Thread | None:
     return _loop_thread
 
 
+def shutdown_background_loop(timeout: float = 5.0) -> None:
+    """Stop the global background event loop and join its thread.
+
+    Idempotent and thread-safe.  Call at process exit to avoid leaking
+    the daemon thread.
+    """
+    global _loop_future, _loop_thread
+
+    with _loop_lock:
+        if _loop_future is None or not _loop_future.done():
+            return  # never started or still starting
+
+        loop = _loop_future.result()
+        try:
+            loop.call_soon_threadsafe(loop.stop)
+        except RuntimeError:
+            pass  # already closed
+
+        t = _loop_thread
+        _loop_future = None
+        _loop_thread = None
+
+    if t is not None and t.is_alive():
+        t.join(timeout=timeout)
+
+
 # ── sync generator → async iterator bridge ──────────────────────────
 
 async def sync_gen_iter(
@@ -202,7 +228,13 @@ def run_sync_coro(coro) -> Any:
     # Reuse the persistent worker instead of spawning a one-off thread
     loop = _ensure_background_loop()
     future = asyncio.run_coroutine_threadsafe(coro, loop)
-    return future.result()
+    try:
+        return future.result()
+    except KeyboardInterrupt:
+        # Cancel the background task so it can clean up (e.g. terminate
+        # bash subprocesses) before the daemon thread dies.
+        future.cancel()
+        raise
 
 
 def run_sync(agen: AsyncIterator[T]) -> list[T]:

@@ -445,7 +445,10 @@ class HookManager:
                     entry.chmod(entry.stat().st_mode & ~0o222)
             logger.debug("Enforced read-only permissions on hooks dir: %s", hooks_dir)
         except OSError as exc:
-            logger.warning("Could not enforce read-only hooks dir %s: %s", hooks_dir, exc)
+            raise RuntimeError(
+                f"Cannot enforce read-only permissions on hooks directory {hooks_dir}. "
+                f"This is a security requirement. Fix permissions or disable hooks."
+            ) from exc
 
     # ── Hook discovery ────────────────────────────────────────────────
 

@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from wisp.config import WISP_CONFIG_DIR
-from wisp.session import Session, SessionManager, _now_iso, _slugify, _timestamp_id
+from wisp.session import Session, _now_iso, _slugify, _timestamp_id
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +103,6 @@ class UnifiedSessionStore:
     def __init__(self, sessions_dir: Path | None = None):
         self.sessions_dir = sessions_dir or (WISP_CONFIG_DIR / "sessions")
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
-        self._legacy_mgr = SessionManager()
         self._migrated = False
         # Per-instance write lock — prevents concurrent read-modify-write races
         # on the same run file (e.g. two async append_event calls).  filelock

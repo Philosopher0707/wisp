@@ -331,24 +331,12 @@ class Session:
         }
 
 
-# ── Session Manager ──────────────────────────────────────────────────
+# ── Session Manager Core (internal, no deprecation warning) ───────────
 
-class SessionManager:
-    """Persists and retrieves sessions on disk.
-
-    .. deprecated::
-        Use :class:`wisp.session_store.UnifiedSessionStore` instead.
-        SessionManager is kept for backward compatibility only and will
-        be removed in a future release.
-    """
+class _SessionManagerCore:
+    """Persists and retrieves sessions on disk."""
 
     def __init__(self):
-        import warnings
-        warnings.warn(
-            "SessionManager is deprecated; use UnifiedSessionStore from wisp.session_store",
-            DeprecationWarning,
-            stacklevel=2,
-        )
         _ensure_sessions_dir()
 
     def save(self, session: Session):
@@ -460,6 +448,42 @@ class SessionManager:
                 return None  # ambiguous
             best = path.stem
         return best
+
+
+# ── Public Session Manager (deprecated wrapper) ────────────────────
+
+class SessionManager:
+    """Persists and retrieves sessions on disk.
+
+    .. deprecated::
+        Use :class:`wisp.session_store.UnifiedSessionStore` instead.
+        SessionManager is kept for backward compatibility only and will
+        be removed in a future release.
+    """
+
+    def __init__(self):
+        import warnings
+        warnings.warn(
+            "SessionManager is deprecated; use UnifiedSessionStore from wisp.session_store",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self._core = _SessionManagerCore()
+
+    def save(self, session: Session):
+        return self._core.save(session)
+
+    def load(self, session_id: str) -> Optional[Session]:
+        return self._core.load(session_id)
+
+    def delete(self, session_id: str) -> bool:
+        return self._core.delete(session_id)
+
+    def list_sessions(self, limit: int = 50) -> list[dict]:
+        return self._core.list_sessions(limit)
+
+    def get_session_id_from_fragment(self, fragment: str) -> Optional[str]:
+        return self._core.get_session_id_from_fragment(fragment)
 
 
 # ── Interactive session helpers ──────────────────────────────────────

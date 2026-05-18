@@ -72,12 +72,14 @@ class ServerTransport:
         self._send_callback = send_callback
         self._pending_approvals: dict[str, PendingApproval] = {}
         self._approval_lock = asyncio.Lock()
+        self._call_id_lock = asyncio.Lock()
         self._call_counter = 0
         self._interrupted = False
 
-    def _next_call_id(self) -> str:
-        self._call_counter += 1
-        return f"tc-{self._call_counter}"
+    async def _next_call_id(self) -> str:
+        async with self._call_id_lock:
+            self._call_counter += 1
+            return f"tc-{self._call_counter}"
 
     async def _send(self, msg: dict):
         """Send a message to the client via the async callback."""
@@ -154,7 +156,7 @@ class ServerTransport:
         This is the canonical approval handler passed to WispAgentCore.run().
         Extracted as a method so it can be unit-tested independently.
         """
-        call_id = self._next_call_id()
+        call_id = await self._next_call_id()
         await self._send({
             "type": "tool_approval_request",
             "call_id": call_id,

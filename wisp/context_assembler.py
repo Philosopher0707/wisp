@@ -255,7 +255,7 @@ class ContextAssembler:
     _MAX_CACHE_SIZE = 16
 
     def __init__(self):
-        self._cache: OrderedDict[tuple, str] = OrderedDict()
+        self._cache: OrderedDict[PromptContext, str] = OrderedDict()
         self.default_system = """You are Wisp, a helpful coding agent.
 
 You have access to tools that let you read, write, and edit files, run bash commands, and list directories.

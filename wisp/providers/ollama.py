@@ -47,3 +47,11 @@ class OllamaProvider(BaseProvider):
     @stream_response.setter
     def stream_response(self, value: Optional[dict]) -> None:
         self._client.stream_response = value
+
+    def __getattr__(self, name: str):
+        """Delegate unknown attributes to the underlying OllamaClient.
+
+        Preserves backward compatibility for methods like ``get_model_info()``
+        that exist on the client but are not part of the BaseProvider contract.
+        """
+        return getattr(self._client, name)

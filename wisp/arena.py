@@ -142,14 +142,29 @@ class ArenaRunner:
                 "Initialize git (`git init`) or fix worktree permissions."
             ) from exc
 
+        try:
             # Run both models in parallel, each in their own directory
             results = await asyncio.gather(
                 self._run_side(wt_a, request.prompt, request.model_a),
                 self._run_side(wt_b, request.prompt, request.model_b),
+                return_exceptions=True,
             )
 
-            (entry.a_summary, entry.a_diff, entry.a_files_changed, entry.a_duration_ms) = results[0]
-            (entry.b_summary, entry.b_diff, entry.b_files_changed, entry.b_duration_ms) = results[1]
+            # Unpack results, preserving partial successes even if one side failed
+            for idx, side_attr in enumerate(("a", "b")):
+                res = results[idx]
+                if isinstance(res, Exception):
+                    logger.error("Arena side %s failed: %s", side_attr, res)
+                    setattr(entry, f"{side_attr}_summary", f"[Error: {res}]")
+                    setattr(entry, f"{side_attr}_diff", "")
+                    setattr(entry, f"{side_attr}_files_changed", [])
+                    setattr(entry, f"{side_attr}_duration_ms", 0)
+                else:
+                    (summary, diff, files, duration_ms) = res
+                    setattr(entry, f"{side_attr}_summary", summary)
+                    setattr(entry, f"{side_attr}_diff", diff)
+                    setattr(entry, f"{side_attr}_files_changed", files)
+                    setattr(entry, f"{side_attr}_duration_ms", duration_ms)
         finally:
             # Always clean up worktrees
             for wt in (wt_a, wt_b):

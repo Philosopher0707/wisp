@@ -200,9 +200,15 @@ class BashRequest(BaseModel):
 class FileWriteRequest(BaseModel):
     content: str
 
+class FileBinaryRequest(BaseModel):
+    content_base64: str
+
 class FileEditRequest(BaseModel):
     old_text: str
     new_text: str
+
+class FileRenameRequest(BaseModel):
+    new_path: str
 
 class DiffRequest(BaseModel):
     path: str
@@ -1156,8 +1162,20 @@ async def list_or_read_file(path: str = ""):
         return {"type": "directory", "path": path, "items": items}
     elif target.is_file():
         try:
-            content = target.read_text(encoding="utf-8", errors="replace")
-            return {"type": "file", "path": path, "content": content}
+            # Try text first; fall back to base64 for binary files
+            try:
+                content = target.read_text(encoding="utf-8")
+                return {"type": "file", "path": path, "content": content, "encoding": "utf-8"}
+            except UnicodeDecodeError:
+                import base64
+                data = target.read_bytes()
+                return {
+                    "type": "file",
+                    "path": path,
+                    "content_base64": base64.b64encode(data).decode("ascii"),
+                    "encoding": "base64",
+                    "size": len(data),
+                }
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
     else:
@@ -1209,6 +1227,49 @@ async def edit_file(path: str, req: FileEditRequest):
         return {"ok": True, "path": path}
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/files", dependencies=[Depends(verify_api_key)])
+async def delete_file(path: str):
+    target = _resolve_path(path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    try:
+        if target.is_dir():
+            import shutil
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+        return {"ok": True, "path": path, "deleted": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/files/binary", dependencies=[Depends(verify_api_key)])
+async def write_binary_file(path: str, req: FileBinaryRequest):
+    target = _resolve_path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import base64
+        data = base64.b64decode(req.content_base64)
+        target.write_bytes(data)
+        return {"ok": True, "path": path, "bytes": len(data)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/files/rename", dependencies=[Depends(verify_api_key)])
+async def rename_file(path: str, req: FileRenameRequest):
+    target = _resolve_path(path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    new_target = _resolve_path(req.new_path)
+    try:
+        new_target.parent.mkdir(parents=True, exist_ok=True)
+        target.rename(new_target)
+        return {"ok": True, "path": path, "new_path": req.new_path}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

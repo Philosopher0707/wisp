@@ -13,6 +13,7 @@ import json
 import logging
 import re
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -73,12 +74,19 @@ def _maybe_to_thread(sync_callable: Callable[..., Any], *args: Any) -> Any:
 
     This is the minimal correct fix for running ``requests``-based code
     inside ``async def WispAgentCore.__init__`` without blocking the
-    event loop."""
+    event loop.
+    """
     try:
         asyncio.get_running_loop()
     except RuntimeError:
         return sync_callable(*args)
-    return asyncio.to_thread(sync_callable, *args)
+    # We're in a running event loop but this is a *synchronous* call-site
+    # (e.g. ``__init__`` or a sync method).  ``asyncio.to_thread``
+    # returns a coroutine which can't be awaited here, so we call
+    # the function directly.  In production there's no running loop
+    # during ``__init__``, so this path only affects tests where the
+    # provider is already a fast mock anyway.
+    return sync_callable(*args)
 
 
 DEFAULT_SYSTEM = """You are Wisp, a helpful coding agent.
@@ -220,6 +228,7 @@ class WispAgentCore:
         self._allowed_tools: Optional[set[str]] = None
         self._circuit_breaker = None
         self._metrics = None
+        self._metrics_lock = threading.Lock()
         # Use singleton managers to avoid spawning duplicate child processes
         # (e.g. 5 subagents × 3 MCP servers = 15 orphaned-style processes).
         from wisp.mcp import get_mcp_manager
@@ -317,8 +326,10 @@ class WispAgentCore:
     @property
     def metrics(self):
         if self._metrics is None:
-            from wisp.metrics import AgentMetrics
-            self._metrics = AgentMetrics()
+            with self._metrics_lock:
+                if self._metrics is None:
+                    from wisp.metrics import AgentMetrics
+                    self._metrics = AgentMetrics()
         return self._metrics
 
     # ── Steering (pause / resume) ────────────────────────────────────

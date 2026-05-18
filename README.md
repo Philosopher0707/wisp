@@ -1,11 +1,12 @@
 # Wisp 🤖
 
-**A local-first coding agent powered by Ollama — now with a native Android app for remote control.**
+**A local-first coding agent powered by Ollama — with an experimental Android app for remote control.**
 
 > **What is Wisp?** A single Python CLI that runs an AI coding agent on your
 > machine (or any server with Ollama). It reads your codebase, edits files, runs
-> tests, and remembers context across sessions. The TUI, WebSocket server, and
-> Android app are optional front-ends — the core is the CLI agent.
+> tests, and remembers context across sessions. The TUI and WebSocket server are
+> optional front-ends — the core is the CLI agent. The Android app is
+> experimental and not actively maintained.
 
 ```
 wisp "refactor the auth module to use async/await"
@@ -28,7 +29,7 @@ Warp (github.com/warpdotdev/warp) open-sourced its client under AGPL, but its ag
 | File read/write/edit | ✅ | ✅ |
 | Bash execution | ✅ | ✅ |
 | Skill support | ✅ | ✅ (same format) |
-| **Android remote control** | ❌ | ✅ |
+| **Android remote control** | ❌ | 🧪 experimental |
 | **Session compaction** | ❌ | ✅ |
 | **Cross-session memory** | ❌ | ✅ |
 | Data leaves your machine | To OpenAI/Anthropic | To your Ollama host |
