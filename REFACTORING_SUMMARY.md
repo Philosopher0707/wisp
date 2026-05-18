@@ -212,7 +212,6 @@ wisp/                          34,880 lines
 | Pre-existing test failures (21) | `test_agent.py`, `test_integration.py` | Medium | Mock drift — unrelated to refactoring |
 | `test_core_events.py` imports `EventBus` | `tests/` | Low | Module was renamed — test needs update |
 | `test_multi_agent.py` imports deleted modules | `tests/` | Low | Test references deleted registry |
-| Long horizon tests import missing modules | `tests/test_long_horizon/` | Low | `wisp.long_horizon` package missing |
 | `server.py` (2,344 lines) | `wisp/server.py` | Medium | Could be split into routes + handlers |
 | `repo_map.py` (1,840 lines) | `wisp/repo_map.py` | Medium | Could be split into parser + builder |
 | `mcp.py` (1,081 lines) | `wisp/mcp.py` | Low | Protocol implementation — acceptable |

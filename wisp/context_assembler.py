@@ -102,19 +102,23 @@ def _deduplicate_repo_map(code_index_summary: str | None, repo_map: str | None) 
         if stripped.startswith(("#", "!", ">", "|", "    ")):
             result_parts.append(line)
             continue
-        for fname in index_files:
-            pos = line.find(fname)
-            if pos == -1:
-                continue
-            prefix = line[:pos].lstrip()
-            if prefix == "" or _TREE_PREFIX_RE.match(prefix):
-                logger.debug(
-                    "ContextAssembler: dropping repo_map line for '%s' "
-                    "already in code_index_summary",
-                    fname,
-                )
-                break
-        else:
+
+        # O(matches_per_line) instead of O(len(index_files))
+        drop = False
+        for m in _DEDUP_FILE_RE.finditer(line):
+            fname = m.group(1)
+            if fname in index_files:
+                pos = m.start(1)
+                prefix = line[:pos].lstrip()
+                if prefix == "" or _TREE_PREFIX_RE.match(prefix):
+                    logger.debug(
+                        "ContextAssembler: dropping repo_map line for '%s' "
+                        "already in code_index_summary",
+                        fname,
+                    )
+                    drop = True
+                    break
+        if not drop:
             result_parts.append(line)
 
     cleaned = "".join(result_parts).rstrip()
@@ -319,25 +323,10 @@ You have access to tools that let you read, write, and edit files, run bash comm
         """Core assembly logic."""
 
         # ── Cache ──────────────────────────────────────────────────
-        # Since PromptContext is frozen and slot-based, it is natively
-        # hashable — perfect for a cache key.
-        cache_key = (
-            ctx.workspace,
-            ctx.default_system,
-            ctx.role_extra,
-            ctx.skills,
-            ctx.project_context,
-            ctx.code_index,
-            ctx.memory,
-            ctx.recent_summaries,
-            ctx.git_context,
-            ctx.plan.active_plan if ctx.plan else None,
-            ctx.plan.is_active if ctx.plan else False,
-            ctx.plan.context if ctx.plan else None,
-            ctx.repo_map,
-            ctx.context_files,
-            ctx.max_tokens,
-        )
+        # PromptContext is frozen and slot-based, so it is natively
+        # hashable — use it directly as the cache key instead of
+        # manually unpacking into a brittle 16-tuple.
+        cache_key = ctx
         if cache_key in self._cache:
             self._cache.move_to_end(cache_key)
             return self._cache[cache_key]
@@ -438,14 +427,20 @@ You have access to tools that let you read, write, and edit files, run bash comm
     # ── Token-aware helpers ──────────────────────────────────
 
     def _estimate_tokens(self, text: str) -> int:
-        """Estimate token count using a conservative character ratio.
+        """Estimate token count using tiktoken when available, falling back to a
+        conservative character ratio.
 
         Wisp primarily targets local Ollama models (Llama, Mistral, etc.) which use
         SentencePiece/BPE tokenizers. These average ~3 characters per token on code.
         """
         if not text:
             return 0
-        return max(1, len(text) // 3)
+        try:
+            import tiktoken
+            enc = tiktoken.get_encoding("cl100k_base")
+            return len(enc.encode(text))
+        except Exception:
+            return max(1, len(text) // 3)
 
     def _fit_sections(self, sections: list[tuple[str, int, str]], max_tokens: int) -> tuple[str, int]:
         """Assemble sections, truncating/dropping lowest-priority ones if over budget.
@@ -469,8 +464,13 @@ You have access to tools that let you read, write, and edit files, run bash comm
             elif priority == 0:
                 remaining = max_tokens - current_tokens
                 if remaining > 0:
-                    max_chars = remaining * 3
-                    truncated_text = content[:max_chars]
+                    try:
+                        import tiktoken
+                        enc = tiktoken.get_encoding("cl100k_base")
+                        truncated_text = enc.decode(enc.encode(content)[:remaining])
+                    except Exception:
+                        max_chars = remaining * 3
+                        truncated_text = content[:max_chars]
 
                     if truncated_text.count("```") % 2 != 0:
                         truncated_text += "\n```\n[Code block truncated]"

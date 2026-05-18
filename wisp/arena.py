@@ -12,9 +12,7 @@ import asyncio
 import json
 import logging
 import os
-import shutil
 import subprocess
-import tempfile
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -132,14 +130,17 @@ class ArenaRunner:
         wt_b: Path | None = None
 
         try:
-            try:
-                wt_a = await worktree_mgr.create("arena-a")
-                wt_b = await worktree_mgr.create("arena-b")
-            except RuntimeError:
-                # Not a git repo or worktree creation failed — fall back to temp dirs
-                logger.warning("Git worktree creation failed, falling back to temp directories")
-                wt_a = Path(tempfile.mkdtemp(prefix="arena-a-", dir=ws))
-                wt_b = Path(tempfile.mkdtemp(prefix="arena-b-", dir=ws))
+            wt_a = await worktree_mgr.create("arena-a")
+            wt_b = await worktree_mgr.create("arena-b")
+        except RuntimeError as exc:
+            # Not a git repo or worktree creation failed — do NOT fall back
+            # to temp directories inside the workspace (no isolation).
+            # Arena mode requires git worktrees for proper A/B isolation.
+            logger.error("Git worktree creation failed: %s", exc)
+            raise RuntimeError(
+                "Arena mode requires a git repository with worktree support. "
+                "Initialize git (`git init`) or fix worktree permissions."
+            ) from exc
 
             # Run both models in parallel, each in their own directory
             results = await asyncio.gather(
@@ -150,17 +151,12 @@ class ArenaRunner:
             (entry.a_summary, entry.a_diff, entry.a_files_changed, entry.a_duration_ms) = results[0]
             (entry.b_summary, entry.b_diff, entry.b_files_changed, entry.b_duration_ms) = results[1]
         finally:
-            # Always clean up worktrees / temp dirs
+            # Always clean up worktrees
             for wt in (wt_a, wt_b):
                 if wt is None:
                     continue
                 try:
-                    if wt.name.startswith("arena-") and (wt / ".git").exists():
-                        # It's a git worktree
-                        await worktree_mgr.cleanup(wt)
-                    elif wt.name.startswith("arena-"):
-                        # It's a temp directory fallback
-                        shutil.rmtree(wt, ignore_errors=True)
+                    await worktree_mgr.cleanup(wt)
                 except Exception as exc:
                     logger.warning("Failed to clean up arena worktree %s: %s", wt, exc)
 

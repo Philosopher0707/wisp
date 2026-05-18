@@ -423,6 +423,30 @@ class HookManager:
                 pass
         return newest
 
+    def _enforce_hooks_dir_readonly(self, hooks_dir: Path) -> None:
+        """Make the hooks directory read-only at the OS level.
+
+        This is defense-in-depth: even if a tool bypasses the path-blocking
+        check in ``_is_hook_controlled_path``, the OS will deny writes to the
+        hooks directory.  On Unix this sets mode 0o555 (r-xr-xr-x); on
+        Windows it sets the read-only attribute on the directory.
+
+        Idempotent — safe to call multiple times.
+        """
+        try:
+            import stat
+            # Remove write bits for owner, group, and others
+            current = hooks_dir.stat().st_mode
+            readonly = current & ~0o222  # clear all write bits
+            hooks_dir.chmod(readonly)
+            # Also make all existing hook files read-only
+            for entry in hooks_dir.iterdir():
+                if entry.is_file():
+                    entry.chmod(entry.stat().st_mode & ~0o222)
+            logger.debug("Enforced read-only permissions on hooks dir: %s", hooks_dir)
+        except OSError as exc:
+            logger.warning("Could not enforce read-only hooks dir %s: %s", hooks_dir, exc)
+
     # ── Hook discovery ────────────────────────────────────────────────
 
     def load_project_hooks(self) -> int:
@@ -476,6 +500,9 @@ class HookManager:
             if not hooks_dir.is_dir():
                 logger.debug("Hooks directory not found: %s", hooks_dir)
                 continue
+
+            # Defense-in-depth: make hooks dir read-only at OS level
+            self._enforce_hooks_dir_readonly(hooks_dir)
 
             logger.debug("Scanning hooks directory: %s", hooks_dir)
             loaded_count += self._load_json_hooks(hooks_dir)

@@ -334,9 +334,21 @@ class Session:
 # ── Session Manager ──────────────────────────────────────────────────
 
 class SessionManager:
-    """Persists and retrieves sessions on disk."""
+    """Persists and retrieves sessions on disk.
+
+    .. deprecated::
+        Use :class:`wisp.session_store.UnifiedSessionStore` instead.
+        SessionManager is kept for backward compatibility only and will
+        be removed in a future release.
+    """
 
     def __init__(self):
+        import warnings
+        warnings.warn(
+            "SessionManager is deprecated; use UnifiedSessionStore from wisp.session_store",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         _ensure_sessions_dir()
 
     def save(self, session: Session):

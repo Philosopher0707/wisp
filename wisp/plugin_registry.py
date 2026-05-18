@@ -131,6 +131,7 @@ def register_tool(
     impl: Callable,
     schema: Optional[dict] = None,
     description: str = "",
+    namespace: str = "",
 ) -> None:
     """Register a custom tool at runtime.
 
@@ -141,14 +142,19 @@ def register_tool(
     Args:
         name: Tool function name.  Must be unique; conflicts silently
               override the previous registration with a logged warning.
-              Namespace isolation (e.g. ``plugin__read_file``) is NOT
-              enforced by this function — callers must prefix themselves.
         impl: The synchronous function that implements the tool.  Parameter
               names must match the schema.  Can auto-return dict/status.
         schema: Ollama-style ``{"type": "function", "function": {...}}`` dict.
                 If *None*, auto-generated from the function's signature.
         description: Fallback description for auto-generated schema.
+        namespace: Optional prefix to isolate the tool (e.g. ``"myplugin"``
+                   produces ``"myplugin__read_file"``).  This prevents
+                   shadowing built-in tools and collisions between plugins.
     """
+    # Apply namespace isolation so plugins cannot shadow built-ins
+    if namespace:
+        name = f"{namespace}__{name}"
+
     # Protect against collision shadowing built-in tools
     try:
         from wisp.tools.registry import TOOL_IMPLS
@@ -168,6 +174,9 @@ def register_tool(
     # Validate that schema shapes match
     if not _is_valid_tool_schema(schema):
         raise ValueError(f"Invalid tool schema for '{name}': missing 'function' or 'name'")
+
+    # Ensure the schema name matches the namespaced name
+    schema["function"]["name"] = name
 
     _plugin_tools[name] = PluginTool(name=name, impl=impl, schema=schema)
     _plugin_schemas.append(schema)
@@ -191,6 +200,7 @@ def register_tools(tools: list[dict]) -> None:
             impl=desc["impl"],
             schema=desc.get("schema"),
             description=desc.get("description", ""),
+            namespace=desc.get("namespace", ""),
         )
 
 

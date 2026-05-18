@@ -22,15 +22,16 @@ from typing import Any
 class AgentMetrics:
     """In-memory counters for agent observability.
 
-    NOT thread-safe by default: ``@dataclass`` mutable fields like
-    ``turns += 1`` are ``LOAD`` → ``ADD`` → ``STORE`` at bytecode level.
-    The GIL protects the individual bytecode opcodes, not the full
-    ``+=`` sequence.  Use the provided ``record_*`` helpers which
-    acquire ``self._lock`` before mutation.
+    Uses ``threading.Lock`` (not ``RLock``) because all mutations are
+    short, non-blocking integer / dict operations with no ``await`` points.
+    In CPython's single-threaded event loop this is safe: the GIL prevents
+    true parallelism and no task switch can occur inside the locked section.
 
-    Not designed for multi-process sharing.
+    If you need to share metrics across OS threads (e.g. a thread-pool
+    executor), wrap calls with ``loop.call_soon_threadsafe()`` or migrate
+    to an ``asyncio.Lock`` variant.
     """
-    _lock: threading.RLock = field(default_factory=threading.RLock)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
 
     # ── Turn-level ──
     turns: int = 0

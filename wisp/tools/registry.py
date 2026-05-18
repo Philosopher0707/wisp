@@ -673,18 +673,8 @@ def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0,
     try:
         result = impl(**filtered)
         if inspect.iscoroutine(result):
-            import asyncio
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-            if loop and loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(asyncio.run, result)
-                    result = future.result()
-            else:
-                result = asyncio.run(result)
+            from wisp.async_utils import run_sync_coro
+            result = run_sync_coro(result)
 
         # Tools can return a dict with 'data' and 'metadata' keys for structured output
         if isinstance(result, dict) and "data" in result:

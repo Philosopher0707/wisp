@@ -63,7 +63,7 @@ from wisp.core.events import (
     TYPE_STEERING_INJECT,
 )
 from wisp.colors import success, error, warning, info, dim, accent, muted, border, highlight
-from wisp.session import Session, SessionManager, format_session_preview
+from wisp.session import Session, format_session_preview
 from wisp.skills import find_skill
 
 logger = logging.getLogger(__name__)

@@ -134,18 +134,7 @@ async def async_tool_run_bash(command: str, workspace: str, timeout: int = 60) -
 
 def tool_run_bash(command: str, workspace: str, timeout: int = 60) -> str:
     """Run a bash command in the workspace directory (synchronous compatibility wrapper)."""
-    coro = async_tool_run_bash(command, workspace, timeout)
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-
-    if loop and loop.is_running():
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(asyncio.run, coro)
-            return future.result()
-    else:
-        return asyncio.run(coro)
+    from wisp.async_utils import run_sync_coro
+    return run_sync_coro(async_tool_run_bash(command, workspace, timeout))
 
 

@@ -55,8 +55,6 @@ class WorkspaceScreen(Screen):
         self._ws_client: WispWSClient | None = None
         self._pending_prompt: str | None = None
         self._pending_approval_call_id: str | None = None
-        self._auto_approve = False
-        self._pending_approval_call_id: str | None = None
         self._auto_approve: bool = False
 
     def compose(self) -> ComposeResult:

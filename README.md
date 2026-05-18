@@ -2,6 +2,11 @@
 
 **A local-first coding agent powered by Ollama — now with a native Android app for remote control.**
 
+> **What is Wisp?** A single Python CLI that runs an AI coding agent on your
+> machine (or any server with Ollama). It reads your codebase, edits files, runs
+> tests, and remembers context across sessions. The TUI, WebSocket server, and
+> Android app are optional front-ends — the core is the CLI agent.
+
 ```
 wisp "refactor the auth module to use async/await"
 ```
