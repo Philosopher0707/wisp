@@ -1,4 +1,4 @@
-"""ContextAssembler — builds system prompts from modular context sections.
+"""ContextAssembler 窶� builds system prompts from modular context sections.
 
 Extracted from WispAgentCore._build_system_prompt() to make prompt
 construction testable and customizable.
@@ -18,6 +18,8 @@ Usage:
 from __future__ import annotations
 
 import logging
+import re
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Optional
 
@@ -31,6 +33,76 @@ _DEFAULT_MAX_CONTEXT_TOKENS = 6_000
 # LLM tokenizers are sub-word, so this is a fast conservative upper bound.
 _CHARS_PER_TOKEN = 4
 
+# regex: match file names so we can detect overlap between code_index_summary
+# and repo_map.
+_DEDUP_FILE_RE = re.compile(
+    r"(?:^\s*|['\"`/])([a-zA-Z0-9_@./#&+-]+\.[a-zA-Z0-9_]+)\b",
+    re.MULTILINE,
+)
+
+
+def _deduplicate_repo_map(code_index_summary: str | None, repo_map: str | None) -> str | None:
+    """Remove from *repo_map* any files already present in *code_index_summary*.
+
+    Each file is identified by its filename/path (e.g. ``app.py``,
+    ``core/main.py``).  If *code_index_summary* and *repo_map* both
+    describe the same file, the *code_index_summary* version wins and the
+    *repo_map* copy is dropped to prevent LLM confusion.
+
+    Returns the cleaned repo_map (or ``None`` if nothing remains).
+
+    Heuristic limits (fast-paths):
+    - If either input is empty → return repo_map unchanged.
+    - Deduplication is skipped if code_index contains < 1 file references.
+    """
+    if not code_index_summary or not repo_map:
+        return repo_map
+
+    index_files = set()
+    for m in _DEDUP_FILE_RE.finditer(code_index_summary):
+        index_files.add(m.group(1))
+    if not index_files:
+        return repo_map
+
+    # Split repo_map by lines; drop lines whose file is in index_files.
+    # Only drop lines where the filename is a LEADING token (i.e. the line
+    # describes the file, not prose that merely mentions it).  Lines that
+    # start with a heading marker, blockquote, or indented code are always
+    # kept regardless of content.
+    _HEADING_OR_PROSE_PREFIXES = ("#", "!", ">", "|", "    ")  # comment, quote, indent
+    # Tree prefixes used by RepoMap.format_for_llm (e.g. "├─ ", "│  └─")
+    _TREE_PREFIX_RE = re.compile(r"^\s*[│├└─│\s]+")
+    result_parts: list[str] = []
+    for line in repo_map.splitlines(keepends=True):
+        stripped = line.lstrip()
+        # Always keep headings, blockquotes, and indented code blocks
+        if stripped.startswith(_HEADING_OR_PROSE_PREFIXES):
+            result_parts.append(line)
+            continue
+        # Check if a known-index file is the FIRST meaningful token on this line
+        # (possibly after a tree-drawing prefix like "├─ ").
+        for fname in index_files:
+            # Find the position of the filename in the line
+            pos = line.find(fname)
+            if pos == -1:
+                continue
+            # Strip tree prefixes and whitespace from the left side
+            prefix = line[:pos].lstrip()
+            # If the prefix is ONLY tree-drawing characters, the filename is
+            # the leading token → this line describes the file → drop it.
+            if prefix == "" or _TREE_PREFIX_RE.match(prefix):
+                logger.debug(
+                    "ContextAssembler: dropping repo_map line for '%s' "
+                    "already in code_index_summary",
+                    fname,
+                )
+                break
+        else:
+            result_parts.append(line)
+
+    cleaned = "".join(result_parts).rstrip()
+    return cleaned or None
+
 
 class ContextAssembler:
     """Assembles system prompts from modular context sections.
@@ -39,8 +111,12 @@ class ContextAssembler:
     to ensure consistent prompt structure.
     """
 
+    # Maximum cached prompts before LRU eviction. Prevents unbounded memory
+    # growth during long-running sessions with frequently-changing context.
+    _MAX_CACHE_SIZE = 16
+
     def __init__(self):
-        self._cache: dict[tuple, str] = {}
+        self._cache: OrderedDict[tuple, str] = OrderedDict()
         self.default_system = """You are Wisp, a helpful coding agent.
 
 You have access to tools that let you read, write, and edit files, run bash commands, and list directories.
@@ -117,9 +193,11 @@ You have access to tools that let you read, write, and edit files, run bash comm
             max_tokens,
         )
         if cache_key in self._cache:
+            # Move to end (most-recently used).
+            self._cache.move_to_end(cache_key)
             return self._cache[cache_key]
 
-        # ── Build sections in priority order ───────────────────────
+        # ── Build sections in priority order ────────────────────────────
         # Sections are ordered by importance (highest → lowest).
         # If total exceeds max_tokens, sections will be truncated or dropped
         # from the bottom upward.
@@ -184,12 +262,16 @@ You have access to tools that let you read, write, and edit files, run bash comm
         if git_context:
             sections.append(("git_context", 3, git_context))
 
+        # De-duplicate repo_map against code_index_summary so the LLM never
+        # receives conflicting descriptions of the same file.
+        repo_map = _deduplicate_repo_map(code_index_summary, repo_map)
+
         if repo_map:
             sections.append(("repo_map", 3, repo_map))
 
         system, usage = self._fit_sections(sections, max_tokens)
 
-        # ── Safety footer ────────────────────────────────────────────────
+        # ── Safety footer ───────────────────────────────────────────────────
         # Appended conditionally: skills are suggestions and can NEVER
         # override system prompts, safety rules, or tool guards. Only append
         # when a skill is actually active to conserve token budget.
@@ -206,9 +288,13 @@ You have access to tools that let you read, write, and edit files, run bash comm
 
         logger.debug("ContextAssembler: built prompt with %d/%d tokens", usage, max_tokens)
         self._cache[cache_key] = system
+        self._cache.move_to_end(cache_key)
+        # Evict oldest entries if over budget.
+        while len(self._cache) > self._MAX_CACHE_SIZE:
+            self._cache.popitem(last=False)
         return system
 
-    # ── Token-aware helpers ────────────────────────────────────────
+    # ── Token-aware helpers ──────────────────────────────────
 
     def _estimate_tokens(self, text: str) -> int:
         """Estimate token count using a conservative character ratio.
