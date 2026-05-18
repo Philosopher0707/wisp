@@ -555,16 +555,28 @@ class Connection:
 class ConnectionManager:
     def __init__(self):
         self._connections: dict[str, Connection] = {}
+        # Q5: Protect against concurrent connect()/disconnect() for the
+        # same client_id, which would leak the first Connection and its
+        # agent_task (the overwrite happens between accept and store).
+        self._lock = asyncio.Lock()
 
     async def connect(self, websocket: WebSocket, client_id: str) -> Connection:
         await websocket.accept()
         conn = Connection(websocket, client_id)
-        self._connections[client_id] = conn
+        async with self._lock:
+            # If a prior Connection was already stored for this client_id,
+            # stop its tasks so we don't leak agent threads.
+            stale = self._connections.get(client_id)
+            if stale is not None:
+                logger.warning("Replacing stale connection for %s", client_id)
+                await stale.stop_tasks(timeout=1.0)
+            self._connections[client_id] = conn
         logger.info("Client %s connected", client_id)
         return conn
 
     async def disconnect(self, client_id: str):
-        conn = self._connections.pop(client_id, None)
+        async with self._lock:
+            conn = self._connections.pop(client_id, None)
         if conn:
             await conn.stop_tasks(timeout=2.0)
         logger.info("Client %s disconnected", client_id)
@@ -581,7 +593,8 @@ class ConnectionManager:
         After all connections are drained, shut down global resources
         (MCP manager, session store DB).
         """
-        connections = list(self._connections.values())
+        async with self._lock:
+            connections = list(self._connections.values())
         if not connections:
             logger.info("No active connections; shutdown is immediate")
             return
