@@ -249,7 +249,7 @@ class WispAgentCore:
         # ── Hooks ──
         self.hook_manager = None
         try:
-            from wisp.hooks import HookManager
+            from wisp.adapters import HookManager
             self.hook_manager = HookManager(config=self.config, workspace=Path(self.config.workspace))
             self.hook_manager.load_project_hooks()
             logger.info("HookManager initialized")
@@ -835,7 +835,7 @@ class WispAgentCore:
         schemas = list(TOOL_SCHEMAS)
         # Plugin tools (registered at runtime via register_tool())
         try:
-            from wisp.plugin_registry import get_plugin_schemas
+            from wisp.adapters import get_plugin_schemas
             schemas.extend(get_plugin_schemas())
         except Exception:
             pass
@@ -1122,7 +1122,7 @@ class WispAgentCore:
         # ── Session start hooks ──
         if self.hook_manager:
             try:
-                from wisp.hooks import HookEvent
+                from wisp.adapters import HookEvent
                 await self.hook_manager.run_hooks(HookEvent.SESSION_START, {
                     "prompt": prompt,
                     "workspace": self.config.workspace,
@@ -1139,7 +1139,7 @@ class WispAgentCore:
             # ── Session end hooks ──
             if self.hook_manager:
                 try:
-                    from wisp.hooks import HookEvent
+                    from wisp.adapters import HookEvent
                     await self.hook_manager.run_hooks(HookEvent.SESSION_END, {
                         "workspace": self.config.workspace,
                         "session_id": self.session.id if self.session else "",

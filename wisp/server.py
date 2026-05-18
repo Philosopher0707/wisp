@@ -2292,7 +2292,7 @@ async def test_mcp_server(name: str):
 
 @app.get("/api/hooks", dependencies=[Depends(verify_api_key)])
 async def list_hooks():
-    from wisp.hooks import HookManager
+    from wisp.adapters import HookManager
     manager = HookManager(workspace=WORKSPACE_ROOT)
     manager.load_project_hooks()
     hooks = manager.list_hooks()
@@ -2314,7 +2314,7 @@ async def list_hooks():
 
 @app.post("/api/hooks", dependencies=[Depends(verify_api_key)])
 async def create_hook(req: HookCreateRequest):
-    from wisp.hooks import HookConfig, HookEvent
+    from wisp.adapters import HookConfig, HookEvent
     import json as _json
 
     hooks_dir = WORKSPACE_ROOT / ".wisp" / "hooks"
@@ -2354,7 +2354,7 @@ async def delete_hook(name: str):
 
 @app.post("/api/hooks/{name}/test", dependencies=[Depends(verify_api_key)])
 async def test_hook(name: str, request: dict):
-    from wisp.hooks import HookManager, HookEvent, build_hook_context
+    from wisp.adapters import HookManager, HookEvent, build_hook_context
     import asyncio
 
     manager = HookManager(workspace=WORKSPACE_ROOT)

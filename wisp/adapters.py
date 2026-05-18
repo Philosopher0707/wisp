@@ -85,6 +85,105 @@ except ImportError:
         def close(self) -> None:
             self._store.stop()
 
+
+# ── Hooks stubs ────────────────────────────────────────────────────
+
+class HookEvent:  # type: ignore
+    """Stub for backward compatibility."""
+    TOOL_CALL = "tool_call"
+    TOOL_RESULT = "tool_result"
+    BASH_COMMAND = "bash_command"
+    FILE_WRITE = "file_write"
+    SESSION_START = "session_start"
+    SESSION_END = "session_end"
+
+    def __init__(self, event_type: str, **kwargs):
+        self.event_type = event_type
+        self.__dict__.update(kwargs)
+
+
+@dataclass
+class HookConfig:  # type: ignore
+    """Stub for backward compatibility."""
+    event: str = ""
+    script: str = ""
+    timeout: float = 5.0
+
+
+class HookResult:  # type: ignore
+    """Stub for backward compatibility."""
+    ALLOW = "allow"
+    BLOCK = "block"
+    WARN = "warn"
+
+    def __init__(self, decision: str = "allow", reason: str = "", modified_args: dict | None = None):
+        self.decision = decision
+        self.reason = reason
+        self.modified_args = modified_args or {}
+
+
+class HookManager:  # type: ignore
+    """Stub for backward compatibility."""
+
+    def __init__(self, config_dir: str | None = None):
+        self.config_dir = config_dir
+        self.hooks: list[HookConfig] = []
+
+    def load_hooks(self) -> None:
+        pass
+
+    def run_hooks(self, event: HookEvent) -> HookResult:
+        return HookResult(decision="allow")
+
+    def register(self, hook: HookConfig) -> None:
+        self.hooks.append(hook)
+
+
+def build_hook_context(**kwargs) -> dict:
+    """Stub for backward compatibility."""
+    return kwargs
+
+
+# ── Plugin registry stubs ────────────────────────────────────────
+
+_plugin_tools: dict[str, Any] = {}
+_plugin_schemas: list[dict] = []
+
+
+def register_tool(name: str, impl: Any, schema: dict | None = None, description: str = "") -> None:
+    """Stub for backward compatibility."""
+    _plugin_tools[name] = {"impl": impl, "schema": schema, "description": description}
+    if schema:
+        _plugin_schemas.append(schema)
+
+
+def list_plugin_tools() -> list[str]:
+    """Stub for backward compatibility."""
+    return list(_plugin_tools.keys())
+
+
+def unregister_tool(name: str) -> None:
+    """Stub for backward compatibility."""
+    _plugin_tools.pop(name, None)
+
+
+def get_plugin_schemas() -> list[dict]:
+    """Stub for backward compatibility."""
+    return list(_plugin_schemas)
+
+
+def has_plugin_tool(name: str) -> bool:
+    """Stub for backward compatibility."""
+    return name in _plugin_tools
+
+
+def execute_plugin_tool(name: str, **kwargs) -> Any:
+    """Stub for backward compatibility."""
+    tool = _plugin_tools.get(name)
+    if tool:
+        return tool["impl"](**kwargs)
+    raise ValueError(f"Plugin tool '{name}' not found")
+
 logger = logging.getLogger(__name__)
 
 # Singleton store cache for get_store() compatibility
