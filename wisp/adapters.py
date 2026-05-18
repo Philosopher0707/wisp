@@ -56,6 +56,10 @@ except ImportError:
             data = self._store.create_session(session_id, model, workspace, title)
             return Session.from_dict(data)
 
+        def save_session(self, session: dict) -> None:
+            """Backward-compatible save that accepts dict."""
+            self._store.save_session(session)
+
         def save(self, session: Session) -> None:
             """Backward-compatible save that accepts Session object."""
             self._store.save_session(session.to_dict())
