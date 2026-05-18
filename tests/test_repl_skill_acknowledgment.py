@@ -55,7 +55,7 @@ class MockAgent:
         if skill_name:
             skill = next((s for s in skills if s.name == skill_name), None)
             if skill:
-                system += f"\n\nMANDATORY Mode: {skill.name}\n"
+                system += f"\n\n## Active Skill: {skill.name}\n"
                 system += skill.description + "\n\n"
                 system += skill.instructions
         self._captured_system_prompt = system
@@ -136,7 +136,7 @@ class TestREPLSkillAcknowledgment:
         # Simulate REPL building system prompt
         system = agent._build_system_prompt("coder", query="ack")
         
-        assert "MANDATORY Mode: coder" in system
+        assert "## Active Skill: coder" in system
         assert "Always use type hints" in system
         assert agent._captured_system_prompt == system
 
@@ -167,7 +167,7 @@ class TestREPLSkillAcknowledgment:
         assert len(agent.messages) == 1
         assert agent.messages[0]["role"] == "user"
         assert "debugger" in agent.messages[0]["content"]
-        assert "MANDATORY Mode: debugger" in system
+        assert "## Active Skill: debugger" in system
         assert "1. Reproduce" in system
 
     def test_skill_switch_clears_previous(self, agent):
@@ -192,8 +192,8 @@ class TestREPLSkillAcknowledgment:
         
         # Verify system prompt uses new skill
         system = agent._build_system_prompt("debugger")
-        assert "MANDATORY Mode: debugger" in system
-        assert "MANDATORY Mode: coder" not in system
+        assert "## Active Skill: debugger" in system
+        assert "## Active Skill: coder" not in system
 
     def test_empty_skill_name_no_acknowledgment(self, agent):
         """Empty skill name should not trigger acknowledgment."""
@@ -293,4 +293,4 @@ class TestREPLSkillAcknowledgment:
         
         # Build system prompt for ack
         system = agent._build_system_prompt("coder")
-        assert "MANDATORY Mode: coder" in system
+        assert "## Active Skill: coder" in system

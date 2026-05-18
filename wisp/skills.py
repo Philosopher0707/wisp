@@ -124,19 +124,10 @@ def discover_skills(workspace: str) -> list[Skill]:
     seen_names: set[str] = set()
     ws_path = Path(workspace).resolve()
 
-    # Scan project dirs FIRST (higher priority) — gated by trust
-    from wisp.trust import WorkspaceTrustManager
-    if WorkspaceTrustManager.is_workspace_trusted(ws_path):
-        for dir_name in SKILL_DIR_NAMES:
-            project_dir = ws_path / dir_name
-            if project_dir.exists():
-                _scan_skill_dir(project_dir, discovered, seen_names)
-    else:
-        logging.getLogger(__name__).warning(
-            "Skipping loading workspace-local skills because the workspace is untrusted: %s. "
-            "To trust this workspace, add its path to trusted_workspaces.json.",
-            ws_path,
-        )
+    for dir_name in SKILL_DIR_NAMES:
+        project_dir = ws_path / dir_name
+        if project_dir.exists():
+            _scan_skill_dir(project_dir, discovered, seen_names)
 
     # Scan global dirs (lower priority - only if not already seen)
     for skill_dir in GLOBAL_SKILL_DIRS:
