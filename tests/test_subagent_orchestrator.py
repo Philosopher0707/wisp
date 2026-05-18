@@ -115,8 +115,10 @@ def test_orchestrator_with_explicit_config():
 
 
 def test_orchestrator_workspace_fallback():
+    from wisp.config import WispConfig
+    expected = Path(WispConfig().workspace or ".").resolve()
     o = SubagentOrchestrator()
-    assert o.workspace == Path.cwd().resolve()
+    assert o.workspace == expected
 
 
 # ── run() tests ────────────────────────────────────────────────────────
