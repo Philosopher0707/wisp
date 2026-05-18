@@ -9,8 +9,7 @@ from wisp.config import WispConfig, load_config, save_config
 from wisp.agent import WispAgent
 from wisp.providers import get_provider
 from wisp.skills import discover_skills
-from wisp.session import format_session_preview
-from wisp.session_store import get_store
+from wisp.adapters import format_session_preview, get_store
 from wisp.colors import success, error, warning, info, dim, accent
 
 
@@ -230,7 +229,7 @@ def cmd_print(prompt, model=None, session_id=None, output_format="json", quiet=F
             import asyncio
             from wisp.config import WispConfig as _WispConfig
             from wisp.core.agent import WispAgentCore as _WispAgentCore
-            from wisp.session_store import get_store as _get_store
+            from wisp.adapters import get_store as _get_store
             import time as _time
 
             config = _WispConfig()

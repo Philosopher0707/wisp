@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from wisp.acp_session import AcpSession, AcpSessionManager
-from wisp.session_store import UnifiedSessionStore
+from wisp.adapters import UnifiedSessionStore
 from wisp.acp_protocol import TextContent, ToolCallContent, ToolResultContent
 
 

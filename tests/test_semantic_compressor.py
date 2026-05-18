@@ -531,7 +531,7 @@ class TestTier3Reachability:
         assert result.compression_stats["tier3_threshold"] == 500
 
     def test_session_compact_passes_max_context_tokens(self, monkeypatch):
-        from wisp.session import Session
+        from wisp.adapters import Session
         from wisp.semantic_compressor import CompressionResult
 
         calls = []

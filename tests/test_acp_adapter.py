@@ -9,7 +9,7 @@ import pytest
 
 from wisp.acp_adapter import AcpAdapter
 from wisp.acp_session import AcpSessionManager
-from wisp.session_store import UnifiedSessionStore
+from wisp.adapters import UnifiedSessionStore
 from wisp.acp_adapter import ACP_PROTOCOL_VERSION
 from wisp.acp_protocol import (
     ErrorCode,

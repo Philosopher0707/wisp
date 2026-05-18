@@ -4,8 +4,8 @@ import json
 import pytest
 from pathlib import Path
 
-from wisp.session_store import UnifiedSessionStore, Run, get_store
-from wisp.session import Session
+from wisp.adapters import UnifiedSessionStore, Run, get_store
+from wisp.adapters import Session
 
 
 class TestUnifiedSessionStore:

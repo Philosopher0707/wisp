@@ -671,7 +671,7 @@ Write this as a direct report to me, the user. No preamble — just the synthesi
 
 @register("new", "Start a new session", aliases=(), usage="/new")
 def cmd_new(agent, args: str):
-    from wisp.session import Session
+    from wisp.adapters import Session
     agent._save_session()
     agent.session = Session.create(
         model=agent.config.model,

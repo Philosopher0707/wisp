@@ -85,7 +85,7 @@ from wisp.core.events import (
     TYPE_APPROVAL_REQUEST,
 )
 from wisp.transport.server import ServerTransport
-from wisp.session_store import get_store
+from wisp.adapters import get_store
 from wisp.persistence.swarm_store import SwarmStateStore
 
 logger = logging.getLogger(__name__)
@@ -727,7 +727,7 @@ class ConnectionManager:
 
         logger.info("Shutting down session store...")
         try:
-            from wisp.session_store import get_store
+            from wisp.adapters import get_store
             store = get_store()
             if hasattr(store, "close"):
                 store.close()
@@ -1112,7 +1112,7 @@ class ForkRequest(BaseModel):
 
 @app.post("/api/sessions/fork", dependencies=[Depends(verify_api_key)])
 async def fork_session(req: ForkRequest):
-    from wisp.session import Session
+    from wisp.adapters import Session
     import copy, uuid
 
     sm = get_store()

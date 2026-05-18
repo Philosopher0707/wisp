@@ -15,8 +15,8 @@ from pathlib import Path
 from typing import Any
 
 from wisp.config import WispConfig
-from wisp.session import Session
-from wisp.session_store import get_store
+from wisp.adapters import Session
+from wisp.adapters import get_store
 
 from .task import EventKind, OrchestratorEvent, SubagentContract, SubagentResult
 

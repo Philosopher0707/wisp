@@ -34,8 +34,7 @@ from wisp.stream_events import (
 )
 from wisp.tools import TOOL_SCHEMAS, execute_tool, ToolError
 from wisp.skills import discover_skills
-from wisp.session import Session
-from wisp.session_store import get_store
+from wisp.adapters import Session, get_store
 from wisp.project_context import detect_project_context, format_context
 from wisp.code_index import build_index as build_regex_index, format_index_summary
 from wisp.tree_sitter_index import build_index as build_ts_index, is_tree_sitter_available

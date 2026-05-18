@@ -4,7 +4,7 @@ import pytest
 
 from wisp.config import WispConfig
 from wisp.core.events import content, done
-from wisp.session_store import UnifiedSessionStore
+from wisp.adapters import UnifiedSessionStore
 from wisp.runtime_protocol import AppEvent
 from wisp.supervisor import WispSupervisor
 

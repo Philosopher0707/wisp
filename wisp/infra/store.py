@@ -18,6 +18,7 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -125,6 +126,22 @@ class UnifiedStore:
             raise
 
     # ── Session CRUD ────────────────────────────────────────────────
+
+    def create_session(self, session_id: str, model: str, workspace: str, title: str = "") -> dict:
+        """Backward-compatible session creation."""
+        now = datetime.now(timezone.utc).isoformat()
+        session = {
+            "id": session_id,
+            "model": model,
+            "workspace": workspace,
+            "messages": [],
+            "compaction_history": [],
+            "created_at": now,
+            "updated_at": now,
+            "title": title,
+        }
+        self.save_session(session)
+        return session
 
     def save_session(self, session: dict) -> None:
         data = {

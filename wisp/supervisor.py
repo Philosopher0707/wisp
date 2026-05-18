@@ -13,7 +13,7 @@ from wisp.config import WISP_CONFIG_DIR
 from wisp.core.agent import WispAgentCore
 from wisp.core.events import TYPE_DONE, TYPE_ERROR, AgentEvent
 from wisp.runtime_protocol import AppEvent
-from wisp.session_store import UnifiedSessionStore, Run, get_store
+from wisp.adapters import UnifiedSessionStore, Run, get_store
 
 
 class WispSupervisor:

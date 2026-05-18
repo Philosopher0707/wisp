@@ -73,7 +73,7 @@ class Wisp:
             else:
                 raise ValueError(f"Session '{session_id}' not found.")
         elif auto_new_session:
-            from wisp.session import Session
+            from wisp.adapters import Session
             self._core.session = Session.create(
                 model=self._core.config.model,
                 workspace=self._core.config.workspace or ".",

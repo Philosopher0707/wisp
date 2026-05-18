@@ -65,13 +65,13 @@ class TestWispAgentCoreSession:
         assert core.session is None
         # We can't easily run async here without more mocking,
         # but we can verify the session setup logic directly
-        from wisp.session import Session
+        from wisp.adapters import Session
         core.session = Session.create("test-model", "/tmp", "hello")
         assert core.session is not None
         assert core.session.title == "hello"
 
     def test_save_session(self, core):
-        from wisp.session import Session
+        from wisp.adapters import Session
         core.session = Session.create("test-model", "/tmp", "test")
         core.messages = [{"role": "user", "content": "hi"}]
         core._save_session()
@@ -91,7 +91,7 @@ class TestWispAgentCoreCompaction:
         assert result is None
 
     def test_maybe_compact_mid_turn_tool(self, core):
-        from wisp.session import Session
+        from wisp.adapters import Session
         core.session = Session.create("test-model", "/tmp", "test")
         # Manually set up messages with a tool in progress
         core.messages = [

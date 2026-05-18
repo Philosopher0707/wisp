@@ -38,7 +38,7 @@ class SessionPickerScreen(Screen):
         if self._loaded:
             return
         try:
-            from wisp.session_store import get_store
+            from wisp.adapters import get_store
             mgr = get_store()
             self._all_sessions = mgr.list_sessions()
         except Exception:

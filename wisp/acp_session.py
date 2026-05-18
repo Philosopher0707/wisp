@@ -181,7 +181,7 @@ class AcpSession:
 
     def to_session(self) -> "Session":
         """Convert this ACP session to a persistent Session object."""
-        from wisp.session import Session
+        from wisp.adapters import Session
         return Session(
             id=self.session_id,
             created_at=self.created_at,
@@ -214,7 +214,7 @@ class AcpSessionManager:
 
     def _get_store(self) -> "UnifiedSessionStore":
         if self._store is None:
-            from wisp.session_store import get_store
+            from wisp.adapters import get_store
             self._store = get_store()
         return self._store
 

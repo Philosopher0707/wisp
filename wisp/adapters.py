@@ -25,6 +25,66 @@ from wisp.composition import CompositionRoot
 from wisp.infra.security import PermissionMode
 from wisp.infra.store import UnifiedStore
 
+# Re-export legacy types for compatibility during migration
+# If old modules are deleted, provide stubs to prevent import errors
+try:
+    from wisp.session_store import Run, UnifiedSessionStore
+except ImportError:
+    @dataclass
+    class Run:  # type: ignore
+        id: str = ""
+        session_id: str = ""
+        prompt: str = ""
+        status: str = "pending"
+        created_at: str = ""
+
+    class UnifiedSessionStore:  # type: ignore
+        """Backward-compatible wrapper around UnifiedStore."""
+
+        def __init__(self, sessions_dir: str | Path | None = None, db_path: str | Path | None = None):
+            if db_path is not None:
+                self._store = UnifiedStore(db_path)
+            elif sessions_dir is not None:
+                self._store = UnifiedStore(Path(sessions_dir) / "wisp.db")
+            else:
+                self._store = UnifiedStore()
+
+        def create_session(self, session_id: str, model: str, workspace: str, title: str = "") -> dict:
+            return self._store.create_session(session_id, model, workspace, title)
+
+        def save_session(self, session: dict) -> None:
+            self._store.save_session(session)
+
+        def load_session(self, session_id: str) -> dict | None:
+            return self._store.load_session(session_id)
+
+        def list_sessions(self) -> list[dict]:
+            return self._store.list_sessions()
+
+        def delete_session(self, session_id: str) -> bool:
+            return self._store.delete_session(session_id)
+
+        def create_run(self, session_id: str, prompt: str, model: str) -> str:
+            return self._store.create_run(session_id, prompt, model)
+
+        def save_run(self, run: dict) -> None:
+            self._store.save_run(run)
+
+        def load_run(self, run_id: str) -> dict | None:
+            return self._store.load_run(run_id)
+
+        def list_runs(self, session_id: str | None = None) -> list[dict]:
+            return self._store.list_runs(session_id)
+
+        def add_event(self, run_id: str, event_type: str, data: dict) -> None:
+            self._store.add_event(run_id, event_type, data)
+
+        def get_events(self, run_id: str) -> list[dict]:
+            return self._store.get_events(run_id)
+
+        def close(self) -> None:
+            self._store.stop()
+
 logger = logging.getLogger(__name__)
 
 # Singleton store cache for get_store() compatibility
