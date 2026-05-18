@@ -236,12 +236,17 @@ class TestSessionCompact:
         extract_text() before .lower().
         """
         s = Session.create("m", ".", "list content")
-        s.messages.append({"role": "user", "content": "hello"})
-        # Assistant with list content (simulating multimodal / text-format)
+        # Build 12 messages alternating user/assistant with list content in last assistant
+        for i in range(5):
+            s.messages.append({"role": "user", "content": f"prompt {i}"})
+            s.messages.append({"role": "assistant", "content": f"response {i}"})
+        # Last turn: user then assistant with LIST content (the regression target)
+        s.messages.append({"role": "user", "content": "fix the bug"})
         s.messages.append({
             "role": "assistant",
             "content": [{"type": "text", "text": "Done thinking."}],
         })
+        assert len(s.messages) == 12
         # This used to raise: AttributeError: 'list' object has no attribute 'lower'
-        result = s.compact(keep_recent=1)
+        result = s.compact(keep_recent=6)
         assert result["compacted"] is True

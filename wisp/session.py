@@ -180,6 +180,12 @@ class Session:
                 break
             adjusted += 1
 
+        # Cap the symmetry guard so we don't keep 223+ messages as "recent"
+        # and summarize only 1.  2×keep_recent is generous — if we can't find a
+        # complete assistant within that, the conversation is mid-turn and we
+        # should postpone compaction, not expand the window endlessly.
+        _GUARD_MAX = int(keep_recent * 2.5)
+
         # Ensure the kept window ends with an assistant message that LOOKS
         # like a complete thought (synthesis), not mid-reasoning. An incomplete
         # assistant message at the window edge leaves the model with a dangling
@@ -189,22 +195,23 @@ class Session:
             role = msg.get("role", "")
             if role != "assistant":
                 return False
+            # Tool-calling messages are always "complete" — they represent
+            # an action taken, not reasoning in progress.  Must be checked
+            # BEFORE the content-empty guard because an assistant may output
+            # zero text and only tool_calls.
+            if msg.get("tool_calls"):
+                return True
             content = extract_text(msg.get("content", "") or "").lower().strip()
             if not content:
                 return False
-            # Tool-calling messages are always "complete" — they represent
-            # an action taken, not reasoning in progress.
-            if msg.get("tool_calls"):
-                return True
             # Ending with a terminal punctuation or markdown/code block closure
             # signals the thought is finished.
-            if content:
-                last_char = content[-1]
-                if last_char in ".!?`}":
-                    return True
-                # Ellipsis is NOT terminal — it's mid-thought trailing off
-                if content.endswith("..."):
-                    return False
+            last_char = content[-1]
+            if last_char in ".!?`}":
+                return True
+            # Ellipsis is NOT terminal — it's mid-thought trailing off
+            if content.endswith("..."):
+                return False
             # Incomplete reasoning markers
             _INCOMPLETE = (
                 "let me think", "i'll", "let me check", "first i need",
@@ -222,7 +229,7 @@ class Session:
             # Search backward for the nearest *complete* assistant,
             # skipping mid-thought dangling messages.
             candidate_i = None
-            for i in range(adjusted, len(self.messages) + 1):
+            for i in range(adjusted, min(len(self.messages), _GUARD_MAX) + 1):
                 idx = len(self.messages) - i
                 if idx < 0:
                     break
@@ -231,11 +238,20 @@ class Session:
                         candidate_i = i
                         break
                     # If incomplete, keep searching backward for an earlier
-                    # complete assistant, but remember the nearest as fallback.
+                    # complete assistant, but remember the nearest as fallback
+                    # only if within the guard limit (else we summarize nothing).
                     if candidate_i is None:
                         candidate_i = i
             if candidate_i is not None:
-                adjusted = candidate_i
+                adjusted = min(candidate_i, _GUARD_MAX)
+
+        # No-op guard: if the symmetry-adjusted window consumes almost the entire
+        # conversation, don't bother summarizing 1-2 messages.
+        if adjusted >= before_count - 2:
+            return {
+                "compacted": False,
+                "reason": f"symmetry guard grew window to {adjusted}; postpone compaction",
+            }
 
         old_messages = self.messages[:-adjusted]
         recent_messages = self.messages[-adjusted:]
