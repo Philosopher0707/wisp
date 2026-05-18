@@ -28,15 +28,27 @@ Structure:
 import json
 import logging
 import os
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from wisp.config import WISP_CONFIG_DIR
-
+# ── Write-coalescing state ───────────────────────────────────────────────
+# Every list_all_facts / recall / add_fact used to call _save() synchronously,
+# rewriting memory.json on every access.  With a write-back cache we batch
+# writes that happen within _SAVE_DEBOUNCE_SECONDS.
+_memory_cache: dict | None = None
+_cache_dirty: bool = False
+_save_timer: threading.Timer | None = None
+_SAVE_LOCK = threading.Lock()
 logger = logging.getLogger(__name__)
 
+_SAVE_DEBOUNCE_SECONDS = 2.0
 _MAX_FACTS = 100  # Max total facts before LRU eviction kicks in
+
+from wisp.config import WISP_CONFIG_DIR
+
+
 
 
 def _now_iso() -> str:
@@ -88,7 +100,7 @@ def load_memory() -> dict:
             ws_facts[ws_path] = _migrate_facts(facts)
         data["workspace_facts"] = ws_facts
         try:
-            _save(data)
+            _flush_save(data)
         except OSError:
             pass
 
@@ -99,8 +111,44 @@ def load_memory() -> dict:
 
 
 def _save(memory: dict):
+    """Legacy synchronous save — bypasses coalescing.  Use _schedule_save()."""
+    _flush_save(memory)
+
+
+def _schedule_save(memory: dict) -> None:
+    """Schedule a debounced write to disk.
+
+    Multiple calls within _SAVE_DEBOUNCE_SECONDS are coalesced into a
+    single disk write.  The memory dict is kept in _memory_cache so we
+    don't need to keep passing it around.
+    """
+    global _memory_cache, _cache_dirty, _save_timer
+    with _SAVE_LOCK:
+        _memory_cache = memory
+        _cache_dirty = True
+        if _save_timer is not None:
+            _save_timer.cancel()
+        _save_timer = threading.Timer(_SAVE_DEBOUNCE_SECONDS, _flush_from_timer)
+        _save_timer.start()
+
+
+def _flush_from_timer() -> None:
+    """Timer callback — writes the cached memory to disk."""
+    global _memory_cache, _cache_dirty, _save_timer
+    with _SAVE_LOCK:
+        if _memory_cache is not None and _cache_dirty:
+            _flush_save(_memory_cache)
+            _cache_dirty = False
+        _save_timer = None
+
+
+def _flush_save(memory: dict) -> None:
+    """Actual synchronous disk write."""
     path = _get_memory_file()
-    path.write_text(json.dumps(memory, indent=2, ensure_ascii=False) + "\n")
+    try:
+        path.write_text(json.dumps(memory, indent=2, ensure_ascii=False) + "\n")
+    except OSError as e:
+        logger.error("Failed to save memory: %s", e)
 
 
 def _migrate_facts(old: list) -> list[dict]:
@@ -248,7 +296,7 @@ def list_facts(workspace: Optional[str] = None) -> list[dict]:
             results.append(f)
 
     results.sort(key=_sort_key, reverse=True)
-    _save(memory)
+    _schedule_save(memory)
     return results
 
 
@@ -271,7 +319,7 @@ def list_all_facts() -> list[dict]:
             results.append(f)
 
     results.sort(key=_sort_key, reverse=True)
-    _save(memory)
+    _schedule_save(memory)
     return results
 
 
