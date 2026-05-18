@@ -211,17 +211,14 @@ You have access to tools that let you read, write, and edit files, run bash comm
     # ── Token-aware helpers ────────────────────────────────────────
 
     def _estimate_tokens(self, text: str) -> int:
-        """Accurately count tokens using tiktoken (cl100k_base) with a robust fallback."""
+        """Estimate token count using a conservative character ratio.
+        
+        Wisp primarily targets local Ollama models (Llama, Mistral, etc.) which use 
+        SentencePiece/BPE tokenizers. These average ~3 characters per token on code.
+        """
         if not text:
             return 0
-        try:
-            import tiktoken
-            if not hasattr(self, "_encoder"):
-                self._encoder = tiktoken.get_encoding("cl100k_base")
-            return len(self._encoder.encode(text))
-        except Exception:
-            # Code/structured tokens average ~2.8-3 characters per token.
-            return max(1, len(text) // 3)
+        return max(1, len(text) // 3)
 
     def _fit_sections(self, sections: list[tuple[str, int, str]], max_tokens: int) -> tuple[str, int]:
         """Assemble sections, truncating/dropping lowest-priority ones if over budget.
@@ -247,15 +244,8 @@ You have access to tools that let you read, write, and edit files, run bash comm
                 # Must include — truncate to fit remaining budget
                 remaining = max_tokens - current_tokens
                 if remaining > 0:
-                    try:
-                        import tiktoken
-                        if not hasattr(self, "_encoder"):
-                            self._encoder = tiktoken.get_encoding("cl100k_base")
-                        tokens = self._encoder.encode(content)
-                        truncated_text = self._encoder.decode(tokens[:remaining])
-                    except Exception:
-                        max_chars = remaining * 3
-                        truncated_text = content[:max_chars]
+                    max_chars = remaining * 3
+                    truncated_text = content[:max_chars]
 
                     # Safeguard markdown formatting structure (e.g. unclosed code blocks)
                     if truncated_text.count("```") % 2 != 0:
