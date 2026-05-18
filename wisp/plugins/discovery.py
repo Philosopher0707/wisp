@@ -52,14 +52,25 @@ async def discover_plugins(
     namespace_owners: dict[str, str] = {}
 
     # ── 1. Project plugins (.wisp/plugins/) ──────────────────────────
-    project_plugins_dir = workspace / ".wisp" / "plugins"
-    if project_plugins_dir.exists():
-        _scan_plugin_dir(
-            project_plugins_dir,
-            discovered,
-            namespace_owners,
-            ns_manager,
-            source="project",
+    #      Gated by workspace trust — malicious plugins are as dangerous
+    #      as malicious hooks.
+    from wisp.trust import WorkspaceTrustManager
+
+    if WorkspaceTrustManager.is_workspace_trusted(workspace):
+        project_plugins_dir = workspace / ".wisp" / "plugins"
+        if project_plugins_dir.exists():
+            _scan_plugin_dir(
+                project_plugins_dir,
+                discovered,
+                namespace_owners,
+                ns_manager,
+                source="project",
+            )
+    else:
+        logger.warning(
+            "Skipping loading workspace-local plugins because the workspace is untrusted: %s. "
+            "To trust this workspace, add its path to trusted_workspaces.json.",
+            workspace,
         )
 
     # ── 2. User plugins (~/.config/wisp/plugins/) ────────────────────
