@@ -335,6 +335,41 @@ class Session:
         """Update the updated_at timestamp."""
         self.updated_at = _now_iso()
 
+    def compact(self, keep_recent: int = 4, max_context_tokens: int = 4096) -> None:
+        """Compact session messages, keeping recent ones."""
+        if len(self.messages) <= keep_recent:
+            return
+        # Try semantic compressor if available
+        try:
+            from wisp.semantic_compressor import SemanticCompressor
+            compressor = SemanticCompressor()
+            result = compressor.compress(
+                messages=self.messages,
+                keep_recent=keep_recent,
+                max_context_tokens=max_context_tokens,
+            )
+            self.messages = result.messages
+            self.compaction_history.append({
+                "before_count": result.compression_stats.get("before_messages", len(self.messages)),
+                "after_count": len(self.messages),
+                "timestamp": _now_iso(),
+                "method": "semantic",
+            })
+            return
+        except Exception:
+            pass  # Fall back to simple compaction
+
+        old_count = len(self.messages)
+        to_summarize = self.messages[:-keep_recent]
+        kept = self.messages[-keep_recent:]
+        summary = f"[Compacted {len(to_summarize)} messages]"
+        self.messages = [{"role": "system", "content": summary}] + kept
+        self.compaction_history.append({
+            "before_count": old_count,
+            "after_count": len(self.messages),
+            "timestamp": _now_iso(),
+        })
+
     @classmethod
     def from_dict(cls, data: dict) -> Session:
         """Deserialize from dictionary."""
