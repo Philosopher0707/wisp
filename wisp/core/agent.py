@@ -628,26 +628,44 @@ class WispAgentCore:
         repo_map = None
         try:
             from wisp.repo_map import RepoMap
-            rm = RepoMap(ws_abs)
+            # Q10: Keep RepoMap instances alive across turns so we skip
+            # __init__ overhead (file list, tree-sitter init, etc.).
+            # build(use_cache=True) is ~10 ms when no files changed vs
+            # 2-5 s for a full _do_build() on 500-file workspaces.
+            if not hasattr(self, "_repo_map_instances"):
+                self._repo_map_instances = {}
+            if ws not in self._repo_map_instances:
+                self._repo_map_instances[ws] = RepoMap(ws_abs)
+            rm = self._repo_map_instances[ws]
             entries = rm.build(use_cache=True, fast_mode=False)
             if entries:
-                map_text = rm.format_for_llm(max_tokens=1200)
-                repo_map = f"## Codebase Map\n{map_text}\n"
-                if query:
-                    relevant = rm.get_relevant_files(query, top_k=5)
-                    if relevant:
-                        repo_map += "\n## Files Relevant to Query\n"
+                # Per-query cache for the formatted string (map + relevant
+                # files + dependents) so repeated queries are instant.
+                if not hasattr(self, "_repo_map_str_cache"):
+                    self._repo_map_str_cache = {}
+                query_key = (ws, query) if query else (ws, None)
+                cached_map = self._repo_map_str_cache.get(query_key)
+                if cached_map is not None:
+                    repo_map = cached_map
+                else:
+                    map_text = rm.format_for_llm(max_tokens=1200)
+                    repo_map = f"## Codebase Map\n{map_text}\n"
+                    if query:
+                        relevant = rm.get_relevant_files(query, top_k=5)
+                        if relevant:
+                            repo_map += "\n## Files Relevant to Query\n"
+                            for f in relevant:
+                                repo_map += f"- {f}\n"
+                        deps_extra = []
                         for f in relevant:
-                            repo_map += f"- {f}\n"
-                    deps_extra = []
-                    for f in relevant:
-                        deps = rm.get_dependents(f)[:3]
-                        if deps:
-                            deps_extra.extend(deps)
-                    if deps_extra:
-                        repo_map += "\n## Dependents of Relevant Files\n"
-                        for d in sorted(set(deps_extra))[:5]:
-                            repo_map += f"- {d}\n"
+                            deps = rm.get_dependents(f)[:3]
+                            if deps:
+                                deps_extra.extend(deps)
+                        if deps_extra:
+                            repo_map += "\n## Dependents of Relevant Files\n"
+                            for d in sorted(set(deps_extra))[:5]:
+                                repo_map += f"- {d}\n"
+                    self._repo_map_str_cache[query_key] = repo_map
         except ImportError:
             pass
         except Exception as e:
@@ -740,6 +758,13 @@ class WispAgentCore:
             self._system_prompt_cache.clear()
         if hasattr(self, "_code_index_cache"):
             self._code_index_cache.clear()
+        if hasattr(self, "_repo_map_str_cache"):
+            self._repo_map_str_cache.clear()
+        # Do NOT clear _repo_map_instances here.  The RepoMap object holds
+        # the parsed entries in memory; clearing it would force a full
+        # _do_build() on the next turn.  The RepoMap.build(use_cache=True)
+        # call checks disk cache / mtimes for staleness, so stale data
+        # is harmless.  We only clear instances when the workspace changes.
 
     # ── Tool schemas ─────────────────────────────────────────────────
 
@@ -925,6 +950,15 @@ class WispAgentCore:
                 error_type = response.get("_error_type", "Unknown")
                 error_msg = response.get("_error_message", "Stream error")
                 partial = response.get("_partial_content", "") or ""
+                # Q15: Discard partial tool-calling streams that would corrupt
+                # the conversation with malformed JSON/arguments.
+                if partial and self._is_partial_tool_call(partial):
+                    partial = ""
+                    error_msg = (
+                        f"{error_msg}\n\n"
+                        "[Partial tool call discarded — stream cut off "
+                        "before arguments were complete]"
+                    )
                 # Add the assistant's partial content to the conversation so
                 # it remains valid (user message must be followed by assistant).
                 msg = response.get("message", {})
@@ -1167,6 +1201,33 @@ class WispAgentCore:
         if tool_calls and isinstance(tool_calls, list):
             return tool_calls
         return None
+
+    @staticmethod
+    def _is_partial_tool_call(partial: str) -> bool:
+        """Detect whether a truncated stream contains a tool-calling payload.
+
+        When a stream fails mid-tool-call, the partial content starts with
+        JSON-like fragments that the next turn would try (and fail) to parse.
+        Discarding these prevents conversation corruption.
+
+        Heuristics (fast, no regex):
+          - Starts with ``{"name"
+           - Starts with ``[
+           - Starts with ``<
+           - Starts with ``"name"`` or ``"function"`` — bare JSON fragment
+        """
+        if not partial:
+            return False
+        stripped = partial.lstrip()
+        if stripped.startswith("{") and '"name"' in stripped:
+            return True
+        if stripped.startswith("<"):
+            return True
+        if stripped.startswith("["):
+            return True
+        if stripped.startswith('"name"') or stripped.startswith('"function"'):
+            return True
+        return False
 
     async def _run_tool_calls(
         self,
