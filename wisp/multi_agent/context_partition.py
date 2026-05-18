@@ -118,7 +118,7 @@ class ContextPartitioner:
         import re
         # Match common file patterns
         patterns = [
-            r'[\w\-./]+\.(py|js|ts|rs|go|java|cpp|c|h|rb|php|swift|kt|scala)',
+            r'[\w\-./]+\.(?:py|js|ts|rs|go|java|cpp|c|h|rb|php|swift|kt|scala|yaml|yml|toml|md|json|sh)',
             r'[\w\-./]+/(?:[\w\-]+/)*[\w\-]+\.\w+',
         ]
         files = set()
