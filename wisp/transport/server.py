@@ -104,12 +104,15 @@ class ServerTransport:
             }
 
         if etype == TYPE_TOOL_RESULT:
-            return {
+            payload = {
                 "type": "tool_result",
                 "name": event.data.get("name", ""),
                 "result": event.data.get("result", ""),
                 "duration_ms": event.data.get("duration_ms"),
             }
+            if event.data.get("auto_approved"):
+                payload["auto_approved"] = True
+            return payload
 
         if etype == TYPE_ERROR:
             return {
@@ -126,14 +129,10 @@ class ServerTransport:
             }
 
         if etype == TYPE_APPROVAL_REQUEST:
-            call_id = self._next_call_id()
-            return {
-                "type": "tool_approval_request",
-                "call_id": call_id,
-                "name": event.data.get("name", ""),
-                "arguments": event.data.get("arguments", {}),
-                "reason": event.data.get("reason", ""),
-            }
+            # Approval requests are handled inline by the approval_handler
+            # callback passed to core.run(); we must NOT generate a separate
+            # call_id here to avoid counter skew and client confusion.
+            return None
 
         if etype == TYPE_DONE:
             return {"type": "done", "session_id": event.data.get("session_id", ""), "turns": event.data.get("turns", 0), "reason": event.data.get("reason", "natural")}
@@ -149,42 +148,42 @@ class ServerTransport:
 
         return None
 
+    async def _request_approval(self, name: str, args: dict, reason: str) -> tuple[bool, Optional[dict]]:
+        """Send an approval request to the client and await the response.
+
+        This is the canonical approval handler passed to WispAgentCore.run().
+        Extracted as a method so it can be unit-tested independently.
+        """
+        call_id = self._next_call_id()
+        await self._send({
+            "type": "tool_approval_request",
+            "call_id": call_id,
+            "name": name,
+            "arguments": args,
+            "reason": reason,
+        })
+        pa = PendingApproval(call_id, name, args)
+        async with self._approval_lock:
+            self._pending_approvals[call_id] = pa
+
+        try:
+            await asyncio.wait_for(pa.event.wait(), timeout=300)
+        except asyncio.TimeoutError:
+            return (False, None)
+        finally:
+            async with self._approval_lock:
+                self._pending_approvals.pop(call_id, None)
+        return (pa.approved, None)
+
     async def run(self, prompt: str, images: Optional[list[str]] = None) -> None:
         """Run one prompt and stream all events to the WebSocket client."""
-
-        async def _ws_approval(name: str, args: dict, reason: str) -> tuple[bool, Optional[dict]]:
-            call_id = self._next_call_id()
-            await self._send({
-                "type": "tool_approval_request",
-                "call_id": call_id,
-                "name": name,
-                "arguments": args,
-                "reason": reason,
-            })
-            pa = PendingApproval(call_id, name, args)
-            async with self._approval_lock:
-                self._pending_approvals[call_id] = pa
-
-            try:
-                await asyncio.wait_for(pa.event.wait(), timeout=300)
-            except asyncio.TimeoutError:
-                return (False, None)
-            finally:
-                async with self._approval_lock:
-                    self._pending_approvals.pop(call_id, None)
-            return (pa.approved, None)
-
-        async for event in self.core.run(prompt, approval_handler=_ws_approval, images=images):
+        async for event in self.core.run(
+            prompt, approval_handler=self._request_approval, images=images
+        ):
             if self._interrupted:
                 break
             msg = self._event_to_json(event)
             if msg is not None:
-                # Skip approval_request in _event_to_json since we handle it
-                # inline in the approval handler above (call_id already sent).
-                # _event_to_json for approval_request generates a new call_id
-                # each time — don't send a duplicate.
-                if event.type == TYPE_APPROVAL_REQUEST:
-                    continue
                 await self._send(msg)
 
     async def approve_tool(self, call_id: str, approved: bool, reason: Optional[str] = None) -> bool:
