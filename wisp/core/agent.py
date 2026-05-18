@@ -857,6 +857,7 @@ class WispAgentCore:
             keep_recent=self.config.compact_keep_recent,
             chars_per_token=self.config.chars_per_token,
             max_context_tokens=self.config.max_context_tokens,
+            client=getattr(self, "client", None),
         )
 
         if result.get("compacted"):

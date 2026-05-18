@@ -650,23 +650,52 @@ def _parse_llm_summary(response_text: str) -> CompressionResult:
     )
 
 
-def _llm_summarize(messages: list[dict], model: str = "", base_url: str = "") -> Optional[CompressionResult]:
-    """Call the LLM to generate an abstractive summary. Returns None on failure."""
+def _llm_summarize(
+    messages: list[dict],
+    model: str = "",
+    base_url: str = "",
+    client=None,
+    timeout: int = 30,
+) -> Optional[CompressionResult]:
+    """Call the LLM to generate an abstractive summary. Returns None on failure.
+
+    Args:
+        messages: Message history to summarize.
+        model: Override model name (defaults to the client's configured model).
+        base_url: Override Ollama base URL.
+        client: Reusable OllamaClient instance.  When None, a *new* client
+                is created from WispConfig (useful for tests, wasteful in prod).
+        timeout: Seconds to wait for the model to respond.  Tier-3
+                 compaction should NOT block for minutes — 30 s is plenty
+                 for a short summary.
+    """
     try:
         from wisp.ollama_client import OllamaClient, OllamaError
         from wisp.config import WispConfig
 
-        config = WispConfig()
-        # Use a smaller model if available, otherwise fall back to configured model
-        summary_model = model or config.model
-        client = OllamaClient(config)
+        # Reuse an injected client (e.g., the agent's own client) so we do not
+        # spin up a fresh connection pool per compaction.
+        if client is None:
+            config = WispConfig()
+            client = OllamaClient(config)
 
-        # Use the same model but with a short max_tokens
-        prompt = _build_llm_summary_prompt(messages)
-        response = client.generate(
-            system_prompt="",
-            messages=[{"role": "user", "content": prompt}],
-        )
+        summary_model = model or getattr(client, "model", "") or WispConfig().model
+
+        # Limit max_tokens for the summary — we want a summary, not an essay.
+        old_max = getattr(client, "max_tokens", None)
+        try:
+            client.max_tokens = 512
+            prompt = _build_llm_summary_prompt(messages)
+            response = client.generate(
+                system_prompt=(
+                    "Summarize the conversation below. Produce a SHORT summary,"
+                    " key decisions, and a task list. Be concise."
+                ),
+                messages=[{"role": "user", "content": prompt}],
+            )
+        finally:
+            client.max_tokens = old_max
+
         text = response.get("message", {}).get("content", "")
         if not text:
             text = response.get("response", "")
@@ -706,6 +735,7 @@ class SemanticCompressor:
         max_context_tokens: int = 256000,
         tier3_trigger_tokens: int = 0,
         use_llm: bool = True,
+        client=None,
     ) -> CompressionResult:
         """Compress a message history using all three tiers.
 
@@ -717,6 +747,8 @@ class SemanticCompressor:
                 Tier 3 LLM abstractive summary. If 0 (default), uses
                 ``max_context_tokens // 4``.
             use_llm: Whether Tier 3 LLM fallback is allowed.
+            client: Reusable OllamaClient instance for Tier 3. Prevents spinning
+                    up a fresh HTTP session on every compaction.
 
         Returns:
             A CompressionResult with summary, decisions, tasks, etc.
@@ -750,7 +782,7 @@ class SemanticCompressor:
 
         # Tier 3: LLM abstractive summary (only if still over budget)
         if use_llm and estimated_tokens > tier3_threshold:
-            llm_result = _llm_summarize(messages)
+            llm_result = _llm_summarize(messages, client=client)
             if llm_result:
                 llm_result.compression_stats.update({
                     "tier": 3,
