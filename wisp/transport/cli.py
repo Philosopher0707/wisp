@@ -1391,8 +1391,6 @@ class CLITransport:
             _stop_spinner()
             self.core._interrupted = True
             self._interrupted = True
-            _stop_spinner()
-            raise
         except asyncio.CancelledError:
             self.core._interrupted = True
             self._interrupted = True
