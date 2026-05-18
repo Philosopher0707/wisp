@@ -261,27 +261,196 @@ async def verify_api_key(
         return x_api_key_header
     raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
-class RateLimiter:
-    def __init__(self, max_requests: int = 60, window_seconds: int = 60):
+import asyncio
+import contextlib
+import importlib
+import importlib.util
+import json
+import logging
+import os
+import re
+import secrets
+import shutil
+import signal
+import sqlite3
+import sys
+import tempfile
+import textwrap
+import threading
+import time
+import traceback
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from mimetypes import guess_type
+from pathlib import Path as PathLib
+from typing import Any, AsyncGenerator, Callable, Generator, Optional, Union
+
+import uvicorn
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel, Field
+from starlette.middleware.sessions import SessionMiddleware
+
+# ── Logging ────────────────────────────────────────────────────
+
+logger = logging.getLogger(__name__)
+
+# ── Wisp imports ───────────────────────────────────────────────
+
+from wisp.config import (
+    WISP_CONFIG_DIR,
+    WispConfig,
+)
+from wisp.core import (
+    AgentEvent,
+    TYPE_APPROVAL_REQUEST,
+    TYPE_CONTENT,
+    TYPE_DONE,
+    TYPE_ERROR,
+    TYPE_TOOL_CALL,
+    TYPE_TOOL_RESULT,
+)
+from wisp.transport import CLITransport
+
+logger = logging.getLogger(__name__)
+
+# Load DEFAULT_SYSTEM from its canonical home
+for _candidate in (
+    PathLib(__file__).parent / "data/system_prompt.txt",
+    PathLib(__file__).parent.parent / "data/system_prompt.txt",
+):
+    if _candidate.exists():
+        DEFAULT_SYSTEM = _candidate.read_text(encoding="utf-8")
+        break
+else:
+    DEFAULT_SYSTEM = (
+        "You are Wisp, a useful coding-agent tool that generates and applies "
+        "fixes automatically. Be concise and precise."
+    )
+
+
+class SQLiteRateLimiter:
+    """Cross-process rate limiter backed by SQLite. Replaces per-process in-memory dict.
+
+    Under uvicorn multiprocess mode, each worker has its own Python process
+    and its own memory.  An in-memory dict like ``{client_ip: [timestamp, ...]}``
+    means a client can round-robin across workers and get N× the limit.
+
+    SQLite WAL mode handles concurrent reads/writes from multiple workers
+    transparently.  Each worker holds its own connection but they all read
+    from the same underlying file.
+    """
+
+    def __init__(self, *, db_path: PathLib, max_requests: int, window_seconds: int):
         self.max_requests = max_requests
         self.window_seconds = window_seconds
-        self._requests: dict[str, list[float]] = {}
-        self._lock = asyncio.Lock()
+        self.db_path = db_path
+        self._init_db()
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(str(self.db_path), timeout=10.0)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _init_db(self) -> None:
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS rate_limits (
+                    client_ip TEXT PRIMARY KEY,
+                    timestamps TEXT NOT NULL DEFAULT '[]',
+                    updated_at REAL NOT NULL DEFAULT 0
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_rate_updated ON rate_limits(updated_at)"
+            )
+
+    def _get_timestamps(self, client_ip: str) -> list[float]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT timestamps FROM rate_limits WHERE client_ip = ?",
+                (client_ip,),
+            ).fetchone()
+        if row is None:
+            return []
+        try:
+            return json.loads(row["timestamps"])
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    def _set_timestamps(self, client_ip: str, timestamps: list[float]) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO rate_limits (client_ip, timestamps, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(client_ip) DO UPDATE SET
+                    timestamps = excluded.timestamps,
+                    updated_at = excluded.updated_at
+                """,
+                (client_ip, json.dumps(timestamps, separators=(",", ":")), time.time()),
+            )
+
+    def _evict_stale(self) -> int:
+        cutoff = time.time() - (self.window_seconds * 2)
+        with self._connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM rate_limits WHERE updated_at < ?",
+                (cutoff,),
+            )
+            return cur.rowcount
 
     async def __call__(self, request: Request):
         client_ip = request.client.host if request.client else "unknown"
         now = time.time()
-        async with self._lock:
-            requests = self._requests.get(client_ip, [])
-            requests = [t for t in requests if now - t < self.window_seconds]
-            if len(requests) >= self.max_requests:
-                raise HTTPException(status_code=429, detail="Rate limit exceeded")
-            requests.append(now)
-            self._requests[client_ip] = requests
+        # Trim stale entries and apply the limit
+        ts = self._get_timestamps(client_ip)
+        ts = [t for t in ts if now - t < self.window_seconds]
+        if len(ts) >= self.max_requests:
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+        ts.append(now)
+        self._set_timestamps(client_ip, ts)
+        # Lazy: cleanup once per 100 requests is not worthwhile here since
+        # each call already trims per-client timestamps.  Evicting orphaned
+        # rows is best done in a background task; skip for simplicity.
+
+    def count(self, client_ip: str) -> int:
+        """Return number of requests from *client_ip* in the current window."""
+        now = time.time()
+        ts = self._get_timestamps(client_ip)
+        return sum(1 for t in ts if now - t < self.window_seconds)
+
+    def reset(self, client_ip: str) -> None:
+        """Reset rate limit for *client_ip* (used by tests)."""
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM rate_limits WHERE client_ip = ?",
+                (client_ip,),
+            )
 
 
 _rate_limit_rps = int(os.environ.get("WISP_RATE_LIMIT_RPS", "10"))
-RATE_LIMITER = RateLimiter(max_requests=_rate_limit_rps * 60, window_seconds=60)
+RATE_LIMITER = SQLiteRateLimiter(
+    db_path=WISP_CONFIG_DIR / "rate_limits.db",
+    max_requests=_rate_limit_rps * 60,
+    window_seconds=60,
+)
 
 # ── App lifecycle ────────────────────────────────────────────────────
 
