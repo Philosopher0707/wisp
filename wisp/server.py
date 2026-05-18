@@ -459,6 +459,9 @@ async def lifespan(app: FastAPI):
     logger.info("Wisp Cloud Server starting...")
     yield
     logger.info("Wisp Cloud Server shutting down...")
+    # Graceful shutdown: interrupt all in-flight agents so they can
+    # save sessions (core.close() in finally) and clean up MCP/LSP.
+    await manager.shutdown_gracefully()
 
 app = FastAPI(title="Wisp Cloud", version="0.1.0", lifespan=lifespan)
 
