@@ -132,7 +132,6 @@ class SubagentOrchestrator:
     async def run(
         self,
         contract: SubagentContract,
-        _bypass_semaphore: bool = False,
     ) -> SubagentResult:
         """Run a single subagent and return its result.
 
@@ -213,7 +212,7 @@ class SubagentOrchestrator:
         system = contract.system_prompt or self._default_system_prompt(contract)
 
         # ── Run with concurrency control ─────────────────────────────
-        if _bypass_semaphore:
+        async with self._semaphore:
             self._active += 1
             try:
                 result = await self._runner.run(
@@ -224,18 +223,6 @@ class SubagentOrchestrator:
                 )
             finally:
                 self._active -= 1
-        else:
-            async with self._semaphore:
-                self._active += 1
-                try:
-                    result = await self._runner.run(
-                        contract=contract,
-                        agent_workspace=agent_workspace,
-                        system_prompt=system,
-                        progress_callback=contract.progress_callback,
-                    )
-                finally:
-                    self._active -= 1
 
         # ── Schema validation ────────────────────────────────────────
         if contract.output_schema and result.success:
@@ -281,7 +268,7 @@ class SubagentOrchestrator:
 
         async def _guarded(contract: SubagentContract) -> SubagentResult:
             async with semaphore:
-                return await self.run(contract, _bypass_semaphore=True)
+                return await self.run(contract)
 
         tasks = [asyncio.create_task(_guarded(c)) for c in contracts]
         results = await asyncio.gather(*tasks, return_exceptions=True)
