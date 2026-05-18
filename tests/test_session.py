@@ -227,3 +227,21 @@ class TestSessionCompact:
         assert s.messages[-3]["content"] == "a4"
         assert s.messages[-2]["content"] == "u5"
         assert s.messages[-1]["content"] == "a5"
+
+    def test_compact_handles_list_content(self):
+        """Regression for compact() crash when assistant content is a list.
+
+        OpenAI-format multimodal messages use ``[{"type":"text","text":"..."}]``
+        instead of plain strings.  _is_complete_assistant() must call
+        extract_text() before .lower().
+        """
+        s = Session.create("m", ".", "list content")
+        s.messages.append({"role": "user", "content": "hello"})
+        # Assistant with list content (simulating multimodal / text-format)
+        s.messages.append({
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Done thinking."}],
+        })
+        # This used to raise: AttributeError: 'list' object has no attribute 'lower'
+        result = s.compact(keep_recent=1)
+        assert result["compacted"] is True

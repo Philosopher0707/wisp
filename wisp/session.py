@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 from wisp.config import WISP_CONFIG_DIR
+from wisp.core.message_format import extract_text
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +189,7 @@ class Session:
             role = msg.get("role", "")
             if role != "assistant":
                 return False
-            content = (msg.get("content", "") or "").lower().strip()
+            content = extract_text(msg.get("content", "") or "").lower().strip()
             if not content:
                 return False
             # Tool-calling messages are always "complete" — they represent
