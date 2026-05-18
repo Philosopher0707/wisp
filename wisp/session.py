@@ -144,6 +144,8 @@ class Session:
         keep_recent: int = 10,
         chars_per_token: int = 4,
         max_context_tokens: int = 256000,
+        use_llm: bool = True,
+        client=None,
     ) -> dict:
         """Compact the session by summarizing old messages and keeping recent ones.
 
@@ -153,6 +155,13 @@ class Session:
         starts with a user message and ends with an assistant message (or user if
         the assistant hasn't replied yet). This prevents the model from losing track
         of who spoke last after compaction.
+
+        Args:
+            use_llm: If True, Tier 3 may call an LLM (blocking).  Set to False
+                     during active streaming to avoid stalling the event loop.
+            client:  Optional OllamaClient instance to reuse.  Passing the agent's
+                     own client avoids spinning up a fresh connection pool per
+                     compaction.
         """
         if len(self.messages) <= keep_recent:
             return {"compacted": False, "reason": "not enough messages"}
@@ -337,14 +346,32 @@ class SessionManager:
             logger.error("Failed to save session %s: %s", session.id, e)
             raise
     def load(self, session_id: str) -> Optional[Session]:
-        """Load a session by ID. Returns None if not found or corrupt."""
+        """Load a session by ID. Returns None if not found or corrupt.
+
+        Uses the same lock file as ``save()`` so concurrent writers cannot
+        produce a partially-written file that we read.
+        """
         path = _session_path(session_id)
         if not path.exists():
             logger.warning("Session not found: %s", session_id)
             return None
+
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            return Session.from_dict(data)
+            from filelock import FileLock
+        except ImportError:
+            logger.warning("filelock not installed — loading session %s without lock", session_id)
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                return Session.from_dict(data)
+            except (json.JSONDecodeError, OSError) as e:
+                logger.error("Corrupt session file %s: %s", session_id, e)
+                return None
+
+        lock = FileLock(str(path) + ".lock")
+        try:
+            with lock:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                return Session.from_dict(data)
         except (json.JSONDecodeError, OSError) as e:
             logger.error("Corrupt session file %s: %s", session_id, e)
             return None
