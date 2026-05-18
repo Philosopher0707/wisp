@@ -51,16 +51,27 @@ class Telemetry:
         return summary
 
     def aggregate(self, results: list[SubagentResult]) -> dict[str, dict[str, Any]]:
-        """Auto-aggregate telemetry from a batch of results."""
+        """Calculate telemetry summary purely from a given batch of results without storing them."""
+        grouped: dict[str, list[SubagentResult]] = {}
         for result in results:
-            if result.model_used:
-                self._records.setdefault(result.model_used, []).append({
-                    "elapsed_seconds": result.elapsed_seconds,
-                    "success": result.success,
-                    "tokens_used": result.tokens_used,
-                    "timestamp": time.time(),
-                })
-        return self.summary()
+            model = result.model_used or "unknown"
+            grouped.setdefault(model, []).append(result)
+            
+        summary = {}
+        for model, runs in grouped.items():
+            if not runs:
+                continue
+            latencies = [r.elapsed_seconds for r in runs]
+            successes = [r.success for r in runs]
+            tokens = [r.tokens_used for r in runs]
+            summary[model] = {
+                "count": len(runs),
+                "success_rate": sum(successes) / len(successes),
+                "avg_latency": sum(latencies) / len(latencies),
+                "max_latency": max(latencies),
+                "total_tokens": sum(tokens),
+            }
+        return summary
 
     def clear(self) -> None:
         """Clear all telemetry."""
