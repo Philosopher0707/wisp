@@ -1389,9 +1389,12 @@ class CLITransport:
             _flush_thinking()
             _flush_content()
             _stop_spinner()
+        except asyncio.CancelledError:
             self.core._interrupted = True
             self._interrupted = True
-        except asyncio.CancelledError:
+            _stop_spinner()
+            raise
+        except KeyboardInterrupt:
             self.core._interrupted = True
             self._interrupted = True
             _stop_spinner()
