@@ -11,6 +11,7 @@ Issues fixed:
 
 import asyncio
 from unittest.mock import MagicMock, patch
+import threading
 import pytest
 
 from wisp.semantic_compressor import _llm_summarize, CompressionResult
@@ -28,7 +29,7 @@ class TestClientReuse:
             "message": {"content": "## Summary\nsummary\n\n## Key Decisions\n- a\n\n## Tasks\n- b"}
         }
 
-        with patch("wisp.semantic_compressor.OllamaClient") as MockClient:
+        with patch("wisp.ollama_client.OllamaClient") as MockClient:
             result = _llm_summarize(
                 [{"role": "user", "content": "hi"}],
                 client=fake_client,
@@ -43,7 +44,7 @@ class TestClientReuse:
 
     def test_creates_new_client_when_none_passed(self):
         """When client is None, a new client is created (tests/back-compat)."""
-        with patch("wisp.semantic_compressor.OllamaClient") as MockClient:
+        with patch("wisp.ollama_client.OllamaClient") as MockClient:
             mock_instance = MagicMock()
             mock_instance.model = "fallback"
             mock_instance.generate.return_value = {

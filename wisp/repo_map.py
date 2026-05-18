@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import time
+import threading
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -69,6 +70,7 @@ _DEFAULT_MAX_FILE_LINES: int = 3000
 
 # Module-level cache for tree-sitter parsers (expensive to recreate per file)
 _PARSER_CACHE: dict = {}
+_PARSER_LOCK = threading.Lock()
 
 # Entry-point filenames that get an initial PageRank boost
 _ENTRY_POINT_PATTERNS: list[str] = [
@@ -912,16 +914,18 @@ def _extract_symbols_ts(content: str, language: str, rel_path: str) -> list[_Sym
 
     # Cache parsers per language — creation is expensive (~20-50ms each)
     cache_key = id(ts_module.Parser)
-    cache = _PARSER_CACHE.get(cache_key)
-    if cache is None:
-        cache = {}
-        _PARSER_CACHE[cache_key] = cache
+    with _PARSER_LOCK:
+        cache = _PARSER_CACHE.get(cache_key)
+        if cache is None:
+            cache = {}
+            _PARSER_CACHE[cache_key] = cache
 
     ts_parser = cache.get(ts_lang)
     if ts_parser is None:
         try:
             ts_parser = ts_module.Parser(language=parser_lang)
-            cache[ts_lang] = ts_parser
+            with _PARSER_LOCK:
+                cache[ts_lang] = ts_parser
         except Exception as e:
             logger.debug("Failed to create tree-sitter parser for %s: %s", ts_lang, e)
             return []
