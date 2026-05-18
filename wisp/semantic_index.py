@@ -74,6 +74,11 @@ class SemanticIndex:
         self._cache_M = None
         
         import threading
+        # threading.Lock is correct here because:
+        # 1. search() is a SYNC method (no async / await inside the lock scope)
+        # 2. Server endpoints now wrap calls in asyncio.to_thread() so the lock
+        #    serializes across worker threads, not the event loop
+        # 3. No yield point exists inside the with self._cache_lock: block
         self._cache_lock = threading.Lock()
 
     @property

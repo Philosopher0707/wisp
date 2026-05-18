@@ -313,7 +313,7 @@ from wisp.config import (
     WISP_CONFIG_DIR,
     WispConfig,
 )
-from wisp.core import (
+from wisp.core.events import (
     AgentEvent,
     TYPE_APPROVAL_REQUEST,
     TYPE_CONTENT,
@@ -472,6 +472,15 @@ app.add_middleware(
 
 # ── Connection manager ───────────────────────────────────────────────
 
+# ═══ Graceful shutdown helpers ═══════════════════════════════════════
+
+GRACEFUL_SHUTDOWN_SECONDS = float(os.environ.get("WISP_SHUTDOWN_TIMEOUT", "10"))
+
+
+class PendingShutdown(Exception):
+    """Raised when a graceful shutdown interrupts a running agent."""
+
+
 class Connection:
     """Represents a single WebSocket connection."""
 
@@ -483,12 +492,58 @@ class Connection:
         self._run_lock = asyncio.Lock()
         self.swarm_task: Optional[asyncio.Task] = None
         self.swarm_orchestrator: Any = None
+        self.core: Optional[Any] = None  # WispAgentCore for lifecycle cleanup
 
     async def send(self, msg: dict):
         try:
             await self.websocket.send_text(json.dumps(msg))
         except Exception as e:
             logger.warning("Failed to send to %s: %s", self.client_id, e)
+
+    async def stop_tasks(self, timeout: float = 2.0) -> None:
+        """Gracefully stop any running agent/swarm tasks.
+
+        1. Signal interruption (let the agent reach its finally block).
+        2. Wait up to *timeout* seconds for natural completion.
+        3. Force-cancel anything still alive.
+        """
+        tasks_to_wait: list[asyncio.Task] = []
+
+        # Interrupt running agent so it exits its loop and hits core.close()
+        if self.transport:
+            try:
+                self.transport.interrupt()
+            except Exception:
+                pass
+        if self.agent_task and not self.agent_task.done():
+            tasks_to_wait.append(self.agent_task)
+        if self.swarm_task and not self.swarm_task.done():
+            self.swarm_task.cancel()
+            tasks_to_wait.append(self.swarm_task)
+
+        if not tasks_to_wait:
+            return
+
+        logger.info(
+            "Waiting up to %.1fs for tasks on client %s to finish...",
+            timeout, self.client_id,
+        )
+        done, pending = await asyncio.wait(
+            tasks_to_wait, timeout=timeout, return_when=asyncio.ALL_COMPLETED,
+        )
+
+        for t in pending:
+            t.cancel()
+            try:
+                await asyncio.wait_for(t, timeout=1.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+
+        if pending:
+            logger.warning(
+                "Force-cancelled %d task(s) for client %s during shutdown",
+                len(pending), self.client_id,
+            )
 
 
 class ConnectionManager:
@@ -504,13 +559,53 @@ class ConnectionManager:
 
     async def disconnect(self, client_id: str):
         conn = self._connections.pop(client_id, None)
-        if conn and conn.agent_task and not conn.agent_task.done():
-            conn.agent_task.cancel()
-            try:
-                await asyncio.wait_for(conn.agent_task, timeout=2)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                pass
+        if conn:
+            await conn.stop_tasks(timeout=2.0)
         logger.info("Client %s disconnected", client_id)
+
+    async def shutdown_gracefully(self, timeout: float = GRACEFUL_SHUTDOWN_SECONDS) -> None:
+        """Gracefully shut down all active WebSocket connections.
+
+        For each connection:
+          1. Interrupt the running agent so it reaches core.close() naturally.
+          2. Wait up to *timeout* seconds for tasks to complete.
+          3. Force-cancel any tasks that refuse to die.
+          4. Close the WebSocket cleanly.
+
+        After all connections are drained, shut down global resources
+        (MCP manager, session store DB).
+        """
+        connections = list(self._connections.values())
+        if not connections:
+            logger.info("No active connections; shutdown is immediate")
+            return
+
+        logger.info(
+            "Graceful shutdown: stopping %d active connection(s)...", len(connections),
+        )
+
+        # Phase 1 — interrupt every agent so it can save sessions + close tools
+        for conn in connections:
+            await conn.stop_tasks(timeout=timeout)
+
+        # Phase 2 — shut down global shared resources
+        logger.info("Shutting down global MCP manager...")
+        try:
+            from wisp.mcp import shutdown_global_mcp_manager
+            shutdown_global_mcp_manager()
+        except Exception as e:
+            logger.warning("MCP manager shutdown error: %s", e)
+
+        logger.info("Shutting down session store...")
+        try:
+            from wisp.session_store import get_store
+            store = get_store()
+            if hasattr(store, "close"):
+                store.close()
+        except Exception as e:
+            logger.warning("Session store shutdown error: %s", e)
+
+        logger.info("Graceful shutdown complete")
 
     async def send(self, client_id: str, msg: dict):
         conn = self._connections.get(client_id)
@@ -1038,7 +1133,9 @@ async def search_codebase(q: str = Query(..., min_length=1, max_length=500),
                           n: int = Query(default=5, ge=1, le=20)):
     """Semantic search over the codebase. Returns top-N relevant code chunks."""
     index = _get_semantic_index()
-    results = index.search(q, top_k=n)
+    # Offload numpy-heavy cosine similarity to thread pool so we
+    # do not block the event loop for large embedding matrices.
+    results = await asyncio.to_thread(index.search, q, top_k=n)
     return {
         "query": q,
         "results": [
@@ -1059,7 +1156,8 @@ async def search_codebase(q: str = Query(..., min_length=1, max_length=500),
 async def reindex_codebase():
     """Trigger a full re-index of the workspace."""
     index = _get_semantic_index()
-    stats = index.index_all()
+    # Re-indexing can touch every file; offload to thread pool.
+    stats = await asyncio.to_thread(index.index_all)
     return {"ok": True, **stats}
 
 
@@ -1067,7 +1165,8 @@ async def reindex_codebase():
 async def codebase_stats():
     """Get semantic index statistics."""
     index = _get_semantic_index()
-    return index.get_stats()
+    # get_stats is a few fast SQLite queries — to_thread is cheap insurance.
+    return await asyncio.to_thread(index.get_stats)
 
 
 @app.post("/api/search", dependencies=[Depends(verify_api_key)])
@@ -2435,6 +2534,7 @@ async def agent_websocket(websocket: WebSocket):
                                 session = sm.load(resolved)
 
                     core = WispAgentCore(config=config, session=session)
+                    conn.core = core
                     if session is not None and session.messages:
                         core.messages = list(session.messages)
                     conn.transport = ServerTransport(core, conn.send)
