@@ -53,7 +53,7 @@ async def async_tool_run_bash(command: str, workspace: str, timeout: int = 60) -
             cwd=cwd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            preexec_fn=os.setpgrp,
+            start_new_session=True,
         )
         stdout, stderr = await asyncio.wait_for(
             proc.communicate(),
@@ -103,23 +103,29 @@ async def async_tool_run_bash(command: str, workspace: str, timeout: int = 60) -
         raise ToolError(f"Command failed: {e}")
     finally:
         if proc and proc.returncode is None:
-            # Terminate the entire process group
+            import platform
             try:
-                pgid = os.getpgid(proc.pid)
-                os.killpg(pgid, signal.SIGTERM)
-                # Wait up to 2 seconds for clean exit, otherwise SIGKILL
-                for _ in range(20):
-                    try:
-                        await asyncio.wait_for(proc.wait(), timeout=0.1)
-                        break
-                    except asyncio.TimeoutError:
-                        pass
+                if platform.system() == "Windows":
+                    import subprocess
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
                 else:
-                    try:
-                        os.killpg(pgid, signal.SIGKILL)
-                        await proc.wait()
-                    except ProcessLookupError:
-                        pass
+                    # With start_new_session=True, the process ID is exactly the process group ID.
+                    # This avoids the race condition of os.getpgid() fetching the parent's group
+                    # if the child process exited quickly and its PID was reused, which would nuke the Wisp server.
+                    os.killpg(proc.pid, signal.SIGTERM)
+                    # Wait up to 2 seconds for clean exit, otherwise SIGKILL
+                    for _ in range(20):
+                        try:
+                            await asyncio.wait_for(proc.wait(), timeout=0.1)
+                            break
+                        except asyncio.TimeoutError:
+                            pass
+                    else:
+                        try:
+                            os.killpg(proc.pid, signal.SIGKILL)
+                            await proc.wait()
+                        except ProcessLookupError:
+                            pass
             except ProcessLookupError:
                 pass
             except Exception as e:
