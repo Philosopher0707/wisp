@@ -80,6 +80,10 @@ class CompositionRoot:
         """Stop all services."""
         self._registry.stop()
 
+    def shutdown(self) -> None:
+        """Shutdown all services (alias for stop)."""
+        self.stop()
+
 
 class _NullProvider:
     """Placeholder provider that yields nothing."""
