@@ -70,6 +70,7 @@ class UnifiedStore:
                     id TEXT PRIMARY KEY,
                     model TEXT NOT NULL,
                     workspace TEXT NOT NULL,
+                    title TEXT NOT NULL DEFAULT '',
                     messages TEXT NOT NULL DEFAULT '[]',
                     compaction_history TEXT NOT NULL DEFAULT '[]',
                     created_at TEXT NOT NULL,
@@ -148,6 +149,7 @@ class UnifiedStore:
             "id": session["id"],
             "model": session.get("model", ""),
             "workspace": session.get("workspace", ""),
+            "title": session.get("title", ""),
             "messages": json.dumps(session.get("messages", [])),
             "compaction_history": json.dumps(session.get("compaction_history", [])),
             "created_at": session.get("created_at", ""),
@@ -155,11 +157,12 @@ class UnifiedStore:
         }
         self._conn.execute(
             """
-            INSERT INTO sessions (id, model, workspace, messages, compaction_history, created_at, updated_at)
-            VALUES (:id, :model, :workspace, :messages, :compaction_history, :created_at, :updated_at)
+            INSERT INTO sessions (id, model, workspace, title, messages, compaction_history, created_at, updated_at)
+            VALUES (:id, :model, :workspace, :title, :messages, :compaction_history, :created_at, :updated_at)
             ON CONFLICT(id) DO UPDATE SET
                 model=excluded.model,
                 workspace=excluded.workspace,
+                title=excluded.title,
                 messages=excluded.messages,
                 compaction_history=excluded.compaction_history,
                 updated_at=excluded.updated_at
@@ -177,6 +180,7 @@ class UnifiedStore:
             "id": row["id"],
             "model": row["model"],
             "workspace": row["workspace"],
+            "title": row["title"],
             "messages": json.loads(row["messages"]),
             "compaction_history": json.loads(row["compaction_history"]),
             "created_at": row["created_at"],
@@ -193,6 +197,7 @@ class UnifiedStore:
                 "id": r["id"],
                 "model": r["model"],
                 "workspace": r["workspace"],
+                "title": r["title"],
                 "created_at": r["created_at"],
                 "updated_at": r["updated_at"],
             }
@@ -203,6 +208,23 @@ class UnifiedStore:
         self._conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
 
     # ── Run CRUD ────────────────────────────────────────────────────
+
+    def create_run(self, session_id: str, prompt: str, model: str = "unknown") -> str:
+        """Backward-compatible run creation."""
+        import uuid
+        run_id = f"run-{uuid.uuid4().hex[:12]}"
+        now = datetime.now(timezone.utc).isoformat()
+        run = {
+            "id": run_id,
+            "session_id": session_id,
+            "prompt": prompt,
+            "model": model,
+            "status": "pending",
+            "events": [],
+            "created_at": now,
+        }
+        self.save_run(run)
+        return run_id
 
     def save_run(self, run: dict) -> None:
         data = {

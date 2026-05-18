@@ -49,8 +49,12 @@ except ImportError:
             else:
                 self._store = UnifiedStore()
 
-        def create_session(self, session_id: str, model: str, workspace: str, title: str = "") -> dict:
-            return self._store.create_session(session_id, model, workspace, title)
+        def create_session(self, session_id: str | None = None, model: str = "", workspace: str = "", title: str = "") -> Session:
+            if session_id is None:
+                import uuid
+                session_id = f"sess-{uuid.uuid4().hex[:12]}"
+            data = self._store.create_session(session_id, model, workspace, title)
+            return Session.from_dict(data)
 
         def save_session(self, session: dict) -> None:
             self._store.save_session(session)
@@ -58,14 +62,37 @@ except ImportError:
         def load_session(self, session_id: str) -> dict | None:
             return self._store.load_session(session_id)
 
-        def list_sessions(self) -> list[dict]:
-            return self._store.list_sessions()
+        def list_sessions(self, limit: int = 50) -> list[dict]:
+            sessions = self._store.list_sessions(limit)
+            for s in sessions:
+                if "title" not in s:
+                    s["title"] = ""
+            return sessions
 
         def delete_session(self, session_id: str) -> bool:
             return self._store.delete_session(session_id)
 
-        def create_run(self, session_id: str, prompt: str, model: str) -> str:
-            return self._store.create_run(session_id, prompt, model)
+        def create_run(self, session_id: str, prompt: str, model: str = "unknown") -> Run:
+            import uuid
+            run_id = f"run-{uuid.uuid4().hex[:12]}"
+            now = datetime.now(timezone.utc).isoformat()
+            run = {
+                "id": run_id,
+                "session_id": session_id,
+                "prompt": prompt,
+                "model": model,
+                "status": "pending",
+                "events": [],
+                "created_at": now,
+            }
+            self._store.save_run(run)
+            return Run(
+                id=run_id,
+                session_id=session_id,
+                prompt=prompt,
+                status="pending",
+                created_at=now,
+            )
 
         def save_run(self, run: dict) -> None:
             self._store.save_run(run)
@@ -82,8 +109,23 @@ except ImportError:
         def get_events(self, run_id: str) -> list[dict]:
             return self._store.get_events(run_id)
 
-        def close(self) -> None:
-            self._store.stop()
+        def update_run_status(self, run_id: str, status: str) -> None:
+            run = self._store.load_run(run_id)
+            if run is not None:
+                run["status"] = status
+                self._store.save_run(run)
+
+        def get_run(self, run_id: str) -> Run | None:
+            data = self._store.load_run(run_id)
+            if data is None:
+                return None
+            return Run(
+                id=data.get("id", ""),
+                session_id=data.get("session_id", ""),
+                prompt=data.get("prompt", ""),
+                status=data.get("status", "pending"),
+                created_at=data.get("created_at", ""),
+            )
 
 
 # ── Hooks stubs ────────────────────────────────────────────────────
@@ -272,6 +314,10 @@ class Session:
             "compaction_history": self.compaction_history,
             "task_ids": self.task_ids,
         }
+
+    def touch(self) -> None:
+        """Update the updated_at timestamp."""
+        self.updated_at = _now_iso()
 
     @classmethod
     def from_dict(cls, data: dict) -> Session:
