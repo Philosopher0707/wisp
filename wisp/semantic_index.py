@@ -72,6 +72,9 @@ class SemanticIndex:
         self._cache_key = None
         self._cache_chunk_ids = []
         self._cache_M = None
+        
+        import threading
+        self._cache_lock = threading.Lock()
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -439,37 +442,41 @@ class SemanticIndex:
 
         # Load all embeddings as a single numpy matrix or use the cached matrix
         try:
-            mtime_row = self.conn.execute("SELECT COUNT(*), COALESCE(MAX(mtime), 0.0) FROM files").fetchone()
-            current_key = (mtime_row[0], mtime_row[1]) if mtime_row else (0, 0.0)
+            version_row = self.conn.execute("PRAGMA data_version").fetchone()
+            data_version = version_row[0] if version_row else 0
+            current_key = (data_version, self.conn.total_changes)
         except Exception:
-            current_key = (0, 0.0)
+            current_key = (0, 0)
 
         dim = len(query_vec)
 
         if self._cache_key != current_key or self._cache_M is None or len(self._cache_chunk_ids) == 0:
-            rows = self.conn.execute(
-                "SELECT chunk_id, embedding FROM embeddings"
-            ).fetchall()
+            with self._cache_lock:
+                # Double-checked locking
+                if self._cache_key != current_key or self._cache_M is None or len(self._cache_chunk_ids) == 0:
+                    rows = self.conn.execute(
+                        "SELECT chunk_id, embedding FROM embeddings"
+                    ).fetchall()
 
-            if not rows:
-                return []
+                    if not rows:
+                        return []
 
-            chunk_ids = []
-            emb_list = []
+                    chunk_ids = []
+                    emb_list = []
 
-            for chunk_id, emb_bytes in rows:
-                if len(emb_bytes) >= dim * 8:
-                    vec = np.frombuffer(emb_bytes[: dim * 8], dtype=np.float64)
-                    chunk_ids.append(chunk_id)
-                    emb_list.append(vec)
+                    for chunk_id, emb_bytes in rows:
+                        if len(emb_bytes) >= dim * 8:
+                            vec = np.frombuffer(emb_bytes[: dim * 8], dtype=np.float64)
+                            chunk_ids.append(chunk_id)
+                            emb_list.append(vec)
 
-            if not emb_list:
-                return []
+                    if not emb_list:
+                        return []
 
-            # Stack and cache the matrix
-            self._cache_chunk_ids = chunk_ids
-            self._cache_M = np.vstack(emb_list)
-            self._cache_key = current_key
+                    # Stack and cache the matrix
+                    self._cache_chunk_ids = chunk_ids
+                    self._cache_M = np.vstack(emb_list)
+                    self._cache_key = current_key
 
         chunk_ids = self._cache_chunk_ids
         M = self._cache_M
