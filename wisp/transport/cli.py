@@ -1370,6 +1370,12 @@ class CLITransport:
                         _stop_spinner()
                         print(msg)
 
+                elif event.type == TYPE_APPROVAL_REQUEST:
+                    # Don't show "Approval required" noise when the handler will
+                    # auto-approve via session cache or benign-command whitelist.
+                    # The handler resolves on the very next coroutine step.
+                    pass  # silently absorbed
+
                 else:
                     _flush_thinking()
                     _flush_content()
@@ -1383,8 +1389,6 @@ class CLITransport:
             _flush_thinking()
             _flush_content()
             _stop_spinner()
-
-        except KeyboardInterrupt:
             self.core._interrupted = True
             self._interrupted = True
             _stop_spinner()
