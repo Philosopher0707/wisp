@@ -31,6 +31,7 @@ from wisp.core.events import (
     approval_request as _approval_request_event,
 )
 from wisp.tools import execute_tool, ToolError, check_dangerous_command
+from wisp.tools.audit import AuditLog
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +159,7 @@ class ToolExecutor:
         # ── Approval gating ──
         needs_approval = func_name in _WRITE_TOOLS
         forced_approval = self._needs_forced_approval(func_name)
+        was_auto_approved = False
         if needs_approval and (not getattr(self.config, "auto_approve", False) or forced_approval):
             if not approval_handler:
                 if forced_approval:
@@ -178,6 +180,8 @@ class ToolExecutor:
                 if not approved:
                     yield _tool_result_event(func_name, f"[Blocked: user declined {func_name}]")
                     return
+        elif needs_approval and getattr(self.config, "auto_approve", False):
+            was_auto_approved = True
 
         # ── Event-specific pre-hooks (PRE_BASH, PRE_FILE_WRITE) ──
         if func_name == "run_bash":
@@ -193,6 +197,28 @@ class ToolExecutor:
 
         # ── Execute tool ──
         result, duration_ms = await self._execute_tool(func_name, func_args, workspace)
+
+        # ── Audit logging (Q22) ──
+        if needs_approval and self.config is not None:
+            try:
+                pm = self.config.permission_mode
+                mode = pm.value if hasattr(pm, "value") else str(pm)
+            except Exception:
+                mode = "auto_edit"
+            try:
+                audit = AuditLog(Path(workspace).resolve() / ".wisp" / "audit.jsonl")
+                if was_auto_approved:
+                    audit.log_auto_approved(
+                        func_name, func_args, workspace, result, duration_ms,
+                        mode=mode, forced=forced_approval,
+                    )
+                else:
+                    audit.log_explicit_approved(
+                        func_name, func_args, workspace, result, duration_ms,
+                        mode=mode,
+                    )
+            except Exception:
+                logger.warning("Audit write failed for %s", func_name, exc_info=True)
 
         # ── Post-tool metrics ──
         self._record_metrics(func_name, duration_ms, result)

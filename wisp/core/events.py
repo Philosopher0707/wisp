@@ -129,10 +129,12 @@ def tool_call(name: str, args: dict[str, Any]) -> AgentEvent:
     return AgentEvent(TYPE_TOOL_CALL, {"name": name, "arguments": args})
 
 
-def tool_result(name: str, result: str, duration_ms: Optional[float] = None) -> AgentEvent:
+def tool_result(name: str, result: str, duration_ms: Optional[float] = None, *, auto_approved: bool = False) -> AgentEvent:
     payload: dict[str, Any] = {"name": name, "result": result}
     if duration_ms is not None:
         payload["duration_ms"] = duration_ms
+    if auto_approved:
+        payload["auto_approved"] = True
     return AgentEvent(TYPE_TOOL_RESULT, payload)
 
 

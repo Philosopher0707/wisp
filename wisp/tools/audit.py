@@ -4,8 +4,8 @@ Q22: When WISP_HEADLESS_AUTO_APPROVE=1 bypasses explicit approval, every
 invocation of a tool in ``_WRITE_TOOLS`` is recorded so CI/compliance
 can retrospectively audit what was executed without operator consent.
 
-Uses POSIX fcntl advisory locks (shared read / exclusive write) so
-concurrent processes can append safely.
+Uses POSIX fcntl advisory locks (exclusive write) so concurrent
+processes can append safely.
 """
 
 from __future__ import annotations
@@ -24,14 +24,13 @@ class AuditLog:
     """Thread-safe JSONL audit trail for destructive tool executions.
 
     One entry per tool call that modifies workspace state (the set of
-    tools in ``_WRITE_TOOLS``).  Records the decision path — auto-approved
+tools in ``_WRITE_TOOLS``).  Records the decision path — auto-approved
     when headless, blocked when forbidden, or explicit via approval handler.
     """
 
     def __init__(self, audit_path: Path | str):
         self._path = Path(audit_path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        # Ensure the file exists for locking operations that need an fd.
         self._path.touch(exist_ok=True)
 
     # ------------------------------------------------------------------
@@ -151,7 +150,6 @@ def _scrub_args(func_name: str, args: dict) -> dict[str, str]:
     scrubbed: dict[str, str] = {}
     for key, value in args.items():
         val = str(value)
-        # Large content fields get hard-truncated to 120 chars
         if key in ("content", "command", "text", "new_text", "old_text"):
             scrubbed[key] = val if len(val) <= 120 else val[:117] + "..."
         else:
