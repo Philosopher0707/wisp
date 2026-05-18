@@ -896,7 +896,10 @@ class WispAgentCore:
             )
 
         # Auto-compact FIRST (semantic compression) before hard trim
-        compact_event = self._maybe_compact_session()
+        # Offload to a thread so the event loop stays responsive.  The
+        # synchronous compressor may call the LLM for Tier-3 abstractive
+        # summary; we must not block the event loop while waiting.
+        compact_event = await asyncio.to_thread(self._maybe_compact_session)
         if compact_event:
             yield compact_event
 
