@@ -29,6 +29,7 @@ import os
 import secrets
 import shutil
 import sys
+import threading
 import re
 import time
 from contextlib import asynccontextmanager
@@ -460,8 +461,10 @@ async def lifespan(app: FastAPI):
     yield
     logger.info("Wisp Cloud Server shutting down...")
     # Graceful shutdown: interrupt all in-flight agents so they can
-    # save sessions (core.close() in finally) and clean up MCP/LSP.
+    # save sessions and clean up MCP / LSP.
     await manager.shutdown_gracefully()
+    # Also close the pooled headless cores so sessions are persisted.
+    _shutdown_headless_pool()
 
 app = FastAPI(title="Wisp Cloud", version="0.1.0", lifespan=lifespan)
 
@@ -732,6 +735,60 @@ class MemoryTransport:
         return result
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Headless Agent Pool — reuse WispAgentCore across /api/prompt requests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_HEADLESS_POOL: dict[str, WispAgentCore] = {}
+"""Map ``key → WispAgentCore`` for headless execution.
+
+Each core is shared across requests with the same ``(model,
+permission_mode, workspace)`` tuple.  This eliminates the 5-10 s
+``__init__`` cost (health-check + HookManager + tool scaffolding)
+per request.  Callers must **not** call ``.close()`` on a pooled
+core — the FastAPI ``lifespan`` teardown drains the pool via
+``_shutdown_headless_pool``.
+"""
+
+_HEADLESS_POOL_LOCK = threading.Lock()
+
+
+def _headless_pool_key(config: WispConfig) -> str:
+    return f"{config.model}:{config.permission_mode}:{config.workspace}"
+
+
+def _get_headless_core(config: WispConfig) -> WispAgentCore:
+    """Return a cached ``WispAgentCore`` for headless execution.
+
+    Creates a new core on first call for a given ``(model,
+    permission_mode, workspace)`` combination and reuses it for all
+    subsequent requests.  The caller MUST NOT call ``.close()`` —
+    lifecycle is managed by ``_shutdown_headless_pool``.
+    """
+    key = _headless_pool_key(config)
+    with _HEADLESS_POOL_LOCK:
+        core = _HEADLESS_POOL.get(key)
+        if core is None:
+            core = WispAgentCore(config=config)
+            _HEADLESS_POOL[key] = core
+            logger.info("Created headless core for key %s", key)
+        return core
+
+
+def _shutdown_headless_pool() -> None:
+    """Close all pooled cores.  Idempotent — safe to call multiple times."""
+    global _HEADLESS_POOL
+    with _HEADLESS_POOL_LOCK:
+        pool = dict(_HEADLESS_POOL)
+        _HEADLESS_POOL.clear()
+    for key, core in pool.items():
+        try:
+            core.close()
+            logger.info("Closed headless core %s", key)
+        except Exception as e:
+            logger.warning("Error closing headless core %s: %s", key, e)
+
+
 async def _run_agent_headless(
     prompt: str,
     model: Optional[str] = None,
@@ -740,7 +797,13 @@ async def _run_agent_headless(
     permission_mode: str = "full",
     images: Optional[list[str]] = None,
 ) -> dict:
-    """Run the agent synchronously in memory and return a structured result."""
+    """Run the agent synchronously in memory and return a structured result.
+
+    Uses a process-level pool of ``WispAgentCore`` instances keyed by
+    ``(model, permission_mode, workspace)`` so that the expensive
+    ``__init__`` work (provider health check, hook loading, etc.) is
+    performed once and shared across requests.
+    """
     start = time.time()
     config = WispConfig()
     if model:
@@ -761,9 +824,14 @@ async def _run_agent_headless(
             if resolved:
                 session = sm.load(resolved)
 
-    core = WispAgentCore(config=config, session=session)
-    if session is not None and session.messages:
+    core = _get_headless_core(config)
+    # Clone per-request state so the pool entry stays clean for the next
+    # caller with a different session.
+    core.session = session
+    if session is not None:
         core.messages = list(session.messages)
+    else:
+        core.messages = []
 
     transport = MemoryTransport(permission_mode=permission_mode)
 
@@ -777,7 +845,18 @@ async def _run_agent_headless(
         logger.error("Headless agent error: %s", e)
         transport.errors.append({"message": str(e), "recoverable": False})
     finally:
-        core.close()
+        # Persist session state without tearing down the pooled core.
+        try:
+            core._save_session()
+        except Exception:
+            pass
+        try:
+            core._save_session_summary()
+        except Exception:
+            pass
+        # Scrub request-specific state so the next call starts clean.
+        core.session = None
+        core.messages = []
 
     result = transport.to_result()
 
