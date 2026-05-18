@@ -1207,19 +1207,13 @@ class WispAgentCore:
             if not isinstance(func_args, dict):
                 func_args = {}
 
-            # Delegate to ToolExecutor (lazy init for tests that bypass __init__)
-            if not hasattr(self, "tool_executor"):
-                # Avoid creating CircuitBreaker with mocked config in tests
-                cb = getattr(self, "_circuit_breaker", None)
-                self.tool_executor = ToolExecutor(
-                    config=self.config,
-                    hook_manager=getattr(self, "hook_manager", None),
-                    metrics=getattr(self, "metrics", None),
-                    circuit_breaker=cb,
-                    mcp=getattr(self, "mcp", None),
-                    file_lock=getattr(self, "file_lock", None),
-                    lsp_manager=getattr(self, "lsp", None),
-                )
+            # Delegate to ToolExecutor
+            # Must be initialized in __init__; tests that need to bypass should
+            # construct ToolExecutor directly and delegate to it.
+            assert hasattr(self, "tool_executor"), (
+                "tool_executor must be initialized in WispAgentCore.__init__. "
+                "Do not bypass __init__ or call _run_tool_calls directly from tests."
+            )
 
             # Intercept spawn_subagent — agent core has the real implementation
             if func_name == "spawn_subagent":
