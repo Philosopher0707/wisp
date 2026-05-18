@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import time
+import traceback
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
@@ -524,19 +525,32 @@ class ToolExecutor:
                 result = json.dumps(structured, ensure_ascii=False)
             except ToolError as e:
                 from wisp.tools.registry import _build_tool_metadata
+                tb = traceback.format_exc()
+                logger.error(
+                    "Tool %s raised ToolError: %s", func_name, str(e)
+                )
                 structured = {
                     "status": "error",
                     "tool": func_name,
-                    "data": str(e),
+                    "data": f"ToolError: {e}",
+                    "traceback": tb,
                     "metadata": _build_tool_metadata(func_name, func_args, ""),
                 }
                 result = json.dumps(structured, ensure_ascii=False)
             except Exception as e:
                 from wisp.tools.registry import _build_tool_metadata
+                tb = traceback.format_exc()
+                logger.error(
+                    "Tool %s raised unexpected exception: %s\n%s",
+                    func_name,
+                    str(e),
+                    tb,
+                )
                 structured = {
                     "status": "error",
                     "tool": func_name,
                     "data": f"Unexpected error: {e}",
+                    "traceback": tb,
                     "metadata": _build_tool_metadata(func_name, func_args, ""),
                 }
                 result = json.dumps(structured, ensure_ascii=False)
@@ -552,9 +566,34 @@ class ToolExecutor:
                     lsp_manager=self.lsp_manager,
                 )
             except ToolError as e:
-                result = f"Error: {e}"
+                tb = traceback.format_exc()
+                from wisp.tools.registry import _build_tool_metadata
+                logger.error("Tool %s raised ToolError: %s", func_name, str(e))
+                structured = {
+                    "status": "error",
+                    "tool": func_name,
+                    "data": f"ToolError: {e}",
+                    "traceback": tb,
+                    "metadata": _build_tool_metadata(func_name, func_args, ""),
+                }
+                result = json.dumps(structured, ensure_ascii=False)
             except Exception as e:
-                result = f"Unexpected error: {e}"
+                tb = traceback.format_exc()
+                from wisp.tools.registry import _build_tool_metadata
+                logger.error(
+                    "Tool %s raised unexpected exception: %s\n%s",
+                    func_name,
+                    str(e),
+                    tb,
+                )
+                structured = {
+                    "status": "error",
+                    "tool": func_name,
+                    "data": f"Unexpected error: {e}",
+                    "traceback": tb,
+                    "metadata": _build_tool_metadata(func_name, func_args, ""),
+                }
+                result = json.dumps(structured, ensure_ascii=False)
 
         duration_ms = (time.monotonic() - start) * 1000
 
@@ -586,14 +625,25 @@ class ToolExecutor:
     async def _call_mcp_tool(self, func_name: str, func_args: dict) -> str:
         """Call an MCP tool and truncate if needed.  Runs in a thread so stdio doesn't block the loop."""
         if not self.mcp:
-            return f"MCP error: no MCP manager"
+            return json.dumps({
+                "status": "error",
+                "tool": func_name,
+                "data": "MCP error: no MCP manager",
+            }, ensure_ascii=False)
         try:
             result = await asyncio.to_thread(self.mcp.call_tool, func_name, func_args)
             if isinstance(result, str) and len(result) > 8000:
                 result = result[:8000] + f"\n... [truncated {len(result)} total chars]"
             return result
         except Exception as e:
-            return f"MCP error: {e}"
+            tb = traceback.format_exc()
+            logger.error("MCP tool %s failed: %s\n%s", func_name, str(e), tb)
+            return json.dumps({
+                "status": "error",
+                "tool": func_name,
+                "data": f"MCP error: {e}",
+                "traceback": tb,
+            }, ensure_ascii=False)
 
     async def _spawn_subagent(self, func_args: dict, workspace: str) -> str:
         """Delegate to subagent orchestrator."""
@@ -603,8 +653,14 @@ class ToolExecutor:
             # For now, return a placeholder that the caller can override.
             return "[Subagent execution not available in ToolExecutor]"
         except Exception as e:
-            logger.error("Subagent spawn failed: %s", e, exc_info=True)
-            return f"Subagent spawn failed: {e}"
+            tb = traceback.format_exc()
+            logger.error("Subagent spawn failed: %s\n%s", str(e), tb)
+            return json.dumps({
+                "status": "error",
+                "tool": "spawn_subagent",
+                "data": f"Subagent spawn failed: {e}",
+                "traceback": tb,
+            }, ensure_ascii=False)
 
     def _record_metrics(self, func_name: str, duration_ms: float, result: str | dict) -> None:
         """Record tool execution metrics."""
