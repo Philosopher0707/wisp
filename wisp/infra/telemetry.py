@@ -11,10 +11,13 @@ Design:
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -111,3 +114,11 @@ class Telemetry:
             "health": self.check_health(),
             "timestamp": time.time(),
         }
+
+    def start(self) -> None:
+        """Lifecycle start — metrics are already initialized."""
+        logger.debug("Telemetry started")
+
+    def stop(self) -> None:
+        """Lifecycle stop — flush any pending metrics."""
+        logger.debug("Telemetry stopped")

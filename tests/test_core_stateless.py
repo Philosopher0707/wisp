@@ -1,0 +1,232 @@
+"""TDD for stateless WispAgentCore — the turn engine.
+
+Replaces: the stateful WispAgentCore in wisp/core/agent.py.
+All state is injected or passed as parameters.
+"""
+
+import pytest
+from dataclasses import dataclass
+from typing import Any
+
+
+# ── Minimal mock provider for testing ──────────────────────────────
+
+class _MockProvider:
+    def __init__(self, responses: list[dict] | None = None):
+        self.responses = responses or []
+        self.calls = []
+
+    def generate_stream_events(self, system_prompt: str, messages: list[dict], tools: list | None = None, checkpoint_every: int = 50):
+        self.calls.append((system_prompt, messages, tools))
+        for resp in self.responses:
+            yield resp
+
+
+# ── Test fixtures ──────────────────────────────────────────────────
+
+@pytest.fixture
+def core():
+    from wisp.core.engine import WispAgentCore
+    from wisp.infra.security import SecurityPolicy, PermissionMode
+    from wisp.infra.extensions import ExtensionHost
+    from wisp.infra.telemetry import Telemetry
+
+    return WispAgentCore(
+        provider=_MockProvider(),
+        security=SecurityPolicy(permission_mode=PermissionMode.FULL),
+        extensions=ExtensionHost(),
+        telemetry=Telemetry(),
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 1. Construction and statelessness
+# ═══════════════════════════════════════════════════════════════════
+
+class TestCoreConstruction:
+    """Core is stateless — all dependencies injected."""
+
+    def test_core_requires_provider(self):
+        from wisp.core.engine import WispAgentCore
+        from wisp.infra.security import SecurityPolicy, PermissionMode
+        from wisp.infra.extensions import ExtensionHost
+        from wisp.infra.telemetry import Telemetry
+
+        with pytest.raises(TypeError):
+            WispAgentCore(
+                security=SecurityPolicy(permission_mode=PermissionMode.FULL),
+                extensions=ExtensionHost(),
+                telemetry=Telemetry(),
+            )
+
+    def test_core_has_no_internal_state(self, core):
+        assert not hasattr(core, "_session")
+        assert not hasattr(core, "_messages")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 2. Turn execution
+# ═══════════════════════════════════════════════════════════════════
+
+class TestTurnExecution:
+    """Turn generates events from provider responses."""
+
+    @pytest.mark.asyncio
+    async def test_turn_yields_content_events(self, core):
+        core.provider = _MockProvider([
+            {"type": "token", "text": "Hello", "phase": "content"},
+            {"type": "token", "text": " world", "phase": "content"},
+            {"type": "done"},
+        ])
+
+        session = {"id": "s1", "messages": [], "model": "qwen"}
+        events = []
+        async for event in core.turn(session, "hi"):
+            events.append(event)
+
+        assert len(events) == 3
+        assert events[0]["text"] == "Hello"
+        assert events[1]["text"] == " world"
+        assert events[2]["type"] == "done"
+
+    @pytest.mark.asyncio
+    async def test_turn_builds_system_prompt(self, core):
+        core.provider = _MockProvider([
+            {"type": "token", "text": "ok", "phase": "content"},
+            {"type": "done"},
+        ])
+
+        session = {"id": "s1", "messages": [], "model": "qwen", "workspace": "/tmp"}
+        async for _ in core.turn(session, "hi"):
+            pass
+
+        assert len(core.provider.calls) == 1
+        system_prompt, messages, tools = core.provider.calls[0]
+        assert "Wisp" in system_prompt or "wisp" in system_prompt.lower()
+        assert len(messages) == 1
+        assert messages[0]["role"] == "user"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 3. Tool call parsing
+# ═══════════════════════════════════════════════════════════════════
+
+class TestToolCallParsing:
+    """Tool calls in the stream are parsed and executed."""
+
+    @pytest.mark.asyncio
+    async def test_tool_call_event(self, core):
+        core.provider = _MockProvider([
+            {"type": "tool_call", "name": "read_file", "arguments": {"path": "test.py"}},
+            {"type": "done"},
+        ])
+
+        session = {"id": "s1", "messages": [], "model": "qwen"}
+        events = []
+        async for event in core.turn(session, "read test.py"):
+            events.append(event)
+
+        tool_events = [e for e in events if e.get("type") == "tool_call"]
+        assert len(tool_events) == 1
+        assert tool_events[0]["name"] == "read_file"
+
+    @pytest.mark.asyncio
+    async def test_tool_result_event(self, core):
+        core.provider = _MockProvider([
+            {"type": "tool_call", "name": "read_file", "arguments": {"path": "test.py"}},
+            {"type": "tool_result", "name": "read_file", "result": "content"},
+            {"type": "done"},
+        ])
+
+        session = {"id": "s1", "messages": [], "model": "qwen"}
+        events = []
+        async for event in core.turn(session, "read test.py"):
+            events.append(event)
+
+        result_events = [e for e in events if e.get("type") == "tool_result"]
+        assert len(result_events) == 1
+        assert result_events[0]["result"] == "content"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 4. Security integration
+# ═══════════════════════════════════════════════════════════════════
+
+class TestSecurityIntegration:
+    """Security policy blocks dangerous tool calls."""
+
+    @pytest.mark.asyncio
+    async def test_blocked_tool_returns_error(self):
+        from wisp.core.engine import WispAgentCore
+        from wisp.infra.security import SecurityPolicy, PermissionMode
+        from wisp.infra.extensions import ExtensionHost
+        from wisp.infra.telemetry import Telemetry
+
+        core = WispAgentCore(
+            provider=_MockProvider([
+                {"type": "tool_call", "name": "run_bash", "arguments": {"command": "rm -rf /"}},
+                {"type": "done"},
+            ]),
+            security=SecurityPolicy(permission_mode=PermissionMode.READ_ONLY),
+            extensions=ExtensionHost(),
+            telemetry=Telemetry(),
+        )
+
+        session = {"id": "s1", "messages": [], "model": "qwen"}
+        events = []
+        async for event in core.turn(session, "delete everything"):
+            events.append(event)
+
+        error_events = [e for e in events if e.get("type") == "error"]
+        assert len(error_events) >= 1
+        assert "READ_ONLY" in error_events[0].get("message", "")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 5. Extension integration
+# ═══════════════════════════════════════════════════════════════════
+
+class TestExtensionIntegration:
+    """Extensions can intercept events."""
+
+    @pytest.mark.asyncio
+    async def test_extension_blocks_tool(self):
+        from wisp.core.engine import WispAgentCore
+        from wisp.infra.security import SecurityPolicy, PermissionMode
+        from wisp.infra.extensions import ExtensionHost
+        from wisp.infra.telemetry import Telemetry
+
+        host = ExtensionHost()
+        host.register(_BlockingExtension())
+
+        core = WispAgentCore(
+            provider=_MockProvider([
+                {"type": "tool_call", "name": "run_bash", "arguments": {"command": "ls"}},
+                {"type": "done"},
+            ]),
+            security=SecurityPolicy(permission_mode=PermissionMode.FULL),
+            extensions=host,
+            telemetry=Telemetry(),
+        )
+
+        session = {"id": "s1", "messages": [], "model": "qwen"}
+        events = []
+        async for event in core.turn(session, "list files"):
+            events.append(event)
+
+        error_events = [e for e in events if e.get("type") == "error"]
+        assert len(error_events) >= 1
+        assert "blocked by extension" in error_events[0].get("message", "").lower()
+
+
+# ── helpers ────────────────────────────────────────────────────────
+
+class _BlockingExtension:
+    name = "blocker"
+    def start(self): pass
+    def stop(self): pass
+    def tools(self): return []
+    def intercept(self, event):
+        if event.get("type") == "tool_call" and event.get("name") == "run_bash":
+            return {"action": "block", "reason": "blocked by extension"}
+        return {"action": "allow"}

@@ -48,6 +48,17 @@ class UnifiedStore:
             self._local.conn = self._connect()
         return self._local.conn
 
+    def start(self) -> None:
+        """Lifecycle start — connection is lazily opened."""
+        logger.debug("UnifiedStore started")
+
+    def stop(self) -> None:
+        """Lifecycle stop — close any open connection."""
+        if hasattr(self._local, "conn") and self._local.conn is not None:
+            self._local.conn.close()
+            self._local.conn = None
+        logger.debug("UnifiedStore stopped")
+
     # ── Schema ──────────────────────────────────────────────────────
 
     def _init_schema(self) -> None:
