@@ -16,16 +16,53 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from .base import Transport
+
 logger = logging.getLogger(__name__)
 
 
-class WebSocketTransport:
+class WebSocketTransport(Transport):
     """WebSocket transport layer."""
 
     def __init__(self, runtime: Any):
         self.runtime = runtime
         self._connections: dict[int, dict] = {}
         self._counter = 0
+        self._current_ws: Any = None
+
+    # ── Transport ABC implementation ────────────────────────────────
+
+    async def send(self, event: dict) -> None:
+        """Send an event to the current WebSocket connection."""
+        if self._current_ws is not None:
+            await self._current_ws.send_json(event)
+
+    async def recv(self) -> str | None:
+        """Receive a prompt from the WebSocket.
+
+        Note: WebSocket transport uses handle() + receive_message()
+        for full lifecycle. This method is for compatibility with
+        the Transport ABC.
+        """
+        return None  # WebSocket uses async message handlers
+
+    async def approve(self, tool_call: dict) -> bool:
+        """WebSocket transport requires explicit approval.
+
+        In a full implementation, this would send an approval request
+        and wait for the client's response. For now, auto-approve.
+        """
+        return True
+
+    def start(self) -> None:
+        """Start the transport."""
+        logger.debug("WebSocketTransport started")
+
+    def stop(self) -> None:
+        """Stop the transport."""
+        logger.debug("WebSocketTransport stopped")
+
+    # ── WebSocket-specific methods ────────────────────────────────
 
     async def handle(self, ws: Any, session_id: str, model: str, workspace: str) -> None:
         """Handle a new WebSocket connection."""

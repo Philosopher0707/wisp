@@ -15,14 +15,58 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from .base import Transport
+
 logger = logging.getLogger(__name__)
 
 
-class CLITransport:
+class CLITransport(Transport):
     """CLI transport layer."""
 
     def __init__(self, runtime: Any):
         self.runtime = runtime
+        self._stdin: Any = None
+        self._stdout: Any = None
+
+    # ── Transport ABC implementation ────────────────────────────────
+
+    async def send(self, event: dict) -> None:
+        """Send an event to stdout."""
+        if self._stdout is not None:
+            self._render_event(self._stdout, event)
+
+    async def recv(self) -> str | None:
+        """Receive a prompt from stdin."""
+        if self._stdin is None:
+            return None
+        try:
+            line = self._stdin.readline()
+        except Exception:
+            return None
+        if not line:
+            return None
+        prompt = line.strip()
+        if prompt.lower() in ("exit", "quit"):
+            return None
+        return prompt
+
+    async def approve(self, tool_call: dict) -> bool:
+        """CLI transport can prompt for approval.
+
+        In a full implementation, this would ask the user.
+        For now, auto-approve.
+        """
+        return True
+
+    def start(self) -> None:
+        """Start the transport."""
+        logger.debug("CLITransport started")
+
+    def stop(self) -> None:
+        """Stop the transport."""
+        logger.debug("CLITransport stopped")
+
+    # ── CLI-specific methods ──────────────────────────────────────
 
     async def run(self, stdin: Any, stdout: Any, session_id: str, model: str, workspace: str) -> None:
         """Run the CLI REPL loop."""

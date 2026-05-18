@@ -17,10 +17,12 @@ import json
 import logging
 from typing import Any
 
+from .base import Transport
+
 logger = logging.getLogger(__name__)
 
 
-class SSETransport:
+class SSETransport(Transport):
     """SSE transport layer."""
 
     def __init__(self, runtime: Any):
@@ -28,6 +30,39 @@ class SSETransport:
         self._sessions: dict[str, dict] = {}
         self._event_buffers: dict[str, list[tuple[int, dict]]] = {}
         self._event_counter = 0
+        self._current_response: Any = None
+
+    # ── Transport ABC implementation ────────────────────────────────
+
+    async def send(self, event: dict) -> None:
+        """Send an event as SSE formatted data."""
+        if self._current_response is not None:
+            await self._send_event(self._current_response, event)
+
+    async def recv(self) -> str | None:
+        """Receive a prompt from SSE.
+
+        Note: SSE transport uses connect() + receive_message()
+        for full lifecycle. This method is for compatibility.
+        """
+        return None
+
+    async def approve(self, tool_call: dict) -> bool:
+        """SSE transport auto-approves tool calls.
+
+        Interactive approval is not practical over SSE.
+        """
+        return True
+
+    def start(self) -> None:
+        """Start the transport."""
+        logger.debug("SSETransport started")
+
+    def stop(self) -> None:
+        """Stop the transport."""
+        logger.debug("SSETransport stopped")
+
+    # ── SSE-specific methods ──────────────────────────────────────
 
     async def connect(self, response: Any, session_id: str, model: str, workspace: str) -> None:
         """Handle a new SSE connection."""
