@@ -33,6 +33,12 @@ class BudgetTracker:
             return None
         return max(0, self._global_budget - self._tokens_consumed)
 
+    def get_ratio(self) -> Optional[float]:
+        """Fraction of budget remaining (0.0–1.0), or None if unlimited."""
+        if self._global_budget is None or self._global_budget <= 0:
+            return None
+        return max(0.0, self.get_remaining() / self._global_budget)
+
     def check(self) -> Optional[str]:
         """Check if budget is exhausted. Returns error message or None."""
         remaining = self.get_remaining()

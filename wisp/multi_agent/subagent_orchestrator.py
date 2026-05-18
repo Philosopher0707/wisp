@@ -311,9 +311,8 @@ class SubagentOrchestrator:
         """Adjust max_concurrent based on system load and token budget."""
         effective = requested
 
-        remaining = self._budget.get_remaining()
-        if remaining is not None:
-            budget_ratio = remaining / max(self._budget._global_budget or 1, 1)
+        budget_ratio = self._budget.get_ratio()
+        if budget_ratio is not None:
             if budget_ratio < 0.1:
                 effective = min(effective, 1)
             elif budget_ratio < 0.3:
