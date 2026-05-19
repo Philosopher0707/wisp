@@ -71,8 +71,12 @@ def _extract_json(text: str) -> str | None:
 
 async def _run_agent_headless(prompt: str, model: str | None = None, permission_mode: str = "read_only") -> dict:
     """Run agent headlessly and return result."""
-    # TODO: integrate with actual headless runner
-    return {"ok": True, "content": "", "model": model, "permission_mode": permission_mode}
+    from wisp.entry import run_headless
+    return await run_headless(
+        prompt=prompt,
+        model=model,
+        permission_mode=permission_mode,
+    )
 
 
 @router.post("/api/review/pr", dependencies=[Depends(verify_api_key)])
