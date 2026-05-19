@@ -25,42 +25,22 @@ def _setup_logging(verbose: bool = False):
 
 def cmd_server(host="0.0.0.0", port=8000, no_auth=False):
     """Run Wisp Cloud Server."""
-    from wisp.server import main as server_main
-    server_main(host=host, port=port, no_auth=no_auth)
+    from wisp.entry import run_mode
+    run_mode("server", host=host, port=port, no_auth=no_auth)
 
 
 def cmd_run(prompt, model=None, skill=None, workspace=None, auto_approve=False, session_id=None, show_thinking=False):
     """Run Wisp with a prompt."""
-    config = WispConfig()
-    if model:
-        config.model = model
-    if workspace:
-        config.workspace = workspace
-    if auto_approve:
-        config.auto_approve = True
-    if show_thinking:
-        config.show_thinking = True
-
-    agent = WispAgent(config)
-    
-    
-    agent.run(prompt, skill_name=skill, session_id=session_id)
+    from wisp.entry import run_mode
+    run_mode("cli", prompt=prompt, model=model, skill=skill, workspace=workspace,
+             auto_approve=auto_approve, session_id=session_id, show_thinking=show_thinking)
 
 
 def cmd_repl(model=None, skill=None, workspace=None, session_id=None, show_thinking=False, auto_approve=False):
     """Run Wisp in interactive REPL mode."""
-    config = WispConfig()
-    if model:
-        config.model = model
-    if workspace:
-        config.workspace = workspace
-    if show_thinking:
-        config.show_thinking = True
-    if auto_approve:
-        config.auto_approve = True
-
-    agent = WispAgent(config)
-    agent.repl(skill_name=skill, session_id=session_id)
+    from wisp.entry import run_mode
+    run_mode("cli", model=model, skill=skill, workspace=workspace,
+             session_id=session_id, show_thinking=show_thinking, auto_approve=auto_approve)
 
 
 def cmd_tui(model=None, workspace=None, show_thinking=False, auto_approve=False, use_ink=False):
