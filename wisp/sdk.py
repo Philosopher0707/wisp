@@ -18,23 +18,24 @@ For conversation across multiple prompts, pass auto_new_session=False:
 
 from __future__ import annotations
 
+import asyncio
 from typing import Iterator, Optional
 
-from wisp.core.agent import WispAgentCore
 from wisp.core.events import AgentEvent
 from wisp.config import WispConfig
-from wisp.async_utils import run_sync
+from wisp.transport.headless import HeadlessTransport
+from wisp.composition import CompositionRoot
 
 
 class Wisp:
-    """High-level synchronous wrapper around WispAgentCore.
+    """High-level synchronous wrapper using CompositionRoot + HeadlessTransport.
 
     Usage:
         with Wisp(model="llama3.2", workspace=".") as agent:
             for event in agent.run("refactor auth.py"):
                 print(event.text)
 
-    Without context manager, call shutdown() when done to clean up MCP connections.
+    Without context manager, call shutdown() when done to clean up.
     """
 
     def __init__(
@@ -60,64 +61,56 @@ class Wisp:
         config.show_thinking = show_thinking
         config.max_iterations = max_iterations
 
-        self._core = WispAgentCore(config=config)
+        self._config = config
         self._skill_name = skill_name
         self._closed = False
-
-        # Session handling
-        if session_id:
-            loaded = self._core._resolve_session(session_id)
-            if loaded is not None:
-                self._core.session = loaded
-                self._core.messages = list(loaded.messages)
-            else:
-                raise ValueError(f"Session '{session_id}' not found.")
-        elif auto_new_session:
-            from wisp.adapters import Session
-            self._core.session = Session.create(
-                model=self._core.config.model,
-                workspace=self._core.config.workspace or ".",
-                first_prompt="SDK session",
-            )
+        self._root: Optional[CompositionRoot] = None
+        self._session_id = session_id
+        self._auto_new_session = auto_new_session
 
     def run(self, prompt: str) -> Iterator[AgentEvent]:
         """Run one prompt and yield all events synchronously.
 
-        Blocks until the turn is complete. For async usage,
-        use WispAgentCore directly.
+        Blocks until the turn is complete.
         """
         if self._closed:
             raise RuntimeError("Wisp agent is closed. Create a new instance.")
-        return self._run_impl(prompt)
 
-    def _run_impl(self, prompt: str) -> Iterator[AgentEvent]:
-        """Implementation of run() as a generator — validation done in run()."""
-        system = self._core._build_system_prompt(self._skill_name)
-        try:
-            async_gen = self._core._arun(prompt, system=system)
-            events = run_sync(async_gen)
-            for event in events:
-                yield event
-        finally:
-            self._core._save_session()
+        # Create root on first run
+        if self._root is None:
+            self._root = CompositionRoot(self._config)
+            self._root.start()
+
+        transport = HeadlessTransport()
+        transport.start()
+
+        async def _run():
+            session = await self._root.runtime.get_or_create_session(
+                session_id=self._session_id or "sdk",
+                model=self._config.model,
+                workspace=self._config.workspace,
+            )
+
+            async for event in self._root.runtime.run_turn(session, prompt):
+                await transport.send(event)
+
+        asyncio.run(_run())
+
+        # Yield collected events as AgentEvent objects
+        for event_dict in transport.events:
+            yield AgentEvent(
+                type=event_dict.get("type", "unknown"),
+                data={k: v for k, v in event_dict.items() if k not in ("type", "timestamp")},
+            )
 
     def shutdown(self):
-        """Shut down the agent and release resources (MCP connections, etc.)."""
+        """Shut down the agent and release resources."""
         if self._closed:
             return
         self._closed = True
-        try:
-            self._core._save_session()
-        except Exception:
-            pass
-        try:
-            self._core.mcp.shutdown()
-        except Exception:
-            pass
-        try:
-            self._core.close()
-        except Exception:
-            pass
+        if self._root is not None:
+            self._root.shutdown()
+            self._root = None
 
     def __enter__(self):
         return self
@@ -129,11 +122,12 @@ class Wisp:
     @property
     def session_id(self) -> str:
         """Return the current session ID, or empty string if no session."""
-        if self._core.session:
-            return self._core.session.id
-        return ""
+        return self._session_id or ""
 
     @property
     def messages(self) -> list[dict]:
         """Return the current conversation messages."""
-        return list(self._core.messages)
+        if self._root is None:
+            return []
+        # TODO: get messages from store
+        return []
