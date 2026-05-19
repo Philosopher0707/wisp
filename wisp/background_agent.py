@@ -23,6 +23,7 @@ from wisp.core.events import (
     AgentEvent, TYPE_CONTENT, TYPE_THINKING, TYPE_TOOL_CALL,
     TYPE_TOOL_RESULT, TYPE_ERROR, TYPE_DONE,
 )
+from wisp.transport.headless import HeadlessTransport
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +116,7 @@ class BackgroundRunner:
         self._tasks[run_id] = task
 
     async def _execute(self, run_id: str):
-        """Execute the agent in background."""
+        """Execute the agent in background using HeadlessTransport."""
         row = self._store._bg_get(run_id)
         if not row:
             logger.error("Run %s disappeared from store", run_id)
@@ -131,29 +132,19 @@ class BackgroundRunner:
             config.auto_approve = True
 
             core = WispAgentCore(config=config)
-            content_parts: list[str] = []
+            transport = HeadlessTransport()
+            transport.start()
 
             try:
                 async for event in core.run(run.prompt):
-                    if event.type == TYPE_CONTENT:
-                        content_parts.append(event.text)
-                    elif event.type == TYPE_TOOL_CALL:
-                        run.tool_calls.append({
-                            "name": event.data.get("name", ""),
-                            "args": event.data.get("arguments", {}),
-                        })
-                    elif event.type == TYPE_TOOL_RESULT:
-                        name = event.data.get("name", "")
-                        for tc in reversed(run.tool_calls):
-                            if tc["name"] == name and "result" not in tc:
-                                tc["result"] = event.data.get("result", "")
-                                break
-                    elif event.type == TYPE_ERROR:
-                        logger.warning("Background run %s error: %s", run_id, event.data.get("message"))
-                    elif event.type == TYPE_DONE:
-                        run.iterations = event.data.get("turns", 0)
+                    await transport.send(event)
 
-                run.content = "\n".join(content_parts)
+                result = transport.collect_result()
+                run.content = result["content"]
+                run.tool_calls = result["tool_calls"]
+                run.iterations = result["iterations"]
+                if not result["ok"]:
+                    run.error = result["errors"][0]["message"] if result["errors"] else "Unknown error"
 
                 # Collect changed files
                 try:
@@ -161,7 +152,7 @@ class BackgroundRunner:
                 except Exception:
                     pass
 
-                run.status = "done"
+                run.status = "done" if result["ok"] else "failed"
             finally:
                 core.close()
 

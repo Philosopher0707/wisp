@@ -36,9 +36,28 @@ class HeadlessTransport(Transport):
         self._started = False
         logger.debug("HeadlessTransport stopped")
 
-    async def send(self, event: dict) -> None:
-        """Store event in memory."""
-        self.events.append(dict(event))
+    async def send(self, event: dict | Any) -> None:
+        """Store event in memory.
+
+        Accepts both dict events (from AgentRuntime) and AgentEvent objects
+        (from WispAgentCore.run()).
+        """
+        if hasattr(event, "type"):
+            # AgentEvent object — flatten to dict
+            data = getattr(event, "data", {})
+            flat = {
+                "type": str(event.type),
+                "timestamp": getattr(event, "timestamp", 0.0),
+            }
+            # Copy data fields to top level for collect_result()
+            flat.update(data)
+            # Also preserve text accessor
+            if hasattr(event, "text") and event.text:
+                flat["text"] = event.text
+            self.events.append(flat)
+        else:
+            # Already a dict
+            self.events.append(dict(event))
 
     async def recv(self) -> str | None:
         """Headless transport does not receive user input."""
