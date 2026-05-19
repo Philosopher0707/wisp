@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from typing import Any
 
 from .base import Transport
@@ -75,7 +76,8 @@ class CLITransport(Transport):
     async def run(self, stdin: Any, stdout: Any, session_id: str, model: str, workspace: str) -> None:
         """Run the CLI REPL loop.
 
-        Uses asyncio.to_thread() for stdin reads to keep the event loop free.
+        Uses a background thread for stdin reads to avoid blocking
+        the asyncio event loop on TTY readline().
         """
         session = await self.runtime.get_or_create_session(
             session_id=session_id,
@@ -86,28 +88,48 @@ class CLITransport(Transport):
         stdout.write("Wisp ready.\n")
         stdout.flush()
 
-        while True:
-            try:
-                line = await asyncio.to_thread(stdin.readline)
-            except Exception:
-                break
+        # Dedicated thread + queue for stdin — avoids asyncio.to_thread
+        # blocking issues on real TTYs where readline() can't be cancelled.
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        stop_event = threading.Event()
 
-            if not line:
-                break  # EOF
+        def _reader() -> None:
+            while not stop_event.is_set():
+                try:
+                    line = stdin.readline()
+                except Exception:
+                    asyncio.run_coroutine_threadsafe(queue.put(None), loop)
+                    break
+                if not line:
+                    asyncio.run_coroutine_threadsafe(queue.put(None), loop)
+                    break
+                prompt = line.strip()
+                if prompt.lower() in ("exit", "quit"):
+                    asyncio.run_coroutine_threadsafe(queue.put(None), loop)
+                    break
+                asyncio.run_coroutine_threadsafe(queue.put(prompt), loop)
 
-            prompt = line.strip()
-            if not prompt:
-                continue
-            if prompt.lower() in ("exit", "quit"):
-                break
+        loop = asyncio.get_running_loop()
+        reader_thread = threading.Thread(target=_reader, daemon=True)
+        reader_thread.start()
 
-            try:
-                async for event in self.runtime.run_turn(session, prompt):
-                    self._render_event(stdout, event)
-            except Exception as exc:
-                logger.exception("Error during turn")
-                stdout.write(f"Error: {exc}\n")
-                stdout.flush()
+        try:
+            while True:
+                prompt = await queue.get()
+                if prompt is None:
+                    break
+                if not prompt:
+                    continue
+
+                try:
+                    async for event in self.runtime.run_turn(session, prompt):
+                        self._render_event(stdout, event)
+                except Exception as exc:
+                    logger.exception("Error during turn")
+                    stdout.write(f"Error: {exc}\n")
+                    stdout.flush()
+        finally:
+            stop_event.set()
 
     def _render_event(self, stdout: Any, event: dict) -> None:
         """Render an event to stdout."""
