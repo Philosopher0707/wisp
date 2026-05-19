@@ -27,7 +27,6 @@ from wisp.server.headless import (
     _get_headless_core,
     _shutdown_headless_pool,
     _run_agent_headless,
-    MemoryTransport,
 )
 
 from wisp.server.routes.prompt import PromptRequest
@@ -56,7 +55,6 @@ __all__ = [
     "_get_headless_core",
     "_shutdown_headless_pool",
     "_run_agent_headless",
-    "MemoryTransport",
     "PromptRequest",
     "Connection",
     "ConnectionManager",
