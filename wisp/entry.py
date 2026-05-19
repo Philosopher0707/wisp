@@ -65,17 +65,54 @@ def _run_cli(root: CompositionRoot, prompt: str | None = None, **kwargs) -> None
             # Single-shot mode: run one prompt and exit
             asyncio.run(_run_single_prompt(transport, root, prompt, config, **kwargs))
         else:
-            # REPL mode: interactive loop
-            session_id = kwargs.get("session_id") or str(uuid.uuid4())
-            asyncio.run(transport.run(
-                stdin=sys.stdin,
-                stdout=sys.stdout,
-                session_id=session_id,
-                model=config.model,
-                workspace=config.workspace,
-            ))
+            # REPL mode: synchronous loop, async per-turn
+            _run_repl(transport, root, config, **kwargs)
     finally:
         transport.stop()
+
+
+def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig, **kwargs) -> None:
+    """Synchronous REPL — reads stdin in main thread, async per turn."""
+    import sys
+    import uuid
+
+    session_id = kwargs.get("session_id") or str(uuid.uuid4())
+
+    # Create session (async)
+    session = asyncio.run(root.runtime.get_or_create_session(
+        session_id=session_id,
+        model=config.model,
+        workspace=config.workspace,
+    ))
+
+    sys.stdout.write("Wisp ready.\n")
+    sys.stdout.flush()
+
+    while True:
+        try:
+            line = sys.stdin.readline()
+        except Exception:
+            break
+        if not line:
+            break
+
+        prompt = line.strip()
+        if not prompt:
+            continue
+        if prompt.lower() in ("exit", "quit"):
+            break
+
+        # Run one turn (async)
+        async def _turn():
+            async for event in root.runtime.run_turn(session, prompt):
+                transport._render_event(sys.stdout, event)
+
+        try:
+            asyncio.run(_turn())
+        except Exception as exc:
+            logger.exception("Error during turn")
+            sys.stdout.write(f"Error: {exc}\n")
+            sys.stdout.flush()
 
 
 async def _run_single_prompt(transport: CLITransport, root: CompositionRoot, prompt: str, config: WispConfig, **kwargs) -> None:
