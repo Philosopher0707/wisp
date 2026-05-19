@@ -33,9 +33,19 @@ class WebSocketTransport(Transport):
     # ── Transport ABC implementation ────────────────────────────────
 
     async def send(self, event: dict) -> None:
-        """Send an event to the current WebSocket connection."""
-        if self._current_ws is not None:
-            await self._current_ws.send_json(event)
+        """Send an event to all active WebSocket connections.
+
+        Broadcasts to all connections. For targeted sends,
+        use receive_message() which has access to the specific ws.
+        """
+        dead: list[int] = []
+        for conn_id, conn in list(self._connections.items()):
+            try:
+                await conn["ws"].send_json(event)
+            except Exception:
+                dead.append(conn_id)
+        for conn_id in dead:
+            self._connections.pop(conn_id, None)
 
     async def recv(self) -> str | None:
         """Receive a prompt from the WebSocket.
