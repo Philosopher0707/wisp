@@ -129,5 +129,8 @@ class Wisp:
         """Return the current conversation messages."""
         if self._root is None:
             return []
-        # TODO: get messages from store
+        # Load from store via runtime
+        session = self._root.store.load_session(self._session_id or "sdk")
+        if session is not None:
+            return list(session.get("messages", []))
         return []

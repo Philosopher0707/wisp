@@ -111,12 +111,19 @@ def _run_server(**kwargs) -> None:
 
 
 def _run_tui(root: CompositionRoot) -> None:
-    """Run TUI mode."""
+    """Run TUI mode.
+
+    Launches the Textual TUI app and wires it to TUITransport.
+    """
+    from wisp.tui.app import WispTUIApp
+
     transport = TUITransport()
     transport.start()
+
     try:
-        logger.info("TUI mode")
-        # TODO: launch Textual app and wire to transport
+        app = WispTUIApp(config=root.config)
+        transport.set_app(app)
+        app.run()
     finally:
         transport.stop()
 
