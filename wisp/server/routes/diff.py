@@ -86,10 +86,26 @@ async def inline_edit(req: InlineEditRequest):
 Return ONLY the replacement code for the selection. No explanation, no markdown fences.
 """
 
-    # TODO: integrate with actual agent core for inline editing
+    from wisp.entry import run_headless
+    result = await run_headless(
+        prompt=edit_prompt,
+        model=req.model,
+        permission_mode="read_only",
+    )
+
+    replacement = result.get("content", "").strip()
+    # Strip markdown fences if present
+    if replacement.startswith("```"):
+        lines = replacement.split("\n")
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        replacement = "\n".join(lines).strip()
+
     return {
-        "ok": True,
+        "ok": result.get("ok", False),
         "path": req.path,
-        "replacement": "",
+        "replacement": replacement,
         "prompt": edit_prompt,
     }
