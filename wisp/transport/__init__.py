@@ -20,6 +20,7 @@ from wisp.transport.websocket import WebSocketTransport
 from wisp.transport.sse import SSETransport
 from wisp.transport.tui import TUITransport
 from wisp.transport.headless import HeadlessTransport
+from wisp.transport.file import FileTransport
 from wisp.transport.adapters import CLITransportAdapter, ServerTransportAdapter
 
 # Legacy exports for backward compatibility
@@ -33,6 +34,7 @@ __all__ = [
     "SSETransport",
     "TUITransport",
     "HeadlessTransport",
+    "FileTransport",
     "CLITransportAdapter",
     "ServerTransportAdapter",
     # Legacy
