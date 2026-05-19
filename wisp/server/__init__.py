@@ -23,7 +23,6 @@ from wisp.server.routes.workspace import WORKSPACE_ROOT
 from wisp.server.routes.files import _resolve_path
 
 from wisp.server.headless import (
-    _HEADLESS_POOL,
     _get_headless_core,
     _shutdown_headless_pool,
     _run_agent_headless,
@@ -51,7 +50,6 @@ __all__ = [
     "lifespan",
     "WORKSPACE_ROOT",
     "_resolve_path",
-    "_HEADLESS_POOL",
     "_get_headless_core",
     "_shutdown_headless_pool",
     "_run_agent_headless",
