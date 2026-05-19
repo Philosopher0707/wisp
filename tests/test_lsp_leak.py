@@ -178,20 +178,21 @@ class TestGlobalShutdown:
 class TestServerEndpointUsage:
     """FastAPI endpoints must call get_lsp_manager, not new LSPManager()."""
 
-    @pytest.mark.parametrize("endpoint_name", [
-        ("/api/diagnostics",),
-        ("/api/suggestions",),
+    @pytest.mark.parametrize("router_file", [
+        "wisp/server/routes/diagnostics.py",
+        "wisp/server/routes/suggestions.py",
     ])
-    def test_endpoints_use_singleton_source(self, endpoint_name):
-        """Read the server source and assert it imports get_lsp_manager."""
-        server_py = Path(__file__).resolve().parent.parent / "wisp" / "server.py"
-        assert server_py.exists()
-        source = server_py.read_text()
+    def test_endpoints_use_singleton_source(self, router_file):
+        """Read the router source and assert it imports get_lsp_manager."""
+        from pathlib import Path
+        router_py = Path(__file__).resolve().parent.parent / router_file
+        assert router_py.exists(), f"{router_file} must exist"
+        source = router_py.read_text()
         assert "get_lsp_manager" in source, (
-            "server.py must import get_lsp_manager to avoid per-request leaks"
+            f"{router_file} must import get_lsp_manager to avoid per-request leaks"
         )
         assert "LSPManager(str(WORKSPACE_ROOT))" not in source, (
-            "server.py must NOT instantiate LSPManager per-request"
+            f"{router_file} must NOT instantiate LSPManager per-request"
         )
 
 

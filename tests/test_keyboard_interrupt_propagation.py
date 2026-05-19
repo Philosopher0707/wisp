@@ -80,7 +80,7 @@ class TestServerWebsocketHandlesException:
     """WebSocket handler must catch Exception, not swallow signals (BaseException)."""
 
     def test_server_run_catches_exception(self):
-        """The inner _run() catches Exception so KeyboardInterrupt/SystemExit propagate.
+        """The agent_websocket catches Exception so KeyboardInterrupt/SystemExit propagate.
 
         The server intentionally does NOT catch BaseException — signals and
         clean-exit requests must escape to the event loop, not be swallowed.
@@ -88,12 +88,12 @@ class TestServerWebsocketHandlesException:
         import ast
         from pathlib import Path
 
-        src = Path("wisp/server.py").read_text()
+        src = Path("wisp/server/routes/agents.py").read_text()
         tree = ast.parse(src)
 
         found = False
         for node in ast.walk(tree):
-            if isinstance(node, ast.AsyncFunctionDef) and node.name == "_run":
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "agent_websocket":
                 for item in node.body:
                     if isinstance(item, ast.Try):
                         for handler in item.handlers:
