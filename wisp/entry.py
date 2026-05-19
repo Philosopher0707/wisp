@@ -49,20 +49,49 @@ def run_mode(mode: str, prompt: str | None = None, **kwargs) -> None:
         root.shutdown()
 
 
-def _run_cli(root: CompositionRoot, prompt: str | None = None) -> None:
+def _run_cli(root: CompositionRoot, prompt: str | None = None, **kwargs) -> None:
     """Run CLI mode."""
     import sys
+    import uuid
+
+    config = root.config
     transport = CLITransport(root.runtime)
     transport.start()
     try:
         if prompt:
-            logger.info("CLI mode with prompt: %s", prompt)
-            # TODO: run single turn with prompt
+            # Single-shot mode: run one prompt and exit
+            asyncio.run(_run_single_prompt(transport, root, prompt, config, **kwargs))
         else:
-            logger.info("CLI REPL mode")
-            # TODO: run REPL loop
+            # REPL mode: interactive loop
+            session_id = kwargs.get("session_id") or str(uuid.uuid4())
+            asyncio.run(transport.run(
+                stdin=sys.stdin,
+                stdout=sys.stdout,
+                session_id=session_id,
+                model=config.model,
+                workspace=config.workspace,
+            ))
     finally:
         transport.stop()
+
+
+async def _run_single_prompt(transport: CLITransport, root: CompositionRoot, prompt: str, config: WispConfig, **kwargs) -> None:
+    """Run a single prompt and print results."""
+    import sys
+    import uuid
+
+    session_id = kwargs.get("session_id") or str(uuid.uuid4())
+    session = await root.runtime.get_or_create_session(
+        session_id=session_id,
+        model=config.model,
+        workspace=config.workspace,
+    )
+
+    async for event in root.runtime.run_turn(session, prompt):
+        transport._render_event(sys.stdout, event)
+
+    sys.stdout.write("\n")
+    sys.stdout.flush()
 
 
 def _run_server(root: CompositionRoot, **kwargs) -> None:
