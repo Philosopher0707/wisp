@@ -182,51 +182,38 @@ class ArenaRunner:
 
     async def _run_side(self, workspace: Path, prompt: str,
                         model: str) -> tuple[str, str, list[str], int]:
-        """Run the prompt with a single model. Returns (summary, diff, files, duration_ms)."""
+        """Run the prompt with a single model using CompositionRoot."""
         import time
-        from wisp.transport.headless import HeadlessTransport
+        from wisp.entry import run_headless
         start = time.time()
 
         try:
-            config = WispConfig()
-            config.model = model
-            config.workspace = str(workspace)
-            config.permission_mode = "full"
-            config.auto_approve = True
+            result = await run_headless(
+                prompt=prompt,
+                model=model,
+                workspace=str(workspace),
+                permission_mode="full",
+            )
 
-            core = WispAgentCore(config=config)
-            transport = HeadlessTransport()
-            transport.start()
+            summary = result.get("content", "")
+            if result.get("errors"):
+                summary += "\n" + "\n".join(f"[Error: {e['message']}]" for e in result["errors"])
 
-            try:
-                async for event in core.run(prompt):
-                    await transport.send(event)
+            # Collect changed files from tool calls
+            files_changed: list[str] = []
+            for tc in result.get("tool_calls", []):
+                if tc.get("name") in ("write_file", "edit_file"):
+                    args = tc.get("args", {})
+                    if "path" in args:
+                        files_changed.append(args["path"])
 
-                result = transport.collect_result()
-                summary = result["content"]
-                if result["errors"]:
-                    summary += "\n" + "\n".join(f"[Error: {e['message']}]" for e in result["errors"])
+            # Get diff from git
+            diff = ""
+            if (workspace / ".git").exists():
+                diff = self._git_diff(workspace)
 
-                # Collect changed files and diff
-                files_changed: list[str] = []
-                diff = ""
-                try:
-                    if hasattr(core.change_tracker, 'files_changed'):
-                        files_changed = core.change_tracker.files_changed()
-                    if hasattr(core.change_tracker, 'cumulative_diff'):
-                        diff = core.change_tracker.cumulative_diff()
-                except Exception:
-                    pass
-
-                # Fallback: get diff from git
-                if not diff and (workspace / ".git").exists():
-                    diff = self._git_diff(workspace)
-
-                duration_ms = round((time.time() - start) * 1000)
-                return summary, diff, files_changed, duration_ms
-
-            finally:
-                core.close()
+            duration_ms = round((time.time() - start) * 1000)
+            return summary, diff, files_changed, duration_ms
 
         except Exception as e:
             duration_ms = round((time.time() - start) * 1000)

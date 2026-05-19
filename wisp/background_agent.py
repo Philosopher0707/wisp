@@ -125,36 +125,31 @@ class BackgroundRunner:
         run = BackgroundRun.from_db_row(row)
 
         try:
-            config = WispConfig()
-            config.model = run.model
-            config.workspace = run.workspace
-            config.permission_mode = "auto_edit"
-            config.auto_approve = True
+            from wisp.entry import run_headless
 
-            core = WispAgentCore(config=config)
-            transport = HeadlessTransport()
-            transport.start()
+            result = await run_headless(
+                prompt=run.prompt,
+                model=run.model,
+                workspace=run.workspace,
+                permission_mode="auto_edit",
+            )
 
-            try:
-                async for event in core.run(run.prompt):
-                    await transport.send(event)
+            run.content = result.get("content", "")
+            run.tool_calls = result.get("tool_calls", [])
+            run.iterations = result.get("iterations", 0)
+            if not result.get("ok", False):
+                run.error = result["errors"][0]["message"] if result.get("errors") else "Unknown error"
 
-                result = transport.collect_result()
-                run.content = result["content"]
-                run.tool_calls = result["tool_calls"]
-                run.iterations = result["iterations"]
-                if not result["ok"]:
-                    run.error = result["errors"][0]["message"] if result["errors"] else "Unknown error"
+            # Collect changed files from tool calls
+            files_changed: list[str] = []
+            for tc in run.tool_calls:
+                if tc.get("name") in ("write_file", "edit_file"):
+                    args = tc.get("args", {})
+                    if isinstance(args, dict) and "path" in args:
+                        files_changed.append(args["path"])
+            run.files_changed = files_changed
 
-                # Collect changed files
-                try:
-                    run.files_changed = core.change_tracker.files_changed() if hasattr(core.change_tracker, 'files_changed') else []
-                except Exception:
-                    pass
-
-                run.status = "done" if result["ok"] else "failed"
-            finally:
-                core.close()
+            run.status = "done" if result.get("ok", False) else "failed"
 
         except Exception as e:
             logger.error("Background run %s failed: %s", run_id, e)
