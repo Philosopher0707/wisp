@@ -22,6 +22,7 @@ from wisp.transport.tui import TUITransport
 from wisp.transport.headless import HeadlessTransport
 from wisp.transport.file import FileTransport
 from wisp.transport.multi import MultiTransport
+from wisp.transport.metrics import MetricsTransport
 from wisp.transport.adapters import CLITransportAdapter, ServerTransportAdapter
 
 # Legacy exports for backward compatibility
@@ -37,6 +38,7 @@ __all__ = [
     "HeadlessTransport",
     "FileTransport",
     "MultiTransport",
+    "MetricsTransport",
     "CLITransportAdapter",
     "ServerTransportAdapter",
     # Legacy
