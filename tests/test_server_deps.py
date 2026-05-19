@@ -12,36 +12,28 @@ class TestAuthConfig:
 
     def test_auth_disabled_without_env(self):
         with patch.dict("os.environ", {}, clear=True):
-            import importlib
-            from wisp.server import deps
-            importlib.reload(deps)
-            auth = deps._AuthConfig()
+            from wisp.server.deps import _AuthConfig
+            auth = _AuthConfig()
             assert auth.required is False
 
     def test_auth_enabled_with_env(self):
         with patch.dict("os.environ", {"WISP_API_KEY": "secret123"}):
-            import importlib
-            from wisp.server import deps
-            importlib.reload(deps)
-            auth = deps._AuthConfig()
+            from wisp.server.deps import _AuthConfig
+            auth = _AuthConfig()
             assert auth.required is True
             assert auth.key == "secret123"
 
     def test_auth_disable(self):
         with patch.dict("os.environ", {"WISP_API_KEY": "secret123"}):
-            import importlib
-            from wisp.server import deps
-            importlib.reload(deps)
-            auth = deps._AuthConfig()
+            from wisp.server.deps import _AuthConfig
+            auth = _AuthConfig()
             auth.disable()
             assert auth.required is False
 
     def test_auth_set_key(self):
         with patch.dict("os.environ", {}, clear=True):
-            import importlib
-            from wisp.server import deps
-            importlib.reload(deps)
-            auth = deps._AuthConfig()
+            from wisp.server.deps import _AuthConfig
+            auth = _AuthConfig()
             auth.set_key("newkey")
             assert auth.required is True
             assert auth.key == "newkey"
@@ -52,44 +44,60 @@ class TestVerifyApiKey:
 
     @pytest.mark.asyncio
     async def test_no_auth_required_allows_any(self):
-        import importlib
-        from wisp.server import deps
-        importlib.reload(deps)
-        from wisp.server.deps import verify_api_key
-        result = await verify_api_key(None, None)
-        assert result == ""
+        from wisp.server.deps import _auth, verify_api_key
+        # Save and restore
+        orig_required = _auth.required
+        _auth._no_auth = True
+        _auth._key = ""
+        try:
+            result = await verify_api_key(None, None)
+            assert result == ""
+        finally:
+            _auth._no_auth = orig_required
 
     @pytest.mark.asyncio
     async def test_valid_header_key(self):
-        with patch.dict("os.environ", {"WISP_API_KEY": "secret123"}):
-            import importlib
-            from wisp.server import deps
-            importlib.reload(deps)
-            from wisp.server.deps import verify_api_key
+        from wisp.server.deps import _auth, verify_api_key
+        orig_key = _auth._key
+        orig_no_auth = _auth._no_auth
+        try:
+            _auth._key = "secret123"
+            _auth._no_auth = False
             result = await verify_api_key("secret123", None)
             assert result == "secret123"
+        finally:
+            _auth._key = orig_key
+            _auth._no_auth = orig_no_auth
 
     @pytest.mark.asyncio
     async def test_valid_bearer_token(self):
-        with patch.dict("os.environ", {"WISP_API_KEY": "secret123"}):
-            import importlib
-            from wisp.server import deps
-            importlib.reload(deps)
-            from wisp.server.deps import verify_api_key
+        from wisp.server.deps import _auth, verify_api_key
+        orig_key = _auth._key
+        orig_no_auth = _auth._no_auth
+        try:
+            _auth._key = "secret123"
+            _auth._no_auth = False
             result = await verify_api_key(None, "Bearer secret123")
             assert result == "secret123"
+        finally:
+            _auth._key = orig_key
+            _auth._no_auth = orig_no_auth
 
     @pytest.mark.asyncio
     async def test_invalid_key_raises_401(self):
-        with patch.dict("os.environ", {"WISP_API_KEY": "secret123"}):
-            import importlib
-            from wisp.server import deps
-            importlib.reload(deps)
-            from wisp.server.deps import verify_api_key
-            from fastapi import HTTPException
+        from wisp.server.deps import _auth, verify_api_key
+        from fastapi import HTTPException
+        orig_key = _auth._key
+        orig_no_auth = _auth._no_auth
+        try:
+            _auth._key = "secret123"
+            _auth._no_auth = False
             with pytest.raises(HTTPException) as exc:
                 await verify_api_key("wrong", None)
             assert exc.value.status_code == 401
+        finally:
+            _auth._key = orig_key
+            _auth._no_auth = orig_no_auth
 
 
 class TestRateLimiter:

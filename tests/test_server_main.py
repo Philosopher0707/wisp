@@ -28,11 +28,21 @@ class TestServerMain:
         assert "/ws/agent" in paths
 
     def test_main_can_disable_auth(self):
-        from wisp.server.main import main
-        from wisp.server.deps import _auth
-        with patch("uvicorn.run") as mock_run:
-            with patch.object(_auth, "disable") as mock_disable:
-                _auth._no_auth = False
-                _auth._key = "secret"
-                main(no_auth=True)
-                mock_disable.assert_called_once()
+        from wisp.server.main import main, app
+        from wisp.server.deps import _auth, verify_api_key
+        # Save original state
+        orig_no_auth = _auth._no_auth
+        orig_key = _auth._key
+        orig_overrides = dict(app.dependency_overrides)
+        try:
+            with patch("uvicorn.run") as mock_run:
+                with patch.object(_auth, "disable") as mock_disable:
+                    _auth._no_auth = False
+                    _auth._key = "secret"
+                    main(no_auth=True)
+                    mock_disable.assert_called_once()
+        finally:
+            # Restore original state
+            _auth._no_auth = orig_no_auth
+            _auth._key = orig_key
+            app.dependency_overrides = orig_overrides
