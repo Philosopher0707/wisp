@@ -183,6 +183,8 @@ class ArenaRunner:
     async def _run_side(self, workspace: Path, prompt: str,
                         model: str) -> tuple[str, str, list[str], int]:
         """Run the prompt with a single model. Returns (summary, diff, files, duration_ms)."""
+        import time
+        from wisp.transport.headless import HeadlessTransport
         start = time.time()
 
         try:
@@ -193,36 +195,38 @@ class ArenaRunner:
             config.auto_approve = True
 
             core = WispAgentCore(config=config)
-            content_parts: list[str] = []
+            transport = HeadlessTransport()
+            transport.start()
 
             try:
                 async for event in core.run(prompt):
-                    if event.type == TYPE_CONTENT:
-                        content_parts.append(event.text)
-                    elif event.type == TYPE_ERROR:
-                        content_parts.append(f"\n[Error: {event.data.get('message', 'unknown')}]")
+                    await transport.send(event)
+
+                result = transport.collect_result()
+                summary = result["content"]
+                if result["errors"]:
+                    summary += "\n" + "\n".join(f"[Error: {e['message']}]" for e in result["errors"])
+
+                # Collect changed files and diff
+                files_changed: list[str] = []
+                diff = ""
+                try:
+                    if hasattr(core.change_tracker, 'files_changed'):
+                        files_changed = core.change_tracker.files_changed()
+                    if hasattr(core.change_tracker, 'cumulative_diff'):
+                        diff = core.change_tracker.cumulative_diff()
+                except Exception:
+                    pass
+
+                # Fallback: get diff from git
+                if not diff and (workspace / ".git").exists():
+                    diff = self._git_diff(workspace)
+
+                duration_ms = round((time.time() - start) * 1000)
+                return summary, diff, files_changed, duration_ms
+
             finally:
                 core.close()
-
-            summary = "\n".join(content_parts)
-
-            # Collect changed files and diff
-            files_changed: list[str] = []
-            diff = ""
-            try:
-                if hasattr(core.change_tracker, 'files_changed'):
-                    files_changed = core.change_tracker.files_changed()
-                if hasattr(core.change_tracker, 'cumulative_diff'):
-                    diff = core.change_tracker.cumulative_diff()
-            except Exception:
-                pass
-
-            # Fallback: get diff from git
-            if not diff and (workspace / ".git").exists():
-                diff = self._git_diff(workspace)
-
-            duration_ms = round((time.time() - start) * 1000)
-            return summary, diff, files_changed, duration_ms
 
         except Exception as e:
             duration_ms = round((time.time() - start) * 1000)
