@@ -10,6 +10,14 @@ from unittest.mock import MagicMock, patch, AsyncMock
 class TestRunHeadless:
     """run_headless() executes prompts without I/O."""
 
+    @pytest.fixture(autouse=True)
+    def _clear_headless_cache(self):
+        """Clear the module-level headless root cache between tests."""
+        from wisp import entry
+        entry._headless_root = None
+        yield
+        entry._headless_root = None
+
     @pytest.mark.asyncio
     async def test_run_headless_returns_result(self):
         from wisp.entry import run_headless

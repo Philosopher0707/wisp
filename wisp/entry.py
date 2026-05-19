@@ -130,6 +130,9 @@ def _run_tui(root: CompositionRoot) -> None:
 
 # ── Headless mode ──────────────────────────────────────────────────
 
+_headless_root: CompositionRoot | None = None
+
+
 async def run_headless(prompt: str, model: str | None = None,
                        workspace: str | None = None,
                        session_id: str | None = None,
@@ -147,9 +150,11 @@ async def run_headless(prompt: str, model: str | None = None,
         session_id: Optional session ID.
         permission_mode: Permission mode for tool execution.
         root: Optional existing CompositionRoot to reuse.
-              If not provided, a new one is created.
+              If not provided, a cached headless root is used.
     """
     from wisp.transport.headless import HeadlessTransport
+
+    global _headless_root
 
     config = WispConfig()
     if model:
@@ -162,8 +167,10 @@ async def run_headless(prompt: str, model: str | None = None,
 
     own_root = root is None
     if own_root:
-        root = CompositionRoot(config)
-        root.start()
+        if _headless_root is None:
+            _headless_root = CompositionRoot(config)
+            _headless_root.start()
+        root = _headless_root
 
     try:
         transport = HeadlessTransport()
@@ -186,4 +193,5 @@ async def run_headless(prompt: str, model: str | None = None,
 
     finally:
         if own_root:
-            root.shutdown()
+            # Don't shutdown cached root — reuse it
+            pass
