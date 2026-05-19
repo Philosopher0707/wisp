@@ -18,6 +18,8 @@ from wisp.transport.base import Transport
 from wisp.transport.cli_v2 import CLITransport as CLITransportV2
 from wisp.transport.websocket import WebSocketTransport
 from wisp.transport.sse import SSETransport
+from wisp.transport.tui import TUITransport
+from wisp.transport.adapters import CLITransportAdapter, ServerTransportAdapter
 
 # Legacy exports for backward compatibility
 from wisp.transport.cli import CLITransport
@@ -28,6 +30,9 @@ __all__ = [
     "CLITransportV2",
     "WebSocketTransport",
     "SSETransport",
+    "TUITransport",
+    "CLITransportAdapter",
+    "ServerTransportAdapter",
     # Legacy
     "CLITransport",
     "ServerTransport",
