@@ -6,9 +6,11 @@ Handles file operations.
 import base64
 import logging
 import os
+import shutil
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 
 from wisp.server.deps import verify_api_key
 from wisp.server.routes.workspace import WORKSPACE_ROOT
@@ -16,6 +18,23 @@ from wisp.server.routes.workspace import WORKSPACE_ROOT
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+class FileWriteRequest(BaseModel):
+    content: str
+
+
+class FileBinaryRequest(BaseModel):
+    content_base64: str
+
+
+class FileEditRequest(BaseModel):
+    old_text: str
+    new_text: str
+
+
+class FileRenameRequest(BaseModel):
+    new_path: str = Field(..., min_length=1)
 
 
 def _resolve_path(path: str) -> Path:
@@ -88,15 +107,58 @@ async def file_tree():
 
 
 @router.post("/api/files", dependencies=[Depends(verify_api_key)])
-async def create_file():
-    return {"created": True}
+async def create_file(path: str, req: FileWriteRequest):
+    target = _resolve_path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(req.content, encoding="utf-8")
+    return {"ok": True, "path": path}
 
 
 @router.post("/api/files/edit", dependencies=[Depends(verify_api_key)])
-async def edit_file():
-    return {"edited": True}
+async def edit_file(path: str, req: FileEditRequest):
+    target = _resolve_path(path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    content = target.read_text(encoding="utf-8")
+    if req.old_text not in content:
+        raise HTTPException(status_code=400, detail="old_text not found in file")
+    new_content = content.replace(req.old_text, req.new_text, 1)
+    target.write_text(new_content, encoding="utf-8")
+    return {"ok": True, "path": path}
+
+
+@router.post("/api/files/binary", dependencies=[Depends(verify_api_key)])
+async def write_binary_file(path: str, req: FileBinaryRequest):
+    target = _resolve_path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    data = base64.b64decode(req.content_base64)
+    target.write_bytes(data)
+    return {"ok": True, "path": path, "size": len(data)}
+
+
+@router.post("/api/files/rename", dependencies=[Depends(verify_api_key)])
+async def rename_file(path: str, req: FileRenameRequest):
+    source = _resolve_path(path)
+    dest = _resolve_path(req.new_path)
+    if not source.exists():
+        raise HTTPException(status_code=404, detail="Source not found")
+    if dest.exists():
+        raise HTTPException(status_code=400, detail="Destination already exists")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(source), str(dest))
+    return {"ok": True, "from": path, "to": req.new_path}
 
 
 @router.delete("/api/files", dependencies=[Depends(verify_api_key)])
-async def delete_file():
-    return {"deleted": True}
+async def delete_file(path: str):
+    target = _resolve_path(path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
