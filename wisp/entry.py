@@ -112,3 +112,51 @@ def _run_tui(root: CompositionRoot) -> None:
         # TODO: launch Textual app and wire to transport
     finally:
         transport.stop()
+
+
+# ── Headless mode ──────────────────────────────────────────────────
+
+async def run_headless(prompt: str, model: str | None = None,
+                       workspace: str | None = None,
+                       session_id: str | None = None,
+                       permission_mode: str = "full") -> dict:
+    """Run a prompt headlessly and return structured result.
+
+    Uses CompositionRoot + HeadlessTransport for consistent
+    event collection across CLI, server, and background modes.
+    """
+    from wisp.transport.headless import HeadlessTransport
+
+    config = WispConfig()
+    if model:
+        config.model = model
+    if workspace:
+        config.workspace = workspace
+    config.permission_mode = permission_mode
+    config.auto_approve = True
+    config.show_thinking = True
+
+    root = CompositionRoot(config)
+    root.start()
+
+    try:
+        transport = HeadlessTransport()
+        transport.start()
+
+        session = await root.runtime.get_or_create_session(
+            session_id=session_id or "headless",
+            model=config.model,
+            workspace=config.workspace,
+        )
+
+        async for event in root.runtime.run_turn(session, prompt):
+            await transport.send(event)
+
+        result = transport.collect_result()
+        result["session_id"] = session.get("id", session_id)
+        result["prompt"] = prompt
+        result["model"] = config.model
+        return result
+
+    finally:
+        root.shutdown()

@@ -207,92 +207,15 @@ def cmd_print(prompt, model=None, session_id=None, output_format="json", quiet=F
             sys.stderr.write("No local server found — running agent in-process...\n")
         try:
             import asyncio
-            from wisp.config import WispConfig as _WispConfig
-            from wisp.core.agent import WispAgentCore as _WispAgentCore
-            from wisp.adapters import get_store as _get_store
-            import time as _time
+            from wisp.entry import run_headless
 
-            config = _WispConfig()
-            if model:
-                config.model = model
-            config.workspace = os.getcwd()
-            config.auto_approve = True
-            config.show_thinking = True
-            config.permission_mode = "full"
-
-            s = None
-            if session_id:
-                sm = _get_store()
-                s = sm.load(session_id)
-                if s is None:
-                    resolved = sm.resolve_session_id(session_id)
-                    if resolved:
-                        s = sm.load(resolved)
-
-            core = _WispAgentCore(config=config, session=s)
-            if s is not None and s.messages:
-                core.messages = list(s.messages)
-
-            # Collect events in memory
-            content_parts: list[str] = []
-            thinking_parts: list[str] = []
-            tool_calls: list[dict] = []
-            errors: list[dict] = []
-            session_id_out = ""
-            iterations = 0
-            start = _time.time()
-
-            async def _run_and_collect():
-                nonlocal session_id_out, iterations
-                async for event in core.run(prompt):
-                    etype = event.type
-                    if etype == "content":
-                        content_parts.append(event.text)
-                    elif etype == "thinking":
-                        thinking_parts.append(event.text)
-                    elif etype == "tool_call":
-                        tool_calls.append({
-                            "name": event.data.get("name", ""),
-                            "args": event.data.get("arguments", {}),
-                            "result": "",
-                        })
-                    elif etype == "tool_result":
-                        for tc in reversed(tool_calls):
-                            if tc["name"] == event.data.get("name", "") and "result" in tc and not tc["result"]:
-                                tc["result"] = event.data.get("result", "")
-                                tc["duration_ms"] = event.data.get("duration_ms")
-                                break
-                        else:
-                            tool_calls.append({
-                                "name": event.data.get("name", ""),
-                                "result": event.data.get("result", ""),
-                                "duration_ms": event.data.get("duration_ms"),
-                            })
-                    elif etype == "error":
-                        errors.append({
-                            "message": event.data.get("message", ""),
-                            "recoverable": event.data.get("recoverable", True),
-                        })
-                    elif etype == "done":
-                        session_id_out = event.data.get("session_id", "")
-                        iterations = event.data.get("turns", 0)
-
-            asyncio.run(_run_and_collect())
-            core.close()
-
-            duration = (_time.time() - start) * 1000
-            result = {
-                "ok": len(errors) == 0,
-                "session_id": session_id_out or (core.session.id if core.session else ""),
-                "content": "\n".join(content_parts),
-                "thinking": "\n".join(thinking_parts) if thinking_parts else "",
-                "tool_calls": tool_calls,
-                "files_changed": [],
-                "iterations": iterations,
-                "duration_ms": round(duration),
-            }
-            if errors:
-                result["errors"] = errors
+            result = asyncio.run(run_headless(
+                prompt=prompt,
+                model=model,
+                workspace=os.getcwd(),
+                session_id=session_id,
+                permission_mode="full",
+            ))
         except Exception as e:
             result = {"ok": False, "error": str(e)}
             exit_code = 1
