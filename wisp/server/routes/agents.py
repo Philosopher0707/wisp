@@ -1,15 +1,16 @@
 """Agents router.
 
-Handles WebSocket agent connections.
+Handles WebSocket agent connections using WebSocketTransport + AgentRuntime.
 """
 
 import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 
 from wisp.server.deps import _auth
+from wisp.transport.websocket import WebSocketTransport
 
 logger = logging.getLogger(__name__)
 
@@ -20,12 +21,24 @@ router = APIRouter()
 async def agent_websocket(websocket: WebSocket):
     """WebSocket endpoint — auth via first-message AuthMessage frame only.
 
-    Query-param auth removed: REST uses headers; WS uses a JSON frame
-    so the API key never appears in URL.
+    Uses WebSocketTransport for event streaming and AgentRuntime for
+    turn execution. Query-param auth removed: REST uses headers; WS
+    uses a JSON frame so the API key never appears in URL.
     """
     await websocket.accept()
     _ws_authenticated = not _auth.required
     client_id = f"{websocket.client.host}:{websocket.client.port}" if websocket.client else "unknown"
+
+    # Get runtime from app state (created in lifespan)
+    root = getattr(websocket.app.state, "root", None)
+    if root is not None:
+        transport = WebSocketTransport(root.runtime)
+        transport.start()
+    else:
+        transport = None
+
+    session_id = None
+    model = None
 
     try:
         while True:
@@ -70,9 +83,25 @@ async def agent_websocket(websocket: WebSocket):
                 if not prompt:
                     await websocket.send_json({"type": "error", "message": "Empty prompt"})
                     continue
-                # TODO: integrate with actual agent core
-                await websocket.send_json({"type": "content", "text": f"Echo: {prompt}"})
-                await websocket.send_json({"type": "complete"})
+
+                if transport is not None and root is not None:
+                    # Initialize session on first prompt
+                    if session_id is None:
+                        session_id = msg.get("session_id") or f"ws-{client_id}"
+                        model = msg.get("model") or root.config.model
+                        await transport.handle(
+                            ws=websocket,
+                            session_id=session_id,
+                            model=model,
+                            workspace=root.config.workspace,
+                        )
+
+                    # Route through transport
+                    await transport.receive_message(websocket, {"type": "user", "text": prompt})
+                else:
+                    # Fallback echo when no runtime available
+                    await websocket.send_json({"type": "content", "text": f"Echo: {prompt}"})
+                    await websocket.send_json({"type": "complete"})
                 continue
 
             if msg_type == "tool_approval":
@@ -114,5 +143,7 @@ async def agent_websocket(websocket: WebSocket):
     except Exception as e:
         logger.error("WebSocket error for %s: %s", client_id, e)
     finally:
+        if transport is not None:
+            transport.stop()
         if not websocket.client_state.DISCONNECTED:
             await websocket.close()
