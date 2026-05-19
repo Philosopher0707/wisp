@@ -18,26 +18,16 @@ from typing import Any
 from wisp.composition import CompositionRoot
 from wisp.config import WispConfig
 from wisp.transport.cli_v2 import CLITransport
+from wisp.transport.tui import TUITransport
 
 logger = logging.getLogger(__name__)
-
-
-class ServerTransport:
-    """Placeholder for server transport."""
-
-    def __init__(self, runtime: Any):
-        self.runtime = runtime
-
-    async def run(self) -> None:
-        from wisp.server import main as server_main
-        server_main()
 
 
 def run_mode(mode: str, prompt: str | None = None, **kwargs) -> None:
     """Run Wisp in the specified mode.
 
     Args:
-        mode: "cli", "server", or "tui"
+        mode: "cli", "server", "tui"
         prompt: Optional initial prompt for CLI mode
     """
     config = WispConfig()
@@ -47,14 +37,49 @@ def run_mode(mode: str, prompt: str | None = None, **kwargs) -> None:
         root.start()
 
         if mode == "cli":
-            transport = CLITransport(root.runtime)
-            # TODO: implement full CLI run with prompt
-            logger.info(f"CLI mode with prompt: {prompt}")
+            _run_cli(root, prompt)
         elif mode == "server":
-            transport = ServerTransport(root.runtime)
-            asyncio.run(transport.run())
+            _run_server(root, **kwargs)
+        elif mode == "tui":
+            _run_tui(root)
         else:
             raise ValueError(f"Unknown mode: {mode}")
 
     finally:
         root.shutdown()
+
+
+def _run_cli(root: CompositionRoot, prompt: str | None = None) -> None:
+    """Run CLI mode."""
+    import sys
+    transport = CLITransport(root.runtime)
+    transport.start()
+    try:
+        if prompt:
+            logger.info("CLI mode with prompt: %s", prompt)
+            # TODO: run single turn with prompt
+        else:
+            logger.info("CLI REPL mode")
+            # TODO: run REPL loop
+    finally:
+        transport.stop()
+
+
+def _run_server(root: CompositionRoot, **kwargs) -> None:
+    """Run server mode."""
+    from wisp.server.main import main as server_main
+    host = kwargs.get("host", "0.0.0.0")
+    port = kwargs.get("port", 8000)
+    no_auth = kwargs.get("no_auth", False)
+    server_main(host=host, port=port, no_auth=no_auth)
+
+
+def _run_tui(root: CompositionRoot) -> None:
+    """Run TUI mode."""
+    transport = TUITransport()
+    transport.start()
+    try:
+        logger.info("TUI mode")
+        # TODO: launch Textual app and wire to transport
+    finally:
+        transport.stop()

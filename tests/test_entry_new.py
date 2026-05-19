@@ -44,15 +44,11 @@ class TestNewEntryPoint:
                 run_mode("cli", "test prompt")
                 mock_transport.assert_called_once_with(mock_instance.runtime)
 
-    def test_server_mode_uses_server_transport(self):
+    def test_server_mode_runs_server_main(self):
         from wisp.entry import run_mode
         with patch("wisp.entry.CompositionRoot") as mock_root:
-            with patch("wisp.entry.ServerTransport") as mock_transport:
+            with patch("wisp.entry._run_server") as mock_run_server:
                 mock_instance = MagicMock()
                 mock_root.return_value = mock_instance
-                # Make run() return a coroutine
-                async def _fake_run():
-                    pass
-                mock_transport.return_value.run = _fake_run
                 run_mode("server")
-                mock_transport.assert_called_once_with(mock_instance.runtime)
+                mock_run_server.assert_called_once_with(mock_instance)
