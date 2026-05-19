@@ -92,24 +92,28 @@ class CLITransport(Transport):
         # blocking issues on real TTYs where readline() can't be cancelled.
         queue: asyncio.Queue[str | None] = asyncio.Queue()
         stop_event = threading.Event()
+        loop = asyncio.get_running_loop()
+
+        def _put(item: str | None) -> None:
+            """Thread-safe put into asyncio queue via call_soon_threadsafe."""
+            queue.put_nowait(item)
 
         def _reader() -> None:
             while not stop_event.is_set():
                 try:
                     line = stdin.readline()
                 except Exception:
-                    asyncio.run_coroutine_threadsafe(queue.put(None), loop)
-                    break
+                    loop.call_soon_threadsafe(_put, None)
+                    return
                 if not line:
-                    asyncio.run_coroutine_threadsafe(queue.put(None), loop)
-                    break
+                    loop.call_soon_threadsafe(_put, None)
+                    return
                 prompt = line.strip()
                 if prompt.lower() in ("exit", "quit"):
-                    asyncio.run_coroutine_threadsafe(queue.put(None), loop)
-                    break
-                asyncio.run_coroutine_threadsafe(queue.put(prompt), loop)
+                    loop.call_soon_threadsafe(_put, None)
+                    return
+                loop.call_soon_threadsafe(_put, prompt)
 
-        loop = asyncio.get_running_loop()
         reader_thread = threading.Thread(target=_reader, daemon=True)
         reader_thread.start()
 
