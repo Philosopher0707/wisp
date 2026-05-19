@@ -12,6 +12,7 @@ Design:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -36,11 +37,14 @@ class CLITransport(Transport):
             self._render_event(self._stdout, event)
 
     async def recv(self) -> str | None:
-        """Receive a prompt from stdin."""
+        """Receive a prompt from stdin.
+
+        Uses asyncio.to_thread() to avoid blocking the event loop.
+        """
         if self._stdin is None:
             return None
         try:
-            line = self._stdin.readline()
+            line = await asyncio.to_thread(self._stdin.readline)
         except Exception:
             return None
         if not line:
@@ -69,7 +73,10 @@ class CLITransport(Transport):
     # ── CLI-specific methods ──────────────────────────────────────
 
     async def run(self, stdin: Any, stdout: Any, session_id: str, model: str, workspace: str) -> None:
-        """Run the CLI REPL loop."""
+        """Run the CLI REPL loop.
+
+        Uses asyncio.to_thread() for stdin reads to keep the event loop free.
+        """
         session = await self.runtime.get_or_create_session(
             session_id=session_id,
             model=model,
@@ -81,7 +88,7 @@ class CLITransport(Transport):
 
         while True:
             try:
-                line = stdin.readline()
+                line = await asyncio.to_thread(stdin.readline)
             except Exception:
                 break
 
