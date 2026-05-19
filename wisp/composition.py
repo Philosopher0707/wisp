@@ -46,6 +46,14 @@ class CompositionRoot:
         self.extensions = ExtensionHost()
         self.telemetry = Telemetry()
 
+        # Register built-in extensions
+        from wisp.extensions import PluginExtension, HookExtension, MCPExtension, SkillExtension
+        workspace = getattr(self.config, "workspace", ".")
+        self.extensions.register(PluginExtension())
+        self.extensions.register(HookExtension())
+        self.extensions.register(MCPExtension(workspace=str(workspace)))
+        self.extensions.register(SkillExtension(workspace=str(workspace)))
+
         # Create runtime with injected dependencies
         self.runtime = AgentRuntime(
             store=self.store,
