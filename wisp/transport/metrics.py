@@ -80,6 +80,10 @@ class MetricsTransport(Transport):
                 self._latency_ms += (time.time() - self._turn_start) * 1000
                 self._turn_start = None
 
+        # Start timing on first event of a turn
+        if self._turn_start is None and etype != "done":
+            self._turn_start = time.time()
+
     async def recv(self) -> str | None:
         """Metrics transport does not receive user input."""
         return None

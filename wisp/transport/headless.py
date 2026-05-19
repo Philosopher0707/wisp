@@ -45,14 +45,13 @@ class HeadlessTransport(Transport):
         if hasattr(event, "type"):
             # AgentEvent object — flatten to dict
             data = getattr(event, "data", {})
-            flat = {
-                "type": str(event.type),
-                "timestamp": getattr(event, "timestamp", 0.0),
-            }
-            # Copy data fields to top level for collect_result()
-            flat.update(data)
-            # Also preserve text accessor
-            if hasattr(event, "text") and event.text:
+            # Start with data fields, then overlay metadata
+            # This prevents data["type"] from overwriting the event type
+            flat = dict(data)
+            flat["type"] = str(event.type)
+            flat["timestamp"] = getattr(event, "timestamp", 0.0)
+            # Preserve text accessor if not already in data
+            if hasattr(event, "text") and event.text and "text" not in flat:
                 flat["text"] = event.text
             self.events.append(flat)
         else:
