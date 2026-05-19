@@ -38,6 +38,8 @@ from wisp.server.connections import (
     manager,
 )
 
+from wisp.app_server import WispAppServer
+
 __all__ = [
     "_auth",
     "API_KEY",
@@ -59,4 +61,5 @@ __all__ = [
     "Connection",
     "ConnectionManager",
     "manager",
+    "WispAppServer",
 ]
