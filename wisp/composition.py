@@ -71,10 +71,17 @@ class CompositionRoot:
 
     def _create_core(self) -> WispAgentCore:
         """Factory for creating stateless core instances."""
-        # TODO: inject real provider based on config
-        from wisp.infra.security import PermissionMode
+        from wisp.providers.factory import ProviderFactory
+
+        provider_name = getattr(self.config, "provider", None)
+        if provider_name:
+            factory = ProviderFactory()
+            provider = factory.from_config(self.config)
+        else:
+            provider = _NullProvider()
+
         return WispAgentCore(
-            provider=_NullProvider(),
+            provider=provider,
             security=self.security,
             extensions=self.extensions,
             telemetry=self.telemetry,
