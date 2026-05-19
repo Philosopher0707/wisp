@@ -50,9 +50,6 @@ class TestNewEntryPoint:
 
     def test_server_mode_runs_server_main(self):
         from wisp.entry import run_mode
-        with patch("wisp.entry.CompositionRoot") as mock_root:
-            with patch("wisp.entry._run_server") as mock_run_server:
-                mock_instance = MagicMock()
-                mock_root.return_value = mock_instance
-                run_mode("server")
-                mock_run_server.assert_called_once_with(mock_instance)
+        with patch("wisp.entry._run_server") as mock_run_server:
+            run_mode("server")
+            mock_run_server.assert_called_once_with()

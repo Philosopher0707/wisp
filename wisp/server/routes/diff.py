@@ -91,6 +91,7 @@ Return ONLY the replacement code for the selection. No explanation, no markdown 
         prompt=edit_prompt,
         model=req.model,
         permission_mode="read_only",
+        root=request.app.state.root if hasattr(request.app.state, "root") else None,
     )
 
     replacement = result.get("content", "").strip()

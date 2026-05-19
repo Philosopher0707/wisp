@@ -929,7 +929,27 @@ class WispAgentCore:
             )
         return None
 
-    # ── Turn execution ───────────────────────────────────────────────
+    # ── Turn execution (Transport ABC interface) ─────────────────────
+
+    async def turn(self, session: dict, prompt: str) -> AsyncIterator[AgentEvent]:
+        """Execute one user turn — Transport ABC entry point.
+
+        Args:
+            session: Session dict (from AgentRuntime) with messages, model, etc.
+            prompt: User prompt text.
+
+        Yields:
+            AgentEvent instances for content, thinking, tool calls, etc.
+        """
+        # Sync session state if provided
+        if session and "messages" in session:
+            self.messages = list(session["messages"])
+        if session and "model" in session:
+            self.config.model = session["model"]
+
+        system = self._build_system_prompt(query=prompt)
+        async for event in self._arun(prompt, system=system):
+            yield event
 
     async def _arun(
         self,

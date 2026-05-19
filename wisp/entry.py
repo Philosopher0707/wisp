@@ -30,6 +30,11 @@ def run_mode(mode: str, prompt: str | None = None, **kwargs) -> None:
         mode: "cli", "server", "tui"
         prompt: Optional initial prompt for CLI mode
     """
+    if mode == "server":
+        # Server creates its own CompositionRoot in lifespan
+        _run_server(**kwargs)
+        return
+
     config = WispConfig()
     root = CompositionRoot(config)
 
@@ -37,9 +42,7 @@ def run_mode(mode: str, prompt: str | None = None, **kwargs) -> None:
         root.start()
 
         if mode == "cli":
-            _run_cli(root, prompt)
-        elif mode == "server":
-            _run_server(root, **kwargs)
+            _run_cli(root, prompt, **kwargs)
         elif mode == "tui":
             _run_tui(root)
         else:
@@ -94,8 +97,12 @@ async def _run_single_prompt(transport: CLITransport, root: CompositionRoot, pro
     sys.stdout.flush()
 
 
-def _run_server(root: CompositionRoot, **kwargs) -> None:
-    """Run server mode."""
+def _run_server(**kwargs) -> None:
+    """Run server mode.
+
+    Server creates its own CompositionRoot in lifespan —
+    no need to create one here.
+    """
     from wisp.server.main import main as server_main
     host = kwargs.get("host", "0.0.0.0")
     port = kwargs.get("port", 8000)
@@ -119,11 +126,21 @@ def _run_tui(root: CompositionRoot) -> None:
 async def run_headless(prompt: str, model: str | None = None,
                        workspace: str | None = None,
                        session_id: str | None = None,
-                       permission_mode: str = "full") -> dict:
+                       permission_mode: str = "full",
+                       root: CompositionRoot | None = None) -> dict:
     """Run a prompt headlessly and return structured result.
 
     Uses CompositionRoot + HeadlessTransport for consistent
     event collection across CLI, server, and background modes.
+
+    Args:
+        prompt: The user prompt to execute.
+        model: Optional model override.
+        workspace: Optional workspace override.
+        session_id: Optional session ID.
+        permission_mode: Permission mode for tool execution.
+        root: Optional existing CompositionRoot to reuse.
+              If not provided, a new one is created.
     """
     from wisp.transport.headless import HeadlessTransport
 
@@ -136,8 +153,10 @@ async def run_headless(prompt: str, model: str | None = None,
     config.auto_approve = True
     config.show_thinking = True
 
-    root = CompositionRoot(config)
-    root.start()
+    own_root = root is None
+    if own_root:
+        root = CompositionRoot(config)
+        root.start()
 
     try:
         transport = HeadlessTransport()
@@ -159,4 +178,5 @@ async def run_headless(prompt: str, model: str | None = None,
         return result
 
     finally:
-        root.shutdown()
+        if own_root:
+            root.shutdown()

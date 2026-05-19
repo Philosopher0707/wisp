@@ -9,7 +9,7 @@ import logging
 import re
 import subprocess
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from wisp.server.deps import verify_api_key
@@ -69,18 +69,19 @@ def _extract_json(text: str) -> str | None:
     return None
 
 
-async def _run_agent_headless(prompt: str, model: str | None = None, permission_mode: str = "read_only") -> dict:
+async def _run_agent_headless(prompt: str, model: str | None = None, permission_mode: str = "read_only", root=None) -> dict:
     """Run agent headlessly and return result."""
     from wisp.entry import run_headless
     return await run_headless(
         prompt=prompt,
         model=model,
         permission_mode=permission_mode,
+        root=root,
     )
 
 
 @router.post("/api/review/pr", dependencies=[Depends(verify_api_key)])
-async def review_pr(req: PRReviewRequest):
+async def review_pr(req: PRReviewRequest, request: Request):
     """Review a PR by diffing base vs head and running the agent."""
     git_dir = WORKSPACE_ROOT / ".git"
     if not git_dir.exists():
@@ -145,6 +146,7 @@ Return your review as JSON:
         prompt=review_prompt,
         model=req.model,
         permission_mode="read_only",
+        root=request.app.state.root if hasattr(request.app.state, "root") else None,
     )
 
     try:
@@ -161,7 +163,7 @@ Return your review as JSON:
 
 
 @router.post("/api/review/diff", dependencies=[Depends(verify_api_key)])
-async def review_diff(req: DiffReviewRequest):
+async def review_diff(req: DiffReviewRequest, request: Request):
     """Review uncommitted changes, staged changes, or a specific commit diff."""
     git_dir = WORKSPACE_ROOT / ".git"
     if not git_dir.exists():
@@ -230,6 +232,7 @@ Return your review as JSON:
     result = await _run_agent_headless(
         prompt=review_prompt,
         permission_mode="read_only",
+        root=request.app.state.root if hasattr(request.app.state, "root") else None,
     )
 
     try:
@@ -246,7 +249,7 @@ Return your review as JSON:
 
 
 @router.post("/api/review/best-of-n", dependencies=[Depends(verify_api_key)])
-async def review_best_of_n(req: BestOfNRequest):
+async def review_best_of_n(req: BestOfNRequest, request: Request):
     """Run N parallel reviews with different models and compare results."""
     git_dir = WORKSPACE_ROOT / ".git"
     if not git_dir.exists():
@@ -277,12 +280,15 @@ and suggest improvements.
 Be concise and return a JSON object with: summary, issues (list of {{severity, file, line, message, suggestion}}), and approval.
 """
 
+    root = request.app.state.root if hasattr(request.app.state, "root") else None
+
     async def _review_with_model(model: str) -> dict:
         try:
             result = await _run_agent_headless(
                 prompt=review_prompt,
                 model=model,
                 permission_mode="read_only",
+                root=root,
             )
             content = result.get("content", "")
             json_match = _extract_json(content)
