@@ -39,7 +39,11 @@ class CompositionRoot:
             raise TypeError("config is required")
 
         # Create infrastructure services
-        self.store = UnifiedStore(self.config.db_path)
+        db_path = getattr(self.config, "db_path", None)
+        if db_path is None:
+            workspace = getattr(self.config, "workspace", ".")
+            db_path = Path(workspace) / ".wisp" / "wisp.db"
+        self.store = UnifiedStore(db_path)
         self.security = SecurityPolicy(
             permission_mode=self.config.permission_mode,
         )

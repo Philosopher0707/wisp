@@ -180,6 +180,9 @@ class WispAgentCore:
         agent_id: Optional[str] = None,
         role: Optional[str] = None,
         provider: Any = None,
+        security: Any = None,
+        extensions: Any = None,
+        telemetry: Any = None,
     ):
         self.config = config or WispConfig()
         if provider is not None:
@@ -188,6 +191,11 @@ class WispAgentCore:
             self.provider = get_provider(self.config)
         # Backward-compatible alias while the rest of the codebase migrates.
         self.client = self.provider
+
+        # Injected services from CompositionRoot
+        self.security = security
+        self.extensions = extensions
+        self.telemetry = telemetry
 
         # Health check on startup — use to_thread when called from async context
         # so we do not block the event loop for 5-10 seconds (Issue 20).
