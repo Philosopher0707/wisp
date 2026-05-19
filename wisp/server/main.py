@@ -89,3 +89,31 @@ app.include_router(mcp_router)
 app.include_router(agents_router)
 app.include_router(search_router)
 app.include_router(diagnostics_router)
+
+
+def main(host: str = "0.0.0.0", port: int = 8000, no_auth: bool = False):
+    """Entry point to run the Wisp API server."""
+    import uvicorn
+    from fastapi import Header
+
+    if no_auth:
+        from wisp.server.deps import _auth, verify_api_key
+        _auth.disable()
+
+        async def _noop_auth(
+            x_api_key_header: str | None = Header(None, alias="X-API-Key"),
+            authorization: str | None = Header(None),
+        ):
+            return x_api_key_header or authorization or ""
+        app.dependency_overrides[verify_api_key] = _noop_auth
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    uvicorn.run(app, host=host, port=port)
+
+
+if __name__ == "__main__":
+    main()
