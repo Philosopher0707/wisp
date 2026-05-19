@@ -4,7 +4,12 @@ Replaces: monolithic 2954-line server.py.
 Mounts all domain routers on a single FastAPI app.
 """
 
+import logging
+import os
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from wisp.server.routes.sessions import router as sessions_router
 from wisp.server.routes.files import router as files_router
@@ -31,7 +36,33 @@ from wisp.server.routes.agents import router as agents_router
 from wisp.server.routes.search import router as search_router
 from wisp.server.routes.diagnostics import router as diagnostics_router
 
-app = FastAPI(title="Wisp API")
+logger = logging.getLogger(__name__)
+
+# CORS Configuration
+_cors_raw = os.environ.get("WISP_CORS_ORIGINS", "")
+if _cors_raw:
+    CORS_ORIGINS = [o.strip() for o in _cors_raw.split(",") if o.strip()]
+else:
+    CORS_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan handler."""
+    logger.info("Wisp API Server starting...")
+    yield
+    logger.info("Wisp API Server shutting down...")
+
+
+app = FastAPI(title="Wisp API", version="0.1.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Mount all routers
 app.include_router(sessions_router)
