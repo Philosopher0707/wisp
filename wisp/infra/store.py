@@ -39,6 +39,7 @@ class UnifiedStore:
             str(self.db_path),
             check_same_thread=False,
             timeout=5.0,
+            isolation_level=None,  # autocommit — each statement is its own transaction
         )
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
