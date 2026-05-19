@@ -48,10 +48,22 @@ else:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan handler."""
+    """Application lifespan handler.
+
+    Creates CompositionRoot on startup and wires it into app.state
+    so routes can access shared services.
+    """
+    from wisp.composition import CompositionRoot
+    from wisp.config import WispConfig
+
     logger.info("Wisp API Server starting...")
+    config = WispConfig()
+    root = CompositionRoot(config)
+    root.start()
+    app.state.root = root
     yield
     logger.info("Wisp API Server shutting down...")
+    root.shutdown()
 
 
 app = FastAPI(title="Wisp API", version="0.1.0", lifespan=lifespan)
