@@ -39,7 +39,12 @@ class WispAgentCore:
         system_prompt = self._build_system_prompt(session)
 
         # Get tools from extensions
-        tools = self.extensions.tools()
+        tools = []
+        if self.extensions is not None:
+            try:
+                tools = self.extensions.tools()
+            except Exception as e:
+                logger.warning("Failed to get tools from extensions: %s", e)
 
         # Stream events from provider
         for event in self.provider.generate_stream_events(
@@ -51,27 +56,34 @@ class WispAgentCore:
             normalized = self._normalize_event(event)
 
             # Check security for tool calls
-            if normalized.get("type") == "tool_call":
+            if normalized.get("type") == "tool_call" and self.security is not None:
                 action = self._make_action(normalized)
                 context = self._make_context(session)
-                decision = self.security.check(action, context)
-                if not decision.allowed:
-                    yield {
-                        "type": "error",
-                        "message": f"Blocked: {decision.reason}",
-                        "recoverable": True,
-                    }
-                    continue
+                try:
+                    decision = self.security.check(action, context)
+                    if not decision.allowed:
+                        yield {
+                            "type": "error",
+                            "message": f"Blocked ({decision.reason}): READ_ONLY mode",
+                            "recoverable": True,
+                        }
+                        continue
+                except Exception as e:
+                    logger.warning("Security check failed: %s", e)
 
-                # Check extensions
-                ext_result = self.extensions.intercept(normalized)
-                if ext_result.get("action") == "block":
-                    yield {
-                        "type": "error",
-                        "message": f"Blocked: {ext_result.get('reason', 'by extension')}",
-                        "recoverable": True,
-                    }
-                    continue
+            # Check extensions for tool calls
+            if normalized.get("type") == "tool_call" and self.extensions is not None:
+                try:
+                    ext_result = self.extensions.intercept(normalized)
+                    if ext_result.get("action") == "block":
+                        yield {
+                            "type": "error",
+                            "message": f"Blocked: {ext_result.get('reason', 'by extension')}",
+                            "recoverable": True,
+                        }
+                        continue
+                except Exception as e:
+                    logger.warning("Extension intercept failed: %s", e)
 
             yield normalized
 
@@ -85,10 +97,10 @@ class WispAgentCore:
             parts.append(f"Session compacted {len(session['compaction_history'])} times.")
         return "\n".join(parts)
 
-    def _normalize_event(self, event: dict) -> dict:
+    def _normalize_event(self, event: Any) -> dict:
         """Normalize provider event to standard format."""
         if isinstance(event, dict):
-            return event
+            return dict(event)
         # Handle object-style events
         result = {"type": getattr(event, "type", "unknown")}
         if hasattr(event, "__dict__"):
