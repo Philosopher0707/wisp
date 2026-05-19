@@ -10,4 +10,5 @@ router = APIRouter()
 
 @router.get("/api/health")
 async def health_check():
-    return {"status": "ok"}
+    from wisp import __version__
+    return {"status": "ok", "version": __version__}
