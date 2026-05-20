@@ -82,8 +82,7 @@ class AgentEvent:
     def to_dict(self) -> dict:
         """Serialize to a JSON-friendly dict.
 
-        Useful for custom transports that need to send events over
-        WebSocket, HTTP, or other protocols.
+        Canonical format: {"type": str, "data": {...}, "timestamp": float}
         """
         return {
             "type": str(self.type),
@@ -93,12 +92,71 @@ class AgentEvent:
 
     @classmethod
     def from_dict(cls, data: dict) -> AgentEvent:
-        """Deserialize from a dict (round-trips with to_dict)."""
+        """Deserialize from a dict (round-trips with to_dict).
+
+        Handles both canonical format ({type, data}) and flat format
+        ({type, text, ...}) for backward compatibility.
+        """
+        ev_type = data.get("type", "")
+        ev_data = data.get("data")
+
+        if ev_data is not None:
+            # Canonical format
+            return cls(
+                type=ev_type,
+                data=dict(ev_data),
+                timestamp=data.get("timestamp", 0.0),
+            )
+
+        # Flat format: wrap non-type keys into data
+        flat_data = {k: v for k, v in data.items() if k not in ("type", "timestamp")}
         return cls(
-            type=data["type"],
-            data=data.get("data", {}),
+            type=ev_type,
+            data=flat_data,
             timestamp=data.get("timestamp", 0.0),
         )
+
+
+# ── Event normalizer ──────────────────────────────────────────────
+
+def normalize_event(event: Any) -> AgentEvent:
+    """Normalize any event representation to a canonical AgentEvent.
+
+    Accepts:
+      - AgentEvent instances (returned as-is)
+      - Canonical dicts: {"type": "content", "data": {"text": "..."}}
+      - Flat dicts: {"type": "content", "text": "..."}
+      - Provider objects with type/phase + attributes
+
+    Returns:
+        Canonical AgentEvent with all payload in the data dict.
+    """
+    if isinstance(event, AgentEvent):
+        return event
+
+    if isinstance(event, dict):
+        return AgentEvent.from_dict(event)
+
+    # Provider object (TokenBatch, Checkpoint, etc.)
+    result: dict[str, Any] = {}
+    if hasattr(event, "type"):
+        result["type"] = event.type
+    elif hasattr(event, "phase"):
+        result["type"] = event.phase
+    else:
+        result["type"] = "unknown"
+
+    # Whitelist known safe fields
+    safe_fields = {
+        "text", "name", "arguments", "result", "message",
+        "duration_ms", "turns", "session_id", "summary", "reason",
+        "level", "recoverable", "tool_call_id", "id",
+    }
+    for field_name in safe_fields:
+        if hasattr(event, field_name):
+            result[field_name] = getattr(event, field_name)
+
+    return AgentEvent.from_dict(result)
 
 
 # Human-readable descriptions
@@ -196,4 +254,5 @@ __all__ = [
     "steering_resumed",
     "steering_feedback",
     "approval_request",
+    "normalize_event",
 ]

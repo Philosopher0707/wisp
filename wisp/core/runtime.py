@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Callable
 
+from wisp.core.events import normalize_event
+
 logger = logging.getLogger(__name__)
 
 
@@ -84,7 +86,13 @@ class AgentRuntime:
         turn_succeeded = False
 
         try:
-            async for event in core.turn(session, prompt):
+            async for raw_event in core.turn(session, prompt):
+                # Normalize to canonical AgentEvent, then flatten for backward compatibility
+                canonical = normalize_event(raw_event).to_dict()
+                # Flatten: merge data fields into top level for easy access
+                event = dict(canonical.get("data", {}))
+                event["type"] = canonical["type"]
+                event["timestamp"] = canonical.get("timestamp", 0.0)
                 yield event
 
                 etype = event.get("type")

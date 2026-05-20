@@ -12,6 +12,7 @@ import logging
 from typing import Any
 
 from .base import Transport
+from wisp.core.events import normalize_event
 
 logger = logging.getLogger(__name__)
 
@@ -39,24 +40,15 @@ class HeadlessTransport(Transport):
     async def send(self, event: dict | Any) -> None:
         """Store event in memory.
 
-        Accepts both dict events (from AgentRuntime) and AgentEvent objects
-        (from WispAgentCore.run()).
+        Normalizes any event format (AgentEvent, canonical dict, flat dict)
+        to a consistent flat dict for easy access.
         """
-        if hasattr(event, "type"):
-            # AgentEvent object — flatten to dict
-            data = getattr(event, "data", {})
-            # Start with data fields, then overlay metadata
-            # This prevents data["type"] from overwriting the event type
-            flat = dict(data)
-            flat["type"] = str(event.type)
-            flat["timestamp"] = getattr(event, "timestamp", 0.0)
-            # Preserve text accessor if not already in data
-            if hasattr(event, "text") and event.text and "text" not in flat:
-                flat["text"] = event.text
-            self.events.append(flat)
-        else:
-            # Already a dict
-            self.events.append(dict(event))
+        normalized = normalize_event(event)
+        # Flatten to simple dict for easy access
+        flat = dict(normalized.data)
+        flat["type"] = str(normalized.type)
+        flat["timestamp"] = normalized.timestamp
+        self.events.append(flat)
 
     async def recv(self) -> str | None:
         """Headless transport does not receive user input."""

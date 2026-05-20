@@ -8,7 +8,7 @@ Design:
   - Builds system prompt from context (rules.md, skills, repo map, etc.)
   - Streams events from provider
   - Parses tool calls, checks security, executes via extensions
-  - Yields events for the transport to consume
+  - Yields flat dict events for backward compatibility
 """
 
 from __future__ import annotations
@@ -19,7 +19,25 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator
 
+from wisp.core.events import (
+    AgentEvent,
+    thinking as thinking_event,
+    content as content_event,
+    tool_call as tool_call_event,
+    tool_result as tool_result_event,
+    error as error_event,
+    done as done_event,
+)
+
 logger = logging.getLogger(__name__)
+
+
+def _flatten_event(ev: AgentEvent) -> dict:
+    """Convert canonical AgentEvent to flat dict for backward compatibility."""
+    flat = dict(ev.data)
+    flat["type"] = str(ev.type)
+    flat["timestamp"] = ev.timestamp
+    return flat
 
 
 @dataclass
@@ -80,11 +98,10 @@ class WispAgentCore:
                         try:
                             decision = self.security.check(action, context)
                             if not decision.allowed:
-                                yield {
-                                    "type": "error",
-                                    "message": f"Blocked ({decision.reason}): READ_ONLY mode",
-                                    "recoverable": True,
-                                }
+                                yield _flatten_event(error_event(
+                                    f"Blocked ({decision.reason}): READ_ONLY mode",
+                                    recoverable=True,
+                                ))
                                 continue
                         except Exception as e:
                             logger.warning("Security check failed: %s", e)
@@ -94,11 +111,10 @@ class WispAgentCore:
                         try:
                             ext_result = self.extensions.intercept(normalized)
                             if ext_result.get("action") == "block":
-                                yield {
-                                    "type": "error",
-                                    "message": f"Blocked: {ext_result.get('reason', 'by extension')}",
-                                    "recoverable": True,
-                                }
+                                yield _flatten_event(error_event(
+                                    f"Blocked: {ext_result.get('reason', 'by extension')}",
+                                    recoverable=True,
+                                ))
                                 continue
                         except Exception as e:
                             logger.warning("Extension intercept failed: %s", e)
@@ -112,15 +128,11 @@ class WispAgentCore:
             logger.exception("Provider stream failed")
             # Yield partial content so user sees something
             if partial_content:
-                yield {
-                    "type": "content",
-                    "text": "".join(partial_content),
-                }
-            yield {
-                "type": "error",
-                "message": f"Stream error: {exc}",
-                "recoverable": True,
-            }
+                yield _flatten_event(content_event("".join(partial_content)))
+            yield _flatten_event(error_event(
+                f"Stream error: {exc}",
+                recoverable=True,
+            ))
             return
 
         # Execute pending tool calls that didn't get a tool_result from provider
@@ -346,12 +358,11 @@ class WispAgentCore:
             try:
                 decision = self.security.check(action, context)
                 if not decision.allowed:
-                    yield {
-                        "type": "tool_result",
-                        "name": name,
-                        "result": {"status": "error", "data": f"Security blocked: {decision.reason}"},
-                        "duration_ms": 0,
-                    }
+                    yield _flatten_event(tool_result_event(
+                        name,
+                        {"status": "error", "data": f"Security blocked: {decision.reason}"},
+                        duration_ms=0,
+                    ))
                     return
             except Exception as e:
                 logger.warning("Security re-check failed: %s", e)
@@ -365,12 +376,7 @@ class WispAgentCore:
 
         duration_ms = (time.time() - start) * 1000
 
-        yield {
-            "type": "tool_result",
-            "name": name,
-            "result": result,
-            "duration_ms": duration_ms,
-        }
+        yield _flatten_event(tool_result_event(name, result, duration_ms=duration_ms))
 
     def _normalize_event(self, event: Any) -> dict:
         """Normalize provider event to standard format.
