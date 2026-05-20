@@ -440,6 +440,7 @@ class CLITransport(Transport):
                     stdout.flush()
         finally:
             stop_event.set()
+            reader_thread.join(timeout=1.0)
 
     def _render_event(self, stdout: Any, event: AgentEvent | dict) -> None:
         """Render an event to stdout with structured formatting.

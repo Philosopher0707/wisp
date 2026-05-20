@@ -104,7 +104,12 @@ class WispAgentCore:
                                 ))
                                 continue
                         except Exception as e:
-                            logger.warning("Security check failed: %s", e)
+                            logger.exception("Security check failed — treating as deny: %s", e)
+                            yield _flatten_event(error_event(
+                                f"Security check failed: {e}. Tool call denied.",
+                                recoverable=True,
+                            ))
+                            continue
 
                     # Check extensions
                     if self.extensions is not None:
@@ -117,7 +122,12 @@ class WispAgentCore:
                                 ))
                                 continue
                         except Exception as e:
-                            logger.warning("Extension intercept failed: %s", e)
+                            logger.exception("Extension intercept failed — treating as deny: %s", e)
+                            yield _flatten_event(error_event(
+                                f"Extension intercept failed: {e}. Tool call denied.",
+                                recoverable=True,
+                            ))
+                            continue
 
                     pending_tool_calls.append(normalized)
 
@@ -264,7 +274,11 @@ class WispAgentCore:
             rm = RepoMap(ws_path)
             entries = rm.build(use_cache=True, fast_mode=True)
             if entries:
-                map_text = rm.format_for_llm(max_tokens=1200)
+                # Configurable max tokens for repo map (default 1200)
+                max_tokens = 1200
+                if self.config is not None:
+                    max_tokens = getattr(self.config, "repo_map_max_tokens", 1200)
+                map_text = rm.format_for_llm(max_tokens=max_tokens)
                 return f"## Codebase Map\n{map_text}\n"
         except ImportError:
             pass
@@ -344,7 +358,9 @@ class WispAgentCore:
         """Execute a tool call and yield the result event.
 
         Security is checked again here as a defense-in-depth measure.
+        Tool results are normalized to a standard JSON-serializable schema.
         """
+        import json
         from wisp.tools import execute_tool
 
         name = event.get("name", "")
@@ -360,23 +376,140 @@ class WispAgentCore:
                 if not decision.allowed:
                     yield _flatten_event(tool_result_event(
                         name,
-                        {"status": "error", "data": f"Security blocked: {decision.reason}"},
+                        self._normalize_tool_result(
+                            {"status": "error", "data": f"Security blocked: {decision.reason}"}
+                        ),
                         duration_ms=0,
                     ))
                     return
             except Exception as e:
-                logger.warning("Security re-check failed: %s", e)
+                logger.exception("Security re-check failed — treating as deny: %s", e)
+                yield _flatten_event(tool_result_event(
+                    name,
+                    self._normalize_tool_result(
+                        {"status": "error", "data": f"Security check failed: {e}"}
+                    ),
+                    duration_ms=0,
+                ))
+                return
 
         start = time.time()
         try:
-            result = execute_tool(name, args, workspace=workspace)
+            raw_result = execute_tool(name, args, workspace=workspace)
         except Exception as e:
             logger.exception("Tool execution failed: %s", name)
-            result = {"status": "error", "data": str(e)}
+            raw_result = {"status": "error", "data": str(e)}
 
         duration_ms = (time.time() - start) * 1000
 
-        yield _flatten_event(tool_result_event(name, result, duration_ms=duration_ms))
+        normalized = self._normalize_tool_result(raw_result)
+        yield _flatten_event(tool_result_event(name, normalized, duration_ms=duration_ms))
+
+    def _normalize_tool_result(self, result: Any) -> dict:
+        """Normalize any tool result to a standard JSON-serializable schema.
+
+        Schema:
+            {
+                "status": "ok" | "error",
+                "data": str | dict | list,     # human-readable or structured result
+                "metadata": {                   # optional metadata
+                    "tool": str,
+                    "args": dict,
+                    "result_length": int,
+                    ...
+                }
+            }
+        """
+        import json
+        from pathlib import Path
+
+        # Already in standard schema
+        if isinstance(result, dict) and "status" in result:
+            # Ensure data is serializable
+            data = result.get("data", "")
+            return {
+                "status": result["status"],
+                "data": self._serialize_value(data),
+                "metadata": self._serialize_value(result.get("metadata", {})),
+            }
+
+        # Error tuple/list (must have exactly 2 elements, first is "error")
+        if isinstance(result, (list, tuple)) and len(result) == 2 and result[0] == "error":
+            return {
+                "status": "error",
+                "data": str(result[1]),
+                "metadata": {"raw": str(result)},
+            }
+
+        # Exception
+        if isinstance(result, BaseException):
+            return {
+                "status": "error",
+                "data": str(result),
+                "metadata": {"exception_type": type(result).__name__},
+            }
+
+        # None
+        if result is None:
+            return {"status": "ok", "data": "", "metadata": {}}
+
+        # Path
+        if isinstance(result, Path):
+            return {"status": "ok", "data": str(result), "metadata": {"is_path": True}}
+
+        # Bytes
+        if isinstance(result, bytes):
+            try:
+                text = result.decode("utf-8")
+            except UnicodeDecodeError:
+                text = result.decode("utf-8", errors="replace")
+            return {"status": "ok", "data": text, "metadata": {"was_bytes": True}}
+
+        # String
+        if isinstance(result, str):
+            return {"status": "ok", "data": result, "metadata": {}}
+
+        # Dict
+        if isinstance(result, dict):
+            return {"status": "ok", "data": result, "metadata": {}}
+
+        # List
+        if isinstance(result, list):
+            return {"status": "ok", "data": result, "metadata": {}}
+
+        # Anything else — coerce to string
+        return {
+            "status": "ok",
+            "data": str(result),
+            "metadata": {"original_type": type(result).__name__},
+        }
+
+    def _serialize_value(self, value: Any) -> Any:
+        """Serialize a value to JSON-compatible types."""
+        import json
+        from pathlib import Path
+
+        if value is None:
+            return None
+        if isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, Path):
+            return str(value)
+        if isinstance(value, bytes):
+            try:
+                return value.decode("utf-8")
+            except UnicodeDecodeError:
+                return value.decode("utf-8", errors="replace")
+        if isinstance(value, dict):
+            return {k: self._serialize_value(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self._serialize_value(v) for v in value]
+
+        # Fallback: JSON round-trip
+        try:
+            return json.loads(json.dumps(value, default=str))
+        except (TypeError, ValueError):
+            return str(value)
 
     def _normalize_event(self, event: Any) -> dict:
         """Normalize provider event to standard format.
