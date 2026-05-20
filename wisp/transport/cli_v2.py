@@ -22,6 +22,28 @@ from .base import Transport
 logger = logging.getLogger(__name__)
 
 
+def _box(content: str, title: str = "", width: int = 72) -> str:
+    """Simple box-drawn panel for REPL banner."""
+    inner = width - 4
+    lines = content.split("\n")
+    
+    if title:
+        title_text = f" {title} "
+        top = "┌" + title_text + "─" * (width - 2 - len(title_text)) + "┐"
+    else:
+        top = "┌" + "─" * (width - 2) + "┐"
+    
+    bottom = "└" + "─" * (width - 2) + "┘"
+    
+    result = [top]
+    for line in lines:
+        if len(line) > inner:
+            line = line[:inner]
+        result.append("│ " + line.ljust(inner) + " │")
+    result.append(bottom)
+    return "\n".join(result)
+
+
 class CLITransport(Transport):
     """CLI transport layer."""
 
@@ -72,6 +94,74 @@ class CLITransport(Transport):
     def stop(self) -> None:
         """Stop the transport."""
         logger.debug("CLITransport stopped")
+
+    # ── Banner ──────────────────────────────────────────────────────
+
+    def print_banner(self, stdout: Any, session: dict, model: str, skill: str | None = None) -> None:
+        """Print REPL startup banner with session info."""
+        import shutil
+        
+        width = min(72, shutil.get_terminal_size().columns - 4)
+        
+        sid = session.get("id", "unknown")
+        ws = session.get("workspace", ".")
+        msg_count = len(session.get("messages", []))
+        
+        lines = [
+            f"  Model:      {model}",
+            f"  Session:    {sid}",
+            f"  Workspace:  {ws}",
+        ]
+        if msg_count:
+            lines.append(f"  History:    {msg_count} messages")
+        if skill:
+            lines.append(f"  Skill:      {skill}")
+        lines.append("")
+        lines.append("  /help for commands  ·  Ctrl+C/D to exit")
+        
+        banner = _box("\n".join(lines), title="🔮 Wisp", width=width)
+        stdout.write(banner + "\n\n")
+        stdout.flush()
+
+    def print_continuation_banner(self, stdout: Any, session: dict, model: str) -> None:
+        """Print session continuation banner."""
+        import shutil
+        
+        width = min(72, shutil.get_terminal_size().columns - 4)
+        
+        sid = session.get("id", "unknown")
+        ws = session.get("workspace", ".")
+        msg_count = len(session.get("messages", []))
+        title = session.get("title", "")
+        
+        lines = []
+        if title:
+            lines.append(f"  Title:      {title}")
+        lines.append(f"  Model:      {model}")
+        lines.append(f"  Session:    {sid}")
+        lines.append(f"  Messages:   {msg_count}")
+        lines.append(f"  Workspace:  {ws}")
+        
+        # Find last user message
+        last_user = None
+        for m in reversed(session.get("messages", [])):
+            if m.get("role") == "user":
+                text = m.get("content", "")
+                if isinstance(text, str) and text.strip():
+                    last_user = text.strip()
+                    break
+        if last_user:
+            preview = last_user[:80].replace("\n", " ")
+            if len(last_user) > 80:
+                preview += "..."
+            lines.append(f"  Last:       {preview}")
+        
+        lines.append("")
+        lines.append("  /help for commands  ·  Ctrl+C/D to exit")
+        
+        banner = _box("\n".join(lines), title="📋 Continuing Session", width=width)
+        stdout.write(banner + "\n\n")
+        stdout.flush()
 
     # ── Thinking buffer ─────────────────────────────────────────────
 

@@ -90,8 +90,21 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
         workspace=config.workspace,
     ))
 
-    sys.stdout.write("Wisp ready.\n")
-    sys.stdout.flush()
+    # Create session (async)
+    session = asyncio.run(root.runtime.get_or_create_session(
+        session_id=session_id,
+        model=config.model,
+        workspace=config.workspace,
+    ))
+
+    # Check if this is a continuation (session has messages)
+    is_continuation = len(session.get("messages", [])) > 0
+    skill = kwargs.get("skill")
+    
+    if is_continuation:
+        transport.print_continuation_banner(sys.stdout, session, config.model)
+    else:
+        transport.print_banner(sys.stdout, session, config.model, skill=skill)
 
     def _show_resume() -> None:
         """Print the resume command for this session."""
