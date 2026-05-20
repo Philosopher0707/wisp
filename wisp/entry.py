@@ -91,6 +91,10 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
     while True:
         try:
             line = sys.stdin.readline()
+        except KeyboardInterrupt:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            continue
         except Exception:
             break
         if not line:
@@ -109,6 +113,11 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
 
         try:
             asyncio.run(_turn())
+        except KeyboardInterrupt:
+            sys.stdout.write("\n⏸  Interrupted. Session saved. Type 'exit' to quit or continue.\n")
+            sys.stdout.flush()
+            # Session was already persisted by run_turn before the interrupt
+            continue
         except Exception as exc:
             import traceback
             sys.stderr.write(f"Error during turn: {exc}\n")
