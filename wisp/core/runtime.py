@@ -45,6 +45,7 @@ class AgentRuntime:
 
     # Per-session locks — prevents concurrent turns on same session
     _session_locks: dict[str, asyncio.Lock] = field(default_factory=dict, repr=False)
+    _max_session_locks: int = field(default=1000, repr=False)
 
     # Configurable thresholds (can be overridden)
     max_messages: int = field(default=50, repr=False)
@@ -106,6 +107,7 @@ class AgentRuntime:
 
         # Get or create per-session lock
         if sid not in self._session_locks:
+            self._evict_old_session_locks()
             self._session_locks[sid] = asyncio.Lock()
         session_lock = self._session_locks[sid]
 
@@ -187,10 +189,11 @@ class AgentRuntime:
 
                 # Record telemetry
                 latency_ms = (time.time() - start) * 1000
+                chars_per_token = getattr(self, "_chars_per_token", 4)
                 self.telemetry.record_turn(
                     latency_ms=latency_ms,
-                    prompt_tokens=len(prompt) // 4,
-                    completion_tokens=len("".join(assistant_content)) // 4,
+                    prompt_tokens=len(prompt) // chars_per_token,
+                    completion_tokens=len("".join(assistant_content)) // chars_per_token,
                 )
 
     def _get_core(self) -> Any:
@@ -233,6 +236,16 @@ class AgentRuntime:
         self.store.save_session(session)
         logger.info("Compacted session %s: %d → %d messages",
                     session.get("id"), old_count, len(session["messages"]))
+
+    def _evict_old_session_locks(self) -> None:
+        """Evict oldest session locks if we exceed the limit."""
+        if len(self._session_locks) <= self._max_session_locks:
+            return
+        # Evict oldest 20% of locks (arbitrary but simple)
+        to_evict = int(self._max_session_locks * 0.2)
+        keys = list(self._session_locks.keys())[:to_evict]
+        for k in keys:
+            self._session_locks.pop(k, None)
 
     async def start_background_run(
         self,

@@ -181,7 +181,8 @@ class TestExtensionErrorHandling:
         host.register(_Broken())
         assert host.tools() == []  # gracefully ignored
 
-    def test_broken_intercept_allows_by_default(self, host):
+    def test_broken_intercept_denies_by_default(self, host):
+        """Broken extensions should deny (fail-closed) for security."""
         class _Broken:
             def start(self): pass
             def stop(self): pass
@@ -190,4 +191,5 @@ class TestExtensionErrorHandling:
 
         host.register(_Broken())
         result = host.intercept({"type": "tool_call"})
-        assert result["action"] == "allow"
+        assert result["action"] == "block"
+        assert "Extension error" in result["reason"]

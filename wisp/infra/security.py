@@ -76,6 +76,7 @@ class SecurityPolicy:
     trusted_workspaces: frozenset[Path] = field(default_factory=frozenset)
     hooks: list[Callable] = field(default_factory=list)
     _audit_log: list[dict] = field(default_factory=list, repr=False)
+    _max_audit_log: int = field(default=10000, repr=False)
 
     # ── Immutable builders ──────────────────────────────────────────
 
@@ -178,6 +179,9 @@ class SecurityPolicy:
             "allowed": decision.allowed,
             "reason": decision.reason,
         })
+        # Cap audit log to prevent unbounded growth
+        if len(self._audit_log) > self._max_audit_log:
+            self._audit_log = self._audit_log[-self._max_audit_log:]
 
     def audit_log(self) -> list[dict]:
         return list(self._audit_log)

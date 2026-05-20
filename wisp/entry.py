@@ -23,6 +23,22 @@ from wisp.transport.tui import TUITransport
 logger = logging.getLogger(__name__)
 
 
+def _run_async(coro):
+    """Run a coroutine, handling nested event loops gracefully.
+
+    Uses asyncio.run() when no loop is running, otherwise uses
+    the existing loop's run_until_complete().
+    """
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No loop running — safe to use asyncio.run
+        return asyncio.run(coro)
+    # Already in a loop — use run_until_complete
+    return loop.run_until_complete(coro)
+
+
 def run_mode(mode: str, prompt: str | None = None, **kwargs) -> None:
     """Run Wisp in the specified mode.
 
@@ -136,7 +152,7 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
 
         transport._reset_buffers()
         try:
-            asyncio.run(_turn())
+            _run_async(_turn())
             transport._flush_thinking(sys.stdout)
             transport._flush_content(sys.stdout)
         except KeyboardInterrupt:
@@ -209,6 +225,12 @@ def _run_tui(root: CompositionRoot) -> None:
 # ── Headless mode ──────────────────────────────────────────────────
 
 _headless_root: CompositionRoot | None = None
+_headless_root_key: str | None = None
+
+
+def _make_headless_key(config: WispConfig) -> str:
+    """Cache key for headless root based on config."""
+    return f"{config.model}:{config.workspace}:{config.permission_mode}"
 
 
 async def run_headless(prompt: str, model: str | None = None,
@@ -232,7 +254,7 @@ async def run_headless(prompt: str, model: str | None = None,
     """
     from wisp.transport.headless import HeadlessTransport
 
-    global _headless_root
+    global _headless_root, _headless_root_key
 
     config = WispConfig()
     if model:
@@ -245,9 +267,13 @@ async def run_headless(prompt: str, model: str | None = None,
 
     own_root = root is None
     if own_root:
-        if _headless_root is None:
+        cache_key = _make_headless_key(config)
+        if _headless_root is None or _headless_root_key != cache_key:
+            if _headless_root is not None:
+                _headless_root.shutdown()
             _headless_root = CompositionRoot(config)
             _headless_root.start()
+            _headless_root_key = cache_key
         root = _headless_root
 
     try:

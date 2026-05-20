@@ -50,18 +50,22 @@ class ExtensionHost:
         return tools
 
     def intercept(self, event: dict) -> dict:
-        """Run event through all extensions. First block wins."""
+        """Run event through all extensions. First block wins.
+
+        If an extension raises an exception, the call is denied (fail-closed).
+        """
         for ext in self._extensions:
             try:
                 result = ext.intercept(event)
                 if result.get("action") == "block":
                     return result
             except Exception as exc:
-                logger.warning(
-                    "Extension %s intercept() failed: %s — allowing by default",
+                logger.exception(
+                    "Extension %s intercept() failed: %s — denying by default",
                     getattr(ext, "name", type(ext).__name__),
                     exc,
                 )
+                return {"action": "block", "reason": f"Extension error: {exc}"}
         return {"action": "allow"}
 
     def start(self) -> None:

@@ -7,7 +7,7 @@ import logging
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from wisp.server.deps import verify_api_key
@@ -30,7 +30,7 @@ async def get_workspace():
 
 
 @router.post("/api/workspace", dependencies=[Depends(verify_api_key)])
-async def set_workspace(req: WorkspaceRequest):
+async def set_workspace(req: WorkspaceRequest, request: Request):
     global WORKSPACE_ROOT
     new_root = Path(req.path).resolve()
     if not new_root.exists():
@@ -38,5 +38,10 @@ async def set_workspace(req: WorkspaceRequest):
     if not new_root.is_dir():
         raise HTTPException(status_code=400, detail="Path is not a directory")
     WORKSPACE_ROOT = new_root
+    # Update CompositionRoot config if available
+    root = getattr(request.app.state, "root", None)
+    if root is not None:
+        root.config.workspace = str(new_root)
+        root.runtime.invalidate_core_cache()
     logger.info("Workspace changed to %s", WORKSPACE_ROOT)
     return {"path": str(WORKSPACE_ROOT)}

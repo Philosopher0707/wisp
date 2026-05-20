@@ -5,7 +5,7 @@ Handles diff and inline editing.
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from wisp.server.deps import verify_api_key
@@ -56,7 +56,7 @@ async def create_diff(req: DiffRequest):
 
 
 @router.post("/api/edit/inline", dependencies=[Depends(verify_api_key)])
-async def inline_edit(req: InlineEditRequest):
+async def inline_edit(req: InlineEditRequest, request: Request):
     """Inline edit — replace a selection based on natural language instruction."""
     target = _resolve_path(req.path)
     if not target.is_file():

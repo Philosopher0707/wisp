@@ -171,7 +171,12 @@ def _generate_agent_id() -> str:
 
 
 class WispAgentCore:
-    """Event-driven agent core — no print, no input, no global state."""
+    """Event-driven agent core — no print, no input, no global state.
+
+    .. deprecated::
+        Use ``wisp.core.engine.WispAgentCore`` (stateless) or
+        ``wisp.composition.CompositionRoot`` instead.
+    """
 
     def __init__(
         self,
@@ -184,6 +189,13 @@ class WispAgentCore:
         extensions: Any = None,
         telemetry: Any = None,
     ):
+        import warnings
+        warnings.warn(
+            "wisp.core.agent.WispAgentCore is deprecated. "
+            "Use wisp.core.engine.WispAgentCore (stateless) or CompositionRoot.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.config = config or WispConfig()
         if provider is not None:
             self.provider = provider

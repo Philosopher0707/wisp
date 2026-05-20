@@ -71,12 +71,14 @@ class WispAgentCore:
         tools = self._get_tool_schemas()
 
         # Stream events from provider
+        # NOTE: generate_stream_events may be synchronous (blocking I/O).
+        # We wrap it in a thread to avoid blocking the event loop.
         pending_tool_calls: list[dict] = []
         provider_events: list[dict] = []
         partial_content: list[str] = []
 
         try:
-            for event in self.provider.generate_stream_events(
+            async for event in self._stream_events_async(
                 system_prompt=system_prompt,
                 messages=messages,
                 tools=tools if tools else None,
@@ -151,6 +153,64 @@ class WispAgentCore:
             for tc in pending_tool_calls:
                 async for result_event in self._execute_tool(tc, session):
                     yield result_event
+
+    async def _stream_events_async(
+        self,
+        system_prompt: str,
+        messages: list[dict],
+        tools: list[dict] | None,
+    ):
+        """Wrap a synchronous provider generator in an async iterator.
+
+        Runs the blocking I/O in a thread to avoid blocking the event loop.
+        This allows concurrent requests in FastAPI and responsive REPL.
+        """
+        import asyncio
+
+        # Check if the provider already has an async version
+        provider = self.provider
+        if hasattr(provider, "generate_stream_events_async"):
+            async for event in provider.generate_stream_events_async(
+                system_prompt=system_prompt,
+                messages=messages,
+                tools=tools,
+            ):
+                yield event
+            return
+
+        # Fallback: run sync generator in a thread via queue.
+        # We spawn a thread that pushes events into an asyncio.Queue,
+        # then yield from the queue. This preserves streaming without
+        # blocking the event loop.
+        loop = asyncio.get_event_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+        done = object()  # sentinel
+
+        def _sync_producer():
+            try:
+                for event in provider.generate_stream_events(
+                    system_prompt=system_prompt,
+                    messages=messages,
+                    tools=tools,
+                ):
+                    loop.call_soon_threadsafe(queue.put_nowait, event)
+                loop.call_soon_threadsafe(queue.put_nowait, done)
+            except Exception as exc:
+                loop.call_soon_threadsafe(queue.put_nowait, done)
+                raise
+
+        # Start producer thread
+        import threading
+        thread = threading.Thread(target=_sync_producer, daemon=True)
+        thread.start()
+
+        while True:
+            event = await queue.get()
+            if event is done:
+                break
+            yield event
+
+        thread.join(timeout=5.0)
 
     def _build_system_prompt(self, session: dict, query: str | None = None) -> str:
         """Build rich system prompt from session context."""

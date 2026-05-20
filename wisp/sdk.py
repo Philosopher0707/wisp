@@ -27,6 +27,15 @@ from wisp.transport.headless import HeadlessTransport
 from wisp.composition import CompositionRoot
 
 
+def _run_async(coro):
+    """Run a coroutine, handling nested event loops gracefully."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    return loop.run_until_complete(coro)
+
+
 class Wisp:
     """High-level synchronous wrapper using CompositionRoot + HeadlessTransport.
 
@@ -94,7 +103,7 @@ class Wisp:
             async for event in self._root.runtime.run_turn(session, prompt):
                 await transport.send(event)
 
-        asyncio.run(_run())
+        _run_async(_run())
 
         # Yield collected events as AgentEvent objects
         for event_dict in transport.events:

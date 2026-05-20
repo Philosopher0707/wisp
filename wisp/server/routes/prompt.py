@@ -29,8 +29,10 @@ class PromptRequest(BaseModel):
 @router.post("/api/prompt", dependencies=[Depends(verify_api_key)])
 async def execute_prompt(req: PromptRequest, request: Request):
     """Non-interactive/headless prompt execution with JSON response."""
+    import copy
     root = request.app.state.root
-    config = root.config
+    # Deep-copy config to prevent cross-request mutation
+    config = copy.deepcopy(root.config)
 
     if req.model:
         config.model = req.model

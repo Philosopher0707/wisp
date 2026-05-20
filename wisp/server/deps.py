@@ -170,7 +170,7 @@ class SQLiteRateLimiter:
 
 # Default rate limiter: 30 requests per 60 seconds
 RATE_LIMITER = SQLiteRateLimiter(
-    db_path=Path("./data/rate_limits.db"),
+    db_path=Path.home() / ".config" / "wisp" / "rate_limits.db",
     max_requests=30,
     window_seconds=60,
 )

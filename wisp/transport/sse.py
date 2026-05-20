@@ -1,149 +1,98 @@
 """SSE transport for Wisp.
 
-Replaces: ad-hoc SSE handling in server.py.
-Clean separation: transport owns the wire protocol, runtime owns the logic.
+Provides an asyncio.Queue-based event stream that can be consumed by
+FastAPI's StreamingResponse. The raw HTTP protocol is handled by the
+framework, not by this class.
 
-Design:
-  - Accepts HTTP connections and establishes SSE streams
-  - Routes incoming messages to runtime.run_turn()
-  - Streams events back as SSE formatted data
-  - Buffers events for reconnection support
-  - Handles disconnections gracefully
+Usage in a FastAPI endpoint::
+
+    from fastapi import Request
+    from fastapi.responses import StreamingResponse
+
+    @router.get("/api/sse")
+    async def sse_endpoint(request: Request):
+        transport = SSETransport(request.app.state.root.runtime)
+        transport.start()
+
+        async def event_stream():
+            async for event in transport.event_stream():
+                yield f"data: {json.dumps(event)}\n\n"
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+        )
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
 
-from .base import Transport
-
 logger = logging.getLogger(__name__)
 
 
-class SSETransport(Transport):
-    """SSE transport layer."""
+class SSETransport:
+    """Queue-based SSE event transport.
+
+    Does NOT inherit from Transport ABC because SSE requires
+    framework-level StreamingResponse support.
+    """
 
     def __init__(self, runtime: Any):
         self.runtime = runtime
+        self._queue: asyncio.Queue[dict] = asyncio.Queue()
         self._sessions: dict[str, dict] = {}
-        self._event_buffers: dict[str, list[tuple[int, dict]]] = {}
         self._event_counter = 0
-        self._current_response: Any = None
-
-    # ── Transport ABC implementation ────────────────────────────────
-
-    async def send(self, event: dict) -> None:
-        """Send an event as SSE formatted data."""
-        if self._current_response is not None:
-            await self._send_event(self._current_response, event)
-
-    async def recv(self) -> str | None:
-        """Receive a prompt from SSE.
-
-        Note: SSE transport uses connect() + receive_message()
-        for full lifecycle. This method is for compatibility.
-        """
-        return None
-
-    async def approve(self, tool_call: dict) -> bool:
-        """SSE transport auto-approves tool calls.
-
-        Interactive approval is not practical over SSE.
-        """
-        return True
+        self._started = False
 
     def start(self) -> None:
         """Start the transport."""
+        self._started = True
         logger.debug("SSETransport started")
 
     def stop(self) -> None:
         """Stop the transport."""
+        self._started = False
         logger.debug("SSETransport stopped")
 
-    # ── SSE-specific methods ──────────────────────────────────────
+    async def send(self, event: dict) -> None:
+        """Queue an event for streaming."""
+        if self._started:
+            await self._queue.put(event)
 
-    async def connect(self, response: Any, session_id: str, model: str, workspace: str) -> None:
-        """Handle a new SSE connection."""
+    async def event_stream(self):
+        """Async generator yielding events for StreamingResponse."""
+        while self._started:
+            try:
+                event = await asyncio.wait_for(self._queue.get(), timeout=1.0)
+                yield event
+            except asyncio.TimeoutError:
+                # Send keep-alive comment to prevent proxy timeouts
+                yield {"type": "_keepalive"}
+
+    async def handle_turn(self, session_id: str, model: str, workspace: str, prompt: str) -> None:
+        """Run a turn and stream events into the queue."""
         session = await self.runtime.get_or_create_session(
             session_id=session_id,
             model=model,
             workspace=workspace,
         )
 
-        self._sessions[session_id] = {
-            "response": response,
-            "session": session,
-        }
+        await self._queue.put({"type": "ready", "session_id": session_id})
 
-        if session_id not in self._event_buffers:
-            self._event_buffers[session_id] = []
+        try:
+            async for event in self.runtime.run_turn(session, prompt):
+                await self._queue.put(event)
+        except Exception as exc:
+            logger.exception("Error during turn")
+            await self._queue.put({"type": "error", "message": str(exc)})
 
-        # Send SSE headers
-        await response.send("HTTP/1.1 200 OK\r\n")
-        await response.send("Content-Type: text/event-stream\r\n")
-        await response.send("Cache-Control: no-cache\r\n")
-        await response.send("Connection: keep-alive\r\n")
-        await response.send("\r\n")
-
-        # Send ready event
-        await self._send_event(response, {"type": "ready", "session_id": session_id})
-
-    async def receive_message(self, response: Any, message: dict) -> None:
-        """Handle an incoming message for an SSE connection."""
-        # Find session by response
-        session_id = None
-        for sid, data in self._sessions.items():
-            if data["response"] is response:
-                session_id = sid
-                break
-
-        if session_id is None:
-            await self._send_event(response, {"type": "error", "message": "Not connected"})
-            return
-
-        session = self._sessions[session_id]["session"]
-        msg_type = message.get("type")
-
-        if msg_type == "user":
-            prompt = message.get("text", "")
-            try:
-                async for event in self.runtime.run_turn(session, prompt):
-                    await self._send_event(response, event)
-                    # Buffer for reconnection
-                    self._event_counter += 1
-                    self._event_buffers[session_id].append((self._event_counter, event))
-                    # Keep buffer size reasonable
-                    if len(self._event_buffers[session_id]) > 100:
-                        self._event_buffers[session_id] = self._event_buffers[session_id][-100:]
-            except Exception as exc:
-                logger.exception("Error during turn")
-                await self._send_event(response, {"type": "error", "message": str(exc)})
-        else:
-            await self._send_event(response, {"type": "error", "message": f"Unknown message type: {msg_type}"})
-
-    async def reconnect(self, response: Any, session_id: str, last_event_id: str) -> None:
-        """Handle reconnection with last-event-id."""
-        # Send headers
-        await response.send("HTTP/1.1 200 OK\r\n")
-        await response.send("Content-Type: text/event-stream\r\n")
-        await response.send("Cache-Control: no-cache\r\n")
-        await response.send("Connection: keep-alive\r\n")
-        await response.send("\r\n")
-
-        # Send buffered events after last_event_id
-        if session_id in self._event_buffers:
-            last_id = int(last_event_id) if last_event_id.isdigit() else 0
-            for event_id, event in self._event_buffers[session_id]:
-                if event_id > last_id:
-                    await self._send_event(response, event, event_id=event_id)
-
-    async def _send_event(self, response: Any, event: dict, event_id: int | None = None) -> None:
-        """Send an event in SSE format."""
-        lines = []
-        if event_id is not None:
-            lines.append(f"id: {event_id}")
-        lines.append(f"data: {json.dumps(event)}")
-        lines.append("")
-        await response.send("\n".join(lines) + "\n")
+    def format_sse(self, event: dict) -> str:
+        """Format a dict as an SSE data line."""
+        if event.get("type") == "_keepalive":
+            return ":\n\n"
+        return f"data: {json.dumps(event)}\n\n"

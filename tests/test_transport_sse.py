@@ -1,11 +1,12 @@
-"""TDD for SSE transport.
+"""TDD for SSE transport (queue-based, StreamingResponse-compatible).
 
-Replaces: ad-hoc SSE handling in server.py.
-Clean separation: transport owns the wire protocol, runtime owns the logic.
+The SSE transport is now queue-based and designed to be consumed by
+FastAPI's StreamingResponse. It does not send raw HTTP headers.
 """
 
 import pytest
-from typing import Any, AsyncIterator
+import asyncio
+from typing import AsyncIterator
 
 
 # ── Minimal mock runtime for testing ───────────────────────────────
@@ -31,20 +32,6 @@ class _MockRuntime:
         yield {"type": "done"}
 
 
-# ── Minimal mock response for testing ──────────────────────────────
-
-class _MockResponse:
-    def __init__(self):
-        self.sent = []
-        self.closed = False
-
-    async def send(self, data: str):
-        self.sent.append(data)
-
-    async def close(self):
-        self.closed = True
-
-
 # ═══════════════════════════════════════════════════════════════════
 # 1. Connection handling
 # ═══════════════════════════════════════════════════════════════════
@@ -53,26 +40,41 @@ class TestConnectionHandling:
     """SSE transport manages connections and sessions."""
 
     @pytest.mark.asyncio
-    async def test_connect_creates_session(self):
+    async def test_handle_turn_creates_session(self):
         from wisp.transport.sse import SSETransport
         runtime = _MockRuntime()
         transport = SSETransport(runtime)
-        response = _MockResponse()
+        transport.start()
 
-        await transport.connect(response, session_id="sess-1", model="qwen", workspace="/tmp")
+        await transport.handle_turn(
+            session_id="sess-1", model="qwen", workspace="/tmp", prompt="hello"
+        )
 
         assert "sess-1" in runtime.sessions
+        transport.stop()
 
     @pytest.mark.asyncio
-    async def test_connect_sends_headers(self):
+    async def test_event_stream_yields_events(self):
         from wisp.transport.sse import SSETransport
         runtime = _MockRuntime()
         transport = SSETransport(runtime)
-        response = _MockResponse()
+        transport.start()
 
-        await transport.connect(response, session_id="sess-1", model="qwen", workspace="/tmp")
+        await transport.handle_turn(
+            session_id="sess-1", model="qwen", workspace="/tmp", prompt="hello"
+        )
 
-        assert any("text/event-stream" in s for s in response.sent)
+        events = []
+        async for event in transport.event_stream():
+            if event.get("type") == "_keepalive":
+                continue
+            events.append(event)
+            if len(events) >= 3:  # ready + content + done
+                break
+
+        assert any(e.get("type") == "ready" for e in events)
+        assert any("echo: hello" in e.get("text", "") for e in events)
+        transport.stop()
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -87,65 +89,50 @@ class TestMessageRouting:
         from wisp.transport.sse import SSETransport
         runtime = _MockRuntime()
         transport = SSETransport(runtime)
-        response = _MockResponse()
+        transport.start()
 
-        await transport.connect(response, session_id="sess-1", model="qwen", workspace="/tmp")
-        await transport.receive_message(response, {"type": "user", "text": "hello"})
+        await transport.handle_turn(
+            session_id="sess-1", model="qwen", workspace="/tmp", prompt="hello"
+        )
 
         assert len(runtime.turns) == 1
         assert runtime.turns[0] == ("sess-1", "hello")
+        transport.stop()
 
     @pytest.mark.asyncio
-    async def test_events_streamed_as_sse(self):
+    async def test_events_formatted_as_sse(self):
         from wisp.transport.sse import SSETransport
         runtime = _MockRuntime()
         transport = SSETransport(runtime)
-        response = _MockResponse()
+        transport.start()
 
-        await transport.connect(response, session_id="sess-1", model="qwen", workspace="/tmp")
-        await transport.receive_message(response, {"type": "user", "text": "hello"})
+        await transport.handle_turn(
+            session_id="sess-1", model="qwen", workspace="/tmp", prompt="hello"
+        )
 
-        # Check SSE format: data: {...}\n\n
-        sse_data = [s for s in response.sent if s.startswith("data:")]
-        assert len(sse_data) >= 2  # ready + content
-        assert any("echo: hello" in s for s in sse_data)
+        events = []
+        async for event in transport.event_stream():
+            if event.get("type") == "_keepalive":
+                continue
+            events.append(event)
+            if len(events) >= 3:
+                break
 
-
-# ═══════════════════════════════════════════════════════════════════
-# 3. Reconnection
-# ═══════════════════════════════════════════════════════════════════
-
-class TestReconnection:
-    """Clients can reconnect and resume."""
-
-    @pytest.mark.asyncio
-    async def test_reconnect_sends_missed_events(self):
-        from wisp.transport.sse import SSETransport
-        runtime = _MockRuntime()
-        transport = SSETransport(runtime)
-        response = _MockResponse()
-
-        await transport.connect(response, session_id="sess-1", model="qwen", workspace="/tmp")
-        await transport.receive_message(response, {"type": "user", "text": "hello"})
-
-        # Simulate reconnection with last-event-id
-        response2 = _MockResponse()
-        await transport.reconnect(response2, session_id="sess-1", last_event_id="0")
-
-        # Should send buffered events
-        sse_data = [s for s in response2.sent if "data:" in s]
-        assert len(sse_data) >= 1
+        sse_lines = [transport.format_sse(e) for e in events]
+        assert any("data:" in line for line in sse_lines)
+        assert any("echo: hello" in line for line in sse_lines)
+        transport.stop()
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 4. Error handling
+# 3. Error handling
 # ═══════════════════════════════════════════════════════════════════
 
 class TestErrorHandling:
-    """Errors are sent to the client, not crashed."""
+    """Errors are queued, not crashed."""
 
     @pytest.mark.asyncio
-    async def test_runtime_error_sent_as_sse(self):
+    async def test_runtime_error_queued_as_error_event(self):
         from wisp.transport.sse import SSETransport
 
         class _BrokenRuntime:
@@ -157,11 +144,20 @@ class TestErrorHandling:
 
         runtime = _BrokenRuntime()
         transport = SSETransport(runtime)
-        response = _MockResponse()
+        transport.start()
 
-        await transport.connect(response, session_id="sess-1", model="qwen", workspace="/tmp")
-        await transport.receive_message(response, {"type": "user", "text": "hello"})
+        await transport.handle_turn(
+            session_id="sess-1", model="qwen", workspace="/tmp", prompt="hello"
+        )
 
-        error_data = [s for s in response.sent if "error" in s]
-        assert len(error_data) >= 1
-        assert "boom" in error_data[0]
+        events = []
+        async for event in transport.event_stream():
+            if event.get("type") == "_keepalive":
+                continue
+            events.append(event)
+            if len(events) >= 2:
+                break
+
+        assert any(e.get("type") == "error" for e in events)
+        assert any("boom" in e.get("message", "") for e in events)
+        transport.stop()
