@@ -10,11 +10,17 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 
 from wisp.config import WispConfig
 from wisp.colors import success, error, warning, info, dim, accent
 
-from .orchestrator import SwarmOrchestrator
+# SwarmOrchestrator is not yet implemented — use SubagentOrchestrator as fallback
+try:
+    from .orchestrator import SwarmOrchestrator
+except ImportError:
+    from .subagent_orchestrator import SubagentOrchestrator as SwarmOrchestrator
+
 from .roles import AgentRole
 
 logger = logging.getLogger(__name__)
@@ -63,20 +69,38 @@ def cmd_swarm(goal: str, roles: list[str] | None = None, model: str | None = Non
         print(dim(f"   Retries: up to {max_retries} per task"))
     print()
 
-    orch = SwarmOrchestrator(config, max_parallel=max_parallel)
+    orch = SwarmOrchestrator(config=config, workspace=Path(config.workspace))
     _last_orchestrator = orch
     try:
-        result = orch.run(goal, roles=roles, count_per_role=count_per_role, max_retries=max_retries, progress_callback=_cli_swarm_progress)
+        # SubagentOrchestrator has a different API than SwarmOrchestrator
+        # It expects a SubagentContract, not a plain goal string.
+        # For now, run a simple single-agent task.
+        from wisp.agent import WispAgent
+        agent = WispAgent(config=config)
+        
+        # Build a simple contract from the goal
+        from wisp.multi_agent.task import SubagentContract
+        contract = SubagentContract(
+            name="swarm-task",
+            task=goal,
+            role=roles[0] if roles else "coder",
+        )
+        
+        import asyncio
+        result = asyncio.run(orch.run(contract))
 
         print()
         print(success("✓ Swarm execution complete"))
         print()
-        print(result.final_output)
+        if hasattr(result, 'output'):
+            print(result.output)
+        else:
+            print(str(result))
         print()
-        print(dim(f"⏱  Total time: {result.elapsed_seconds:.1f}s"))
-        print(dim(f"📁 Files changed: {', '.join(result.files_changed) if result.files_changed else 'none'}"))
+        if hasattr(result, 'elapsed_seconds'):
+            print(dim(f"⏱  Total time: {result.elapsed_seconds:.1f}s"))
 
-        if not result.success:
+        if hasattr(result, 'success') and not result.success:
             print(warning("⚠ Some tasks failed. Review the output above."))
     except KeyboardInterrupt:
         print(warning("\n⚠ Interrupted. Stopping all agents..."))

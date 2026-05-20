@@ -696,7 +696,7 @@ def cmd_session_list():
         print(f"    {dim('Model:')}    {s['model']}")
         print(f"    {dim('Started:')}  {created}")
         print(f"    {dim('Updated:')}  {updated}")
-        print(f"    {dim('Messages:')} {s['msg_count']}")
+        print(f"    {dim('Messages:')} {s.get('msg_count', '?')}")
         if s.get("task_count"):
             print(f"    {dim('Tasks:')}    {s['task_count']}")
         print(f"    {dim('Continue:')} wisp -S {s['id']} \"your next question\"")
@@ -705,11 +705,11 @@ def cmd_session_list():
 
 def _resolve_session_or_fragment(mgr, session_id: str):
     """Resolve a session ID, trying exact match then prefix fragment match."""
-    session = mgr.load(session_id)
+    session = mgr.load_session(session_id)
     if session is None:
         resolved = mgr.get_session_id_from_fragment(session_id)
         if resolved:
-            session = mgr.load(resolved)
+            session = mgr.load_session(resolved)
     return session
 
 
@@ -737,7 +737,7 @@ def cmd_session_delete(session_id: str):
         print(error(f"✗ Session '{session_id}' not found."))
         print(dim("  Run 'wisp session list' to see available sessions."))
         return
-    mgr.delete(session.id)
+    mgr.delete_session(session.id)
     print(success(f"✓ Deleted session {session.id}"))
 
 

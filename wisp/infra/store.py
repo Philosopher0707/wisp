@@ -214,6 +214,7 @@ class UnifiedStore:
                 "title": r["title"],
                 "created_at": r["created_at"],
                 "updated_at": r["updated_at"],
+                "msg_count": len(json.loads(r["messages"])) if r["messages"] else 0,
             }
             for r in rows
         ]

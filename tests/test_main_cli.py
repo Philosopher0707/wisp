@@ -119,7 +119,7 @@ class TestResolveSessionOrFragment:
     def test_exact_match(self):
         session_obj = {"id": "20240101-120000-abc123-fix-bug", "title": "Test"}
         mgr = MagicMock()
-        mgr.load.return_value = session_obj
+        mgr.load_session.return_value = session_obj
         result = main_mod._resolve_session_or_fragment(mgr, "20240101-120000-abc123-fix-bug")
         assert result == session_obj
 
@@ -129,14 +129,14 @@ class TestResolveSessionOrFragment:
         calls = [None, session_obj]
         def side_effect(*args):
             return calls.pop(0)
-        mgr.load.side_effect = side_effect
+        mgr.load_session.side_effect = side_effect
         mgr.get_session_id_from_fragment.return_value = "20240101-120000-abc123-fix-bug"
         result = main_mod._resolve_session_or_fragment(mgr, "fix-bug")
         assert result == session_obj
 
     def test_no_match(self):
         mgr = MagicMock()
-        mgr.load.return_value = None
+        mgr.load_session.return_value = None
         mgr.get_session_id_from_fragment.return_value = None
         result = main_mod._resolve_session_or_fragment(mgr, "nonexistent")
         assert result is None
@@ -181,7 +181,7 @@ class TestCmdSessionShow:
         session.id = "20240101-120000-abc123"
         session.to_dict.return_value = {"id": "20240101-120000-abc123", "title": "Test"}
         mgr = MagicMock()
-        mgr.load.return_value = session
+        mgr.load_session.return_value = session
         monkeypatch.setattr("wisp.__main__.get_store", lambda: mgr)
         with patch("wisp.__main__.format_session_preview", return_value="Session preview"):
             main_mod.cmd_session_show("20240101-120000-abc123")
@@ -196,11 +196,11 @@ class TestCmdSessionDelete:
         session = MagicMock()
         session.id = "20240101-120000-abc123"
         mgr = MagicMock()
-        mgr.load.return_value = session
+        mgr.load_session.return_value = session
         monkeypatch.setattr("wisp.__main__.get_store", lambda: mgr)
         with patch("builtins.input", return_value="yes"):
             main_mod.cmd_session_delete("20240101-120000-abc123")
-        mgr.delete.assert_called_once()
+        mgr.delete_session.assert_called_once()
 
 
 # ── cmd_plan ─────────────────────────────────────────────────────────

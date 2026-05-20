@@ -261,11 +261,14 @@ def get_store(db_path: str | None = None) -> UnifiedSessionStore:
     return _store_cache[db_path]
 
 
-def format_session_preview(session: dict) -> str:
+def format_session_preview(session) -> str:
     """Format a session for display in a list.
 
     Backward-compatible replacement for wisp.session.format_session_preview().
+    Accepts both dict and Session objects.
     """
+    if hasattr(session, "to_dict"):
+        session = session.to_dict()
     sid = session.get("id", "unknown")
     title = session.get("title", "")
     updated = session.get("updated_at", "")
