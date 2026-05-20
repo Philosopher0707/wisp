@@ -140,6 +140,13 @@ class CLITransport(Transport):
         event_type = event.get("type")
         if event_type == "content":
             stdout.write(event.get("text", ""))
+        elif event_type == "thinking":
+            # Thinking is rendered inline with brackets for visibility
+            text = event.get("text", "")
+            if text:
+                stdout.write(f"[thinking: {text[:80]}...]\n")
+        elif event_type == "complete":
+            stdout.write("\n")
         elif event_type == "done":
             stdout.write("\n")
         elif event_type == "error":
@@ -148,4 +155,5 @@ class CLITransport(Transport):
             stdout.write(f"[Tool: {event.get('name', '')}]\n")
         elif event_type == "tool_result":
             stdout.write(f"[Result: {event.get('result', '')}]\n")
+        # checkpoint events are internal — don't render
         stdout.flush()

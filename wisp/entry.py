@@ -110,7 +110,9 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
         try:
             asyncio.run(_turn())
         except Exception as exc:
-            logger.exception("Error during turn")
+            import traceback
+            sys.stderr.write(f"Error during turn: {exc}\n")
+            traceback.print_exc(file=sys.stderr)
             sys.stdout.write(f"Error: {exc}\n")
             sys.stdout.flush()
 

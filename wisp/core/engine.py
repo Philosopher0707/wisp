@@ -101,8 +101,15 @@ class WispAgentCore:
         """Normalize provider event to standard format."""
         if isinstance(event, dict):
             return dict(event)
-        # Handle object-style events
-        result = {"type": getattr(event, "type", "unknown")}
+        # Handle StreamEvent objects (TokenBatch, Checkpoint, StreamComplete, etc.)
+        # which use 'phase' instead of 'type'
+        result: dict[str, Any] = {}
+        if hasattr(event, "type"):
+            result["type"] = event.type
+        elif hasattr(event, "phase"):
+            result["type"] = event.phase
+        else:
+            result["type"] = "unknown"
         if hasattr(event, "__dict__"):
             result.update(event.__dict__)
         return result
