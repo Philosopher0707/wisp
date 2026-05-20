@@ -44,15 +44,13 @@ class WispAgentCore:
         # Build system prompt with full context awareness
         system_prompt = self._build_system_prompt(session, query=prompt)
 
-        # Get tools from extensions
-        tools = []
-        if self.extensions is not None:
-            try:
-                tools = self.extensions.tools()
-            except Exception as e:
-                logger.warning("Failed to get tools from extensions: %s", e)
+        # Get tools — built-in + extensions
+        tools = self._get_tool_schemas()
 
         # Stream events from provider
+        pending_tool_calls: list[dict] = []
+        provider_events: list[dict] = []
+
         for event in self.provider.generate_stream_events(
             system_prompt=system_prompt,
             messages=messages,
@@ -60,6 +58,11 @@ class WispAgentCore:
         ):
             # Normalize event
             normalized = self._normalize_event(event)
+            provider_events.append(normalized)
+
+            # Track tool calls for potential execution
+            if normalized.get("type") == "tool_call":
+                pending_tool_calls.append(normalized)
 
             # Check security for tool calls
             if normalized.get("type") == "tool_call" and self.security is not None:
@@ -91,7 +94,17 @@ class WispAgentCore:
                 except Exception as e:
                     logger.warning("Extension intercept failed: %s", e)
 
+            # Yield the event
             yield normalized
+
+        # Execute pending tool calls that didn't get a tool_result from provider
+        # (Real providers don't yield tool_result — they expect the engine to execute)
+        # But if the provider DID yield tool_result, skip execution
+        has_tool_results = any(e.get("type") == "tool_result" for e in provider_events)
+        if pending_tool_calls and not has_tool_results:
+            for tc in pending_tool_calls:
+                async for result_event in self._execute_tool(tc, session):
+                    yield result_event
 
     def _build_system_prompt(self, session: dict, query: str | None = None) -> str:
         """Build rich system prompt from session context.
@@ -143,6 +156,12 @@ class WispAgentCore:
                 repo_map=repo_map or None,
             )
             static_prompt = assembler.build(ctx)
+
+            # Append tools description
+            tools_block = self._build_tools_block()
+            if tools_block:
+                static_prompt += "\n\n" + tools_block
+
             self._static_prompt_cache[cache_key] = static_prompt
 
         # Add query-specific context
@@ -234,6 +253,86 @@ class WispAgentCore:
         except Exception as e:
             logger.debug("Failed to get relevant files: %s", e)
         return ""
+
+    def _build_tools_block(self) -> str:
+        """Build a human-readable tools description for the system prompt."""
+        lines = ["## Tools available"]
+        descriptions = {
+            "read_file": "Read file contents (supports offset/limit for large files)",
+            "write_file": "Create or overwrite a file",
+            "edit_file": "Targeted text replacement (surgical edits, with fuzzy fallback)",
+            "edit_file_multi": "Make multiple precise edits in a single file in one call",
+            "run_bash": "Execute shell commands",
+            "list_files": "Explore directory structure",
+            "web_fetch": "Fetch content from URLs (web pages, APIs, documentation)",
+            "web_search": "Search the web for current information, docs, error messages",
+            "search_symbols": "Search code for functions, classes, structs by name (regex-based)",
+            "search_codebase": "Semantic search over the codebase using vector similarity",
+            "remember": "Store a fact in cross-session memory",
+            "recall": "Search cross-session memory and past summaries for relevant facts",
+            "spawn_subagent": "Delegate a scoped task to a child agent",
+            "git_status": "Show git status (branch, uncommitted files, recent commits)",
+            "git_diff": "Show git diff for files or entire workspace",
+            "git_branch": "List/create/switch git branches",
+            "git_commit": "Stage files and commit with a message",
+            "git_push": "Push current branch to remote",
+            "gh_pr_create": "Create a GitHub pull request (requires gh CLI)",
+            "lsp_diagnostics": "Run language server diagnostics on a file",
+            "lsp_definition": "Go to definition of a symbol",
+            "lsp_references": "Find all references to a symbol",
+            "lsp_hover": "Get type info and docstring for a symbol",
+            "lsp_symbols": "List all symbols in a file as an outline tree",
+            "diagnose": "Diagnose errors from test output, tracebacks, or command failures",
+            "run_tests": "Run tests for changed files or the full test suite",
+            "plan_task": "Create a structured plan with subtasks and dependencies",
+            "mark_step_done": "Mark a plan task as completed",
+            "update_plan": "Update a plan task's status",
+        }
+        for name, desc in descriptions.items():
+            lines.append(f"- {name}: {desc}")
+        return "\n".join(lines)
+
+    def _get_tool_schemas(self) -> list[dict]:
+        """Get all tool schemas — built-in + extensions."""
+        from wisp.tools import TOOL_SCHEMAS
+
+        schemas = list(TOOL_SCHEMAS)
+
+        # Extension tools
+        if self.extensions is not None:
+            try:
+                ext_tools = self.extensions.tools()
+                if ext_tools:
+                    schemas.extend(ext_tools)
+            except Exception as e:
+                logger.warning("Failed to get extension tools: %s", e)
+
+        return schemas
+
+    async def _execute_tool(self, event: dict, session: dict) -> AsyncIterator[dict]:
+        """Execute a tool call and yield the result event."""
+        import time
+        from wisp.tools import execute_tool
+
+        name = event.get("name", "")
+        args = event.get("arguments", {})
+        workspace = session.get("workspace", ".")
+
+        start = time.time()
+        try:
+            result = execute_tool(name, args, workspace=workspace)
+        except Exception as e:
+            logger.exception("Tool execution failed: %s", name)
+            result = {"status": "error", "data": str(e)}
+
+        duration_ms = (time.time() - start) * 1000
+
+        yield {
+            "type": "tool_result",
+            "name": name,
+            "result": result,
+            "duration_ms": duration_ms,
+        }
 
     def _normalize_event(self, event: Any) -> dict:
         """Normalize provider event to standard format."""
