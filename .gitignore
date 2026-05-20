@@ -58,3 +58,8 @@ android/build/
 MagicMock/
 .wisp/worktrees/
 .wisp/subagent_results.jsonl
+-e 
+# Generated runtime files
+.wisp/audit.jsonl
+.wisp/repo_map.json
+workspace/.wisp/repo_map.json
