@@ -29,6 +29,8 @@ class CLITransport(Transport):
         self.runtime = runtime
         self._stdin: Any = None
         self._stdout: Any = None
+        self._thinking_buffer: list[str] = []
+        self._thinking_shown: bool = False
 
     # ── Transport ABC implementation ────────────────────────────────
 
@@ -70,6 +72,32 @@ class CLITransport(Transport):
     def stop(self) -> None:
         """Stop the transport."""
         logger.debug("CLITransport stopped")
+
+    # ── Thinking buffer ─────────────────────────────────────────────
+
+    def _buffer_thinking(self, text: str) -> None:
+        """Accumulate thinking text instead of rendering immediately."""
+        self._thinking_buffer.append(text)
+
+    def _flush_thinking(self, stdout: Any) -> None:
+        """Render accumulated thinking as a single block."""
+        if not self._thinking_buffer or self._thinking_shown:
+            return
+        full = "".join(self._thinking_buffer)
+        self._thinking_buffer = []
+        if full.strip():
+            # Single-line thinking display, truncated if very long
+            display = full.replace("\n", " ")
+            if len(display) > 120:
+                display = display[:117] + "..."
+            stdout.write(f"💭 {display}\n")
+            stdout.flush()
+        self._thinking_shown = True
+
+    def _reset_thinking(self) -> None:
+        """Reset thinking state for a new turn."""
+        self._thinking_buffer = []
+        self._thinking_shown = False
 
     # ── CLI-specific methods ──────────────────────────────────────
 
@@ -125,9 +153,11 @@ class CLITransport(Transport):
                 if not prompt:
                     continue
 
+                self._reset_thinking()
                 try:
                     async for event in self.runtime.run_turn(session, prompt):
                         self._render_event(stdout, event)
+                    self._flush_thinking(stdout)
                 except Exception as exc:
                     logger.exception("Error during turn")
                     stdout.write(f"Error: {exc}\n")
@@ -136,24 +166,31 @@ class CLITransport(Transport):
             stop_event.set()
 
     def _render_event(self, stdout: Any, event: dict) -> None:
-        """Render an event to stdout."""
+        """Render an event to stdout.
+
+        Thinking events are buffered and rendered as a single block
+        when content arrives or at turn end.
+        """
         event_type = event.get("type")
-        if event_type == "content":
+        if event_type == "thinking":
+            self._buffer_thinking(event.get("text", ""))
+        elif event_type == "content":
+            self._flush_thinking(stdout)
             stdout.write(event.get("text", ""))
-        elif event_type == "thinking":
-            # Thinking is rendered inline with brackets for visibility
-            text = event.get("text", "")
-            if text:
-                stdout.write(f"[thinking: {text[:80]}...]\n")
         elif event_type == "complete":
+            self._flush_thinking(stdout)
             stdout.write("\n")
         elif event_type == "done":
+            self._flush_thinking(stdout)
             stdout.write("\n")
         elif event_type == "error":
+            self._flush_thinking(stdout)
             stdout.write(f"Error: {event.get('message', '')}\n")
         elif event_type == "tool_call":
+            self._flush_thinking(stdout)
             stdout.write(f"[Tool: {event.get('name', '')}]\n")
         elif event_type == "tool_result":
+            self._flush_thinking(stdout)
             stdout.write(f"[Result: {event.get('result', '')}]\n")
         # checkpoint events are internal — don't render
         stdout.flush()
