@@ -14,6 +14,7 @@ Design:
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -36,7 +37,11 @@ class WispAgentCore:
     _static_prompt_cache: dict = field(default_factory=dict, repr=False)
 
     async def turn(self, session: dict, prompt: str) -> AsyncIterator[dict]:
-        """Run one turn, yielding events."""
+        """Run one turn, yielding events.
+
+        Security is checked BEFORE yielding tool_call events.
+        Provider exceptions are caught and yielded as error events.
+        """
         # Build messages list
         messages = list(session.get("messages", []))
         messages.append({"role": "user", "content": prompt})
@@ -50,56 +55,75 @@ class WispAgentCore:
         # Stream events from provider
         pending_tool_calls: list[dict] = []
         provider_events: list[dict] = []
+        partial_content: list[str] = []
 
-        for event in self.provider.generate_stream_events(
-            system_prompt=system_prompt,
-            messages=messages,
-            tools=tools if tools else None,
-        ):
-            # Normalize event
-            normalized = self._normalize_event(event)
-            provider_events.append(normalized)
+        try:
+            for event in self.provider.generate_stream_events(
+                system_prompt=system_prompt,
+                messages=messages,
+                tools=tools if tools else None,
+            ):
+                # Normalize event
+                normalized = self._normalize_event(event)
+                provider_events.append(normalized)
 
-            # Track tool calls for potential execution
-            if normalized.get("type") == "tool_call":
-                pending_tool_calls.append(normalized)
+                # Accumulate partial content for error recovery
+                if normalized.get("type") == "content":
+                    partial_content.append(normalized.get("text", ""))
 
-            # Check security for tool calls
-            if normalized.get("type") == "tool_call" and self.security is not None:
-                action = self._make_action(normalized)
-                context = self._make_context(session)
-                try:
-                    decision = self.security.check(action, context)
-                    if not decision.allowed:
-                        yield {
-                            "type": "error",
-                            "message": f"Blocked ({decision.reason}): READ_ONLY mode",
-                            "recoverable": True,
-                        }
-                        continue
-                except Exception as e:
-                    logger.warning("Security check failed: %s", e)
+                # Security + extension checks for tool calls
+                if normalized.get("type") == "tool_call":
+                    # Check security BEFORE yielding
+                    if self.security is not None:
+                        action = self._make_action(normalized)
+                        context = self._make_context(session)
+                        try:
+                            decision = self.security.check(action, context)
+                            if not decision.allowed:
+                                yield {
+                                    "type": "error",
+                                    "message": f"Blocked ({decision.reason}): READ_ONLY mode",
+                                    "recoverable": True,
+                                }
+                                continue
+                        except Exception as e:
+                            logger.warning("Security check failed: %s", e)
 
-            # Check extensions for tool calls
-            if normalized.get("type") == "tool_call" and self.extensions is not None:
-                try:
-                    ext_result = self.extensions.intercept(normalized)
-                    if ext_result.get("action") == "block":
-                        yield {
-                            "type": "error",
-                            "message": f"Blocked: {ext_result.get('reason', 'by extension')}",
-                            "recoverable": True,
-                        }
-                        continue
-                except Exception as e:
-                    logger.warning("Extension intercept failed: %s", e)
+                    # Check extensions
+                    if self.extensions is not None:
+                        try:
+                            ext_result = self.extensions.intercept(normalized)
+                            if ext_result.get("action") == "block":
+                                yield {
+                                    "type": "error",
+                                    "message": f"Blocked: {ext_result.get('reason', 'by extension')}",
+                                    "recoverable": True,
+                                }
+                                continue
+                        except Exception as e:
+                            logger.warning("Extension intercept failed: %s", e)
 
-            # Yield the event
-            yield normalized
+                    pending_tool_calls.append(normalized)
+
+                # Yield the event
+                yield normalized
+
+        except Exception as exc:
+            logger.exception("Provider stream failed")
+            # Yield partial content so user sees something
+            if partial_content:
+                yield {
+                    "type": "content",
+                    "text": "".join(partial_content),
+                }
+            yield {
+                "type": "error",
+                "message": f"Stream error: {exc}",
+                "recoverable": True,
+            }
+            return
 
         # Execute pending tool calls that didn't get a tool_result from provider
-        # (Real providers don't yield tool_result — they expect the engine to execute)
-        # But if the provider DID yield tool_result, skip execution
         has_tool_results = any(e.get("type") == "tool_result" for e in provider_events)
         if pending_tool_calls and not has_tool_results:
             for tc in pending_tool_calls:
@@ -107,12 +131,7 @@ class WispAgentCore:
                     yield result_event
 
     def _build_system_prompt(self, session: dict, query: str | None = None) -> str:
-        """Build rich system prompt from session context.
-
-        Loads .wisp/rules.md, discovers skills, builds repo map,
-        and assembles everything via ContextAssembler — just like
-        the legacy stateful WispAgentCore.
-        """
+        """Build rich system prompt from session context."""
         from wisp.context_assembler import ContextAssembler, PromptContext
 
         ws = session.get("workspace", ".")
@@ -123,12 +142,11 @@ class WispAgentCore:
             self._assembler_cache = ContextAssembler()
         assembler = self._assembler_cache
 
-        # Check cache for static prompt (workspace + skills + project context)
+        # Check cache for static prompt
         cache_key = (ws,)
         static_prompt = self._static_prompt_cache.get(cache_key)
 
         if static_prompt is None:
-            # Gather context sections
             skills_block = self._build_skills_block(ws)
             project_ctx = self._detect_project_context(ws)
             memory_block = self._build_memory_block(ws)
@@ -144,7 +162,6 @@ class WispAgentCore:
                 except Exception:
                     pass
 
-            # Build static prompt via assembler
             ctx = PromptContext.from_legacy(
                 workspace=ws,
                 default_system=assembler.default_system,
@@ -157,7 +174,6 @@ class WispAgentCore:
             )
             static_prompt = assembler.build(ctx)
 
-            # Append tools description
             tools_block = self._build_tools_block()
             if tools_block:
                 static_prompt += "\n\n" + tools_block
@@ -166,7 +182,6 @@ class WispAgentCore:
 
         # Add query-specific context
         if query:
-            # Add relevant files hint if repo map is available
             relevant = self._get_relevant_files(ws, query)
             if relevant:
                 static_prompt += f"\n\n## Files Relevant to Query\n{relevant}\n"
@@ -177,6 +192,11 @@ class WispAgentCore:
             static_prompt += f"\n[Session compacted {count} times.]\n"
 
         return static_prompt
+
+    def invalidate_caches(self) -> None:
+        """Invalidate all caches — call when workspace context changes."""
+        self._static_prompt_cache.clear()
+        logger.debug("Engine caches invalidated")
 
     def _build_skills_block(self, workspace: str) -> str:
         """Discover and format skills for the system prompt."""
@@ -298,7 +318,6 @@ class WispAgentCore:
 
         schemas = list(TOOL_SCHEMAS)
 
-        # Extension tools
         if self.extensions is not None:
             try:
                 ext_tools = self.extensions.tools()
@@ -310,13 +329,32 @@ class WispAgentCore:
         return schemas
 
     async def _execute_tool(self, event: dict, session: dict) -> AsyncIterator[dict]:
-        """Execute a tool call and yield the result event."""
-        import time
+        """Execute a tool call and yield the result event.
+
+        Security is checked again here as a defense-in-depth measure.
+        """
         from wisp.tools import execute_tool
 
         name = event.get("name", "")
         args = event.get("arguments", {})
         workspace = session.get("workspace", ".")
+
+        # Defense-in-depth: re-check security before execution
+        if self.security is not None:
+            action = self._make_action(event)
+            context = self._make_context(session)
+            try:
+                decision = self.security.check(action, context)
+                if not decision.allowed:
+                    yield {
+                        "type": "tool_result",
+                        "name": name,
+                        "result": {"status": "error", "data": f"Security blocked: {decision.reason}"},
+                        "duration_ms": 0,
+                    }
+                    return
+            except Exception as e:
+                logger.warning("Security re-check failed: %s", e)
 
         start = time.time()
         try:
@@ -335,20 +373,34 @@ class WispAgentCore:
         }
 
     def _normalize_event(self, event: Any) -> dict:
-        """Normalize provider event to standard format."""
+        """Normalize provider event to standard format.
+
+        Whitelist known fields instead of copying __dict__ to avoid
+        leaking internal state or circular references.
+        """
         if isinstance(event, dict):
             return dict(event)
-        # Handle StreamEvent objects (TokenBatch, Checkpoint, StreamComplete, etc.)
-        # which use 'phase' instead of 'type'
+
         result: dict[str, Any] = {}
+
+        # Extract type/phase
         if hasattr(event, "type"):
             result["type"] = event.type
         elif hasattr(event, "phase"):
             result["type"] = event.phase
         else:
             result["type"] = "unknown"
-        if hasattr(event, "__dict__"):
-            result.update(event.__dict__)
+
+        # Whitelist known safe fields
+        safe_fields = {
+            "text", "name", "arguments", "result", "message",
+            "duration_ms", "turns", "session_id", "summary", "reason",
+            "level", "recoverable", "tool_call_id", "id",
+        }
+        for field_name in safe_fields:
+            if hasattr(event, field_name):
+                result[field_name] = getattr(event, field_name)
+
         return result
 
     def _make_action(self, event: dict) -> Any:

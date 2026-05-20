@@ -433,6 +433,9 @@ class CLITransport(Transport):
                     self._flush_content(stdout)
                 except Exception as exc:
                     logger.exception("Error during turn")
+                    self._flush_thinking(stdout)
+                    self._flush_content(stdout)
+                    self._reset_buffers()
                     stdout.write(f"Error: {exc}\n")
                     stdout.flush()
         finally:
@@ -539,6 +542,11 @@ class CLITransport(Transport):
         elif etype == EventType.STEERING_INJECT:
             stdout.write(dim(f"  💉 Steering feedback: {ev.data.get('text', '')[:80]}\n"))
             stdout.flush()
+
+        else:
+            # Default: silently ignore unknown event types
+            # (checkpoint, stream_complete, custom extension events, etc.)
+            pass
 
     def _render_tool_result(self, name: str, result: Any, duration_ms: float | None, width: int) -> str | None:
         """Render a tool result with structured output and diff support."""

@@ -90,13 +90,6 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
         workspace=config.workspace,
     ))
 
-    # Create session (async)
-    session = asyncio.run(root.runtime.get_or_create_session(
-        session_id=session_id,
-        model=config.model,
-        workspace=config.workspace,
-    ))
-
     # Check if this is a continuation (session has messages)
     is_continuation = len(session.get("messages", [])) > 0
     skill = kwargs.get("skill")
