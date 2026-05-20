@@ -72,7 +72,12 @@ def _run_cli(root: CompositionRoot, prompt: str | None = None, **kwargs) -> None
 
 
 def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig, **kwargs) -> None:
-    """Synchronous REPL — reads stdin in main thread, async per turn."""
+    """Synchronous REPL — reads stdin in main thread, async per turn.
+
+    Ctrl+C behavior:
+      - During a turn: interrupts the turn, saves session, shows resume command
+      - At prompt: exits REPL gracefully with resume command
+    """
     import sys
     import uuid
 
@@ -88,13 +93,25 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
     sys.stdout.write("Wisp ready.\n")
     sys.stdout.flush()
 
+    def _show_resume() -> None:
+        """Print the resume command for this session."""
+        sys.stdout.write(f"\n⏸  Turn interrupted. Session saved.\n")
+        sys.stdout.write(f"   Resume: wisp repl -S {session_id}\n\n")
+        sys.stdout.flush()
+
+    def _show_exit() -> None:
+        """Print exit message with resume command."""
+        sys.stdout.write(f"\n👋  Exiting. Session saved.\n")
+        sys.stdout.write(f"   Resume: wisp repl -S {session_id}\n\n")
+        sys.stdout.flush()
+
     while True:
         try:
             line = sys.stdin.readline()
         except KeyboardInterrupt:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-            continue
+            # Ctrl+C at prompt — exit gracefully
+            _show_exit()
+            break
         except Exception:
             break
         if not line:
@@ -114,10 +131,8 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
         try:
             asyncio.run(_turn())
         except KeyboardInterrupt:
-            sys.stdout.write("\n⏸  Interrupted. Session saved. Type 'exit' to quit or continue.\n")
-            sys.stdout.flush()
-            # Session was already persisted by run_turn before the interrupt
-            continue
+            # Ctrl+C during turn — show resume and continue
+            _show_resume()
         except Exception as exc:
             import traceback
             sys.stderr.write(f"Error during turn: {exc}\n")
