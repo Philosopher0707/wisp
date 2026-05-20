@@ -141,17 +141,20 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
             async for event in root.runtime.run_turn(session, prompt):
                 transport._render_event(sys.stdout, event)
 
-        transport._reset_thinking()
+        transport._reset_buffers()
         try:
             asyncio.run(_turn())
             transport._flush_thinking(sys.stdout)
+            transport._flush_content(sys.stdout)
         except KeyboardInterrupt:
             # Ctrl+C during turn — show resume and continue
             transport._flush_thinking(sys.stdout)
+            transport._flush_content(sys.stdout)
             _show_resume()
         except Exception as exc:
             import traceback
             transport._flush_thinking(sys.stdout)
+            transport._flush_content(sys.stdout)
             sys.stderr.write(f"Error during turn: {exc}\n")
             traceback.print_exc(file=sys.stderr)
             sys.stdout.write(f"Error: {exc}\n")
@@ -173,6 +176,8 @@ async def _run_single_prompt(transport: CLITransport, root: CompositionRoot, pro
     async for event in root.runtime.run_turn(session, prompt):
         transport._render_event(sys.stdout, event)
 
+    transport._flush_thinking(sys.stdout)
+    transport._flush_content(sys.stdout)
     sys.stdout.write("\n")
     sys.stdout.flush()
 
