@@ -191,6 +191,78 @@ class CLITransport(Transport):
             stdout.write(f"[Tool: {event.get('name', '')}]\n")
         elif event_type == "tool_result":
             self._flush_thinking(stdout)
-            stdout.write(f"[Result: {event.get('result', '')}]\n")
+            self._render_tool_result(stdout, event)
         # checkpoint events are internal — don't render
         stdout.flush()
+
+    def _render_tool_result(self, stdout: Any, event: dict) -> None:
+        """Render a tool_result event, with special handling for edits and writes."""
+        name = event.get("name", "")
+        result = event.get("result", "")
+
+        # Try to parse structured result dict
+        parsed = None
+        if isinstance(result, dict):
+            parsed = result
+        elif isinstance(result, str):
+            try:
+                import json
+                parsed = json.loads(result)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        if name in ("edit_file", "edit_file_multi") and parsed:
+            self._render_edit_result(stdout, parsed)
+        elif name == "write_file" and parsed:
+            self._render_write_result(stdout, parsed)
+        else:
+            # Default: show result summary
+            text = result if isinstance(result, str) else str(result)
+            # Truncate very long results
+            if len(text) > 500:
+                text = text[:497] + "..."
+            stdout.write(f"[Result: {text}]\n")
+
+    def _render_edit_result(self, stdout: Any, parsed: dict) -> None:
+        """Render an edit_file result with diff."""
+        data = parsed.get("data", "")
+        meta = parsed.get("metadata", {})
+        diff = meta.get("diff", "")
+        path = meta.get("path", "unknown")
+
+        stdout.write(f"✏️  {data}\n")
+        if diff:
+            stdout.write("---\n")
+            for line in diff.split("\n")[:20]:  # Show first 20 lines
+                if line.startswith("+"):
+                    stdout.write(f"\033[32m{line}\033[0m\n")  # Green for additions
+                elif line.startswith("-"):
+                    stdout.write(f"\033[31m{line}\033[0m\n")  # Red for deletions
+                elif line.startswith("@@"):
+                    stdout.write(f"\033[36m{line}\033[0m\n")  # Cyan for hunk header
+                else:
+                    stdout.write(f"{line}\n")
+            if len(diff.split("\n")) > 20:
+                stdout.write("... (truncated)\n")
+            stdout.write("---\n")
+
+    def _render_write_result(self, stdout: Any, parsed: dict) -> None:
+        """Render a write_file result with diff."""
+        data = parsed.get("data", "")
+        meta = parsed.get("metadata", {})
+        diff = meta.get("diff", "")
+        path = meta.get("path", "unknown")
+
+        stdout.write(f"📝 {data}\n")
+        if diff:
+            stdout.write("---\n")
+            for line in diff.split("\n")[:20]:
+                if line.startswith("+"):
+                    stdout.write(f"\033[32m{line}\033[0m\n")
+                elif line.startswith("-"):
+                    stdout.write(f"\033[31m{line}\033[0m\n")
+                else:
+                    stdout.write(f"{line}\n")
+            if len(diff.split("\n")) > 20:
+                stdout.write("... (truncated)\n")
+            stdout.write("---\n")
