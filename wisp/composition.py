@@ -85,6 +85,7 @@ class CompositionRoot:
             provider = _NullProvider()
 
         return WispAgentCore(
+            config=self.config,
             provider=provider,
             security=self.security,
             extensions=self.extensions,
