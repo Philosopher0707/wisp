@@ -157,6 +157,13 @@ class AgentRuntime:
                 # Always record what happened in the session
                 if tool_calls or tool_results:
                     for tc in tool_calls:
+                        import json
+                        args = tc.get("arguments", {})
+                        if isinstance(args, str):
+                            try:
+                                args = json.loads(args)
+                            except json.JSONDecodeError:
+                                args = {}
                         session["messages"].append({
                             "role": "assistant",
                             "content": "",
@@ -165,16 +172,22 @@ class AgentRuntime:
                                 "type": "function",
                                 "function": {
                                     "name": tc.get("name", ""),
-                                    "arguments": str(tc.get("arguments", {})),
+                                    "arguments": args,
                                 },
                             }],
                         })
 
                     for tr in tool_results:
+                        import json
+                        result = tr.get("result", "")
+                        if isinstance(result, dict):
+                            content = json.dumps(result)
+                        else:
+                            content = str(result)
                         session["messages"].append({
                             "role": "tool",
                             "tool_call_id": tr.get("tool_call_id", ""),
-                            "content": str(tr.get("result", "")),
+                            "content": content,
                         })
 
                 if assistant_content:

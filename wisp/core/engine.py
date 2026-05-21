@@ -64,7 +64,9 @@ class WispAgentCore:
         """
         # Build messages list
         messages = list(session.get("messages", []))
-        messages.append({"role": "user", "content": prompt})
+        # Avoid duplicating the user message if runtime already added it
+        if not messages or messages[-1].get("role") != "user" or messages[-1].get("content") != prompt:
+            messages.append({"role": "user", "content": prompt})
 
         # Build system prompt with full context awareness
         system_prompt = self._build_system_prompt(session, query=prompt)
@@ -541,7 +543,10 @@ class WispAgentCore:
         duration_ms = (time.time() - start) * 1000
 
         normalized = self._normalize_tool_result(raw_result)
-        yield _flatten_event(tool_result_event(name, normalized, duration_ms=duration_ms))
+        yield _flatten_event(tool_result_event(
+            name, normalized, duration_ms=duration_ms,
+            tool_call_id=event.get("id")
+        ))
 
     def _normalize_tool_result(self, result: Any) -> dict:
         """Normalize any tool result to a standard JSON-serializable schema.
