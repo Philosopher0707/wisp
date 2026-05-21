@@ -112,8 +112,16 @@ class AcpSession:
                 yield ThinkingContent(text=thinking)
 
             # Parse tool calls from response
-            from wisp.core.agent import WispAgentCore
-            tool_calls = WispAgentCore._parse_tool_call(response)
+            def _parse_tool_call(response: dict) -> list[dict] | None:
+                msg = response.get("message", {})
+                if not isinstance(msg, dict):
+                    return None
+                tool_calls = msg.get("tool_calls")
+                if tool_calls and isinstance(tool_calls, list):
+                    return tool_calls
+                return None
+
+            tool_calls = _parse_tool_call(response)
 
             if tool_calls:
                 # Yield text content if any

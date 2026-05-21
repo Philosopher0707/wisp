@@ -224,8 +224,18 @@ class WispAgentCore:
             self._assembler_cache = ContextAssembler()
         assembler = self._assembler_cache
 
-        # Check cache for static prompt
-        cache_key = (ws,)
+        # Check cache for static prompt — include mtimes of key context files
+        # so that edits to rules.md, skills, etc. invalidate the cache.
+        context_mt = 0.0
+        for candidate in (
+            ws_path / ".wisp" / "rules.md",
+            ws_path / ".wisp" / "conventions.md",
+        ):
+            try:
+                context_mt = max(context_mt, candidate.stat().st_mtime)
+            except OSError:
+                pass
+        cache_key = (ws, context_mt)
         static_prompt = self._static_prompt_cache.get(cache_key)
 
         if static_prompt is None:

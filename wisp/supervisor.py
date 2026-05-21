@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Callable
 
 from wisp.config import WISP_CONFIG_DIR
-from wisp.core.agent import WispAgentCore
 from wisp.core.events import TYPE_DONE, TYPE_ERROR, AgentEvent
 from wisp.runtime_protocol import AppEvent
 from wisp.adapters import UnifiedSessionStore, Run, get_store
@@ -23,12 +22,10 @@ class WispSupervisor:
         self,
         store: UnifiedSessionStore | None = None,
         artifacts_dir: Path | None = None,
-        agent_factory: Callable = WispAgentCore,
     ):
         self.store = store or get_store()
         self.artifacts_dir = Path(artifacts_dir or (WISP_CONFIG_DIR / "artifacts"))
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
-        self.agent_factory = agent_factory
 
     def create_thread(self, workspace: str, title: str | None = None):
         thread_title = title or Path(workspace).name or "Workspace thread"
@@ -107,13 +104,41 @@ class WispSupervisor:
         events.append(started)
 
         failed = False
-        agent = self.agent_factory(config)
-        async for agent_event in agent.run(prompt):
-            app_event = self._translate_agent_event(thread.id, run.id, agent_event)
+        try:
+            from wisp.entry import run_headless
+            result = await run_headless(
+                prompt=prompt,
+                model=getattr(config, "model", None),
+                workspace=workspace,
+                permission_mode=getattr(config, "permission_mode", "full"),
+            )
+            if not result.get("ok", False):
+                failed = True
+                app_event = AppEvent(
+                    event="run.error",
+                    thread_id=thread.id,
+                    run_id=run.id,
+                    payload={"message": result.get("error", "Unknown error"), "recoverable": False},
+                )
+            else:
+                app_event = AppEvent(
+                    event="run.completed",
+                    thread_id=thread.id,
+                    run_id=run.id,
+                    payload={"content": result.get("content", ""), "turns": result.get("iterations", 0)},
+                )
             self.append_run_event(run.id, app_event)
             events.append(app_event)
-            if agent_event.type == TYPE_ERROR and not agent_event.data.get("recoverable", True):
-                failed = True
+        except Exception as exc:
+            failed = True
+            app_event = AppEvent(
+                event="run.error",
+                thread_id=thread.id,
+                run_id=run.id,
+                payload={"message": str(exc), "recoverable": False},
+            )
+            self.append_run_event(run.id, app_event)
+            events.append(app_event)
 
         if failed:
             self.store.update_run_status(run.id, "failed")

@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Optional
 
 from wisp.config import WispConfig
-from wisp.core.agent import WispAgentCore
 from wisp.core.events import (
     AgentEvent, TYPE_CONTENT, TYPE_THINKING, TYPE_TOOL_CALL,
     TYPE_TOOL_RESULT, TYPE_ERROR, TYPE_DONE,
@@ -84,8 +83,9 @@ class BackgroundRunner:
     """Manages background agent execution with cross-process state tracking."""
 
     def __init__(self, workspace: str = "."):
-        from wisp.persistence.swarm_store import SwarmStateStore
-        self._store = SwarmStateStore(workspace)
+        from wisp.infra.store import UnifiedStore
+        db_path = Path(workspace) / ".wisp" / "wisp.db"
+        self._store = UnifiedStore(db_path)
         self._tasks: dict[str, asyncio.Task] = {}   # process-local only
         self._callbacks: dict[str, asyncio.Task] = {} # process-local only
 
@@ -100,24 +100,24 @@ class BackgroundRunner:
             workspace=workspace,
             status="pending",
         )
-        self._store._bg_create(run.to_dict())
+        self._store.bg_create(run.to_dict())
         return run
 
     def start(self, run_id: str):
         """Begin execution of a pending run on THIS worker."""
-        row = self._store._bg_get(run_id)
+        row = self._store.bg_get(run_id)
         if not row:
             raise ValueError(f"Unknown run: {run_id}")
         if row.get("status") != "pending":
             raise ValueError(f"Run {run_id} already started (status: {row['status']})")
 
-        self._store._bg_update(run_id, status="running", started_at=time.time())
+        self._store.bg_update(run_id, status="running", started_at=time.time())
         task = asyncio.create_task(self._execute(run_id))
         self._tasks[run_id] = task
 
     async def _execute(self, run_id: str):
         """Execute the agent in background using HeadlessTransport."""
-        row = self._store._bg_get(run_id)
+        row = self._store.bg_get(run_id)
         if not row:
             logger.error("Run %s disappeared from store", run_id)
             return
@@ -158,7 +158,7 @@ class BackgroundRunner:
 
         finally:
             run.finished_at = time.time()
-            self._store._bg_update(
+            self._store.bg_update(
                 run_id,
                 status=run.status,
                 content=run.content,
@@ -168,14 +168,14 @@ class BackgroundRunner:
 
     def get(self, run_id: str) -> Optional[BackgroundRun]:
         """Get a run by ID (reads from SQLite — works across processes)."""
-        row = self._store._bg_get(run_id)
+        row = self._store.bg_get(run_id)
         if not row:
             return None
         return BackgroundRun.from_db_row(row)
 
     def list_runs(self) -> list[BackgroundRun]:
         """List all runs (reads from SQLite — works across processes)."""
-        rows = self._store._bg_list()
+        rows = self._store.bg_list()
         return [BackgroundRun.from_db_row(r) for r in rows]
 
     def cancel(self, run_id: str) -> bool:
@@ -185,8 +185,8 @@ different worker (caller should poll status instead)."""
         task = self._tasks.get(run_id)
         if task and not task.done():
             task.cancel()
-            self._store._bg_update(
-run_id,
+            self._store.bg_update(
+                run_id,
                 status="cancelled",
                 error="Cancelled by user",
             )

@@ -46,7 +46,7 @@ class TestNewEntryPoint:
                     mock_instance = MagicMock()
                     mock_root.return_value = mock_instance
                     run_mode("cli", "test prompt")
-                    mock_transport.assert_called_once_with(mock_instance.runtime)
+                    mock_transport.assert_called_once_with(mock_instance.runtime, mock_instance.config)
 
     def test_server_mode_runs_server_main(self):
         from wisp.entry import run_mode

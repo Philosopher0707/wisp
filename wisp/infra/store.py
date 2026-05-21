@@ -111,6 +111,23 @@ class UnifiedStore:
                 CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id);
                 CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(session_id);
                 CREATE INDEX IF NOT EXISTS idx_memory_created ON memory(created_at);
+
+                CREATE TABLE IF NOT EXISTS background_runs (
+                    id TEXT PRIMARY KEY,
+                    prompt TEXT NOT NULL,
+                    model TEXT NOT NULL DEFAULT 'unknown',
+                    workspace TEXT NOT NULL DEFAULT '.',
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at REAL NOT NULL DEFAULT 0,
+                    started_at REAL,
+                    finished_at REAL,
+                    content TEXT NOT NULL DEFAULT '',
+                    tool_calls TEXT NOT NULL DEFAULT '[]',
+                    files_changed TEXT NOT NULL DEFAULT '[]',
+                    error TEXT,
+                    iterations INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE INDEX IF NOT EXISTS idx_bg_runs_status ON background_runs(status);
                 """
             )
             # Schema migration: add title column if missing
@@ -118,6 +135,29 @@ class UnifiedStore:
                 conn.execute("SELECT title FROM sessions LIMIT 1")
             except sqlite3.OperationalError:
                 conn.execute("ALTER TABLE sessions ADD COLUMN title TEXT NOT NULL DEFAULT ''")
+
+            # Schema migration: add background_runs table if missing (older dbs)
+            try:
+                conn.execute("SELECT 1 FROM background_runs LIMIT 1")
+            except sqlite3.OperationalError:
+                conn.execute("""
+                    CREATE TABLE background_runs (
+                        id TEXT PRIMARY KEY,
+                        prompt TEXT NOT NULL,
+                        model TEXT NOT NULL DEFAULT 'unknown',
+                        workspace TEXT NOT NULL DEFAULT '.',
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        created_at REAL NOT NULL DEFAULT 0,
+                        started_at REAL,
+                        finished_at REAL,
+                        content TEXT NOT NULL DEFAULT '',
+                        tool_calls TEXT NOT NULL DEFAULT '[]',
+                        files_changed TEXT NOT NULL DEFAULT '[]',
+                        error TEXT,
+                        iterations INTEGER NOT NULL DEFAULT 0
+                    )
+                """)
+                conn.execute("CREATE INDEX idx_bg_runs_status ON background_runs(status)")
 
     def _list_tables(self) -> list[str]:
         cursor = self._get_conn().execute(
@@ -346,3 +386,82 @@ class UnifiedStore:
             """,
             (keep,),
         )
+
+    # ── Background runs ─────────────────────────────────────────────
+
+    def bg_create(self, run: dict) -> None:
+        """Create a background run record."""
+        self._get_conn().execute(
+            """
+            INSERT INTO background_runs (id, prompt, model, workspace, status, created_at)
+            VALUES (:id, :prompt, :model, :workspace, :status, :created_at)
+            """,
+            {
+                "id": run["id"],
+                "prompt": run.get("prompt", ""),
+                "model": run.get("model", "unknown"),
+                "workspace": run.get("workspace", "."),
+                "status": run.get("status", "pending"),
+                "created_at": run.get("created_at", 0),
+            },
+        )
+
+    def bg_get(self, run_id: str) -> dict | None:
+        """Get a background run by ID."""
+        row = self._get_conn().execute(
+            "SELECT * FROM background_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "run_id": row["id"],
+            "prompt": row["prompt"],
+            "model": row["model"],
+            "workspace": row["workspace"],
+            "status": row["status"],
+            "created_at": row["created_at"],
+            "started_at": row["started_at"],
+            "finished_at": row["finished_at"],
+            "content": row["content"],
+            "tool_calls": json.loads(row["tool_calls"]),
+            "files_changed": json.loads(row["files_changed"]),
+            "error": row["error"],
+            "iterations": row["iterations"],
+        }
+
+    def bg_update(self, run_id: str, **kwargs) -> None:
+        """Update fields of a background run."""
+        allowed = {"status", "started_at", "finished_at", "content", "error", "iterations"}
+        fields = {k: v for k, v in kwargs.items() if k in allowed}
+        if not fields:
+            return
+        sets = ", ".join(f"{k} = :{k}" for k in fields)
+        fields["id"] = run_id
+        self._get_conn().execute(
+            f"UPDATE background_runs SET {sets} WHERE id = :id",
+            fields,
+        )
+
+    def bg_list(self) -> list[dict]:
+        """List all background runs."""
+        rows = self._get_conn().execute(
+            "SELECT * FROM background_runs ORDER BY created_at DESC"
+        ).fetchall()
+        return [
+            {
+                "run_id": r["id"],
+                "prompt": r["prompt"],
+                "model": r["model"],
+                "workspace": r["workspace"],
+                "status": r["status"],
+                "created_at": r["created_at"],
+                "started_at": r["started_at"],
+                "finished_at": r["finished_at"],
+                "content": r["content"],
+                "tool_calls": json.loads(r["tool_calls"]),
+                "files_changed": json.loads(r["files_changed"]),
+                "error": r["error"],
+                "iterations": r["iterations"],
+            }
+            for r in rows
+        ]

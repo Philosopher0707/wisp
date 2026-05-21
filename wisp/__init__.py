@@ -31,7 +31,6 @@ from wisp.sdk import Wisp
 
 # ── Core components ──────────────────────────────────────────────────
 
-from wisp.core.agent import WispAgentCore as _LegacyWispAgentCore
 from wisp.core.engine import WispAgentCore
 from wisp.core.events import AgentEvent
 

@@ -69,6 +69,8 @@ class ProviderFactory:
           - model: str
         """
         name = getattr(config, "provider", "ollama")
+        if not isinstance(name, str):
+            name = "ollama"
         if name not in self._providers:
             raise ValueError(f"Unknown provider: {name}. Available: {list(self._providers.keys())}")
 

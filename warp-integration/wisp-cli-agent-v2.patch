@@ -1,0 +1,212 @@
+From: Wisp Contributors <wisp@wisp.dev>
+Date: May 20, 2026
+Subject: feat: add Wisp OSC 777 CLI agent support to Warp
+
+This patch adds Wisp as a fully-supported third-party CLI agent in Warp,
+complete with OSC 777 event handling for status chips, approval banners,
+and desktop notifications.
+
+Wisp is an open-source, local-first coding agent powered by Ollama.
+When users run `wisp --warp-mode` in Warp's terminal, the agent toolbelt
+activates with full native support — footer status, approval banners,
+rich input editor, code review panel, and session sharing.
+
+Includes: CLIAgent::Wisp, WispPluginManager, OSC 777 listener support.
+
+---
+
+app/src/terminal/cli_agent.rs          |
+app/src/terminal/cli_agent_sessions/listener/mod.rs |
+app/src/terminal/cli_agent_sessions/plugin_manager/mod.rs |
+app/src/terminal/cli_agent_sessions/plugin_manager/wisp.rs (new file) |
+crates/warp_core/resources/bundled/svg/wisp.svg (new file) |
+crates/warp_core/src/ui/icons.rs      |
+
+---
+
+Step 1: Add CLIAgent::Wisp
+
+app/src/terminal/cli_agent.rs:
+@@ -93,6 +93,12 @@ const AUGGIE_COLOR: ColorU = ColorU {
+     r: 38, g: 37, b: 30, a: 255,
+ };
+ 
++/// Wisp brand color — indigo/violet (#6366F1)
++const WISP_COLOR: ColorU = ColorU {
++    r: 99, g: 102, b: 241, a: 255,
++};
++
+ /// Represents a CLI agent (e.g., Claude Code, Gemini CLI, Codex, Amp, Droid,
+-/// OpenCode, Copilot, Pi, Auggie, Cursor)
++/// OpenCode, Copilot, Pi, Auggie, Cursor, or Wisp)
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Sequence, Serialize, Deserialize)]
+ pub enum CLIAgent {
+     Claude,
+@@ -107,6 +113,7 @@ pub enum CLIAgent {
+     Auggie,
+     CursorCli,
++    Wisp,
+     /// Represents an unknown/custom CLI agent matched by user-configured regex patterns.
+     Unknown,
+ }
+@@ -123,6 +130,7 @@ impl CLIAgent {
+             CLIAgent::Auggie => "auggie",
+             CLIAgent::CursorCli => "agent",
++            CLIAgent::Wisp => "wisp",
+             CLIAgent::Unknown => "",
+         }
+     }
+@@ -144,6 +152,7 @@ impl CLIAgent {
+             CLIAgent::Auggie => "Auggie",
+             CLIAgent::CursorCli => "Cursor",
++            CLIAgent::Wisp => "Wisp",
+             CLIAgent::Unknown => "CLI Agent",
+         }
+     }
+@@ -162,6 +171,7 @@ impl CLIAgent {
+             CLIAgent::Auggie => Some(Icon::AuggieLogo),
+             CLIAgent::CursorCli => Some(Icon::CursorLogo),
++            CLIAgent::Wisp => Some(Icon::WispLogo),
+             CLIAgent::Unknown => None,
+         }
+     }
+@@ -179,6 +189,7 @@ impl CLIAgent {
+             CLIAgent::Auggie => &[SkillProvider::Agents],
+             CLIAgent::CursorCli => &[SkillProvider::Agents],
++            CLIAgent::Wisp => &[SkillProvider::Agents],
+             CLIAgent::Unknown => &[],
+         }
+     }
+@@ -222,6 +233,7 @@ impl CLIAgent {
+             CLIAgent::Auggie => Some(AUGGIE_COLOR),
+             CLIAgent::CursorCli => Some(CURSOR_COLOR),
++            CLIAgent::Wisp => Some(WISP_COLOR),
+             CLIAgent::Unknown => None,
+         }
+     }
+@@ -233,6 +245,7 @@ impl CLIAgent {
+             CLIAgent::Auggie => ColorU::new(0, 0, 0, 255),
+             CLIAgent::Droid => ColorU::new(0, 0, 0, 255),
++            CLIAgent::Wisp => ColorU::new(0, 0, 0, 255),
+             _ => ColorU::white(),
+         }
+     }
+
+Step 2: Add Wisp to OSC 777 listener support
+
+app/src/terminal/cli_agent_sessions/listener/mod.rs:
+@@
+ pub fn is_agent_supported(agent: &CLIAgent) -> bool {
+     matches!(
+         agent,
+         CLIAgent::Claude
+             | CLIAgent::OpenCode
+             | CLIAgent::Codex
+             | CLIAgent::Gemini
+             | CLIAgent::Auggie
++            | CLIAgent::Wisp
+     )
+ }
+ @@
+ fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
+     match agent {
+         CLIAgent::Claude | CLIAgent::OpenCode | CLIAgent::Gemini | CLIAgent::Auggie | CLIAgent::Wisp => {
+             Some(Box::new(DefaultSessionListener))
+         }
+         CLIAgent::Codex => Some(Box::new(CodexSessionHandler)),
+         _ => None,
+     }
+ }
+
+Step 3: Add WispPluginManager
+
+app/src/terminal/cli_agent_sessions/plugin_manager/mod.rs:
+@@
+ pub(crate) mod claude;
+ pub(crate) mod codex;
+ pub(crate) mod gemini;
+ pub(crate) mod opencode;
++pub(crate) mod wisp;
+
+@@ -20,6 +21,8 @@ use claude::ClaudeCodePluginManager;
+ use codex::CodexPluginManager;
+ use gemini::GeminiPluginManager;
+ use opencode::OpenCodePluginManager;
++use wisp::WispPluginManager;
+
+@@ -90,6 +93,7 @@ pub fn plugin_manager_for(agent: CLIAgent) -> Option<Box<dyn CliAgentPluginManage
+         CLIAgent::Opencode => Some(Box::new(OpenCodePluginManager)),
+         CLIAgent::Codex => Some(Box::new(CodexPluginManager)),
+         CLIAgent::Gemini => Some(Box::new(GeminiPluginManager)),
++        CLIAgent::Wisp => Some(Box::new(WispPluginManager)),
+         _ => None,
+     }
+ }
+
+Step 4: Create WispPluginManager
+
+app/src/terminal/cli_agent_sessions/plugin_manager/wisp.rs (new file):
+pub(crate) struct WispPluginManager;
+
+impl CliAgentPluginManager for WispPluginManager {
+    fn name(&self) -> &'static str {
+        "wisp-warp"
+    }
+
+    fn minimum_plugin_version(&self) -> &'static str {
+        "0.1.0"
+    }
+
+    fn install_instructions(
+        &self,
+        _is_update: bool,
+        _detected_command: Option<&str>,
+        _detected_args: &[String],
+    ) -> PluginInstructions {
+        PluginInstructions {
+            title: "Wisp Warp Plugin",
+            subtitle: "Install the Wisp Warp plugin for enhanced features.",
+            steps: &[
+                PluginInstructionStep {
+                    description: "Install wisp if not already installed:",
+                    command: "pip install wisp",
+                    executable: true,
+                    link: None,
+                },
+                PluginInstructionStep {
+                    description: "Wisp uses OSC 777 — no plugin needed! Run with --warp-mode:",
+                    command: "wisp --warp-mode",
+                    executable: true,
+                    link: Some("https://github.com/wisp/wisp"),
+                },
+            ],
+            post_install_notes: &[],
+        }
+    }
+
+    fn install_plugin(
+        &self,
+        _command: &str,
+        _args: &[String],
+        _env_vars: Option<HashMap<String, String>>,
+    ) -> Result<(), PluginInstallError> {
+        // Wisp needs no plugin — OSC 777 support is built-in.
+        Ok(())
+    }
+}
+
+Step 5: Add Wisp SVG icon
+
+crates/warp_core/resources/bundled/svg/wisp.svg (new file):
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <path d="M3 4L9 12L3 20" stroke="#6366F1" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M11 4L17 12L11 20" stroke="#818CF8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M19 4L21 12L19 20" stroke="#A5B4FC" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+  <rect x="21" y="16" width="2" height="4" rx="1" fill="#6366F1" opacity="0.6" />
+</svg>
+
+crates/warp_core/src/ui/icons.rs:
+@@
++    WispLogo,
+@@
++            Icon::WispLogo => "bundled/svg/wisp.svg",

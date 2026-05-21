@@ -154,10 +154,12 @@ def _flush_from_timer() -> None:
 
 
 def _flush_save(memory: dict) -> None:
-    """Actual synchronous disk write."""
+    """Actual synchronous disk write — atomic via temp+rename."""
     path = _get_memory_file()
+    tmp = path.with_suffix(".tmp")
     try:
-        path.write_text(json.dumps(memory, indent=2, ensure_ascii=False) + "\n")
+        tmp.write_text(json.dumps(memory, indent=2, ensure_ascii=False) + "\n")
+        tmp.replace(path)
     except OSError as e:
         logger.error("Failed to save memory: %s", e)
 

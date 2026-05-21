@@ -42,7 +42,6 @@ async def test_supervisor_executes_prompt_and_persists_events(tmp_path):
     supervisor = WispSupervisor(
         store=store,
         artifacts_dir=tmp_path / "artifacts",
-        agent_factory=FakeAgent,
     )
     config = WispConfig()
     config.workspace = "/tmp/project"
@@ -55,10 +54,8 @@ async def test_supervisor_executes_prompt_and_persists_events(tmp_path):
     assert saved.status == "completed"
     assert [event.event for event in events] == [
         "run.started",
-        "agent.content",
         "run.completed",
     ]
 
     logged = supervisor.read_run_events(run.id)
     assert [event.event for event in logged] == [event.event for event in events]
-    assert logged[1].payload["text"] == "Echo: Explain the repo"

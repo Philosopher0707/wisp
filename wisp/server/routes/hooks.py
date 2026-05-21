@@ -61,10 +61,18 @@ async def create_hook(req: HookCreateRequest):
     hooks_dir = WORKSPACE_ROOT / ".wisp" / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
 
-    try:
-        event = HookEvent[req.event.upper()]
-    except KeyError:
-        valid = [e.name for e in HookEvent]
+    event_map = {
+        "PRE_TOOL_USE": HookEvent.TOOL_CALL,
+        "POST_TOOL_USE": HookEvent.TOOL_RESULT,
+        "PRE_BASH": HookEvent.BASH_COMMAND,
+        "POST_BASH": HookEvent.BASH_COMMAND,
+        "PRE_FILE_WRITE": HookEvent.FILE_WRITE,
+        "SESSION_START": HookEvent.SESSION_START,
+        "SESSION_END": HookEvent.SESSION_END,
+    }
+    event = event_map.get(req.event.upper())
+    if event is None:
+        valid = list(event_map.keys())
         raise HTTPException(status_code=400, detail=f"Invalid event '{req.event}'. Must be one of: {', '.join(valid)}")
 
     hook = HookConfig(

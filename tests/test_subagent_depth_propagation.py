@@ -12,30 +12,23 @@ from wisp.multi_agent import SubagentOrchestrator, SubagentContract
 from wisp.multi_agent.task import SubagentResult
 
 
-class FakeWispAgentCore:
+class FakeStatelessCore:
     """Captures depth/branch_count so tests can inspect propagation."""
 
     created_instances: list = []
 
-    def __init__(self, config=None, session=None, role=""):
+    def __init__(self, provider=None, security=None, extensions=None, telemetry=None, config=None):
         self.config = config or MagicMock()
-        self.config.workspace = "/tmp"
-        self.session = session
-        self.role = role
-        self._subagent_depth = 0
-        self._subagent_branch_count = 0
-        self.messages = []
-        self.closed = False
-        FakeWispAgentCore.created_instances.append(self)
+        # Extract depth from config if it's a real value, not a MagicMock
+        depth = getattr(config, "_subagent_depth", 0) if config else 0
+        branch = getattr(config, "_subagent_branch_count", 0) if config else 0
+        self._subagent_depth = depth if not isinstance(depth, MagicMock) else 0
+        self._subagent_branch_count = branch if not isinstance(branch, MagicMock) else 0
+        FakeStatelessCore.created_instances.append(self)
 
-    async def run_task(self, **kwargs):
-        return {
-            "success": True,
-            "output": f"depth={getattr(self, '_subagent_depth', 0)}",
-        }
-
-    def close(self):
-        self.closed = True
+    async def turn(self, session_dict, task):
+        yield {"type": "content", "text": f"depth={self._subagent_depth}"}
+        yield {"type": "done"}
 
     @classmethod
     def reset(cls):
@@ -46,6 +39,7 @@ class FakeWispAgentCore:
 def mock_parent_agent():
     agent = MagicMock()
     agent.config.model = "test-model"
+    agent.config.provider = "ollama"
     agent.config.workspace = "/tmp"
     agent.config.show_thinking = False
     agent.config.chars_per_token = 4
@@ -65,8 +59,8 @@ def orch(mock_parent_agent):
 
 @pytest.mark.asyncio
 async def test_subagent_depth_is_propagated_from_contract(orch):
-    """When a subagent spawns, its WispAgentCore must inherit the depth from the contract."""
-    FakeWispAgentCore.reset()
+    """When a subagent spawns, its core must inherit the depth from the contract."""
+    FakeStatelessCore.reset()
 
     contract = SubagentContract(
         name="child",
@@ -76,12 +70,13 @@ async def test_subagent_depth_is_propagated_from_contract(orch):
         _subagent_branch_count=3,
     )
 
-    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+    with patch("wisp.core.engine.WispAgentCore", FakeStatelessCore):
         result = await orch.run(contract)
 
     assert result.success is True
-    assert len(FakeWispAgentCore.created_instances) == 1
-    child = FakeWispAgentCore.created_instances[0]
+    assert len(FakeStatelessCore.created_instances) == 1
+    child = FakeStatelessCore.created_instances[0]
+    # In the new architecture depth is carried on the config object if set
     assert child._subagent_depth == 1
     assert child._subagent_branch_count == 3
 
@@ -89,15 +84,15 @@ async def test_subagent_depth_is_propagated_from_contract(orch):
 @pytest.mark.asyncio
 async def test_subagent_depth_zero_when_not_specified(orch):
     """Default depth=0 and branch_count=0 when contract omits them."""
-    FakeWispAgentCore.reset()
+    FakeStatelessCore.reset()
 
     contract = SubagentContract(name="default", task="hello", role="coder")
 
-    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+    with patch("wisp.core.engine.WispAgentCore", FakeStatelessCore):
         result = await orch.run(contract)
 
     assert result.success is True
-    assert len(FakeWispAgentCore.created_instances) == 1
-    child = FakeWispAgentCore.created_instances[0]
+    assert len(FakeStatelessCore.created_instances) == 1
+    child = FakeStatelessCore.created_instances[0]
     assert child._subagent_depth == 0
     assert child._subagent_branch_count == 0

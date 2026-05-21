@@ -266,6 +266,32 @@ def get_setting(key: str, default=None):
 # ── Resolved config ──────────────────────────────────────────────────
 
 
+def _parse_bool(value: Any, default: bool) -> bool:
+    """Parse a boolean setting, falling back to default on error."""
+    if isinstance(value, bool):
+        return value
+    try:
+        return str(value).lower() == "true"
+    except Exception:
+        return default
+
+
+def _parse_int(value: Any, default: int, min_val: int | None = None, max_val: int | None = None) -> int:
+    """Parse an integer setting, falling back to default on error."""
+    if isinstance(value, int):
+        result = value
+    else:
+        try:
+            result = int(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return default
+    if min_val is not None and result < min_val:
+        return min_val
+    if max_val is not None and result > max_val:
+        return max_val
+    return result
+
+
 class WispConfig:
     """Resolved Wisp configuration.
 
@@ -300,34 +326,34 @@ class WispConfig:
         # Auto-approve tool calls (default FALSE — require explicit opt-in).
         # When false, every mutating tool call triggers an approval_request
         # event and the transport layer must confirm before execution.
-        self.auto_approve: bool = str(get_setting("auto_approve", "false")).lower() == "true"
+        self.auto_approve: bool = _parse_bool(get_setting("auto_approve", "false"), False)
         # Show reasoning trace inline
-        self.show_thinking: bool = str(get_setting("show_thinking", "true")).lower() == "true"
+        self.show_thinking: bool = _parse_bool(get_setting("show_thinking", "true"), True)
         # Show full tool output (when false, collapse to one-liners)
-        self.show_tool_output: bool = str(get_setting("show_tool_output", "true")).lower() == "true"
+        self.show_tool_output: bool = _parse_bool(get_setting("show_tool_output", "true"), True)
         # Minimal rendering mode — no boxes, flat output, good for pipes/narrow terminals
-        self.compact_mode: bool = str(get_setting("compact_mode", "false")).lower() == "true"
+        self.compact_mode: bool = _parse_bool(get_setting("compact_mode", "false"), False)
         # Max agent loop iterations per user turn
-        self.max_iterations: int = int(get_setting("max_iterations", "30"))
+        self.max_iterations: int = _parse_int(get_setting("max_iterations", "30"), 30, 1, 100)
         # Max repeated identical tool calls before stopping (0 = disabled)
-        self.max_reflections: int = int(get_setting("max_reflections", "3"))
+        self.max_reflections: int = _parse_int(get_setting("max_reflections", "3"), 3, 0, 10)
         # Context window guard: trim oldest messages when estimated tokens exceed this
         raw_ctx = get_setting("max_context_tokens")
-        self.max_context_tokens: int = int(raw_ctx) if raw_ctx is not None else DEFAULT_MAX_CONTEXT_TOKENS
+        self.max_context_tokens: int = _parse_int(raw_ctx, DEFAULT_MAX_CONTEXT_TOKENS, 1024)
         # Track whether user explicitly set context window (disables auto-detection)
         self._context_tokens_explicit: bool = raw_ctx is not None
         # Permissions: full (all allowed) | ask_all (ask for writes) | auto_edit (ask for bash only) | read_only (no writes)
         self.permission_mode: PermissionMode = PermissionMode(get_setting("permission_mode", PermissionMode.AUTO_EDIT))
         # Plan mode: agent plans only, no tool execution
-        self.plan_mode: bool = str(get_setting("plan_mode", "false")).lower() == "true"
+        self.plan_mode: bool = _parse_bool(get_setting("plan_mode", "false"), False)
         # Plan context: approved plan injected into system prompt
         self.plan_context: Optional[str] = None
         # Tokens per character estimate for context budget (4 is conservative for code/text)
-        self.chars_per_token: int = int(get_setting("chars_per_token", "4"))
+        self.chars_per_token: int = _parse_int(get_setting("chars_per_token", "4"), 4, 1, 10)
         # Auto-compaction settings
-        self.auto_compact: bool = str(get_setting("auto_compact", "true")).lower() == "true"
-        self.compact_threshold_tokens: int = int(get_setting("compact_threshold_tokens", "75"))
-        self.compact_keep_recent: int = int(get_setting("compact_keep_recent", "6"))
+        self.auto_compact: bool = _parse_bool(get_setting("auto_compact", "true"), True)
+        self.compact_threshold_tokens: int = _parse_int(get_setting("compact_threshold_tokens", "75"), 75, 10, 95)
+        self.compact_keep_recent: int = _parse_int(get_setting("compact_keep_recent", "6"), 6, 4, 50)
         # Context files
         raw_context_files = get_setting(
             "context_files",

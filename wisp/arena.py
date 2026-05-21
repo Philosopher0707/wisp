@@ -32,6 +32,36 @@ logger = logging.getLogger(__name__)
 LEADERBOARD_FILE = ".wisp/arena_leaderboard.json"
 
 
+def _cleanup_stale_arena_worktrees(workspace: Path) -> None:
+    """Remove orphaned arena worktrees left by hard crashes."""
+    wt_root = workspace / ".wisp" / "worktrees"
+    if not wt_root.exists():
+        return
+    for entry in wt_root.iterdir():
+        if not entry.is_dir():
+            continue
+        # Arena worktrees are prefixed with "arena-"
+        if entry.name.startswith("arena-"):
+            try:
+                import shutil
+                shutil.rmtree(entry, ignore_errors=True)
+                logger.info("Cleaned up stale arena worktree: %s", entry)
+            except Exception as exc:
+                logger.debug("Failed to clean stale worktree %s: %s", entry, exc)
+    # Also prune git worktree metadata
+    try:
+        git_dir = workspace / ".git"
+        if git_dir.exists():
+            subprocess.run(
+                ["git", "worktree", "prune"],
+                cwd=str(workspace),
+                capture_output=True,
+                timeout=10,
+            )
+    except Exception:
+        pass
+
+
 @dataclass
 class ArenaEntry:
     id: str
@@ -102,6 +132,8 @@ class ArenaRunner:
 
     def __init__(self):
         self._entries: dict[str, ArenaEntry] = {}
+        # Clean up orphaned worktrees from previous hard crashes
+        _cleanup_stale_arena_worktrees(Path.cwd())
 
     async def run_comparison(self, request: ArenaCompareRequest) -> ArenaEntry:
         """Run prompt with two models in parallel, compare results."""

@@ -26,12 +26,13 @@ class ExtensionHost:
 
     def register(self, ext: Any) -> None:
         """Register an extension and start it."""
-        self._extensions.append(ext)
         try:
             ext.start()
+            self._extensions.append(ext)
             logger.debug("Extension started: %s", getattr(ext, "name", type(ext).__name__))
         except Exception as exc:
             logger.warning("Extension %s failed to start: %s", getattr(ext, "name", "?"), exc)
+            # Do NOT append broken extensions
 
     def tools(self) -> list[dict]:
         """Aggregate tools from all extensions."""

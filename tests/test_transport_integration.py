@@ -103,7 +103,7 @@ class TestInterruptPropagation:
 
     def test_interrupt_on_shared_core(self, core):
         """Two transports share core interrupt state via signal handler."""
-        import wisp.transport._legacy_cli as _cli_mod
+        import wisp.transport.cli as _cli_mod
         send_mock = AsyncMock()
         s = ServerTransport(core, send_mock)
         c = CLITransport(core)

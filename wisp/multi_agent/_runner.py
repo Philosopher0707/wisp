@@ -205,69 +205,102 @@ class SubagentRunner:
         workspace_path: str,
         tool_calls_log: list[dict],
     ) -> dict:
-        """Run a WispAgentCore instance and return its result dict.
+        """Run a stateless WispAgentCore instance and return its result dict.
 
-        Direct async execution — no threads, no nested loops.
+        Uses the new engine (wisp.core.engine) instead of the deprecated
+        stateful core (wisp.core.agent).
         """
-        from wisp.core.agent import WispAgentCore
+        from wisp.core.engine import WispAgentCore as StatelessCore
+        from wisp.providers.factory import ProviderFactory
+        from wisp.infra.security import SecurityPolicy
+        from wisp.infra.extensions import ExtensionHost
+        from wisp.infra.telemetry import Telemetry
 
-        agent = WispAgentCore(
+        # Propagate subagent depth/branch from contract to config so the core
+        # can access them (and tests can verify propagation).
+        config._subagent_depth = getattr(contract, "_subagent_depth", 0)
+        config._subagent_branch_count = getattr(contract, "_subagent_branch_count", 0)
+
+        provider_name = getattr(config, "provider", None)
+        if not isinstance(provider_name, str):
+            provider_name = "ollama"
+        factory = ProviderFactory()
+        provider = factory.from_config(config)
+
+        security = SecurityPolicy(
+            permission_mode=getattr(config, "permission_mode", "full"),
+        )
+        extensions = ExtensionHost()
+        telemetry = Telemetry()
+
+        core = StatelessCore(
+            provider=provider,
+            security=security,
+            extensions=extensions,
+            telemetry=telemetry,
             config=config,
-            session=session,
-            role=f"subagent:{contract.name}",
         )
 
-        # Propagate guard state so recursive subagents don't reset depth
-        agent._subagent_depth = getattr(contract, "_subagent_depth", 0)
-        agent._subagent_branch_count = getattr(contract, "_subagent_branch_count", 0)
+        session_dict = session.to_dict()
+        if system_prompt:
+            session_dict["messages"] = [{"role": "system", "content": system_prompt}] + list(session_dict.get("messages", []))
 
-        try:
-            agent.config.workspace = workspace_path
+        output_text = ""
+        iterations = 0
+        max_iter = contract.max_iterations
 
-            if contract.tools != ["all"]:
-                agent._allowed_tools = set(contract.tools)
+        for iteration in range(max_iter):
+            try:
+                async with asyncio.timeout(contract.timeout_seconds):
+                    events = []
+                    async for event in core.turn(session_dict, contract.task):
+                        events.append(event)
+                        etype = event.get("type")
+                        if etype == "content":
+                            output_text = event.get("text", "")
+                        elif etype == "tool_call":
+                            name = event.get("name", "")
+                            args = event.get("arguments", {})
+                            arg_preview = self._compact_args(args)
+                            tool_calls_log.append({"name": name, "args_preview": arg_preview})
+                        elif etype == "error":
+                            output_text = event.get("message", "")
+                            return {
+                                "success": False,
+                                "output": output_text,
+                                "error": output_text,
+                                "files_changed": [],
+                                "iterations_used": iteration + 1,
+                                "messages": session_dict.get("messages", []),
+                            }
+                        elif etype == "done":
+                            break
+            except asyncio.TimeoutError:
+                return {
+                    "success": False,
+                    "output": f"[TIMED OUT after {contract.timeout_seconds}s]",
+                    "error": f"Timeout after {contract.timeout_seconds}s",
+                    "files_changed": [],
+                    "iterations_used": iteration + 1,
+                    "messages": session_dict.get("messages", []),
+                }
 
-            task_result = await agent.run_task(
-                task_description=contract.task,
-                workspace=workspace_path,
-                max_iterations=contract.max_iterations,
-                timeout_seconds=contract.timeout_seconds,
-                system_prompt=system_prompt,
-            )
+            iterations = iteration + 1
+            # Check if the last assistant message has tool_calls
+            msgs = session_dict.get("messages", [])
+            if msgs and msgs[-1].get("role") == "assistant" and msgs[-1].get("tool_calls"):
+                continue  # Another iteration needed
+            break
 
-            # Collect tool calls
-            for msg in agent.messages:
-                tcs = msg.get("tool_calls", []) or []
-                for tc in tcs:
-                    func = tc.get("function", {})
-                    name = func.get("name", "")
-                    args = func.get("arguments", {})
-                    if isinstance(args, str):
-                        try:
-                            args = json.loads(args)
-                        except (json.JSONDecodeError, TypeError):
-                            args = {}
-                    if not isinstance(args, dict):
-                        args = {}
-                    arg_preview = self._compact_args(args)
-                    tool_calls_log.append({"name": name, "args_preview": arg_preview})
-
-            # Extract files changed
-            files_changed: list[str] = []
-            output_text = task_result.get("output", "") or ""
-            if output_text:
-                files_changed = self._extract_files_changed(output_text)
-
-            return {
-                "success": task_result.get("success", False),
-                "output": output_text,
-                "error": None if task_result.get("success") else task_result.get("output"),
-                "files_changed": files_changed,
-                "iterations_used": len([m for m in agent.messages if m.get("role") == "assistant"]),
-                "messages": agent.messages,
-            }
-        finally:
-            agent.close()
+        files_changed = self._extract_files_changed(output_text)
+        return {
+            "success": True,
+            "output": output_text,
+            "error": None,
+            "files_changed": files_changed,
+            "iterations_used": iterations,
+            "messages": session_dict.get("messages", []),
+        }
 
     def _build_child_config(self, contract: SubagentContract, workspace: str) -> WispConfig:
         """Clone the parent config with optional per-subagent overrides."""

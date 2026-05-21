@@ -49,7 +49,10 @@ class WispWSClient:
     async def _connect_loop(self) -> None:
         """Reconnect loop. Reports first failure once, then retries silently."""
         _did_report = False
-        while self._running:
+        _attempts = 0
+        _max_attempts = 20
+        _base_delay = 3.0
+        while self._running and _attempts < _max_attempts:
             try:
                 import websockets
                 ws_url = self.server_url.replace("http://", "ws://").replace("https://", "wss://")
@@ -59,28 +62,37 @@ class WispWSClient:
                     if self.on_status:
                         await self.on_status("Connected", "info")
                     _did_report = False
+                    _attempts = 0
                     await self._listen(ws)
             except ConnectionRefusedError:
                 logger.debug("WebSocket connection refused — server not running")
                 if self._running and self.on_status and not _did_report:
                     await self.on_status("Server not running — run `wisp server` to start", "warning")
                     _did_report = True
-                await asyncio.sleep(3)
+                _attempts += 1
+                delay = min(_base_delay * (1.5 ** _attempts), 60.0)
+                await asyncio.sleep(delay)
             except OSError as e:
                 err_name = errno.errorcode.get(e.errno, f"errno {e.errno}") if e.errno else "?"
                 logger.debug("WebSocket OS error: %s: %s", err_name, e.strerror or str(e))
                 if self._running and self.on_status and not _did_report:
                     await self.on_status("Server not running — run `wisp server` to start", "warning")
                     _did_report = True
-                await asyncio.sleep(3)
+                _attempts += 1
+                delay = min(_base_delay * (1.5 ** _attempts), 60.0)
+                await asyncio.sleep(delay)
             except Exception as e:
                 logger.debug("WebSocket error: %s: %s", type(e).__name__, e)
                 if self._running and self.on_status and not _did_report:
                     await self.on_status("Server not running — run `wisp server` to start", "warning")
                     _did_report = True
-                await asyncio.sleep(3)
+                _attempts += 1
+                delay = min(_base_delay * (1.5 ** _attempts), 60.0)
+                await asyncio.sleep(delay)
             finally:
                 self._ws = None
+        if _attempts >= _max_attempts and self.on_status:
+            await self.on_status("Disconnected — max reconnect attempts reached", "error")
 
     async def _listen(self, ws: Any) -> None:
         """Read loop for incoming messages."""

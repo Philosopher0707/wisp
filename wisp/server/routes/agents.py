@@ -145,5 +145,7 @@ async def agent_websocket(websocket: WebSocket):
     finally:
         if transport is not None:
             transport.stop()
-        if not websocket.client_state.DISCONNECTED:
+        try:
             await websocket.close()
+        except Exception:
+            pass

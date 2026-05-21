@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -98,9 +100,9 @@ class WorkspaceScreen(Screen):
             title_bar.session_label = self.session_id or "new session"
         except Exception:
             pass  # DOM not composed yet (install_screen phase)
-        self._start_ws()
+        self._ws_task = asyncio.create_task(self._start_ws())
 
-    def _start_ws(self) -> None:
+    async def _start_ws(self) -> None:
         self._ws_client = WispWSClient(self.server_url)
         self._ws_client.on_token = self._on_token
         self._ws_client.on_tool_call = self._on_tool_call
@@ -109,8 +111,7 @@ class WorkspaceScreen(Screen):
         self._ws_client.on_error = self._on_error
         self._ws_client.on_status = self._on_status
         self._ws_client.on_approval_request = self._on_approval_request
-        import asyncio
-        asyncio.create_task(self._ws_client.connect())
+        await self._ws_client.connect()
 
     async def _on_approval_request(self, call_id: str, name: str, args: dict, reason: str) -> None:
         if self._auto_approve:

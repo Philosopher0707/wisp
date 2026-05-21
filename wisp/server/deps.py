@@ -154,13 +154,39 @@ class SQLiteRateLimiter:
         return [t for t in timestamps if t > cutoff]
 
     def is_allowed(self, client_ip: str) -> bool:
-        timestamps = self._get_timestamps(client_ip)
-        timestamps = self._prune_old(timestamps)
-        if len(timestamps) >= self.max_requests:
-            return False
-        timestamps.append(time.time())
-        self._set_timestamps(client_ip, timestamps)
-        return True
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT timestamps FROM rate_limits WHERE client_ip = ?",
+                    (client_ip,),
+                ).fetchone()
+                timestamps = []
+                if row is not None:
+                    try:
+                        timestamps = json.loads(row["timestamps"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                timestamps = self._prune_old(timestamps)
+                if len(timestamps) >= self.max_requests:
+                    conn.execute("ROLLBACK")
+                    return False
+                timestamps.append(time.time())
+                conn.execute(
+                    """
+                    INSERT INTO rate_limits (client_ip, timestamps, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(client_ip) DO UPDATE SET
+                        timestamps = excluded.timestamps,
+                        updated_at = excluded.updated_at
+                    """,
+                    (client_ip, json.dumps(timestamps), time.time()),
+                )
+                conn.execute("COMMIT")
+                return True
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
 
     async def __call__(self, request: Request) -> None:
         client_ip = request.client.host if request.client else "unknown"

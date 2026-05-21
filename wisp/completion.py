@@ -124,8 +124,6 @@ async def generate_completion(
 
         messages = [{"role": "user", "content": prompt}]
         response = provider.generate(system_prompt="", messages=messages)
-    finally:
-        config.temperature = original_temp
 
         completion_text = ""
         if isinstance(response, dict):
@@ -154,3 +152,5 @@ async def generate_completion(
     except Exception as e:
         logger.warning("Completion generation failed: %s", e)
         return CompletionResult(text="", finish_reason="error")
+    finally:
+        config.temperature = original_temp

@@ -161,6 +161,7 @@ class SecurityPolicy:
         return Decision(allowed=False, reason=f"Untrusted workspace: {context.workspace}")
 
     def _check_hooks(self, action: Action, context: Context) -> Decision:
+        current_args = dict(action.args)
         for hook in self.hooks:
             result = hook(action, context)
             if result.get("action") == "block":
@@ -168,7 +169,10 @@ class SecurityPolicy:
             if result.get("action") == "modify":
                 new_args = result.get("args")
                 if new_args:
-                    action.args.update(new_args)
+                    current_args.update(new_args)
+        if current_args != action.args:
+            # Return a new Action with modified args — caller must re-check if needed
+            return Decision(allowed=True, modified_args=current_args)
         return Decision(allowed=True)
 
     def _audit(self, action: Action, context: Context, decision: Decision) -> None:

@@ -41,6 +41,8 @@ def _resolve_path(path: str) -> Path:
     """Resolve a path relative to WORKSPACE_ROOT, with security boundary enforcement."""
     real_ws = os.path.realpath(str(WORKSPACE_ROOT))
     target = WORKSPACE_ROOT / path
+    # Do NOT resolve symlinks — check the literal path first, then resolve
+    # to catch traversal attempts while preserving symlink safety.
     real_target = os.path.realpath(str(target))
 
     if real_target == real_ws:
@@ -49,6 +51,14 @@ def _resolve_path(path: str) -> Path:
     prefix = real_ws if real_ws.endswith(os.sep) else real_ws + os.sep
     if not real_target.startswith(prefix):
         raise HTTPException(status_code=400, detail="Path traversal blocked")
+
+    # Extra safety: reject paths containing .. that escape the workspace
+    try:
+        resolved = target.resolve(strict=False)
+        resolved.relative_to(WORKSPACE_ROOT.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path traversal blocked")
+
     return Path(real_target)
 
 

@@ -37,6 +37,49 @@ from wisp.core.events import AgentEvent, EventType
 
 logger = logging.getLogger(__name__)
 
+
+def _is_interactive() -> bool:
+    """Return True if stdin is a tty."""
+    return sys.stdin.isatty()
+
+
+def _input_line(prompt: str, allow_multiline: bool = True) -> str:
+    """Read a line from stdin."""
+    try:
+        if sys.stdin.isatty():
+            return input(prompt)
+        # Non-tty: read from buffer to handle piped input
+        data = sys.stdin.buffer.readline()
+        if not data:
+            return ""
+        return data.decode("utf-8", errors="replace").rstrip("\n\r")
+    except EOFError:
+        return ""
+    except UnicodeDecodeError:
+        return ""
+
+
+def _args_preview(args: dict) -> str:
+    """Compact preview of tool arguments."""
+    if not args:
+        return "..."
+    if "path" in args:
+        return str(args["path"])
+    if "command" in args:
+        return str(args["command"])
+    if "content" in args:
+        content = str(args["content"])
+        if len(content) > 40:
+            content = content[:37] + "..."
+        return f"{content} ({len(str(args['content']))} chars)"
+    # Fallback: show first key=value
+    k, v = next(iter(args.items()))
+    sv = str(v)
+    if len(sv) > 40:
+        sv = sv[:37] + "..."
+    return f"{k}={sv}"
+
+
 _FULL_OUTPUT_TOOLS: set[str] = {
     "plan_task",
     "mark_step_done",
@@ -196,11 +239,143 @@ def _detect_language(path: str) -> str:
     return lang_map.get(ext, "")
 
 
+class _SessionAdapter:
+    """Wraps a session dict to look like the old Session object."""
+
+    def __init__(self, session: dict):
+        self._session = session
+
+    def __getattr__(self, name: str):
+        if name == "_session":
+            raise AttributeError(name)
+        if name in ("id", "created_at", "updated_at", "model", "workspace",
+                    "messages", "title", "compaction_history", "task_ids"):
+            return self._session.get(name)
+        raise AttributeError(f"_SessionAdapter has no attribute '{name}'")
+
+    def __setattr__(self, name: str, value):
+        if name == "_session":
+            super().__setattr__(name, value)
+            return
+        if name in ("messages", "title", "compaction_history", "task_ids"):
+            self._session[name] = value
+            return
+        super().__setattr__(name, value)
+
+    def touch(self) -> None:
+        from datetime import datetime, timezone
+        self._session["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    def compact(self, keep_recent: int = 4, max_context_tokens: int = 4096) -> None:
+        """Compact session messages, keeping recent ones."""
+        msgs = self._session.get("messages", [])
+        if len(msgs) <= keep_recent:
+            return
+        # Simple compaction: summarize older messages
+        to_summarize = msgs[:-keep_recent]
+        keep = msgs[-keep_recent:]
+        summary = f"[Previous conversation: {len(to_summarize)} messages summarized]"
+        self._session["messages"] = [{"role": "system", "content": summary}] + keep
+        self._session.setdefault("compaction_history", []).append({
+            "before": len(msgs),
+            "after": len(self._session["messages"]),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
+    def to_dict(self) -> dict:
+        return dict(self._session)
+
+
+class AgentAdapter:
+    """Adapts the new runtime+session+config to the old WispAgentCore API.
+
+    This lets existing slash commands in wisp/commands.py work without
+    modification.
+    """
+
+    def __init__(self, runtime: Any, config: Any, session: dict):
+        self.runtime = runtime
+        self.config = config
+        self.session = _SessionAdapter(session)
+        self.messages = session["messages"]
+        self._system_prompt_cache: dict = {}
+        self._active_skill: str | None = None
+        self._pending_continue: bool = False
+        self._interrupted: bool = False
+        self._paused = asyncio.Event()
+        self._paused.set()
+
+    # ── Provider access ─────────────────────────────────────────────
+
+    @property
+    def client(self):
+        """Return the provider from the cached core, if available."""
+        try:
+            core = self.runtime._get_core()
+            return getattr(core, "provider", None)
+        except Exception:
+            return None
+
+    # ── Metrics / circuit breaker ─────────────────────────────────────
+
+    @property
+    def metrics(self):
+        return getattr(self.runtime, "telemetry", None)
+
+    @property
+    def circuit_breaker(self):
+        return getattr(self.runtime, "security", None)
+
+    # ── Session helpers ─────────────────────────────────────────────
+
+    def _save_session(self) -> None:
+        store = getattr(self.runtime, "store", None)
+        if store is not None:
+            store.save_session(self.session.to_dict())
+
+    def _maybe_compact_session(self) -> None:
+        asyncio.create_task(self.runtime.maybe_compact(self.session.to_dict()))
+
+    def _build_system_prompt(self, skill_name: str | None = None, query: str = "") -> str:
+        # Try to delegate to core
+        try:
+            core = self.runtime._get_core()
+            if hasattr(core, "_build_system_prompt"):
+                return core._build_system_prompt(skill_name, query)
+        except Exception:
+            pass
+        # Fallback
+        return "You are Wisp, a helpful coding assistant."
+
+    def _estimate_tokens(self, messages: list[dict]) -> int:
+        chars = sum(len(str(m.get("content", ""))) for m in messages)
+        return chars // 4
+
+    def _add_message(self, role: str, content: str) -> None:
+        self.messages.append({"role": role, "content": content})
+
+    def _expand_continuation(self, text: str) -> str:
+        return text
+
+    def _run_turn_streaming(self, system: str) -> dict:
+        """Backward-compat for /continue."""
+        return {}
+
+    # ── Steering ──────────────────────────────────────────────────────
+
+    def pause(self) -> None:
+        self._paused.clear()
+
+    def resume(self, injected_text: str | None = None) -> None:
+        self._paused.set()
+
+
 class CLITransport(Transport):
     """CLI transport layer with structured output matching legacy CLI."""
 
-    def __init__(self, runtime: Any):
+    def __init__(self, runtime: Any, config: Any | None = None):
         self.runtime = runtime
+        self.config = config
         self._stdin: Any = None
         self._stdout: Any = None
         self._thinking_buffer: list[str] = []
@@ -251,6 +426,45 @@ class CLITransport(Transport):
     def stop(self) -> None:
         """Stop the transport."""
         logger.debug("CLITransport stopped")
+
+    # ── Backward compatibility with old WispAgentCore ───────────────
+
+    async def _execute_turn(self, system: str, workspace: str) -> None:
+        """Backward-compat shim for old WispAgentCore._execute_loop.
+
+        Delegates to the runtime's turn() if available, otherwise
+        falls back to old-core _arun() streaming.
+        """
+        runtime = self.runtime
+        # Pop the last user message (old behavior)
+        if hasattr(runtime, "messages") and runtime.messages:
+            if runtime.messages[-1].get("role") == "user":
+                runtime.messages.pop()
+        try:
+            # If runtime has the old-core _arun method, use it
+            if hasattr(runtime, "_arun"):
+                async for _event in runtime._arun(system, workspace):
+                    pass
+                # Reset interrupt flags after successful turn
+                self._interrupted = False
+                if hasattr(runtime, "_interrupted"):
+                    runtime._interrupted = False
+                return
+            # Otherwise assume new Runtime interface
+            from wisp.runtime_protocol import Runtime
+            if isinstance(runtime, Runtime):
+                await runtime.run_turn(system, workspace)
+                self._interrupted = False
+        except KeyboardInterrupt:
+            self._interrupted = True
+            if hasattr(runtime, "_interrupted"):
+                runtime._interrupted = True
+            raise
+        except asyncio.CancelledError:
+            self._interrupted = True
+            if hasattr(runtime, "_interrupted"):
+                runtime._interrupted = True
+            raise
 
     # ── Banner ──────────────────────────────────────────────────────
 
@@ -424,6 +638,22 @@ class CLITransport(Transport):
                     break
                 if not prompt:
                     continue
+
+                # ── Slash commands ──────────────────────────────────────
+                if prompt.startswith("/"):
+                    from wisp.commands import dispatch
+                    from wisp.exceptions import ExitREPL
+                    adapter = AgentAdapter(self.runtime, self.config, session)
+                    try:
+                        if dispatch(prompt, adapter):
+                            continue
+                    except ExitREPL:
+                        break
+                    except Exception as exc:
+                        logger.exception("Slash command failed")
+                        stdout.write(f"Error: {exc}\n")
+                        stdout.flush()
+                        continue
 
                 self._reset_buffers()
                 try:

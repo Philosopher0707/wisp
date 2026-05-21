@@ -86,6 +86,10 @@ def check_dangerous_command(command: str) -> Optional[str]:
     if re.search(r'\bsudo\b', cmd_lower):
         return "privilege escalation (sudo)"
 
+    # su -c privilege escalation
+    if re.search(r'\bsu\s+-[\w]*c\b', cmd_lower):
+        return "privilege escalation (su -c)"
+
     # rm with recursive flag (-r, -R, --recursive)
     tokens = cmd_lower.split()
     if tokens and tokens[0] == 'rm':
@@ -94,6 +98,16 @@ def check_dangerous_command(command: str) -> Optional[str]:
                 return "recursive deletion"
             if t == '--recursive':
                 return "recursive deletion"
+
+    # Detect rm -rf inside bash -c or sh -c (common obfuscation)
+    if re.search(r'\b(bash|sh|zsh)\s+-[\w]*c\b', cmd_lower):
+        inner = re.sub(r'^\S+\s+-[\w]*c\s+', '', cmd_lower)
+        if re.search(r'\brm\s+\S*r\S*\s+/', inner):
+            return "recursive deletion (nested shell)"
+        if re.search(r'\bsudo\b', inner):
+            return "privilege escalation (nested shell)"
+        if re.search(r'\bcurl\b.*\|\s*\b(sh|bash|zsh)\b', inner):
+            return "remote code execution (nested pipe to shell)"
 
     # dd to block device
     if re.search(r'\bdd\b', cmd_lower) and re.search(r'\bof\s*=\s*/dev/', cmd_lower):

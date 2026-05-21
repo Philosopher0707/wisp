@@ -14,27 +14,50 @@ from wisp.multi_agent import SubagentOrchestrator, SubagentContract, SubagentRes
 from wisp.multi_agent.task import EventKind, OrchestratorEvent
 
 
-class FakeWispAgentCore:
-    """Minimal fake agent core for testing SubagentOrchestrator."""
+class FakeStatelessCore:
+    """Minimal fake stateless core for testing SubagentOrchestrator."""
 
-    def __init__(self, config=None, session=None, role=""):
+    def __init__(self, provider=None, security=None, extensions=None, telemetry=None, config=None):
         self.config = config or MagicMock()
         self.config.workspace = "/tmp"
-        self.session = session
-        self.role = role
+        # Handle MagicMock provider gracefully
+        prov = getattr(config, "provider", None) if config else None
+        self.config.provider = prov if prov and not isinstance(prov, MagicMock) else "ollama"
         self.messages = [
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": "Do the task."},
             {"role": "assistant", "content": "Fake output"},
         ]
+
+    async def turn(self, session_dict, task):
+        yield {"type": "content", "text": "Fake output"}
+        yield {"type": "done"}
+
+
+class FakeWispAgentCore(FakeStatelessCore):
+    """Backward-compat alias for old test code."""
+
+    def __init__(self, provider=None, security=None, extensions=None, telemetry=None, config=None, **kwargs):
+        super().__init__(provider=provider, security=security, extensions=extensions, telemetry=telemetry, config=config)
+        self.session = kwargs.get("session")
+        self.role = kwargs.get("role", "")
         self.closed = False
 
     async def run_task(self, **kwargs):
-        # Return a canned result
         return {
             "success": True,
             "output": "Fake output",
         }
+
+    async def turn(self, session_dict, task):
+        result = await self.run_task(task_description=task)
+        # Add fake messages for token estimation
+        session_dict["messages"] = session_dict.get("messages", []) + self.messages
+        if not result.get("success", True):
+            yield {"type": "error", "message": result.get("output", "Task failed")}
+            return
+        yield {"type": "content", "text": result.get("output", "")}
+        yield {"type": "done"}
 
     def close(self):
         self.closed = True
@@ -126,7 +149,7 @@ def test_orchestrator_workspace_fallback():
 
 @pytest.mark.asyncio
 async def test_run_success(orch):
-    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+    with patch("wisp.core.engine.WispAgentCore", FakeWispAgentCore):
         contract = SubagentContract(name="test", task="hello")
         result = await orch.run(contract)
     assert isinstance(result, SubagentResult)
@@ -142,7 +165,7 @@ async def test_run_with_progress_events(orch):
     async def callback(event):
         events.append(event)
 
-    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+    with patch("wisp.core.engine.WispAgentCore", FakeWispAgentCore):
         contract = SubagentContract(
             name="test", task="hello", progress_callback=callback
         )
@@ -161,7 +184,7 @@ async def test_run_timeout(orch):
             await asyncio.sleep(10)
             return {"success": True, "output": "too late"}
 
-    with patch("wisp.core.agent.WispAgentCore", SlowAgent):
+    with patch("wisp.core.engine.WispAgentCore", SlowAgent):
         contract = SubagentContract(name="slow", task="sleep", timeout_seconds=0.1)
         result = await orch.run(contract)
 
@@ -176,7 +199,7 @@ async def test_run_crashed_agent(orch):
         async def run_task(self, **kwargs):
             raise RuntimeError("simulated crash")
 
-    with patch("wisp.core.agent.WispAgentCore", BrokenAgent):
+    with patch("wisp.core.engine.WispAgentCore", BrokenAgent):
         contract = SubagentContract(name="broken", task="crash")
         result = await orch.run(contract)
 
@@ -189,7 +212,7 @@ async def test_run_crashed_agent(orch):
 
 @pytest.mark.asyncio
 async def test_run_parallel_success(orch):
-    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+    with patch("wisp.core.engine.WispAgentCore", FakeWispAgentCore):
         contracts = [
             SubagentContract(name=f"task-{i}", task=f"job {i}")
             for i in range(3)
@@ -205,12 +228,12 @@ async def test_run_parallel_success(orch):
 async def test_run_parallel_mixed_results(orch):
     class FlakyAgent(FakeWispAgentCore):
         async def run_task(self, **kwargs):
-            # Deterministic failure for a specific role (contract name)
-            if "task-1" in self.role:
+            # Deterministic failure for a specific task description
+            if "job 1" in kwargs.get("task_description", ""):
                 raise RuntimeError("fail")
             return {"success": True, "output": "ok"}
 
-    with patch("wisp.core.agent.WispAgentCore", FlakyAgent):
+    with patch("wisp.core.engine.WispAgentCore", FlakyAgent):
         contracts = [
             SubagentContract(name=f"task-{i}", task=f"job {i}")
             for i in range(3)
@@ -244,7 +267,7 @@ async def test_run_validates_json_schema(orch):
         "required": ["findings", "summary"],
     }
 
-    with patch("wisp.core.agent.WispAgentCore", JSONAgent):
+    with patch("wisp.core.engine.WispAgentCore", JSONAgent):
         contract = SubagentContract(
             name="schema-test",
             task="return json",
@@ -266,7 +289,7 @@ async def test_run_schema_validation_failure_no_retry(orch):
 
     schema = {"type": "object", "properties": {"value": {"type": "integer"}}}
 
-    with patch("wisp.core.agent.WispAgentCore", BadJSONAgent):
+    with patch("wisp.core.engine.WispAgentCore", BadJSONAgent):
         contract = SubagentContract(
             name="bad-schema",
             task="return bad json",
@@ -285,7 +308,7 @@ async def test_run_schema_validation_failure_no_retry(orch):
 
 @pytest.mark.asyncio
 async def test_run_without_worktree(orch):
-    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+    with patch("wisp.core.engine.WispAgentCore", FakeWispAgentCore):
         contract = SubagentContract(
             name="shared", task="hello", worktree_isolated=False
         )
@@ -316,7 +339,7 @@ def test_contract_prompt_alias():
 
 @pytest.mark.asyncio
 async def test_run_map_reduce(orch):
-    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+    with patch("wisp.core.engine.WispAgentCore", FakeWispAgentCore):
         result = await orch.run_map_reduce(
             task="Review codebase for bugs",
             items=["src/auth.py", "src/api.py"],
@@ -339,7 +362,7 @@ async def test_run_vote_consensus(orch):
         async def run_task(self, **kwargs):
             return {"success": True, "output": "YES, this is vulnerable."}
 
-    with patch("wisp.core.agent.WispAgentCore", AgreeingAgent):
+    with patch("wisp.core.engine.WispAgentCore", AgreeingAgent):
         result = await orch.run_vote(
             task="Is this function vulnerable?",
             agents=[
@@ -367,7 +390,7 @@ async def test_run_vote_no_consensus(orch):
                 return {"success": True, "output": "YES"}
             return {"success": True, "output": "NO"}
 
-    with patch("wisp.core.agent.WispAgentCore", DisagreeingAgent):
+    with patch("wisp.core.engine.WispAgentCore", DisagreeingAgent):
         result = await orch.run_vote(
             task="Is this vulnerable?",
             agents=[
@@ -383,7 +406,7 @@ async def test_run_vote_no_consensus(orch):
 
 @pytest.mark.asyncio
 async def test_run_chain_success(orch):
-    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+    with patch("wisp.core.engine.WispAgentCore", FakeWispAgentCore):
         result = await orch.run_chain([
             SubagentContract(name="writer", task="Write code"),
             SubagentContract(name="reviewer", task="Review code"),
@@ -400,7 +423,7 @@ async def test_run_chain_failure_midway(orch):
         async def run_task(self, **kwargs):
             raise RuntimeError("step failed")
 
-    with patch("wisp.core.agent.WispAgentCore", FailingAgent):
+    with patch("wisp.core.engine.WispAgentCore", FailingAgent):
         result = await orch.run_chain([
             SubagentContract(name="step1", task="Do step 1"),
             SubagentContract(name="step2", task="Do step 2"),
@@ -420,7 +443,7 @@ async def test_global_token_budget_enforced(orch):
     orch.set_global_token_budget(10)
 
     # First run should succeed but consume tokens
-    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+    with patch("wisp.core.engine.WispAgentCore", FakeWispAgentCore):
         result1 = await orch.run(SubagentContract(name="first", task="hello"))
 
     assert result1.success is True
@@ -429,7 +452,7 @@ async def test_global_token_budget_enforced(orch):
     # Set budget to already-consumed amount to force exhaustion
     orch.set_global_token_budget(orch.get_tokens_consumed())
 
-    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+    with patch("wisp.core.engine.WispAgentCore", FakeWispAgentCore):
         result2 = await orch.run(SubagentContract(name="second", task="world"))
 
     assert result2.success is False
@@ -449,7 +472,7 @@ async def test_token_estimation_tracked(orch):
                 {"role": "assistant", "content": "Hi! How can I help?"},
             ]
 
-    with patch("wisp.core.agent.WispAgentCore", MessageAgent):
+    with patch("wisp.core.engine.WispAgentCore", MessageAgent):
         result = await orch.run(SubagentContract(name="msg", task="hello"))
 
     assert result.success is True
@@ -462,7 +485,7 @@ async def test_token_estimation_tracked(orch):
 @pytest.mark.asyncio
 async def test_token_aggregation_in_chain(orch):
     """Chain aggregates token usage across all steps."""
-    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+    with patch("wisp.core.engine.WispAgentCore", FakeWispAgentCore):
         result = await orch.run_chain([
             SubagentContract(name="step1", task="Step 1"),
             SubagentContract(name="step2", task="Step 2"),
@@ -481,7 +504,7 @@ async def test_token_budget_remaining(orch):
     orch.set_global_token_budget(1000)
     assert orch.get_token_budget_remaining() == 1000
 
-    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+    with patch("wisp.core.engine.WispAgentCore", FakeWispAgentCore):
         await orch.run(SubagentContract(name="t1", task="hello"))
 
     remaining = orch.get_token_budget_remaining()
@@ -671,7 +694,7 @@ class TestDefaultSystemPrompt:
 @pytest.mark.asyncio
 async def test_telemetry_tracked_after_run(orch):
     """After a successful run, telemetry contains one record."""
-    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+    with patch("wisp.core.engine.WispAgentCore", FakeWispAgentCore):
         await orch.run(SubagentContract(name="t1", task="hello"))
 
     telemetry = orch.get_telemetry()
@@ -689,7 +712,7 @@ async def test_telemetry_after_failure(orch):
         async def run_task(self, **kwargs):
             return {"success": False, "output": "Task failed"}
 
-    with patch("wisp.core.agent.WispAgentCore", FailAgent):
+    with patch("wisp.core.engine.WispAgentCore", FailAgent):
         contract = SubagentContract(name="failer", task="fail")
         result = await orch.run(contract)
 
@@ -705,7 +728,7 @@ async def test_telemetry_after_failure(orch):
 @pytest.mark.asyncio
 async def test_telemetry_multiple_runs_aggregated(orch):
     """Multiple runs aggregate in telemetry."""
-    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+    with patch("wisp.core.engine.WispAgentCore", FakeWispAgentCore):
         await orch.run(SubagentContract(name="t1", task="task1"))
         await orch.run(SubagentContract(name="t2", task="task2"))
 
@@ -717,7 +740,7 @@ async def test_telemetry_multiple_runs_aggregated(orch):
 @pytest.mark.asyncio
 async def test_telemetry_summary(orch):
     """get_telemetry_summary returns aggregated stats."""
-    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+    with patch("wisp.core.engine.WispAgentCore", FakeWispAgentCore):
         await orch.run(SubagentContract(name="t1", task="task1"))
         await orch.run(SubagentContract(name="t2", task="task2"))
 
@@ -742,7 +765,7 @@ async def test_run_map_reduce_with_mapper_failures(orch):
                 raise RuntimeError("mapper failed")
             return {"success": True, "output": "Mapper done."}
 
-    with patch("wisp.core.agent.WispAgentCore", FlakyMapper):
+    with patch("wisp.core.engine.WispAgentCore", FlakyMapper):
         result = await orch.run_map_reduce(
             task="Review files",
             items=["src/a.py", "src/b.py", "src/c.py"],
@@ -770,7 +793,7 @@ async def test_run_vote_with_failures(orch):
                 return {"success": True, "output": "YES"}
             raise RuntimeError("agent failed")
 
-    with patch("wisp.core.agent.WispAgentCore", MixedAgent):
+    with patch("wisp.core.engine.WispAgentCore", MixedAgent):
         result = await orch.run_vote(
             task="Is this safe?",
             agents=[
@@ -796,7 +819,7 @@ async def test_run_vote_simple_consensus(orch):
                 return {"success": True, "output": "YES, it is safe."}
             return {"success": True, "output": "NO, it is not safe."}
 
-    with patch("wisp.core.agent.WispAgentCore", BinAgent):
+    with patch("wisp.core.engine.WispAgentCore", BinAgent):
         result = await orch.run_vote(
             task="Is this safe?",
             agents=[
@@ -829,7 +852,7 @@ async def test_run_chain_no_context_pass(orch):
             TrackingAgent.last_task = kwargs.get("task_description", "")
             return {"success": True, "output": f"Done: {kwargs.get('task_description', '')}"}
 
-    with patch("wisp.core.agent.WispAgentCore", TrackingAgent):
+    with patch("wisp.core.engine.WispAgentCore", TrackingAgent):
         result = await orch.run_chain([
             SubagentContract(name="step1", task="Do step 1"),
             SubagentContract(name="step2", task="Do step 2"),
@@ -865,7 +888,7 @@ async def test_output_token_truncation(orch):
 
     # The FakeWispAgentCore has 3 messages with total chars = ~100
     # chars_per_token = 4, so about 25 tokens. Setting max_output to 1 forces truncation.
-    with patch("wisp.core.agent.WispAgentCore", VerboseAgent):
+    with patch("wisp.core.engine.WispAgentCore", VerboseAgent):
         contract = SubagentContract(
             name="verbose", task="speak",
             max_output_tokens=1,
@@ -883,13 +906,13 @@ async def test_token_budget_check_fails_early(orch):
     """Budget exhausted — run returns immediately with zero elapsed."""
     orch.set_global_token_budget(1)
     # Consume the budget
-    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+    with patch("wisp.core.engine.WispAgentCore", FakeWispAgentCore):
         await orch.run(SubagentContract(name="consumer", task="use tokens"))
 
     # Now budget is exhausted — next run should fail fast
     orch.set_global_token_budget(orch.get_tokens_consumed())
 
-    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+    with patch("wisp.core.engine.WispAgentCore", FakeWispAgentCore):
         result = await orch.run(SubagentContract(name="exhausted", task="should fail"))
 
     assert result.success is False
@@ -918,7 +941,7 @@ async def test_run_schema_auto_retry(orch):
 
     schema = {"type": "object", "properties": {"value": {"type": "integer"}}, "required": ["value"]}
 
-    with patch("wisp.core.agent.WispAgentCore", FirstBadThenGoodAgent):
+    with patch("wisp.core.engine.WispAgentCore", FirstBadThenGoodAgent):
         contract = SubagentContract(
             name="retry-test",
             task="return json",
@@ -948,7 +971,7 @@ async def test_run_schema_jsonschema_not_installed(monkeypatch):
                 "output": '{"value": 42}',
             }
 
-    with patch("wisp.core.agent.WispAgentCore", JSONAgent):
+    with patch("wisp.core.engine.WispAgentCore", JSONAgent):
         contract = SubagentContract(
             name="no-schema-lib",
             task="return json",
@@ -1023,7 +1046,7 @@ async def test_result_persistence(mock_parent_agent, tmp_path):
         task="test task",
         timeout_seconds=5,
     )
-    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+    with patch("wisp.core.engine.WispAgentCore", FakeWispAgentCore):
         result = await orch.run(contract)
     assert result.success
     persisted = orch.get_persisted_results()
@@ -1108,7 +1131,7 @@ async def test_role_validation_valid_role(mock_parent_agent):
         task="test",
         timeout_seconds=5,
     )
-    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+    with patch("wisp.core.engine.WispAgentCore", FakeWispAgentCore):
         result = await orch.run(contract)
     assert result.success
 
@@ -1218,7 +1241,7 @@ async def test_worktree_name_sanitization(mock_parent_agent, tmp_path):
         timeout_seconds=5,
         worktree_isolated=True,
     )
-    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+    with patch("wisp.core.engine.WispAgentCore", FakeWispAgentCore):
         result = await orch.run(contract)
     # Should succeed despite special chars in name
     assert result.success
@@ -1305,6 +1328,6 @@ async def test_subagent_uses_skills_in_run(mock_parent_agent, tmp_path):
         task="test",
         timeout_seconds=5,
     )
-    with patch("wisp.core.agent.WispAgentCore", FakeWispAgentCore):
+    with patch("wisp.core.engine.WispAgentCore", FakeWispAgentCore):
         result = await orch.run(contract)
     assert result.success

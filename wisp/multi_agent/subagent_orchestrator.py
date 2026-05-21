@@ -669,20 +669,22 @@ class SubagentOrchestrator:
                     return name
         return None
 
-    def _list_local_models(self) -> list[str]:
+    async def _list_local_models(self) -> list[str]:
         """Query Ollama for locally available models. Cached for 60s."""
         now = time.monotonic()
         cache = getattr(self, "_local_model_cache", None)
         if cache and now - cache["ts"] < 60:
             return cache["models"]
         try:
-            import requests
+            import aiohttp
             url = getattr(self.config, "ollama_url", "http://localhost:11434")
-            resp = requests.get(f"{url}/api/tags", timeout=5)
-            if resp.status_code == 200:
-                models = [m["name"] for m in resp.json().get("models", [])]
-                self._local_model_cache = {"ts": now, "models": models}
-                return models
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
+                async with session.get(f"{url}/api/tags") as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        models = [m["name"] for m in data.get("models", [])]
+                        self._local_model_cache = {"ts": now, "models": models}
+                        return models
         except Exception:
             pass
         return []

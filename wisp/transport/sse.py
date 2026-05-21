@@ -44,7 +44,7 @@ class SSETransport:
 
     def __init__(self, runtime: Any):
         self.runtime = runtime
-        self._queue: asyncio.Queue[dict] = asyncio.Queue()
+        self._queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=1000)
         self._sessions: dict[str, dict] = {}
         self._event_counter = 0
         self._started = False
@@ -62,7 +62,10 @@ class SSETransport:
     async def send(self, event: dict) -> None:
         """Queue an event for streaming."""
         if self._started:
-            await self._queue.put(event)
+            try:
+                self._queue.put_nowait(event)
+            except asyncio.QueueFull:
+                logger.warning("SSE queue full — dropping event")
 
     async def event_stream(self):
         """Async generator yielding events for StreamingResponse."""

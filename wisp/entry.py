@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Any
 
 from wisp.composition import CompositionRoot
@@ -74,7 +75,7 @@ def _run_cli(root: CompositionRoot, prompt: str | None = None, **kwargs) -> None
     import uuid
 
     config = root.config
-    transport = CLITransport(root.runtime)
+    transport = CLITransport(root.runtime, config)
     transport.start()
     try:
         if prompt:
@@ -145,6 +146,24 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
         if prompt.lower() in ("exit", "quit"):
             break
 
+        # ── Slash commands ──────────────────────────────────────
+        if prompt.startswith("/"):
+            from wisp.commands import dispatch
+            from wisp.exceptions import ExitREPL
+            from wisp.transport.cli_v2 import AgentAdapter
+            adapter = AgentAdapter(root.runtime, config, session)
+            try:
+                if dispatch(prompt, adapter):
+                    continue
+            except ExitREPL:
+                break
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).exception("Slash command failed")
+                sys.stdout.write(f"Error: {exc}\n")
+                sys.stdout.flush()
+                continue
+
         # Run one turn (async)
         async def _turn():
             async for event in root.runtime.run_turn(session, prompt):
@@ -181,6 +200,21 @@ async def _run_single_prompt(transport: CLITransport, root: CompositionRoot, pro
         model=config.model,
         workspace=config.workspace,
     )
+
+    # ── Slash commands in single-shot mode ──────────────────
+    if prompt.startswith("/"):
+        from wisp.commands import dispatch
+        from wisp.transport.cli_v2 import AgentAdapter
+        adapter = AgentAdapter(root.runtime, config, session)
+        try:
+            if dispatch(prompt, adapter):
+                return
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).exception("Slash command failed")
+            sys.stdout.write(f"Error: {exc}\n")
+            sys.stdout.flush()
+            return
 
     async for event in root.runtime.run_turn(session, prompt):
         transport._render_event(sys.stdout, event)
@@ -268,12 +302,21 @@ async def run_headless(prompt: str, model: str | None = None,
     own_root = root is None
     if own_root:
         cache_key = _make_headless_key(config)
-        if _headless_root is None or _headless_root_key != cache_key:
+        # Invalidate cache if config file on disk changed since last use
+        cfg_path = Path.home() / ".config" / "wisp" / "config.json"
+        cfg_mtime = cfg_path.stat().st_mtime if cfg_path.exists() else 0
+        cache_valid = (
+            _headless_root is not None
+            and _headless_root_key == cache_key
+            and getattr(_headless_root, "_config_mtime", 0) == cfg_mtime
+        )
+        if not cache_valid:
             if _headless_root is not None:
                 _headless_root.shutdown()
             _headless_root = CompositionRoot(config)
             _headless_root.start()
             _headless_root_key = cache_key
+            _headless_root._config_mtime = cfg_mtime
         root = _headless_root
 
     try:
