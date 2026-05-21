@@ -195,6 +195,31 @@ Settings are resolved: **env vars > config file > defaults**
 
 Or use env vars: `WISP_MODEL`, `WISP_AUTO_APPROVE`, `WISP_AUTO_COMPACT`, etc.
 
+### Terminal Output Modes
+
+Wisp supports multiple output styles for different terminals, screen readers, and accessibility needs:
+
+| Mode | Env / How | What it looks like |
+|------|-----------|-------------------|
+| **Unicode** *(default)* | none / `WISP_OUTPUT_MODE=unicode` | Fancy boxes `┌─┐│`, colored icons `✓` `✗`, emojis `🧠` |
+| **ASCII** | `WISP_OUTPUT_MODE=ascii` or `TERM=dumb` | Simple ASCII `+--+|`, no emojis |
+| **Accessible** | `WISP_ACCESSIBLE=1` or `WISP_OUTPUT_MODE=accessible` | `[PASS]` / `[FAIL]` labels, full content shown (nothing collapsed), clear borders `[-]` |
+| **Minimal** | `WISP_OUTPUT_MODE=minimal` | No borders at all. Plain text. |
+| **High-contrast** | `WISP_HIGH_CONTRAST=1` | Colorblind-safe palette (blue instead of green for success) |
+
+Set at runtime:
+```bash
+WISP_OUTPUT_MODE=accessible wisp repl    # screen-reader friendly
+WISP_HIGH_CONTRAST=1 wisp repl           # colorblind-safe colors
+NO_COLOR=1 wisp repl                    # no colors (implies ascii mode)
+```
+
+**Key features:**
+- **Display-width aware**: CJK characters and emoji are measured correctly so wrapping, box alignment, and dot-filling work without tearing (uses `wcwidth`).
+- **Automatic detection**: If `NO_COLOR` is set or stdout is not a TTY, Wisp falls back to ASCII mode automatically.
+- **Accessible**: Thinking content is never collapsed in accessible mode — everything is rendered. Status icons become `[PASS]` / `[FAIL]` text instead of `✓` / `✗`.
+- **Unicode width-safe**: Middle-dot padding in tool result headers uses display-width calculations, so lines align perfectly even with emoji.
+
 ---
 
 ## Android App

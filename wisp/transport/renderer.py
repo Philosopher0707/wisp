@@ -2,6 +2,9 @@
 
 Extracted from wisp/transport/cli.py to make rendering logic testable
 and reusable across transports.
+
+Uses width-aware rendering (CJK, emoji, combining chars) with fallback
+modes: unicode, ascii, accessible, minimal.
 """
 
 from __future__ import annotations
@@ -11,6 +14,15 @@ from typing import Optional
 
 from wisp.colors import dim, error, warning, success
 from wisp.core.events import AgentEvent
+from wisp.terminal_width import (
+    display_width,
+    wrap_text_wide,
+    pad_right as _pad_right,
+    BoxChars,
+    OutputMode,
+    get_output_mode,
+    is_accessible,
+)
 
 
 def format_duration(duration_ms: float | None) -> str:
@@ -50,24 +62,22 @@ def format_arg_value(key: str, value) -> str:
 
 
 def wrap_text(text: str, width: int, indent: str = "") -> list[str]:
-    """Wrap text to a given width, with an optional indent on each line after the first."""
-    if not text:
-        return [""]
-    lines = []
-    for paragraph in text.split("\n"):
-        if not paragraph.strip():
-            lines.append("")
-            continue
-        wrapped = textwrap.wrap(paragraph, width=width)
-        if indent and len(lines) > 0:
-            wrapped = [wrapped[0]] + [indent + w for w in wrapped[1:]]
-        lines.extend(wrapped)
-    return lines
+    """Wrap text to display width, accounting for wide characters.
+
+    Uses display-width-aware wrapping instead of naive character count.
+    """
+    return wrap_text_wide(text, width, indent)
 
 
 def render_tool_call(name: str, args: dict, box_mode: bool = True) -> str:
     """Render a tool call with structured argument display."""
-    lines = [dim(f"  🔧 {name}")]
+    box = BoxChars()
+    if box.mode == OutputMode.ACCESSIBLE:
+        lines = [dim(f"  [TOOL] {name}")]
+    elif box.mode == OutputMode.MINIMAL:
+        lines = [f"  tool: {name}"]
+    else:
+        lines = [dim(f"  🔧 {name}")]
     if args:
         for key, value in args.items():
             val_str = format_arg_value(key, value)
@@ -81,6 +91,16 @@ def render_thinking_block(text: str, box_mode: bool, width: int) -> Optional[str
         return None
     inner_w = width - 4
     wrapped = wrap_text(text.strip(), inner_w)
+
+    if is_accessible():
+        # Accessible mode: semantic label, no emoji
+        header = _rule("─", "Reasoning:", style_fn=dim, width=width)
+        if box_mode:
+            body = "\n".join(dim(f"  {line}") for line in wrapped)
+        else:
+            body = "\n".join(dim(f"  {line}") for line in wrapped)
+        return f"{header}\n{body}"
+
     if box_mode:
         header = _rule("·", "🧠 Reasoning", style_fn=dim, width=width)
         body = "\n".join(dim(f"  {line}") for line in wrapped)
@@ -98,6 +118,8 @@ def render_content_block(text: str, box_mode: bool, width: int) -> Optional[str]
     inner_w = width - 4
     wrapped = wrap_text(text.strip(), inner_w)
     if box_mode:
+        if is_accessible():
+            return f"[Response]\n" + "\n".join(wrapped)
         return _box("\n".join(wrapped), title="Response", style="muted", width=width)
     else:
         return "\n".join(wrapped)
@@ -106,6 +128,21 @@ def render_content_block(text: str, box_mode: bool, width: int) -> Optional[str]
 def render_done_reason(event: AgentEvent, iterations: int) -> Optional[str]:
     """Render the turn completion reason."""
     reason = event.data.get("reason", "")
+    if is_accessible():
+        # Accessible mode: text descriptions instead of emoji
+        if reason == "max_iterations":
+            return warning(
+                f"\n  [WARNING] Max iterations ({iterations}) reached. "
+                "Type 'continue' or increase --max-iterations."
+            )
+        elif reason == "max_reflections":
+            return warning(f"\n  [REFLECT] Reflective loop detected after {iterations} iterations.")
+        elif reason == "interrupted":
+            return dim("\n  [INTERRUPTED]")
+        elif reason == "error":
+            return error("\n  [ERROR] Stream error — turn aborted.")
+        return None
+
     if reason == "max_iterations":
         return warning(
             f"\n  ⚠️  Max iterations ({iterations}) reached. "
@@ -127,45 +164,80 @@ def _box(content: str, title: str = "", style: str = "dim",
     """Wrap content in a box-drawn panel."""
     from wisp.colors import muted
 
-    if width is None:
-        width = 80  # default for testing
-    inner_width = width - 4
+    box = BoxChars()
+    mode = box.mode
 
+    if width is None:
+        width = 80
+
+    # Pick style function
     style_fn = {"dim": dim, "error": error, "success": success, "muted": muted}.get(style, dim)
 
-    if double:
-        tl, tr, bl, br, hz, vt = "╔", "╗", "╚", "╝", "═", "║"
-    else:
-        tl, tr, bl, br, hz, vt = "┌", "┐", "└", "┘", "─", "│"
+    if mode == OutputMode.MINIMAL:
+        # Minimal mode: no boxes
+        if title:
+            return f"[{title}]\n{content}"
+        return content
 
+    inner_width = width - 4
+
+    # Build top border
     if title:
-        title_text = f" {title} "
-        available = width - 2
-        if len(title_text) > available:
-            title_text = title_text[:available]
-        top = tl + title_text + hz * (width - 2 - len(title_text)) + tr
+        if mode == OutputMode.ACCESSIBLE:
+            title_text = f"[ {title} ]"
+            top = title_text + "-" * max(0, width - display_width(title_text))
+        else:
+            title_text = f" {title} "
+            available = width - 2
+            title_width = display_width(title_text)
+            if title_width > available:
+                title_text = title_text[:available]
+                title_width = display_width(title_text)
+            left = (available - title_width) // 2
+            right = available - title_width - left
+            if double:
+                hz = "═"
+                top = "╔" + hz * left + title_text + hz * right + "╗"
+            else:
+                top = box.tl + box.hz * left + title_text + box.hz * right + box.tr
     else:
-        top = tl + hz * (width - 2) + tr
+        if double:
+            hz = "═" * (width - 2)
+            top = "╔" + hz + "╗"
+        else:
+            top = box.top(width)
 
-    bottom = bl + hz * (width - 2) + br
+    # Build bottom border
+    if double:
+        hz_b = "═" * (width - 2)
+        bottom = "╚" + hz_b + "╝"
+    else:
+        bottom = box.bottom(width)
 
     lines = content.split("\n")
     result_lines = [style_fn(top)]
 
     if title:
-        result_lines.append(style_fn(f"{vt} {' ' * inner_width} {vt}"))
+        result_lines.append(style_fn(f"{box.vt} {' ' * inner_width} {box.vt}"))
 
     for line in lines:
         if not line.strip():
-            result_lines.append(style_fn(f"{vt} {' ' * inner_width} {vt}"))
+            if mode != OutputMode.ACCESSIBLE:
+                result_lines.append(style_fn(f"{box.vt} {' ' * inner_width} {box.vt}"))
             continue
-        wrapped = textwrap.wrap(line, width=inner_width)
+
+        # Use display_width-aware wrapping
+        wrapped = wrap_text(line, inner_width)
         for w in wrapped:
-            padded = w.ljust(inner_width)
-            result_lines.append(style_fn(f"{vt} {padded} {vt}"))
+            if mode == OutputMode.ACCESSIBLE:
+                padded = w.ljust(inner_width)
+                result_lines.append(style_fn(f"  {padded}"))
+            else:
+                padded = w.ljust(inner_width)
+                result_lines.append(style_fn(f"{box.vt} {padded} {box.vt}"))
 
     if title:
-        result_lines.append(style_fn(f"{vt} {' ' * inner_width} {vt}"))
+        result_lines.append(style_fn(f"{box.vt} {' ' * inner_width} {box.vt}"))
 
     result_lines.append(style_fn(bottom))
     return "\n".join(result_lines)
@@ -178,9 +250,23 @@ def _rule(char: str = "─", label: str = "", style_fn=None,
         width = 80
     style_fn = style_fn or dim
 
+    box = BoxChars()
+
+    if box.mode == OutputMode.MINIMAL:
+        if label:
+            return f"[{label}]"
+        return ""
+
+    if box.mode == OutputMode.ACCESSIBLE:
+        # Accessible mode: simpler separators
+        if label:
+            return style_fn(f"-- {label} --")
+        return style_fn("-" * width)
+
     if label:
         label_str = f" {label} "
-        remaining = width - len(label_str)
+        label_width = display_width(label_str)
+        remaining = width - label_width
         left = char * (remaining // 2)
         right = char * (remaining - len(left))
         return style_fn(f"{left}{label_str}{right}")

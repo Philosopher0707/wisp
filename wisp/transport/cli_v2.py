@@ -34,6 +34,7 @@ from .renderer import (
 )
 from wisp.colors import dim, error, warning, success, info, accent
 from wisp.core.events import AgentEvent, EventType
+from wisp.terminal_width import display_width, is_accessible, OutputMode
 
 logger = logging.getLogger(__name__)
 
@@ -582,9 +583,14 @@ class CLITransport(Transport):
                 stdout.write(rendered + "\n")
         else:
             line_count = full.count("\n") + 1
-            stdout.write(
-                dim(f"  🧠 Thinking... ({line_count} lines — /thinking to expand)\n")
-            )
+            if is_accessible():
+                stdout.write(
+                    dim(f"  [Thinking] {line_count} lines — use /thinking to expand\n")
+                )
+            else:
+                stdout.write(
+                    dim(f"  🧠 Thinking... ({line_count} lines — /thinking to expand)\n")
+                )
         stdout.flush()
         self._thinking_shown = True
 
@@ -773,8 +779,9 @@ class CLITransport(Transport):
             self._flush_thinking(stdout, width)
             self._flush_content(stdout, width)
             msg = ev.data.get("message", "")
-            stdout.write(
-                _box(f"✗ {msg}", title="Error", style="error", double=True, width=width)
+            error_prefix = "[ERROR] " if is_accessible() else "✗ "
+            stderr.write(
+                _box(f"{error_prefix}{msg}", title="Error", style="error", double=True, width=width)
                 + "\n"
             )
             stdout.flush()
@@ -818,7 +825,10 @@ class CLITransport(Transport):
     def _render_tool_result(
         self, name: str, result: Any, duration_ms: float | None, width: int
     ) -> str | None:
-        """Render a tool result with structured output and diff support."""
+        """Render a tool result with structured output and diff support.
+        
+        Supports all output modes: unicode, ascii, accessible, minimal.
+        """
         duration_str = _format_duration(duration_ms)
 
         # Parse JSON result and determine true success/error status
@@ -845,20 +855,36 @@ class CLITransport(Transport):
         else:
             is_error = result_text.startswith("[") or result_text.startswith("Error")
 
+        # Mode-aware icon selection
+        if is_accessible():
+            icon = "[FAIL]" if is_error else "[PASS]"
+        elif display_width("✓") == 1:
+            # Terminal supports emoji
+            icon = "✗" if is_error else "✓"
+        else:
+            # Terminal renders emoji as 2 columns or garbled
+            icon = "[X]" if is_error else "[OK]"
+
         diff_text = (meta or {}).get("diff", "")
         is_edit_tool = name in ("write_file", "edit_file", "edit_file_multi")
 
+        # Helper: build header with display-width-aware dot padding
+        def _build_header(icon_str: str, tool_name: str, dur_str: str) -> str:
+            prefix = f"  {icon_str} {tool_name} ({dur_str}) "
+            prefix_width = display_width(prefix)
+            fill_width = width - prefix_width - 2  # -2 for border breathing room
+            if fill_width > 0:
+                # U+00B7 middle dot has display width 1
+                fill = "\u00B7" * fill_width
+                return dim(prefix + fill)
+            return dim(prefix)
+
         # Edit tools with a diff: show diff regardless of success/failure
         if is_edit_tool and diff_text:
-            icon = "✗" if is_error else "✓"
-            header = dim(
-                f"  {icon} {name} ({duration_str}) "
-                + "·" * max(0, width - len(f"  {icon} {name} ({duration_str}) ") - 2)
-            )
+            header = _build_header(icon, name, duration_str)
             summary = dim(f"     → {result_text[:200].replace(chr(10), ' ')}")
             try:
                 from wisp.diff_renderer import render_diff_box
-
                 lang = _detect_language(meta.get("path", ""))
                 diff_box = render_diff_box(
                     diff_text,
@@ -873,37 +899,33 @@ class CLITransport(Transport):
 
         # Full-output tools (non-edit): preserve multi-line formatting
         if name in _FULL_OUTPUT_TOOLS and not is_edit_tool:
-            icon = "✗" if is_error else "✓"
             output_str = result_text
             if not self.show_tool_output:
                 line_count = output_str.count("\n") + 1
+                if is_accessible():
+                    return dim(f"  {icon} {name} ({duration_str}) — {line_count} lines of output")
                 return dim(
-                    f"  {icon} {name} ({duration_str}) — {line_count} lines of output · · · · · · · · · · · · · · · · · · ·"
+                    f"  {icon} {name} ({duration_str}) — {line_count} lines of output"
+                    + " \u00B7" * max(0, width - display_width(f"  {icon} {name} ({duration_str}) — {line_count} lines of output") - 2)
                 )
 
-            header = dim(
-                f"  {icon} {name} ({duration_str}) "
-                + "·" * max(0, width - len(f"  {icon} {name} ({duration_str}) ") - 2)
-            )
+            header = _build_header(icon, name, duration_str)
             body = _box(output_str, width=width)
             return f"{header}\n{body}"
 
         # Regular / compact tool results
-        icon = "✗" if is_error else "✓"
         if not self.show_tool_output:
-            return dim(
-                f"  {icon} {name} ({duration_str}) · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · ·"
-            )
+            fill_content = f"  {icon} {name} ({duration_str})"
+            fill_width = display_width(fill_content)
+            dots = " \u00B7" * max(0, width - fill_width - 2)
+            return dim(fill_content + dots)
 
         if is_error:
             preview = result_text[:200].replace("\n", " ")
-            return dim(f"  ✗ {name} ({duration_str})") + "\n" + dim(f"     → {preview}")
+            return dim(f"  {icon} {name} ({duration_str})") + "\n" + dim(f"     → {preview}")
 
         preview = result_text[:200].replace("\n", " ")
         if len(result_text) > 200:
             preview += "..."
-        header = dim(
-            f"  ✓ {name} ({duration_str}) "
-            + "·" * max(0, width - len(f"  ✓ {name} ({duration_str}) ") - 2)
-        )
+        header = _build_header(icon, name, duration_str)
         return f"{header}\n" + dim(f"     → {preview}")

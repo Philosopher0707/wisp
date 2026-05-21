@@ -22,6 +22,7 @@ dependencies = [
     "diff-match-patch>=20241021",
     "filelock>=3.0",
     "numpy>=1.24",
+    "wcwidth>=0.2.5",
 ]
 
 [project.optional-dependencies]
