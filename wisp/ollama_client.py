@@ -542,6 +542,13 @@ class OllamaClient:
                         raise
                 return  # stream exhausted normally
             except requests.exceptions.HTTPError as e:
+                # Log response body on 4xx errors for easier debugging
+                if e.response is not None and 400 <= e.response.status_code < 500:
+                    try:
+                        body = e.response.text[:500]
+                        logger.error("Ollama %d response: %s", e.response.status_code, body)
+                    except Exception:
+                        pass
                 if e.response.status_code >= 500 and attempt < max_retries - 1 and not events_yielded:
                     delay = base_delay * (2 ** attempt)
                     logger.warning("Server error %d, retrying in %ds...", e.response.status_code, delay)
