@@ -46,7 +46,20 @@ async def test_supervisor_executes_prompt_and_persists_events(tmp_path):
     config = WispConfig()
     config.workspace = "/tmp/project"
 
-    thread, run, events = await supervisor.execute_prompt(config, "Explain the repo")
+    # Mock run_headless to avoid calling real Ollama API
+    from unittest.mock import patch
+    async def fake_run_headless(prompt, model=None, workspace=None, session_id=None, permission_mode="full"):
+        return {
+            "ok": True,
+            "content": f"Echo: {prompt}",
+            "iterations": 1,
+            "session_id": session_id or "session-1",
+            "prompt": prompt,
+            "model": model,
+        }
+
+    with patch("wisp.entry.run_headless", fake_run_headless):
+        thread, run, events = await supervisor.execute_prompt(config, "Explain the repo")
 
     saved = store.get_run(run.id)
     assert thread.workspace == "/tmp/project"
