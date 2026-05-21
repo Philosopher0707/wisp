@@ -65,7 +65,11 @@ class WispAgentCore:
         # Build messages list
         messages = list(session.get("messages", []))
         # Avoid duplicating the user message if runtime already added it
-        if not messages or messages[-1].get("role") != "user" or messages[-1].get("content") != prompt:
+        if (
+            not messages
+            or messages[-1].get("role") != "user"
+            or messages[-1].get("content") != prompt
+        ):
             messages.append({"role": "user", "content": prompt})
 
         # Build system prompt with full context awareness
@@ -122,17 +126,24 @@ class WispAgentCore:
                                     try:
                                         decision = self.security.check(action, context)
                                         if not decision.allowed:
-                                            yield _flatten_event(error_event(
-                                                f"Blocked ({decision.reason}): READ_ONLY mode",
-                                                recoverable=True,
-                                            ))
+                                            yield _flatten_event(
+                                                error_event(
+                                                    f"Blocked ({decision.reason}): READ_ONLY mode",
+                                                    recoverable=True,
+                                                )
+                                            )
                                             continue
                                     except Exception as e:
-                                        logger.exception("Security check failed — treating as deny: %s", e)
-                                        yield _flatten_event(error_event(
-                                            f"Security check failed: {e}. Tool call denied.",
-                                            recoverable=True,
-                                        ))
+                                        logger.exception(
+                                            "Security check failed — treating as deny: %s",
+                                            e,
+                                        )
+                                        yield _flatten_event(
+                                            error_event(
+                                                f"Security check failed: {e}. Tool call denied.",
+                                                recoverable=True,
+                                            )
+                                        )
                                         continue
 
                                 # Check extensions
@@ -140,17 +151,24 @@ class WispAgentCore:
                                     try:
                                         ext_result = self.extensions.intercept(tc_event)
                                         if ext_result.get("action") == "block":
-                                            yield _flatten_event(error_event(
-                                                f"Blocked: {ext_result.get('reason', 'by extension')}",
-                                                recoverable=True,
-                                            ))
+                                            yield _flatten_event(
+                                                error_event(
+                                                    f"Blocked: {ext_result.get('reason', 'by extension')}",
+                                                    recoverable=True,
+                                                )
+                                            )
                                             continue
                                     except Exception as e:
-                                        logger.exception("Extension intercept failed — treating as deny: %s", e)
-                                        yield _flatten_event(error_event(
-                                            f"Extension intercept failed: {e}. Tool call denied.",
-                                            recoverable=True,
-                                        ))
+                                        logger.exception(
+                                            "Extension intercept failed — treating as deny: %s",
+                                            e,
+                                        )
+                                        yield _flatten_event(
+                                            error_event(
+                                                f"Extension intercept failed: {e}. Tool call denied.",
+                                                recoverable=True,
+                                            )
+                                        )
                                         continue
 
                                 pending_tool_calls.append(tc_event)
@@ -165,17 +183,23 @@ class WispAgentCore:
                         try:
                             decision = self.security.check(action, context)
                             if not decision.allowed:
-                                yield _flatten_event(error_event(
-                                    f"Blocked ({decision.reason}): READ_ONLY mode",
-                                    recoverable=True,
-                                ))
+                                yield _flatten_event(
+                                    error_event(
+                                        f"Blocked ({decision.reason}): READ_ONLY mode",
+                                        recoverable=True,
+                                    )
+                                )
                                 continue
                         except Exception as e:
-                            logger.exception("Security check failed — treating as deny: %s", e)
-                            yield _flatten_event(error_event(
-                                f"Security check failed: {e}. Tool call denied.",
-                                recoverable=True,
-                            ))
+                            logger.exception(
+                                "Security check failed — treating as deny: %s", e
+                            )
+                            yield _flatten_event(
+                                error_event(
+                                    f"Security check failed: {e}. Tool call denied.",
+                                    recoverable=True,
+                                )
+                            )
                             continue
 
                     # Check extensions
@@ -183,17 +207,23 @@ class WispAgentCore:
                         try:
                             ext_result = self.extensions.intercept(normalized)
                             if ext_result.get("action") == "block":
-                                yield _flatten_event(error_event(
-                                    f"Blocked: {ext_result.get('reason', 'by extension')}",
-                                    recoverable=True,
-                                ))
+                                yield _flatten_event(
+                                    error_event(
+                                        f"Blocked: {ext_result.get('reason', 'by extension')}",
+                                        recoverable=True,
+                                    )
+                                )
                                 continue
                         except Exception as e:
-                            logger.exception("Extension intercept failed — treating as deny: %s", e)
-                            yield _flatten_event(error_event(
-                                f"Extension intercept failed: {e}. Tool call denied.",
-                                recoverable=True,
-                            ))
+                            logger.exception(
+                                "Extension intercept failed — treating as deny: %s", e
+                            )
+                            yield _flatten_event(
+                                error_event(
+                                    f"Extension intercept failed: {e}. Tool call denied.",
+                                    recoverable=True,
+                                )
+                            )
                             continue
 
                     pending_tool_calls.append(normalized)
@@ -208,10 +238,12 @@ class WispAgentCore:
             # Yield partial content so user sees something
             if partial_content:
                 yield _flatten_event(content_event("".join(partial_content)))
-            yield _flatten_event(error_event(
-                f"Stream error: {exc}",
-                recoverable=True,
-            ))
+            yield _flatten_event(
+                error_event(
+                    f"Stream error: {exc}",
+                    recoverable=True,
+                )
+            )
             return
 
         # Execute pending tool calls that didn't get a tool_result from provider
@@ -271,6 +303,7 @@ class WispAgentCore:
 
         # Start producer thread
         import threading
+
         thread = threading.Thread(target=_sync_producer, daemon=True)
         thread.start()
 
@@ -364,6 +397,7 @@ class WispAgentCore:
         """Discover and format skills for the system prompt."""
         try:
             from wisp.skills import discover_skills
+
             skills = discover_skills(workspace)
             if not skills:
                 return ""
@@ -381,6 +415,7 @@ class WispAgentCore:
         """Detect project type and format context."""
         try:
             from wisp.project_context import detect_project_context, format_context
+
             ctx = detect_project_context(workspace)
             return format_context(ctx)
         except Exception as e:
@@ -391,6 +426,7 @@ class WispAgentCore:
         """Build memory block from agent memory."""
         try:
             from wisp.agent_memory import get_agent_memory
+
             memory = get_agent_memory()
             return memory.format_for_prompt([])
         except Exception as e:
@@ -401,6 +437,7 @@ class WispAgentCore:
         """Build git context string."""
         try:
             from wisp.git_context import format_git_context
+
             return format_git_context(workspace)
         except Exception as e:
             logger.debug("Failed to build git context: %s", e)
@@ -410,6 +447,7 @@ class WispAgentCore:
         """Build repo map for the workspace."""
         try:
             from wisp.repo_map import RepoMap
+
             ws_path = Path(workspace).resolve()
             rm = RepoMap(ws_path)
             entries = rm.build(use_cache=True, fast_mode=True)
@@ -430,6 +468,7 @@ class WispAgentCore:
         """Get files relevant to the query from repo map."""
         try:
             from wisp.repo_map import RepoMap
+
             ws_path = Path(workspace).resolve()
             rm = RepoMap(ws_path)
             rm.build(use_cache=True, fast_mode=True)
@@ -514,23 +553,30 @@ class WispAgentCore:
             try:
                 decision = self.security.check(action, context)
                 if not decision.allowed:
-                    yield _flatten_event(tool_result_event(
-                        name,
-                        self._normalize_tool_result(
-                            {"status": "error", "data": f"Security blocked: {decision.reason}"}
-                        ),
-                        duration_ms=0,
-                    ))
+                    yield _flatten_event(
+                        tool_result_event(
+                            name,
+                            self._normalize_tool_result(
+                                {
+                                    "status": "error",
+                                    "data": f"Security blocked: {decision.reason}",
+                                }
+                            ),
+                            duration_ms=0,
+                        )
+                    )
                     return
             except Exception as e:
                 logger.exception("Security re-check failed — treating as deny: %s", e)
-                yield _flatten_event(tool_result_event(
-                    name,
-                    self._normalize_tool_result(
-                        {"status": "error", "data": f"Security check failed: {e}"}
-                    ),
-                    duration_ms=0,
-                ))
+                yield _flatten_event(
+                    tool_result_event(
+                        name,
+                        self._normalize_tool_result(
+                            {"status": "error", "data": f"Security check failed: {e}"}
+                        ),
+                        duration_ms=0,
+                    )
+                )
                 return
 
         start = time.time()
@@ -543,10 +589,11 @@ class WispAgentCore:
         duration_ms = (time.time() - start) * 1000
 
         normalized = self._normalize_tool_result(raw_result)
-        yield _flatten_event(tool_result_event(
-            name, normalized, duration_ms=duration_ms,
-            tool_call_id=event.get("id")
-        ))
+        yield _flatten_event(
+            tool_result_event(
+                name, normalized, duration_ms=duration_ms, tool_call_id=event.get("id")
+            )
+        )
 
     def _normalize_tool_result(self, result: Any) -> dict:
         """Normalize any tool result to a standard JSON-serializable schema.
@@ -576,8 +623,25 @@ class WispAgentCore:
                 "metadata": self._serialize_value(result.get("metadata", {})),
             }
 
+        # JSON string that contains a structured result — parse it
+        if isinstance(result, str) and result.startswith("{"):
+            try:
+                parsed = json.loads(result)
+                if isinstance(parsed, dict) and "status" in parsed:
+                    return {
+                        "status": parsed["status"],
+                        "data": self._serialize_value(parsed.get("data", "")),
+                        "metadata": self._serialize_value(parsed.get("metadata", {})),
+                    }
+            except json.JSONDecodeError:
+                pass
+
         # Error tuple/list (must have exactly 2 elements, first is "error")
-        if isinstance(result, (list, tuple)) and len(result) == 2 and result[0] == "error":
+        if (
+            isinstance(result, (list, tuple))
+            and len(result) == 2
+            and result[0] == "error"
+        ):
             return {
                 "status": "error",
                 "data": str(result[1]),
@@ -675,9 +739,21 @@ class WispAgentCore:
 
         # Whitelist known safe fields
         safe_fields = {
-            "text", "name", "arguments", "result", "message",
-            "duration_ms", "turns", "session_id", "summary", "reason",
-            "level", "recoverable", "tool_call_id", "id", "calls",
+            "text",
+            "name",
+            "arguments",
+            "result",
+            "message",
+            "duration_ms",
+            "turns",
+            "session_id",
+            "summary",
+            "reason",
+            "level",
+            "recoverable",
+            "tool_call_id",
+            "id",
+            "calls",
         }
         for field_name in safe_fields:
             if hasattr(event, field_name):
@@ -691,6 +767,7 @@ class WispAgentCore:
     def _make_action(self, event: dict) -> Any:
         """Create Action from tool_call event."""
         from wisp.infra.security import Action
+
         return Action(
             name=event.get("name", ""),
             args=event.get("arguments", {}),
@@ -700,4 +777,5 @@ class WispAgentCore:
         """Create Context from session."""
         from pathlib import Path
         from wisp.infra.security import Context
+
         return Context(workspace=Path(session.get("workspace", ".")))

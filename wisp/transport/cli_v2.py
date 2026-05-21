@@ -248,8 +248,17 @@ class _SessionAdapter:
     def __getattr__(self, name: str):
         if name == "_session":
             raise AttributeError(name)
-        if name in ("id", "created_at", "updated_at", "model", "workspace",
-                    "messages", "title", "compaction_history", "task_ids"):
+        if name in (
+            "id",
+            "created_at",
+            "updated_at",
+            "model",
+            "workspace",
+            "messages",
+            "title",
+            "compaction_history",
+            "task_ids",
+        ):
             return self._session.get(name)
         raise AttributeError(f"_SessionAdapter has no attribute '{name}'")
 
@@ -264,6 +273,7 @@ class _SessionAdapter:
 
     def touch(self) -> None:
         from datetime import datetime, timezone
+
         self._session["updated_at"] = datetime.now(timezone.utc).isoformat()
 
     def compact(self, keep_recent: int = 4, max_context_tokens: int = 4096) -> None:
@@ -276,11 +286,13 @@ class _SessionAdapter:
         keep = msgs[-keep_recent:]
         summary = f"[Previous conversation: {len(to_summarize)} messages summarized]"
         self._session["messages"] = [{"role": "system", "content": summary}] + keep
-        self._session.setdefault("compaction_history", []).append({
-            "before": len(msgs),
-            "after": len(self._session["messages"]),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        self._session.setdefault("compaction_history", []).append(
+            {
+                "before": len(msgs),
+                "after": len(self._session["messages"]),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
 
     def to_dict(self) -> dict:
         return dict(self._session)
@@ -336,7 +348,9 @@ class AgentAdapter:
     def _maybe_compact_session(self) -> None:
         asyncio.create_task(self.runtime.maybe_compact(self.session.to_dict()))
 
-    def _build_system_prompt(self, skill_name: str | None = None, query: str = "") -> str:
+    def _build_system_prompt(
+        self, skill_name: str | None = None, query: str = ""
+    ) -> str:
         # Try to delegate to core
         try:
             core = self.runtime._get_core()
@@ -383,7 +397,9 @@ class CLITransport(Transport):
         self._content_buffer: list[str] = []
         self._in_thinking: bool = False
         self._in_content: bool = False
-        self.show_thinking: bool = getattr(config, "show_thinking", False) if config else False
+        self.show_thinking: bool = (
+            getattr(config, "show_thinking", False) if config else False
+        )
         self.show_tool_output: bool = True
 
     # ── Transport ABC implementation ────────────────────────────────
@@ -452,6 +468,7 @@ class CLITransport(Transport):
                 return
             # Otherwise assume new Runtime interface
             from wisp.runtime_protocol import Runtime
+
             if isinstance(runtime, Runtime):
                 await runtime.run_turn(system, workspace)
                 self._interrupted = False
@@ -468,7 +485,9 @@ class CLITransport(Transport):
 
     # ── Banner ──────────────────────────────────────────────────────
 
-    def print_banner(self, stdout: Any, session: dict, model: str, skill: str | None = None) -> None:
+    def print_banner(
+        self, stdout: Any, session: dict, model: str, skill: str | None = None
+    ) -> None:
         """Print REPL startup banner with session info."""
         width = min(72, _term_width() - 4)
 
@@ -526,7 +545,9 @@ class CLITransport(Transport):
         lines.append("")
         lines.append("  /help for commands  ·  Ctrl+C/D to exit")
 
-        banner = _box("\n".join(lines), title="📋 Continuing Session", style="dim", width=width)
+        banner = _box(
+            "\n".join(lines), title="📋 Continuing Session", style="dim", width=width
+        )
         stdout.write(banner + "\n\n")
         stdout.flush()
 
@@ -552,14 +573,18 @@ class CLITransport(Transport):
         if not full.strip():
             return
         w = width or _term_width()
-        show_thinking = getattr(self.config, "show_thinking", False) if self.config else False
+        show_thinking = (
+            getattr(self.config, "show_thinking", False) if self.config else False
+        )
         if show_thinking:
             rendered = _render_thinking_block(full, box_mode=True, width=w)
             if rendered:
                 stdout.write(rendered + "\n")
         else:
             line_count = full.count("\n") + 1
-            stdout.write(dim(f"  🧠 Thinking... ({line_count} lines — /thinking to expand)\n"))
+            stdout.write(
+                dim(f"  🧠 Thinking... ({line_count} lines — /thinking to expand)\n")
+            )
         stdout.flush()
         self._thinking_shown = True
 
@@ -588,7 +613,9 @@ class CLITransport(Transport):
 
     # ── CLI-specific methods ──────────────────────────────────────
 
-    async def run(self, stdin: Any, stdout: Any, session_id: str, model: str, workspace: str) -> None:
+    async def run(
+        self, stdin: Any, stdout: Any, session_id: str, model: str, workspace: str
+    ) -> None:
         """Run the CLI REPL loop.
 
         Uses a background thread for stdin reads to avoid blocking
@@ -644,6 +671,7 @@ class CLITransport(Transport):
                 if prompt.startswith("/"):
                     from wisp.commands import dispatch
                     from wisp.exceptions import ExitREPL
+
                     adapter = AgentAdapter(self.runtime, self.config, session)
                     try:
                         if dispatch(prompt, adapter):
@@ -745,7 +773,10 @@ class CLITransport(Transport):
             self._flush_thinking(stdout, width)
             self._flush_content(stdout, width)
             msg = ev.data.get("message", "")
-            stdout.write(_box(f"✗ {msg}", title="Error", style="error", double=True, width=width) + "\n")
+            stdout.write(
+                _box(f"✗ {msg}", title="Error", style="error", double=True, width=width)
+                + "\n"
+            )
             stdout.flush()
 
         elif etype == EventType.SYSTEM:
@@ -764,7 +795,9 @@ class CLITransport(Transport):
             pass
 
         elif etype == EventType.STEERING_PAUSED:
-            stdout.write(warning(f"  ⏸  Steering paused: {ev.data.get('reason', '')}\n"))
+            stdout.write(
+                warning(f"  ⏸  Steering paused: {ev.data.get('reason', '')}\n")
+            )
             stdout.flush()
 
         elif etype == EventType.STEERING_RESUMED:
@@ -772,7 +805,9 @@ class CLITransport(Transport):
             stdout.flush()
 
         elif etype == EventType.STEERING_INJECT:
-            stdout.write(dim(f"  💉 Steering feedback: {ev.data.get('text', '')[:80]}\n"))
+            stdout.write(
+                dim(f"  💉 Steering feedback: {ev.data.get('text', '')[:80]}\n")
+            )
             stdout.flush()
 
         else:
@@ -780,7 +815,9 @@ class CLITransport(Transport):
             # (checkpoint, stream_complete, custom extension events, etc.)
             pass
 
-    def _render_tool_result(self, name: str, result: Any, duration_ms: float | None, width: int) -> str | None:
+    def _render_tool_result(
+        self, name: str, result: Any, duration_ms: float | None, width: int
+    ) -> str | None:
         """Render a tool result with structured output and diff support."""
         duration_str = _format_duration(duration_ms)
 
@@ -803,6 +840,8 @@ class CLITransport(Transport):
 
         if isinstance(parsed, dict):
             is_error = parsed.get("status") == "error"
+        elif isinstance(result, dict):
+            is_error = result.get("status") == "error"
         else:
             is_error = result_text.startswith("[") or result_text.startswith("Error")
 
@@ -812,10 +851,14 @@ class CLITransport(Transport):
         # Edit tools with a diff: show diff regardless of success/failure
         if is_edit_tool and diff_text:
             icon = "✗" if is_error else "✓"
-            header = dim(f"  {icon} {name} ({duration_str}) " + "·" * max(0, width - len(f"  {icon} {name} ({duration_str}) ") - 2))
+            header = dim(
+                f"  {icon} {name} ({duration_str}) "
+                + "·" * max(0, width - len(f"  {icon} {name} ({duration_str}) ") - 2)
+            )
             summary = dim(f"     → {result_text[:200].replace(chr(10), ' ')}")
             try:
                 from wisp.diff_renderer import render_diff_box
+
                 lang = _detect_language(meta.get("path", ""))
                 diff_box = render_diff_box(
                     diff_text,
@@ -834,16 +877,23 @@ class CLITransport(Transport):
             output_str = result_text
             if not self.show_tool_output:
                 line_count = output_str.count("\n") + 1
-                return dim(f"  {icon} {name} ({duration_str}) — {line_count} lines of output · · · · · · · · · · · · · · · · · · ·")
+                return dim(
+                    f"  {icon} {name} ({duration_str}) — {line_count} lines of output · · · · · · · · · · · · · · · · · · ·"
+                )
 
-            header = dim(f"  {icon} {name} ({duration_str}) " + "·" * max(0, width - len(f"  {icon} {name} ({duration_str}) ") - 2))
+            header = dim(
+                f"  {icon} {name} ({duration_str}) "
+                + "·" * max(0, width - len(f"  {icon} {name} ({duration_str}) ") - 2)
+            )
             body = _box(output_str, width=width)
             return f"{header}\n{body}"
 
         # Regular / compact tool results
         icon = "✗" if is_error else "✓"
         if not self.show_tool_output:
-            return dim(f"  {icon} {name} ({duration_str}) · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · ·")
+            return dim(
+                f"  {icon} {name} ({duration_str}) · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · ·"
+            )
 
         if is_error:
             preview = result_text[:200].replace("\n", " ")
@@ -852,5 +902,8 @@ class CLITransport(Transport):
         preview = result_text[:200].replace("\n", " ")
         if len(result_text) > 200:
             preview += "..."
-        header = dim(f"  ✓ {name} ({duration_str}) " + "·" * max(0, width - len(f"  ✓ {name} ({duration_str}) ") - 2))
+        header = dim(
+            f"  ✓ {name} ({duration_str}) "
+            + "·" * max(0, width - len(f"  ✓ {name} ({duration_str}) ") - 2)
+        )
         return f"{header}\n" + dim(f"     → {preview}")
