@@ -37,3 +37,8 @@ include = ["wisp*"]
 dev = [
     "pytest-asyncio>=1.3.0",
 ]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore:coroutine '_run_single_prompt' was never awaited:RuntimeWarning",
+]
