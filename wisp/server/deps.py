@@ -16,6 +16,8 @@ from pathlib import Path
 
 from fastapi import Header, HTTPException, Request
 
+from wisp.infra.audit import audit
+
 logger = logging.getLogger(__name__)
 
 
@@ -23,26 +25,74 @@ logger = logging.getLogger(__name__)
 # Auth
 # ═══════════════════════════════════════════════════════════════════
 
+_AUTH_KEY_GRACE_SECONDS = 86_400  # 24h default key rotation grace period
+
+
 class _AuthConfig:
-    """Runtime-mutable auth key."""
+    """Runtime-mutable auth key with rotation support.
+
+    Supports up to one previous key during rotation with a grace period.
+    """
 
     def __init__(self):
         self._key: str = os.environ.get("WISP_API_KEY", "")
         self._no_auth: bool = False
+        self._valid_keys: dict[str, float | None] = {}
+        # Track valid keys: key -> expiry timestamp (None = no expiry)
         if self._key:
+            self._valid_keys[self._key] = None
             logger.info("WISP_API_KEY set — server requires authentication")
         else:
             self._no_auth = True
             logger.info("WISP_API_KEY not set — authentication disabled (dev mode)")
 
     def set_key(self, key: str) -> None:
+        """Replace the current key immediately (no rotation grace)."""
         self._key = key
         self._no_auth = not bool(key)
+        self._valid_keys = {key: None} if key else {}
+        audit.record("key_set", key="api_key")
+
+    def rotate_key(self, new_key: str, grace_seconds: int = _AUTH_KEY_GRACE_SECONDS) -> None:
+        """Rotate to a new key while keeping the current one valid for a grace period."""
+        old_key = self._key
+        now = time.time()
+        # Update new key as primary (no expiry)
+        self._key = new_key
+        self._no_auth = not bool(new_key)
+        # Set expiry for old key if it exists and differs
+        if old_key and old_key != new_key:
+            self._valid_keys[old_key] = now + grace_seconds
+            logger.info("Key rotation: old key expires in %d seconds", grace_seconds)
+        # Add new key with no expiry, or clear if empty
+        if new_key:
+            self._valid_keys[new_key] = None
+        if not new_key:
+            self._valid_keys.clear()
+        audit.record("key_rotation", key="api_key",
+                      new_value=new_key[:4] + "..." if new_key else None)
 
     def disable(self) -> None:
         self._key = ""
         self._no_auth = True
+        self._valid_keys.clear()
         logger.info("Auth disabled (no-auth mode)")
+        audit.record("auth_disabled", key="api_key")
+
+    def _is_valid(self, candidate: str) -> bool:
+        """Check if a candidate key is valid (current or within grace period)."""
+        if self._no_auth:
+            return True
+        now = time.time()
+        # Clean expired keys lazily
+        expired = [
+            k for k, expiry in self._valid_keys.items()
+            if expiry is not None and now > expiry
+        ]
+        for k in expired:
+            del self._valid_keys[k]
+            logger.info("Rotated key expired and removed")
+        return candidate in self._valid_keys
 
     @property
     def key(self) -> str:
@@ -81,9 +131,9 @@ async def verify_api_key(
         return x_api_key_header or authorization or ""
     if authorization and authorization.lower().startswith("bearer "):
         auth_key = authorization[7:]
-        if auth_key == _auth.key:
+        if _auth._is_valid(auth_key):
             return auth_key
-    if x_api_key_header and x_api_key_header == _auth.key:
+    if x_api_key_header and _auth._is_valid(x_api_key_header):
         return x_api_key_header
     raise HTTPException(status_code=401, detail="Invalid or missing API key")
 

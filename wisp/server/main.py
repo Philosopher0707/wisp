@@ -76,6 +76,42 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── Security Headers Middleware ──
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add recommended security headers to every HTTP response."""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        # Block content MIME-type sniffing
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        # Block clickjacking
+        response.headers["X-Frame-Options"] = "DENY"
+        # Basic XSS protection for older browsers
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        # Enforce HTTPS in production (set WISP_ENABLE_HSTS=true)
+        if os.environ.get("WISP_ENABLE_HSTS", "").lower() == "true":
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=31536000; includeSubDomains"
+            )
+        # Generic referrer policy
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        # Restrictive CSP for API-only usage
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'none'; "
+            "object-src 'none'; "
+            "frame-ancestors 'none'"
+        )
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
+
 # Mount all routers
 app.include_router(sessions_router)
 app.include_router(files_router)

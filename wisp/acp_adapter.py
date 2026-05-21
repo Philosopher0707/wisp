@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from wisp import __version__
+from wisp.infra.audit import audit
 from wisp.acp_protocol import (
     AgentCapabilities,
     ConfigSetRequest,
@@ -289,16 +290,28 @@ class AcpAdapter:
             return make_error(None, ErrorCode.INVALID_PARAMS, f"Session not found: {req.session_id}")
 
         # Map config keys to Wisp settings
+        original_value = None
         if req.key == "model":
+            original_value = session.config.model
             session.config.model = req.value
             session.agent.client.model = req.value
         elif req.key == "skill":
+            original_value = getattr(session.agent, "_active_skill", None)
             session.agent._active_skill = req.value
         elif req.key == "auto_approve":
+            original_value = session.config.auto_approve
             session.config.auto_approve = req.value.lower() in ("true", "1", "yes")
         elif req.key == "show_thinking":
+            original_value = session.config.show_thinking
             session.config.show_thinking = req.value.lower() in ("true", "1", "yes")
 
+        audit.record(
+            "config_change",
+            actor=f"acp:{req.session_id}",
+            key=req.key,
+            old_value=original_value,
+            new_value=req.value,
+        )
         return {"status": "ok"}
 
     def _handle_cancel(self, params: dict) -> dict:
