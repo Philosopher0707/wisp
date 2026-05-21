@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Optional
 
 from wisp.config import WispConfig
-from wisp.core.agent import WispAgentCore  # noqa: F401 — imported for test monkeypatching
 from wisp.core.events import (
     AgentEvent, TYPE_CONTENT, TYPE_DONE, TYPE_ERROR,
     TYPE_TOOL_CALL, TYPE_TOOL_RESULT,

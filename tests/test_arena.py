@@ -30,8 +30,6 @@ class TestArenaIsolation:
         """run_comparison should create two separate directories for A and B."""
         from wisp.arena import ArenaRunner, ArenaCompareRequest
 
-        monkeypatch.setattr("wisp.arena.WispAgentCore", lambda **kw: None)
-
         arena = ArenaRunner()
         req = ArenaCompareRequest(
             prompt="write hello to output.txt",
@@ -59,8 +57,6 @@ class TestArenaIsolation:
     def test_concurrent_writes_dont_corrupt(self, tmp_path, monkeypatch):
         """Model A and Model B writing the same file should not clobber each other."""
         from wisp.arena import ArenaRunner, ArenaCompareRequest
-
-        monkeypatch.setattr("wisp.arena.WispAgentCore", lambda **kw: None)
 
         arena = ArenaRunner()
         req = ArenaCompareRequest(
@@ -90,8 +86,6 @@ class TestArenaIsolation:
         """After run_comparison, no leftover worktree directories should remain."""
         from wisp.arena import ArenaRunner, ArenaCompareRequest
 
-        monkeypatch.setattr("wisp.arena.WispAgentCore", lambda **kw: None)
-
         arena = ArenaRunner()
         req = ArenaCompareRequest(
             prompt="test",
@@ -117,8 +111,6 @@ class TestArenaIsolation:
     def test_diff_shows_only_own_changes(self, tmp_path, monkeypatch):
         """Each side's diff should reflect only that side's changes."""
         from wisp.arena import ArenaRunner, ArenaCompareRequest
-
-        monkeypatch.setattr("wisp.arena.WispAgentCore", lambda **kw: None)
 
         arena = ArenaRunner()
         req = ArenaCompareRequest(

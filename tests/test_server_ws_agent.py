@@ -70,6 +70,7 @@ class TestWebSocketAgent:
     async def test_websocket_handles_prompt(self):
         from wisp.server.routes.agents import agent_websocket
         mock_ws = AsyncMock()
+        mock_ws.app.state.root = None  # Prevent auto-created mock from triggering run_turn
         mock_ws.receive_text.side_effect = [
             '{"type": "prompt", "content": "hello"}',
             Exception("close")
