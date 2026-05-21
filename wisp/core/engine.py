@@ -32,8 +32,10 @@ from wisp.core.events import (
 logger = logging.getLogger(__name__)
 
 
-def _flatten_event(ev: AgentEvent) -> dict:
+def _flatten_event(ev: AgentEvent | dict) -> dict:
     """Convert canonical AgentEvent to flat dict for backward compatibility."""
+    if isinstance(ev, dict):
+        return dict(ev)
     flat = dict(ev.data)
     flat["type"] = str(ev.type)
     flat["timestamp"] = ev.timestamp
@@ -92,7 +94,68 @@ class WispAgentCore:
                     partial_content.append(normalized.get("text", ""))
 
                 # Security + extension checks for tool calls
-                if normalized.get("type") == "tool_call":
+                if normalized.get("type") in ("tool_call", "tool_calls"):
+                    # Normalize type to singular for downstream consistency
+                    normalized["type"] = "tool_call"
+                    # Extract calls from ToolCallBatch if present
+                    if "calls" in normalized and "name" not in normalized:
+                        calls = normalized.pop("calls", [])
+                        if calls:
+                            # Yield individual tool_call events for each call
+                            for call in calls:
+                                func = call.get("function", {})
+                                single = {
+                                    "type": "tool_call",
+                                    "name": func.get("name", ""),
+                                    "arguments": func.get("arguments", {}),
+                                }
+                                if "id" in call:
+                                    single["id"] = call["id"]
+                                # Process each individually
+                                tc_event = dict(single)
+                                # Check security BEFORE yielding
+                                if self.security is not None:
+                                    action = self._make_action(tc_event)
+                                    context = self._make_context(session)
+                                    try:
+                                        decision = self.security.check(action, context)
+                                        if not decision.allowed:
+                                            yield _flatten_event(error_event(
+                                                f"Blocked ({decision.reason}): READ_ONLY mode",
+                                                recoverable=True,
+                                            ))
+                                            continue
+                                    except Exception as e:
+                                        logger.exception("Security check failed — treating as deny: %s", e)
+                                        yield _flatten_event(error_event(
+                                            f"Security check failed: {e}. Tool call denied.",
+                                            recoverable=True,
+                                        ))
+                                        continue
+
+                                # Check extensions
+                                if self.extensions is not None:
+                                    try:
+                                        ext_result = self.extensions.intercept(tc_event)
+                                        if ext_result.get("action") == "block":
+                                            yield _flatten_event(error_event(
+                                                f"Blocked: {ext_result.get('reason', 'by extension')}",
+                                                recoverable=True,
+                                            ))
+                                            continue
+                                    except Exception as e:
+                                        logger.exception("Extension intercept failed — treating as deny: %s", e)
+                                        yield _flatten_event(error_event(
+                                            f"Extension intercept failed: {e}. Tool call denied.",
+                                            recoverable=True,
+                                        ))
+                                        continue
+
+                                pending_tool_calls.append(tc_event)
+                                yield _flatten_event(tc_event)
+                            continue  # Skip the default yield below since we already yielded
+                        continue
+
                     # Check security BEFORE yielding
                     if self.security is not None:
                         action = self._make_action(normalized)
@@ -133,7 +196,9 @@ class WispAgentCore:
 
                     pending_tool_calls.append(normalized)
 
-                # Yield the event
+                # Yield the event (skip complete events — we yield done after tool execution)
+                if normalized.get("type") in ("complete", "done"):
+                    continue
                 yield normalized
 
         except Exception as exc:
@@ -153,6 +218,9 @@ class WispAgentCore:
             for tc in pending_tool_calls:
                 async for result_event in self._execute_tool(tc, session):
                     yield result_event
+
+        # Yield final done event
+        yield _flatten_event(done_event(session.get("id", "")))
 
     async def _stream_events_async(
         self,
@@ -604,11 +672,14 @@ class WispAgentCore:
         safe_fields = {
             "text", "name", "arguments", "result", "message",
             "duration_ms", "turns", "session_id", "summary", "reason",
-            "level", "recoverable", "tool_call_id", "id",
+            "level", "recoverable", "tool_call_id", "id", "calls",
         }
         for field_name in safe_fields:
             if hasattr(event, field_name):
                 result[field_name] = getattr(event, field_name)
+
+        # Map provider-specific event types to canonical types
+        # (ToolCallBatch uses 'tool_calls' which we handle in turn())
 
         return result
 

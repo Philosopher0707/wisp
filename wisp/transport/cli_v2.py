@@ -383,7 +383,7 @@ class CLITransport(Transport):
         self._content_buffer: list[str] = []
         self._in_thinking: bool = False
         self._in_content: bool = False
-        self.show_thinking: bool = False
+        self.show_thinking: bool = getattr(config, "show_thinking", False) if config else False
         self.show_tool_output: bool = True
 
     # ── Transport ABC implementation ────────────────────────────────
