@@ -552,7 +552,8 @@ class CLITransport(Transport):
         if not full.strip():
             return
         w = width or _term_width()
-        if self.show_thinking:
+        show_thinking = getattr(self.config, "show_thinking", False) if self.config else False
+        if show_thinking:
             rendered = _render_thinking_block(full, box_mode=True, width=w)
             if rendered:
                 stdout.write(rendered + "\n")
