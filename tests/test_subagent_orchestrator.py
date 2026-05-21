@@ -987,7 +987,6 @@ async def test_run_schema_jsonschema_not_installed(monkeypatch):
 
 # ── Worktree and config tests ──────────────────────────────────────────
 
-@pytest.mark.asyncio
 def test_orchestrator_with_explicit_workspace():
     """Orchestrator accepts explicit workspace path."""
     from wisp.config import WispConfig
@@ -1074,7 +1073,6 @@ async def test_telemetry_auto_aggregation(mock_parent_agent):
 # ── Removed Pipe IPC test ───────────────────────────────────────────
 # ── Gap #15: Output compression ───────────────────────────────────────
 
-@pytest.mark.asyncio
 def test_pool_size_default(mock_parent_agent):
     orch = SubagentOrchestrator(parent_agent=mock_parent_agent)
     assert orch.get_pool_status()["pool_size"] == 4

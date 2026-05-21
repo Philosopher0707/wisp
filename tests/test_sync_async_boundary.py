@@ -159,7 +159,7 @@ class TestNoNestedEventLoops:
         """
         async def inner():
             with pytest.raises(RuntimeError):
-                asyncio.run(asyncio.sleep(0))
+                asyncio.run((lambda: None)())
 
         asyncio.run(inner())
 
