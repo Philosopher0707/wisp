@@ -138,7 +138,7 @@ class _AuthConfig:
             logger.info("Rotated key expired and removed")
         if expired:
             self._save_to_disk()
-        return candidate in self._valid_keys
+        return candidate in self._valid_keys or candidate == self._key
 
     @property
     def key(self) -> str:

@@ -176,7 +176,7 @@ class TestAuditTrail:
         trail = AuditTrail(path=log_file)
         trail.record(
             "config_change",
-            fld="token",
+            key="token",
             new_value="FAKE_TOKEN_FOR_TESTING",
         )
 

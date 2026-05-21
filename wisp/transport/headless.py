@@ -20,18 +20,20 @@ logger = logging.getLogger(__name__)
 class HeadlessTransport(Transport):
     """Transport that collects events into memory.
 
-    No user interaction — auto-approves all tool calls.
-    Events are stored in `.events` for inspection.
+    No user interaction — by default it does NOT auto-approve tool calls.
+    Set ``auto_approve=True`` only when the caller explicitly opts in.
+    Events are stored in ``.events`` for inspection.
     """
 
-    def __init__(self):
+    def __init__(self, *, auto_approve: bool = False):
         self.events: list[dict] = []
         self._started = False
+        self._auto_approve = auto_approve
 
     def start(self) -> None:
         self._started = True
         self.events = []
-        logger.debug("HeadlessTransport started")
+        logger.debug("HeadlessTransport started (auto_approve=%s)", self._auto_approve)
 
     def stop(self) -> None:
         self._started = False
@@ -55,8 +57,18 @@ class HeadlessTransport(Transport):
         return None
 
     async def approve(self, tool_call: dict) -> bool:
-        """Auto-approve all tool calls in headless mode."""
-        return True
+        """Respect the configured ``auto_approve`` flag.
+
+        By default returns ``False`` so dangerous tools are not silently
+        executed in headless / programmatic contexts.
+        """
+        if not self._auto_approve:
+            logger.warning(
+                "HeadlessTransport denied tool '%s' — auto_approve=False. "
+                "Pass auto_approve=True only if you fully trust the prompt.",
+                tool_call.get("name", "unknown"),
+            )
+        return self._auto_approve
 
     def collect_result(self) -> dict:
         """Build a result dict from collected events.
