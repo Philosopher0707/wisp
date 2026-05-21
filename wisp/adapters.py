@@ -21,7 +21,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from wisp.composition import CompositionRoot
 from wisp.infra.security import PermissionMode
 from wisp.infra.store import UnifiedStore
 
@@ -444,5 +443,6 @@ def create_runtime(config: Any) -> Any:
         model=getattr(config, "model", "qwen2.5-coder"),
     )
 
+    from wisp.composition import CompositionRoot
     root = CompositionRoot(new_config)
     return root.runtime
