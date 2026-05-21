@@ -184,7 +184,7 @@ Settings are resolved: **env vars > config file > defaults**
 # ~/.config/wisp/config.json
 {
   "model": "deepseek-v4-flash:cloud",
-  "auto_approve": true,
+  "auto_approve": false,
   "show_thinking": true,
   "auto_compact": true,
   "compact_threshold_msgs": 40,
@@ -283,14 +283,49 @@ wisp/
 
 ## Security
 
+Wisp has undergone a comprehensive security audit (52 findings, 4 severity levels). Production deployments benefit from a defense-in-depth model across transport, API, multi-agent, and infrastructure layers.
+
+### Hardening Summary
+
+| Layer | Control |
+|-------|---------|
+| **Transport** | WebSocket message size capped (256 KiB text / 10 MB images); all interactive transports default to `auto_approve=False` |
+| **API** | Rate limiting on all state-changing routes via SQLite-backed per-IP tracking (30 req / 60 s) |
+| **API** | Security headers: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Content-Security-Policy`, `Referrer-Policy`; opt-in HSTS via `WISP_ENABLE_HSTS=true` |
+| **Auth** | API key rotation with persisted grace period (default 24h, stored in `~/.config/wisp/auth_keys.json` with `600` permissions) |
+| **Auth** | Audit trail: append-only hash-chained log with automatic PII redaction at `~/.config/wisp/audit.jsonl` |
+| **Routes** | Input validation: git refs allow-listed, hook names regex-restricted, plugin paths workspace-bound, workspace root bounded by `WISP_ALLOWED_WORKSPACE_ROOTS` |
+| **Routes** | Error sanitization: raw `str(e)` replaced with generic messages on all production routes |
+| **LLM Provider** | Ollama URL validated against `WISP_ALLOWED_OLLAMA_HOSTS`; cloud metadata endpoints (169.254.169.254) blocked in production mode via `WISP_PRODUCTION_MODE=true` |
+| **Headless API** | `/api/prompt` defaults `auto_approve=False`; operators may set `WISP_HEADLESS_AUTO_APPROVE=true` for backward-compatible CI integrations |
+| **Multi-agent** | Subagent recursion capped at `MAX_SUBAGENT_DEPTH=2`; `auto_approve=False` by default |
+| **Schema** | Tool arguments pre-validated against JSON schemas before execution; malicious regex patterns gracefully handled |
+| **Subagent** | Sensitive tool arguments (api_key, token, password, etc.) redacted before approval requests reach the client |
+
+### Configuration
+
+```bash
+# Production-hardened environment
+export WISP_API_KEY="sk-change-me-here"    # Required in production; set before start
+export WISP_PRODUCTION_MODE="true"           # Blocks internal IPs and metadata services
+export WISP_ALLOWED_OLLAMA_HOSTS="localhost,127.0.0.1,my-llm.internal"
+export WISP_ALLOWED_WORKSPACE_ROOTS="/var/wisp-workspaces"  # Prevents workspace escape
+export WISP_ENABLE_HSTS="true"               # Enforce HTTPS via strict-transport-security
+export WISP_WORKSPACE_MUTABLE="true"         # Set to "false" to lock workspace path
+```
+
+### Security Audit Report
+
+Full audit report: [SECURITY_AUDIT_2025-05-21.md](SECURITY_AUDIT_2025-05-21.md)
+
+### Legacy Controls
+
 - 🔒 **Dangerous commands blocked** — `rm -rf /`, `mkfs`, `eval`, `bash -c`, encoded payloads, etc. blocked at API + agent + sandbox layers
 - 🔒 **Path sandboxing** — File access restricted to `WISP_WORKSPACE`; symlinks that escape the workspace are rejected
 - 🔒 **Bash timeout** — Commands killed after 60 seconds
 - 🔒 **CORS restricted** — Same-origin by default, configurable via `WISP_CORS_ORIGINS`
-- 🔒 **API key required** — Pre-shared key for all client connections
-- 🔒 **Headless mode hardened** — `/api/prompt` defaults to `auto_edit` permission mode and does NOT auto-approve destructive tools. Set `WISP_HEADLESS_AUTO_APPROVE=1` only in isolated CI environments
 - 🔒 **TLS recommended** — Use `wss://` in production (Let's Encrypt / Cloudflare)
-- 🔒 **Docker sandbox recommended** — `NoopSandbox` (host execution) is the fallback when Docker is unavailable; it now warns and still blocks dangerous commands
+- 🔒 **Docker sandbox recommended** — `NoopSandbox` (host execution) is the fallback when Docker is unavailable
 
 ---
 

@@ -780,7 +780,7 @@ class CLITransport(Transport):
             self._flush_content(stdout, width)
             msg = ev.data.get("message", "")
             error_prefix = "[ERROR] " if is_accessible() else "✗ "
-            stderr.write(
+            stdout.write(
                 _box(f"{error_prefix}{msg}", title="Error", style="error", double=True, width=width)
                 + "\n"
             )
