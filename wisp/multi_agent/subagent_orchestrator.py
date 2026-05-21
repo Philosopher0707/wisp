@@ -494,7 +494,7 @@ class SubagentOrchestrator:
         output_schema: Optional[dict] = None,
         auto_retry: bool = True,
         workspace: Optional[str] = None,
-        auto_approve: bool = True,
+        auto_approve: bool = False,
         depth: int = 0,
         branch_count: int = 0,
     ) -> str:
@@ -633,9 +633,18 @@ class SubagentOrchestrator:
         contracts: list[SubagentContract] = []
         for spec in specs:
             if isinstance(spec, dict):
+                # SECURITY FIX: never trust depth/branch values from external dict input.
+                # Always override with the orchestrator's computed values.
+                spec = dict(spec)
+                spec.pop("_subagent_depth", None)
+                spec.pop("_subagent_branch_count", None)
                 contract = SubagentContract(**spec)
             else:
                 contract = spec
+            # Enforce depth/branch counters regardless of what the caller passed
+            contract._subagent_depth = depth + 1
+            contract._subagent_branch_count = branch_count + 1
+
             # Apply production optimizations
             if contract.timeout_seconds < 30.0:
                 contract.timeout_seconds = self._adaptive_subagent_timeout(

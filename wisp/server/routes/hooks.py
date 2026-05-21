@@ -5,16 +5,34 @@ Handles hook operations.
 
 import json as _json
 import logging
+import re
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from wisp.server.deps import verify_api_key
+from wisp.server.deps import verify_api_key, RATE_LIMITER
 from wisp.server.routes.workspace import WORKSPACE_ROOT
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Strict allowlist for hook names to prevent path traversal
+_SAFE_HOOK_NAME_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
+_MAX_HOOK_NAME_LEN = 128
+
+
+def _validate_hook_name(name: str) -> str:
+    """Sanitize and validate a hook name."""
+    if not name or not isinstance(name, str):
+        raise ValueError("Hook name must be a non-empty string")
+    if len(name) > _MAX_HOOK_NAME_LEN:
+        raise ValueError(f"Hook name too long (max {_MAX_HOOK_NAME_LEN})")
+    if not _SAFE_HOOK_NAME_RE.match(name):
+        raise ValueError(
+            "Hook name may only contain letters, numbers, underscores, and hyphens"
+        )
+    return name
 
 
 class HookCreateRequest(BaseModel):
@@ -54,7 +72,7 @@ async def hook_logs():
     return {"logs": [], "message": "Hook execution logging not yet implemented"}
 
 
-@router.post("/api/hooks", dependencies=[Depends(verify_api_key)])
+@router.post("/api/hooks", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
 async def create_hook(req: HookCreateRequest):
     from wisp.adapters import HookConfig, HookEvent
 
@@ -75,8 +93,13 @@ async def create_hook(req: HookCreateRequest):
         valid = list(event_map.keys())
         raise HTTPException(status_code=400, detail=f"Invalid event '{req.event}'. Must be one of: {', '.join(valid)}")
 
+    try:
+        safe_name = _validate_hook_name(req.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
     hook = HookConfig(
-        name=req.name,
+        name=safe_name,
         event=event,
         command=req.command,
         timeout_seconds=req.timeout_seconds,
@@ -85,13 +108,13 @@ async def create_hook(req: HookCreateRequest):
         working_dir=req.working_dir,
     )
 
-    hook_file = hooks_dir / f"{req.name}.json"
+    hook_file = hooks_dir / f"{safe_name}.json"
     hook_file.write_text(_json.dumps(hook.to_dict(), indent=2) + "\n", encoding="utf-8")
 
     return {"ok": True, "hook": hook.to_dict()}
 
 
-@router.post("/api/hooks/{name}/test", dependencies=[Depends(verify_api_key)])
+@router.post("/api/hooks/{name}/test", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
 async def test_hook(name: str, request: dict):
     from wisp.adapters import HookManager, build_hook_context
     import asyncio
@@ -128,9 +151,13 @@ async def test_hook(name: str, request: dict):
 
 @router.delete("/api/hooks/{name}", dependencies=[Depends(verify_api_key)])
 async def delete_hook(name: str):
+    try:
+        safe_name = _validate_hook_name(name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     hooks_dir = WORKSPACE_ROOT / ".wisp" / "hooks"
-    hook_file = hooks_dir / f"{name}.json"
+    hook_file = hooks_dir / f"{safe_name}.json"
     if not hook_file.exists():
-        raise HTTPException(status_code=404, detail=f"Hook '{name}' not found")
+        raise HTTPException(status_code=404, detail=f"Hook '{safe_name}' not found")
     hook_file.unlink()
-    return {"ok": True, "message": f"Hook '{name}' deleted"}
+    return {"ok": True, "message": f"Hook '{safe_name}' deleted"}

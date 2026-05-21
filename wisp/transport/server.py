@@ -29,6 +29,33 @@ from wisp.core.events import (
 __all__ = ["ServerTransport", "PendingApproval"]
 
 
+def _redact_sensitive_tool_args(args: dict) -> dict:
+    """Redact known sensitive fields from tool arguments before sending to client.
+
+    Keys matched (case-insensitive): api_key, token, password, secret,
+    credential, auth, bearer, authorization, client_secret, ssh_key,
+    private_key, access_token, refresh_token.
+    """
+    if not isinstance(args, dict):
+        return args
+    sensitive_patterns = {
+        "api_key", "token", "password", "secret", "credential", "auth",
+        "bearer", "authorization", "client_secret", "ssh_key", "private_key",
+        "access_token", "refresh_token",
+    }
+    redacted = {}
+    for key, value in args.items():
+        key_lower = key.lower().replace("-", "_")
+        if any(p in key_lower for p in sensitive_patterns):
+            if isinstance(value, str) and len(value) > 4:
+                redacted[key] = value[:4] + "***"
+            else:
+                redacted[key] = "***"
+        else:
+            redacted[key] = value
+    return redacted
+
+
 class PendingApproval:
     """Represents a tool call waiting for client approval (async-aware)."""
 

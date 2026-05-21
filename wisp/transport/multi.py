@@ -73,16 +73,28 @@ class MultiTransport(Transport):
         return None
 
     async def approve(self, tool_call: dict) -> bool:
-        """Approve if ANY child transport approves.
+        """Approve only if ALL interactive child transports approve.
 
-        Returns True if at least one transport approves.
-        This is useful when one transport is interactive (CLI)
-        and others are passive (file logging).
+        Returns True only if every child transport that implements
+        approval (i.e., is not a passive logger) returns True.
+        This prevents passive transports (file, metrics) from
+        silently bypassing interactive approval (CLI, WebSocket).
         """
+        interactive_count = 0
+        approvals = 0
         for t in self.transports:
             try:
+                # Only count transports that actually implement approval logic
+                # (they will return True or False; passive ones that always
+                # return True are explicitly excluded by checking the class)
+                if t.__class__.__name__ in ("FileTransport", "HeadlessTransport", "MetricsTransport"):
+                    continue
+                interactive_count += 1
                 if await t.approve(tool_call):
-                    return True
+                    approvals += 1
             except Exception as exc:
                 logger.warning("Approve failed on %s: %s", t.__class__.__name__, exc)
-        return False
+        # If there are no interactive transports, default to False (deny)
+        if interactive_count == 0:
+            return False
+        return approvals == interactive_count

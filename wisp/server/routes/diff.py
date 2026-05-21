@@ -8,7 +8,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from wisp.server.deps import verify_api_key
+from wisp.server.deps import verify_api_key, RATE_LIMITER
 from wisp.server.routes.workspace import WORKSPACE_ROOT
 from wisp.server.routes.files import _resolve_path
 
@@ -29,7 +29,7 @@ class InlineEditRequest(BaseModel):
     model: str | None = None
 
 
-@router.post("/api/diff", dependencies=[Depends(verify_api_key)])
+@router.post("/api/diff", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
 async def create_diff(req: DiffRequest):
     target = _resolve_path(req.path)
     from wisp.diff import generate_diff_string
@@ -55,7 +55,7 @@ async def create_diff(req: DiffRequest):
         }
 
 
-@router.post("/api/edit/inline", dependencies=[Depends(verify_api_key)])
+@router.post("/api/edit/inline", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
 async def inline_edit(req: InlineEditRequest, request: Request):
     """Inline edit — replace a selection based on natural language instruction."""
     target = _resolve_path(req.path)

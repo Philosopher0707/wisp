@@ -17,7 +17,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Optional
 
 from wisp.core.events import (
     AgentEvent,
@@ -546,6 +546,20 @@ class WispAgentCore:
         args = event.get("arguments", {})
         workspace = session.get("workspace", ".")
 
+        # ── Schema validation (defense-in-depth) ─────────────────
+        schema_error = self._validate_tool_args(name, args)
+        if schema_error:
+            yield _flatten_event(
+                tool_result_event(
+                    name,
+                    self._normalize_tool_result(
+                        {"status": "error", "data": schema_error}
+                    ),
+                    duration_ms=0,
+                )
+            )
+            return
+
         # Defense-in-depth: re-check security before execution
         if self.security is not None:
             action = self._make_action(event)
@@ -763,6 +777,31 @@ class WispAgentCore:
         # (ToolCallBatch uses 'tool_calls' which we handle in turn())
 
         return result
+
+    def _validate_tool_args(self, name: str, args: dict) -> Optional[str]:
+        """Validate tool arguments against the registered JSON schema.
+
+        Returns an error message string if validation fails, or None
+        if the tool is not found or validation succeeds.
+        """
+        from wisp.tools import TOOL_SCHEMAS
+
+        # Find the schema for this tool
+        schema = None
+        for ts in TOOL_SCHEMAS:
+            if ts.get("function", {}).get("name") == name:
+                schema = ts.get("function", {}).get("parameters", {})
+                break
+
+        if schema is None:
+            return None  # Unknown tool — let security layer handle it
+
+        try:
+            import jsonschema
+            jsonschema.validate(instance=args, schema=schema)
+            return None
+        except Exception as exc:
+            return f"Schema validation failed for tool '{name}': {exc}"
 
     def _make_action(self, event: dict) -> Any:
         """Create Action from tool_call event."""

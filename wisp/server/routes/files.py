@@ -90,8 +90,9 @@ async def list_or_read_file(path: str = ""):
                     "encoding": "base64",
                     "size": len(data),
                 }
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+        except Exception:
+            logger.exception("Failed to read file: %s", path)
+            raise HTTPException(status_code=500, detail="Failed to read file")
     else:
         raise HTTPException(status_code=404, detail="Not found")
 
@@ -170,5 +171,6 @@ async def delete_file(path: str):
         else:
             target.unlink()
         return {"ok": True}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Failed to delete file: %s", path)
+        raise HTTPException(status_code=500, detail="Failed to delete file")

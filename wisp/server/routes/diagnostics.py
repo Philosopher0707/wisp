@@ -8,7 +8,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from wisp.server.deps import verify_api_key
+from wisp.server.deps import verify_api_key, RATE_LIMITER
 from wisp.server.routes.workspace import WORKSPACE_ROOT
 from wisp.server.routes.files import _resolve_path
 
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.get("/api/diagnostics", dependencies=[Depends(verify_api_key)])
+@router.get("/api/diagnostics", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
 async def get_diagnostics(path: str):
     """Return LSP diagnostics for a specific file."""
     target = _resolve_path(path)

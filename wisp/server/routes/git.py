@@ -9,7 +9,7 @@ import subprocess
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from wisp.server.deps import verify_api_key
+from wisp.server.deps import verify_api_key, RATE_LIMITER
 from wisp.server.routes.workspace import WORKSPACE_ROOT
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ async def git_status():
     return result
 
 
-@router.post("/api/git/commit", dependencies=[Depends(verify_api_key)])
+@router.post("/api/git/commit", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
 async def git_commit(req: GitCommitRequest):
     git_dir = WORKSPACE_ROOT / ".git"
     if not git_dir.exists():

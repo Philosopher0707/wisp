@@ -67,7 +67,18 @@ async def plugin_marketplace():
 @router.post("/api/plugins/install", dependencies=[Depends(verify_api_key)])
 async def install_plugin(req: PluginInstallRequest):
     registry = _get_plugin_registry()
-    plugin_path = Path(req.path).expanduser().resolve()
+    raw_path = Path(req.path).expanduser()
+
+    # Security: reject absolute paths and paths that escape the workspace
+    if raw_path.is_absolute():
+        raise HTTPException(status_code=400, detail="Plugin path must be relative to the workspace")
+    # Resolve within workspace boundaries
+    plugin_path = (WORKSPACE_ROOT / raw_path).resolve()
+    try:
+        plugin_path.relative_to(WORKSPACE_ROOT.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Plugin path must be inside the workspace")
+
     if not plugin_path.exists():
         raise HTTPException(status_code=404, detail=f"Plugin path not found: {req.path}")
     if not plugin_path.is_dir():
@@ -87,9 +98,9 @@ async def install_plugin(req: PluginInstallRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
+    except Exception:
         logger.exception("Plugin install failed")
-        raise HTTPException(status_code=500, detail=f"Install failed: {e}")
+        raise HTTPException(status_code=500, detail="Install failed")
 
 
 @router.post("/api/plugins/{name}/toggle", dependencies=[Depends(verify_api_key)])

@@ -9,6 +9,7 @@ Production-hardened with:
 """
 
 import asyncio
+import contextvars
 import json
 import logging
 import threading
@@ -32,6 +33,13 @@ from wisp.stream_parser import parse_stream, EventStreamError
 
 logger = logging.getLogger(__name__)
 _loop_local = threading.local()
+
+# Context-safe storage for per-turn/client stream responses.
+# Using a ContextVar prevents cross-session data leakage when the same
+# client instance is shared across concurrent tasks.
+_ollama_stream_response: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "ollama_stream_response", default=None
+)
 
 
 class OllamaError(Exception):
@@ -85,7 +93,18 @@ class OllamaClient:
         self.temperature = config.temperature
         self.max_tokens = config.max_tokens
         self._session = session or requests.Session()
-        self.stream_response: Optional[dict] = None
+        # SECURITY: stream_response is stored in a ContextVar (not a
+        # mutable instance attribute) so that concurrent turns cannot
+        # overwrite or leak each other's response data.
+        _ollama_stream_response.set(None)
+
+    @property
+    def stream_response(self) -> Optional[dict]:
+        return _ollama_stream_response.get(None)
+
+    @stream_response.setter
+    def stream_response(self, value: Optional[dict]) -> None:
+        _ollama_stream_response.set(value)
 
     def check_health(self) -> bool:
         """Verify Ollama is running and the model is available."""

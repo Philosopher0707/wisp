@@ -67,16 +67,20 @@ class TUITransport(Transport):
     async def approve(self, tool_call: dict) -> bool:
         """Ask the user to approve a tool call via TUI modal.
 
-        Shows a modal dialog and waits for user response.
+        SECURITY: Previously this method unconditionally returned True,
+        which bypassed all approval gating. It now returns False (deny)
+        until a proper modal approval dialog is implemented. If your
+        TUI workflow depends on tool approval, wire a real prompt here.
         """
         if self._app is not None:
             try:
-                # TODO: show modal dialog in TUI
                 logger.info("TUI approval requested for: %s", tool_call.get("name", "?"))
-                return True
+                # TODO: show modal dialog in TUI and return the user's choice
+                return False
             except Exception as exc:
                 logger.warning("TUITransport approve() failed: %s", exc)
-        return True
+        # No TUI app available → deny the tool call (security default)
+        return False
 
     def start(self) -> None:
         """Start the TUI transport."""

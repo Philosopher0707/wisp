@@ -8,7 +8,7 @@ import logging
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
-from wisp.server.deps import verify_api_key
+from wisp.server.deps import verify_api_key, RATE_LIMITER
 from wisp.server.routes.workspace import WORKSPACE_ROOT
 from wisp.transport.headless import HeadlessTransport
 
@@ -26,7 +26,7 @@ class PromptRequest(BaseModel):
     images: list[str] | None = None
 
 
-@router.post("/api/prompt", dependencies=[Depends(verify_api_key)])
+@router.post("/api/prompt", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
 async def execute_prompt(req: PromptRequest, request: Request):
     """Non-interactive/headless prompt execution with JSON response."""
     import copy

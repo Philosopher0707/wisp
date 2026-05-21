@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+MAX_WS_MSG_SIZE = 256_000  # 256 KiB max WebSocket message size
+
 @router.websocket("/ws/agent")
 async def agent_websocket(websocket: WebSocket):
     """WebSocket endpoint — auth via first-message AuthMessage frame only.
@@ -47,6 +49,14 @@ async def agent_websocket(websocket: WebSocket):
             except WebSocketDisconnect:
                 logger.info("Client %s disconnected", client_id)
                 break
+
+            # ── Security: enforce max message size ─────────────────
+            if len(raw.encode("utf-8")) > MAX_WS_MSG_SIZE:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Message too large",
+                })
+                continue
 
             try:
                 msg = json.loads(raw)

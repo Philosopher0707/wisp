@@ -19,6 +19,49 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Security: strict allowlist for git refs, branch names, and commit SHAs
+# Refs must be alphanumeric plus safe delimiters. Reject any shell metacharacters.
+_SAFE_GIT_REF_RE = re.compile(r"^[a-zA-Z0-9._@\-/:]+$")
+_MAX_GIT_REF_LEN = 128
+
+
+def _validate_git_ref(ref: str, field_name: str) -> str:
+    """Validate a git ref/branch name before passing to git commands.
+
+    Raises ValueError if the ref contains unsafe characters or is too long.
+    """
+    if not ref or not isinstance(ref, str):
+        raise ValueError(f"{field_name} must be a non-empty string")
+    if len(ref) > _MAX_GIT_REF_LEN:
+        raise ValueError(f"{field_name} too long (max {_MAX_GIT_REF_LEN})")
+    ref = ref.strip()
+    # Reject refs that look like shell injection attempts, option switches, or pipes
+    unsafe = {"--", "|", "&", ";", "$(", "`", "$", "\n", "\r", "\x00"}
+    for bad in unsafe:
+        if bad in ref:
+            raise ValueError(f"{field_name} contains unsafe characters")
+    # Reject absolute paths (could be used to escape the repo)
+    if ref.startswith("/"):
+        raise ValueError(f"{field_name} cannot be an absolute path")
+    if not _SAFE_GIT_REF_RE.match(ref):
+        raise ValueError(f"{field_name} contains invalid characters")
+    return ref
+
+
+def _git_ref_exists(ref: str, cwd: str) -> bool:
+    """Verify a ref resolves to an actual object in the git repo."""
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", ref],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return proc.returncode == 0
+    except Exception:
+        return False
+
 
 class PRReviewRequest(BaseModel):
     base_branch: str = Field(default="main")
@@ -87,18 +130,36 @@ async def review_pr(req: PRReviewRequest, request: Request):
     if not git_dir.exists():
         raise HTTPException(status_code=400, detail="No git repository in workspace")
 
-    base = req.base_branch
-    head = req.head_branch
+    # ── Security: sanitize all git refs before passing to subprocess ──
+    try:
+        base = _validate_git_ref(req.base_branch, "base_branch")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
-    if req.pr_number is not None and not head:
+    head: str | None = None
+    if req.pr_number is not None:
         head = f"pull/{req.pr_number}/head"
-    elif not head:
+    elif req.head_branch:
+        try:
+            head = _validate_git_ref(req.head_branch, "head_branch")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    if not head:
         raise HTTPException(status_code=400, detail="Either pr_number or head_branch is required")
+
+    # Verify refs exist before running diff
+    for ref in (base, head):
+        if not _git_ref_exists(ref, str(WORKSPACE_ROOT)):
+            raise HTTPException(status_code=400, detail=f"Git ref '{ref}' not found")
 
     try:
         proc = subprocess.run(
-            ["git", "diff", f"{base}...{head}"],
-            cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=30,
+            ["git", "diff", "--", f"{base}...{head}"],
+            cwd=str(WORKSPACE_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         if proc.returncode != 0:
             raise HTTPException(status_code=500, detail=f"git diff failed: {proc.stderr}")
@@ -109,8 +170,9 @@ async def review_pr(req: PRReviewRequest, request: Request):
         raise
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=408, detail="git diff timed out")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("PR review failed")
+        raise HTTPException(status_code=500, detail="Review failed")
 
     files_reviewed = _extract_files_from_diff(diff_text)
 
@@ -172,10 +234,17 @@ async def review_diff(req: DiffReviewRequest, request: Request):
     diff_text = ""
     target_desc = req.target
 
+    # Validate target before running git commands
+    if req.target not in ("uncommitted", "staged"):
+        try:
+            target_desc = _validate_git_ref(req.target, "target")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
     try:
         if req.target == "uncommitted":
             proc = subprocess.run(
-                ["git", "diff"],
+                ["git", "diff", "--"],
                 cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=30,
             )
             diff_text = proc.stdout
@@ -186,14 +255,16 @@ async def review_diff(req: DiffReviewRequest, request: Request):
             )
             diff_text = proc.stdout
         elif req.target:
+            if not _git_ref_exists(target_desc, str(WORKSPACE_ROOT)):
+                raise HTTPException(status_code=400, detail=f"Git ref '{target_desc}' not found")
             proc = subprocess.run(
-                ["git", "diff", f"{req.target}^!"],
+                ["git", "diff", "--", f"{target_desc}^!"],
                 cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=30,
             )
             diff_text = proc.stdout
             if not diff_text.strip():
                 proc = subprocess.run(
-                    ["git", "show", req.target],
+                    ["git", "show", "--", target_desc],
                     cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=30,
                 )
                 diff_text = proc.stdout
@@ -201,10 +272,13 @@ async def review_diff(req: DiffReviewRequest, request: Request):
         if not diff_text.strip():
             return {"summary": "No changes to review.", "issues": [], "files_reviewed": []}
 
+    except HTTPException:
+        raise
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=408, detail="git command timed out")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Diff review failed")
+        raise HTTPException(status_code=500, detail="Review failed")
 
     files_reviewed = _extract_files_from_diff(diff_text)
 
@@ -265,8 +339,9 @@ async def review_best_of_n(req: BestOfNRequest, request: Request):
             return {"diff": "", "reviews": [], "message": "No changes to review."}
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=408, detail="git diff timed out")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Best-of-N review failed")
+        raise HTTPException(status_code=500, detail="Review failed")
 
     files_reviewed = _extract_files_from_diff(diff_text)
 
@@ -300,8 +375,9 @@ Be concise and return a JSON object with: summary, issues (list of {{severity, f
             else:
                 result["review"] = {"raw_content": content[:2000]}
             return result
-        except Exception as e:
-            return {"model": model, "ok": False, "error": str(e)}
+        except Exception:
+            logger.exception("Review model %s failed", model)
+            return {"model": model, "ok": False, "error": "Review failed"}
 
     models_to_use = req.models[:req.n]
     tasks = [_review_with_model(m) for m in models_to_use]

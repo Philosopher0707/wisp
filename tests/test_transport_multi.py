@@ -75,14 +75,14 @@ class TestMultiTransport:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_approve_returns_true_if_any_approves(self):
+    async def test_approve_returns_false_if_not_all_approve(self):
         t1 = MagicMock()
         t1.approve = AsyncMock(return_value=False)
         t2 = MagicMock()
         t2.approve = AsyncMock(return_value=True)
         multi = MultiTransport([t1, t2])
         result = await multi.approve({"name": "run_bash"})
-        assert result is True
+        assert result is False
 
     @pytest.mark.asyncio
     async def test_approve_returns_false_if_none_approve(self):

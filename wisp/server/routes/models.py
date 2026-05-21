@@ -8,12 +8,12 @@ import subprocess
 import requests
 from fastapi import APIRouter, Depends, HTTPException
 
-from wisp.server.deps import verify_api_key
+from wisp.server.deps import verify_api_key, RATE_LIMITER
 
 router = APIRouter()
 
 
-@router.get("/api/models", dependencies=[Depends(verify_api_key)])
+@router.get("/api/models", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
 async def list_models():
     """List available Ollama models (local + cloud)."""
     try:

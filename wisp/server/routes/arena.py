@@ -8,7 +8,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from wisp.server.deps import verify_api_key
+from wisp.server.deps import verify_api_key, RATE_LIMITER
 from wisp.server.routes.workspace import WORKSPACE_ROOT
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ class ArenaVoteRequest(BaseModel):
     vote: str = Field(..., pattern="^(a|b|tie)$")
 
 
-@router.post("/api/arena/compare", dependencies=[Depends(verify_api_key)])
+@router.post("/api/arena/compare", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
 async def compare_arena(req: ArenaCompareRequest):
     """Run a blind A/B comparison between two models."""
     from wisp.arena import get_arena, ArenaCompareRequest as AR
@@ -51,7 +51,7 @@ async def compare_arena(req: ArenaCompareRequest):
     }
 
 
-@router.post("/api/arena/vote", dependencies=[Depends(verify_api_key)])
+@router.post("/api/arena/vote", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
 async def vote_arena(req: ArenaVoteRequest):
     """Vote on an arena comparison. Reveals model identities after voting."""
     from wisp.arena import get_arena

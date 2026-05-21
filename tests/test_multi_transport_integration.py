@@ -74,7 +74,7 @@ class TestMultiTransportIntegration:
             os.unlink(log_path)
 
     @pytest.mark.asyncio
-    async def test_multi_approve_any(self):
+    async def test_multi_approve_unanimous(self):
         t1 = MagicMock()
         t1.approve = AsyncMock(return_value=False)
         t2 = MagicMock()
@@ -82,7 +82,7 @@ class TestMultiTransportIntegration:
 
         multi = MultiTransport([t1, t2])
         result = await multi.approve({"name": "run_bash"})
-        assert result is True
+        assert result is False
 
     @pytest.mark.asyncio
     async def test_multi_recv_first(self):

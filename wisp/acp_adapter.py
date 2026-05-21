@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Optional
 
 from wisp import __version__
@@ -167,7 +169,38 @@ class AcpAdapter:
         """Create a new ACP session."""
         req = NewSessionRequest.from_dict(params)
         config = WispConfig()
-        config.workspace = req.workspace or self.workspace
+        workspace = req.workspace or self.workspace
+
+        # Security: reject paths containing traversal sequences
+        if ".." in workspace:
+            return make_error(
+                None, ErrorCode.INVALID_PARAMS,
+                "Workspace path may not contain directory traversal sequences."
+            )
+
+        # If WISP_ALLOWED_WORKSPACE_ROOTS is set, enforce it.
+        # Otherwise (default), allow the path after resolving it.
+        allowed_roots_raw = os.environ.get("WISP_ALLOWED_WORKSPACE_ROOTS")
+        if allowed_roots_raw:
+            try:
+                workspace_path = Path(workspace).resolve()
+                allowed = [Path(r.strip()).resolve() for r in allowed_roots_raw.split(",")]
+                if not any(
+                    workspace_path == a or str(workspace_path).startswith(str(a) + os.sep)
+                    for a in allowed
+                ):
+                    return make_error(
+                        None,
+                        ErrorCode.INVALID_PARAMS,
+                        f"Workspace path must be within allowed roots: {allowed_roots_raw}"
+                    )
+            except Exception:
+                return make_error(
+                    None, ErrorCode.INVALID_PARAMS,
+                    f"Invalid workspace path: {workspace}"
+                )
+
+        config.workspace = str(Path(workspace).resolve())
         session = self.session_mgr.create(config.workspace, config, title=req.title)
         return NewSessionResponse(session=session.to_info()).to_dict()
 

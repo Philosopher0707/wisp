@@ -8,7 +8,7 @@ import logging
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from wisp.server.deps import verify_api_key
+from wisp.server.deps import verify_api_key, RATE_LIMITER
 from wisp.server.routes.workspace import WORKSPACE_ROOT
 
 logger = logging.getLogger(__name__)
@@ -20,7 +20,7 @@ class ContextUpdateRequest(BaseModel):
     content: str = Field(..., min_length=1)
 
 
-@router.get("/api/context", dependencies=[Depends(verify_api_key)])
+@router.get("/api/context", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
 async def get_context():
     """Get loaded project context for display in UI."""
     from wisp.config import WispConfig

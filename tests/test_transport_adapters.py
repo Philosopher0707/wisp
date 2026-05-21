@@ -50,12 +50,12 @@ class TestCLITransportAdapter:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_approve_returns_true(self):
+    async def test_approve_returns_false(self):
         from wisp.transport.adapters import CLITransportAdapter
         mock_core = MagicMock()
         adapter = CLITransportAdapter(mock_core)
         result = await adapter.approve({"name": "run_bash"})
-        assert result is True
+        assert result is False
 
 
 class TestServerTransportAdapter:
@@ -106,10 +106,10 @@ class TestServerTransportAdapter:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_approve_returns_true(self):
+    async def test_approve_returns_false(self):
         from wisp.transport.adapters import ServerTransportAdapter
         mock_core = MagicMock()
         mock_send = MagicMock()
         adapter = ServerTransportAdapter(mock_core, mock_send)
         result = await adapter.approve({"name": "run_bash"})
-        assert result is True
+        assert result is False

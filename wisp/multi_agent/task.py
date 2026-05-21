@@ -118,8 +118,13 @@ class SubagentContract:
     worktree_isolated: bool = True
     """Run in an isolated git worktree. When False the subagent shares the workspace."""
 
-    auto_approve: bool = True
-    """If False, dangerous commands are blocked instead of executed."""
+    auto_approve: bool = False
+    """Auto-approve dangerous tool calls without user consent.
+
+    Security: defaults to False so subagents spawned by untrusted
+    input (e.g. LLM-generated plans) require human approval.
+    Only set to True when the caller explicitly opts in.
+    """
 
     # ── Observability ──
     progress_callback: Optional[Callable[[OrchestratorEvent], None]] = None

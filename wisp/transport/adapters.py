@@ -64,12 +64,13 @@ class CLITransportAdapter(Transport):
         return None
 
     async def approve(self, tool_call: dict) -> bool:
-        """Approve a tool call.
+        """DO NOT auto-approve tool calls through this adapter.
 
-        The old CLITransport has its own approval mechanism. This adapter
-        auto-approves since the old transport handles approval internally.
+        The old CLITransport has its own approval mechanism.
+        Returning False lets the caller fall through to the real
+        approval handler instead of bypassing it.
         """
-        return True
+        return False
 
 
 class ServerTransportAdapter(Transport):
@@ -111,9 +112,12 @@ class ServerTransportAdapter(Transport):
         return None
 
     async def approve(self, tool_call: dict) -> bool:
-        """Approve a tool call.
+        """DO NOT auto-approve tool calls through this adapter.
 
         The old ServerTransport has its own approval mechanism via
-        PendingApproval. This adapter auto-approves for simplicity.
+        PendingApproval. This adapter previously auto-approved all calls,
+        which bypassed the real approval mechanism. We now return False
+        so the caller (e.g. AgentRuntime) will fall through to the
+        ServerTransport's own approval handler instead.
         """
-        return True
+        return False
