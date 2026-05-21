@@ -1,0 +1,55 @@
+project: wisp
+imagemagick: false
+
+environments:
+  local:
+    url: http://localhost:8000
+    restrictions:
+      - "Single-user local tool -- no multi-user scenarios"
+      - "Ollama must be running at localhost:11434 for LLM tests"
+      - "MockProvider available for deterministic tests"
+      - "Test sessions are harmless local SQLite data -- no cleanup needed"
+  headless:
+    url: in-process
+    restrictions:
+      - "No server needed -- runs agent directly in-process via run_headless()"
+      - "Uses the same core engine as the REPL"
+
+default_target: local
+
+auth:
+  method: api-key
+  provider: custom
+
+personas:
+  - name: developer
+    description: "Local developer using Wisp for AI-assisted coding"
+    email: local-user
+    credentials_source: env-var
+    secret_name: WISP_API_KEY
+    test_focus:
+      - single-shot prompt execution
+      - interactive REPL with slash commands
+      - session management (list, show, delete)
+      - tool execution (edit_file, write_file, bash, search)
+      - multi-turn conversation
+    cannot_do:
+      - "No role-based access control"
+      - "No multi-user concurrency scenarios"
+
+apps:
+  wisp-cli:
+    path_patterns:
+      - "wisp/**/*.py"
+      - "pyproject.toml"
+      - "setup.py"
+    skill: qa-cli
+    test_tool: tuistory
+    build_command: "pip install -e ."
+
+cleanup:
+  auto_cleanup: false
+  strategy: none
+  instructions: "Test sessions are stored in local SQLite (.wisp/wisp.db). They are harmless and can be left in place. No cleanup needed."
+
+failure_learning: suggest_in_report

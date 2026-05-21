@@ -144,9 +144,9 @@ async def test_hook(name: str, request: dict):
             "hook": name,
             "results": [r.to_dict() for r in results],
         }
-    except Exception as e:
+    except Exception:
         logger.exception("Hook test failed")
-        raise HTTPException(status_code=500, detail=f"Hook test failed: {e}")
+        raise HTTPException(status_code=500, detail="Hook test failed")
 
 
 @router.delete("/api/hooks/{name}", dependencies=[Depends(verify_api_key)])

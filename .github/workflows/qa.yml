@@ -1,0 +1,100 @@
+name: QA
+
+on:
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: qa-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "."
+          pip install pytest
+
+      - name: Install Droid CLI
+        run: curl -fsSL https://app.factory.ai/cli | sh
+
+      - name: Run QA
+        id: qa
+        timeout-minutes: 15
+        continue-on-error: true
+        env:
+          CI: "true"
+          WISP_API_KEY: ${{ secrets.WISP_API_KEY }}
+          WISP_MOCK: "true"
+        run: |
+          echo "Starting QA run..."
+          droid exec --auto high "Run the qa skill for this project. Read the git diff, determine affected areas, and run relevant CLI tests. Write the final report to qa-results/report.md. You are running in a non-interactive CI environment. There is NO human available. Do NOT use AskUser, do NOT wait for confirmations, do NOT pause for input."
+
+      - name: Upload QA artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-results-${{ github.run_number }}
+          path: |
+            qa-results/
+            !qa-results/node_modules
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Post QA report as PR comment
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPORT_FILE="qa-results/report.md"
+          if [ -f "$REPORT_FILE" ]; then
+            BODY=$(cat "$REPORT_FILE")
+          else
+            BODY="No QA report generated. Check the artifacts for details."
+          fi
+
+          # Ensure heading
+          if ! echo "$BODY" | head -1 | grep -q "^## QA Report"; then
+            BODY="## QA Report\n\n${BODY}"
+          fi
+
+          # Footer
+          ARTIFACT_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
+          FOOTER="\n\n---\n*QA run #${{ github.run_number }} by [workflow](${ARTIFACT_URL}) | [artifacts](${ARTIFACT_URL})*\n"
+
+          COMMENT_BODY="<!-- qa-report -->\n${BODY}${FOOTER}"
+
+          # Find existing QA comment
+          EXISTING_COMMENT=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+            --paginate --jq '.[] | select(.body | startswith("<!-- qa-report -->")) | .id')
+
+          if [ -n "$EXISTING_COMMENT" ]; then
+            echo "Updating existing PR comment $EXISTING_COMMENT"
+            gh api "repos/${{ github.repository }}/issues/comments/${EXISTING_COMMENT}" \
+              --method PATCH -f body="$COMMENT_BODY"
+          else
+            echo "Creating new PR comment"
+            gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+              --method POST -f body="$COMMENT_BODY"
+          fi

@@ -1,0 +1,33 @@
+version: 1
+categories:
+  default_target:
+    target: local
+  personas: developer
+  critical_flows:
+    - "CLI startup and basic commands"
+    - "Single-shot execution"
+    - "REPL initialization and slash commands"
+    - "Session management"
+    - "Tool execution in REPL"
+    - "Config commands"
+    - "Model and provider commands"
+    - "Server mode start/stop"
+    - "Headless JSON output"
+    - "Negative/error handling"
+    - "Multi-agent/swarm"
+    - "Memory commands"
+    - "TUI mode (experimental)"
+  external_services:
+    - "Ollama (localhost:11434)"
+    - "MockProvider (deterministic tests)"
+  cleanup:
+    strategy: none
+    instruction: "Test sessions are stored in local SQLite (.wisp/wisp.db). They are harmless and can be left in place."
+  imagemagick: false
+  github_action: true
+  workflow_mode: optional
+  failure_learning: suggest_in_report
+notes:
+  - "This is a single-user local development tool, not a multi-user SaaS application"
+  - "No role-based access control exists"
+  - "No preview deployments detected; TUI tests run locally via pip install -e ."

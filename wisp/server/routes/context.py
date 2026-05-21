@@ -49,6 +49,7 @@ async def update_context(req: ContextUpdateRequest):
             "path": str(rules_path.relative_to(WORKSPACE_ROOT)),
             "bytes": len(req.content.encode("utf-8")),
         }
-    except Exception as e:
+    except Exception:
         from fastapi import HTTPException
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Context update failed")
+        raise HTTPException(status_code=500, detail="Update failed")

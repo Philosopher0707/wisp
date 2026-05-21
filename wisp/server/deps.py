@@ -32,25 +32,67 @@ class _AuthConfig:
     """Runtime-mutable auth key with rotation support.
 
     Supports up to one previous key during rotation with a grace period.
+    Keys are persisted to disk (~/.config/wisp/auth_keys.json) so
+    rotation grace windows survive server restarts.
     """
+
+    _persist_path: Path = Path.home() / ".config" / "wisp" / "auth_keys.json"
 
     def __init__(self):
         self._key: str = os.environ.get("WISP_API_KEY", "")
         self._no_auth: bool = False
         self._valid_keys: dict[str, float | None] = {}
-        # Track valid keys: key -> expiry timestamp (None = no expiry)
+
+        # Load persisted keys first; env overrides
+        self._load_from_disk()
+
         if self._key:
-            self._valid_keys[self._key] = None
+            self._valid_keys.setdefault(self._key, None)
             logger.info("WISP_API_KEY set — server requires authentication")
         else:
             self._no_auth = True
             logger.info("WISP_API_KEY not set — authentication disabled (dev mode)")
+        self._save_to_disk()
+
+    # ── Persistence ─────────────────────────────────────────────────
+
+    def _load_from_disk(self) -> None:
+        if not self._persist_path.exists():
+            return
+        try:
+            data = json.loads(self._persist_path.read_text(encoding="utf-8"))
+            self._valid_keys = {k: v for k, v in data.items()}
+            # Filter expired keys
+            now = time.time()
+            expired = [
+                k for k, expiry in self._valid_keys.items()
+                if expiry is not None and now > expiry
+            ]
+            for k in expired:
+                del self._valid_keys[k]
+            if expired:
+                logger.info("Removed %d expired key(s) on load", len(expired))
+        except Exception:
+            logger.warning("Failed to load persisted keys, starting fresh")
+
+    def _save_to_disk(self) -> None:
+        try:
+            self._persist_path.parent.mkdir(parents=True, exist_ok=True)
+            self._persist_path.write_text(
+                json.dumps(self._valid_keys, indent=2), encoding="utf-8"
+            )
+            self._persist_path.chmod(0o600)  # Owner read/write only
+        except Exception:
+            logger.warning("Failed to persist auth keys to disk")
+
+    # ── Mutation ──────────────────────────────────────────────────
 
     def set_key(self, key: str) -> None:
         """Replace the current key immediately (no rotation grace)."""
         self._key = key
         self._no_auth = not bool(key)
         self._valid_keys = {key: None} if key else {}
+        self._save_to_disk()
         audit.record("key_set", key="api_key")
 
     def rotate_key(self, new_key: str, grace_seconds: int = _AUTH_KEY_GRACE_SECONDS) -> None:
@@ -69,6 +111,7 @@ class _AuthConfig:
             self._valid_keys[new_key] = None
         if not new_key:
             self._valid_keys.clear()
+        self._save_to_disk()
         audit.record("key_rotation", key="api_key",
                       new_value=new_key[:4] + "..." if new_key else None)
 
@@ -78,6 +121,7 @@ class _AuthConfig:
         self._valid_keys.clear()
         logger.info("Auth disabled (no-auth mode)")
         audit.record("auth_disabled", key="api_key")
+        self._save_to_disk()
 
     def _is_valid(self, candidate: str) -> bool:
         """Check if a candidate key is valid (current or within grace period)."""
@@ -92,6 +136,8 @@ class _AuthConfig:
         for k in expired:
             del self._valid_keys[k]
             logger.info("Rotated key expired and removed")
+        if expired:
+            self._save_to_disk()
         return candidate in self._valid_keys
 
     @property

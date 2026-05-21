@@ -17,7 +17,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-MAX_WS_MSG_SIZE = 256_000  # 256 KiB max WebSocket message size
+MAX_WS_TEXT_SIZE = 256_000      # 256 KiB max for text/control messages
+MAX_WS_IMAGE_SIZE = 10_000_000  # 10 MB max for image uploads
 
 @router.websocket("/ws/agent")
 async def agent_websocket(websocket: WebSocket):
@@ -50,11 +51,19 @@ async def agent_websocket(websocket: WebSocket):
                 logger.info("Client %s disconnected", client_id)
                 break
 
-            # ── Security: enforce max message size ─────────────────
-            if len(raw.encode("utf-8")) > MAX_WS_MSG_SIZE:
+            # ── Security: enforce max message size (images get higher limit) ──
+            msg_size = len(raw.encode("utf-8"))
+            try:
+                parsed_for_size = json.loads(raw)
+                msg_type = parsed_for_size.get("type", "")
+            except Exception:
+                msg_type = ""
+            max_size = MAX_WS_IMAGE_SIZE if msg_type == "image" else MAX_WS_TEXT_SIZE
+            if msg_size > max_size:
+                size_label = "image" if msg_type == "image" else "message"
                 await websocket.send_json({
                     "type": "error",
-                    "message": "Message too large",
+                    "message": f"{size_label.capitalize()} too large (max {max_size // 1024} KiB)",
                 })
                 continue
 

@@ -6,6 +6,7 @@ Handles bash execution.
 import logging
 import os
 import re
+import subprocess
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -83,6 +84,9 @@ async def run_bash(req: BashRequest):
         }
     except HTTPException:
         raise
-    except Exception as e:
+    except subprocess.CalledProcessError:
         logger.exception("bash_exec failed")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Command execution failed")
+    except Exception:
+        logger.exception("bash_exec failed")
+        raise HTTPException(status_code=500, detail="Internal error")
