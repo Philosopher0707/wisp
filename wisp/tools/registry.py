@@ -6,6 +6,7 @@ TOOL_IMPLS (name → function mapping) for all built-in tools.
 
 import json
 import logging
+from pathlib import Path
 from typing import Any, Optional
 
 from wisp.tools.errors import ToolError
@@ -619,13 +620,28 @@ def _build_tool_metadata(name: str, args: dict, result: str) -> dict:
     return meta
 
 
-def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0, file_lock=None, lsp_manager=None) -> str:
+def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0, file_lock=None, lsp_manager=None, security_policy=None) -> str:
     """Execute a tool by name with given arguments.
 
     Returns a structured JSON string with status, data, and metadata
     so the LLM can parse results programmatically.
+
+    If security_policy is provided, it is checked before execution
+    (defense-in-depth — callers should also check before calling).
     """
     impl = TOOL_IMPLS.get(name)
+    # ── Defense-in-depth: security check before execution ──
+    if security_policy is not None and impl is not None:
+        from wisp.infra.security import Action, Context
+        decision = security_policy.check(Action(name=name, args=args), Context(workspace=Path(workspace)))
+        if not decision.allowed:
+            structured = {
+                "status": "error",
+                "tool": name,
+                "data": f"Security blocked: {decision.reason}",
+                "metadata": _build_tool_metadata(name, args, ""),
+            }
+            return json.dumps(structured, ensure_ascii=False)
     # ── Plugin tools are fallback (built-ins take absolute precedence) ──
     # Built-ins checked first; plugins only run if no built-in tool exists.
     # Security: plugin tools run in-process with no sandbox.

@@ -33,9 +33,9 @@ from .task import EventKind, OrchestratorEvent, SubagentContract, SubagentResult
 
 logger = logging.getLogger(__name__)
 
-# Maximum subagent nesting depth to prevent recursive explosion
-MAX_SUBAGENT_DEPTH = 2
-MAX_SUBAGENT_BRANCHING = 3
+# Fallback defaults — runtime values come from config
+_MAX_SUBAGENT_DEPTH_DEFAULT = 2
+_MAX_SUBAGENT_BRANCHING_DEFAULT = 3
 
 
 class SubagentOrchestrator:
@@ -67,8 +67,12 @@ class SubagentOrchestrator:
         self._worktree_mgr = WorktreeManager(self.workspace)
         self._runner = SubagentRunner(self.config, self.workspace)
 
+        # Config-driven limits
+        self._max_depth = getattr(self.config, "max_subagent_depth", _MAX_SUBAGENT_DEPTH_DEFAULT)
+        self._max_branching = getattr(self.config, "max_subagent_branching", _MAX_SUBAGENT_BRANCHING_DEFAULT)
+
         # Concurrency
-        self._pool_size = 4
+        self._pool_size = getattr(self.config, "subagent_pool_size", 4)
         self._active = 0
         self._semaphore = asyncio.Semaphore(self._pool_size)
 
@@ -137,12 +141,12 @@ class SubagentOrchestrator:
         Never raises — failures are returned as ``SubagentResult(success=False)``.
         """
         # ── Depth guard ────────────────────────────────────────────────
-        if contract._subagent_depth >= MAX_SUBAGENT_DEPTH:
+        if contract._subagent_depth >= self._max_depth:
             return SubagentResult(
                 task_id=contract.name,
                 success=False,
-                output=f"[DEPTH LIMIT EXCEEDED] Max subagent depth is {MAX_SUBAGENT_DEPTH}",
-                error=f"Subagent depth {contract._subagent_depth} exceeds max {MAX_SUBAGENT_DEPTH}",
+                output=f"[DEPTH LIMIT EXCEEDED] Max subagent depth is {self._max_depth}",
+                error=f"Subagent depth {contract._subagent_depth} exceeds max {self._max_depth}",
                 elapsed_seconds=0.0,
             )
 
@@ -357,6 +361,57 @@ class SubagentOrchestrator:
         from ._patterns import run_chain
         return await run_chain(self, contracts, pass_context, max_concurrent, continue_on_error)
 
+    async def run_dag(
+        self,
+        dag: Any,  # TaskDAG
+        max_parallelism: int = 4,
+        timeout_per_node: float = 300.0,
+    ) -> Any:  # DAGResult
+        """Execute a TaskDAG with topological scheduling.
+
+        Each level of the DAG runs in parallel (up to max_parallelism).
+        Dependencies between levels are respected — a node only runs
+        after all its dependencies complete.
+
+        Args:
+            dag: TaskDAG with nodes and edges.
+            max_parallelism: Max concurrent nodes per level.
+            timeout_per_node: Per-node timeout in seconds.
+
+        Returns:
+            DAGResult with per-node results and timing.
+        """
+        from .dag import DAGScheduler
+
+        async def _executor(node):
+            """Execute a single TaskNode via this orchestrator."""
+            task = node.task
+            # If it's already a SubagentContract, run it directly
+            if isinstance(task, SubagentContract):
+                # Apply resource budget from node metadata if present
+                budget_dict = node.metadata.get("budget", {})
+                if budget_dict:
+                    from .resource_budget import ResourceBudget
+                    budget = ResourceBudget.from_config(budget_dict)
+                    budget.start()
+                    # Pass budget to contract metadata for runner
+                    if not task.metadata:
+                        task.metadata = {}
+                    task.metadata["_budget"] = budget
+                return await self.run(task)
+
+            # If it's a callable, invoke it
+            if callable(task):
+                return await task()
+
+            raise ValueError(f"Unsupported task type in DAG node '{node.name}': {type(task)}")
+
+        scheduler = DAGScheduler(
+            max_parallelism=max_parallelism,
+            timeout_per_node=timeout_per_node,
+        )
+        return await scheduler.execute(dag, _executor)
+
     # ── Internal helpers ───────────────────────────────────────────────
 
     def _validate_role(self, contract: SubagentContract) -> Optional[str]:
@@ -506,11 +561,11 @@ class SubagentOrchestrator:
         Returns the subagent output as a string, or an error message.
         """
         # ── Depth and branching limits ─────────────────────────────────
-        if depth >= MAX_SUBAGENT_DEPTH:
-            return f"[Error: subagent depth {depth} exceeds max {MAX_SUBAGENT_DEPTH}]"
+        if depth >= self._max_depth:
+            return f"[Error: subagent depth {depth} exceeds max {self._max_depth}]"
 
-        if branch_count >= MAX_SUBAGENT_BRANCHING:
-            return f"[Error: subagent branching {branch_count} exceeds max {MAX_SUBAGENT_BRANCHING}]"
+        if branch_count >= self._max_branching:
+            return f"[Error: subagent branching {branch_count} exceeds max {self._max_branching}]"
 
         # ── Build contract ─────────────────────────────────────────────
         contract = SubagentContract(
@@ -529,7 +584,7 @@ class SubagentOrchestrator:
         )
 
         # ── Local model fallback ───────────────────────────────────────
-        local_model = self._pick_local_model_for_subagent(contract.task)
+        local_model = await self._pick_local_model_for_subagent(contract.task)
         if local_model:
             contract.model = local_model
             logger.info("Using local model %s for subagent %s", local_model, contract.name)
@@ -607,23 +662,23 @@ class SubagentOrchestrator:
             A list of SubagentResult objects, one per spec.
         """
         # ── Depth and branching limits ─────────────────────────────────
-        if depth >= MAX_SUBAGENT_DEPTH:
+        if depth >= self._max_depth:
             return [
                 SubagentResult(
                     task_id=getattr(spec, "name", "unknown"),
                     success=False,
-                    output=f"[Error: subagent depth {depth} exceeds max {MAX_SUBAGENT_DEPTH}]",
+                    output=f"[Error: subagent depth {depth} exceeds max {self._max_depth}]",
                     elapsed_seconds=0.0,
                 )
                 for spec in specs
             ]
 
-        if branch_count >= MAX_SUBAGENT_BRANCHING:
+        if branch_count >= self._max_branching:
             return [
                 SubagentResult(
                     task_id=getattr(spec, "name", "unknown"),
                     success=False,
-                    output=f"[Error: subagent branching {branch_count} exceeds max {MAX_SUBAGENT_BRANCHING}]",
+                    output=f"[Error: subagent branching {branch_count} exceeds max {self._max_branching}]",
                     elapsed_seconds=0.0,
                 )
                 for spec in specs
@@ -649,7 +704,7 @@ class SubagentOrchestrator:
                 contract.timeout_seconds = self._adaptive_subagent_timeout(
                     contract.task, contract.timeout_seconds
                 )
-            local_model = self._pick_local_model_for_subagent(contract.task)
+            local_model = await self._pick_local_model_for_subagent(contract.task)
             if local_model:
                 contract.model = local_model
             contracts.append(contract)
@@ -664,13 +719,16 @@ class SubagentOrchestrator:
 
     # ── Internal helpers (moved from WispAgentCore) ──────────────────
 
-    def _pick_local_model_for_subagent(self, task: str) -> Optional[str]:
-        """Return a fast local model name if the task is simple enough."""
+    async def _pick_local_model_for_subagent(self, task: str) -> Optional[str]:
+        """Return a fast local model name if the task is simple enough.
+
+        Uses config.subagent_models as priority list (env: WISP_SUBAGENT_MODELS).
+        """
         parent_model = getattr(self.config, "model", "")
         if not parent_model or ":cloud" not in parent_model:
             return None
-        fast_locals = ["llama3.2", "llama3.1", "qwen2.5", "phi4", "gemma2"]
-        available = self._list_local_models()
+        fast_locals = getattr(self.config, "subagent_models", ["llama3.2", "llama3.1", "qwen2.5", "phi4", "gemma2"])
+        available = await self._list_local_models()
         for candidate in fast_locals:
             for name in available:
                 if candidate in name.lower():

@@ -285,24 +285,42 @@ def cmd_tokens(agent, args: str):
 
 @register("metrics", "Show agent metrics (turns, tokens, tools, latency)", usage="/metrics")
 def cmd_metrics(agent, args: str):
-    snap = agent.metrics.snapshot(chars_per_token=agent.config.chars_per_token)
-    print(info("📊 Agent Metrics"))
-    print(f"  {dim('Turns:')}           {snap['turns']}")
-    print(f"  {dim('Tokens:')}          {snap['total_tokens']:,} "
-          f"(prompt {snap['prompt_tokens']:,} + completion {snap['completion_tokens']:,})")
-    print(f"  {dim('Avg latency:')}     {snap['avg_latency_ms']:.0f} ms")
-    print(f"  {dim('Tool calls:')}      {snap['tool_calls']} "
-          f"({snap['tool_errors']} errors, {snap['tool_success_rate']:.0f}% success)")
-    if snap['avg_tool_duration_ms']:
-        print(f"  {dim('Tool latencies:')}")
-        for name, dur in sorted(snap['avg_tool_duration_ms'].items()):
-            print(f"    {dim(name + ':')} {dur:.0f} ms")
-    if snap['compactions']:
-        print(f"  {dim('Compactions:')}     {snap['compactions']}")
-    if snap['interruptions']:
-        print(f"  {dim('Interruptions:')}   {snap['interruptions']}")
-    if snap['tool_blocks']:
-        print(f"  {dim('Blocks:')}          {snap['tool_blocks']}")
+    # Try new Telemetry first, fall back to old AgentMetrics
+    metrics = getattr(agent, "telemetry", None) or getattr(agent, "metrics", None)
+    if metrics is None:
+        print(dim("No metrics available."))
+        return
+
+    try:
+        snap = metrics.snapshot()
+    except TypeError:
+        snap = metrics.snapshot(chars_per_token=getattr(agent.config, "chars_per_token", 4))
+
+    print(info("Agent Metrics"))
+    turns = snap.get("turns", snap.get("turns_total", 0))
+    tools = snap.get("tools", {})
+    latency = snap.get("turn_latency", {})
+
+    print(f"  {dim('Turns:')}           {turns}")
+    if isinstance(tools, dict):
+        print(f"  {dim('Tool calls:')}      {tools.get('total', 0)} "
+              f"({tools.get('errors', 0)} errors, {tools.get('success_rate', 0)}% success)")
+    else:
+        print(f"  {dim('Tool calls:')}      {snap.get('tool_calls', 0)} "
+              f"({snap.get('tool_errors', 0)} errors)")
+    print(f"  {dim('Avg latency:')}     {snap.get('avg_latency_ms', snap.get('turn_latency_ms_avg', 0)):.0f} ms")
+    if latency:
+        print(f"  {dim('Latency p50:')}      {latency.get('p50_ms', '-')} ms")
+        print(f"  {dim('Latency p95:')}      {latency.get('p95_ms', '-')} ms")
+        print(f"  {dim('Latency p99:')}      {latency.get('p99_ms', '-')} ms")
+
+    # Per-tool breakdown
+    per_tool = snap.get("per_tool", {})
+    if per_tool:
+        print(f"  {dim('Per-tool:')}")
+        for name, stats in sorted(per_tool.items()):
+            print(f"    {dim(name + ':')} {stats['calls']} calls, {stats['avg_duration_ms']:.0f} ms avg"
+                  f"{', ' + str(stats['errors']) + ' errors' if stats.get('errors') else ''}")
 
 
 @register("circuit", "Show circuit breaker status", usage="/circuit [tool_name|reset]")

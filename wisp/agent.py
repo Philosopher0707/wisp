@@ -18,7 +18,7 @@ from wisp.transport.cli import (
     _args_preview,
 )
 
-from wisp.core.agent import WispAgentCore
+from wisp.core.engine import WispAgentCore
 from wisp.transport.cli import CLITransport
 
 logger = logging.getLogger(__name__)

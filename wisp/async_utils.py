@@ -18,8 +18,34 @@ from typing import Any, AsyncIterator, TypeVar, Iterator
 
 T = TypeVar("T")
 
-# Thread pool for synchronous generators to avoid spawning raw unmanaged threads per call
-_GEN_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="wisp-sync-gen")
+# Shared thread pool — single pool for all sync-offload work.
+# Consolidates the old _GEN_EXECUTOR + default asyncio executor so thread
+# count stays bounded under concurrent turns.
+_SHARED_EXECUTOR: ThreadPoolExecutor | None = None
+_SHARED_EXECUTOR_SIZE: int = 8
+
+
+def get_shared_executor() -> ThreadPoolExecutor:
+    """Return the shared thread pool, creating it lazily if needed.
+
+    This pool is used by ``sync_gen_iter()`` and registered as the default
+    asyncio executor so ``asyncio.to_thread()`` also uses it.
+    """
+    global _SHARED_EXECUTOR
+    if _SHARED_EXECUTOR is None:
+        _SHARED_EXECUTOR = ThreadPoolExecutor(
+            max_workers=_SHARED_EXECUTOR_SIZE,
+            thread_name_prefix="wisp-worker",
+        )
+    return _SHARED_EXECUTOR
+
+
+def set_shared_executor_size(size: int) -> None:
+    """Configure the shared thread pool size. Must be called before first use."""
+    global _SHARED_EXECUTOR_SIZE, _SHARED_EXECUTOR
+    if _SHARED_EXECUTOR is not None:
+        raise RuntimeError("Cannot resize executor after it has been created")
+    _SHARED_EXECUTOR_SIZE = max(1, size)
 
 
 # ── Persistent background thread + loop ──────────────────────────────────
@@ -167,8 +193,8 @@ async def sync_gen_iter(
                 except AttributeError:
                     pass
 
-    # Start the consumer thread using the thread pool executor
-    _GEN_EXECUTOR.submit(_thread_target)
+    # Start the consumer thread using the shared thread pool
+    get_shared_executor().submit(_thread_target)
 
     try:
         while True:

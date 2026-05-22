@@ -113,6 +113,12 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Minimal rendering mode — no boxes, flat output",
         "env_var": "WISP_COMPACT_MODE",
     },
+    "log_format": {
+        "type": str,
+        "default": "text",
+        "description": "Log output format: text (human-readable) or json (structured)",
+        "env_var": "WISP_LOG_FORMAT",
+    },
     "max_iterations": {
         "type": int,
         "default": 30,
@@ -354,6 +360,51 @@ class WispConfig:
         self.auto_compact: bool = _parse_bool(get_setting("auto_compact", "true"), True)
         self.compact_threshold_tokens: int = _parse_int(get_setting("compact_threshold_tokens", "75"), 75, 10, 95)
         self.compact_keep_recent: int = _parse_int(get_setting("compact_keep_recent", "6"), 6, 4, 50)
+        self.compaction_model: str = get_setting("compaction_model", "") or ""
+        # Circuit breaker settings
+        self.circuit_failure_threshold: int = _parse_int(
+            get_setting("circuit_failure_threshold", "5"), 5, 1, 50
+        )
+        self.circuit_recovery_timeout: float = float(
+            get_setting("circuit_recovery_timeout", "30.0") or "30.0"
+        )
+        # Concurrency limits
+        self.thread_pool_size: int = _parse_int(
+            get_setting("thread_pool_size", "8"), 8, 1, 64
+        )
+        self.subagent_pool_size: int = _parse_int(
+            get_setting("subagent_pool_size", "4"), 4, 1, 32
+        )
+        self.max_subagent_depth: int = _parse_int(
+            get_setting("max_subagent_depth", "2"), 2, 0, 10
+        )
+        self.max_subagent_branching: int = _parse_int(
+            get_setting("max_subagent_branching", "3"), 3, 1, 20
+        )
+        # Write-classification tools requiring approval in restricted modes
+        raw_write_tools = get_setting(
+            "write_tools",
+            ["write_file", "edit_file", "run_bash", "git_commit", "git_push",
+             "gh_pr_create", "spawn_subagent"],
+        )
+        if isinstance(raw_write_tools, str):
+            self.write_tools: list[str] = [t.strip() for t in raw_write_tools.split(",") if t.strip()]
+        elif isinstance(raw_write_tools, list):
+            self.write_tools = raw_write_tools
+        else:
+            self.write_tools = ["write_file", "edit_file", "run_bash", "git_commit",
+                                "git_push", "gh_pr_create", "spawn_subagent"]
+        # Subagent model fallback priority (tried in order for local subagent execution)
+        raw_subagent_models = get_setting(
+            "subagent_models",
+            ["llama3.2", "llama3.1", "qwen2.5", "phi4", "gemma2"],
+        )
+        if isinstance(raw_subagent_models, str):
+            self.subagent_models: list[str] = [m.strip() for m in raw_subagent_models.split(",") if m.strip()]
+        elif isinstance(raw_subagent_models, list):
+            self.subagent_models = raw_subagent_models
+        else:
+            self.subagent_models = ["llama3.2", "llama3.1", "qwen2.5", "phi4", "gemma2"]
         # Context files
         raw_context_files = get_setting(
             "context_files",

@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 ApprovalHandler = Callable[[str, dict, str], Awaitable[tuple[bool, Optional[dict]]]]
 
 # Tools that modify workspace state and require approval when auto_approve=False
-_WRITE_TOOLS: set[str] = {
+_DEFAULT_WRITE_TOOLS: set[str] = {
     "write_file",
     "edit_file",
     "edit_file_multi",
@@ -52,7 +52,15 @@ _WRITE_TOOLS: set[str] = {
     "plan_task",
     "mark_step_done",
     "update_plan",
+    "spawn_subagent",
 }
+
+
+def _get_write_tools(config: Any = None) -> set[str]:
+    """Resolve write-classification tools from config (env: WISP_WRITE_TOOLS)."""
+    if config is not None and hasattr(config, "write_tools") and config.write_tools:
+        return set(config.write_tools)
+    return _DEFAULT_WRITE_TOOLS
 
 
 def _should_block_hook(hook_results: list) -> bool:
@@ -99,6 +107,7 @@ class ToolExecutor:
         mcp: Any | None = None,
         file_lock: Any | None = None,
         lsp_manager: Any | None = None,
+        subagent_orchestrator: Any | None = None,
     ):
         self.config = config
         self.hook_manager = hook_manager
@@ -107,6 +116,7 @@ class ToolExecutor:
         self.mcp = mcp
         self.file_lock = file_lock
         self.lsp_manager = lsp_manager
+        self.subagent_orchestrator = subagent_orchestrator
 
     # ── Public API ───────────────────────────────────────────────────
 
@@ -158,7 +168,7 @@ class ToolExecutor:
             return
 
         # ── Approval gating ──
-        needs_approval = func_name in _WRITE_TOOLS
+        needs_approval = func_name in _get_write_tools(self.config)
         forced_approval = self._needs_forced_approval(func_name)
         was_auto_approved = False
         if needs_approval and (not getattr(self.config, "auto_approve", False) or forced_approval):
@@ -416,7 +426,7 @@ class ToolExecutor:
 
     def _check_plan_mode(self, func_name: str) -> str | None:
         """Check plan mode guard. Returns block message if blocked, else None."""
-        if getattr(self.config, "plan_mode", False) and func_name in _WRITE_TOOLS:
+        if getattr(self.config, "plan_mode", False) and func_name in _get_write_tools(self.config):
             return f"[Blocked: plan mode — {func_name} requires write access]"
         return None
 
@@ -448,7 +458,7 @@ class ToolExecutor:
           read_only -> all write/edit/bash/git operations AND all MCP tools
         """
         mode = getattr(self.config, "permission_mode", PermissionMode.AUTO_EDIT)
-        if mode == PermissionMode.READ_ONLY and func_name in _WRITE_TOOLS:
+        if mode == PermissionMode.READ_ONLY and func_name in _get_write_tools(self.config):
             return f"[Blocked: read_only mode - {func_name} is not allowed]"
         # MCP tools are external code — always gated in READ_ONLY mode
         if mode == PermissionMode.READ_ONLY and func_name.startswith("mcp:"):
@@ -473,7 +483,7 @@ class ToolExecutor:
             return True
         mode = getattr(self.config, "permission_mode", PermissionMode.AUTO_EDIT)
         if mode == PermissionMode.ASK_ALL:
-            return func_name in _WRITE_TOOLS
+            return func_name in _get_write_tools(self.config)
         if mode == PermissionMode.AUTO_EDIT:
             return func_name in ("run_bash", "git_branch", "git_commit", "git_push", "gh_pr_create")
         return False
@@ -646,12 +656,43 @@ class ToolExecutor:
             }, ensure_ascii=False)
 
     async def _spawn_subagent(self, func_args: dict, workspace: str) -> str:
-        """Delegate to subagent orchestrator."""
+        """Delegate to subagent orchestrator.
+
+        Builds a SubagentContract from the tool call arguments and routes
+        through SubagentOrchestrator.spawn_with_guards().
+        """
+        if not self.subagent_orchestrator:
+            return json.dumps({
+                "status": "error",
+                "tool": "spawn_subagent",
+                "data": "Subagent orchestrator not available — wire it via CompositionRoot",
+                "metadata": {},
+            }, ensure_ascii=False)
+
         try:
-            # We can't easily import WispAgentCore here without circular imports,
-            # so we rely on the caller having set up the subagent infrastructure.
-            # For now, return a placeholder that the caller can override.
-            return "[Subagent execution not available in ToolExecutor]"
+            task = func_args.get("task", func_args.get("prompt", ""))
+            if not task:
+                return json.dumps({
+                    "status": "error",
+                    "tool": "spawn_subagent",
+                    "data": "spawn_subagent requires a 'task' argument",
+                    "metadata": {},
+                }, ensure_ascii=False)
+
+            result = await self.subagent_orchestrator.spawn_with_guards(
+                task=task,
+                tools=func_args.get("tools", ["all"]),
+                max_iterations=func_args.get("max_iterations", 30),
+                timeout_seconds=func_args.get("timeout_seconds", 300.0),
+                output_format=func_args.get("output_format", "text"),
+                worktree_isolated=func_args.get("worktree_isolated", False),
+                max_tokens=func_args.get("max_tokens"),
+                output_schema=func_args.get("output_schema"),
+                auto_retry=func_args.get("auto_retry", True),
+                workspace=workspace,
+                auto_approve=func_args.get("auto_approve", False),
+            )
+            return result
         except Exception as e:
             tb = traceback.format_exc()
             logger.error("Subagent spawn failed: %s\n%s", str(e), tb)

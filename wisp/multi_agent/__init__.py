@@ -40,7 +40,7 @@ Unified Subagent API
 """
 
 from .roles import AgentRole, ROLE_CONFIGS
-from .subagent_orchestrator import MAX_SUBAGENT_DEPTH, SubagentOrchestrator
+from .subagent_orchestrator import _MAX_SUBAGENT_DEPTH_DEFAULT as MAX_SUBAGENT_DEPTH, SubagentOrchestrator
 from .task import (
     EventKind,
     OrchestratorEvent,

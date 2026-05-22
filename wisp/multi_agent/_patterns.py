@@ -88,7 +88,10 @@ async def run_map_reduce(
     reducer_input = "\n".join(parts)
 
     # Guard: truncate if too large
-    estimated_tokens = len(reducer_input) // 4
+    from wisp.infra.token_counter import TokenCounter
+    chars_per_token = getattr(orchestrator.config, "chars_per_token", 4)
+    counter = TokenCounter(chars_per_token=chars_per_token)
+    estimated_tokens = counter.estimate_chars(len(reducer_input))
     max_tokens = orchestrator.config.max_context_tokens * 0.8
     if estimated_tokens > max_tokens:
         logger.warning(

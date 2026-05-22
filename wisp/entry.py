@@ -71,29 +71,42 @@ def run_mode(mode: str, prompt: str | None = None, **kwargs) -> None:
 
 
 def _run_cli(root: CompositionRoot, prompt: str | None = None, **kwargs) -> None:
-    """Run CLI mode."""
+    """Run CLI mode.
+
+    Uses a single persistent event loop regardless of mode (single-shot or REPL).
+    This avoids cross-loop issues (RuntimeWarning, orphaned background tasks)
+    caused by ``asyncio.run()`` creating a fresh loop each time.
+    """
     import sys
     import uuid
 
     config = root.config
     transport = CLITransport(root.runtime, config)
     transport.start()
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
         if prompt:
-            # Single-shot mode: run one prompt on a transient loop, then exit
-            asyncio.run(_run_single_prompt(transport, root, prompt, config, **kwargs))
+            # Single-shot mode: run one prompt on the persistent loop, then exit
+            loop.run_until_complete(_run_single_prompt(transport, root, prompt, config, **kwargs))
         else:
-            # REPL mode: one persistent loop for the entire session
-            _run_repl(transport, root, config, **kwargs)
+            # REPL mode: reuse the same persistent loop for all turns
+            _run_repl(transport, root, config, loop=loop, **kwargs)
     finally:
+        try:
+            loop.run_until_complete(asyncio.sleep(0))
+        except Exception:
+            pass
+        loop.close()
         transport.stop()
 
 
-def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig, **kwargs) -> None:
+def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig, loop: asyncio.AbstractEventLoop | None = None, **kwargs) -> None:
     """Synchronous REPL — single persistent event loop for the session.
 
-    Creates one event loop at startup, keeps it alive across all turns.
-    Background threads (e.g. engine producer) reference this loop.
+    Uses *loop* if provided (shared with single-shot mode), otherwise creates
+    a new persistent loop. Background threads reference this loop.
     Ctrl+C during a turn cancels the turn's tasks but keeps the loop running.
     Ctrl+C at the prompt exits gracefully.
     """
@@ -102,9 +115,10 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
 
     session_id = kwargs.get("session_id") or str(uuid.uuid4())
 
-    # Create one persistent event loop for the entire REPL session
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    own_loop = loop is None
+    if own_loop:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
 
     # Create session (async, on the persistent loop)
     session = loop.run_until_complete(root.runtime.get_or_create_session(
@@ -210,12 +224,13 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
         # Run one turn
         _run_turn(prompt)
 
-    # Clean up: close the persistent loop
+    # Clean up: close the persistent loop (only if we own it)
     try:
         _cancel_tasks()
         loop.run_until_complete(asyncio.sleep(0.1))  # Let cancellations settle
     finally:
-        loop.close()
+        if own_loop:
+            loop.close()
 
 
 async def _run_single_prompt(transport: CLITransport, root: CompositionRoot, prompt: str, config: WispConfig, **kwargs) -> None:

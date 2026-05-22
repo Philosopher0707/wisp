@@ -32,6 +32,7 @@ class UnifiedStore:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        self.name = "store"
         self._init_schema()
 
     def _connect(self) -> sqlite3.Connection:
@@ -66,6 +67,15 @@ class UnifiedStore:
                 self._local.conn.close()
                 self._local.conn = None
         logger.debug("UnifiedStore stopped")
+
+    def healthy(self) -> bool:
+        """Health check — ping the database."""
+        try:
+            conn = self._get_conn()
+            conn.execute("SELECT 1")
+            return True
+        except Exception:
+            return False
 
     # ── Schema ──────────────────────────────────────────────────────
 
@@ -128,6 +138,25 @@ class UnifiedStore:
                     iterations INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE INDEX IF NOT EXISTS idx_bg_runs_status ON background_runs(status);
+
+                CREATE TABLE IF NOT EXISTS session_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    sequence_num INTEGER NOT NULL,
+                    event_type TEXT NOT NULL,
+                    payload TEXT NOT NULL DEFAULT '{}',
+                    created_at REAL NOT NULL DEFAULT 0
+                );
+                CREATE INDEX IF NOT EXISTS idx_session_events_session
+                    ON session_events(session_id, sequence_num);
+
+                CREATE TABLE IF NOT EXISTS idempotency (
+                    key TEXT PRIMARY KEY,
+                    result TEXT NOT NULL DEFAULT '',
+                    created_at REAL NOT NULL DEFAULT 0
+                );
+                CREATE INDEX IF NOT EXISTS idx_idempotency_created
+                    ON idempotency(created_at);
                 """
             )
             # Schema migration: add title column if missing

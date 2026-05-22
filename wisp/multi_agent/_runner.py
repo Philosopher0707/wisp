@@ -326,18 +326,20 @@ class SubagentRunner:
         """Estimate token count from message history.
 
         Returns (input_tokens, output_tokens, total_tokens).
+        Uses TokenCounter for consistent char-ratio estimation.
         """
+        from wisp.infra.token_counter import TokenCounter
+
         chars_per_token = getattr(self.parent_config, "chars_per_token", 4)
+        counter = TokenCounter(chars_per_token=chars_per_token)
+
         input_chars = 0
         output_chars = 0
 
         for msg in messages:
             role = msg.get("role", "")
             content = msg.get("content", "") or ""
-            if isinstance(content, str):
-                text = content
-            else:
-                text = str(content)
+            text = content if isinstance(content, str) else str(content)
 
             if role in ("user", "system", "tool"):
                 input_chars += len(text)
@@ -346,13 +348,10 @@ class SubagentRunner:
                 for tc in msg.get("tool_calls", []) or []:
                     func = tc.get("function", {})
                     args = func.get("arguments", "")
-                    if isinstance(args, str):
-                        output_chars += len(args)
-                    else:
-                        output_chars += len(str(args))
+                    output_chars += len(args) if isinstance(args, str) else len(str(args))
 
-        input_tokens = input_chars // chars_per_token
-        output_tokens = output_chars // chars_per_token
+        input_tokens = counter.estimate_chars(input_chars)
+        output_tokens = counter.estimate_chars(output_chars)
         return input_tokens, output_tokens, input_tokens + output_tokens
 
     @staticmethod

@@ -427,20 +427,15 @@ You have access to tools that let you read, write, and edit files, run bash comm
     # ── Token-aware helpers ──────────────────────────────────
 
     def _estimate_tokens(self, text: str) -> int:
-        """Estimate token count using tiktoken when available, falling back to a
-        conservative character ratio.
+        """Estimate token count using TokenCounter (tiktoken with ratio fallback).
 
-        Wisp primarily targets local Ollama models (Llama, Mistral, etc.) which use
-        SentencePiece/BPE tokenizers. These average ~3 characters per token on code.
+        Uses a conservative 3:1 char ratio for code-heavy text.
         """
         if not text:
             return 0
-        try:
-            import tiktoken
-            enc = tiktoken.get_encoding("cl100k_base")
-            return len(enc.encode(text))
-        except Exception:
-            return max(1, len(text) // 3)
+        from wisp.infra.token_counter import TokenCounter
+        counter = TokenCounter(chars_per_token=3)
+        return counter.count(text)
 
     def _fit_sections(self, sections: list[tuple[str, int, str]], max_tokens: int) -> tuple[str, int]:
         """Assemble sections, truncating/dropping lowest-priority ones if over budget.
