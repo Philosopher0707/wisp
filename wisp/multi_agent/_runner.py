@@ -49,7 +49,8 @@ class SubagentRunner:
     ):
         self.parent_config = parent_config
         self.workspace = workspace
-        self._store = store or UnifiedStore()
+        default_db = Path(workspace) / ".wisp" / "wisp.db"
+        self._store = store or UnifiedStore(default_db)
 
     async def run(
         self,
