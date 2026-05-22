@@ -7,6 +7,7 @@ Backward compatible: plain strings auto-wrapped to content arrays.
 from __future__ import annotations
 
 import base64
+import json
 import logging
 from typing import Union
 
@@ -143,12 +144,12 @@ def to_ollama_messages(messages: list[dict]) -> list[dict]:
 
     Internal format may have content arrays with image_url parts.
     Ollama expects: {role, content: str, images: [base64_str, ...]}.
-    Non-user messages pass through unchanged (assistant/tool/system roles).
     """
     converted: list[dict] = []
     for msg in messages:
         role = msg.get("role", "")
         content = msg.get("content", "")
+        tool_calls = msg.get("tool_calls")
 
         # Extract text from content arrays (multimodal format → plain string)
         if isinstance(content, list):
@@ -159,11 +160,40 @@ def to_ollama_messages(messages: list[dict]) -> list[dict]:
                 new_msg["images"] = images
             if msg.get("thinking"):
                 new_msg["thinking"] = msg["thinking"]
-            if msg.get("tool_calls"):
-                new_msg["tool_calls"] = msg["tool_calls"]
-            converted.append(new_msg)
+            if msg.get("tool_call_id"):
+                new_msg["tool_call_id"] = msg["tool_call_id"]
         else:
-            converted.append(msg)
+            new_msg = dict(msg)
+
+        # Convert tool_calls arguments from JSON string → dict (Ollama native format)
+        if tool_calls:
+            ollama_tcs = []
+            for tc in tool_calls:
+                func = tc.get("function", {})
+                args = func.get("arguments", {})
+                has_id = "id" in tc
+                has_type = "type" in tc
+                if isinstance(args, dict) and not has_id and not has_type:
+                    # Already in Ollama format — no conversion needed
+                    ollama_tcs.append(tc)
+                else:
+                    tc_copy = dict(tc)
+                    if isinstance(args, str):
+                        try:
+                            func["arguments"] = json.loads(args)
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                    tc_copy["function"] = func
+                    tc_copy.pop("id", None)
+                    tc_copy.pop("type", None)
+                    ollama_tcs.append(tc_copy)
+            new_msg["tool_calls"] = ollama_tcs
+
+        # Omit empty content on assistant messages with tool_calls
+        if role == "assistant" and tool_calls and not content:
+            new_msg.pop("content", None)
+
+        converted.append(new_msg)
 
     return converted
 

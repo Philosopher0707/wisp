@@ -363,7 +363,8 @@ class AgentAdapter:
         try:
             core = self.runtime._get_core()
             if hasattr(core, "_build_system_prompt"):
-                return core._build_system_prompt(skill_name, query)
+                session_dict = self.session.to_dict()
+                return core._build_system_prompt(session_dict, query=query or skill_name or "")
         except Exception:
             pass
         # Fallback
@@ -534,8 +535,8 @@ class CLITransport(Transport):
     async def _execute_turn(self, system: str, workspace: str) -> None:
         """Backward-compat shim for old WispAgentCore._execute_loop.
 
-        Delegates to the runtime's turn() if available, otherwise
-        falls back to old-core _arun() streaming.
+        Note: new code path uses entry.py → runtime.run_turn → engine.turn.
+        This shim exists only for callers that still go through old agent.py.
         """
         runtime = self.runtime
         # Pop the last user message (old behavior)
@@ -543,21 +544,12 @@ class CLITransport(Transport):
             if runtime.messages[-1].get("role") == "user":
                 runtime.messages.pop()
         try:
-            # If runtime has the old-core _arun method, use it
             if hasattr(runtime, "_arun"):
                 async for _event in runtime._arun(system, workspace):
                     pass
-                # Reset interrupt flags after successful turn
                 self._interrupted = False
                 if hasattr(runtime, "_interrupted"):
                     runtime._interrupted = False
-                return
-            # Otherwise assume new Runtime interface
-            from wisp.runtime_protocol import Runtime
-
-            if isinstance(runtime, Runtime):
-                await runtime.run_turn(system, workspace)
-                self._interrupted = False
         except KeyboardInterrupt:
             self._interrupted = True
             if hasattr(runtime, "_interrupted"):

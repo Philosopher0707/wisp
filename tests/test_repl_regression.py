@@ -4,13 +4,26 @@ Covers P0 signal-propagation, P0 exception state corruption, P1 continuation fal
 """
 
 import asyncio
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 import pytest
 
-from wisp.core.agent import WispAgentCore
+from wisp.core.engine import WispAgentCore
 from wisp.transport.cli import CLITransport, _handle_sigint
 from wisp.config import WispConfig
+
+
+def _make_core(config=None):
+    """Build a WispAgentCore with all required dependencies mocked."""
+    if config is None:
+        config = WispConfig()
+    return WispAgentCore(
+        config=config,
+        provider=MagicMock(),
+        security=MagicMock(),
+        extensions=MagicMock(),
+        telemetry=MagicMock(),
+    )
 
 
 def _make_failing_gen(exc_type):
@@ -30,7 +43,7 @@ class TestSigintPropagationToCore:
 
     def test_sigint_sets_core_flag(self):
         config = WispConfig()
-        core = WispAgentCore(config=config)
+        core = _make_core(config)
         transport = CLITransport(core)
         transport._interrupted = False
         core._interrupted = False
@@ -44,7 +57,7 @@ class TestExecuteTurnExceptionHandling:
 
     def test_keyboard_interrupt_propagates_and_sets_flags(self):
         config = WispConfig()
-        core = WispAgentCore(config=config)
+        core = _make_core(config)
         transport = CLITransport(core)
         core.messages = [{"role": "user", "content": "hi"}]
 
@@ -58,7 +71,7 @@ class TestExecuteTurnExceptionHandling:
     def test_runtime_error_propagates_without_appending_user_message(self):
         """Previously a broad `except Exception` re-added a fake user message."""
         config = WispConfig()
-        core = WispAgentCore(config=config)
+        core = _make_core(config)
         transport = CLITransport(core)
         core.messages = [{"role": "user", "content": "foo"}]
 
@@ -77,7 +90,7 @@ class TestExecuteTurnExceptionHandling:
 
     def test_cancelled_error_propagates_and_sets_flags(self):
         config = WispConfig()
-        core = WispAgentCore(config=config)
+        core = _make_core(config)
         transport = CLITransport(core)
         core.messages = [{"role": "user", "content": "bar"}]
 
@@ -96,18 +109,18 @@ class TestExpandContinuation:
 
     def test_long_question_no_expansion(self):
         config = WispConfig()
-        core = WispAgentCore(config=config)
+        core = _make_core(config)
         text = "How do I continue using this API in production?"
         assert core._expand_continuation(text) == text
 
     def test_medium_question_no_expansion(self):
         config = WispConfig()
-        core = WispAgentCore(config=config)
+        core = _make_core(config)
         assert core._expand_continuation("Can you continue with the fix?") == "Can you continue with the fix?"
 
     def test_short_continue_still_expands(self):
         config = WispConfig()
-        core = WispAgentCore(config=config)
+        core = _make_core(config)
         core.messages = [{"role": "assistant", "content": "Step one..."}]
         result = core._expand_continuation("continue")
         assert result.startswith("continue")
@@ -115,7 +128,7 @@ class TestExpandContinuation:
 
     def test_short_go_on_still_expands(self):
         config = WispConfig()
-        core = WispAgentCore(config=config)
+        core = _make_core(config)
         core.messages = [{"role": "assistant", "content": "Then add..."}]
         result = core._expand_continuation("go on")
         assert result.startswith("go on")
@@ -123,7 +136,7 @@ class TestExpandContinuation:
 
     def test_removed_triggers_gone(self):
         config = WispConfig()
-        core = WispAgentCore(config=config)
+        core = _make_core(config)
         for removed in ("and?", "what else", "tell me more"):
             assert removed not in core._CONTINUATION_TRIGGERS, removed
 
@@ -133,7 +146,7 @@ class TestInterruptResetPerTurn:
 
     def test_interrupt_resets(self):
         config = WispConfig()
-        core = WispAgentCore(config=config)
+        core = _make_core(config)
         transport = CLITransport(core)
         transport._interrupted = True
         core._interrupted = True
@@ -158,7 +171,7 @@ class TestActionTriggers:
         """After the assistant was thinking (no tool_calls), 'do it' should
         inject context telling the model to EXECUTE immediately."""
         config = WispConfig()
-        core = WispAgentCore(config=config)
+        core = _make_core(config)
         # Simulate the conversation from the bug report:
         # - user asked for research
         # - assistant thought about what to write (no tool_calls)
@@ -178,14 +191,14 @@ class TestActionTriggers:
         """If there's no prior assistant message, 'do it' is a fresh command.
         Don't expand."""
         config = WispConfig()
-        core = WispAgentCore(config=config)
+        core = _make_core(config)
         assert core._expand_continuation("do it") == "do it"
 
     def test_do_it_after_tool_call_no_expansion(self):
         """If the assistant already executed a tool, 'do it' is unrelated.
         Don't expand."""
         config = WispConfig()
-        core = WispAgentCore(config=config)
+        core = _make_core(config)
         core.messages = [
             {"role": "user", "content": "read file A"},
             {"role": "assistant", "content": "Done.", "tool_calls": [{"function": {"name": "read_file"}}]},
@@ -195,7 +208,7 @@ class TestActionTriggers:
     def test_various_action_triggers_expand(self):
         """Multiple direct-action phrases should expand with action context."""
         config = WispConfig()
-        core = WispAgentCore(config=config)
+        core = _make_core(config)
         core.messages = [
             {"role": "user", "content": "write a test"},
             {"role": "assistant", "content": "I need to create a pytest fixture..."},
@@ -214,7 +227,7 @@ class TestActionTriggers:
     def test_long_phrase_not_action_trigger(self):
         """Multi-sentence requests should NOT be treated as action triggers."""
         config = WispConfig()
-        core = WispAgentCore(config=config)
+        core = _make_core(config)
         core.messages = [
             {"role": "user", "content": "write a test"},
             {"role": "assistant", "content": "I need to create a pytest fixture..."},
@@ -226,7 +239,7 @@ class TestActionTriggers:
     def test_question_with_trigger_not_action(self):
         """Questions containing trigger words are not action triggers."""
         config = WispConfig()
-        core = WispAgentCore(config=config)
+        core = _make_core(config)
         core.messages = [
             {"role": "user", "content": "how do I write tests?"},
             {"role": "assistant", "content": "Use pytest..."},
@@ -240,7 +253,7 @@ class TestActionTriggers:
         """The injected context should include the last part of the assistant's
         analysis so the model knows what to execute."""
         config = WispConfig()
-        core = WispAgentCore(config=config)
+        core = _make_core(config)
         core.messages = [
             {"role": "user", "content": "write a summary"},
             {"role": "assistant", "content": "I should cover architecture, API changes, migration path, and code examples."},
@@ -253,7 +266,7 @@ class TestActionTriggers:
     def test_repeated_do_it_escalates(self):
         """If user says 'do it' multiple times, each should expand with action context."""
         config = WispConfig()
-        core = WispAgentCore(config=config)
+        core = _make_core(config)
         core.messages = [
             {"role": "user", "content": "fix the bug"},
             {"role": "assistant", "content": "The issue is in the auth module. I need to add validation."},

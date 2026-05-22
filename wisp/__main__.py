@@ -877,11 +877,12 @@ def main():
     flags_print = None
     flags_output_format = "json"
     flags_ink = False
+    flags_quiet = False
 
     def extract_global_flags(args):
         """Extract global flags from args list, return remaining args."""
         nonlocal flags_model, flags_skill, flags_session, flags_workspace, flags_auto, flags_show_thinking
-        nonlocal flags_ink
+        nonlocal flags_ink, flags_print, flags_output_format, flags_quiet
         result = []
         i = 0
         while i < len(args):

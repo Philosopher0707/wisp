@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 from wisp.agent import _is_interactive, _args_preview, _input_line
-from wisp.core.agent import WispAgentCore
+from wisp.core.engine import WispAgentCore
 from wisp.config import WispConfig
 
 

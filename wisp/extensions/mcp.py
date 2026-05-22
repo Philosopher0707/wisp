@@ -16,15 +16,16 @@ class MCPExtension:
 
     name = "mcp"
 
-    def __init__(self, workspace: str = "."):
+    def __init__(self, workspace: str = ".", manager=None):
         self._workspace = workspace
-        self._manager = None
+        self._manager = manager  # can be injected for shared instance
 
     def start(self) -> None:
         """Start the MCP extension — load and connect configured servers."""
         try:
             from wisp.mcp import MCPManager
-            self._manager = MCPManager(self._workspace)
+            if self._manager is None:
+                self._manager = MCPManager(self._workspace)
             configs = self._manager.load_server_configs()
             for config in configs:
                 if config.always_load:

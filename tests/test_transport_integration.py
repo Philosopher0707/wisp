@@ -10,7 +10,7 @@ import pytest
 from unittest.mock import AsyncMock
 
 from wisp.config import WispConfig
-from wisp.core.agent import WispAgentCore
+from wisp.core.engine import WispAgentCore
 from wisp.core.events import (
     content,
     thinking,

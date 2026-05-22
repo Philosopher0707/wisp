@@ -5,7 +5,7 @@ import asyncio
 from unittest.mock import AsyncMock
 
 from wisp.transport.server import ServerTransport, PendingApproval
-from wisp.core.agent import WispAgentCore
+from wisp.core.engine import WispAgentCore
 from wisp.core.events import (
     content,
     thinking,

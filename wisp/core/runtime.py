@@ -187,11 +187,14 @@ class AgentRuntime:
 
             try:
                 async for raw_event in core.turn(session, prompt, approval_handler=approval_handler):
-                    # Normalize to canonical AgentEvent, then flatten
-                    canonical = normalize_event(raw_event).to_dict()
-                    event = dict(canonical.get("data", {}))
-                    event["type"] = canonical["type"]
-                    event["timestamp"] = canonical.get("timestamp", 0.0)
+                    # Engine already yields flat dicts — normalize only if needed
+                    if isinstance(raw_event, dict) and "type" in raw_event:
+                        event = dict(raw_event)
+                    else:
+                        canonical = normalize_event(raw_event).to_dict()
+                        event = dict(canonical.get("data", {}))
+                        event["type"] = canonical["type"]
+                        event["timestamp"] = canonical.get("timestamp", 0.0)
                     yield event
                     emitted_events.append(dict(event))
 

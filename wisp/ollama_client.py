@@ -550,6 +550,9 @@ class OllamaClient:
         for attempt in range(max_retries):
             events_yielded = False
             try:
+                if logger.isEnabledFor(logging.DEBUG):
+                    payload_dump = json.dumps(payload, default=str)
+                    logger.debug("Ollama POST %s payload (attempt %d): %s", url, attempt + 1, payload_dump[:3000])
                 with self._session.post(url, json=payload, timeout=timeout, stream=True) as resp:
                     resp.raise_for_status()
                     try:

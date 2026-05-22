@@ -82,14 +82,24 @@ class CompositionRoot:
 
         # Register built-in extensions
         from wisp.extensions import PluginExtension, HookExtension, MCPExtension, SkillExtension
+        from wisp.mcp import MCPManager
+        from wisp.file_lock import FileLock
+        from wisp.infra.hook_types import HookManager
         workspace = getattr(self.config, "workspace", ".")
+        wsp = Path(workspace).resolve()
+
+        # Create HookManager — shared between HookExtension (intercept) and ToolExecutor (hooks)
+        self._hook_manager = HookManager(workspace=str(workspace))
+
+        # Create MCPManager — shared between MCPExtension (tools) and ToolExecutor (dispatch)
+        self._mcp_manager = MCPManager(str(workspace))
+
         self.extensions.register(PluginExtension())
-        self.extensions.register(HookExtension())
-        self.extensions.register(MCPExtension(workspace=str(workspace)))
+        self.extensions.register(HookExtension(manager=self._hook_manager))
+        self.extensions.register(MCPExtension(workspace=str(workspace), manager=self._mcp_manager))
         self.extensions.register(SkillExtension(workspace=str(workspace)))
 
         # Create subagent orchestrator
-        wsp = Path(workspace).resolve()
         self.subagent_orchestrator = SubagentOrchestrator(
             config=self.config,
             workspace=wsp,
@@ -98,12 +108,23 @@ class CompositionRoot:
         # Ensure .wisp dir exists for persistence
         (wsp / ".wisp").mkdir(parents=True, exist_ok=True)
 
+        # Create FileLock for concurrent file operation safety
+        self._file_lock = FileLock(str(workspace))
+
+        # Create LSPManager for language server operations (singleton — server endpoints share this instance)
+        from wisp.lsp.manager import get_lsp_manager
+        self._lsp_manager = get_lsp_manager(str(workspace))
+
         # Create ToolRegistry (shared state with module-level TOOL_SCHEMAS/TOOL_IMPLS)
         self.tool_registry = ToolRegistry()
 
-        # Create ToolExecutor wired with orchestrator
+        # Create ToolExecutor wired with all dependencies
         self.tool_executor = ToolExecutor(
             config=self.config,
+            hook_manager=self._hook_manager,
+            mcp=self._mcp_manager,
+            file_lock=self._file_lock,
+            lsp_manager=self._lsp_manager,
             subagent_orchestrator=self.subagent_orchestrator,
         )
 
@@ -187,6 +208,10 @@ class CompositionRoot:
         try:
             from wisp.infra.telemetry import export_metrics
             export_metrics(self.telemetry)
+        except Exception:
+            pass
+        try:
+            self._lsp_manager.shutdown_all()
         except Exception:
             pass
         try:

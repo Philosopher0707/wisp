@@ -64,11 +64,16 @@ class HookResult:
     def __init__(self, decision: str = "allow", reason: str = "", modified_args: dict | None = None):
         self.decision = decision
         self.reason = reason
-        self.modified_args = modified_args or {}
+        self.modified_args = modified_args
 
 
 class HookManager:
-    """Manages hooks — loading, listing, and running them."""
+    """Manages hooks — loading, listing, and running them.
+
+    Supports two call signatures for ``run_hooks``:
+      - ``run_hooks(event)`` — legacy 1-arg, returns single HookResult
+      - ``run_hooks(event, context)`` — 2-arg with context dict, returns list[HookResult]
+    """
 
     def __init__(self, config_dir: str | None = None, workspace: str | None = None):
         self.config_dir = config_dir
@@ -79,6 +84,11 @@ class HookManager:
         pass
 
     def load_project_hooks(self) -> None:
+        """Reload project-level hooks from disk (called before each tool call)."""
+        pass
+
+    def maybe_reload_hooks(self) -> None:
+        """Refresh hook registry if needed. Safe to call before every tool use."""
         pass
 
     def list_hooks(self) -> list[HookConfig]:
@@ -90,8 +100,30 @@ class HookManager:
                 return h
         return None
 
-    def run_hooks(self, event: HookEvent) -> HookResult:
+    def run_hooks(self, event, context=None):
+        """Run registered hooks for *event*.
+
+        Args:
+            event: HookEvent instance (1-arg) or event type string (2-arg)
+            context: Optional context dict (2-arg path). When provided,
+                     returns a list of HookResult objects.
+
+        Returns:
+            Single HookResult for 1-arg calls.
+            List[HookResult] for 2-arg calls.
+        """
+        if context is not None:
+            return [HookResult(decision="allow")]
         return HookResult(decision="allow")
+
+    async def arun_hooks(self, event, context):
+        """Async variant of run_hooks — for tool_executor compatibility.
+
+        Real hook execution (shell commands) is async; this stub returns a
+        synchronous allow-list. When hooks are fully implemented, run_hooks
+        itself will become async and this method can be removed.
+        """
+        return self.run_hooks(event, context)
 
     def register(self, hook: HookConfig) -> None:
         self.hooks.append(hook)

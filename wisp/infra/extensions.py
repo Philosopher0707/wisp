@@ -70,8 +70,7 @@ class ExtensionHost:
         return {"action": "allow"}
 
     def start(self) -> None:
-        """Lifecycle start — extensions already started during register()."""
-        pass
+        """Extensions already started during register() — kept for ServiceRegistry contract."""
 
     def stop(self) -> None:
         """Stop all extensions in reverse registration order."""

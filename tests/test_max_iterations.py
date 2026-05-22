@@ -4,7 +4,11 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from wisp.core.agent import WispAgentCore
+import warnings
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", DeprecationWarning)
+    from wisp.core.agent import WispAgentCore as _LegacyWispAgentCore
+# Tests that use old API — keep as reference until Phase 7 migration
 
 
 class _AsyncIteratorMock:

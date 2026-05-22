@@ -170,7 +170,7 @@ class WispAgentCore:
 
                         # Check security BEFORE yielding
                         gate = self._get_approval_gate()
-                        allowed, reason = await gate.check(normalized, session)
+                        allowed, reason = await gate.check(normalized, session, approval_handler=approval_handler)
                         if not allowed:
                             yield _flatten_event(
                                 error_event(

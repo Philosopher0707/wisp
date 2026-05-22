@@ -12,7 +12,7 @@ import pytest
 from unittest.mock import MagicMock
 
 from wisp.config import WispConfig
-from wisp.core.agent import WispAgentCore
+from wisp.core.engine import WispAgentCore
 from wisp.stream_events import StreamError, TokenBatch
 
 

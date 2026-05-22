@@ -314,7 +314,7 @@ class ToolExecutor:
                 session_id="",
                 cwd=str(Path(self.config.workspace or ".")),
             )
-            hook_results = await self.hook_manager.run_hooks(HookEvent.PRE_BASH, context)
+            hook_results = await self.hook_manager.arun_hooks(HookEvent.PRE_BASH, context)
             if _should_block_hook(hook_results):
                 return f"[Blocked by PRE_BASH hook: {_collect_hook_messages(hook_results)}]"
             modified = _get_modified_args(hook_results)
@@ -343,7 +343,7 @@ class ToolExecutor:
                 session_id="",
                 cwd=str(Path(self.config.workspace or ".")),
             )
-            hook_results = await self.hook_manager.run_hooks(HookEvent.PRE_FILE_WRITE, context)
+            hook_results = await self.hook_manager.arun_hooks(HookEvent.PRE_FILE_WRITE, context)
             if _should_block_hook(hook_results):
                 return f"[Blocked by PRE_FILE_WRITE hook: {_collect_hook_messages(hook_results)}]"
             modified = _get_modified_args(hook_results)
@@ -374,9 +374,9 @@ class ToolExecutor:
                 extra={"result": str(result)[:4000]},  # cap size
             )
             # POST_TOOL_USE always fires for every tool
-            await self.hook_manager.run_hooks(HookEvent.POST_TOOL_USE, ctx)
+            await self.hook_manager.arun_hooks(HookEvent.POST_TOOL_USE, ctx)
             if func_name == "run_bash":
-                await self.hook_manager.run_hooks(HookEvent.POST_BASH, ctx)
+                await self.hook_manager.arun_hooks(HookEvent.POST_BASH, ctx)
         except ImportError:
             pass
         except Exception as e:
@@ -403,7 +403,7 @@ class ToolExecutor:
                 "session_id": "",
                 "cwd": str(Path(self.config.workspace or ".")),
             }
-            hook_results = await self.hook_manager.run_hooks(HookEvent.PRE_TOOL_USE, context)
+            hook_results = await self.hook_manager.arun_hooks(HookEvent.PRE_TOOL_USE, context)
             if _should_block_hook(hook_results):
                 return f"[Blocked by hook: {_collect_hook_messages(hook_results)}]"
             modified = _get_modified_args(hook_results)

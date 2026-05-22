@@ -75,6 +75,9 @@ class ServiceRegistry:
 
     def _start_one(self, svc: Any) -> None:
         name = getattr(svc, "name", type(svc).__name__)
+        if not hasattr(svc, "start"):
+            self._started.add(name)
+            return
         try:
             svc.start()
             self._started.add(name)
