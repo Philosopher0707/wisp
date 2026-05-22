@@ -438,9 +438,23 @@ def cmd_grep(agent, args: str):
     if not args:
         print(info("Usage: /grep <pattern> [path]"))
         return
-    parts = args.split(maxsplit=1)
-    pattern = parts[0]
-    target = parts[1] if len(parts) > 1 else "."
+    # Last whitespace-separated token is the target path, everything before is the pattern
+    parts = args.rsplit(maxsplit=1)
+    if len(parts) == 1:
+        pattern = parts[0]
+        target = "."
+    else:
+        # If the last token looks like a file path (contains . / or exists), treat it as path
+        candidate_path = parts[1]
+        ws = agent.config.workspace or "."
+        full_path = Path(ws) / candidate_path
+        if full_path.exists() or "/" in candidate_path or "." in candidate_path:
+            pattern = parts[0]
+            target = candidate_path
+        else:
+            # Last token is part of the pattern
+            pattern = args
+            target = "."
     ws = agent.config.workspace or "."
     target_path = Path(ws) / target
     if not target_path.exists():
