@@ -50,7 +50,7 @@ class HookExtension:
 
         try:
             from wisp.adapters import HookEvent
-            hook_event = HookEvent.PRE_TOOL_USE
+            hook_event = HookEvent(HookEvent.TOOL_CALL, name=event.get("name", ""), args=event.get("arguments", {}))
             result = self._manager.run_hooks(hook_event)
             if result.decision == "block":
                 return {"action": "block", "reason": getattr(result, "reason", "Hook blocked") or "Hook blocked"}

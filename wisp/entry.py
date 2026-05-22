@@ -53,6 +53,15 @@ def run_mode(mode: str, prompt: str | None = None, **kwargs) -> None:
         return
 
     config = WispConfig()
+
+    # Apply overrides from kwargs (model, workspace, etc.)
+    model = kwargs.get("model")
+    if model:
+        config.model = model
+    workspace = kwargs.get("workspace")
+    if workspace:
+        config.workspace = workspace
+
     root = CompositionRoot(config)
 
     try:

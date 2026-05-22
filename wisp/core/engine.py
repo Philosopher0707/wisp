@@ -128,7 +128,7 @@ class WispAgentCore:
                                         if not decision.allowed:
                                             yield _flatten_event(
                                                 error_event(
-                                                    f"Blocked ({decision.reason}): READ_ONLY mode",
+                                                    f"Blocked: {decision.reason}",
                                                     recoverable=True,
                                                 )
                                             )
@@ -185,7 +185,7 @@ class WispAgentCore:
                             if not decision.allowed:
                                 yield _flatten_event(
                                     error_event(
-                                        f"Blocked ({decision.reason}): READ_ONLY mode",
+                                        f"Blocked: {decision.reason}",
                                         recoverable=True,
                                     )
                                 )
