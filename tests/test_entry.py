@@ -75,45 +75,49 @@ class TestRunCLI:
 
 
 class TestRunREPL:
-    """REPL mode creates session and loops."""
+    """REPL mode creates session and loops with persistent loop."""
 
     def test_repl_creates_session(self):
+        from unittest.mock import AsyncMock
         from wisp.entry import _run_repl
 
         root = MagicMock()
         root.config = MagicMock()
         root.config.model = "test"
         root.config.workspace = "/tmp"
+        root.runtime.get_or_create_session = AsyncMock(
+            return_value={"id": "test", "messages": []}
+        )
 
         transport = MagicMock()
 
         with patch("sys.stdin") as mock_stdin:
             mock_stdin.readline.return_value = ""
-            with patch("wisp.entry.asyncio.run") as mock_run:
-                mock_run.return_value = {"id": "test", "messages": []}
-                _run_repl(transport, root, root.config)
-                root.runtime.get_or_create_session.assert_called_once()
+            _run_repl(transport, root, root.config)
+            root.runtime.get_or_create_session.assert_called_once()
 
     def test_repl_uses_session_id(self):
+        from unittest.mock import AsyncMock
         from wisp.entry import _run_repl
 
         root = MagicMock()
         root.config = MagicMock()
         root.config.model = "test"
         root.config.workspace = "/tmp"
+        root.runtime.get_or_create_session = AsyncMock(
+            return_value={"id": "my-session", "messages": []}
+        )
 
         transport = MagicMock()
 
         with patch("sys.stdin") as mock_stdin:
             mock_stdin.readline.return_value = ""
-            with patch("wisp.entry.asyncio.run") as mock_run:
-                mock_run.return_value = {"id": "my-session", "messages": []}
-                _run_repl(transport, root, root.config, session_id="my-session")
-                root.runtime.get_or_create_session.assert_called_with(
-                    session_id="my-session",
-                    model="test",
-                    workspace="/tmp",
-                )
+            _run_repl(transport, root, root.config, session_id="my-session")
+            root.runtime.get_or_create_session.assert_called_with(
+                session_id="my-session",
+                model="test",
+                workspace="/tmp",
+            )
 
 
 class TestHeadlessMode:

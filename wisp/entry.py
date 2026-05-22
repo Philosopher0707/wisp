@@ -24,19 +24,11 @@ from wisp.transport.tui import TUITransport
 logger = logging.getLogger(__name__)
 
 
-def _run_async(coro):
-    """Run a coroutine, handling nested event loops gracefully.
+def _run_async(coro, loop: asyncio.AbstractEventLoop):
+    """Run a coroutine on the given event loop.
 
-    Uses asyncio.run() when no loop is running, otherwise uses
-    the existing loop's run_until_complete().
+    Assumes the loop is already running (single persistent REPL loop).
     """
-    import asyncio
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        # No loop running — safe to use asyncio.run
-        return asyncio.run(coro)
-    # Already in a loop — use run_until_complete
     return loop.run_until_complete(coro)
 
 
@@ -88,29 +80,34 @@ def _run_cli(root: CompositionRoot, prompt: str | None = None, **kwargs) -> None
     transport.start()
     try:
         if prompt:
-            # Single-shot mode: run one prompt and exit
+            # Single-shot mode: run one prompt on a transient loop, then exit
             asyncio.run(_run_single_prompt(transport, root, prompt, config, **kwargs))
         else:
-            # REPL mode: synchronous loop, async per-turn
+            # REPL mode: one persistent loop for the entire session
             _run_repl(transport, root, config, **kwargs)
     finally:
         transport.stop()
 
 
 def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig, **kwargs) -> None:
-    """Synchronous REPL — reads stdin in main thread, async per turn.
+    """Synchronous REPL — single persistent event loop for the session.
 
-    Ctrl+C behavior:
-      - During a turn: interrupts the turn, saves session, shows resume command
-      - At prompt: exits REPL gracefully with resume command
+    Creates one event loop at startup, keeps it alive across all turns.
+    Background threads (e.g. engine producer) reference this loop.
+    Ctrl+C during a turn cancels the turn's tasks but keeps the loop running.
+    Ctrl+C at the prompt exits gracefully.
     """
     import sys
     import uuid
 
     session_id = kwargs.get("session_id") or str(uuid.uuid4())
 
-    # Create session (async)
-    session = asyncio.run(root.runtime.get_or_create_session(
+    # Create one persistent event loop for the entire REPL session
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    # Create session (async, on the persistent loop)
+    session = loop.run_until_complete(root.runtime.get_or_create_session(
         session_id=session_id,
         model=config.model,
         workspace=config.workspace,
@@ -136,6 +133,43 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
         sys.stdout.write(f"\n👋  Exiting. Session saved.\n")
         sys.stdout.write(f"   Resume: wisp repl -S {session_id}\n\n")
         sys.stdout.flush()
+
+    def _cancel_tasks() -> None:
+        """Cancel all pending tasks except the current one."""
+        current_task = asyncio.current_task(loop)
+        for task in asyncio.all_tasks(loop):
+            if task is not current_task and not task.done():
+                task.cancel()
+
+    def _run_turn(prompt: str) -> None:
+        """Run one turn on the persistent loop."""
+        async def _turn():
+            async for event in root.runtime.run_turn(session, prompt):
+                transport._render_event(sys.stdout, event)
+
+        transport._reset_buffers()
+        try:
+            loop.run_until_complete(_turn())
+            transport._flush_thinking(sys.stdout)
+            transport._flush_content(sys.stdout)
+        except KeyboardInterrupt:
+            _cancel_tasks()
+            transport._flush_thinking(sys.stdout)
+            transport._flush_content(sys.stdout)
+            _show_resume()
+        except asyncio.CancelledError:
+            # Task was cancelled (likely Ctrl+C)
+            transport._flush_thinking(sys.stdout)
+            transport._flush_content(sys.stdout)
+            _show_resume()
+        except Exception as exc:
+            import traceback
+            transport._flush_thinking(sys.stdout)
+            transport._flush_content(sys.stdout)
+            sys.stderr.write(f"Error during turn: {exc}\n")
+            traceback.print_exc(file=sys.stderr)
+            sys.stdout.write(f"Error: {exc}\n")
+            sys.stdout.flush()
 
     while True:
         try:
@@ -173,29 +207,15 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
                 sys.stdout.flush()
                 continue
 
-        # Run one turn (async)
-        async def _turn():
-            async for event in root.runtime.run_turn(session, prompt):
-                transport._render_event(sys.stdout, event)
+        # Run one turn
+        _run_turn(prompt)
 
-        transport._reset_buffers()
-        try:
-            _run_async(_turn())
-            transport._flush_thinking(sys.stdout)
-            transport._flush_content(sys.stdout)
-        except KeyboardInterrupt:
-            # Ctrl+C during turn — show resume and continue
-            transport._flush_thinking(sys.stdout)
-            transport._flush_content(sys.stdout)
-            _show_resume()
-        except Exception as exc:
-            import traceback
-            transport._flush_thinking(sys.stdout)
-            transport._flush_content(sys.stdout)
-            sys.stderr.write(f"Error during turn: {exc}\n")
-            traceback.print_exc(file=sys.stderr)
-            sys.stdout.write(f"Error: {exc}\n")
-            sys.stdout.flush()
+    # Clean up: close the persistent loop
+    try:
+        _cancel_tasks()
+        loop.run_until_complete(asyncio.sleep(0.1))  # Let cancellations settle
+    finally:
+        loop.close()
 
 
 async def _run_single_prompt(transport: CLITransport, root: CompositionRoot, prompt: str, config: WispConfig, **kwargs) -> None:

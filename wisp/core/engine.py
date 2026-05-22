@@ -284,7 +284,7 @@ class WispAgentCore:
         # We spawn a thread that pushes events into an asyncio.Queue,
         # then yield from the queue. This preserves streaming without
         # blocking the event loop.
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         queue: asyncio.Queue = asyncio.Queue()
         done = object()  # sentinel
 
