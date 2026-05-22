@@ -70,14 +70,10 @@ class ExtensionHost:
         return {"action": "allow"}
 
     def start(self) -> None:
-        """Lifecycle start — all extensions are already loaded."""
-        logger.debug("ExtensionHost started")
+        """Lifecycle start — extensions already started during register()."""
+        pass
 
     def stop(self) -> None:
-        """Lifecycle stop — stop all extensions."""
-        self.shutdown()
-
-    def shutdown(self) -> None:
         """Stop all extensions in reverse registration order."""
         for ext in reversed(self._extensions):
             try:

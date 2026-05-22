@@ -103,7 +103,6 @@ class ToolExecutor:
         config: WispConfig,
         hook_manager: Any | None = None,
         metrics: Any | None = None,
-        circuit_breaker: Any | None = None,
         mcp: Any | None = None,
         file_lock: Any | None = None,
         lsp_manager: Any | None = None,
@@ -112,7 +111,6 @@ class ToolExecutor:
         self.config = config
         self.hook_manager = hook_manager
         self.metrics = metrics
-        self.circuit_breaker = circuit_breaker
         self.mcp = mcp
         self.file_lock = file_lock
         self.lsp_manager = lsp_manager
@@ -153,12 +151,6 @@ class ToolExecutor:
         danger_block_msg = self._check_dangerous_command(func_name, func_args)
         if danger_block_msg:
             yield _tool_result_event(func_name, danger_block_msg)
-            return
-
-        # ── Circuit breaker ──
-        circuit_block_msg = self._check_circuit_breaker(func_name)
-        if circuit_block_msg:
-            yield _tool_result_event(func_name, circuit_block_msg)
             return
 
         # ── Permission mode guard ──
@@ -438,15 +430,6 @@ class ToolExecutor:
                 return f"[Blocked: dangerous command — {danger_reason}]"
         return None
 
-    def _check_circuit_breaker(self, func_name: str) -> str | None:
-        """Check circuit breaker. Returns block message if open, else None."""
-        if self.circuit_breaker and self.circuit_breaker.is_open(func_name):
-            status = self.circuit_breaker.status(func_name)
-            if hasattr(self.metrics, "record_tool_block"):
-                self.metrics.record_tool_block()
-            return f"[Circuit breaker open for {func_name}: {status}]"
-        return None
-
     def _check_permission_mode(self, func_name: str) -> str | None:
         """Check permission mode guard.
 
@@ -713,8 +696,3 @@ class ToolExecutor:
         )
         if hasattr(self.metrics, "record_tool"):
             self.metrics.record_tool(func_name, duration_ms, success=ok)
-        if hasattr(self.metrics, "circuit_breaker") and self.circuit_breaker:
-            if ok:
-                self.circuit_breaker.record_success(func_name)
-            else:
-                self.circuit_breaker.record_failure(func_name)

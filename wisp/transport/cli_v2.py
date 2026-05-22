@@ -346,10 +346,6 @@ class AgentAdapter:
             self._agent_metrics = AgentMetrics()
         return self._agent_metrics
 
-    @property
-    def circuit_breaker(self):
-        return getattr(self.runtime, "security", None)
-
     # ── Session helpers ─────────────────────────────────────────────
 
     def _save_session(self) -> None:

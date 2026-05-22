@@ -23,7 +23,6 @@ from wisp.infra.audit import ImmutableAuditTrail
 from wisp.infra.extensions import ExtensionHost
 from wisp.infra.telemetry import Telemetry
 from wisp.infra.lifecycle import ServiceRegistry
-from wisp.infra.circuit_breaker import CircuitBreakerRegistry
 from wisp.core.runtime import AgentRuntime
 from wisp.core.engine import WispAgentCore
 from wisp.core.compaction import Compactor
@@ -57,7 +56,6 @@ class CompositionRoot:
             db_path = Path(workspace) / ".wisp" / "wisp.db"
         self.store = UnifiedStore(db_path)
         self.audit_trail = ImmutableAuditTrail(self.store)
-        self.circuit_breakers = CircuitBreakerRegistry()
         self.security = SecurityPolicy(
             permission_mode=self.config.permission_mode,
             _audit_trail=self.audit_trail,
@@ -150,6 +148,7 @@ class CompositionRoot:
             security=self.security,
             extensions=self.extensions,
             telemetry=self.telemetry,
+            tool_executor=self.tool_executor,
         )
 
     def _create_compaction_provider(self, model: str):

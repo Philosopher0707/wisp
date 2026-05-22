@@ -361,13 +361,6 @@ class WispConfig:
         self.compact_threshold_tokens: int = _parse_int(get_setting("compact_threshold_tokens", "75"), 75, 10, 95)
         self.compact_keep_recent: int = _parse_int(get_setting("compact_keep_recent", "6"), 6, 4, 50)
         self.compaction_model: str = get_setting("compaction_model", "") or ""
-        # Circuit breaker settings
-        self.circuit_failure_threshold: int = _parse_int(
-            get_setting("circuit_failure_threshold", "5"), 5, 1, 50
-        )
-        self.circuit_recovery_timeout: float = float(
-            get_setting("circuit_recovery_timeout", "30.0") or "30.0"
-        )
         # Concurrency limits
         self.thread_pool_size: int = _parse_int(
             get_setting("thread_pool_size", "8"), 8, 1, 64

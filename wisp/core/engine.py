@@ -28,6 +28,7 @@ from wisp.core.events import (
     error as error_event,
     done as done_event,
 )
+from wisp.core.approval_gate import ApprovalGate
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +52,12 @@ class WispAgentCore:
     extensions: Any = None
     telemetry: Any = None
     config: Any = None
+    tool_executor: Any = None
 
     # Caches for expensive context building
     _assembler_cache: Any = field(default=None, repr=False)
     _static_prompt_cache: dict = field(default_factory=dict, repr=False)
+    _approval_gate: Any = field(default=None, repr=False)
 
     async def turn(self, session: dict, prompt: str, approval_handler=None) -> AsyncIterator[dict]:
         """Run one turn, yielding events.
@@ -120,41 +123,18 @@ class WispAgentCore:
                                 # Process each individually
                                 tc_event = dict(single)
                                 # Check security BEFORE yielding
-                                if self.security is not None:
-                                    action = self._make_action(tc_event)
-                                    context = self._make_context(session)
-                                    try:
-                                        decision = self.security.check(action, context)
-                                        if not decision.allowed:
-                                            # Interactive override via transport
-                                            approved = False
-                                            if approval_handler is not None:
-                                                try:
-                                                    approved = await approval_handler(tc_event)
-                                                except Exception as ae:
-                                                    logger.exception(
-                                                        "Approval handler failed: %s", ae
-                                                    )
-                                            if not approved:
-                                                yield _flatten_event(
-                                                    error_event(
-                                                        f"Blocked: {decision.reason}",
-                                                        recoverable=True,
-                                                    )
-                                                )
-                                                continue
-                                    except Exception as e:
-                                        logger.exception(
-                                            "Security check failed — treating as deny: %s",
-                                            e,
+                                gate = self._get_approval_gate()
+                                allowed, reason = await gate.check(
+                                    tc_event, session, approval_handler=approval_handler
+                                )
+                                if not allowed:
+                                    yield _flatten_event(
+                                        error_event(
+                                            f"Blocked: {reason}",
+                                            recoverable=True,
                                         )
-                                        yield _flatten_event(
-                                            error_event(
-                                                f"Security check failed: {e}. Tool call denied.",
-                                                recoverable=True,
-                                            )
-                                        )
-                                        continue
+                                    )
+                                    continue
 
                                 # Check extensions
                                 if self.extensions is not None:
@@ -187,30 +167,16 @@ class WispAgentCore:
                         continue
 
                     # Check security BEFORE yielding
-                    if self.security is not None:
-                        action = self._make_action(normalized)
-                        context = self._make_context(session)
-                        try:
-                            decision = self.security.check(action, context)
-                            if not decision.allowed:
-                                yield _flatten_event(
-                                    error_event(
-                                        f"Blocked: {decision.reason}",
-                                        recoverable=True,
-                                    )
-                                )
-                                continue
-                        except Exception as e:
-                            logger.exception(
-                                "Security check failed — treating as deny: %s", e
+                    gate = self._get_approval_gate()
+                    allowed, reason = await gate.check(normalized, session)
+                    if not allowed:
+                        yield _flatten_event(
+                            error_event(
+                                f"Blocked: {reason}",
+                                recoverable=True,
                             )
-                            yield _flatten_event(
-                                error_event(
-                                    f"Security check failed: {e}. Tool call denied.",
-                                    recoverable=True,
-                                )
-                            )
-                            continue
+                        )
+                        continue
 
                     # Check extensions
                     if self.extensions is not None:
@@ -544,14 +510,11 @@ class WispAgentCore:
         return schemas
 
     async def _execute_tool(self, event: dict, session: dict, approval_handler=None) -> AsyncIterator[dict]:
-        """Execute a tool call and yield the result event.
+        """Execute a tool call via ToolExecutor, yielding flattened events.
 
-        Security is checked again here as a defense-in-depth measure.
-        Tool results are normalized to a standard JSON-serializable schema.
+        Schema validation is done here as defense-in-depth.
+        ToolExecutor handles permission checks, hooks, and dispatch.
         """
-        import json
-        from wisp.tools import execute_tool
-
         name = event.get("name", "")
         args = event.get("arguments", {})
         workspace = session.get("workspace", ".")
@@ -570,64 +533,30 @@ class WispAgentCore:
             )
             return
 
-        # Defense-in-depth: re-check security before execution
-        if self.security is not None:
-            action = self._make_action(event)
-            context = self._make_context(session)
+        if self.tool_executor is not None:
+            async for agent_event in self.tool_executor.execute(
+                name, args, workspace,
+                tool_call_id=event.get("id"),
+                approval_handler=approval_handler,
+            ):
+                yield _flatten_event(agent_event)
+        else:
+            # Fallback: direct execution when no ToolExecutor wired
+            import json
+            from wisp.tools import execute_tool
+            start = time.time()
             try:
-                decision = self.security.check(action, context)
-                if not decision.allowed:
-                    # Interactive override via transport
-                    approved = False
-                    if approval_handler is not None:
-                        try:
-                            approved = await approval_handler(event)
-                        except Exception as ae:
-                            logger.exception(
-                                "Approval handler failed: %s", ae
-                            )
-                    if not approved:
-                        yield _flatten_event(
-                            tool_result_event(
-                                name,
-                                self._normalize_tool_result(
-                                    {
-                                        "status": "error",
-                                        "data": f"Security blocked: {decision.reason}",
-                                    }
-                                ),
-                                duration_ms=0,
-                            )
-                        )
-                        return
+                raw_result = execute_tool(name, args, workspace=workspace)
             except Exception as e:
-                logger.exception("Security re-check failed — treating as deny: %s", e)
-                yield _flatten_event(
-                    tool_result_event(
-                        name,
-                        self._normalize_tool_result(
-                            {"status": "error", "data": f"Security check failed: {e}"}
-                        ),
-                        duration_ms=0,
-                    )
+                logger.exception("Tool execution failed: %s", name)
+                raw_result = {"status": "error", "data": str(e)}
+            duration_ms = (time.time() - start) * 1000
+            normalized = self._normalize_tool_result(raw_result)
+            yield _flatten_event(
+                tool_result_event(
+                    name, normalized, duration_ms=duration_ms, tool_call_id=event.get("id")
                 )
-                return
-
-        start = time.time()
-        try:
-            raw_result = execute_tool(name, args, workspace=workspace)
-        except Exception as e:
-            logger.exception("Tool execution failed: %s", name)
-            raw_result = {"status": "error", "data": str(e)}
-
-        duration_ms = (time.time() - start) * 1000
-
-        normalized = self._normalize_tool_result(raw_result)
-        yield _flatten_event(
-            tool_result_event(
-                name, normalized, duration_ms=duration_ms, tool_call_id=event.get("id")
             )
-        )
 
     def _normalize_tool_result(self, result: Any) -> dict:
         """Normalize any tool result to a standard JSON-serializable schema.
@@ -822,6 +751,12 @@ class WispAgentCore:
             return None
         except Exception as exc:
             return f"Schema validation failed for tool '{name}': {exc}"
+
+    def _get_approval_gate(self) -> ApprovalGate:
+        """Lazily create the approval gate from current security policy."""
+        if self._approval_gate is None:
+            self._approval_gate = ApprovalGate(self.security)
+        return self._approval_gate
 
     def _make_action(self, event: dict) -> Any:
         """Create Action from tool_call event."""

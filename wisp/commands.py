@@ -323,44 +323,6 @@ def cmd_metrics(agent, args: str):
                   f"{', ' + str(stats['errors']) + ' errors' if stats.get('errors') else ''}")
 
 
-@register("circuit", "Show circuit breaker status", usage="/circuit [tool_name|reset]")
-def cmd_circuit(agent, args: str):
-    cb = agent.circuit_breaker
-    if cb is None or not hasattr(cb, "_states"):
-        print(dim("No circuit breaker state (no tools have been called yet)."))
-        return
-
-    parts = args.split()
-    if parts and parts[0] == "reset":
-        reset_name = parts[1] if len(parts) > 1 else ""
-        cb.reset(reset_name)
-        if reset_name:
-            print(success(f"✓ Circuit breaker for '{reset_name}' reset."))
-        else:
-            print(success("✓ All circuit breakers reset."))
-        return
-
-    open_tools = []
-    half_tools = []
-    closed_tools = []
-    for name, state in cb._states.items():
-        if state.state == "OPEN":
-            open_tools.append(name)
-        elif state.state == "HALF_OPEN":
-            half_tools.append(name)
-        else:
-            closed_tools.append(name)
-
-    if open_tools:
-        print(error(f"⚠ OPEN: {', '.join(open_tools)} — blocked until recovery timeout"))
-    if half_tools:
-        print(warning(f"⚡ HALF_OPEN: {', '.join(half_tools)} — one probe allowed"))
-    if closed_tools:
-        print(success(f"✓ CLOSED: {', '.join(closed_tools)}"))
-    if not (open_tools or half_tools or closed_tools):
-        print(dim("All circuits healthy."))
-
-
 @register("compact", "Compact session history to save context", aliases=("c",), usage="/compact")
 def cmd_compact(agent, args: str):
     if agent.session is None:

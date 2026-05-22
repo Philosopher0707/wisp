@@ -71,13 +71,13 @@ class TestExtensionLifecycle:
         host.register(ext)
         assert ext._started is True
 
-    def test_shutdown_stops_extensions(self, host):
+    def test_stop_stops_extensions(self, host):
         ext = _TestPlugin()
         host.register(ext)
-        host.shutdown()
+        host.stop()
         assert ext._stopped is True
 
-    def test_shutdown_reverses_order(self, host):
+    def test_stop_reverses_order(self, host):
         order = []
 
         class _Ordered:
@@ -90,7 +90,7 @@ class TestExtensionLifecycle:
 
         host.register(_Ordered("first"))
         host.register(_Ordered("second"))
-        host.shutdown()
+        host.stop()
         assert order == ["second", "first"]
 
 
