@@ -201,16 +201,22 @@ def _box(content: str, title: str = "", style: str = "dim",
             else:
                 top = box.tl + box.hz * left + title_text + box.hz * right + box.tr
     else:
-        if double:
-            hz = "═" * (width - 2)
-            top = "╔" + hz + "╗"
+        if mode != OutputMode.ACCESSIBLE and double:
+            # Only use unicode double borders in unicode mode
+            hz = "═"
+            top = "╔" + hz * (width - 2) + "╗"
         else:
             top = box.top(width)
 
     # Build bottom border
     if double:
-        hz_b = "═" * (width - 2)
-        bottom = "╚" + hz_b + "╝"
+        if mode == OutputMode.ACCESSIBLE:
+            bottom = "-" * width
+        elif mode == OutputMode.MINIMAL:
+            bottom = ""
+        else:
+            hz_b = "═" * (width - 2)
+            bottom = "╚" + hz_b + "╝"
     else:
         bottom = box.bottom(width)
 
