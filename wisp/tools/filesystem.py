@@ -322,7 +322,7 @@ def tool_edit_file_multi(path: str, workspace: str, edits: list[dict], file_lock
             lock.release(path)
 
 
-def tool_list_files(path: str, workspace: str, pattern: str = "*") -> str:
+def tool_list_files(path: str = ".", workspace: str = ".", pattern: str = "*") -> str:
     """List files and directories, optionally matching a pattern."""
     _validate_string(path, "path")
     _validate_string(pattern, "pattern", 200)
