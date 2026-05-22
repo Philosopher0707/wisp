@@ -18,6 +18,7 @@ from wisp.acp_protocol import (
     ToolCallContent,
     ToolResultContent,
 )
+from wisp.agent import WispAgent
 from wisp.config import WispConfig
 from wisp.infra.store import UnifiedStore
 from wisp.tools import execute_tool, ToolError
@@ -80,8 +81,16 @@ class AcpSession:
         if not self.messages:
             return
 
+        # Build session dict for new API
+        session_dict = {
+            "id": self.session_id,
+            "model": getattr(self.config, "model", "unknown"),
+            "workspace": self.workspace,
+            "messages": list(self.messages),
+        }
+
         # Build system prompt
-        system = self._ensure_agent()._build_system_prompt()
+        system = self._ensure_agent()._build_system_prompt(session_dict)
 
         # Get the last user message
         last_user_msg = self.messages[-1]
@@ -89,9 +98,6 @@ class AcpSession:
             return
 
         user_content = last_user_msg.get("content", "")
-
-        # Add user message to agent
-        self._ensure_agent()._add_message("user", user_content)
 
         # Run one turn with streaming — suppress stdout to avoid corrupting JSON-RPC
         captured_output = io.StringIO()
@@ -143,7 +149,8 @@ class AcpSession:
                 # Just text response
                 if content:
                     yield TextContent(text=content)
-                self._ensure_agent()._add_message("assistant", content, thinking)
+                # Track in local messages for session persistence
+                self.add_assistant_message(content)
 
         except Exception as e:
             logger.exception("Error in agent turn")
@@ -220,7 +227,8 @@ class AcpSessionManager:
 
     def _get_store(self) -> UnifiedStore:
         if self._store is None:
-            self._store = UnifiedStore()
+            from pathlib import Path
+            self._store = UnifiedStore(Path.home() / ".config" / "wisp" / "wisp.db")
         return self._store
 
     def create(self, workspace: str, config: WispConfig, title: str = "") -> AcpSession:

@@ -40,7 +40,12 @@ class WispAgent(WispAgentCore):
         agent_id: Optional[str] = None,
         role: Optional[str] = None,
     ):
-        super().__init__(config=config, session=session, agent_id=agent_id, role=role)
+        super().__init__(config=config)
+        self.session = session
+        self.agent_id = agent_id
+        self.role = role
+        self._interrupted = False
+        self._active_skill: Optional[str] = None
 
     # ── Synchronous public API ─────────────────────────────────────
 

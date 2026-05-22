@@ -56,10 +56,12 @@ class TestRunCLI:
         root.config.model = "test"
         root.config.workspace = "/tmp"
 
-        with patch("wisp.entry.asyncio.run") as mock_run:
-            with patch("wisp.entry.CLITransport") as mock_transport:
-                _run_cli(root, prompt="hello")
-                mock_run.assert_called()
+        loop = MagicMock()
+        with patch("wisp.entry.asyncio.new_event_loop", return_value=loop), \
+             patch("wisp.entry.asyncio.set_event_loop"), \
+             patch("wisp.entry.CLITransport"):
+            _run_cli(root, prompt="hello")
+            loop.run_until_complete.assert_called()
 
     def test_repl_mode_no_prompt(self):
         from wisp.entry import _run_cli
@@ -70,8 +72,11 @@ class TestRunCLI:
         root.config.workspace = "/tmp"
 
         with patch("wisp.entry._run_repl") as mock_repl:
-            _run_cli(root, prompt=None)
-            mock_repl.assert_called_once()
+            with patch("wisp.entry.asyncio.new_event_loop"), \
+                 patch("wisp.entry.asyncio.set_event_loop"), \
+                 patch("wisp.entry.CLITransport"):
+                _run_cli(root, prompt=None)
+                mock_repl.assert_called_once()
 
 
 class TestRunREPL:

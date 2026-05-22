@@ -46,10 +46,10 @@ def _flatten_event(ev: AgentEvent | dict) -> dict:
 class WispAgentCore:
     """Stateless turn engine."""
 
-    provider: Any
-    security: Any
-    extensions: Any
-    telemetry: Any
+    provider: Any = None
+    security: Any = None
+    extensions: Any = None
+    telemetry: Any = None
     config: Any = None
 
     # Caches for expensive context building

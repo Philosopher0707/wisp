@@ -12,6 +12,7 @@ Design:
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -87,6 +88,7 @@ class SecurityPolicy:
     hooks: list[Callable] = field(default_factory=list)
     _engine: PolicyEngine | None = field(default=None, repr=False)
     _audit_trail: Any = field(default=None, repr=False)
+    _audit_log: list[dict] = field(default_factory=list, repr=False)  # fallback when no trail
 
     def __post_init__(self):
         if self._engine is None:
@@ -112,6 +114,7 @@ class SecurityPolicy:
             hooks=list(self.hooks),
             _engine=self._engine,
             _audit_trail=self._audit_trail,
+            _audit_log=list(self._audit_log),
         )
 
     def with_hook(self, hook: Callable) -> "SecurityPolicy":
@@ -123,6 +126,7 @@ class SecurityPolicy:
             hooks=new_hooks,
             _engine=self._engine,
             _audit_trail=self._audit_trail,
+            _audit_log=list(self._audit_log),
         )
 
     def with_permission_mode(self, mode: PermissionMode) -> "SecurityPolicy":
@@ -138,6 +142,7 @@ class SecurityPolicy:
                 auto_edit_block_tools=_AUTO_EDIT_BLOCK_TOOLS,
             ),
             _audit_trail=self._audit_trail,
+            _audit_log=list(self._audit_log),
         )
 
     def add_rule(self, rule: Rule) -> None:
@@ -206,12 +211,12 @@ class SecurityPolicy:
         return Decision(allowed=True)
 
     def _audit(self, action: Action, context: Context, decision: Decision) -> None:
-        if self._audit_trail is not None:
-            try:
-                import json
-                args_summary = json.dumps(dict(action.args), default=str)
-                if len(args_summary) > 500:
-                    args_summary = args_summary[:500]
+        try:
+            import json
+            args_summary = json.dumps(dict(action.args), default=str)
+            if len(args_summary) > 500:
+                args_summary = args_summary[:500]
+            if self._audit_trail is not None:
                 self._audit_trail.record_decision(
                     action=action.name,
                     tool_name=action.name,
@@ -220,14 +225,22 @@ class SecurityPolicy:
                     reason=decision.reason,
                     args_summary=args_summary,
                 )
-            except Exception:
-                pass  # Audit failure must not break the agent
+            else:
+                self._audit_log.append({
+                    "action": action.name,
+                    "allowed": decision.allowed,
+                    "reason": decision.reason,
+                    "workspace": str(context.workspace),
+                    "timestamp": time.time(),
+                })
+        except Exception:
+            pass  # Audit failure must not break the agent
 
     def audit_log(self) -> list[dict]:
-        """Read recent audit entries from the immutable trail."""
+        """Read recent audit entries from the immutable trail or fallback list."""
         if self._audit_trail is not None:
             try:
                 return self._audit_trail.entries(limit=100)
             except Exception:
                 pass
-        return []
+        return list(self._audit_log)
