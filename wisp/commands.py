@@ -308,7 +308,7 @@ def cmd_metrics(agent, args: str):
 @register("circuit", "Show circuit breaker status", usage="/circuit [tool_name|reset]")
 def cmd_circuit(agent, args: str):
     cb = agent.circuit_breaker
-    if not cb._states:
+    if cb is None or not hasattr(cb, "_states"):
         print(dim("No circuit breaker state (no tools have been called yet)."))
         return
 
