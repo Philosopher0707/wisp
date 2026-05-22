@@ -6,6 +6,7 @@ Screens are installed by name and navigated via push_screen/switch_screen.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -47,12 +48,14 @@ class WispTUIApp(App):
         self,
         config: WispConfig | None = None,
         server_url: str = "http://localhost:8000",
+        transport: Any | None = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.wisp_config = config or WispConfig()
         self.server_url = server_url
         self.current_session_id: str | None = None
+        self.transport = transport
         # Screen instances (set in on_mount)
         self._splash: Widget | None = None
         self._session_picker: Widget | None = None

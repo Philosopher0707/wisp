@@ -6,13 +6,15 @@ Uses UnifiedSessionStore for session/run/event persistence.
 from __future__ import annotations
 
 import json
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
 from wisp.config import WISP_CONFIG_DIR
 from wisp.core.events import TYPE_DONE, TYPE_ERROR, AgentEvent
 from wisp.runtime_protocol import AppEvent
-from wisp.adapters import UnifiedSessionStore, Run, get_store
+from wisp.infra.store import UnifiedStore
 
 
 class WispSupervisor:
@@ -20,23 +22,34 @@ class WispSupervisor:
 
     def __init__(
         self,
-        store: UnifiedSessionStore | None = None,
+        store: UnifiedStore | None = None,
         artifacts_dir: Path | None = None,
     ):
-        self.store = store or get_store()
+        self.store = store or UnifiedStore()
         self.artifacts_dir = Path(artifacts_dir or (WISP_CONFIG_DIR / "artifacts"))
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     def create_thread(self, workspace: str, title: str | None = None):
         thread_title = title or Path(workspace).name or "Workspace thread"
-        return self.store.create_session(model="unknown", workspace=workspace, title=thread_title)
+        session_id = f"sess-{uuid.uuid4().hex[:12]}"
+        self.store.create_session(session_id, model="unknown", workspace=workspace, title=thread_title)
+        return self.store.load_session(session_id)
 
     def list_threads(self):
         return self.store.list_sessions()
 
     def start_run(self, thread_id: str, prompt: str):
-        run = self.store.create_run(session_id=thread_id, prompt=prompt)
-        self.run_log_path(run.id).touch()
+        run_id = f"run-{uuid.uuid4().hex[:12]}"
+        now = datetime.now(timezone.utc).isoformat()
+        run = {
+            "id": run_id,
+            "session_id": thread_id,
+            "prompt": prompt,
+            "status": "pending",
+            "created_at": now,
+        }
+        self.store.save_run(run)
+        self.run_log_path(run_id).touch()
         return run
 
     def run_log_path(self, run_id: str) -> Path:
@@ -90,17 +103,17 @@ class WispSupervisor:
         if thread is None:
             thread = self.create_thread(workspace=workspace, title=title)
 
-        run = self.start_run(thread.id, prompt)
-        self.store.update_run_status(run.id, "running")
+        run = self.start_run(thread["id"], prompt)
+        self.store.update_run_status(run["id"], "running")
 
         events: list[AppEvent] = []
         started = AppEvent(
             event="run.started",
-            thread_id=thread.id,
-            run_id=run.id,
+            thread_id=thread["id"],
+            run_id=run["id"],
             payload={"prompt": prompt, "workspace": workspace},
         )
-        self.append_run_event(run.id, started)
+        self.append_run_event(run["id"], started)
         events.append(started)
 
         failed = False
@@ -116,34 +129,34 @@ class WispSupervisor:
                 failed = True
                 app_event = AppEvent(
                     event="run.error",
-                    thread_id=thread.id,
-                    run_id=run.id,
+                    thread_id=thread["id"],
+                    run_id=run["id"],
                     payload={"message": result.get("error", "Unknown error"), "recoverable": False},
                 )
             else:
                 app_event = AppEvent(
                     event="run.completed",
-                    thread_id=thread.id,
-                    run_id=run.id,
+                    thread_id=thread["id"],
+                    run_id=run["id"],
                     payload={"content": result.get("content", ""), "turns": result.get("iterations", 0)},
                 )
-            self.append_run_event(run.id, app_event)
+            self.append_run_event(run["id"], app_event)
             events.append(app_event)
         except Exception as exc:
             failed = True
             app_event = AppEvent(
                 event="run.error",
-                thread_id=thread.id,
-                run_id=run.id,
+                thread_id=thread["id"],
+                run_id=run["id"],
                 payload={"message": str(exc), "recoverable": False},
             )
-            self.append_run_event(run.id, app_event)
+            self.append_run_event(run["id"], app_event)
             events.append(app_event)
 
         if failed:
-            self.store.update_run_status(run.id, "failed")
+            self.store.update_run_status(run["id"], "failed")
         else:
-            self.store.update_run_status(run.id, "completed")
+            self.store.update_run_status(run["id"], "completed")
 
-        saved_run = self.store.get_run(run.id) or run
+        saved_run = self.store.get_run(run["id"]) or run
         return thread, saved_run, events

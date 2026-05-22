@@ -27,6 +27,7 @@ from wisp.tui.widgets.monitor.metrics import PerformanceMetrics
 from wisp.tui.widgets.status_bar import StatusBar
 from wisp.tui.widgets.title_bar import TitleBar
 from wisp.tui.data.ws_client import WispWSClient
+from wisp.transport.tui import ApprovalRequested
 
 
 class WorkspaceScreen(Screen):
@@ -117,11 +118,25 @@ class WorkspaceScreen(Screen):
         if self._auto_approve:
             if self._ws_client:
                 await self._ws_client.approve_tool(call_id, True)
+            else:
+                transport = getattr(self.app, "transport", None)
+                if transport:
+                    transport.set_approval(True)
             return
         self._pending_approval_call_id = call_id
         try:
             status = self.query_one("#status-bar", StatusBar)
             status.connection_state = f"Approve {name}? [y]es [n]o [a]ll [d]eny"
+        except Exception:
+            pass
+
+    def on_approval_requested(self, message: ApprovalRequested) -> None:
+        """Handle approval requests from local TUITransport."""
+        try:
+            status = self.query_one("#status-bar", StatusBar)
+            status.connection_state = (
+                f"Approve {message.tool_name}? [y]es [n]o [a]ll [d]eny"
+            )
         except Exception:
             pass
 
@@ -202,12 +217,22 @@ class WorkspaceScreen(Screen):
             import asyncio
             asyncio.create_task(self._ws_client.approve_tool(self._pending_approval_call_id, True))
             self._pending_approval_call_id = None
+            return
+        # Local mode — resolve via TUITransport
+        transport = getattr(self.app, "transport", None)
+        if transport:
+            transport.set_approval(True)
 
     def action_deny_tool(self) -> None:
         if self._ws_client and self._pending_approval_call_id:
             import asyncio
             asyncio.create_task(self._ws_client.approve_tool(self._pending_approval_call_id, False))
             self._pending_approval_call_id = None
+            return
+        # Local mode — resolve via TUITransport
+        transport = getattr(self.app, "transport", None)
+        if transport:
+            transport.set_approval(False)
 
     def action_approve_all(self) -> None:
         self._auto_approve = True
@@ -215,6 +240,11 @@ class WorkspaceScreen(Screen):
             import asyncio
             asyncio.create_task(self._ws_client.approve_tool(self._pending_approval_call_id, True))
             self._pending_approval_call_id = None
+            return
+        # Local mode — resolve via TUITransport
+        transport = getattr(self.app, "transport", None)
+        if transport:
+            transport.set_approval(True)
 
     def action_deny_all(self) -> None:
         self._auto_approve = False
@@ -222,6 +252,11 @@ class WorkspaceScreen(Screen):
             import asyncio
             asyncio.create_task(self._ws_client.approve_tool(self._pending_approval_call_id, False))
             self._pending_approval_call_id = None
+            return
+        # Local mode — resolve via TUITransport
+        transport = getattr(self.app, "transport", None)
+        if transport:
+            transport.set_approval(False)
 
     def on_icon_button_pressed(self, event) -> None:
         tabs = self.query_one("#tabs", TabbedContent)

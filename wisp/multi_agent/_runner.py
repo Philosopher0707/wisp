@@ -15,8 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from wisp.config import WispConfig
-from wisp.adapters import Session
-from wisp.adapters import get_store
+from wisp.infra.store import UnifiedStore
 
 from .task import EventKind, OrchestratorEvent, SubagentContract, SubagentResult
 
@@ -46,10 +45,11 @@ class SubagentRunner:
         self,
         parent_config: WispConfig,
         workspace: Path,
+        store: UnifiedStore | None = None,
     ):
         self.parent_config = parent_config
         self.workspace = workspace
-        self._session_mgr = get_store()
+        self._store = store or UnifiedStore()
 
     async def run(
         self,
@@ -68,13 +68,22 @@ class SubagentRunner:
         # Build child config
         child_cfg = self._build_child_config(contract, agent_workspace)
 
-        # Create session
-        session = Session.create(
-            model=child_cfg.model,
-            workspace=agent_workspace,
-            first_prompt=contract.task,
-        )
-        session.title = f"[sub] {contract.name}"
+        # Create session dict
+        import uuid
+        from datetime import datetime, timezone
+        session_id = f"sess-{uuid.uuid4().hex[:12]}"
+        now = datetime.now(timezone.utc).isoformat()
+        session = {
+            "id": session_id,
+            "model": child_cfg.model,
+            "workspace": agent_workspace,
+            "messages": [{"role": "user", "content": contract.task}],
+            "compaction_history": [],
+            "created_at": now,
+            "updated_at": now,
+            "title": f"[sub] {contract.name}",
+        }
+        self._store.create_session(session_id, child_cfg.model, agent_workspace, title=f"[sub] {contract.name}")
 
         # Emit start event
         if progress_callback:
@@ -96,8 +105,9 @@ class SubagentRunner:
                     tool_calls_log,
                 )
 
-            session.touch()
-            self._session_mgr.save(session)
+            from datetime import datetime, timezone
+            session["updated_at"] = datetime.now(timezone.utc).isoformat()
+            self._store.save_session(session)
 
             duration = time.monotonic() - start
             subagent_result = SubagentResult(
@@ -107,7 +117,7 @@ class SubagentRunner:
                 tool_calls=list(tool_calls_log),
                 elapsed_seconds=duration,
                 error=result_dict.get("error"),
-                session_id=session.id,
+                session_id=session["id"],
                 files_changed=result_dict.get("files_changed", []),
                 iterations_used=result_dict.get("iterations_used", 0),
             )
@@ -156,8 +166,8 @@ class SubagentRunner:
         except asyncio.TimeoutError:
             duration = time.monotonic() - start
             logger.warning("Subagent %s timed out after %.1fs", contract.name, duration)
-            session.touch()
-            self._session_mgr.save(session)
+            session["updated_at"] = datetime.now(timezone.utc).isoformat()
+            self._store.save_session(session)
             if progress_callback:
                 await self._emit(
                     progress_callback,
@@ -172,7 +182,7 @@ class SubagentRunner:
                 tool_calls=list(tool_calls_log),
                 elapsed_seconds=duration,
                 error=f"Timeout after {contract.timeout_seconds}s",
-                session_id=session.id,
+                session_id=session["id"],
                 timed_out=True,
             )
 
@@ -193,7 +203,7 @@ class SubagentRunner:
                 tool_calls=list(tool_calls_log),
                 elapsed_seconds=duration,
                 error=str(exc),
-                session_id=session.id,
+                session_id=session["id"],
             )
 
     async def _run_agent(
@@ -241,7 +251,7 @@ class SubagentRunner:
             config=config,
         )
 
-        session_dict = session.to_dict()
+        session_dict = dict(session)
         if system_prompt:
             session_dict["messages"] = [{"role": "system", "content": system_prompt}] + list(session_dict.get("messages", []))
 

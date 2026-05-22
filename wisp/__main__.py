@@ -6,7 +6,6 @@ import os
 import sys
 from wisp import __version__
 from wisp.config import WispConfig, load_config, save_config
-from wisp.agent import WispAgent
 from wisp.providers import get_provider
 from wisp.skills import discover_skills
 from wisp.adapters import format_session_preview, get_store

@@ -113,7 +113,7 @@ def cmd_clear(agent, args: str):
     print(success(f"✓ Cleared {count} messages."))
 
 
-@register("model", "Switch Ollama model", aliases=("m",), usage="/model [name|number]")
+@register("model", "Switch or list Ollama models", aliases=("m", "models"), usage="/model [name|number]")
 def cmd_model(agent, args: str):
     # Fetch available models from Ollama
     models: list[dict] = []

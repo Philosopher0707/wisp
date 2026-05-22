@@ -75,8 +75,6 @@ def cmd_swarm(goal: str, roles: list[str] | None = None, model: str | None = Non
         # SubagentOrchestrator has a different API than SwarmOrchestrator
         # It expects a SubagentContract, not a plain goal string.
         # For now, run a simple single-agent task.
-        from wisp.agent import WispAgent
-        agent = WispAgent(config=config)
         
         # Build a simple contract from the goal
         from wisp.multi_agent.task import SubagentContract

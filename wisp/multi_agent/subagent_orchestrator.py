@@ -20,7 +20,6 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-from wisp.agent import WispAgent
 from wisp.config import WispConfig
 
 from ._budget_tracker import BudgetTracker
@@ -48,12 +47,12 @@ class SubagentOrchestrator:
 
     def __init__(
         self,
-        parent_agent: Optional[WispAgent] = None,
+        parent_agent: Optional[Any] = None,
         config: Optional[WispConfig] = None,
         workspace: Optional[Path] = None,
     ):
         self.parent = parent_agent
-        self.config = config or (parent_agent.config if parent_agent else WispConfig())
+        self.config = config or (getattr(parent_agent, "config", None) if parent_agent else WispConfig())
         self.workspace = (
             workspace
             or (Path(self.config.workspace).resolve() if self.config.workspace else None)

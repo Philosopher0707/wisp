@@ -38,9 +38,9 @@ class SessionPickerScreen(Screen):
         if self._loaded:
             return
         try:
-            from wisp.adapters import get_store
-            mgr = get_store()
-            self._all_sessions = mgr.list_sessions()
+            from wisp.infra.store import UnifiedStore
+            store = UnifiedStore()
+            self._all_sessions = store.list_sessions()
         except Exception:
             self._all_sessions = []
 

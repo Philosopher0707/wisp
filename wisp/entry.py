@@ -249,7 +249,7 @@ def _run_tui(root: CompositionRoot) -> None:
     transport.start()
 
     try:
-        app = WispTUIApp(config=root.config)
+        app = WispTUIApp(config=root.config, transport=transport)
         transport.set_app(app)
         app.run()
     finally:

@@ -18,8 +18,8 @@ from wisp.acp_protocol import (
     ToolCallContent,
     ToolResultContent,
 )
-from wisp.agent import WispAgent
 from wisp.config import WispConfig
+from wisp.infra.store import UnifiedStore
 from wisp.tools import execute_tool, ToolError
 
 logger = logging.getLogger(__name__)
@@ -187,43 +187,40 @@ class AcpSession:
             message_count=len(self.messages),
         )
 
-    def to_session(self) -> "Session":
-        """Convert this ACP session to a persistent Session object."""
-        from wisp.adapters import Session
-        return Session(
-            id=self.session_id,
-            created_at=self.created_at,
-            updated_at=self.updated_at,
-            model=getattr(self.config, "model", "unknown"),
-            workspace=self.workspace,
-            messages=self.messages.copy(),
-            title=self.title or "Wisp Session",
-            compaction_history=[],
-            task_ids=[],
-        )
+    def to_session(self) -> dict:
+        """Convert this ACP session to a persistent session dict."""
+        return {
+            "id": self.session_id,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "model": getattr(self.config, "model", "unknown"),
+            "workspace": self.workspace,
+            "messages": self.messages.copy(),
+            "title": self.title or "Wisp Session",
+            "compaction_history": [],
+        }
 
     @classmethod
-    def from_session(cls, session: "Session", config: WispConfig) -> "AcpSession":
-        """Restore an ACP session from a persistent Session object."""
-        acp = cls(session.id, session.workspace, config)
-        acp.messages = session.messages.copy()
-        acp.title = session.title
-        acp.created_at = session.created_at
-        acp.updated_at = session.updated_at
+    def from_session(cls, session: dict, config: WispConfig) -> "AcpSession":
+        """Restore an ACP session from a persistent session dict."""
+        acp = cls(session["id"], session["workspace"], config)
+        acp.messages = list(session.get("messages", []))
+        acp.title = session.get("title", "Wisp Session")
+        acp.created_at = session.get("created_at", _now_iso())
+        acp.updated_at = session.get("updated_at", _now_iso())
         return acp
 
 
 class AcpSessionManager:
     """Manages multiple ACP sessions with optional disk persistence."""
 
-    def __init__(self, store: "UnifiedSessionStore" | None = None):
+    def __init__(self, store: UnifiedStore | None = None):
         self._store = store
         self._active: dict[str, AcpSession] = {}
 
-    def _get_store(self) -> "UnifiedSessionStore":
+    def _get_store(self) -> UnifiedStore:
         if self._store is None:
-            from wisp.adapters import get_store
-            self._store = get_store()
+            self._store = UnifiedStore()
         return self._store
 
     def create(self, workspace: str, config: WispConfig, title: str = "") -> AcpSession:
@@ -235,10 +232,10 @@ class AcpSessionManager:
         # Persist to disk
         store = self._get_store()
         store.create_session(
+            session_id=session_id,
             model=getattr(config, "model", "unknown"),
             workspace=workspace,
             title=session.title,
-            session_id=session_id,
         )
         logger.info("Created ACP session %s", session_id)
         return session
