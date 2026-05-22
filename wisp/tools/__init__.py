@@ -28,6 +28,8 @@ from wisp.tools._utils import (
 from wisp.tools.registry import (
     TOOL_SCHEMAS,
     TOOL_IMPLS,
+    ToolRegistry,
+    default_registry,
     execute_tool,
     _build_tool_metadata,
 )

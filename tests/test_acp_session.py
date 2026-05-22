@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from wisp.acp_session import AcpSession, AcpSessionManager
-from wisp.adapters import UnifiedSessionStore
+from wisp.infra.store import UnifiedStore
 from wisp.acp_protocol import TextContent, ToolCallContent, ToolResultContent
 
 
@@ -129,7 +129,7 @@ class TestAcpSessionManager:
 
     @pytest.fixture
     def store(self, tmp_path):
-        return UnifiedSessionStore(sessions_dir=tmp_path / "sessions")
+        return UnifiedStore(tmp_path / "sessions" / "wisp.db")
 
     def test_create(self, store):
         mgr = AcpSessionManager(store=store)

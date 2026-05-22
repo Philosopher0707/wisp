@@ -68,6 +68,10 @@ class UnifiedStore:
                 self._local.conn = None
         logger.debug("UnifiedStore stopped")
 
+    def close(self) -> None:
+        """Alias for stop() — backward compatibility."""
+        self.stop()
+
     def healthy(self) -> bool:
         """Health check — ping the database."""
         try:
@@ -291,6 +295,21 @@ class UnifiedStore:
     def delete_session(self, session_id: str) -> None:
         self._get_conn().execute("DELETE FROM sessions WHERE id = ?", (session_id,))
 
+    def get_session_id_from_fragment(self, fragment: str) -> str | None:
+        """Find session ID matching a fragment."""
+        sessions = self.list_sessions()
+        for s in sessions:
+            if fragment.lower() in s.get("id", "").lower():
+                return s["id"]
+        return None
+
+    def update_run_status(self, run_id: str, status: str) -> None:
+        """Update a run's status."""
+        run = self.load_run(run_id)
+        if run is not None:
+            run["status"] = status
+            self.save_run(run)
+
     # ── Run CRUD ────────────────────────────────────────────────────
 
     def create_run(self, session_id: str, prompt: str, model: str = "unknown") -> str:
@@ -494,3 +513,43 @@ class UnifiedStore:
             }
             for r in rows
         ]
+
+
+# ── format_session_preview (migrated from adapters.py) ──────────────
+
+
+def format_session_preview(session) -> str:
+    """Format a session for display in a list. Accepts both dict and SessionDTO."""
+    if hasattr(session, "to_dict"):
+        session = session.to_dict()
+    sid = session.get("id", "unknown")
+    title = session.get("title", "")
+    updated = session.get("updated_at", "")
+    model = session.get("model", "")
+    msg_count = len(session.get("messages", []))
+
+    parts = [sid]
+    if title:
+        parts.append(f"'{title}'")
+    if updated:
+        parts.append(f"updated {updated[:19]}")
+    if model:
+        parts.append(f"model={model}")
+    parts.append(f"{msg_count} messages")
+
+    return " | ".join(parts)
+
+
+# ── get_store (migrated from adapters.py) ───────────────────────────
+
+_store_cache: dict[str, UnifiedStore] = {}
+
+
+def get_store(db_path: str | None = None) -> UnifiedStore:
+    """Get or create a UnifiedStore instance."""
+    if db_path is None:
+        db_path = str(Path.home() / ".config" / "wisp" / "wisp.db")
+
+    if db_path not in _store_cache:
+        _store_cache[db_path] = UnifiedStore(db_path)
+    return _store_cache[db_path]

@@ -130,3 +130,65 @@ class TestExecuteTool:
         result = execute_tool("spawn_subagent", {"task": "test"}, ".")
         assert "error" in result
         assert "agent loop" in result
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ToolRegistry class tests (Phase 7.2)
+# ═══════════════════════════════════════════════════════════════════
+
+class TestToolRegistry:
+    """TDD tests for ToolRegistry class."""
+
+    def test_create_registry_with_defaults(self):
+        from wisp.tools.registry import ToolRegistry
+        registry = ToolRegistry()
+        schemas = registry.schemas()
+        assert len(schemas) >= 28, f"Expected >=28 built-in tools, got {len(schemas)}"
+        assert registry.has_tool("read_file")
+        assert registry.has_tool("write_file")
+        assert registry.has_tool("run_bash")
+
+    def test_register_new_tool(self):
+        from wisp.tools.registry import ToolRegistry
+        registry = ToolRegistry()
+        registry.register("my_tool", lambda **kw: "done", {"type": "function", "function": {"name": "my_tool"}})
+        assert registry.has_tool("my_tool")
+        schemas = registry.schemas()
+        names = {s["function"]["name"] for s in schemas}
+        assert "my_tool" in names
+
+    def test_unregister_removes_tool(self):
+        from wisp.tools.registry import ToolRegistry
+        registry = ToolRegistry()
+        registry.register("temp_tool", lambda **kw: "ok", {"type": "function", "function": {"name": "temp_tool"}})
+        assert registry.has_tool("temp_tool")
+        registry.unregister("temp_tool")
+        assert not registry.has_tool("temp_tool")
+
+    def test_execute_runs_tool(self):
+        from wisp.tools.registry import ToolRegistry
+        registry = ToolRegistry()
+        registry.register("echo", lambda text, **kw: text, {"type": "function", "function": {"name": "echo"}})
+        result = registry.execute("echo", {"text": "hello"}, "/tmp")
+        assert "hello" in result
+
+    def test_execute_unknown_tool_raises(self):
+        from wisp.tools.registry import ToolRegistry, ToolError
+        registry = ToolRegistry()
+        with pytest.raises(ToolError, match="Unknown tool"):
+            registry.execute("nonexistent", {}, "/tmp")
+
+    def test_singleton_shared_state(self):
+        from wisp.tools.registry import default_registry, TOOL_IMPLS
+        assert default_registry._impls is TOOL_IMPLS, \
+            "default_registry._impls must be the same object as TOOL_IMPLS"
+
+    def test_runtime_register_unregister_cycle(self):
+        from wisp.tools.registry import ToolRegistry
+        registry = ToolRegistry()
+        registry.register("step1", lambda **kw: "first", {"type": "function", "function": {"name": "step1"}})
+        assert registry.has_tool("step1")
+        registry.unregister("step1")
+        assert not registry.has_tool("step1")
+        registry.register("step1", lambda **kw: "second", {"type": "function", "function": {"name": "step1"}})
+        assert registry.has_tool("step1")

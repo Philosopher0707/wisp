@@ -22,7 +22,7 @@ class HookExtension:
 
     def start(self) -> None:
         """Start the hook extension — load project hooks."""
-        from wisp.adapters import HookManager
+        from wisp.infra.hook_types import HookManager
         self._manager = HookManager(config_dir=self._config_dir)
         self._manager.load_hooks()
         logger.debug("HookExtension started")
@@ -49,7 +49,7 @@ class HookExtension:
             return {"action": "allow"}
 
         try:
-            from wisp.adapters import HookEvent
+            from wisp.infra.hook_types import HookEvent
             hook_event = HookEvent(HookEvent.TOOL_CALL, name=event.get("name", ""), args=event.get("arguments", {}))
             result = self._manager.run_hooks(hook_event)
             if result.decision == "block":

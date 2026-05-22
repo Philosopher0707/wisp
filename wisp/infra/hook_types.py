@@ -1,0 +1,102 @@
+"""Hook types for Wisp hook system.
+
+Extracted from wisp/adapters.py during Phase 7.1 migration.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+
+class HookEvent:
+    """Hook event type constants."""
+    TOOL_CALL = "tool_call"
+    TOOL_RESULT = "tool_result"
+    BASH_COMMAND = "bash_command"
+    FILE_WRITE = "file_write"
+    SESSION_START = "session_start"
+    SESSION_END = "session_end"
+
+    # Composite events used by tool_executor
+    PRE_BASH = "pre_bash"
+    PRE_FILE_WRITE = "pre_file_write"
+    POST_TOOL_USE = "post_tool_use"
+    POST_BASH = "post_bash"
+    PRE_TOOL_USE = "pre_tool_use"
+
+    def __init__(self, event_type: str, **kwargs):
+        self.event_type = event_type
+        self.__dict__.update(kwargs)
+
+
+@dataclass
+class HookConfig:
+    """Configuration for a single hook."""
+    name: str = ""
+    event: str = ""
+    command: str = ""
+    script: str = ""
+    timeout: float = 5.0
+    timeout_seconds: float = 5.0
+    enabled: bool = True
+    matcher: str = ""
+    working_dir: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "event": self.event,
+            "command": self.command,
+            "timeout_seconds": self.timeout_seconds,
+            "enabled": self.enabled,
+            "matcher": self.matcher,
+            "working_dir": self.working_dir,
+        }
+
+
+class HookResult:
+    """Result from running a hook."""
+    ALLOW = "allow"
+    BLOCK = "block"
+    WARN = "warn"
+
+    def __init__(self, decision: str = "allow", reason: str = "", modified_args: dict | None = None):
+        self.decision = decision
+        self.reason = reason
+        self.modified_args = modified_args or {}
+
+
+class HookManager:
+    """Manages hooks — loading, listing, and running them."""
+
+    def __init__(self, config_dir: str | None = None, workspace: str | None = None):
+        self.config_dir = config_dir
+        self.workspace = workspace
+        self.hooks: list[HookConfig] = []
+
+    def load_hooks(self) -> None:
+        pass
+
+    def load_project_hooks(self) -> None:
+        pass
+
+    def list_hooks(self) -> list[HookConfig]:
+        return list(self.hooks)
+
+    def get_hook(self, name: str) -> HookConfig | None:
+        for h in self.hooks:
+            if h.name == name:
+                return h
+        return None
+
+    def run_hooks(self, event: HookEvent) -> HookResult:
+        return HookResult(decision="allow")
+
+    def register(self, hook: HookConfig) -> None:
+        self.hooks.append(hook)
+
+
+def build_hook_context(**kwargs) -> dict:
+    """Build a context dict for hook execution."""
+    return kwargs

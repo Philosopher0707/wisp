@@ -8,7 +8,7 @@ from wisp import __version__
 from wisp.config import WispConfig, load_config, save_config
 from wisp.providers import get_provider
 from wisp.skills import discover_skills
-from wisp.adapters import format_session_preview, get_store
+from wisp.infra.store import format_session_preview, get_store
 from wisp.colors import success, error, warning, info, dim, accent
 
 
@@ -725,7 +725,7 @@ def cmd_session_show(session_id: str):
     print()
 
 
-    print(dim(f"  Continue: wisp -S {session.id} \"your next question\""))
+    print(dim(f"  Continue: wisp -S {session['id']} \"your next question\""))
 
 
 def cmd_session_delete(session_id: str):
@@ -736,31 +736,33 @@ def cmd_session_delete(session_id: str):
         print(error(f"✗ Session '{session_id}' not found."))
         print(dim("  Run 'wisp session list' to see available sessions."))
         return
-    mgr.delete_session(session.id)
-    print(success(f"✓ Deleted session {session.id}"))
+    mgr.delete_session(session["id"])
+    print(success(f"✓ Deleted session {session['id']}"))
 
 
 def cmd_session_compact(session_id: str, keep: int = 6):
     """Compact a session by summarizing old messages and keeping recent ones."""
+    from wisp.infra.session_dto import SessionDTO
     mgr = get_store()
     session = _resolve_session_or_fragment(mgr, session_id)
     if session is None:
         print(error(f"✗ Session '{session_id}' not found."))
         return
 
-    if len(session.messages) <= keep:
-        print(dim(f"Session only has {len(session.messages)} message(s), nothing to compact."))
+    if len(session["messages"]) <= keep:
+        print(dim(f"Session only has {len(session['messages'])} message(s), nothing to compact."))
         return
 
-    print(info(f"Compacting session {session.id} ({len(session.messages)} messages, keeping last {keep})..."))
-    result = session.compact(keep_recent=keep,max_context_tokens=256000,)
+    print(info(f"Compacting session {session['id']} ({len(session['messages'])} messages, keeping last {keep})..."))
+    dto = SessionDTO.from_dict(session)
+    before_count = len(dto.messages)
+    dto.compact(keep_recent=keep, max_context_tokens=256000)
+    after_count = len(dto.messages)
 
-    if result.get("compacted"):
-        mgr.save(session)
-        saved = result["before_count"] - result["after_count"]
-        print(success(f"✓ Compacted: {result['before_count']} → {result['after_count']} messages ({saved} removed)"))
-        if result.get("summary"):
-            print(dim(f"  Summary: {result['summary'][:120]}..."))
+    if after_count < before_count:
+        mgr.save_session(dto.to_dict())
+        saved = before_count - after_count
+        print(success(f"✓ Compacted: {before_count} → {after_count} messages ({saved} removed)"))
     else:
         print(dim("Compaction skipped: not enough messages to summarize."))
 
@@ -782,18 +784,18 @@ def cmd_session_trim(session_id: str, keep: int = 10):
         return
 
     # Count complete user turns
-    user_msg_indices = [i for i, m in enumerate(session.messages) if m.get("role") == "user"]
+    user_msg_indices = [i for i, m in enumerate(session["messages"]) if m.get("role") == "user"]
     if len(user_msg_indices) <= keep:
         print(dim(f"Session only has {len(user_msg_indices)} turn(s), nothing to trim."))
         return
 
-    original = len(session.messages)
+    original = len(session["messages"])
     # Find the start index of the (last N)th user turn
     # We keep everything from that user message onwards
     keep_from = user_msg_indices[-keep]
-    session.messages = session.messages[keep_from:]
-    mgr.save(session)
-    print(success(f"✓ Trimmed session {session.id}: {original} → {len(session.messages)} messages "
+    session["messages"] = session["messages"][keep_from:]
+    mgr.save_session(session)
+    print(success(f"✓ Trimmed session {session['id']}: {original} → {len(session['messages'])} messages "
           f"({keep} turn(s) preserved)"))
 
 

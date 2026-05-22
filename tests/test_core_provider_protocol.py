@@ -71,7 +71,7 @@ class TestCoreProviderProtocol:
         core = WispAgentCore(config=config, provider=provider)
         core.messages = [{"role": "user", "content": "hi"}]
         # Use temp store to avoid db lock
-        from wisp.adapters import get_store
+        from wisp.infra.store import get_store
         core.session_mgr = get_store(str(tmp_path / "test.db"))
 
         import asyncio
@@ -114,7 +114,7 @@ class TestCoreProviderErrors:
         provider = _BrokenProvider()
         core = WispAgentCore(config=config, provider=provider)
         core.messages = [{"role": "user", "content": "hi"}]
-        from wisp.adapters import get_store
+        from wisp.infra.store import get_store
         core.session_mgr = get_store(str(tmp_path / "test.db"))
 
         import asyncio

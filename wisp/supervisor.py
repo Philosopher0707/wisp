@@ -14,7 +14,7 @@ from typing import Callable
 from wisp.config import WISP_CONFIG_DIR
 from wisp.core.events import TYPE_DONE, TYPE_ERROR, AgentEvent
 from wisp.runtime_protocol import AppEvent
-from wisp.infra.store import UnifiedStore
+from wisp.infra.store import UnifiedStore, get_store
 
 
 class WispSupervisor:
@@ -25,7 +25,7 @@ class WispSupervisor:
         store: UnifiedStore | None = None,
         artifacts_dir: Path | None = None,
     ):
-        self.store = store or UnifiedStore()
+        self.store = store or get_store()
         self.artifacts_dir = Path(artifacts_dir or (WISP_CONFIG_DIR / "artifacts"))
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
 
@@ -158,5 +158,5 @@ class WispSupervisor:
         else:
             self.store.update_run_status(run["id"], "completed")
 
-        saved_run = self.store.get_run(run["id"]) or run
+        saved_run = self.store.load_run(run["id"]) or run
         return thread, saved_run, events

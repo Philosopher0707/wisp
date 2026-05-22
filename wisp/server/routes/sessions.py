@@ -16,7 +16,7 @@ def _get_store(request: Request):
     if root is not None:
         return root.store
     # Fallback to legacy adapter
-    from wisp.adapters import get_store
+    from wisp.infra.store import get_store
     return get_store()
 
 

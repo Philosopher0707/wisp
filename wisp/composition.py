@@ -28,6 +28,7 @@ from wisp.core.runtime import AgentRuntime
 from wisp.core.engine import WispAgentCore
 from wisp.core.compaction import Compactor
 from wisp.tool_executor import ToolExecutor
+from wisp.tools.registry import ToolRegistry
 from wisp.multi_agent.subagent_orchestrator import SubagentOrchestrator
 
 logger = logging.getLogger(__name__)
@@ -98,6 +99,9 @@ class CompositionRoot:
 
         # Ensure .wisp dir exists for persistence
         (wsp / ".wisp").mkdir(parents=True, exist_ok=True)
+
+        # Create ToolRegistry (shared state with module-level TOOL_SCHEMAS/TOOL_IMPLS)
+        self.tool_registry = ToolRegistry()
 
         # Create ToolExecutor wired with orchestrator
         self.tool_executor = ToolExecutor(

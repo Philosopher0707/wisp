@@ -703,9 +703,9 @@ Write this as a direct report to me, the user. No preamble — just the synthesi
 
 @register("new", "Start a new session", aliases=(), usage="/new")
 def cmd_new(agent, args: str):
-    from wisp.adapters import Session
+    from wisp.infra.session_dto import SessionDTO
     agent._save_session()
-    agent.session = Session.create(
+    agent.session = SessionDTO.create(
         model=agent.config.model,
         workspace=agent.config.workspace or ".",
         first_prompt="New session",

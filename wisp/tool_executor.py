@@ -313,7 +313,7 @@ class ToolExecutor:
         if not self.hook_manager:
             return None
         try:
-            from wisp.adapters import HookEvent, build_hook_context
+            from wisp.infra.hook_types import HookEvent, build_hook_context
             context = build_hook_context(
                 event=HookEvent.PRE_BASH,
                 tool_name="run_bash",
@@ -342,7 +342,7 @@ class ToolExecutor:
         if not self.hook_manager:
             return None
         try:
-            from wisp.adapters import HookEvent, build_hook_context
+            from wisp.infra.hook_types import HookEvent, build_hook_context
             context = build_hook_context(
                 event=HookEvent.PRE_FILE_WRITE,
                 tool_name=func_name,
@@ -371,7 +371,7 @@ class ToolExecutor:
         if not self.hook_manager:
             return
         try:
-            from wisp.adapters import HookEvent, build_hook_context
+            from wisp.infra.hook_types import HookEvent, build_hook_context
             ctx = build_hook_context(
                 event=HookEvent.POST_TOOL_USE,
                 tool_name=func_name,
@@ -403,7 +403,7 @@ class ToolExecutor:
             # hook written earlier this session can still fire.
             if hasattr(self.hook_manager, "maybe_reload_hooks"):
                 self.hook_manager.maybe_reload_hooks()
-            from wisp.adapters import HookEvent
+            from wisp.infra.hook_types import HookEvent
             context = {
                 "tool_name": func_name,
                 "tool_args": func_args,

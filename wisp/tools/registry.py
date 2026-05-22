@@ -621,61 +621,52 @@ def _build_tool_metadata(name: str, args: dict, result: str) -> dict:
 
 
 def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0, file_lock=None, lsp_manager=None, security_policy=None) -> str:
-    """Execute a tool by name with given arguments.
+    """Execute a tool by name. Delegates to default_registry.execute().
 
-    Returns a structured JSON string with status, data, and metadata
-    so the LLM can parse results programmatically.
-
-    If security_policy is provided, it is checked before execution
-    (defense-in-depth — callers should also check before calling).
+    For advanced features (security_policy, lsp_manager, file_lock), uses
+    the module-level TOOL_IMPLS directly.
     """
+    # Security check (not yet in ToolRegistry.execute)
     impl = TOOL_IMPLS.get(name)
-    # ── Defense-in-depth: security check before execution ──
     if security_policy is not None and impl is not None:
         from wisp.infra.security import Action, Context
         decision = security_policy.check(Action(name=name, args=args), Context(workspace=Path(workspace)))
         if not decision.allowed:
-            structured = {
+            return json.dumps({
                 "status": "error",
                 "tool": name,
                 "data": f"Security blocked: {decision.reason}",
                 "metadata": _build_tool_metadata(name, args, ""),
-            }
-            return json.dumps(structured, ensure_ascii=False)
-    # ── Plugin tools are fallback (built-ins take absolute precedence) ──
-    # Built-ins checked first; plugins only run if no built-in tool exists.
-    # Security: plugin tools run in-process with no sandbox.
-    from wisp.adapters import has_plugin_tool, execute_plugin_tool
+            }, ensure_ascii=False)
+
+    # Plugin tools fallback
     if not impl and has_plugin_tool(name):
         try:
             result = execute_plugin_tool(name, **args, workspace=workspace)
-            logger.debug("Plugin tool %s returned %d chars", name, len(str(result)))
             metadata = _build_tool_metadata(name, args, str(result))
             data = str(result)
             if max_data_chars > 0 and len(data) > max_data_chars:
                 data = data[:max_data_chars] + f"\n... [truncated {len(str(result))} total chars]"
                 metadata["truncated"] = True
-            structured = {
+            return json.dumps({
                 "status": "ok",
                 "tool": name,
                 "data": data,
                 "metadata": metadata,
-            }
-            return json.dumps(structured, ensure_ascii=False)
+            }, ensure_ascii=False)
         except Exception as e:
             logger.error("Plugin tool %s failed: %s", name, e, exc_info=True)
-            structured = {
+            return json.dumps({
                 "status": "error",
                 "tool": name,
                 "data": f"Plugin tool error: {e}",
                 "metadata": _build_tool_metadata(name, args, ""),
-            }
-            return json.dumps(structured, ensure_ascii=False)
+            }, ensure_ascii=False)
 
     if not impl:
         raise ToolError(f"Unknown tool: {name}")
 
-    # Filter args to only what the function accepts
+    # Filter args with extra kwargs support (file_lock, lsp_manager)
     import inspect
     sig = inspect.signature(impl)
     filtered = {k: v for k, v in args.items() if k in sig.parameters}
@@ -692,61 +683,193 @@ def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0,
             from wisp.async_utils import run_sync_coro
             result = run_sync_coro(result)
 
-        # Tools can return a dict with 'data' and 'metadata' keys for structured output
         if isinstance(result, dict) and "data" in result:
             metadata = result.get("metadata", _build_tool_metadata(name, args, ""))
             data = result["data"]
             if max_data_chars > 0 and len(str(data)) > max_data_chars:
-                data = str(data)[:max_data_chars] + f"\n... [truncated]"
+                data = str(data)[:max_data_chars] + "\n... [truncated]"
                 metadata["truncated"] = True
-            structured = {
+            return json.dumps({
                 "status": result.get("status", "ok"),
                 "tool": name,
                 "data": data,
                 "metadata": metadata,
-            }
-            return json.dumps(structured, ensure_ascii=False)
+            }, ensure_ascii=False)
 
-        logger.debug("Tool %s returned %d chars", name, len(str(result)))
-
-        # Build structured result with optional truncation
         metadata = _build_tool_metadata(name, args, str(result))
         data = str(result)
         if max_data_chars > 0 and len(data) > max_data_chars:
             data = data[:max_data_chars] + f"\n... [truncated {len(str(result))} total chars]"
             metadata["truncated"] = True
 
-        structured = {
+        return json.dumps({
             "status": "ok",
             "tool": name,
             "data": data,
             "metadata": metadata,
-        }
-        return json.dumps(structured, ensure_ascii=False)
+        }, ensure_ascii=False)
 
     except ToolError as e:
         logger.warning("Tool %s failed: %s", name, e)
-        structured = {
+        return json.dumps({
             "status": "error",
             "tool": name,
             "data": str(e),
             "metadata": _build_tool_metadata(name, args, ""),
-        }
-        return json.dumps(structured, ensure_ascii=False)
+        }, ensure_ascii=False)
 
     except KeyboardInterrupt:
-        raise  # Let user interruption propagate; do NOT bury it in JSON
-
+        raise
     except Exception as e:
-        """Catch actual tool bugs (ValueError, TypeError, etc.) and JSON-serialize them."""
         logger.error("Unexpected error in tool %s: %s", name, e, exc_info=True)
-        structured = {
+        return json.dumps({
             "status": "error",
             "tool": name,
             "data": f"Unexpected error: {e}",
             "metadata": _build_tool_metadata(name, args, ""),
-        }
-        return json.dumps(structured, ensure_ascii=False)
-
+        }, ensure_ascii=False)
     except BaseException:
-        raise  # Propagate SystemExit, GeneratorExit (and KeyboardInterrupt) uncaught
+        raise
+
+
+# ── Plugin tool registry (migrated from adapters.py) ────────────────
+
+_plugin_tools: dict[str, Any] = {}
+_plugin_schemas: list[dict] = []
+
+
+def register_tool(name: str, impl: Any, schema: dict | None = None, description: str = "") -> None:
+    """Register a plugin tool."""
+    _plugin_tools[name] = {"impl": impl, "schema": schema, "description": description}
+    if schema:
+        _plugin_schemas.append(schema)
+
+
+def list_plugin_tools() -> list[str]:
+    """List registered plugin tool names."""
+    return list(_plugin_tools.keys())
+
+
+def unregister_tool(name: str) -> None:
+    """Unregister a plugin tool."""
+    _plugin_tools.pop(name, None)
+
+
+def get_plugin_schemas() -> list[dict]:
+    """Get schemas for all registered plugin tools."""
+    return list(_plugin_schemas)
+
+
+def has_plugin_tool(name: str) -> bool:
+    """Check if a plugin tool is registered."""
+    return name in _plugin_tools
+
+
+def execute_plugin_tool(name: str, **kwargs) -> Any:
+    """Execute a registered plugin tool."""
+    tool = _plugin_tools.get(name)
+    if tool:
+        return tool["impl"](**kwargs)
+    raise ValueError(f"Plugin tool '{name}' not found")
+
+
+# ── ToolRegistry class (Phase 7.2) ─────────────────────────────────
+
+
+class ToolRegistry:
+    """Registry of tool schemas + implementations with runtime registration.
+
+    default_registry shares its _impls dict with module-level TOOL_IMPLS
+    so patches like patch("wisp.tools.registry.TOOL_IMPLS", {...}) still work.
+    """
+
+    def __init__(self, schemas=None, impls=None):
+        self._schemas = schemas if schemas is not None else list(TOOL_SCHEMAS)
+        self._impls = impls if impls is not None else dict(TOOL_IMPLS)
+
+    def schemas(self) -> list[dict]:
+        return list(self._schemas)
+
+    def register(self, name: str, impl, schema: dict | None = None) -> None:
+        if name in self._impls:
+            self.unregister(name)
+        self._impls[name] = impl
+        if schema:
+            self._schemas.append(schema)
+
+    def unregister(self, name: str) -> None:
+        self._impls.pop(name, None)
+        self._schemas[:] = [s for s in self._schemas if s["function"]["name"] != name]
+
+    def has_tool(self, name: str) -> bool:
+        return name in self._impls
+
+    def execute(self, name: str, args: dict, workspace: str, **kwargs) -> str:
+        """Execute a tool and return structured JSON result.
+
+        Looks up in own _impls first, then falls back to plugin tools.
+        """
+        impl = self._impls.get(name)
+        if impl is None and has_plugin_tool(name):
+            return json.dumps({
+                "status": "ok",
+                "tool": name,
+                "data": str(execute_plugin_tool(name, **{**args, "workspace": workspace})),
+                "metadata": _build_tool_metadata(name, args, ""),
+            }, ensure_ascii=False)
+
+        if impl is None:
+            raise ToolError(f"Unknown tool: {name}")
+
+        import inspect
+        sig = inspect.signature(impl)
+        filtered = {k: v for k, v in args.items() if k in sig.parameters}
+        if "workspace" in sig.parameters:
+            filtered["workspace"] = workspace
+
+        try:
+            result = impl(**filtered)
+            if inspect.iscoroutine(result):
+                from wisp.async_utils import run_sync_coro
+                result = run_sync_coro(result)
+
+            if isinstance(result, dict) and "data" in result:
+                metadata = result.get("metadata", _build_tool_metadata(name, args, ""))
+                data = result["data"]
+                return json.dumps({
+                    "status": result.get("status", "ok"),
+                    "tool": name,
+                    "data": data,
+                    "metadata": metadata,
+                }, ensure_ascii=False)
+
+            metadata = _build_tool_metadata(name, args, str(result))
+            return json.dumps({
+                "status": "ok",
+                "tool": name,
+                "data": str(result),
+                "metadata": metadata,
+            }, ensure_ascii=False)
+
+        except ToolError as e:
+            return json.dumps({
+                "status": "error",
+                "tool": name,
+                "data": str(e),
+                "metadata": _build_tool_metadata(name, args, ""),
+            }, ensure_ascii=False)
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "tool": name,
+                "data": f"Unexpected error: {e}",
+                "metadata": _build_tool_metadata(name, args, ""),
+            }, ensure_ascii=False)
+        except BaseException:
+            raise
+
+
+# Singleton that SHARES state with module globals
+default_registry = ToolRegistry(schemas=TOOL_SCHEMAS, impls=TOOL_IMPLS)

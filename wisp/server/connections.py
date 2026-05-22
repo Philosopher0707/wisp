@@ -127,7 +127,7 @@ class ConnectionManager:
 
         logger.info("Shutting down session store...")
         try:
-            from wisp.adapters import get_store
+            from wisp.infra.store import get_store
             store = get_store()
             if hasattr(store, "close"):
                 store.close()

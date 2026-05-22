@@ -47,7 +47,7 @@ class HookCreateRequest(BaseModel):
 
 @router.get("/api/hooks", dependencies=[Depends(verify_api_key)])
 async def list_hooks():
-    from wisp.adapters import HookManager
+    from wisp.infra.hook_types import HookManager
     manager = HookManager(workspace=WORKSPACE_ROOT)
     manager.load_project_hooks()
     hooks = manager.list_hooks()
@@ -74,7 +74,7 @@ async def hook_logs():
 
 @router.post("/api/hooks", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
 async def create_hook(req: HookCreateRequest):
-    from wisp.adapters import HookConfig, HookEvent
+    from wisp.infra.hook_types import HookConfig, HookEvent
 
     hooks_dir = WORKSPACE_ROOT / ".wisp" / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
@@ -116,7 +116,7 @@ async def create_hook(req: HookCreateRequest):
 
 @router.post("/api/hooks/{name}/test", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
 async def test_hook(name: str, request: dict):
-    from wisp.adapters import HookManager, build_hook_context
+    from wisp.infra.hook_types import HookManager, build_hook_context
     import asyncio
 
     manager = HookManager(workspace=WORKSPACE_ROOT)
