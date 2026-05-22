@@ -343,7 +343,7 @@ class WispConfig:
         # Track whether user explicitly set context window (disables auto-detection)
         self._context_tokens_explicit: bool = raw_ctx is not None
         # Permissions: full (all allowed) | ask_all (ask for writes) | auto_edit (ask for bash only) | read_only (no writes)
-        self.permission_mode: PermissionMode = PermissionMode(get_setting("permission_mode", PermissionMode.AUTO_EDIT))
+        self.permission_mode: PermissionMode = PermissionMode(get_setting("permission_mode", PermissionMode.FULL))
         # Plan mode: agent plans only, no tool execution
         self.plan_mode: bool = _parse_bool(get_setting("plan_mode", "false"), False)
         # Plan context: approved plan injected into system prompt

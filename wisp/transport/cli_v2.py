@@ -34,6 +34,7 @@ from .renderer import (
     _rule,
 )
 from wisp.colors import dim, error, warning, success, info, accent
+from wisp.approval_state import ApprovalSessionState, SessionPolicy
 from wisp.core.events import AgentEvent, EventType
 from wisp.terminal_width import display_width, is_accessible, OutputMode
 
@@ -412,6 +413,9 @@ class CLITransport(Transport):
             getattr(config, "show_thinking", False) if config else False
         )
         self.show_tool_output: bool = True
+        # Session-level per-tool approval memory
+        self._approval_state = ApprovalSessionState()
+        self._force_approval_mode = not _is_interactive()
 
     # ── Transport ABC implementation ────────────────────────────────
 
@@ -439,12 +443,87 @@ class CLITransport(Transport):
         return prompt
 
     async def approve(self, tool_call: dict) -> bool:
-        """CLI transport can prompt for approval.
+        """Interactive approval with session-level per-tool memory.
 
-        In a full implementation, this would ask the user.
-        For now, auto-approve.
+        Prompts the user with choices:
+          y = yes (once)  Y = yes (always this tool this session)
+          a = approve ALL tools this session
+          n = no (once)   N = no (always deny this tool)
+          d = deny ALL tools this session
+          c = cancel turn
         """
-        return True
+        tool_name = tool_call.get("name", "unknown")
+        args_text = ""
+        args_map = tool_call.get("arguments", {})
+        if args_map:
+            args_text = ", ".join(f"{k}={v!r}" for k, v in list(args_map.items())[:3])
+            if len(args_map) > 3:
+                args_text += ", ..."
+
+        # Non-interactive / piped input = auto-deny unless session policy is auto
+        if self._force_approval_mode or self._approval_state.session_policy is SessionPolicy.AUTO:
+            if self._approval_state.session_policy == SessionPolicy.AUTO:
+                return True
+            # Blocked in non-interactive mode
+            return False
+
+        # Check session state first
+        if self._approval_state.session_policy == SessionPolicy.BLOCK:
+            return False
+        if tool_name in self._approval_state.allowed_tools:
+            return True
+        if tool_name in self._approval_state.denied_tools:
+            return False
+
+        # Show interactive prompt
+        width = self._term_width() if hasattr(self, "_term_width") else 80
+        print(file=sys.stdout)  # blank line before prompt
+        print(
+            warning(
+                f"⚠️  {tool_name}({args_text})"
+            ),
+            file=sys.stdout,
+        )
+        print(
+            dim("     [y] yes  [Y] always this  [a] all on  [n] no  [N] always no  [d] all off  [c] cancel"),
+            file=sys.stdout,
+        )
+        sys.stdout.flush()
+
+        loop = asyncio.get_event_loop()
+        try:
+            raw = await asyncio.to_thread(input, dim("Approve? "))
+        except (EOFError, OSError):
+            return False
+        choice = raw.strip().lower()
+
+        if choice == "y":
+            return True
+        if choice == "Y":
+            self._approval_state.allow_tool(tool_name)
+            return True
+        if choice == "a":
+            self._approval_state.set_auto()
+            return True
+        if choice == "n":
+            return False
+        if choice == "N":
+            self._approval_state.deny_tool(tool_name)
+            return False
+        if choice == "d":
+            self._approval_state.set_block()
+            return False
+        if choice == "c":
+            # Cancel = treat as deny
+            return False
+        # Any other key = deny
+        return False
+
+    async def _send(self, event: dict) -> None:
+        """Send compatibility shim.
+        (some call-sites expect _send instead of send)."""
+        await self.send(event)
+
 
     def start(self) -> None:
         """Start the transport."""
