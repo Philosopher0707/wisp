@@ -144,7 +144,7 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
     def _run_turn(prompt: str) -> None:
         """Run one turn on the persistent loop."""
         async def _turn():
-            async for event in root.runtime.run_turn(session, prompt):
+            async for event in root.runtime.run_turn(session, prompt, approval_handler=getattr(transport, "approve", None)):
                 transport._render_event(sys.stdout, event)
 
         transport._reset_buffers()
@@ -245,7 +245,7 @@ async def _run_single_prompt(transport: CLITransport, root: CompositionRoot, pro
             sys.stdout.flush()
             return
 
-    async for event in root.runtime.run_turn(session, prompt):
+    async for event in root.runtime.run_turn(session, prompt, approval_handler=getattr(transport, "approve", None)):
         transport._render_event(sys.stdout, event)
 
     transport._flush_thinking(sys.stdout)

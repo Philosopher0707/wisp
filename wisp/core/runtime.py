@@ -86,7 +86,7 @@ class AgentRuntime:
         self.store.save_session(session)
         return session
 
-    async def run_turn(self, session: dict, prompt: str) -> AsyncIterator[dict]:
+    async def run_turn(self, session: dict, prompt: str, approval_handler=None) -> AsyncIterator[dict]:
         """Run one turn, yielding events.
 
         Guarantees session consistency even if the turn aborts:
@@ -127,7 +127,7 @@ class AgentRuntime:
             turn_succeeded = False
 
             try:
-                async for raw_event in core.turn(session, prompt):
+                async for raw_event in core.turn(session, prompt, approval_handler=approval_handler):
                     # Normalize to canonical AgentEvent, then flatten
                     canonical = normalize_event(raw_event).to_dict()
                     event = dict(canonical.get("data", {}))

@@ -56,7 +56,7 @@ class WispAgentCore:
     _assembler_cache: Any = field(default=None, repr=False)
     _static_prompt_cache: dict = field(default_factory=dict, repr=False)
 
-    async def turn(self, session: dict, prompt: str) -> AsyncIterator[dict]:
+    async def turn(self, session: dict, prompt: str, approval_handler=None) -> AsyncIterator[dict]:
         """Run one turn, yielding events.
 
         Security is checked BEFORE yielding tool_call events.
@@ -126,13 +126,23 @@ class WispAgentCore:
                                     try:
                                         decision = self.security.check(action, context)
                                         if not decision.allowed:
-                                            yield _flatten_event(
-                                                error_event(
-                                                    f"Blocked: {decision.reason}",
-                                                    recoverable=True,
+                                            # Interactive override via transport
+                                            approved = False
+                                            if approval_handler is not None:
+                                                try:
+                                                    approved = await approval_handler(tc_event)
+                                                except Exception as ae:
+                                                    logger.exception(
+                                                        "Approval handler failed: %s", ae
+                                                    )
+                                            if not approved:
+                                                yield _flatten_event(
+                                                    error_event(
+                                                        f"Blocked: {decision.reason}",
+                                                        recoverable=True,
+                                                    )
                                                 )
-                                            )
-                                            continue
+                                                continue
                                     except Exception as e:
                                         logger.exception(
                                             "Security check failed — treating as deny: %s",
@@ -250,7 +260,7 @@ class WispAgentCore:
         has_tool_results = any(e.get("type") == "tool_result" for e in provider_events)
         if pending_tool_calls and not has_tool_results:
             for tc in pending_tool_calls:
-                async for result_event in self._execute_tool(tc, session):
+                async for result_event in self._execute_tool(tc, session, approval_handler=approval_handler):
                     yield result_event
 
         # Yield final done event
@@ -533,7 +543,7 @@ class WispAgentCore:
 
         return schemas
 
-    async def _execute_tool(self, event: dict, session: dict) -> AsyncIterator[dict]:
+    async def _execute_tool(self, event: dict, session: dict, approval_handler=None) -> AsyncIterator[dict]:
         """Execute a tool call and yield the result event.
 
         Security is checked again here as a defense-in-depth measure.
@@ -567,19 +577,29 @@ class WispAgentCore:
             try:
                 decision = self.security.check(action, context)
                 if not decision.allowed:
-                    yield _flatten_event(
-                        tool_result_event(
-                            name,
-                            self._normalize_tool_result(
-                                {
-                                    "status": "error",
-                                    "data": f"Security blocked: {decision.reason}",
-                                }
-                            ),
-                            duration_ms=0,
+                    # Interactive override via transport
+                    approved = False
+                    if approval_handler is not None:
+                        try:
+                            approved = await approval_handler(event)
+                        except Exception as ae:
+                            logger.exception(
+                                "Approval handler failed: %s", ae
+                            )
+                    if not approved:
+                        yield _flatten_event(
+                            tool_result_event(
+                                name,
+                                self._normalize_tool_result(
+                                    {
+                                        "status": "error",
+                                        "data": f"Security blocked: {decision.reason}",
+                                    }
+                                ),
+                                duration_ms=0,
+                            )
                         )
-                    )
-                    return
+                        return
             except Exception as e:
                 logger.exception("Security re-check failed — treating as deny: %s", e)
                 yield _flatten_event(
