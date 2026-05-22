@@ -13,6 +13,7 @@ Design:
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import logging
 import shutil
@@ -277,11 +278,11 @@ class _SessionAdapter:
 
         self._session["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-    def compact(self, keep_recent: int = 4, max_context_tokens: int = 4096) -> None:
+    def compact(self, keep_recent: int = 4, max_context_tokens: int = 4096, chars_per_token: int = 4) -> "dict":
         """Compact session messages, keeping recent ones."""
         msgs = self._session.get("messages", [])
         if len(msgs) <= keep_recent:
-            return
+            return {"compacted": False, "before_count": len(msgs), "after_count": len(msgs)}
         # Simple compaction: summarize older messages
         to_summarize = msgs[:-keep_recent]
         keep = msgs[-keep_recent:]
@@ -291,9 +292,15 @@ class _SessionAdapter:
             {
                 "before": len(msgs),
                 "after": len(self._session["messages"]),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             }
         )
+        return {
+            "compacted": True,
+            "before_count": len(msgs),
+            "after_count": len(self._session["messages"]),
+            "summary": summary,
+        }
 
     def to_dict(self) -> dict:
         return dict(self._session)
