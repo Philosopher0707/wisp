@@ -1,161 +1,147 @@
-"""Tests for wisp.core.agent — WispAgentCore event-driven logic."""
+"""Tests for AgentAdapter — backward-compat API for slash commands.
 
-import pytest
+These methods were originally on WispAgentCore (old agent.py). They now live on
+AgentAdapter in wisp/transport/cli_v2.py, which adapts the new runtime+session to
+the old API that wisp/commands.py expects.
+"""
+
 from unittest.mock import MagicMock, patch
 
-from wisp.core.engine import WispAgentCore
-from wisp.core.events import (
-    TYPE_CONTENT,
-    TYPE_DONE,
-    TYPE_TOOL_CALL,
-    TYPE_TOOL_RESULT,
-    TYPE_SYSTEM,
-    TYPE_APPROVAL_REQUEST,
-)
-from wisp.config import WispConfig
+import pytest
+
+from wisp.transport.cli_v2 import AgentAdapter
 
 
-@pytest.fixture
-def core():
-    config = WispConfig()
+def _make_adapter(messages=None, runtime=None, session=None):
+    """Build an AgentAdapter with minimal dependencies."""
+    if runtime is None:
+        runtime = MagicMock()
+    if session is None:
+        session = {
+            "id": "test-session",
+            "messages": messages or [],
+            "title": "test",
+            "model": "test-model",
+            "workspace": "/tmp",
+        }
+    config = MagicMock()
     config.model = "test-model"
     config.workspace = "/tmp"
     config.auto_compact = False
-    return WispAgentCore(config=config)
+    return AgentAdapter(runtime=runtime, config=config, session=session)
 
 
-class TestWispAgentCoreBasics:
+class TestAgentAdapterBasics:
 
-    def test_init(self, core):
-        assert core.config.model == "test-model"
-        assert core.messages == []
-        assert core.agent_id.startswith("wisp-")
+    def test_init(self):
+        adapter = _make_adapter()
+        assert adapter.messages == []
+        assert adapter._interrupted is False
 
-    def test_add_message(self, core):
-        core._add_message("user", "hello")
-        assert len(core.messages) == 1
-        assert core.messages[0]["role"] == "user"
-        assert core.messages[0]["content"] == [{"type": "text", "text": "hello"}]
+    def test_add_message(self):
+        adapter = _make_adapter()
+        adapter._add_message("user", "hello")
+        assert len(adapter.messages) == 1
+        assert adapter.messages[0]["role"] == "user"
+        assert adapter.messages[0]["content"] == "hello"
 
-    def test_expand_continuation_no_trigger(self, core):
-        text = "explain python"
-        assert core._expand_continuation(text) == text
+    def test_expand_continuation_noop(self):
+        """_expand_continuation is now a no-op — returns text unchanged."""
+        adapter = _make_adapter()
+        assert adapter._expand_continuation("explain python") == "explain python"
+        assert adapter._expand_continuation("continue") == "continue"
+        assert adapter._expand_continuation("go on") == "go on"
+        assert adapter._expand_continuation("do it") == "do it"
 
-    def test_expand_continuation_with_trigger(self, core):
-        core.messages = [
-            {"role": "user", "content": "explain decorators"},
-            {"role": "assistant", "content": "Decorators are functions that wrap..."},
-        ]
-        result = core._expand_continuation("continue")
-        assert "Continue your previous response" in result
-        assert "Decorators are functions" in result
-
-    def test_estimate_tokens(self, core):
-        core.messages = [
+    def test_estimate_tokens(self):
+        adapter = _make_adapter()
+        msgs = [
             {"role": "user", "content": "a" * 400},
             {"role": "assistant", "content": "b" * 400},
         ]
-        tokens = core._estimate_tokens(core.messages)
+        tokens = adapter._estimate_tokens(msgs)
         assert tokens == 200  # 800 chars / 4
 
+    def test_estimate_tokens_empty(self):
+        adapter = _make_adapter()
+        assert adapter._estimate_tokens([]) == 0
 
-class TestWispAgentCoreSession:
+    def test_estimate_tokens_short(self):
+        adapter = _make_adapter()
+        msgs = [{"role": "user", "content": "abc"}]
+        assert adapter._estimate_tokens(msgs) == 0  # 3 / 4 = 0
 
-    def test_session_created_on_first_run(self, core):
-        assert core.session is None
-        # We can't easily run async here without more mocking,
-        # but we can verify the session setup logic directly
-        from wisp.infra.session_dto import SessionDTO as Session
-        core.session = Session.create("test-model", "/tmp", "hello")
-        assert core.session is not None
-        assert core.session.title == "hello"
-
-    def test_save_session(self, core):
-        from wisp.infra.session_dto import SessionDTO as Session
-        core.session = Session.create("test-model", "/tmp", "test")
-        core.messages = [{"role": "user", "content": "hi"}]
-        core._save_session()
-        assert core.session.messages == core.messages
-
-
-class TestWispAgentCoreCompaction:
-
-    def test_maybe_compact_disabled(self, core):
-        core.config.auto_compact = False
-        result = core._maybe_compact_session()
-        assert result is None
-
-    def test_maybe_compact_no_session(self, core):
-        core.session = None
-        result = core._maybe_compact_session()
-        assert result is None
-
-    def test_maybe_compact_mid_turn_tool(self, core):
-        from wisp.infra.session_dto import SessionDTO as Session
-        core.session = Session.create("test-model", "/tmp", "test")
-        # Manually set up messages with a tool in progress
-        core.messages = [
-            {"role": "user", "content": "run"},
-            {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "run_bash"}}]},
-            {"role": "tool", "content": "ok"},
+    def test_estimate_tokens_two_messages(self):
+        adapter = _make_adapter()
+        msgs = [
+            {"role": "user", "content": "hello wo"},  # 8 chars
+            {"role": "assistant", "content": "rld! hel"},  # 8 chars
         ]
-        # Directly test the guard: _maybe_compact_session checks last message role
-        # When last is "tool", it should return a system event
-        # But only if token threshold is also met — so let's verify the guard logic
-        # by checking the method's internal behavior
-        last = core.messages[-1]
-        assert last.get("role") == "tool"
-        # The guard will trigger if token threshold is met.
-        # For this test, we just verify the guard condition exists.
-        # We'll test the full compaction in integration tests.
-        assert True  # Guard condition verified by inspection
+        assert adapter._estimate_tokens(msgs) == 4  # 16 / 4
 
 
-class TestWispAgentCoreToolParsing:
+class TestAgentAdapterSession:
 
-    def test_parse_tool_call_empty(self, core):
-        assert core._parse_tool_call({}) is None
-
-    def test_parse_tool_call_valid(self, core):
-        response = {
-            "message": {
-                "tool_calls": [{"function": {"name": "read_file"}}],
-            }
+    def test_session_created(self):
+        session = {
+            "id": "test-id",
+            "messages": [],
+            "title": "test",
+            "model": "test-model",
+            "workspace": "/tmp",
         }
-        result = core._parse_tool_call(response)
-        assert result is not None
-        assert len(result) == 1
+        adapter = _make_adapter(session=session)
+        assert adapter.session is not None
+        assert adapter.session.title == "test"
 
-    def test_parse_tool_call_no_tools(self, core):
-        response = {"message": {"content": "hello"}}
-        assert core._parse_tool_call(response) is None
+    def test_save_session(self):
+        runtime = MagicMock()
+        adapter = _make_adapter(runtime=runtime)
+        adapter._save_session()
+        runtime.store.save_session.assert_called_once()
 
 
-class TestWispAgentCoreDangerousCommand:
+class TestAgentAdapterCompaction:
 
-    @pytest.mark.asyncio
-    async def test_run_bash_dangerous_blocked(self, core):
-        """Dangerous commands get auto-blocked without approval prompt."""
-        core.messages = [
-            {"role": "user", "content": "run rm -rf /"},
-        ]
-        with patch.object(core, '_run_turn_streaming_events') as mock_events:
-            mock_events.return_value = iter([])
-            core.client.stream_response = {
-                "message": {
-                    "content": "",
-                    "tool_calls": [
-                        {"function": {"name": "run_bash", "arguments": {"command": "rm -rf /"}}}
-                    ],
-                }
-            }
-            events = []
-            async for event in core.run("run rm -rf /"):
-                events.append(event)
+    def test_maybe_compact(self):
+        runtime = MagicMock()
+        adapter = _make_adapter(runtime=runtime)
+        with patch("wisp.transport.cli_v2.asyncio.create_task") as mock_create:
+            adapter._maybe_compact_session()
+            mock_create.assert_called_once()
 
-            # Dangerous commands get auto-blocked; no approval_request
-            types = [e.type for e in events]
-            assert TYPE_TOOL_CALL in types
-            assert TYPE_APPROVAL_REQUEST not in types  # No prompt — auto-blocked
-            tool_results = [e for e in events if e.type == TYPE_TOOL_RESULT]
-            assert any("Blocked" in e.data["result"] for e in tool_results)
+
+class TestAgentAdapterInterrupted:
+
+    def test_interrupted_default_false(self):
+        adapter = _make_adapter()
+        assert adapter._interrupted is False
+
+    def test_interrupted_can_be_set(self):
+        adapter = _make_adapter()
+        adapter._interrupted = True
+        assert adapter._interrupted is True
+
+
+class TestAgentAdapterBuildSystemPrompt:
+
+    def test_build_system_prompt_fallback(self):
+        """When core doesn't have _build_system_prompt, uses fallback."""
+        runtime = MagicMock()
+        core = MagicMock()
+        del core._build_system_prompt
+        runtime._get_core.return_value = core
+        adapter = _make_adapter(runtime=runtime)
+        result = adapter._build_system_prompt()
+        assert "Wisp" in result
+        assert "coding assistant" in result
+
+    def test_build_system_prompt_delegates(self):
+        """When core has _build_system_prompt, delegates to it."""
+        runtime = MagicMock()
+        core = MagicMock()
+        core._build_system_prompt.return_value = "custom prompt"
+        runtime._get_core.return_value = core
+        adapter = _make_adapter(runtime=runtime)
+        result = adapter._build_system_prompt(query="test query")
+        assert result == "custom prompt"
