@@ -340,7 +340,10 @@ class AgentAdapter:
 
     @property
     def metrics(self):
-        return getattr(self.runtime, "telemetry", None)
+        from wisp.metrics import AgentMetrics
+        if not hasattr(self, '_agent_metrics'):
+            self._agent_metrics = AgentMetrics()
+        return self._agent_metrics
 
     @property
     def circuit_breaker(self):
