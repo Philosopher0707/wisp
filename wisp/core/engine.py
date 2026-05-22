@@ -570,15 +570,25 @@ class WispAgentCore:
                         {"status": "error", "data": schema_error}
                     ),
                     duration_ms=0,
+                    tool_call_id=event.get("id"),
                 )
             )
             return
 
         if self.tool_executor is not None:
+            # Wrap simple handler (event_dict -> bool) to ToolExecutor's protocol
+            # (name, args, reason) -> (approved, modified_args_or_none)
+            wrapped_handler = None
+            if approval_handler is not None:
+                async def _wrap_approval(name, args, reason):
+                    approved = await approval_handler({"name": name, "arguments": args})
+                    return approved, None
+                wrapped_handler = _wrap_approval
+
             async for agent_event in self.tool_executor.execute(
                 name, args, workspace,
                 tool_call_id=event.get("id"),
-                approval_handler=approval_handler,
+                approval_handler=wrapped_handler,
             ):
                 yield _flatten_event(agent_event)
         else:

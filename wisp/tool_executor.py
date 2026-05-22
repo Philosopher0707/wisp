@@ -229,7 +229,7 @@ class ToolExecutor:
         # ── Post-tool event hooks (best-effort, non-blocking) ──
         await self._run_post_tool_hooks(func_name, func_args, result, workspace)
 
-        yield _tool_result_event(func_name, result, duration_ms=duration_ms)
+        yield _tool_result_event(func_name, result, duration_ms=duration_ms, tool_call_id=tool_call_id)
 
     async def build_tool_message(
         self,
