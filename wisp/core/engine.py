@@ -62,8 +62,8 @@ class WispAgentCore:
     async def turn(self, session: dict, prompt: str, approval_handler=None) -> AsyncIterator[dict]:
         """Run one turn, yielding events.
 
-        Security is checked BEFORE yielding tool_call events.
-        Provider exceptions are caught and yielded as error events.
+        Loops internally: provider → tool_calls → execute → append → provider
+        until the model returns content (no tool calls) or max iterations.
         """
         # Build messages list
         messages = list(session.get("messages", []))
@@ -81,155 +81,196 @@ class WispAgentCore:
         # Get tools — built-in + extensions
         tools = self._get_tool_schemas()
 
-        # Stream events from provider
-        # NOTE: generate_stream_events may be synchronous (blocking I/O).
-        # We wrap it in a thread to avoid blocking the event loop.
-        pending_tool_calls: list[dict] = []
-        provider_events: list[dict] = []
-        partial_content: list[str] = []
+        max_iterations = getattr(self.config, "max_iterations", 30)
 
-        try:
-            async for event in self._stream_events_async(
-                system_prompt=system_prompt,
-                messages=messages,
-                tools=tools if tools else None,
-            ):
-                # Normalize event
-                normalized = self._normalize_event(event)
-                provider_events.append(normalized)
+        for iteration in range(max_iterations):
+            pending_tool_calls: list[dict] = []
+            provider_events: list[dict] = []
+            partial_content: list[str] = []
+            has_tool_calls = False
 
-                # Accumulate partial content for error recovery
-                if normalized.get("type") == "content":
-                    partial_content.append(normalized.get("text", ""))
+            try:
+                async for event in self._stream_events_async(
+                    system_prompt=system_prompt,
+                    messages=messages,
+                    tools=tools if tools else None,
+                ):
+                    # Normalize event
+                    normalized = self._normalize_event(event)
+                    provider_events.append(normalized)
 
-                # Security + extension checks for tool calls
-                if normalized.get("type") in ("tool_call", "tool_calls"):
-                    # Normalize type to singular for downstream consistency
-                    normalized["type"] = "tool_call"
-                    # Extract calls from ToolCallBatch if present
-                    if "calls" in normalized and "name" not in normalized:
-                        calls = normalized.pop("calls", [])
-                        if calls:
-                            # Yield individual tool_call events for each call
-                            for call in calls:
-                                func = call.get("function", {})
-                                single = {
-                                    "type": "tool_call",
-                                    "name": func.get("name", ""),
-                                    "arguments": func.get("arguments", {}),
-                                }
-                                if "id" in call:
-                                    single["id"] = call["id"]
-                                # Process each individually
-                                tc_event = dict(single)
-                                # Check security BEFORE yielding
-                                gate = self._get_approval_gate()
-                                allowed, reason = await gate.check(
-                                    tc_event, session, approval_handler=approval_handler
-                                )
-                                if not allowed:
-                                    yield _flatten_event(
-                                        error_event(
-                                            f"Blocked: {reason}",
-                                            recoverable=True,
-                                        )
+                    # Accumulate partial content for error recovery
+                    if normalized.get("type") == "content":
+                        partial_content.append(normalized.get("text", ""))
+
+                    # Security + extension checks for tool calls
+                    if normalized.get("type") in ("tool_call", "tool_calls"):
+                        has_tool_calls = True
+                        # Normalize type to singular for downstream consistency
+                        normalized["type"] = "tool_call"
+                        # Extract calls from ToolCallBatch if present
+                        if "calls" in normalized and "name" not in normalized:
+                            calls = normalized.pop("calls", [])
+                            if calls:
+                                # Yield individual tool_call events for each call
+                                for call in calls:
+                                    func = call.get("function", {})
+                                    single = {
+                                        "type": "tool_call",
+                                        "name": func.get("name", ""),
+                                        "arguments": func.get("arguments", {}),
+                                    }
+                                    if "id" in call:
+                                        single["id"] = call["id"]
+                                    # Process each individually
+                                    tc_event = dict(single)
+                                    # Check security BEFORE yielding
+                                    gate = self._get_approval_gate()
+                                    allowed, reason = await gate.check(
+                                        tc_event, session, approval_handler=approval_handler
                                     )
-                                    continue
-
-                                # Check extensions
-                                if self.extensions is not None:
-                                    try:
-                                        ext_result = self.extensions.intercept(tc_event)
-                                        if ext_result.get("action") == "block":
-                                            yield _flatten_event(
-                                                error_event(
-                                                    f"Blocked: {ext_result.get('reason', 'by extension')}",
-                                                    recoverable=True,
-                                                )
-                                            )
-                                            continue
-                                    except Exception as e:
-                                        logger.exception(
-                                            "Extension intercept failed — treating as deny: %s",
-                                            e,
-                                        )
+                                    if not allowed:
                                         yield _flatten_event(
                                             error_event(
-                                                f"Extension intercept failed: {e}. Tool call denied.",
+                                                f"Blocked: {reason}",
                                                 recoverable=True,
                                             )
                                         )
                                         continue
 
-                                pending_tool_calls.append(tc_event)
-                                yield _flatten_event(tc_event)
-                            continue  # Skip the default yield below since we already yielded
-                        continue
+                                    # Check extensions
+                                    if self.extensions is not None:
+                                        try:
+                                            ext_result = self.extensions.intercept(tc_event)
+                                            if ext_result.get("action") == "block":
+                                                yield _flatten_event(
+                                                    error_event(
+                                                        f"Blocked: {ext_result.get('reason', 'by extension')}",
+                                                        recoverable=True,
+                                                    )
+                                                )
+                                                continue
+                                        except Exception as e:
+                                            logger.exception(
+                                                "Extension intercept failed — treating as deny: %s",
+                                                e,
+                                            )
+                                            yield _flatten_event(
+                                                error_event(
+                                                    f"Extension intercept failed: {e}. Tool call denied.",
+                                                    recoverable=True,
+                                                )
+                                            )
+                                            continue
 
-                    # Check security BEFORE yielding
-                    gate = self._get_approval_gate()
-                    allowed, reason = await gate.check(normalized, session)
-                    if not allowed:
-                        yield _flatten_event(
-                            error_event(
-                                f"Blocked: {reason}",
-                                recoverable=True,
-                            )
-                        )
-                        continue
+                                    pending_tool_calls.append(tc_event)
+                                    yield _flatten_event(tc_event)
+                                continue  # Skip the default yield below since we already yielded
+                            continue
 
-                    # Check extensions
-                    if self.extensions is not None:
-                        try:
-                            ext_result = self.extensions.intercept(normalized)
-                            if ext_result.get("action") == "block":
-                                yield _flatten_event(
-                                    error_event(
-                                        f"Blocked: {ext_result.get('reason', 'by extension')}",
-                                        recoverable=True,
-                                    )
-                                )
-                                continue
-                        except Exception as e:
-                            logger.exception(
-                                "Extension intercept failed — treating as deny: %s", e
-                            )
+                        # Check security BEFORE yielding
+                        gate = self._get_approval_gate()
+                        allowed, reason = await gate.check(normalized, session)
+                        if not allowed:
                             yield _flatten_event(
                                 error_event(
-                                    f"Extension intercept failed: {e}. Tool call denied.",
+                                    f"Blocked: {reason}",
                                     recoverable=True,
                                 )
                             )
                             continue
 
-                    pending_tool_calls.append(normalized)
+                        # Check extensions
+                        if self.extensions is not None:
+                            try:
+                                ext_result = self.extensions.intercept(normalized)
+                                if ext_result.get("action") == "block":
+                                    yield _flatten_event(
+                                        error_event(
+                                            f"Blocked: {ext_result.get('reason', 'by extension')}",
+                                            recoverable=True,
+                                        )
+                                    )
+                                    continue
+                            except Exception as e:
+                                logger.exception(
+                                    "Extension intercept failed — treating as deny: %s", e
+                                )
+                                yield _flatten_event(
+                                    error_event(
+                                        f"Extension intercept failed: {e}. Tool call denied.",
+                                        recoverable=True,
+                                    )
+                                )
+                                continue
 
-                # Yield the event (skip complete events — we yield done after tool execution)
-                if normalized.get("type") in ("complete", "done"):
-                    continue
-                yield normalized
+                        pending_tool_calls.append(normalized)
 
-        except Exception as exc:
-            logger.exception("Provider stream failed")
-            # Yield partial content so user sees something
-            if partial_content:
-                yield _flatten_event(content_event("".join(partial_content)))
-            yield _flatten_event(
-                error_event(
-                    f"Stream error: {exc}",
-                    recoverable=True,
+                    # Yield the event (skip complete events)
+                    if normalized.get("type") in ("complete", "done"):
+                        continue
+                    yield normalized
+
+            except Exception as exc:
+                logger.exception("Provider stream failed")
+                if partial_content:
+                    yield _flatten_event(content_event("".join(partial_content)))
+                yield _flatten_event(
+                    error_event(
+                        f"Stream error: {exc}",
+                        recoverable=True,
+                    )
                 )
-            )
-            return
+                return
 
-        # Execute pending tool calls that didn't get a tool_result from provider
-        has_tool_results = any(e.get("type") == "tool_result" for e in provider_events)
-        if pending_tool_calls and not has_tool_results:
-            for tc in pending_tool_calls:
-                async for result_event in self._execute_tool(tc, session, approval_handler=approval_handler):
-                    yield result_event
+            # ── If no tool calls, the model produced final content ──
+            if not has_tool_calls:
+                yield _flatten_event(done_event(session.get("id", "")))
+                return
 
-        # Yield final done event
+            # ── Execute tools and feed results back to messages ──
+            tool_results_events: list[dict] = []
+            has_tool_results = any(e.get("type") == "tool_result" for e in provider_events)
+            if pending_tool_calls and not has_tool_results:
+                for tc in pending_tool_calls:
+                    async for result_event in self._execute_tool(
+                        tc, session, approval_handler=approval_handler
+                    ):
+                        tool_results_events.append(result_event)
+                        yield result_event
+
+            # Append assistant + tool messages to continue the conversation
+            assistant_msg = {"role": "assistant", "content": "".join(partial_content)}
+            if pending_tool_calls:
+                import json
+                import uuid as _uuid
+                tc_blocks = []
+                for tc in pending_tool_calls:
+                    args = tc.get("arguments", {})
+                    tc_blocks.append({
+                        "id": tc.get("id", f"call_{_uuid.uuid4().hex[:8]}"),
+                        "type": "function",
+                        "function": {
+                            "name": tc.get("name", ""),
+                            "arguments": json.dumps(args) if isinstance(args, dict) else str(args),
+                        },
+                    })
+                assistant_msg["tool_calls"] = tc_blocks
+            messages.append(assistant_msg)
+
+            for tr in tool_results_events:
+                content = tr.get("result", tr.get("data", ""))
+                if isinstance(content, dict):
+                    content = json.dumps(content)
+                tc_id = tr.get("tool_call_id", "")
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc_id,
+                    "content": str(content),
+                })
+
+        # Max iterations reached
+        yield _flatten_event(error_event("Max iterations reached", recoverable=False))
         yield _flatten_event(done_event(session.get("id", "")))
 
     async def _stream_events_async(
