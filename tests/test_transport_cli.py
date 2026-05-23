@@ -337,6 +337,6 @@ class TestCLIThinkingCollapse:
         await transport.run(stdin, stdout, session_id="sess-1", model="qwen", workspace="/tmp")
 
         all_output = "".join(stdout.outputs)
-        # Should show collapsed summary, not raw thinking text
-        assert "Let me think carefully" not in all_output
+        # Should show collapsed summary with first-line preview
+        assert "Let me think carefully" in all_output
         assert "Thinking" in all_output

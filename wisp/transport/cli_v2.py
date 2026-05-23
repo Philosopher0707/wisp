@@ -668,14 +668,33 @@ class CLITransport(Transport):
                 stdout.write(rendered + "\n")
         else:
             line_count = full.count("\n") + 1
-            if is_accessible():
-                stdout.write(
-                    dim(f"  [Thinking] {line_count} lines — use /thinking to expand\n")
-                )
+            # Extract first meaningful line as preview
+            preview = ""
+            for line in full.strip().splitlines():
+                stripped = line.strip()
+                if stripped:
+                    preview = stripped[:60]
+                    if len(stripped) > 60:
+                        preview += "..."
+                    break
+            if preview:
+                if is_accessible():
+                    stdout.write(
+                        dim(f'  [Thinking] "{preview}" — {line_count} lines, /thinking to expand\n')
+                    )
+                else:
+                    stdout.write(
+                        dim(f'  🧠 Thinking: "{preview}" ({line_count} lines — /thinking to expand)\n')
+                    )
             else:
-                stdout.write(
-                    dim(f"  🧠 Thinking... ({line_count} lines — /thinking to expand)\n")
-                )
+                if is_accessible():
+                    stdout.write(
+                        dim(f"  [Thinking] {line_count} lines — use /thinking to expand\n")
+                    )
+                else:
+                    stdout.write(
+                        dim(f"  🧠 Thinking... ({line_count} lines — /thinking to expand)\n")
+                    )
         stdout.flush()
 
     def _flush_content(self, stdout: Any, width: int | None = None) -> None:
@@ -893,6 +912,11 @@ class CLITransport(Transport):
                     spinner.fail(label)
                 else:
                     spinner.succeed(label)
+                # Show result content below spinner line
+                rendered = self._render_tool_result(name, result, duration_ms, width, skip_header=True)
+                if rendered:
+                    stdout.write(rendered + "\n")
+                    stdout.flush()
 
         elif etype == EventType.DONE:
             self._flush_thinking(stdout, width)
@@ -946,7 +970,8 @@ class CLITransport(Transport):
             pass
 
     def _render_tool_result(
-        self, name: str, result: Any, duration_ms: float | None, width: int
+        self, name: str, result: Any, duration_ms: float | None, width: int,
+        skip_header: bool = False,
     ) -> str | None:
         """Render a tool result with structured output and diff support.
         
@@ -1004,7 +1029,6 @@ class CLITransport(Transport):
 
         # Edit tools with a diff: show diff regardless of success/failure
         if is_edit_tool and diff_text:
-            header = _build_header(icon, name, duration_str)
             summary = dim(f"     → {result_text[:200].replace(chr(10), ' ')}")
             try:
                 from wisp.diff_renderer import render_diff_box
@@ -1016,6 +1040,9 @@ class CLITransport(Transport):
                     box_mode=True,
                     language=lang,
                 )
+                if skip_header:
+                    return f"{summary}\n{diff_box}"
+                header = _build_header(icon, name, duration_str)
                 return f"{header}\n{summary}\n{diff_box}"
             except ImportError:
                 pass
@@ -1032,12 +1059,16 @@ class CLITransport(Transport):
                     + " \u00B7" * max(0, width - display_width(f"  {icon} {name} ({duration_str}) — {line_count} lines of output") - 2)
                 )
 
+            if skip_header:
+                return _box(output_str, width=width)
             header = _build_header(icon, name, duration_str)
             body = _box(output_str, width=width)
             return f"{header}\n{body}"
 
         # Regular / compact tool results
         if not self.show_tool_output:
+            if skip_header:
+                return None
             fill_content = f"  {icon} {name} ({duration_str})"
             fill_width = display_width(fill_content)
             dots = " \u00B7" * max(0, width - fill_width - 2)
@@ -1045,10 +1076,14 @@ class CLITransport(Transport):
 
         if is_error:
             preview = result_text[:200].replace("\n", " ")
+            if skip_header:
+                return dim(f"     → {preview}")
             return dim(f"  {icon} {name} ({duration_str})") + "\n" + dim(f"     → {preview}")
 
         preview = result_text[:200].replace("\n", " ")
         if len(result_text) > 200:
             preview += "..."
+        if skip_header:
+            return dim(f"     → {preview}")
         header = _build_header(icon, name, duration_str)
         return f"{header}\n" + dim(f"     → {preview}")

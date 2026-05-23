@@ -47,19 +47,20 @@ class TestSpinnerStart:
 
 
 class TestSpinnerUpdate:
-    """update() cycles frames."""
+    """update() changes label while animation thread cycles frames."""
 
-    def test_update_cycles_frame(self):
+    def test_update_changes_label(self):
         out = io.StringIO()
         s = Spinner(out, OutputMode.ASCII)
         s.start("work")
-        first = out.getvalue()
-        s.update("work")
-        second = out.getvalue()
-        # Should have \r in output (line overwrite)
-        assert "\r" in second
-        # Should have cycled to next frame
-        assert "/" in second
+        s.update("new work")
+        # Animation thread writes frames; label should update
+        # Give thread time to write at least one frame with new label
+        import time
+        time.sleep(0.2)
+        s.stop()
+        output = out.getvalue()
+        assert "new work" in output
 
     def test_update_only_when_active(self):
         out = io.StringIO()
