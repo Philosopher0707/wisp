@@ -719,6 +719,8 @@ class CLITransport(Transport):
 
         self._in_thinking = False
         self._in_content = False
+        if self._spinner is not None:
+            self._spinner.stop()
         self._turn_number += 1
         self._progress.start_turn(self._turn_number)
         self._phase = "understand"
@@ -899,7 +901,9 @@ class CLITransport(Transport):
             result = ev.data.get("result", "")
             duration_ms = ev.data.get("duration_ms")
             if duration_ms and duration_ms < 50:
-                # Fast tools: skip spinner, show result inline
+                # Fast tools: stop spinner, show result inline
+                if self._spinner is not None:
+                    self._spinner.stop()
                 rendered = self._render_tool_result(name, result, duration_ms, width)
                 if rendered:
                     stdout.write(rendered + "\n")
