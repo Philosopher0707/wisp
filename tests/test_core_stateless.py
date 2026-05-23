@@ -29,13 +29,11 @@ def core():
     from wisp.core.engine import WispAgentCore
     from wisp.infra.security import SecurityPolicy, PermissionMode
     from wisp.infra.extensions import ExtensionHost
-    from wisp.infra.telemetry import Telemetry
 
     return WispAgentCore(
         provider=_MockProvider(),
         security=SecurityPolicy(permission_mode=PermissionMode.FULL),
         extensions=ExtensionHost(),
-        telemetry=Telemetry(),
     )
 
 
@@ -170,7 +168,6 @@ class TestSecurityIntegration:
         from wisp.core.engine import WispAgentCore
         from wisp.infra.security import SecurityPolicy, PermissionMode
         from wisp.infra.extensions import ExtensionHost
-        from wisp.infra.telemetry import Telemetry
 
         core = WispAgentCore(
             provider=_MockProvider([
@@ -179,7 +176,6 @@ class TestSecurityIntegration:
             ]),
             security=SecurityPolicy(permission_mode=PermissionMode.READ_ONLY),
             extensions=ExtensionHost(),
-            telemetry=Telemetry(),
         )
 
         session = {"id": "s1", "messages": [], "model": "qwen"}
@@ -204,7 +200,6 @@ class TestExtensionIntegration:
         from wisp.core.engine import WispAgentCore
         from wisp.infra.security import SecurityPolicy, PermissionMode
         from wisp.infra.extensions import ExtensionHost
-        from wisp.infra.telemetry import Telemetry
 
         host = ExtensionHost()
         host.register(_BlockingExtension())
@@ -216,7 +211,6 @@ class TestExtensionIntegration:
             ]),
             security=SecurityPolicy(permission_mode=PermissionMode.FULL),
             extensions=host,
-            telemetry=Telemetry(),
         )
 
         session = {"id": "s1", "messages": [], "model": "qwen"}

@@ -173,7 +173,6 @@ class CompositionRoot:
             provider=provider,
             security=self.security,
             extensions=self.extensions,
-            telemetry=self.telemetry,
             tool_executor=self.tool_executor,
         )
 

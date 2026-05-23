@@ -17,7 +17,7 @@ from wisp.multi_agent.task import EventKind, OrchestratorEvent
 class FakeStatelessCore:
     """Minimal fake stateless core for testing SubagentOrchestrator."""
 
-    def __init__(self, provider=None, security=None, extensions=None, telemetry=None, config=None):
+    def __init__(self, provider=None, security=None, extensions=None, config=None):
         self.config = config or MagicMock()
         self.config.workspace = "/tmp"
         # Handle MagicMock provider gracefully
@@ -37,8 +37,8 @@ class FakeStatelessCore:
 class FakeWispAgentCore(FakeStatelessCore):
     """Backward-compat alias for old test code."""
 
-    def __init__(self, provider=None, security=None, extensions=None, telemetry=None, config=None, **kwargs):
-        super().__init__(provider=provider, security=security, extensions=extensions, telemetry=telemetry, config=config)
+    def __init__(self, provider=None, security=None, extensions=None, config=None, **kwargs):
+        super().__init__(provider=provider, security=security, extensions=extensions, config=config)
         self.session = kwargs.get("session")
         self.role = kwargs.get("role", "")
         self.closed = False

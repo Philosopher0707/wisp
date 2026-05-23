@@ -10,7 +10,7 @@ import re
 
 import pytest
 
-from wisp.core.agent import DEFAULT_SYSTEM  # compat shim — see Phase 7
+from wisp.context_assembler import DEFAULT_SYSTEM
 from wisp.tools import TOOL_SCHEMAS, TOOL_IMPLS
 
 

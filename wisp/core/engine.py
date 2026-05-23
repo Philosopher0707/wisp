@@ -18,7 +18,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
 
 from wisp.core.events import (
     AgentEvent,
@@ -30,6 +30,14 @@ from wisp.core.events import (
     done as done_event,
 )
 from wisp.core.approval_gate import ApprovalGate
+
+if TYPE_CHECKING:
+    from wisp.providers.protocol import Provider
+    from wisp.infra.security import SecurityPolicy
+    from wisp.infra.extensions import ExtensionHost
+    from wisp.tool_executor import ToolExecutor
+    from wisp.config import WispConfig
+    from wisp.context_assembler import ContextAssembler
 
 logger = logging.getLogger(__name__)
 
@@ -48,17 +56,16 @@ def _flatten_event(ev: AgentEvent | dict) -> dict:
 class WispAgentCore:
     """Stateless turn engine."""
 
-    provider: Any = None
-    security: Any = None
-    extensions: Any = None
-    telemetry: Any = None
-    config: Any = None
-    tool_executor: Any = None
+    config: WispConfig | None = None
+    provider: Provider | None = None
+    security: SecurityPolicy | None = None
+    extensions: ExtensionHost | None = None
+    tool_executor: ToolExecutor | None = None
 
     # Caches for expensive context building
-    _assembler_cache: Any = field(default=None, repr=False)
+    _assembler_cache: ContextAssembler | None = field(default=None, repr=False)
     _static_prompt_cache: dict = field(default_factory=dict, repr=False)
-    _approval_gate: Any = field(default=None, repr=False)
+    _approval_gate: ApprovalGate | None = field(default=None, repr=False)
 
     async def turn(self, session: dict, prompt: str, approval_handler=None) -> AsyncIterator[dict]:
         """Run one turn, yielding events.

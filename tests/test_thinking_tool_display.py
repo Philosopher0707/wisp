@@ -54,7 +54,6 @@ def transport():
         provider=provider,
         security=SecurityPolicy('full'),
         extensions=ExtensionHost(),
-        telemetry=Telemetry(),
         config=config,
     )
     store = MagicMock()

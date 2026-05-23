@@ -9,13 +9,11 @@ def core():
     from wisp.core.engine import WispAgentCore
     from wisp.infra.security import SecurityPolicy, PermissionMode
     from wisp.infra.extensions import ExtensionHost
-    from wisp.infra.telemetry import Telemetry
 
     return WispAgentCore(
         provider=MagicMock(),
         security=SecurityPolicy(permission_mode=PermissionMode.FULL),
         extensions=ExtensionHost(),
-        telemetry=Telemetry(),
     )
 
 

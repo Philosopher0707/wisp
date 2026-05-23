@@ -17,7 +17,7 @@ class FakeStatelessCore:
 
     created_instances: list = []
 
-    def __init__(self, provider=None, security=None, extensions=None, telemetry=None, config=None, **kwargs):
+    def __init__(self, provider=None, security=None, extensions=None, config=None, **kwargs):
         self.config = config or MagicMock()
         # Extract depth from config if it's a real value, not a MagicMock
         depth = getattr(config, "_subagent_depth", 0) if config else 0
