@@ -60,7 +60,7 @@ class TestCLISessionLifecycle:
 
     @pytest.mark.asyncio
     async def test_creates_session_on_start(self):
-        from wisp.transport.cli_v2 import CLITransport
+        from wisp.transport.cli import CLITransport
         runtime = _MockRuntime()
         transport = CLITransport(runtime)
         stdin = _MockIO([])
@@ -72,7 +72,7 @@ class TestCLISessionLifecycle:
 
     @pytest.mark.asyncio
     async def test_prints_ready_message(self):
-        from wisp.transport.cli_v2 import CLITransport
+        from wisp.transport.cli import CLITransport
         runtime = _MockRuntime()
         transport = CLITransport(runtime)
         stdin = _MockIO([])
@@ -92,7 +92,7 @@ class TestCLIMessageRouting:
 
     @pytest.mark.asyncio
     async def test_user_input_triggers_turn(self):
-        from wisp.transport.cli_v2 import CLITransport
+        from wisp.transport.cli import CLITransport
         runtime = _MockRuntime()
         transport = CLITransport(runtime)
         stdin = _MockIO(["hello"])
@@ -105,7 +105,7 @@ class TestCLIMessageRouting:
 
     @pytest.mark.asyncio
     async def test_events_printed_to_stdout(self):
-        from wisp.transport.cli_v2 import CLITransport
+        from wisp.transport.cli import CLITransport
         runtime = _MockRuntime()
         transport = CLITransport(runtime)
         stdin = _MockIO(["hello"])
@@ -125,7 +125,7 @@ class TestCLIMultipleTurns:
 
     @pytest.mark.asyncio
     async def test_multiple_inputs(self):
-        from wisp.transport.cli_v2 import CLITransport
+        from wisp.transport.cli import CLITransport
         runtime = _MockRuntime()
         transport = CLITransport(runtime)
         stdin = _MockIO(["hello", "world"])
@@ -147,7 +147,7 @@ class TestCLIErrorHandling:
 
     @pytest.mark.asyncio
     async def test_runtime_error_printed(self):
-        from wisp.transport.cli_v2 import CLITransport
+        from wisp.transport.cli import CLITransport
 
         class _BrokenRuntime:
             async def get_or_create_session(self, **kwargs):
@@ -176,7 +176,7 @@ class TestCLIExitHandling:
 
     @pytest.mark.asyncio
     async def test_eof_exits(self):
-        from wisp.transport.cli_v2 import CLITransport
+        from wisp.transport.cli import CLITransport
         runtime = _MockRuntime()
         transport = CLITransport(runtime)
         stdin = _MockIO([])
@@ -189,7 +189,7 @@ class TestCLIExitHandling:
 
     @pytest.mark.asyncio
     async def test_exit_command_terminates(self):
-        from wisp.transport.cli_v2 import CLITransport
+        from wisp.transport.cli import CLITransport
         runtime = _MockRuntime()
         transport = CLITransport(runtime)
         stdin = _MockIO(["exit"])
@@ -209,7 +209,7 @@ class TestCLIPhaseTracking:
 
     @pytest.mark.asyncio
     async def test_turn_counter_increments(self):
-        from wisp.transport.cli_v2 import CLITransport
+        from wisp.transport.cli import CLITransport
         runtime = _MockRuntime()
         transport = CLITransport(runtime)
         stdin = _MockIO(["hello", "world"])
@@ -224,7 +224,7 @@ class TestCLIPhaseTracking:
 
     @pytest.mark.asyncio
     async def test_progress_reset_per_turn(self):
-        from wisp.transport.cli_v2 import CLITransport
+        from wisp.transport.cli import CLITransport
         runtime = _MockRuntime()
         transport = CLITransport(runtime)
         stdin = _MockIO(["hello"])
@@ -238,7 +238,7 @@ class TestCLIPhaseTracking:
 
     @pytest.mark.asyncio
     async def test_phase_tracking_with_tools(self):
-        from wisp.transport.cli_v2 import CLITransport
+        from wisp.transport.cli import CLITransport
 
         class _ToolRuntime:
             async def get_or_create_session(self, **kwargs):
@@ -265,7 +265,7 @@ class TestCLIPhaseTracking:
 
     @pytest.mark.asyncio
     async def test_tool_success_and_failure_counted(self):
-        from wisp.transport.cli_v2 import CLITransport
+        from wisp.transport.cli import CLITransport
 
         class _MixedRuntime:
             async def get_or_create_session(self, **kwargs):
@@ -293,7 +293,7 @@ class TestCLIFileTracking:
 
     @pytest.mark.asyncio
     async def test_modified_files_in_output(self):
-        from wisp.transport.cli_v2 import CLITransport
+        from wisp.transport.cli import CLITransport
 
         class _FileRuntime:
             async def get_or_create_session(self, **kwargs):
@@ -320,7 +320,7 @@ class TestCLIThinkingCollapse:
 
     @pytest.mark.asyncio
     async def test_thinking_collapsed_by_default(self):
-        from wisp.transport.cli_v2 import CLITransport
+        from wisp.transport.cli import CLITransport
 
         class _ThinkRuntime:
             async def get_or_create_session(self, **kwargs):

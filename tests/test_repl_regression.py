@@ -121,7 +121,7 @@ class TestInterruptFlag:
 
 def _make_agent_adapter(messages=None):
     """Build an AgentAdapter with minimal dependencies."""
-    from wisp.transport.cli_v2 import AgentAdapter
+    from wisp.transport.cli import AgentAdapter
 
     runtime = MagicMock()
     session = {

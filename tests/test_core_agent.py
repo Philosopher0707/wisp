@@ -1,7 +1,7 @@
 """Tests for AgentAdapter — backward-compat API for slash commands.
 
 These methods were originally on WispAgentCore (old agent.py). They now live on
-AgentAdapter in wisp/transport/cli_v2.py, which adapts the new runtime+session to
+AgentAdapter in wisp/transport/cli.py, which adapts the new runtime+session to
 the old API that wisp/commands.py expects.
 """
 
@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from wisp.transport.cli_v2 import AgentAdapter
+from wisp.transport.cli import AgentAdapter
 
 
 def _make_adapter(messages=None, runtime=None, session=None):
@@ -106,7 +106,7 @@ class TestAgentAdapterCompaction:
     def test_maybe_compact(self):
         runtime = MagicMock()
         adapter = _make_adapter(runtime=runtime)
-        with patch("wisp.transport.cli_v2.asyncio.create_task") as mock_create:
+        with patch("wisp.transport.cli.asyncio.create_task") as mock_create:
             adapter._maybe_compact_session()
             mock_create.assert_called_once()
 

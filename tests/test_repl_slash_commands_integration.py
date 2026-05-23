@@ -56,7 +56,7 @@ class FakeRoot:
 def test_repl_help_command():
     """/help in REPL should show commands without LLM call."""
     from wisp.entry import _run_repl
-    from wisp.transport.cli_v2 import CLITransport
+    from wisp.transport.cli import CLITransport
 
     root = FakeRoot()
     transport = CLITransport(root.runtime, root.config)
@@ -74,7 +74,7 @@ def test_repl_help_command():
 def test_repl_clear_command():
     """/clear in REPL should clear messages."""
     from wisp.entry import _run_repl
-    from wisp.transport.cli_v2 import CLITransport
+    from wisp.transport.cli import CLITransport
 
     root = FakeRoot()
     transport = CLITransport(root.runtime, root.config)
@@ -92,7 +92,7 @@ def test_repl_clear_command():
 def test_repl_session_command():
     """/session in REPL should show session info."""
     from wisp.entry import _run_repl
-    from wisp.transport.cli_v2 import CLITransport
+    from wisp.transport.cli import CLITransport
 
     root = FakeRoot()
     transport = CLITransport(root.runtime, root.config)
@@ -110,7 +110,7 @@ def test_repl_session_command():
 def test_repl_unknown_command():
     """Unknown slash command should show error."""
     from wisp.entry import _run_repl
-    from wisp.transport.cli_v2 import CLITransport
+    from wisp.transport.cli import CLITransport
 
     root = FakeRoot()
     transport = CLITransport(root.runtime, root.config)
@@ -128,7 +128,7 @@ def test_repl_unknown_command():
 def test_repl_normal_prompt_still_works():
     """Non-slash prompts should still run through the runtime."""
     from wisp.entry import _run_repl
-    from wisp.transport.cli_v2 import CLITransport
+    from wisp.transport.cli import CLITransport
 
     root = FakeRoot()
     transport = CLITransport(root.runtime, root.config)

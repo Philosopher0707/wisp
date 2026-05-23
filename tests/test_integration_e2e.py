@@ -133,7 +133,7 @@ class TestTransportRuntimeIntegration:
     @pytest.mark.asyncio
     async def test_cli_transport_e2e(self, config):
         from wisp.composition import CompositionRoot
-        from wisp.transport.cli_v2 import CLITransport
+        from wisp.transport.cli import CLITransport
 
         root = CompositionRoot(config)
         original_factory = root.runtime.core_factory

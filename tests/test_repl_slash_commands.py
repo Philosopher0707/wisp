@@ -37,7 +37,7 @@ class FakeConfig:
 
 @pytest.fixture
 def transport():
-    from wisp.transport.cli_v2 import CLITransport
+    from wisp.transport.cli import CLITransport
     return CLITransport(FakeRuntime(), FakeConfig())
 
 

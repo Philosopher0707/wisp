@@ -18,7 +18,7 @@ from typing import Any
 
 from wisp.composition import CompositionRoot
 from wisp.config import WispConfig
-from wisp.transport.cli_v2 import CLITransport
+from wisp.transport.cli import CLITransport
 from wisp.transport.tui import TUITransport
 from wisp.transport.renderer import render_turn_stats, render_file_ticker
 from wisp.colors import dim
@@ -240,7 +240,7 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
         if prompt.startswith("/"):
             from wisp.commands import dispatch
             from wisp.exceptions import ExitREPL
-            from wisp.transport.cli_v2 import AgentAdapter
+            from wisp.transport.cli import AgentAdapter
             adapter = AgentAdapter(root.runtime, config, session)
             try:
                 if dispatch(prompt, adapter):
@@ -281,7 +281,7 @@ async def _run_single_prompt(transport: CLITransport, root: CompositionRoot, pro
     # ── Slash commands in single-shot mode ──────────────────
     if prompt.startswith("/"):
         from wisp.commands import dispatch
-        from wisp.transport.cli_v2 import AgentAdapter
+        from wisp.transport.cli import AgentAdapter
         adapter = AgentAdapter(root.runtime, config, session)
         try:
             if dispatch(prompt, adapter):
