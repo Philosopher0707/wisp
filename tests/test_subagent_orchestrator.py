@@ -76,6 +76,10 @@ def mock_parent_agent():
     agent.config._context_tokens_explicit = True
     agent.config.permission_mode = "auto"
     agent.config.max_iterations = 30
+    agent.config.subagent_pool_size = 4
+    agent.config.chars_per_token = 4
+    agent.config.max_subagent_depth = 2
+    agent.config.max_subagent_branching = 3
     return agent
 
 
@@ -987,14 +991,14 @@ async def test_run_schema_jsonschema_not_installed(monkeypatch):
 
 # ── Worktree and config tests ──────────────────────────────────────────
 
-def test_orchestrator_with_explicit_workspace():
+def test_orchestrator_with_explicit_workspace(tmp_path):
     """Orchestrator accepts explicit workspace path."""
     from wisp.config import WispConfig
     cfg = WispConfig()
     cfg.model = "test-model"
-    cfg.workspace = "/custom/workspace"
+    cfg.workspace = str(tmp_path)
     orch = SubagentOrchestrator(config=cfg)
-    assert str(orch.workspace) == "/custom/workspace"
+    assert str(orch.workspace) == str(tmp_path)
 
 
 # ── Removed process isolation tests ────────────────────────────────────

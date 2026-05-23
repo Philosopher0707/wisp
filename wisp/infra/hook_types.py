@@ -25,6 +25,11 @@ class HookEvent:
     POST_BASH = "post_bash"
     PRE_TOOL_USE = "pre_tool_use"
 
+    # Subagent lifecycle events
+    SUBAGENT_SPAWN = "subagent_spawn"
+    SUBAGENT_COMPLETE = "subagent_complete"
+    SUBAGENT_FAIL = "subagent_fail"
+
     def __init__(self, event_type: str, **kwargs):
         self.event_type = event_type
         self.__dict__.update(kwargs)

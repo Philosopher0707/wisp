@@ -161,6 +161,6 @@ class TestExtensionHostIntegration:
         host.register(mock_ext1)
         host.register(mock_ext2)
 
-        host.shutdown()
+        host.stop()
         mock_ext1.stop.assert_called_once()
         mock_ext2.stop.assert_called_once()

@@ -48,7 +48,8 @@ You have access to tools that let you read, write, and edit files, run bash comm
 - search_codebase: Semantic search over the codebase using vector similarity
 - remember: Store a fact in cross-session memory
 - recall: Search cross-session memory and past summaries for relevant facts
-- spawn_subagent: Delegate a scoped task to a child agent
+- fanout: Delegate a task to multiple subagents in parallel
+- spawn: Launch a subagent with a contract for scoped work
 - git_status: Show git status (branch, uncommitted files, recent commits)
 - git_diff: Show git diff for files or entire workspace
 - git_branch: List/create/switch git branches

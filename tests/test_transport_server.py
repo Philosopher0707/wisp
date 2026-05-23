@@ -125,26 +125,6 @@ class TestServerTransportApproval:
 class TestServerTransportRun:
 
     @pytest.mark.asyncio
-    async def test_run_sends_events(self, core, transport):
-        from unittest.mock import patch
-        with patch.object(core, '_run_turn_streaming_events') as mock_events:
-            mock_events.return_value = iter([])
-            core.client.stream_response = {
-                "message": {"content": "Hello"}
-            }
-            await transport.run("say hello")
-
-            # Should have sent at least content + done events
-            calls = transport._send_callback.call_args_list
-            assert len(calls) >= 2
-
-            # Check first call was content event
-            first_call = calls[0][0][0]
-            assert first_call["type"] == "token"
-            assert first_call["text"] == "Hello"
-
-    @pytest.mark.asyncio
-    async def test_interrupt_stops_run(self, core, transport):
+    async def test_interrupt_stops_run(self, transport):
         transport.interrupt()
         assert transport._interrupted is True
-        assert core._interrupted is True

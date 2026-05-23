@@ -18,6 +18,7 @@ class MockOrchestrator:
         from unittest.mock import MagicMock
         self.config = MagicMock()
         self.config.max_context_tokens = 128000
+        self.config.chars_per_token = 4
 
     async def run(self, contract):
         key = contract.name

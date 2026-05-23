@@ -17,7 +17,7 @@ class FakeStatelessCore:
 
     created_instances: list = []
 
-    def __init__(self, provider=None, security=None, extensions=None, telemetry=None, config=None):
+    def __init__(self, provider=None, security=None, extensions=None, telemetry=None, config=None, **kwargs):
         self.config = config or MagicMock()
         # Extract depth from config if it's a real value, not a MagicMock
         depth = getattr(config, "_subagent_depth", 0) if config else 0
@@ -49,6 +49,10 @@ def mock_parent_agent():
     agent.config._context_tokens_explicit = True
     agent.config.permission_mode = "auto"
     agent.config.max_iterations = 30
+    agent.config.subagent_pool_size = 4
+    agent.config.chars_per_token = 4
+    agent.config.max_subagent_depth = 2
+    agent.config.max_subagent_branching = 3
     return agent
 
 

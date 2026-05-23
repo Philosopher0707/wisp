@@ -14,6 +14,7 @@ Design:
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -369,6 +370,8 @@ class WispAgentCore:
             memory_block = self._build_memory_block(ws)
             git_ctx = self._build_git_context(ws)
             repo_map = self._build_repo_map(ws)
+            lint_ctx = self._build_lint_context(ws)
+            module_summary = self._build_module_summary(ws)
 
             # Load rules.md if present
             rules_path = ws_path / ".wisp" / "rules.md"
@@ -394,6 +397,12 @@ class WispAgentCore:
             tools_block = self._build_tools_block()
             if tools_block:
                 static_prompt += "\n\n" + tools_block
+
+            if lint_ctx:
+                static_prompt += "\n\n" + lint_ctx
+
+            if module_summary:
+                static_prompt += "\n\n" + module_summary
 
             self._static_prompt_cache[cache_key] = static_prompt
 
@@ -485,6 +494,166 @@ class WispAgentCore:
         except Exception as e:
             logger.debug("Failed to build repo map: %s", e)
         return ""
+
+    def _build_lint_context(self, workspace: str) -> str:
+        """Build a concise lint/check config summary for the workspace.
+
+        Tells the model what verification tools are available so it can
+        write code that passes checks on the first attempt — no need to
+        call lsp_diagnostics just to discover what's configured.
+        """
+        ws_path = Path(workspace).resolve()
+        lines: list[str] = []
+        detected: set[str] = set()
+
+        # Detect file extensions in the project
+        ext_to_linter = {
+            ".py": "py_compile / ruff / mypy",
+            ".ts": "tsc --noEmit",
+            ".tsx": "tsc --noEmit",
+            ".js": "eslint",
+            ".jsx": "eslint",
+            ".rs": "cargo check / cargo clippy",
+            ".go": "go vet",
+        }
+        fast_ext_to_check = {
+            ".py": "ruff",
+            ".ts": "tsc",
+            ".tsx": "tsc",
+            ".js": "eslint",
+            ".jsx": "eslint",
+            ".rs": "cargo",
+            ".go": "go",
+        }
+
+        try:
+            for root, dirs, _files in os.walk(ws_path):
+                # Skip hidden and venv directories
+                dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
+                    "node_modules", "venv", ".venv", "__pycache__", "target", "dist", "build",
+                )]
+                for f in _files:
+                    ext = Path(f).suffix.lower()
+                    if ext in ext_to_linter and ext not in detected:
+                        detected.add(ext)
+                if len(detected) >= len(ext_to_linter):
+                    break
+                # Limit depth for performance
+                if root.count(os.sep) - ws_path.as_posix().count(os.sep) > 3:
+                    dirs[:] = []
+        except Exception:
+            pass
+
+        if not detected:
+            return ""
+
+        lines.append("## Available Code Checks")
+        lines.append("After writing or editing a file, these checks are auto-run. Write code that passes them:")
+        for ext in sorted(detected):
+            linter = ext_to_linter.get(ext, "unknown")
+            lines.append(f"- **{ext}** files: `{linter}`")
+
+        # Check which linter binaries are actually available
+        available = []
+        import shutil
+        for ext in sorted(detected):
+            binary = fast_ext_to_check.get(ext)
+            if binary and shutil.which(binary):
+                available.append(f"`{binary}`")
+        if available:
+            lines.append(f"\nInstalled: {', '.join(available)}")
+
+        return "\n".join(lines)
+
+    def _build_module_summary(self, workspace: str) -> str:
+        """Build a concise module structure overview for the workspace.
+
+        Scans top-level directories, identifies packages and key modules,
+        so the model has a mental map before the first turn — no need to
+        run list_files just to understand the project layout.
+        """
+        ws_path = Path(workspace).resolve()
+        lines: list[str] = []
+        packages: list[tuple[str, str]] = []  # (name, description)
+
+        # Known project type markers
+        markers = {
+            "pyproject.toml": "Python project",
+            "setup.py": "Python project",
+            "setup.cfg": "Python project",
+            "package.json": "Node/TS project",
+            "Cargo.toml": "Rust project",
+            "go.mod": "Go project",
+            "Makefile": "C/C++ project",
+            "CMakeLists.txt": "C/C++ project",
+        }
+        project_types: list[str] = []
+        for marker, label in markers.items():
+            if (ws_path / marker).exists():
+                project_types.append(label)
+
+        try:
+            entries = sorted(os.listdir(ws_path))
+        except OSError:
+            return ""
+
+        # Identify top-level source directories
+        src_dirs: list[str] = []
+        for entry in entries:
+            entry_path = ws_path / entry
+            if entry.startswith("."):
+                continue
+            if entry in ("node_modules", "venv", ".venv", "__pycache__", "target",
+                         "dist", "build", ".git", ".wisp", "tests", "test"):
+                continue
+            if entry_path.is_dir():
+                # Check if it's a package (has __init__.py) or has source files
+                pkg_init = entry_path / "__init__.py"
+                has_src = (
+                    any(entry_path.glob("*.py")) or any(entry_path.glob("*.ts"))
+                    or any(entry_path.glob("*.rs")) or any(entry_path.glob("*.go"))
+                )
+                if pkg_init.exists():
+                    # Python package — peek at docstring
+                    desc = ""
+                    try:
+                        first_line = pkg_init.read_text(encoding="utf-8").strip().split("\n")[0]
+                        if first_line.startswith('"""') or first_line.startswith("'''"):
+                            desc = first_line.strip('"\'').strip()
+                    except Exception:
+                        pass
+                    packages.append((entry, desc))
+                    src_dirs.append(entry)
+                elif has_src:
+                    src_dirs.append(entry)
+
+        config_files = [e for e in entries if not (ws_path / e).is_dir()
+                        and e in markers and not markers[e].startswith("Python")]
+
+        if not packages and not src_dirs and not project_types and not config_files:
+            return ""
+
+        lines.append("## Project Structure")
+        if project_types:
+            lines.append("Type: " + ", ".join(project_types))
+
+        if packages:
+            lines.append("\nKey packages:")
+            for name, desc in packages:
+                if desc:
+                    lines.append(f"- **{name}/** — {desc}")
+                else:
+                    lines.append(f"- **{name}/**")
+
+        # List other notable top-level items
+        other_dirs = [e for e in src_dirs if e not in [p[0] for p in packages]]
+        if other_dirs:
+            lines.append("\nOther source directories: " + ", ".join(f"`{d}/`" for d in other_dirs))
+
+        if config_files:
+            lines.append("Config: " + ", ".join(f"`{f}`" for f in config_files))
+
+        return "\n".join(lines)
 
     def _get_relevant_files(self, workspace: str, query: str) -> str:
         """Get files relevant to the query from repo map."""

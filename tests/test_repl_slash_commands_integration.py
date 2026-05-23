@@ -28,7 +28,7 @@ class FakeRuntime:
             "messages": [],
         }
 
-    async def run_turn(self, session, prompt):
+    async def run_turn(self, session, prompt, approval_handler=None):
         async for event in self._core.turn(session, prompt):
             yield event
 

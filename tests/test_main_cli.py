@@ -223,10 +223,7 @@ class TestCmdPlan:
             instance.load_active.return_value = None
             instance.create_plan.return_value = plan
             MockStore.return_value = instance
-            with patch("wisp.__main__.get_provider"):
-                with patch("wisp.__main__.WispConfig"):
-                    with patch("wisp.__main__.WispAgent"):
-                        main_mod.cmd_plan(["create", "Fix the bug"])
+            main_mod.cmd_plan(["create", "Fix the bug"])
         captured = capsys.readouterr()
         assert "Creating plan" in captured.out or "plan" in captured.out.lower()
 

@@ -20,7 +20,7 @@ class _MockCore:
     def __init__(self):
         self.turns = []
 
-    async def turn(self, session: dict, prompt: str):
+    async def turn(self, session: dict, prompt: str, approval_handler=None):
         self.turns.append((session["id"], prompt))
         yield {"type": "content", "text": f"echo: {prompt}"}
         yield {"type": "done"}

@@ -97,9 +97,11 @@ class TestSubmoduleTools:
         from wisp.tools import TOOL_IMPLS
         assert "diagnose" in TOOL_IMPLS
 
-    def test_spawn_subagent_tool(self):
+    def test_spawn_tools(self):
         from wisp.tools import TOOL_IMPLS
-        assert "spawn_subagent" in TOOL_IMPLS
+        assert "spawn" in TOOL_IMPLS
+        assert "fanout" in TOOL_IMPLS
+        # spawn_subagent removed from schemas — merged into spawn
 
     def test_run_tests_tool(self):
         from wisp.tools import TOOL_IMPLS
@@ -126,8 +128,14 @@ class TestExecuteTool:
         assert "hello world" in result
 
     def test_execute_spawn_subagent_stub(self):
+        from wisp.tools import execute_tool, ToolError
+        # spawn_subagent removed from schemas/impls — now unknown tool
+        with pytest.raises(ToolError, match="Unknown tool"):
+            execute_tool("spawn_subagent", {"task": "test"}, ".")
+
+    def test_execute_spawn_stub(self):
         from wisp.tools import execute_tool
-        result = execute_tool("spawn_subagent", {"task": "test"}, ".")
+        result = execute_tool("spawn", {"task": "test"}, ".")
         assert "error" in result
         assert "agent loop" in result
 

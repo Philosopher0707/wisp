@@ -38,12 +38,13 @@ class TestConcurrentTurns:
 
         # Mock core that yields content slowly
         class SlowCore:
-            async def turn(self, session, prompt):
+            async def turn(self, session, prompt, approval_handler=None):
                 await asyncio.sleep(0.01)
                 yield {"type": "content", "text": f"response to {prompt}"}
                 yield {"type": "done"}
 
         runtime.core_factory = lambda: SlowCore()
+        runtime.invalidate_core_cache()
 
         async def turn(prompt):
             events = []
@@ -80,7 +81,7 @@ class TestConcurrentTurns:
         session2 = {"id": "s2", "messages": [], "workspace": "/tmp"}
 
         class SlowCore:
-            async def turn(self, session, prompt):
+            async def turn(self, session, prompt, approval_handler=None):
                 await asyncio.sleep(0.05)
                 yield {"type": "content", "text": "ok"}
                 yield {"type": "done"}

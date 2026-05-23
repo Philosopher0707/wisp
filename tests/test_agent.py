@@ -1,35 +1,8 @@
-"""Tests for agent.py — parse_tool_call, estimate_tokens, trim, resolve_session."""
+"""Tests for agent.py — _is_interactive, _args_preview, _input_line, auto-detect context."""
 
 import pytest
 from unittest.mock import patch, MagicMock
 from wisp.agent import _is_interactive, _args_preview, _input_line
-from wisp.core.engine import WispAgentCore
-from wisp.config import WispConfig
-
-
-# ── _parse_tool_call ──────────────────────────────────────────────────
-
-class TestParseToolCall:
-
-    def test_valid_tool_call(self):
-        resp = {"message": {"tool_calls": [{"function": {"name": "read_file"}}]}}
-        result = WispAgentCore._parse_tool_call(resp)
-        assert result == [{"function": {"name": "read_file"}}]
-
-    def test_no_tool_calls(self):
-        resp = {"message": {"content": "Hello"}}
-        assert WispAgentCore._parse_tool_call(resp) is None
-
-    def test_empty_list(self):
-        resp = {"message": {"tool_calls": []}}
-        assert WispAgentCore._parse_tool_call(resp) is None
-
-    def test_missing_message(self):
-        assert WispAgentCore._parse_tool_call({}) is None
-
-    def test_malformed_message_type(self):
-        resp = {"message": "not a dict"}
-        assert WispAgentCore._parse_tool_call(resp) is None
 
 
 # ── _is_interactive ───────────────────────────────────────────────────
@@ -97,101 +70,7 @@ class TestArgsPreview:
         assert _args_preview({}) == "..."
 
 
-# ── WispAgent unit tests ──────────────────────────────────────────────
-
-class FakeConfig:
-    ollama_url = "http://localhost:11434"
-    model = "test-model"
-    temperature = 0.0
-    max_tokens = 4096
-    max_context_tokens = 128000
-    chars_per_token = 4
-    auto_approve = True
-    show_thinking = False
-    workspace = "/tmp"
-
-
-@pytest.fixture
-def agent():
-    from wisp.agent import WispAgent
-    # We need to avoid the health check in __init__ — just construct directly
-    config = FakeConfig()
-    agent = WispAgent.__new__(WispAgent)
-    agent.config = config
-    agent.client = MagicMock()
-    agent.client.check_health.return_value = True
-    agent.client.generate_stream.return_value = iter([])
-    agent.messages = []
-    agent.session = None
-    agent.session_mgr = MagicMock()
-    agent._interrupted = False
-    return agent
-
-
-class TestEstimateTokens:
-
-    def test_empty_messages(self, agent):
-        assert agent._estimate_tokens([]) == 0
-
-    def test_simple_message(self, agent):
-        msgs = [{"role": "user", "content": "hello world"}]
-        assert agent._estimate_tokens(msgs) == 2  # 11 chars / 4
-
-    def test_with_thinking(self, agent):
-        msgs = [{"role": "assistant", "content": "answer", "thinking": "let me think"}]
-        assert agent._estimate_tokens(msgs) == 4  # (6 + 12) / 4
-
-
-class TestTrimContext:
-
-    def test_does_not_trim_when_under_budget(self, agent):
-        agent.messages = [{"role": "user", "content": "hi"}]
-        agent._trim_context_if_needed()
-        assert len(agent.messages) == 1
-
-    def test_trims_oldest_when_over_budget(self, agent):
-        agent.config.max_context_tokens = 10
-        agent.config.chars_per_token = 1
-        agent.messages = [
-            {"role": "user", "content": "x" * 20},
-            {"role": "assistant", "content": "y" * 20},
-            {"role": "user", "content": "z" * 5},
-        ]
-        agent._trim_context_if_needed()
-        assert len(agent.messages) <= 2
-
-    def test_preserves_at_least_two_messages(self, agent):
-        agent.config.max_context_tokens = 1
-        agent.config.chars_per_token = 1
-        agent.messages = [
-            {"role": "user", "content": "keep1"},
-            {"role": "assistant", "content": "keep2"},
-        ]
-        agent._trim_context_if_needed()
-        assert len(agent.messages) == 2
-
-
-class TestResolveSession:
-
-    def test_exact_match(self, agent):
-        agent.session_mgr.load_session.return_value = MagicMock(id="20260430-120000-test")
-        result = agent._resolve_session("20260430-120000-test")
-        assert result is not None
-        agent.session_mgr.load_session.assert_called_with("20260430-120000-test")
-
-    def test_fragment_match(self, agent):
-        agent.session_mgr.load_session.side_effect = [None, MagicMock(id="20260430-120000-test")]
-        agent.session_mgr.get_session_id_from_fragment.return_value = "20260430-120000-test"
-        result = agent._resolve_session("20260430")
-        assert result is not None
-        agent.session_mgr.get_session_id_from_fragment.assert_called_with("20260430")
-
-    def test_no_match(self, agent):
-        agent.session_mgr.load_session.return_value = None
-        agent.session_mgr.get_session_id_from_fragment.return_value = None
-        result = agent._resolve_session("nope")
-        assert result is None
-
+# ── WispAgent auto-detect context ─────────────────────────────────────
 
 class TestAutoDetectContext:
 

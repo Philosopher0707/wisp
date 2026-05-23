@@ -52,7 +52,8 @@ _DEFAULT_WRITE_TOOLS: set[str] = {
     "plan_task",
     "mark_step_done",
     "update_plan",
-    "spawn_subagent",
+    "spawn",
+    "fanout",
 }
 
 
@@ -495,8 +496,10 @@ class ToolExecutor:
             if _block:
                 return _block, 0.0
 
-        if func_name == "spawn_subagent":
-            result = await self._spawn_subagent(func_args, workspace)
+        if func_name in ("spawn", "spawn_subagent"):
+            result = await self._spawn(func_args, workspace)
+        elif func_name == "fanout":
+            result = await self._fanout(func_args, workspace)
         elif self._is_mcp_tool(func_name):
             result = await self._call_mcp_tool(func_name, func_args)
         elif func_name == "run_bash":
@@ -590,6 +593,28 @@ class ToolExecutor:
 
         duration_ms = (time.monotonic() - start) * 1000
 
+        # ── Write-verify: auto-lint after file writes ─────────────────
+        if func_name in ("write_file", "edit_file", "edit_file_multi"):
+            file_path = func_args.get("path", "")
+            if file_path and '"status": "ok"' in str(result):
+                try:
+                    lint_feedback = await self._run_write_verify(file_path, workspace)
+                    if lint_feedback:
+                        if isinstance(result, str):
+                            try:
+                                parsed = json.loads(result)
+                                if isinstance(parsed, dict) and "data" in parsed:
+                                    parsed["data"] = str(parsed["data"]) + lint_feedback
+                                    result = json.dumps(parsed, ensure_ascii=False)
+                                else:
+                                    result = str(result) + lint_feedback
+                            except json.JSONDecodeError:
+                                result = str(result) + lint_feedback
+                        elif isinstance(result, dict):
+                            result["data"] = str(result.get("data", "")) + lint_feedback
+                except Exception:
+                    logger.debug("Write-verify lint failed for %s", file_path, exc_info=True)
+
         # fire post-hooks (non-blocking, best-effort)
         await self._run_post_tool_hooks(func_name, func_args, result, workspace)
 
@@ -638,53 +663,293 @@ class ToolExecutor:
                 "traceback": tb,
             }, ensure_ascii=False)
 
-    async def _spawn_subagent(self, func_args: dict, workspace: str) -> str:
-        """Delegate to subagent orchestrator.
+    async def _spawn(self, func_args: dict, workspace: str) -> str:
+        """Execute spawn tool — role-driven subagent.
 
-        Builds a SubagentContract from the tool call arguments and routes
-        through SubagentOrchestrator.spawn_with_guards().
+        Builds a SubagentContract from role defaults with optional overrides
+        for advanced cases (explicit tools, output_format, output_schema, etc.).
+        Returns structured JSON: {ok, summary, files, error, elapsed_seconds, role}.
         """
         if not self.subagent_orchestrator:
             return json.dumps({
                 "status": "error",
-                "tool": "spawn_subagent",
+                "tool": "spawn",
                 "data": "Subagent orchestrator not available — wire it via CompositionRoot",
                 "metadata": {},
             }, ensure_ascii=False)
 
+        # Ensure orchestrator has hook_manager for lifecycle hooks
+        if self.hook_manager and not getattr(self.subagent_orchestrator, "hook_manager", None):
+            self.subagent_orchestrator.hook_manager = self.hook_manager
+
+        task = func_args.get("task", func_args.get("prompt", ""))
+        if not task:
+            return json.dumps({
+                "status": "error",
+                "tool": "spawn",
+                "data": "spawn requires a 'task' argument",
+                "metadata": {},
+            }, ensure_ascii=False)
+
+        role = func_args.get("role", "generalist")
+
+        # Resolve role config for defaults
         try:
-            task = func_args.get("task", func_args.get("prompt", ""))
-            if not task:
+            from wisp.multi_agent.roles import ROLE_CONFIGS
+            role_cfg = ROLE_CONFIGS.get(role)
+        except Exception:
+            role_cfg = None
+
+        if role_cfg is None:
+            valid = ["coder", "reviewer", "tester", "researcher", "planner", "debugger", "generalist"]
+            return json.dumps({
+                "status": "error",
+                "tool": "spawn",
+                "data": f"Unknown role '{role}'. Valid roles: {', '.join(valid)}",
+                "metadata": {},
+            }, ensure_ascii=False)
+
+        # Resolve params: explicit args > role defaults
+        timeout = func_args.get("timeout_seconds") or role_cfg.timeout_seconds
+        max_iter = func_args.get("max_iterations") or role_cfg.max_iterations
+        worktree = func_args.get("worktree_isolated", False)
+        model_override = func_args.get("model") or role_cfg.model
+        tools = func_args.get("tools") or role_cfg.allowed_tools
+        output_format = func_args.get("output_format", "text")
+        output_schema = func_args.get("output_schema")
+        max_tokens = func_args.get("max_tokens")
+        auto_retry = func_args.get("auto_retry", True)
+
+        try:
+            from wisp.multi_agent.task import SubagentContract
+
+            contract = SubagentContract(
+                name=f"spawn-{role}",
+                role=role,
+                task=task,
+                tools=tools,
+                max_iterations=int(max_iter),
+                timeout_seconds=float(timeout),
+                worktree_isolated=worktree,
+                model=model_override,
+                workspace=workspace,
+                auto_approve=func_args.get("auto_approve", False),
+                output_format=output_format,
+                output_schema=output_schema,
+                max_tokens=max_tokens,
+                max_retries=int(auto_retry) * 2,
+            )
+
+            result = await self.subagent_orchestrator._run_with_retry(contract)
+
+            return json.dumps({
+                "status": "ok",
+                "tool": "spawn",
+                "data": {
+                    "ok": result.success,
+                    "summary": result.output[:2000] if result.output else "",
+                    "files": result.files_changed or [],
+                    "error": result.error,
+                    "elapsed_seconds": round(result.elapsed_seconds, 1),
+                    "role": role,
+                },
+                "metadata": {
+                    "role": role,
+                    "task_id": result.task_id,
+                    "elapsed_seconds": result.elapsed_seconds,
+                    "files_changed": result.files_changed,
+                    "tokens_used": result.tokens_used,
+                    "timed_out": result.timed_out,
+                },
+            }, ensure_ascii=False)
+        except Exception as e:
+            tb = traceback.format_exc()
+            logger.error("spawn failed: %s\n%s", str(e), tb)
+            return json.dumps({
+                "status": "error",
+                "tool": "spawn",
+                "data": {
+                    "ok": False,
+                    "summary": "",
+                    "files": [],
+                    "error": str(e),
+                    "elapsed_seconds": 0,
+                    "role": role,
+                },
+                "metadata": {"traceback": tb},
+            }, ensure_ascii=False)
+
+    async def _fanout(self, func_args: dict, workspace: str) -> str:
+        """Execute fanout tool — parallel role-driven subagents.
+
+        Each task in the tasks array gets its own role-driven SubagentContract.
+        All run concurrently via run_parallel. Returns aggregated structured results.
+        """
+        if not self.subagent_orchestrator:
+            return json.dumps({
+                "status": "error",
+                "tool": "fanout",
+                "data": "Subagent orchestrator not available — wire it via CompositionRoot",
+                "metadata": {},
+            }, ensure_ascii=False)
+
+        # Ensure orchestrator has hook_manager for lifecycle hooks
+        if self.hook_manager and not getattr(self.subagent_orchestrator, "hook_manager", None):
+            self.subagent_orchestrator.hook_manager = self.hook_manager
+
+        tasks_spec = func_args.get("tasks", [])
+        if not tasks_spec:
+            return json.dumps({
+                "status": "error",
+                "tool": "fanout",
+                "data": "fanout requires a 'tasks' array",
+                "metadata": {},
+            }, ensure_ascii=False)
+
+        max_concurrent = int(func_args.get("max_concurrent", 4))
+
+        try:
+            from wisp.multi_agent.roles import ROLE_CONFIGS
+            from wisp.multi_agent.task import SubagentContract
+        except Exception as e:
+            return json.dumps({
+                "status": "error",
+                "tool": "fanout",
+                "data": f"Failed to import multi_agent modules: {e}",
+                "metadata": {},
+            }, ensure_ascii=False)
+
+        contracts = []
+        for i, spec in enumerate(tasks_spec):
+            if not isinstance(spec, dict):
                 return json.dumps({
                     "status": "error",
-                    "tool": "spawn_subagent",
-                    "data": "spawn_subagent requires a 'task' argument",
+                    "tool": "fanout",
+                    "data": f"tasks[{i}] must be an object with 'task' and optional 'role'",
                     "metadata": {},
                 }, ensure_ascii=False)
 
-            result = await self.subagent_orchestrator.spawn_with_guards(
+            task = spec.get("task", "")
+            if not task:
+                return json.dumps({
+                    "status": "error",
+                    "tool": "fanout",
+                    "data": f"tasks[{i}] requires a 'task' field",
+                    "metadata": {},
+                }, ensure_ascii=False)
+
+            role = spec.get("role", "generalist")
+            role_cfg = ROLE_CONFIGS.get(role)
+            if role_cfg is None:
+                valid = ["coder", "reviewer", "tester", "researcher", "planner", "debugger", "generalist"]
+                return json.dumps({
+                    "status": "error",
+                    "tool": "fanout",
+                    "data": f"tasks[{i}]: unknown role '{role}'. Valid: {', '.join(valid)}",
+                    "metadata": {},
+                }, ensure_ascii=False)
+
+            timeout = spec.get("timeout_seconds") or role_cfg.timeout_seconds
+            max_iter = spec.get("max_iterations") or role_cfg.max_iterations
+            worktree = spec.get("worktree_isolated", False)
+            model_override = spec.get("model") or None
+
+            contracts.append(SubagentContract(
+                name=f"fanout-{i}-{role}",
+                role=role,
                 task=task,
-                tools=func_args.get("tools", ["all"]),
-                max_iterations=func_args.get("max_iterations", 30),
-                timeout_seconds=func_args.get("timeout_seconds", 300.0),
-                output_format=func_args.get("output_format", "text"),
-                worktree_isolated=func_args.get("worktree_isolated", False),
-                max_tokens=func_args.get("max_tokens"),
-                output_schema=func_args.get("output_schema"),
-                auto_retry=func_args.get("auto_retry", True),
+                tools=role_cfg.allowed_tools,
+                max_iterations=int(max_iter),
+                timeout_seconds=float(timeout),
+                worktree_isolated=worktree,
+                model=model_override,
                 workspace=workspace,
-                auto_approve=func_args.get("auto_approve", False),
+                auto_approve=spec.get("auto_approve", False),
+            ))
+
+        try:
+            results = await self.subagent_orchestrator.run_parallel(
+                contracts, max_concurrent=max_concurrent,
             )
-            return result
         except Exception as e:
             tb = traceback.format_exc()
-            logger.error("Subagent spawn failed: %s\n%s", str(e), tb)
+            logger.error("fanout run_parallel failed: %s\n%s", str(e), tb)
             return json.dumps({
                 "status": "error",
-                "tool": "spawn_subagent",
-                "data": f"Subagent spawn failed: {e}",
-                "traceback": tb,
+                "tool": "fanout",
+                "data": {
+                    "ok": False,
+                    "results": [],
+                    "error": str(e),
+                    "total_elapsed_seconds": 0,
+                },
+                "metadata": {"traceback": tb},
             }, ensure_ascii=False)
+
+        result_items = []
+        for r in results:
+            result_items.append({
+                "task": r.task_id,
+                "ok": r.success,
+                "summary": r.output[:2000] if r.output else "",
+                "files": r.files_changed or [],
+                "error": r.error,
+                "elapsed_seconds": round(r.elapsed_seconds, 1),
+            })
+
+        all_ok = all(r.success for r in results)
+        total_elapsed = sum(r.elapsed_seconds for r in results)
+        total_files = list({f for r in results for f in (r.files_changed or [])})
+
+        return json.dumps({
+            "status": "ok",
+            "tool": "fanout",
+            "data": {
+                "ok": all_ok,
+                "results": result_items,
+                "total_elapsed_seconds": round(total_elapsed, 1),
+                "all_files": total_files,
+                "summary": f"{sum(1 for r in results if r.success)}/{len(results)} subagents succeeded",
+            },
+            "metadata": {
+                "total": len(results),
+                "succeeded": sum(1 for r in results if r.success),
+                "failed": sum(1 for r in results if not r.success),
+                "total_tokens": sum(r.tokens_used for r in results),
+                "total_elapsed_seconds": round(total_elapsed, 1),
+            },
+        }, ensure_ascii=False)
+
+    async def _run_write_verify(self, file_path: str, workspace: str) -> str:
+        """Run lint + affected tests after a file write/edit. Returns feedback or ''."""
+        feedback_parts: list[str] = []
+
+        # ── Lint ──────────────────────────────────────────────────────
+        try:
+            from wisp.tools.lsp import tool_lsp_diagnostics
+            lint_result = tool_lsp_diagnostics(path=file_path, workspace=workspace)
+            if lint_result and "No issues found" not in lint_result \
+               and "No diagnostics available" not in lint_result \
+               and not lint_result.startswith("Error:"):
+                feedback_parts.append(f"[Lint: {lint_result.strip()[:500]}]")
+        except Exception:
+            pass
+
+        # ── Affected tests ────────────────────────────────────────────
+        try:
+            from wisp.tools.tests import tool_run_tests
+            test_result = tool_run_tests(files=[file_path], workspace=workspace, timeout=60)
+            if test_result:
+                # Only include if tests were actually found and run
+                if "0/0 passed" not in test_result and "no tests" not in test_result.lower():
+                    short = test_result.strip()
+                    if len(short) > 600:
+                        short = short[:600] + "..."
+                    feedback_parts.append(f"[Tests: {short}]")
+        except Exception:
+            pass
+
+        return "\n".join(feedback_parts) if feedback_parts else ""
 
     def _record_metrics(self, func_name: str, duration_ms: float, result: str | dict) -> None:
         """Record tool execution metrics."""

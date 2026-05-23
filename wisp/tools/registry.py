@@ -211,22 +211,54 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "spawn_subagent",
-            "description": "Spawn a specialist subagent to handle a scoped task (research, coding, testing) with its own iteration budget and timeout. The subagent runs in parallel and returns a structured result. Use when a task can be decomposed into an independent work unit.",
+            "name": "spawn",
+            "description": "Spawn a specialist subagent. The role picks tools, system prompt, timeout, and iteration budget automatically. For advanced cases, you can override any default: specify exact tools, output_format, output_schema for structured output, or auto_retry behavior.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "task": {"type": "string", "description": "Specific instruction for the subagent. Be precise about what to produce."},
-                    "tools": {"type": "array", "items": {"type": "string"}, "description": "Tool names the subagent may use. Omit or use ['all'] for full toolset.", "default": ["all"]},
-                    "max_iterations": {"type": "number", "description": "Max agent loop iterations", "default": 15},
-                    "timeout_seconds": {"type": "number", "description": "Hard timeout in seconds. If omitted, adaptive timeout is used based on task complexity.", "default": 120},
-                    "output_format": {"type": "string", "description": "text | json | markdown | report", "default": "text"},
-                    "worktree_isolated": {"type": "boolean", "description": "Run in isolated git worktree. Default false for speed.", "default": False},
-                    "max_tokens": {"type": "number", "description": "Max tokens for subagent output. Prevents context overflow.", "default": 4000},
-                    "output_schema": {"type": "object", "description": "JSON schema for structured output validation. Only used when output_format=json.", "default": None},
-                    "auto_retry": {"type": "boolean", "description": "Automatically retry on failure with exponential backoff.", "default": True},
+                    "task": {"type": "string", "description": "Specific instruction for the subagent. Be precise about what to produce and which files to touch."},
+                    "role": {"type": "string", "description": "Agent role: coder, reviewer, tester, researcher, planner, debugger, generalist. The role determines tools, timeout, and iteration budget.", "default": "generalist"},
+                    "timeout_seconds": {"type": "number", "description": "Override the role's default timeout in seconds."},
+                    "max_iterations": {"type": "number", "description": "Override the role's default max iterations."},
+                    "worktree_isolated": {"type": "boolean", "description": "Run in isolated git worktree. Default false.", "default": False},
+                    "model": {"type": "string", "description": "Override the model. Default inherits from parent."},
+                    "tools": {"type": "array", "items": {"type": "string"}, "description": "Explicit tool list. Overrides role defaults. Use ['all'] for full toolset."},
+                    "output_format": {"type": "string", "description": "text | json | markdown | report. Default text."},
+                    "output_schema": {"type": "object", "description": "JSON schema for structured output validation. Requires output_format=json."},
+                    "max_tokens": {"type": "number", "description": "Max tokens for subagent output."},
+                    "auto_retry": {"type": "boolean", "description": "Retry on failure with exponential backoff. Default true.", "default": True},
                 },
                 "required": ["task"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fanout",
+            "description": "Spawn multiple specialist subagents in parallel. Each gets a role-driven configuration. All run concurrently and results are collected. Use when a task naturally splits into independent work units — e.g., research + implement + test in parallel.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tasks": {
+                        "type": "array",
+                        "description": "List of subagent tasks to run in parallel.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "task": {"type": "string", "description": "Instruction for this subagent."},
+                                "role": {"type": "string", "description": "Agent role: coder, reviewer, tester, researcher, planner, debugger, generalist.", "default": "generalist"},
+                                "timeout_seconds": {"type": "number", "description": "Override role default timeout.", "default": None},
+                                "max_iterations": {"type": "number", "description": "Override role default max iterations.", "default": None},
+                                "worktree_isolated": {"type": "boolean", "description": "Isolated git worktree.", "default": False},
+                                "model": {"type": "string", "description": "Model override.", "default": None},
+                            },
+                            "required": ["task"],
+                        },
+                    },
+                    "max_concurrent": {"type": "number", "description": "Max subagents running at once. Default 4.", "default": 4},
+                },
+                "required": ["tasks"],
             },
         },
     },
@@ -500,24 +532,22 @@ TOOL_SCHEMAS = [
     },
 ]
 
-def _tool_spawn_subagent_stub(**kwargs) -> str:
-    """Stub: spawn_subagent is handled by the agent core, not the tool executor.
-
-    When the agent core processes tool calls, it intercepts spawn_subagent
-    and routes it to WispAgentCore._spawn_subagent() which creates a
-    SubagentContract and delegates to SubagentOrchestrator.
-
-    If you see this message, spawn_subagent was called outside the agent loop
-    (e.g. via execute_tool() directly). Use agent.spawn_subagents() instead.
-    """
+def _tool_spawn_stub(**kwargs) -> str:
+    """Stub: spawn is handled by the agent core (ToolExecutor), not here."""
     return json.dumps({
         "status": "error",
-        "tool": "spawn_subagent",
-        "data": (
-            "spawn_subagent must be called through the agent loop. "
-            "Use agent.spawn_subagents() or include it in a tool_calls "
-            "block from the model response."
-        ),
+        "tool": "spawn",
+        "data": "spawn must be called through the agent loop.",
+        "metadata": {},
+    })
+
+
+def _tool_fanout_stub(**kwargs) -> str:
+    """Stub: fanout is handled by the agent core (ToolExecutor), not here."""
+    return json.dumps({
+        "status": "error",
+        "tool": "fanout",
+        "data": "fanout must be called through the agent loop.",
         "metadata": {},
     })
 
@@ -525,7 +555,8 @@ def _tool_spawn_subagent_stub(**kwargs) -> str:
 # Map tool names to their implementations
 
 TOOL_IMPLS = {
-    "spawn_subagent": _tool_spawn_subagent_stub,
+    "spawn": _tool_spawn_stub,
+    "fanout": _tool_fanout_stub,
     "read_file": tool_read_file,
     "write_file": tool_write_file,
     "edit_file": tool_edit_file,

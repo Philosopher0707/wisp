@@ -20,7 +20,7 @@ class TestHeadlessRuntimeIntegration:
 
         # Mock core that yields events
         mock_core = MagicMock()
-        async def _mock_turn(session, prompt):
+        async def _mock_turn(session, prompt, approval_handler=None):
             yield {"type": "content", "text": "Hello"}
             yield {"type": "done", "turns": 1}
 
@@ -50,7 +50,7 @@ class TestHeadlessRuntimeIntegration:
         transport.start()
 
         mock_core = MagicMock()
-        async def _mock_turn(session, prompt):
+        async def _mock_turn(session, prompt, approval_handler=None):
             yield {"type": "tool_call", "name": "read_file", "arguments": {"path": "/tmp/test"}}
             yield {"type": "tool_result", "name": "read_file", "result": "content", "duration_ms": 42}
             yield {"type": "done"}

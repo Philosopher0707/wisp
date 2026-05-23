@@ -21,6 +21,11 @@ class TestProviderFactoryIntegration:
         config.ollama_url = "http://localhost:11434"
         config.model = "qwen2.5-coder"
         config.workspace = "."
+        config.thread_pool_size = 4
+        config.subagent_pool_size = 4
+        config.chars_per_token = 4
+        config.max_subagent_depth = 2
+        config.max_subagent_branching = 3
 
         with patch.object(ProviderFactory, "from_config") as mock_from_config:
             mock_provider = MagicMock()
@@ -41,6 +46,11 @@ class TestProviderFactoryIntegration:
         config.ollama_url = "http://localhost:11434"
         config.model = "qwen2.5-coder"
         config.workspace = "."
+        config.thread_pool_size = 4
+        config.subagent_pool_size = 4
+        config.chars_per_token = 4
+        config.max_subagent_depth = 2
+        config.max_subagent_branching = 3
 
         root = CompositionRoot(config)
         with patch.object(ProviderFactory, "from_config") as mock_from_config:
@@ -59,6 +69,11 @@ class TestProviderFactoryIntegration:
         config.permission_mode = "full"
         config.provider = None
         config.workspace = "."
+        config.thread_pool_size = 4
+        config.subagent_pool_size = 4
+        config.chars_per_token = 4
+        config.max_subagent_depth = 2
+        config.max_subagent_branching = 3
 
         root = CompositionRoot(config)
         core = root._create_core()

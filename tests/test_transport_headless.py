@@ -43,7 +43,7 @@ class TestHeadlessTransport:
 
     @pytest.mark.asyncio
     async def test_approve_returns_true(self):
-        transport = HeadlessTransport()
+        transport = HeadlessTransport(auto_approve=True)
         result = await transport.approve({"name": "run_bash"})
         assert result is True
 

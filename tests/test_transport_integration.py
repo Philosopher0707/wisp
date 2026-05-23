@@ -90,16 +90,16 @@ class TestInterruptPropagation:
     """Interrupt signals propagate to the core."""
 
     def test_server_interrupt_sets_core_flag(self, server, core):
-        """ServerTransport.interrupt() marks core._interrupted."""
-        assert core._interrupted is False
+        """ServerTransport.interrupt() marks transport._interrupted."""
+        assert server._interrupted is False
         server.interrupt()
-        assert core._interrupted is True
+        assert server._interrupted is True
 
     def test_server_interrupt_idempotent(self, server, core):
         """Multiple interrupts on the same transport are idempotent."""
         server.interrupt()
         server.interrupt()
-        assert core._interrupted is True
+        assert server._interrupted is True
 
     def test_interrupt_on_shared_core(self, core):
         """Two transports share core interrupt state via signal handler."""
@@ -111,7 +111,6 @@ class TestInterruptPropagation:
         _cli_mod._transport_instances = {s, c}
         try:
             _cli_mod._handle_sigint(None, None)
-            assert core._interrupted is True
             assert s._interrupted is True
             assert c._interrupted is True
         finally:

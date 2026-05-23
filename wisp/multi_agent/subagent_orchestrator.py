@@ -51,6 +51,7 @@ class SubagentOrchestrator:
         config: Optional[WispConfig] = None,
         workspace: Optional[Path] = None,
         tool_executor: Any = None,
+        hook_manager: Any = None,
     ):
         self.parent = parent_agent
         self.config = config or (getattr(parent_agent, "config", None) if parent_agent else WispConfig())
@@ -60,6 +61,7 @@ class SubagentOrchestrator:
             or Path.cwd().resolve()
         )
         self.workspace = Path(_ws).resolve() if not isinstance(_ws, Path) else _ws.resolve()
+        self.hook_manager = hook_manager
 
         # Unique cache namespace — prevents cross-session cache collisions
         import uuid
@@ -146,63 +148,77 @@ class SubagentOrchestrator:
 
         Never raises — failures are returned as ``SubagentResult(success=False)``.
         """
+        # ── Fire spawn hook (before guards — always notify on attempt) ──
+        await self._fire_subagent_hook("subagent_spawn", contract, None)
+
         # ── Depth guard ────────────────────────────────────────────────
         if contract._subagent_depth >= self._max_depth:
-            return SubagentResult(
+            result = SubagentResult(
                 task_id=contract.name,
                 success=False,
                 output=f"[DEPTH LIMIT EXCEEDED] Max subagent depth is {self._max_depth}",
                 error=f"Subagent depth {contract._subagent_depth} exceeds max {self._max_depth}",
                 elapsed_seconds=0.0,
             )
+            await self._fire_subagent_hook("subagent_fail", contract, result)
+            return result
 
         # ── Role validation ────────────────────────────────────────────
         role_error = self._validate_role(contract)
         if role_error:
             logger.warning("Role validation failed for %s: %s", contract.name, role_error)
-            return SubagentResult(
+            result = SubagentResult(
                 task_id=contract.name,
                 success=False,
                 output=f"[ROLE VALIDATION FAILED] {role_error}",
                 error=role_error,
                 elapsed_seconds=0.0,
             )
+            await self._fire_subagent_hook("subagent_fail", contract, result)
+            return result
 
         # ── Contract validation ────────────────────────────────────────
         if contract.timeout_seconds <= 0:
-            return SubagentResult(
+            result = SubagentResult(
                 task_id=contract.name,
                 success=False,
                 output="[CONTRACT INVALID] timeout_seconds must be > 0",
                 error="timeout_seconds must be > 0",
                 elapsed_seconds=0.0,
             )
+            await self._fire_subagent_hook("subagent_fail", contract, result)
+            return result
         if contract.max_iterations <= 0:
-            return SubagentResult(
+            result = SubagentResult(
                 task_id=contract.name,
                 success=False,
                 output="[CONTRACT INVALID] max_iterations must be > 0",
                 error="max_iterations must be > 0",
                 elapsed_seconds=0.0,
             )
+            await self._fire_subagent_hook("subagent_fail", contract, result)
+            return result
 
         # ── Cache check ────────────────────────────────────────────────
         contract._cache_context = self._cache_namespace
         cached = self._cache.get(contract)
         if cached is not None:
+            await self._fire_subagent_hook("subagent_complete", contract, cached)
             return cached
 
         # ── Token budget check ─────────────────────────────────────────
         budget_error = self._budget.check()
         if budget_error:
             logger.warning("Token budget check failed for %s: %s", contract.name, budget_error)
-            return SubagentResult(
+            result = SubagentResult(
                 task_id=contract.name,
                 success=False,
                 output=f"[TOKEN BUDGET EXCEEDED] {budget_error}",
                 error=budget_error,
                 elapsed_seconds=0.0,
             )
+            await self._fire_subagent_hook("subagent_fail", contract, result)
+            return result
 
         # ── Worktree ───────────────────────────────────────────────────
         worktree_path: Path | None = None
@@ -243,6 +259,10 @@ class SubagentOrchestrator:
         self._persistence.save(contract, result)
         self._budget.record(result.tokens_used)
         self._telemetry.record(contract.model or self.config.model or "unknown", result)
+
+        # ── Fire complete/fail hook ──────────────────────────────────
+        hook_event = "subagent_complete" if result.success else "subagent_fail"
+        await self._fire_subagent_hook(hook_event, contract, result)
 
         # ── Capture & apply worktree changes ────────────────────────────
         if worktree_path:
@@ -595,6 +615,35 @@ class SubagentOrchestrator:
 
         result.error = f"Schema validation failed: {'; '.join(errors)}"
         return result
+
+    async def _fire_subagent_hook(
+        self, event: str, contract: SubagentContract, result: SubagentResult | None
+    ) -> None:
+        """Fire a subagent lifecycle hook. Best-effort — failures are logged."""
+        if not self.hook_manager:
+            return
+        try:
+            from wisp.infra.hook_types import HookEvent
+            ctx = {
+                "event": event,
+                "subagent_name": contract.name,
+                "role": contract.role,
+                "task": contract.task[:500],
+                "timeout_seconds": contract.timeout_seconds,
+                "max_iterations": contract.max_iterations,
+                "worktree_isolated": contract.worktree_isolated,
+                "workspace": str(self.workspace),
+            }
+            if result is not None:
+                ctx["success"] = result.success
+                ctx["elapsed_seconds"] = result.elapsed_seconds
+                ctx["files_changed"] = result.files_changed or []
+                ctx["tokens_used"] = result.tokens_used
+                ctx["error"] = result.error or ""
+                ctx["output_preview"] = result.output[:1000] if result.output else ""
+            await self.hook_manager.arun_hooks(HookEvent(event), ctx)
+        except Exception:
+            logger.debug("Subagent hook %s failed", event, exc_info=True)
 
     # ── Spawn with guards (moved from WispAgentCore) ───────────────────
 

@@ -157,42 +157,42 @@ class TestMockProviderStreamEvents:
 class TestMockProviderWithAgentCore:
 
     def test_agent_core_runs_turn_with_mock(self):
-        from wisp.core.agent import WispAgentCore
+        from wisp.core.engine import WispAgentCore
         from wisp.config import WispConfig
         from wisp.providers.mock import MockProvider
 
         config = WispConfig()
         config.model = "mock-model"
         config.auto_approve = True
-        config.max_iterations = 5
+        config.max_iterations = 2
+        config.workspace = "/tmp"
 
         provider = MockProvider(responses=["I am a mock model"])
         core = WispAgentCore(config=config)
         core.provider = provider
-        core.client = provider
 
         events = []
         async def _collect():
-            async for event in core._arun("hello", system="test"):
+            async for event in core.turn({"messages": []}, "hello"):
                 events.append(event)
 
         import asyncio
         asyncio.run(_collect())
 
-        content_events = [e for e in events if e.type == "content"]
+        content_events = [e for e in events if e["type"] == "content"]
         assert len(content_events) > 0
-        full_text = "".join(e.data.get("text", "") for e in content_events)
+        full_text = "".join(e.get("text", "") for e in content_events)
         assert "mock model" in full_text
 
     def test_agent_core_runs_tool_call_with_mock(self):
-        from wisp.core.agent import WispAgentCore
+        from wisp.core.engine import WispAgentCore
         from wisp.config import WispConfig
         from wisp.providers.mock import MockProvider
 
         config = WispConfig()
         config.model = "mock-model"
         config.auto_approve = True
-        config.max_iterations = 5
+        config.max_iterations = 2
         config.workspace = "/tmp"
 
         provider = MockProvider(
@@ -201,17 +201,16 @@ class TestMockProviderWithAgentCore:
         )
         core = WispAgentCore(config=config)
         core.provider = provider
-        core.client = provider
 
         events = []
         async def _collect():
-            async for event in core._arun("read a file", system="test"):
+            async for event in core.turn({"messages": []}, "read a file"):
                 events.append(event)
 
         import asyncio
         asyncio.run(_collect())
 
-        tool_call_events = [e for e in events if e.type == "tool_call"]
-        tool_result_events = [e for e in events if e.type == "tool_result"]
+        tool_call_events = [e for e in events if e["type"] == "tool_call"]
+        tool_result_events = [e for e in events if e["type"] == "tool_result"]
         assert len(tool_call_events) > 0
         assert len(tool_result_events) > 0
