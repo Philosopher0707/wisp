@@ -36,7 +36,10 @@ from .renderer import (
 from wisp.colors import dim, error, warning, success, info, accent
 from wisp.approval_state import ApprovalSessionState, SessionPolicy
 from wisp.core.events import AgentEvent, EventType
-from wisp.terminal_width import display_width, is_accessible, OutputMode
+from wisp.terminal_width import display_width, is_accessible, OutputMode, get_output_mode
+from wisp.transport.progress import ProgressTracker
+from wisp.transport.spinner import Spinner
+from wisp.transport.renderer import render_phase_bar, render_turn_stats, render_file_ticker
 
 logger = logging.getLogger(__name__)
 
@@ -402,7 +405,7 @@ class CLITransport(Transport):
         self._stdin: Any = None
         self._stdout: Any = None
         self._thinking_buffer: list[str] = []
-        self._thinking_shown: bool = False
+
         self._content_buffer: list[str] = []
         self._in_thinking: bool = False
         self._in_content: bool = False
@@ -413,6 +416,11 @@ class CLITransport(Transport):
         # Session-level per-tool approval memory
         self._approval_state = ApprovalSessionState()
         self._force_approval_mode = not _is_interactive()
+        # Progress tracking
+        self._progress = ProgressTracker()
+        self._spinner: Spinner | None = None
+        self._turn_number: int = 0
+        self._phase: str = "understand"
 
     # ── Transport ABC implementation ────────────────────────────────
 
@@ -643,7 +651,7 @@ class CLITransport(Transport):
 
     def _flush_thinking(self, stdout: Any, width: int | None = None) -> None:
         """Render accumulated thinking as a structured block."""
-        if not self._thinking_buffer or self._thinking_shown:
+        if not self._thinking_buffer:
             return
         full = "".join(self._thinking_buffer)
         self._thinking_buffer = []
@@ -669,7 +677,6 @@ class CLITransport(Transport):
                     dim(f"  🧠 Thinking... ({line_count} lines — /thinking to expand)\n")
                 )
         stdout.flush()
-        self._thinking_shown = True
 
     def _flush_content(self, stdout: Any, width: int | None = None) -> None:
         """Render accumulated content as a structured block."""
@@ -690,9 +697,28 @@ class CLITransport(Transport):
         """Reset all buffers for a new turn."""
         self._thinking_buffer = []
         self._content_buffer = []
-        self._thinking_shown = False
+
         self._in_thinking = False
         self._in_content = False
+        self._turn_number += 1
+        self._progress.start_turn(self._turn_number)
+        self._phase = "understand"
+
+    def _get_spinner(self) -> Spinner:
+        """Lazily create spinner bound to current stdout."""
+        if self._spinner is None:
+            stdout = self._stdout if self._stdout is not None else sys.stdout
+            self._spinner = Spinner(stdout, mode=get_output_mode())
+        return self._spinner
+
+    @staticmethod
+    def _is_error_result(result: Any) -> bool:
+        """Check if a tool result indicates an error."""
+        if isinstance(result, dict):
+            return result.get("status") == "error"
+        if isinstance(result, str):
+            return result.startswith("Error") or result.startswith("[")
+        return False
 
     # ── CLI-specific methods ──────────────────────────────────────
 
@@ -773,6 +799,18 @@ class CLITransport(Transport):
                         self._render_event(stdout, event)
                     self._flush_thinking(stdout)
                     self._flush_content(stdout)
+                    # Show turn stats after turn completes
+                    stats = self._progress.on_done()
+                    stats_line = render_turn_stats(stats, _term_width())
+                    if stats_line:
+                        stdout.write(stats_line + "\n")
+                    files = stats.get("files_changed", [])
+                    if files:
+                        ticker = render_file_ticker(files, _term_width())
+                        if ticker:
+                            stdout.write(ticker + "\n")
+                    stdout.write("\n" + dim("─" * _term_width()) + "\n\n")
+                    stdout.flush()
                 except Exception as exc:
                     logger.exception("Error during turn")
                     self._flush_thinking(stdout)
@@ -787,15 +825,13 @@ class CLITransport(Transport):
     def _render_event(self, stdout: Any, event: AgentEvent | dict) -> None:
         """Render an event to stdout with structured formatting.
 
-        Matches the legacy CLI's rich output with panels, rules,
-        and color-coded tool results.
+        Uses ProgressTracker for phase detection, Spinner for live
+        tool execution feedback, and shows file change ticker.
         """
         # Normalize to AgentEvent
         if isinstance(event, dict):
-            # Handle both full serialization ({type, data}) and flat dicts ({type, text, ...})
             ev_data = event.get("data", {})
             if not ev_data:
-                # Flat dict: wrap non-type keys into data
                 ev_data = {k: v for k, v in event.items() if k != "type"}
             ev = AgentEvent(type=event.get("type", ""), data=ev_data)
         else:
@@ -803,6 +839,15 @@ class CLITransport(Transport):
 
         etype = ev.type
         width = _term_width()
+
+        # Feed to progress tracker for phase detection
+        new_phase = self._progress.on_event(ev)
+        if new_phase and new_phase != self._phase:
+            self._phase = new_phase
+            bar = render_phase_bar(new_phase, {"tools_run": self._progress.progress.tools_run}, width)
+            if bar:
+                stdout.write(bar + "\n")
+                stdout.flush()
 
         if etype == EventType.THINKING:
             if self._in_content:
@@ -824,10 +869,9 @@ class CLITransport(Transport):
             self._flush_content(stdout, width)
             name = ev.data.get("name", "")
             args = ev.data.get("arguments", {})
-            rendered = _render_tool_call(name, args, box_mode=True)
-            if rendered:
-                stdout.write(rendered + "\n")
-                stdout.flush()
+            label = f"{name} {_args_preview(args)}"
+            spinner = self._get_spinner()
+            spinner.start(label)
 
         elif etype == EventType.TOOL_RESULT:
             self._flush_thinking(stdout, width)
@@ -835,22 +879,24 @@ class CLITransport(Transport):
             name = ev.data.get("name", "")
             result = ev.data.get("result", "")
             duration_ms = ev.data.get("duration_ms")
-            rendered = self._render_tool_result(name, result, duration_ms, width)
-            if rendered:
-                stdout.write(rendered + "\n")
-                stdout.flush()
+            if duration_ms and duration_ms < 50:
+                # Fast tools: skip spinner, show result inline
+                rendered = self._render_tool_result(name, result, duration_ms, width)
+                if rendered:
+                    stdout.write(rendered + "\n")
+                    stdout.flush()
+            else:
+                spinner = self._get_spinner()
+                duration_str = _format_duration(duration_ms) if duration_ms else ""
+                label = f"{name} {duration_str}".strip()
+                if self._is_error_result(result):
+                    spinner.fail(label)
+                else:
+                    spinner.succeed(label)
 
         elif etype == EventType.DONE:
             self._flush_thinking(stdout, width)
             self._flush_content(stdout, width)
-            turns = ev.data.get("turns", 0)
-            msg = _render_done_reason(ev, turns)
-            if msg:
-                stdout.write(msg + "\n")
-                stdout.flush()
-            # Turn separator
-            stdout.write("\n" + dim("─" * width) + "\n\n")
-            stdout.flush()
 
         elif etype == EventType.ERROR:
             self._flush_thinking(stdout, width)

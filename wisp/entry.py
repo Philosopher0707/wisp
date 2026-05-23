@@ -20,6 +20,9 @@ from wisp.composition import CompositionRoot
 from wisp.config import WispConfig
 from wisp.transport.cli_v2 import CLITransport
 from wisp.transport.tui import TUITransport
+from wisp.transport.renderer import render_turn_stats, render_file_ticker
+from wisp.colors import dim
+import shutil
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +56,10 @@ def run_mode(mode: str, prompt: str | None = None, **kwargs) -> None:
     workspace = kwargs.get("workspace")
     if workspace:
         config.workspace = workspace
+    if kwargs.get("show_thinking") is not None:
+        config.show_thinking = kwargs["show_thinking"]
+    if kwargs.get("auto_approve") is not None:
+        config.auto_approve = kwargs["auto_approve"]
 
     root = CompositionRoot(config)
 
@@ -100,6 +107,30 @@ def _run_cli(root: CompositionRoot, prompt: str | None = None, **kwargs) -> None
             pass
         loop.close()
         transport.stop()
+
+
+def _term_width() -> int:
+    try:
+        return shutil.get_terminal_size().columns
+    except Exception:
+        return 80
+
+
+def _show_turn_stats(transport: CLITransport) -> None:
+    """Render turn stats, file ticker, and separator after a turn."""
+    import sys
+    stats = transport._progress.on_done()
+    width = _term_width()
+    stats_line = render_turn_stats(stats, width)
+    if stats_line:
+        sys.stdout.write(stats_line + "\n")
+    files = stats.get("files_changed", [])
+    if files:
+        ticker = render_file_ticker(files, width)
+        if ticker:
+            sys.stdout.write(ticker + "\n")
+    sys.stdout.write("\n" + dim("─" * width) + "\n\n")
+    sys.stdout.flush()
 
 
 def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig, loop: asyncio.AbstractEventLoop | None = None, **kwargs) -> None:
@@ -166,6 +197,8 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
             loop.run_until_complete(_turn())
             transport._flush_thinking(sys.stdout)
             transport._flush_content(sys.stdout)
+            # Turn stats + file ticker + separator
+            _show_turn_stats(transport)
         except KeyboardInterrupt:
             _cancel_tasks()
             transport._flush_thinking(sys.stdout)
@@ -260,12 +293,13 @@ async def _run_single_prompt(transport: CLITransport, root: CompositionRoot, pro
             sys.stdout.flush()
             return
 
+    transport._reset_buffers()
     async for event in root.runtime.run_turn(session, prompt, approval_handler=getattr(transport, "approve", None)):
         transport._render_event(sys.stdout, event)
 
     transport._flush_thinking(sys.stdout)
     transport._flush_content(sys.stdout)
-    sys.stdout.write("\n")
+    _show_turn_stats(transport)
     sys.stdout.flush()
 
 

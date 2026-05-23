@@ -277,3 +277,90 @@ def _rule(char: str = "─", label: str = "", style_fn=None,
         right = char * (remaining - len(left))
         return style_fn(f"{left}{label_str}{right}")
     return style_fn(char * width)
+
+
+# ── Phase bar ────────────────────────────────────────────────────
+
+_PHASES = ("understand", "plan", "execute", "verify")
+_PHASE_ICONS = {"understand": "🔍", "plan": "📋", "execute": "⚡", "verify": "✅"}
+
+
+def render_phase_bar(phase: str, stats: dict, width: int = 80) -> str:
+    """Render a phase progress indicator.
+
+    Shows all four phases with the current one highlighted.
+    Returns empty string in minimal mode.
+    """
+    mode = get_output_mode()
+    if mode == OutputMode.MINIMAL:
+        return ""
+
+    if mode == OutputMode.ACCESSIBLE:
+        segments = []
+        for p in _PHASES:
+            if p == phase:
+                segments.append(f"[{p.upper()}]")
+            else:
+                segments.append(p)
+        return dim("  " + " > ".join(segments))
+
+    # Unicode / ASCII: progress bar style
+    segments = []
+    current_idx = _PHASES.index(phase) if phase in _PHASES else 0
+    for i, p in enumerate(_PHASES):
+        icon = _PHASE_ICONS.get(p, "")
+        if i < current_idx:
+            segments.append(dim(f"{icon} {p}"))
+        elif i == current_idx:
+            segments.append(f"{icon} {p}")
+        else:
+            segments.append(dim(f"{icon} {p}"))
+    return "  " + "  →  ".join(segments)
+
+
+def render_turn_stats(stats: dict, width: int = 80) -> str:
+    """Render a one-line turn summary: turn number, tools, files, elapsed."""
+    turn = stats.get("turn_number", 0)
+    tools_run = stats.get("tools_run", 0)
+    succeeded = stats.get("tools_succeeded", 0)
+    failed = stats.get("tools_failed", 0)
+    files = stats.get("files_changed", [])
+    elapsed = stats.get("elapsed", 0.0)
+
+    parts = [f"Turn {turn}"]
+
+    tool_str = f"{tools_run} tools"
+    if failed > 0:
+        tool_str += f" ({succeeded} ok, {failed} failed)"
+    parts.append(tool_str)
+
+    n_files = len(files)
+    parts.append(f"{n_files} files")
+
+    if elapsed > 0:
+        if elapsed < 60:
+            parts.append(f"{elapsed:.1f}s")
+        else:
+            mins = int(elapsed / 60)
+            secs = int(elapsed % 60)
+            parts.append(f"{mins}m {secs}s")
+
+    return dim("  " + " · ".join(parts))
+
+
+def render_file_ticker(files: list[str], width: int = 80) -> str:
+    """Render changed files as a compact inline list."""
+    if not files:
+        return ""
+
+    mode = get_output_mode()
+    if mode == OutputMode.ACCESSIBLE:
+        prefix = "  Files changed: "
+    else:
+        prefix = "  Files: "
+
+    shown = files[:4]
+    more = f" +{len(files) - 4}" if len(files) > 4 else ""
+    file_list = ", ".join(shown) + more
+
+    return dim(f"{prefix}{file_list}")

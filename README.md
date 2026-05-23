@@ -164,15 +164,27 @@ Then install the Android APK and connect to `wss://your-domain.com`.
 | `read_file` | Read file contents (with offset/limit) |
 | `write_file` | Create or overwrite a file |
 | `edit_file` | Targeted text replacement (surgical edits) |
+| `edit_file_multi` | Multiple precise edits in a single call |
 | `run_bash` | Execute shell commands (dangerous commands blocked) |
 | `list_files` | Explore directory structure |
 | `web_fetch` | Fetch content from URLs |
-| `search_symbols` | Search code for functions, classes, structs |
+| `web_search` | Search the web for current information |
+| `search_symbols` | Search code by regex for functions, classes, structs |
+| `search_codebase` | Semantic vector search over the codebase |
 | `remember` | Store a fact in cross-session memory |
 | `recall` | Search memory and past summaries |
-| `spawn_subagent` | Delegate scoped tasks to child agents |
+| `spawn` | Launch a subagent with a contract for scoped work |
+| `fanout` | Delegate a task to multiple subagents in parallel |
+| `plan_task` | Create a structured plan with subtasks |
+| `run_tests` | Run tests for changed files or full suite |
+| `diagnose` | Diagnose errors from test output or tracebacks |
 | `git_status` | Show git status |
 | `git_diff` | Show uncommitted changes |
+| `git_commit` | Stage files and commit |
+| `gh_pr_create` | Create a GitHub pull request |
+| `lsp_diagnostics` | Run language server diagnostics on a file |
+| `lsp_definition` | Go to definition of a symbol |
+| `lsp_references` | Find all references to a symbol |
 
 ---
 
@@ -253,26 +265,51 @@ cd android
 
 ---
 
+## CLI UX
+
+The CLI transport (`CLITransportV2`) renders agent activity as a **live dashboard** rather than a plain log stream:
+
+- **Phase bar** — Shows `understand → plan → execute → verify` phases, highlighting the current one
+- **Tool spinners** — Inline `⠋` spinner with live elapsed time during tool execution; replaced by `✓`/`✗` on completion
+- **File change ticker** — Accumulated changed files shown after each turn
+- **Turn stats** — `Turn 3 · 5 tools (4 ok, 1 failed) · 2 files · 12.3s` summary line
+- **Thinking collapsed** — Thinking output shown as a compact summary line (`🧠 Thinking... (12 lines — /thinking to expand)`) by default; use `--show-thinking` or `/thinking` to expand
+
+All rendering is output-mode-aware (unicode, ascii, accessible, minimal) and display-width-aware (CJK, emoji).
+
 ## Project Structure
 
 ```
 wisp/
 ├── wisp/                    # Core agent
 │   ├── __main__.py          # CLI entry point
-│   ├── agent.py             # Plan → Act → Observe loop
-│   ├── server.py            # FastAPI + WebSocket cloud server
-│   ├── session.py           # Session persistence + compaction
-│   ├── memory.py            # Cross-session memory (remember/recall)
-│   ├── agent_memory.py      # Session summary storage
-│   ├── summarizer.py        # Extractive summarization
-│   ├── tools.py             # 15 tools for the agent
-│   ├── ollama_client.py     # Ollama API wrapper
+│   ├── agent.py             # Deprecated compat shim
+│   ├── core/                # Event-driven stateless engine
+│   │   ├── engine.py        # WispAgentCore (async turn() loop)
+│   │   ├── events.py        # AgentEvent + 12 event types
+│   │   ├── runtime.py       # AgentRuntime (session mgmt + locks)
+│   │   └── ...
+│   ├── transport/           # I/O layer (Transport ABC)
+│   │   ├── base.py          # Transport abstract base class
+│   │   ├── cli_v2.py        # CLI transport (live dashboard)
+│   │   ├── server.py        # WebSocket server transport
+│   │   ├── headless.py      # Headless transport (CI/API)
+│   │   ├── tui.py           # Textual TUI transport
+│   │   ├── renderer.py      # Terminal rendering utilities
+│   │   ├── progress.py      # ProgressTracker (phase detection)
+│   │   ├── spinner.py       # Terminal inline spinner
+│   │   └── ...
+│   ├── tools/               # Tool schemas + implementations
+│   │   ├── registry.py      # TOOL_SCHEMAS + TOOL_IMPLS
+│   │   └── ...
+│   ├── multi_agent/         # Subagent orchestration
+│   ├── infra/               # Security, telemetry, extensions
 │   ├── config.py            # Settings schema + resolution
 │   ├── commands.py          # REPL slash commands
 │   └── ...
 ├── android/                 # Android app
 │   └── app/src/main/java/   # Jetpack Compose UI
-├── tests/                   # 30+ test files
+├── tests/                   # 35+ test files
 ├── skills/                  # Warp-compatible skill files
 ├── docker-compose.yml       # One-command cloud deploy
 ├── CLOUD_DEPLOYMENT_GUIDE.md
@@ -336,12 +373,20 @@ Wisp is now built as a layered SDK:
 ```
 ┌─────────────────────────────────────────┐
 │  Transports (I/O layer)                 │
-│  - CLITransport      → terminal         │
-│  - ServerTransport   → WebSocket        │
+│  - CLITransportV2   → live dashboard    │
+│  - ServerTransport  → WebSocket         │
+│  - HeadlessTransport → CI/API           │
+│  - TUITransport     → Textual TUI       │
 ├─────────────────────────────────────────┤
 │  Core (pure logic, zero I/O)            │
 │  - WispAgentCore     → event-driven     │
 │  - AgentEvent        → structured events│
+│  - AgentRuntime      → session mgmt     │
+├─────────────────────────────────────────┤
+│  CLI Dashboard (rendering layer)        │
+│  - ProgressTracker   → phase detection  │
+│  - Spinner           → inline progress  │
+│  - Renderer          → terminal output  │
 ├─────────────────────────────────────────┤
 │  Config & Tools                         │
 │  - WispConfig, TOOL_SCHEMAS, etc.       │
