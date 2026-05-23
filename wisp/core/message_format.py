@@ -145,6 +145,16 @@ def to_ollama_messages(messages: list[dict]) -> list[dict]:
     Internal format may have content arrays with image_url parts.
     Ollama expects: {role, content: str, images: [base64_str, ...]}.
     """
+    # Build tool_call_id → function name lookup for tool result messages.
+    # Gemini models require the "name" field on function_response.
+    tc_id_to_name: dict[str, str] = {}
+    for msg in messages:
+        for tc in msg.get("tool_calls", []):
+            tc_id = tc.get("id", "")
+            name = tc.get("function", {}).get("name", "")
+            if tc_id and name:
+                tc_id_to_name[tc_id] = name
+
     converted: list[dict] = []
     for msg in messages:
         role = msg.get("role", "")
@@ -162,20 +172,30 @@ def to_ollama_messages(messages: list[dict]) -> list[dict]:
                 new_msg["thinking"] = msg["thinking"]
             if msg.get("tool_call_id"):
                 new_msg["tool_call_id"] = msg["tool_call_id"]
+                tc_name = tc_id_to_name.get(msg["tool_call_id"], "")
+                if tc_name:
+                    new_msg["name"] = tc_name
         else:
             new_msg = dict(msg)
+            # Gemini models require "name" on tool result messages
+            if role == "tool" and msg.get("tool_call_id") and "name" not in new_msg:
+                tc_name = tc_id_to_name.get(msg["tool_call_id"], "")
+                if tc_name:
+                    new_msg["name"] = tc_name
 
         # Convert tool_calls arguments from JSON string → dict (Ollama native format)
         if tool_calls:
             ollama_tcs = []
             for tc in tool_calls:
-                func = tc.get("function", {})
+                func = dict(tc.get("function", {}))
                 args = func.get("arguments", {})
-                has_id = "id" in tc
                 has_type = "type" in tc
-                if isinstance(args, dict) and not has_id and not has_type:
-                    # Already in Ollama format — no conversion needed
-                    ollama_tcs.append(tc)
+                if isinstance(args, dict) and not has_type:
+                    # Already in Ollama format — no conversion needed.
+                    # Preserve id (Gemini models embed a signature in it).
+                    tc_clean = dict(tc)
+                    tc_clean.pop("type", None)
+                    ollama_tcs.append(tc_clean)
                 else:
                     tc_copy = dict(tc)
                     if isinstance(args, str):
@@ -184,7 +204,6 @@ def to_ollama_messages(messages: list[dict]) -> list[dict]:
                         except (json.JSONDecodeError, TypeError):
                             pass
                     tc_copy["function"] = func
-                    tc_copy.pop("id", None)
                     tc_copy.pop("type", None)
                     ollama_tcs.append(tc_copy)
             new_msg["tool_calls"] = ollama_tcs

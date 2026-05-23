@@ -122,6 +122,8 @@ class WispAgentCore:
                                     }
                                     if "id" in call:
                                         single["id"] = call["id"]
+                                    if "index" in func:
+                                        single["_index"] = func["index"]
                                     # Process each individually
                                     tc_event = dict(single)
                                     # Check security BEFORE yielding
@@ -247,13 +249,16 @@ class WispAgentCore:
                 tc_blocks = []
                 for tc in pending_tool_calls:
                     args = tc.get("arguments", {})
+                    func_block = {
+                        "name": tc.get("name", ""),
+                        "arguments": json.dumps(args) if isinstance(args, dict) else str(args),
+                    }
+                    if "_index" in tc:
+                        func_block["index"] = tc["_index"]
                     tc_blocks.append({
                         "id": tc.get("id", f"call_{_uuid.uuid4().hex[:8]}"),
                         "type": "function",
-                        "function": {
-                            "name": tc.get("name", ""),
-                            "arguments": json.dumps(args) if isinstance(args, dict) else str(args),
-                        },
+                        "function": func_block,
                     })
                 assistant_msg["tool_calls"] = tc_blocks
             messages.append(assistant_msg)
