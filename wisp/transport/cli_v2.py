@@ -36,7 +36,7 @@ from .renderer import (
 from wisp.colors import dim, error, warning, success, info, accent
 from wisp.approval_state import ApprovalSessionState, SessionPolicy
 from wisp.core.events import AgentEvent, EventType
-from wisp.terminal_width import display_width, is_accessible, OutputMode, get_output_mode
+from wisp.terminal_width import display_width, is_accessible, OutputMode, get_output_mode, wrap_text_wide
 from wisp.transport.progress import ProgressTracker
 from wisp.transport.spinner import Spinner
 from wisp.transport.renderer import render_phase_bar, render_turn_stats, render_file_ticker
@@ -1059,11 +1059,16 @@ class CLITransport(Transport):
                     + " \u00B7" * max(0, width - display_width(f"  {icon} {name} ({duration_str}) — {line_count} lines of output") - 2)
                 )
 
+            # Light framing: rule header + indented output (no heavy box)
+            label_str = f"{name} output" if is_accessible() else f"📤 {name} output"
+            rule = _rule("-", label_str, style_fn=dim, width=width)
+            inner_w = width - 4
+            wrapped = wrap_text_wide(output_str.strip(), inner_w)
+            indented = "\n".join(dim(f"  {line}") for line in wrapped)
             if skip_header:
-                return _box(output_str, width=width)
+                return indented
             header = _build_header(icon, name, duration_str)
-            body = _box(output_str, width=width)
-            return f"{header}\n{body}"
+            return f"{header}\n{rule}\n{indented}"
 
         # Regular / compact tool results
         if not self.show_tool_output:

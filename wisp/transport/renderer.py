@@ -120,7 +120,8 @@ def render_content_block(text: str, box_mode: bool, width: int) -> Optional[str]
     if box_mode:
         if is_accessible():
             return f"[Response]\n" + "\n".join(wrapped)
-        return _box("\n".join(wrapped), title="Response", style="muted", width=width)
+        header = _rule("─", "Response", style_fn=dim, width=width)
+        return f"{header}\n" + "\n".join(wrapped)
     else:
         return "\n".join(wrapped)
 
