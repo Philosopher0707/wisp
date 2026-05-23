@@ -99,12 +99,6 @@ class CompositionRoot:
         self.extensions.register(MCPExtension(workspace=str(workspace), manager=self._mcp_manager))
         self.extensions.register(SkillExtension(workspace=str(workspace)))
 
-        # Create subagent orchestrator
-        self.subagent_orchestrator = SubagentOrchestrator(
-            config=self.config,
-            workspace=wsp,
-        )
-
         # Ensure .wisp dir exists for persistence
         (wsp / ".wisp").mkdir(parents=True, exist_ok=True)
 
@@ -118,6 +112,13 @@ class CompositionRoot:
         # Create ToolRegistry (shared state with module-level TOOL_SCHEMAS/TOOL_IMPLS)
         self.tool_registry = ToolRegistry()
 
+        # Create subagent orchestrator (phase 1: without tool_executor)
+        self.subagent_orchestrator = SubagentOrchestrator(
+            config=self.config,
+            workspace=wsp,
+            tool_executor=None,  # will be set in phase 2 below
+        )
+
         # Create ToolExecutor wired with all dependencies
         self.tool_executor = ToolExecutor(
             config=self.config,
@@ -127,6 +128,9 @@ class CompositionRoot:
             lsp_manager=self._lsp_manager,
             subagent_orchestrator=self.subagent_orchestrator,
         )
+
+        # Phase 2: inject tool_executor into orchestrator's runner
+        self.subagent_orchestrator._runner._tool_executor = self.tool_executor
 
         # Create Compactor for LLM-powered summarization
         compaction_model = getattr(self.config, "compaction_model", "") or ""
@@ -144,6 +148,7 @@ class CompositionRoot:
             telemetry=self.telemetry,
             core_factory=self._create_core,
             compactor=self.compactor,
+            orchestrator=self.subagent_orchestrator,
         )
 
         # Register services for lifecycle management

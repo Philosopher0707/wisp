@@ -31,6 +31,7 @@ class ResultCache:
             contract.output_format,
             str(contract.output_schema or ""),
             str(contract.system_prompt or ""),
+            contract._cache_context,
         ]
         raw = "|".join(parts)
         return hashlib.sha256(raw.encode()).hexdigest()[:32]

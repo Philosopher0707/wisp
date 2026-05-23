@@ -298,6 +298,24 @@ def _parse_int(value: Any, default: int, min_val: int | None = None, max_val: in
     return result
 
 
+def _parse_float(value: Any, default: float, min_val: float | None = None, max_val: float | None = None) -> float:
+    """Parse a float setting, falling back to default on error."""
+    if isinstance(value, float):
+        result = value
+    elif isinstance(value, int):
+        result = float(value)
+    else:
+        try:
+            result = float(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return default
+    if min_val is not None and result < min_val:
+        return min_val
+    if max_val is not None and result > max_val:
+        return max_val
+    return result
+
+
 class WispConfig:
     """Resolved Wisp configuration.
 
@@ -373,6 +391,13 @@ class WispConfig:
         )
         self.max_subagent_branching: int = _parse_int(
             get_setting("max_subagent_branching", "3"), 3, 1, 20
+        )
+        # Auto-delegation: detect multi-faceted prompts and split into subagents
+        self.auto_delegate: bool = _parse_bool(
+            get_setting("auto_delegate", "true"), True
+        )
+        self.delegation_threshold: float = _parse_float(
+            get_setting("delegation_threshold", "0.18"), 0.18, 0.05, 0.95
         )
         # Write-classification tools requiring approval in restricted modes
         raw_write_tools = get_setting(

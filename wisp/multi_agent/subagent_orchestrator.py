@@ -50,14 +50,20 @@ class SubagentOrchestrator:
         parent_agent: Optional[Any] = None,
         config: Optional[WispConfig] = None,
         workspace: Optional[Path] = None,
+        tool_executor: Any = None,
     ):
         self.parent = parent_agent
         self.config = config or (getattr(parent_agent, "config", None) if parent_agent else WispConfig())
-        self.workspace = (
+        _ws = (
             workspace
             or (Path(self.config.workspace).resolve() if self.config.workspace else None)
             or Path.cwd().resolve()
         )
+        self.workspace = Path(_ws).resolve() if not isinstance(_ws, Path) else _ws.resolve()
+
+        # Unique cache namespace — prevents cross-session cache collisions
+        import uuid
+        self._cache_namespace = uuid.uuid4().hex[:12]
 
         # Composed subsystems
         self._budget = BudgetTracker()
@@ -65,7 +71,7 @@ class SubagentOrchestrator:
         self._telemetry = Telemetry()
         self._persistence = Persistence(self.workspace / ".wisp" / "subagent_results.jsonl")
         self._worktree_mgr = WorktreeManager(self.workspace)
-        self._runner = SubagentRunner(self.config, self.workspace)
+        self._runner = SubagentRunner(self.config, self.workspace, tool_executor=tool_executor)
 
         # Config-driven limits
         self._max_depth = getattr(self.config, "max_subagent_depth", _MAX_SUBAGENT_DEPTH_DEFAULT)
@@ -181,6 +187,7 @@ class SubagentOrchestrator:
             )
 
         # ── Cache check ────────────────────────────────────────────────
+        contract._cache_context = self._cache_namespace
         cached = self._cache.get(contract)
         if cached is not None:
             return cached

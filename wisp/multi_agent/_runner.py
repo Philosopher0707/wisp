@@ -46,11 +46,13 @@ class SubagentRunner:
         parent_config: WispConfig,
         workspace: Path,
         store: UnifiedStore | None = None,
+        tool_executor: Any | None = None,
     ):
         self.parent_config = parent_config
         self.workspace = workspace
         default_db = Path(workspace) / ".wisp" / "wisp.db"
         self._store = store or UnifiedStore(default_db)
+        self._tool_executor = tool_executor
 
     async def run(
         self,
@@ -250,11 +252,32 @@ class SubagentRunner:
             extensions=extensions,
             telemetry=telemetry,
             config=config,
+            tool_executor=self._tool_executor,
         )
 
         session_dict = dict(session)
         if system_prompt:
             session_dict["messages"] = [{"role": "system", "content": system_prompt}] + list(session_dict.get("messages", []))
+
+        # Partition context — only pass relevant history to subagent
+        raw_messages = list(session_dict.get("messages", []))
+        if len(raw_messages) > 10:
+            from .context_partition import ContextPartitioner
+            partitioner = ContextPartitioner(max_messages=10, max_tokens=4000)
+            filtered = partitioner.partition(raw_messages, contract.task, include_system=True)
+            # Always ensure the task message is present
+            task_msg = {"role": "user", "content": contract.task}
+            has_task = any(
+                m.get("role") == "user" and m.get("content") == contract.task
+                for m in filtered
+            )
+            if not has_task:
+                filtered.append(task_msg)
+            session_dict["messages"] = filtered
+            logger.debug(
+                "Context partitioned for %s: %d → %d messages",
+                contract.name, len(raw_messages), len(filtered),
+            )
 
         output_text = ""
         iterations = 0

@@ -153,6 +153,9 @@ class SubagentContract:
     max_memory_mb: int = 2048
     """Maximum memory limit for process subagents (Unix only)."""
 
+    _cache_context: str = ""
+    """Session-scoped context for cache key isolation. Set by orchestrator."""
+
     def __post_init__(self):
         """Normalize backward-compat aliases."""
         if self.prompt and not self.task:

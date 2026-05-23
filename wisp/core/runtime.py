@@ -41,6 +41,7 @@ class AgentRuntime:
     core_factory: Callable[[], Any]
     session_repo: Any = None
     compactor: Any = None
+    orchestrator: Any = None  # SubagentOrchestrator — set by CompositionRoot
 
     # Cached core instance — avoids rebuilding system prompt caches every turn
     _core_cache: Any = field(default=None, repr=False)
@@ -177,8 +178,31 @@ class AgentRuntime:
                 except Exception:
                     pass
 
+            # ── Auto-delegation check ─────────────────────────────────────
+            delegation_context: str | None = None
+            if (
+                self.orchestrator is not None
+                and getattr(self._get_core().config, "auto_delegate", True)
+            ):
+                delegation_context = await self._maybe_delegate(
+                    prompt, session, self._get_core().config
+                )
+                if delegation_context:
+                    yield {
+                        "type": "system",
+                        "message": "Auto-delegating to subagents...",
+                        "timestamp": time.time(),
+                    }
+
             # Get cached core (warm-start, thread-safe)
             core = self._get_core()
+
+            # Inject delegation results as system context
+            if delegation_context:
+                session["messages"].append({
+                    "role": "system",
+                    "content": delegation_context,
+                })
 
             assistant_content: list[str] = []
             tool_calls: list[dict] = []
@@ -305,6 +329,90 @@ class AgentRuntime:
                     prompt_tokens=counter.count(prompt, model=model),
                     completion_tokens=counter.count("".join(assistant_content), model=model),
                 )
+
+    async def _maybe_delegate(
+        self, prompt: str, session: dict, config: Any,
+    ) -> str | None:
+        """Analyze prompt and auto-delegate to subagents if warranted.
+
+        Returns delegation context string to inject as system message,
+        or None if delegation is not needed or fails.
+        """
+        if not prompt or len(prompt) < 20:
+            return None
+
+        try:
+            from wisp.multi_agent.delegation import get_delegation_analyzer
+            from wisp.multi_agent.task import SubagentContract
+
+            threshold = getattr(config, "delegation_threshold", 0.18)
+            analyzer = get_delegation_analyzer()
+            signal = analyzer.analyze(prompt)
+
+            if not signal.should_delegate or signal.confidence < threshold:
+                return None
+
+            logger.info(
+                "Auto-delegating: %s (confidence=%.2f, reason=%s)",
+                prompt[:80], signal.confidence, signal.reason,
+            )
+
+            # Build contracts from suggested contracts
+            contracts = []
+            for sc_dict in signal.suggested_contracts:
+                sc_dict = dict(sc_dict)
+                sc_dict.setdefault("_cache_context", session.get("id", ""))
+                contracts.append(SubagentContract(**sc_dict))
+
+            if not contracts:
+                return None
+
+            # Run subagents with overall timeout
+            import asyncio
+            try:
+                async with asyncio.timeout(60):
+                    results = await self.orchestrator.run_parallel(
+                        contracts, max_concurrent=3,
+                    )
+            except asyncio.TimeoutError:
+                logger.warning("Auto-delegation timed out after 60s")
+                return None
+
+            # Build context from results
+            succeeded = [r for r in results if r.success]
+            failed = [r for r in results if not r.success]
+
+            if not succeeded:
+                logger.warning(
+                    "All %d delegation subagents failed", len(results),
+                )
+                return None
+
+            parts = [
+                "[AUTO-DELEGATION RESULTS]",
+                f"The following research was completed by specialized subagents "
+                f"({len(succeeded)} succeeded, {len(failed)} failed):\n",
+            ]
+            for r in succeeded:
+                parts.append(f"## {r.task_id}")
+                parts.append(r.output[:3000])
+                parts.append("")
+
+            if failed:
+                parts.append("## Failures (ignore these approaches)")
+                for r in failed:
+                    parts.append(f"- {r.task_id}: {r.error or 'unknown'}")
+
+            context = "\n".join(parts)
+            logger.info(
+                "Delegation complete: %d/%d succeeded, %d chars of context",
+                len(succeeded), len(results), len(context),
+            )
+            return context
+
+        except Exception:
+            logger.exception("Auto-delegation failed, proceeding without")
+            return None
 
     def _get_core(self) -> Any:
         """Get cached core instance, creating if needed.
