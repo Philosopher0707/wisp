@@ -85,6 +85,70 @@ class WorktreeManager:
         logger.debug("Worktree created and synced: %s (branch=%s)", worktree_path, branch_name)
         return worktree_path
 
+    async def detect_files_changed(self, worktree_path: Path) -> list[str]:
+        """Return list of files changed in the worktree via git diff --name-only.
+
+        More reliable than regex-extracting paths from LLM text output.
+        Returns empty list if worktree doesn't exist or has no changes.
+        """
+        if not worktree_path.exists():
+            return []
+
+        proc = await asyncio.create_subprocess_exec(
+            "git", "diff", "--name-only", "HEAD",
+            cwd=str(worktree_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+
+        files = [
+            line.strip() for line in stdout.decode("utf-8", errors="replace").splitlines()
+            if line.strip()
+        ]
+        return files
+
+    async def apply_patch(self, patch: str) -> bool:
+        """Apply a git patch to the parent workspace.
+
+        Returns True if the patch applied cleanly, False on conflict.
+        """
+        if not patch.strip():
+            return True
+
+        proc = await asyncio.create_subprocess_exec(
+            "git", "apply",
+            cwd=str(self.workspace),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate(input=patch.encode("utf-8"))
+
+        if proc.returncode != 0:
+            err_text = stderr.decode("utf-8", errors="replace").strip()
+            logger.warning("git apply failed (exit %d): %s", proc.returncode, err_text)
+            return False
+
+        logger.info("Patch applied successfully to %s", self.workspace)
+        return True
+
+    async def apply_patches_sequential(self, patches: list[str]) -> dict[str, bool]:
+        """Apply multiple patches sequentially. Skips on conflict.
+
+        Returns a dict mapping patch index → success.
+        """
+        results: dict[str, bool] = {}
+        for i, patch in enumerate(patches):
+            if not patch.strip():
+                results[str(i)] = True
+                continue
+            ok = await self.apply_patch(patch)
+            results[str(i)] = ok
+            if not ok:
+                logger.warning("Patch %d/%d conflicted — skipping remaining", i + 1, len(patches))
+        return results
+
     async def get_patch(self, worktree_path: Path) -> str:
         """Capture all uncommitted changes (tracked & untracked) in the worktree as a patch string."""
         if not worktree_path.exists():

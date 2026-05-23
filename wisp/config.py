@@ -386,6 +386,9 @@ class WispConfig:
         self.subagent_pool_size: int = _parse_int(
             get_setting("subagent_pool_size", "4"), 4, 1, 32
         )
+        self.max_subagent_timeout: int = _parse_int(
+            get_setting("max_subagent_timeout", "600"), 600, 30, 3600
+        )
         self.max_subagent_depth: int = _parse_int(
             get_setting("max_subagent_depth", "2"), 2, 0, 10
         )

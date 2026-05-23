@@ -347,7 +347,21 @@ class AgentRuntime:
 
             threshold = getattr(config, "delegation_threshold", 0.18)
             analyzer = get_delegation_analyzer()
-            signal = analyzer.analyze(prompt)
+
+            # Build LLM call wrapper for hybrid classification
+            async def _llm_classify(classify_prompt: str) -> str:
+                core = self._get_core()
+                messages = [{"role": "user", "content": classify_prompt}]
+                events = []
+                async for event in core.provider.generate_stream_events(messages=messages):
+                    events.append(event)
+                    if event.get("type") == "done":
+                        break
+                return "".join(
+                    e.get("text", "") for e in events if e.get("type") == "content"
+                )
+
+            signal = await analyzer.analyze_with_llm(prompt, _llm_classify)
 
             if not signal.should_delegate or signal.confidence < threshold:
                 return None
@@ -367,16 +381,10 @@ class AgentRuntime:
             if not contracts:
                 return None
 
-            # Run subagents with overall timeout
-            import asyncio
-            try:
-                async with asyncio.timeout(60):
-                    results = await self.orchestrator.run_parallel(
-                        contracts, max_concurrent=3,
-                    )
-            except asyncio.TimeoutError:
-                logger.warning("Auto-delegation timed out after 60s")
-                return None
+            # Run subagents — each contract enforces its own deadline (Phase 1A)
+            results = await self.orchestrator.run_parallel(
+                contracts, max_concurrent=3,
+            )
 
             # Build context from results
             succeeded = [r for r in results if r.success]

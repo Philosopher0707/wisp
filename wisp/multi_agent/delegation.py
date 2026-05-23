@@ -4,15 +4,30 @@ This module provides capability mismatch detection for the agent loop.
 When the main agent encounters a task that is too complex, multi-faceted,
 or outside its current context, it can automatically delegate to specialized
 subagents.
+
+Delegation classification uses a hybrid approach:
+1. LLM-based classification (primary) — single-call prompt, 5s timeout
+2. Keyword-based scoring (fallback) — when LLM unavailable or times out
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Awaitable, Callable, Optional
 
 logger = logging.getLogger(__name__)
+
+_LLM_CLASSIFY_PROMPT = (
+    "Analyze this task and determine if it should be delegated to specialized "
+    "subagents. A task benefits from delegation if it is multi-faceted, requires "
+    "parallel research, or spans many files.\n\n"
+    "Task: {task}\n\n"
+    'Respond with JSON only: {{"delegate": true/false, "confidence": 0.0-1.0, '
+    '"reason": "short reason", "subagents": ["role1", "role2"]}}'
+)
 
 
 @dataclass
@@ -29,7 +44,10 @@ class DelegationSignal:
 
 
 class DelegationAnalyzer:
-    """Analyzes prompts to detect capability mismatch and suggest delegation."""
+    """Analyzes prompts to detect capability mismatch and suggest delegation.
+
+    Hybrid: LLM classification (primary) → keyword scoring (fallback).
+    """
 
     # Keywords that suggest multi-faceted tasks
     COMPLEXITY_INDICATORS = [
@@ -61,6 +79,41 @@ class DelegationAnalyzer:
 
     def __init__(self, max_prompt_length: int = 100):
         self.max_prompt_length = max_prompt_length
+
+    # ── Public API ──────────────────────────────────────────────────────
+
+    async def analyze_with_llm(
+        self,
+        prompt: str,
+        llm_call: Callable[[str], Awaitable[str]],
+        current_iteration: int = 0,
+        max_iterations: int = 10,
+    ) -> DelegationSignal:
+        """Analyze prompt using LLM classification with keyword fallback.
+
+        Args:
+            prompt: The user's prompt.
+            llm_call: Async callable that takes a prompt string and returns
+                      the LLM's text response. Called with a classification
+                      prompt; expects a JSON response.
+            current_iteration: Current iteration in the agent loop.
+            max_iterations: Maximum iterations allowed.
+
+        Returns:
+            DelegationSignal with should_delegate and suggested contracts.
+        """
+        try:
+            classify_prompt = _LLM_CLASSIFY_PROMPT.format(task=prompt[:800])
+            response = await asyncio.wait_for(
+                llm_call(classify_prompt), timeout=5.0,
+            )
+            return self._parse_llm_response(prompt, response)
+        except asyncio.TimeoutError:
+            logger.debug("LLM delegation classification timed out — using keyword fallback")
+        except Exception:
+            logger.debug("LLM delegation classification failed — using keyword fallback", exc_info=True)
+
+        return self.analyze(prompt, current_iteration, max_iterations)
 
     def analyze(self, prompt: str, current_iteration: int = 0,
                 max_iterations: int = 10) -> DelegationSignal:
@@ -200,6 +253,49 @@ class DelegationAnalyzer:
             })
 
         return contracts
+
+    def _parse_llm_response(self, prompt: str, response: str) -> DelegationSignal:
+        """Parse LLM classification response into a DelegationSignal."""
+        try:
+            # Extract JSON from response (may have markdown fences)
+            json_str = response.strip()
+            if json_str.startswith("```"):
+                lines = json_str.split("\n")
+                json_str = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+            data = json.loads(json_str)
+        except (json.JSONDecodeError, ValueError):
+            logger.debug("Failed to parse LLM delegation response, falling back to keyword")
+            return self.analyze(prompt)
+
+        should_delegate = data.get("delegate", False)
+        confidence = float(data.get("confidence", 0.0))
+        reason = data.get("reason", "LLM classified")
+        roles = data.get("subagents", [])
+
+        contracts = []
+        role_to_config = {
+            "researcher": {"role": "researcher", "timeout_seconds": 180, "max_iterations": 15},
+            "coder": {"role": "coder", "timeout_seconds": 300, "max_iterations": 20},
+            "reviewer": {"role": "reviewer", "timeout_seconds": 180, "max_iterations": 15},
+            "architect": {"role": "architect", "timeout_seconds": 240, "max_iterations": 20},
+            "generalist": {"role": "generalist", "timeout_seconds": 180, "max_iterations": 15},
+        }
+        for i, role in enumerate(roles):
+            cfg = role_to_config.get(role, {"role": "generalist", "timeout_seconds": 180, "max_iterations": 15})
+            contracts.append({
+                "name": f"{role}-{i}",
+                "role": cfg["role"],
+                "task": f"[{role}] {prompt[:200]}",
+                "timeout_seconds": cfg["timeout_seconds"],
+                "max_iterations": cfg["max_iterations"],
+            })
+
+        return DelegationSignal(
+            should_delegate=should_delegate,
+            reason=reason,
+            suggested_contracts=contracts if should_delegate else [],
+            confidence=confidence,
+        )
 
 
 # Global analyzer instance

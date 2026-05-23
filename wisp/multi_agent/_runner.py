@@ -63,9 +63,13 @@ class SubagentRunner:
     ) -> SubagentResult:
         """Run a single subagent and return its result.
 
-        Uses ``asyncio.timeout`` for cancellation — no threads, no nested loops.
+        Uses a single wall-clock deadline — the contract timeout is the hard
+        upper bound regardless of iteration count. Per-iteration timeouts are
+        derived from remaining budget so a 300s contract with 30 iterations
+        cannot run 9000s.
         """
         start = time.monotonic()
+        deadline = start + contract.timeout_seconds
         tool_calls_log: list[dict] = []
 
         # Build child config
@@ -106,6 +110,7 @@ class SubagentRunner:
                     system_prompt,
                     agent_workspace,
                     tool_calls_log,
+                    deadline,
                 )
 
             from datetime import datetime, timezone
@@ -217,6 +222,7 @@ class SubagentRunner:
         system_prompt: str,
         workspace_path: str,
         tool_calls_log: list[dict],
+        deadline: float,
     ) -> dict:
         """Run a stateless WispAgentCore instance and return its result dict.
 
@@ -284,40 +290,37 @@ class SubagentRunner:
         max_iter = contract.max_iterations
 
         for iteration in range(max_iter):
-            try:
-                async with asyncio.timeout(contract.timeout_seconds):
-                    events = []
-                    async for event in core.turn(session_dict, contract.task):
-                        events.append(event)
-                        etype = event.get("type")
-                        if etype == "content":
-                            output_text = event.get("text", "")
-                        elif etype == "tool_call":
-                            name = event.get("name", "")
-                            args = event.get("arguments", {})
-                            arg_preview = self._compact_args(args)
-                            tool_calls_log.append({"name": name, "args_preview": arg_preview})
-                        elif etype == "error":
-                            output_text = event.get("message", "")
-                            return {
-                                "success": False,
-                                "output": output_text,
-                                "error": output_text,
-                                "files_changed": [],
-                                "iterations_used": iteration + 1,
-                                "messages": session_dict.get("messages", []),
-                            }
-                        elif etype == "done":
-                            break
-            except asyncio.TimeoutError:
-                return {
-                    "success": False,
-                    "output": f"[TIMED OUT after {contract.timeout_seconds}s]",
-                    "error": f"Timeout after {contract.timeout_seconds}s",
-                    "files_changed": [],
-                    "iterations_used": iteration + 1,
-                    "messages": session_dict.get("messages", []),
-                }
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise asyncio.TimeoutError("contract deadline reached")
+
+            # Per-iteration cap: min of remaining budget or 5 minutes
+            iter_timeout = min(remaining, 300.0)
+
+            async with asyncio.timeout(iter_timeout):
+                events = []
+                async for event in core.turn(session_dict, contract.task):
+                    events.append(event)
+                    etype = event.get("type")
+                    if etype == "content":
+                        output_text = event.get("text", "")
+                    elif etype == "tool_call":
+                        name = event.get("name", "")
+                        args = event.get("arguments", {})
+                        arg_preview = self._compact_args(args)
+                        tool_calls_log.append({"name": name, "args_preview": arg_preview})
+                    elif etype == "error":
+                        output_text = event.get("message", "")
+                        return {
+                            "success": False,
+                            "output": output_text,
+                            "error": output_text,
+                            "files_changed": [],
+                            "iterations_used": iteration + 1,
+                            "messages": session_dict.get("messages", []),
+                        }
+                    elif etype == "done":
+                        break
 
             iterations = iteration + 1
             # Check if the last assistant message has tool_calls
@@ -349,10 +352,12 @@ class SubagentRunner:
         """Estimate token count from message history.
 
         Returns (input_tokens, output_tokens, total_tokens).
-        Uses TokenCounter for consistent char-ratio estimation.
+        Uses tiktoken for accurate counting when available, falls back to
+        model-specific char ratios (claude=3.5, gpt=4, gemini=3, default=4).
         """
         from wisp.infra.token_counter import TokenCounter
 
+        model = getattr(self.parent_config, "model", "") or ""
         chars_per_token = getattr(self.parent_config, "chars_per_token", 4)
         counter = TokenCounter(chars_per_token=chars_per_token)
 
@@ -373,8 +378,34 @@ class SubagentRunner:
                     args = func.get("arguments", "")
                     output_chars += len(args) if isinstance(args, str) else len(str(args))
 
+        # Use tiktoken if model is known for total count, char ratio for split.
+        # Tool call args already accounted in char computation above.
         input_tokens = counter.estimate_chars(input_chars)
         output_tokens = counter.estimate_chars(output_chars)
+        if model:
+            parts: list[str] = []
+            for m in messages:
+                content = m.get("content", "") or ""
+                if isinstance(content, str):
+                    parts.append(content)
+                for tc in m.get("tool_calls", []) or []:
+                    func = tc.get("function", {})
+                    args = func.get("arguments", "")
+                    if isinstance(args, str):
+                        parts.append(args)
+            full_text = "".join(parts)
+            tiktoken_total = counter.count(full_text, model=model)
+            if tiktoken_total > 0:
+                # Sanity check: tiktoken total should be in same ballpark
+                char_total = input_tokens + output_tokens
+                if char_total > 0 and abs(tiktoken_total - char_total) / char_total > 0.5:
+                    # Large discrepancy — tiktoken disagrees with char ratio.
+                    # Use tiktoken total, split proportionally.
+                    total_chars = input_chars + output_chars
+                    if total_chars > 0:
+                        input_tokens = max(0, int(tiktoken_total * input_chars / total_chars))
+                        output_tokens = max(0, tiktoken_total - input_tokens)
+
         return input_tokens, output_tokens, input_tokens + output_tokens
 
     @staticmethod

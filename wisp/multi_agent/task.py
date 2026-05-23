@@ -150,6 +150,9 @@ class SubagentContract:
     retry_count: int = 0
     """Number of schema validation retries attempted."""
 
+    max_retries: int = 0
+    """Max execution retries on failure (0 = no retry). Timeouts are not retried."""
+
     max_memory_mb: int = 2048
     """Maximum memory limit for process subagents (Unix only)."""
 
@@ -188,6 +191,9 @@ class SubagentResult:
     hit_iteration_limit: bool = False
     worktree_patch: Optional[str] = None
     """git diff patch of uncommitted changes made in the isolated worktree before it was destroyed."""
+
+    patch_applied: bool = False
+    """Whether the worktree patch was successfully applied to the parent workspace."""
 
     # ── Audit trail ──
     messages: list[dict] = field(default_factory=list)

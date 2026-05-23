@@ -18,7 +18,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, AsyncIterator, Optional
 
 from wisp.config import WispConfig
 
@@ -244,12 +244,28 @@ class SubagentOrchestrator:
         self._budget.record(result.tokens_used)
         self._telemetry.record(contract.model or self.config.model or "unknown", result)
 
-        # ── Cleanup worktree ───────────────────────────────────────────
+        # ── Capture & apply worktree changes ────────────────────────────
         if worktree_path:
             try:
                 result.worktree_patch = await self._worktree_mgr.get_patch(worktree_path)
             except Exception as exc:
                 logger.warning("Failed to capture worktree patch for %s: %s", worktree_path, exc)
+
+            # Git-based file detection (replaces regex heuristic when worktree available)
+            if result.success:
+                try:
+                    actual_files = await self._worktree_mgr.detect_files_changed(worktree_path)
+                    if actual_files:
+                        result.files_changed = actual_files
+                except Exception as exc:
+                    logger.debug("Git file detection failed for %s: %s", worktree_path, exc)
+
+            # Apply patch to parent workspace
+            if result.worktree_patch and result.success:
+                try:
+                    result.patch_applied = await self._worktree_mgr.apply_patch(result.worktree_patch)
+                except Exception as exc:
+                    logger.warning("Failed to apply worktree patch for %s: %s", worktree_path, exc)
 
             if not os.environ.get("WISP_KEEP_WORKTREES", "").lower() == "true":
                 try:
@@ -306,8 +322,47 @@ class SubagentOrchestrator:
             sum(1 for r in resolved if r.success),
             len(resolved),
         )
+        # Report patch conflicts from concurrent subagents
+        failed_patches = [r for r in resolved if r.success and r.worktree_patch and not r.patch_applied]
+        if failed_patches:
+            logger.warning(
+                "Patch conflicts in parallel run: %d/%d patches failed to apply (%s)",
+                len(failed_patches),
+                sum(1 for r in resolved if r.success and r.worktree_patch),
+                ", ".join(r.task_id for r in failed_patches),
+            )
         self.aggregate_telemetry(resolved)
         return resolved
+
+    async def run_parallel_streaming(
+        self,
+        contracts: list[SubagentContract],
+        max_concurrent: int = 4,
+    ) -> AsyncIterator[SubagentResult]:
+        """Run multiple subagent contracts concurrently, yielding results as they finish.
+
+        Uses ``asyncio.as_completed()`` so the caller gets results incrementally
+        instead of waiting for the slowest subagent.
+        """
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def _guarded(contract: SubagentContract) -> SubagentResult:
+            async with semaphore:
+                return await self.run(contract)
+
+        tasks = [asyncio.create_task(_guarded(c)) for c in contracts]
+        completed = 0
+        for coro in asyncio.as_completed(tasks):
+            try:
+                result = await coro
+                completed += 1
+                logger.debug(
+                    "Streaming result %d/%d: %s success=%s",
+                    completed, len(contracts), result.task_id, result.success,
+                )
+                yield result
+            except Exception as exc:
+                logger.error("Subagent crashed during streaming: %s", exc)
 
     def _adaptive_max_concurrent(self, requested: int, queue_size: int) -> int:
         """Adjust max_concurrent based on system load and token budget."""
@@ -543,6 +598,68 @@ class SubagentOrchestrator:
 
     # ── Spawn with guards (moved from WispAgentCore) ───────────────────
 
+    async def _run_with_retry(self, contract: SubagentContract) -> SubagentResult:
+        """Run a contract with retry on failure.
+
+        Failed subagents retry with exponential backoff. Timed-out subagents
+        retry once with 1.5x timeout budget (capped at config max).
+        """
+        max_retries = contract.max_retries
+        max_timeout = getattr(self.config, "max_subagent_timeout", 600)
+        last_error = ""
+        for attempt in range(max_retries + 1):
+            try:
+                result = await self.run(contract)
+                if result.success:
+                    return result
+                last_error = result.error or "subagent failed"
+                if result.timed_out:
+                    if attempt < max_retries:
+                        new_timeout = min(int(contract.timeout_seconds * 1.5), max_timeout)
+                        logger.warning(
+                            "Subagent %s timed out — retrying with %ds budget (attempt %d/%d)",
+                            contract.name, new_timeout, attempt + 1, max_retries + 1,
+                        )
+                        contract.timeout_seconds = new_timeout
+                        continue
+                    logger.warning("Subagent %s timed out — no retries left", contract.name)
+                    return result
+                if "timeout" in last_error.lower():
+                    logger.warning("Subagent %s timed out — not retrying", contract.name)
+                    return result
+                if attempt < max_retries:
+                    backoff = 2 ** attempt
+                    logger.warning(
+                        "Subagent %s failed (attempt %d/%d), retrying in %ds: %s",
+                        contract.name, attempt + 1, max_retries + 1, backoff, last_error,
+                    )
+                    await asyncio.sleep(backoff)
+            except Exception as exc:
+                last_error = str(exc)
+                if attempt < max_retries:
+                    backoff = 2 ** attempt
+                    logger.warning(
+                        "Subagent %s crashed (attempt %d/%d), retrying in %ds: %s",
+                        contract.name, attempt + 1, max_retries + 1, backoff, last_error,
+                    )
+                    await asyncio.sleep(backoff)
+                else:
+                    logger.error("Subagent %s crashed: %s", contract.name, exc, exc_info=True)
+                    return SubagentResult(
+                        task_id=contract.name,
+                        success=False,
+                        output=f"[CRASHED after {max_retries + 1} attempts: {exc}]",
+                        error=str(exc),
+                        elapsed_seconds=0.0,
+                    )
+        return SubagentResult(
+            task_id=contract.name,
+            success=False,
+            output=f"[FAILED after {max_retries + 1} attempts: {last_error}]",
+            error=last_error,
+            elapsed_seconds=0.0,
+        )
+
     async def spawn_with_guards(
         self,
         task: str,
@@ -596,10 +713,8 @@ class SubagentOrchestrator:
             contract.model = local_model
             logger.info("Using local model %s for subagent %s", local_model, contract.name)
 
-        # ── Adaptive timeout ─────────────────────────────────────────
-        contract.timeout_seconds = self._adaptive_subagent_timeout(
-            contract.task, contract.timeout_seconds
-        )
+        # ── Clamp timeout to operator-set SLA ────────────────────────
+        contract.timeout_seconds = self._clamp_subagent_timeout(contract.timeout_seconds)
 
         # ── Progress callback ──────────────────────────────────────────
         async def _progress(event: OrchestratorEvent) -> None:
@@ -611,40 +726,10 @@ class SubagentOrchestrator:
                 logger.warning("[sub] %s failed: %s", event.task_id, event.payload.get("error", ""))
 
         contract.progress_callback = _progress
+        contract.max_retries = int(auto_retry) * 2
 
         # ── Run with retry ───────────────────────────────────────────
-        max_retries = int(auto_retry) * 2
-        last_error = ""
-        result: Optional[SubagentResult] = None
-        for attempt in range(max_retries + 1):
-            try:
-                result = await self.run(contract)
-                if result.success:
-                    break
-                last_error = result.error or "subagent failed"
-                if result.timed_out or "timeout" in last_error.lower():
-                    logger.warning("Subagent %s timed out — not retrying", contract.name)
-                    break
-                if attempt < max_retries:
-                    backoff = 2 ** attempt
-                    logger.warning("Subagent %s failed (attempt %d/%d), retrying in %ds: %s",
-                                   contract.name, attempt + 1, max_retries + 1, backoff, last_error)
-                    await asyncio.sleep(backoff)
-            except Exception as exc:
-                last_error = str(exc)
-                if attempt < max_retries:
-                    backoff = 2 ** attempt
-                    logger.warning("Subagent %s crashed (attempt %d/%d), retrying in %ds: %s",
-                                   contract.name, attempt + 1, max_retries + 1, backoff, last_error)
-                    await asyncio.sleep(backoff)
-                else:
-                    logger.error("Subagent %s crashed: %s", contract.name, exc, exc_info=True)
-                    return f"[Error: subagent crashed after {max_retries + 1} attempts: {exc}]"
-        else:
-            return f"[Error: subagent failed after {max_retries + 1} attempts: {last_error}]"
-
-        if result is None:
-            return f"[Error: subagent failed after {max_retries + 1} attempts: {last_error}]"
+        result = await self._run_with_retry(contract)
 
         # ── Return output (with size guard) ────────────────────────────
         output = result.output
@@ -706,11 +791,8 @@ class SubagentOrchestrator:
             contract._subagent_depth = depth + 1
             contract._subagent_branch_count = branch_count + 1
 
-            # Apply production optimizations
-            if contract.timeout_seconds < 30.0:
-                contract.timeout_seconds = self._adaptive_subagent_timeout(
-                    contract.task, contract.timeout_seconds
-                )
+            # Clamp timeout to operator-set SLA
+            contract.timeout_seconds = self._clamp_subagent_timeout(contract.timeout_seconds)
             local_model = await self._pick_local_model_for_subagent(contract.task)
             if local_model:
                 contract.model = local_model
@@ -762,27 +844,10 @@ class SubagentOrchestrator:
             pass
         return []
 
-    def _adaptive_subagent_timeout(self, task: str, requested: float) -> float:
-        """Compute adaptive timeout based on task complexity and model latency."""
-        parent_model = getattr(self.config, "model", "")
-        is_cloud = ":cloud" in parent_model or "https://" in getattr(self.config, "ollama_url", "")
-        base_per_turn = 25.0 if is_cloud else 8.0
-
-        estimated_iterations = 3
-        if len(task) > 200:
-            estimated_iterations += 1
-        if len(task) > 500:
-            estimated_iterations += 1
-        tool_keywords = ["read", "write", "edit", "list", "search", "run"]
-        tool_mentions = sum(1 for kw in tool_keywords if kw in task.lower())
-        estimated_iterations += min(tool_mentions, 3)
-
-        estimated_seconds = estimated_iterations * base_per_turn + 10
-        adaptive = max(30.0, min(estimated_seconds, 300.0))
-
-        if requested >= 30.0:
-            return min(requested, 300.0)
-        return adaptive
+    def _clamp_subagent_timeout(self, requested: float) -> float:
+        """Clamp timeout to operator-set bounds. Caller's explicit value wins."""
+        max_timeout = getattr(self.config, "max_subagent_timeout", 600)
+        return max(30.0, min(requested, max_timeout))
 
     def _research_angles(self, prompt: str) -> list[str]:
         """Break a research prompt into parallel investigation angles."""
