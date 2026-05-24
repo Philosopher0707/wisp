@@ -63,5 +63,4 @@ from wisp.tools.memory import tool_remember, tool_recall
 from wisp.tools.search import tool_search_symbols, tool_search_codebase
 from wisp.tools.plan import tool_plan_task, tool_mark_step_done, tool_update_plan
 from wisp.tools.diagnose import tool_diagnose
-from wisp.tools.subagent import tool_spawn_subagent
 from wisp.tools.tests import tool_run_tests

@@ -40,7 +40,6 @@ from wisp.tools.memory import tool_remember, tool_recall
 from wisp.tools.search import tool_search_symbols, tool_search_codebase
 from wisp.tools.plan import tool_plan_task, tool_mark_step_done, tool_update_plan
 from wisp.tools.diagnose import tool_diagnose
-from wisp.tools.subagent import tool_spawn_subagent
 from wisp.tools.tests import tool_run_tests
 
 logger = logging.getLogger(__name__)
@@ -532,31 +531,20 @@ TOOL_SCHEMAS = [
     },
 ]
 
-def _tool_spawn_stub(**kwargs) -> str:
-    """Stub: spawn is handled by the agent core (ToolExecutor), not here."""
+
+def _tool_not_direct(**kwargs) -> str:
+    """Tools dispatched by ToolExecutor, not callable directly via execute_tool()."""
     return json.dumps({
         "status": "error",
-        "tool": "spawn",
-        "data": "spawn must be called through the agent loop.",
+        "tool": kwargs.get("_tool_name", "unknown"),
+        "data": "This tool must be called through the agent loop, not directly.",
         "metadata": {},
     })
 
-
-def _tool_fanout_stub(**kwargs) -> str:
-    """Stub: fanout is handled by the agent core (ToolExecutor), not here."""
-    return json.dumps({
-        "status": "error",
-        "tool": "fanout",
-        "data": "fanout must be called through the agent loop.",
-        "metadata": {},
-    })
-
-
-# Map tool names to their implementations
 
 TOOL_IMPLS = {
-    "spawn": _tool_spawn_stub,
-    "fanout": _tool_fanout_stub,
+    "spawn": _tool_not_direct,
+    "fanout": _tool_not_direct,
     "read_file": tool_read_file,
     "write_file": tool_write_file,
     "edit_file": tool_edit_file,

@@ -36,8 +36,6 @@ import time as _time_module
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
-from .protocol import EventType as _EventType  # lazy to avoid circular import, resolve below
-
 
 def _new_id() -> str:
     return str(uuid.uuid4())[:8]

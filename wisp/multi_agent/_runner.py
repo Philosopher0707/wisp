@@ -233,7 +233,6 @@ class SubagentRunner:
         from wisp.providers.factory import ProviderFactory
         from wisp.infra.security import SecurityPolicy
         from wisp.infra.extensions import ExtensionHost
-        from wisp.infra.telemetry import Telemetry
 
         # Propagate subagent depth/branch from contract to config so the core
         # can access them (and tests can verify propagation).
@@ -250,13 +249,11 @@ class SubagentRunner:
             permission_mode=getattr(config, "permission_mode", "full"),
         )
         extensions = ExtensionHost()
-        telemetry = Telemetry()
 
         core = StatelessCore(
             provider=provider,
             security=security,
             extensions=extensions,
-            telemetry=telemetry,
             config=config,
             tool_executor=self._tool_executor,
         )
@@ -286,48 +283,33 @@ class SubagentRunner:
             )
 
         output_text = ""
-        iterations = 0
-        max_iter = contract.max_iterations
+        engine_iterations = 0
 
-        for iteration in range(max_iter):
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise asyncio.TimeoutError("contract deadline reached")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise asyncio.TimeoutError("contract deadline reached")
 
-            # Per-iteration cap: min of remaining budget or 5 minutes
-            iter_timeout = min(remaining, 300.0)
-
-            async with asyncio.timeout(iter_timeout):
-                events = []
-                async for event in core.turn(session_dict, contract.task):
-                    events.append(event)
-                    etype = event.get("type")
-                    if etype == "content":
-                        output_text = event.get("text", "")
-                    elif etype == "tool_call":
-                        name = event.get("name", "")
-                        args = event.get("arguments", {})
-                        arg_preview = self._compact_args(args)
-                        tool_calls_log.append({"name": name, "args_preview": arg_preview})
-                    elif etype == "error":
-                        output_text = event.get("message", "")
-                        return {
-                            "success": False,
-                            "output": output_text,
-                            "error": output_text,
-                            "files_changed": [],
-                            "iterations_used": iteration + 1,
-                            "messages": session_dict.get("messages", []),
-                        }
-                    elif etype == "done":
-                        break
-
-            iterations = iteration + 1
-            # Check if the last assistant message has tool_calls
-            msgs = session_dict.get("messages", [])
-            if msgs and msgs[-1].get("role") == "assistant" and msgs[-1].get("tool_calls"):
-                continue  # Another iteration needed
-            break
+        async with asyncio.timeout(remaining):
+            async for event in core.turn(session_dict, contract.task):
+                etype = event.get("type")
+                if etype == "content":
+                    output_text = event.get("text", "")
+                elif etype == "tool_call":
+                    engine_iterations += 1
+                    name = event.get("name", "")
+                    args = event.get("arguments", {})
+                    arg_preview = self._compact_args(args)
+                    tool_calls_log.append({"name": name, "args_preview": arg_preview})
+                elif etype == "error":
+                    output_text = event.get("message", "")
+                    return {
+                        "success": False,
+                        "output": output_text,
+                        "error": output_text,
+                        "files_changed": [],
+                        "iterations_used": engine_iterations,
+                        "messages": session_dict.get("messages", []),
+                    }
 
         files_changed = self._extract_files_changed(output_text)
         return {
@@ -335,7 +317,7 @@ class SubagentRunner:
             "output": output_text,
             "error": None,
             "files_changed": files_changed,
-            "iterations_used": iterations,
+            "iterations_used": engine_iterations,
             "messages": session_dict.get("messages", []),
         }
 
@@ -346,6 +328,7 @@ class SubagentRunner:
         child.workspace = workspace
         child.auto_approve = contract.auto_approve
         child.max_context_tokens = contract.max_tokens or self.parent_config.max_context_tokens
+        child.max_iterations = contract.max_iterations
         return child
 
     def _estimate_tokens(self, messages: list[dict]) -> tuple[int, int, int]:

@@ -101,7 +101,7 @@ class TestSubmoduleTools:
         from wisp.tools import TOOL_IMPLS
         assert "spawn" in TOOL_IMPLS
         assert "fanout" in TOOL_IMPLS
-        # spawn_subagent removed from schemas — merged into spawn
+        # spawn handled by ToolExecutor, not registry — safety stub in TOOL_IMPLS
 
     def test_run_tests_tool(self):
         from wisp.tools import TOOL_IMPLS
@@ -127,9 +127,9 @@ class TestExecuteTool:
         result = execute_tool("read_file", {"path": "test.txt"}, str(tmp_path))
         assert "hello world" in result
 
-    def test_execute_spawn_subagent_stub(self):
+    def test_execute_spawn_subagent_unknown(self):
         from wisp.tools import execute_tool, ToolError
-        # spawn_subagent removed from schemas/impls — now unknown tool
+        # spawn_subagent was removed — only "spawn" is valid
         with pytest.raises(ToolError, match="Unknown tool"):
             execute_tool("spawn_subagent", {"task": "test"}, ".")
 

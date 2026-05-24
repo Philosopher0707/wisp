@@ -31,7 +31,9 @@ from wisp.core.events import (
     tool_result as _tool_result_event,
     approval_request as _approval_request_event,
 )
-from wisp.tools import execute_tool, ToolError, check_dangerous_command
+from wisp.tools.errors import ToolError
+from wisp.tools._utils import check_dangerous_command
+from wisp.tools.registry import execute_tool
 from wisp.tools.audit import AuditLog
 
 logger = logging.getLogger(__name__)
@@ -496,7 +498,7 @@ class ToolExecutor:
             if _block:
                 return _block, 0.0
 
-        if func_name in ("spawn", "spawn_subagent"):
+        if func_name == "spawn":
             result = await self._spawn(func_args, workspace)
         elif func_name == "fanout":
             result = await self._fanout(func_args, workspace)
@@ -678,10 +680,6 @@ class ToolExecutor:
                 "metadata": {},
             }, ensure_ascii=False)
 
-        # Ensure orchestrator has hook_manager for lifecycle hooks
-        if self.hook_manager and not getattr(self.subagent_orchestrator, "hook_manager", None):
-            self.subagent_orchestrator.hook_manager = self.hook_manager
-
         task = func_args.get("task", func_args.get("prompt", ""))
         if not task:
             return json.dumps({
@@ -792,10 +790,6 @@ class ToolExecutor:
                 "data": "Subagent orchestrator not available — wire it via CompositionRoot",
                 "metadata": {},
             }, ensure_ascii=False)
-
-        # Ensure orchestrator has hook_manager for lifecycle hooks
-        if self.hook_manager and not getattr(self.subagent_orchestrator, "hook_manager", None):
-            self.subagent_orchestrator.hook_manager = self.hook_manager
 
         tasks_spec = func_args.get("tasks", [])
         if not tasks_spec:

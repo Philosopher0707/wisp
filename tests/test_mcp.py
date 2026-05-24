@@ -62,7 +62,7 @@ class TestDiscoverMCPConfigs:
         """Workspace config takes priority over home config."""
         from wisp.trust import WorkspaceTrustManager
         WorkspaceTrustManager.trust_workspace(str(tmp_path))
-        monkeypatch.setattr("wisp.mcp.Path.home", lambda: tmp_path / "home")
+        monkeypatch.setattr("wisp.mcp.manager.Path.home", lambda: tmp_path / "home")
 
         # Home config
         home_mcp = tmp_path / "home" / ".config" / "wisp" / "mcp.json"

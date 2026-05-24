@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import time
@@ -22,11 +23,7 @@ from typing import Any, AsyncIterator, Optional
 
 from wisp.config import WispConfig
 
-from ._budget_tracker import BudgetTracker
-from ._persistence import Persistence
-from ._result_cache import ResultCache
 from ._runner import SubagentRunner
-from ._telemetry import Telemetry
 from ._worktree_manager import WorktreeManager
 from .roles import ROLE_CONFIGS
 from .task import EventKind, OrchestratorEvent, SubagentContract, SubagentResult
@@ -36,6 +33,214 @@ logger = logging.getLogger(__name__)
 # Fallback defaults — runtime values come from config
 _MAX_SUBAGENT_DEPTH_DEFAULT = 2
 _MAX_SUBAGENT_BRANCHING_DEFAULT = 3
+
+
+class BudgetTracker:
+    """Track token consumption across subagent runs."""
+
+    def __init__(self):
+        self._tokens_consumed: int = 0
+        self._global_budget: int | None = None
+
+    def set_budget(self, budget: int | None) -> None:
+        self._global_budget = budget
+
+    def get_consumed(self) -> int:
+        return self._tokens_consumed
+
+    def get_remaining(self) -> int | None:
+        if self._global_budget is None:
+            return None
+        return max(0, self._global_budget - self._tokens_consumed)
+
+    def get_ratio(self) -> float | None:
+        if self._global_budget is None or self._global_budget <= 0:
+            return None
+        return max(0.0, self.get_remaining() / self._global_budget)
+
+    def check(self) -> str | None:
+        remaining = self.get_remaining()
+        if remaining is not None and remaining <= 0:
+            return f"Global token budget exhausted ({self._global_budget} tokens)"
+        return None
+
+    def record(self, tokens: int) -> None:
+        self._tokens_consumed += tokens
+
+    def remove_budget(self) -> None:
+        self._global_budget = None
+
+
+class Persistence:
+    """Persist subagent results to a JSONL file."""
+
+    def __init__(self, path: Path):
+        self._path = path
+
+    def save(self, contract: SubagentContract, result: SubagentResult) -> None:
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            record = {
+                "timestamp": time.time(),
+                "task_id": result.task_id,
+                "role": contract.role,
+                "task": contract.task[:200],
+                "success": result.success,
+                "elapsed_seconds": result.elapsed_seconds,
+                "tokens_used": result.tokens_used,
+                "iterations_used": result.iterations_used,
+                "timed_out": result.timed_out,
+                "error": result.error,
+                "output_preview": result.output[:500] if result.output else "",
+            }
+            with open(self._path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record) + "\n")
+        except Exception as exc:
+            logger.debug("Failed to persist subagent result: %s", exc)
+
+    def load(self, limit: int = 100) -> list[dict]:
+        results = []
+        try:
+            if not self._path.exists():
+                return results
+            with open(self._path, "r", encoding="utf-8") as f:
+                for line_num, line in enumerate(f, 1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        results.append(json.loads(line))
+                    except json.JSONDecodeError as exc:
+                        logger.debug("Skipping corrupted JSONL line %d: %s", line_num, exc)
+            return results[-limit:]
+        except Exception as exc:
+            logger.warning("Failed to read persisted results: %s", exc)
+            return results
+
+    def clear(self) -> None:
+        try:
+            if self._path.exists():
+                self._path.unlink()
+        except OSError as exc:
+            logger.warning("Failed to clear persisted results: %s", exc)
+
+
+class ResultCache:
+    """Cache subagent results with time-based expiration."""
+
+    def __init__(self):
+        self._cache: dict[str, tuple[SubagentResult, float]] = {}
+        self._hits = 0
+        self._misses = 0
+
+    def _key(self, contract: SubagentContract) -> str:
+        parts = [
+            contract.task,
+            contract.role,
+            ",".join(sorted(contract.tools)),
+            str(contract.model or ""),
+            str(contract.workspace or ""),
+            contract.output_format,
+            str(contract.output_schema or ""),
+            str(contract.system_prompt or ""),
+            contract._cache_context,
+        ]
+        raw = "|".join(parts)
+        return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+    def get(self, contract: SubagentContract) -> SubagentResult | None:
+        key = self._key(contract)
+        entry = self._cache.get(key)
+        if entry is None:
+            self._misses += 1
+            return None
+        result, ts = entry
+        ttl = 300 if contract.output_format == "json" else 60
+        if time.monotonic() - ts > ttl:
+            del self._cache[key]
+            self._misses += 1
+            return None
+        self._hits += 1
+        return result
+
+    def set(self, contract: SubagentContract, result: SubagentResult) -> None:
+        key = self._key(contract)
+        self._cache[key] = (result, time.monotonic())
+
+    def stats(self) -> dict[str, int | float]:
+        total = self._hits + self._misses
+        return {
+            "hits": self._hits,
+            "misses": self._misses,
+            "total": total,
+            "hit_rate": self._hits / total if total else 0.0,
+            "size": len(self._cache),
+        }
+
+    def clear(self) -> None:
+        self._cache.clear()
+        self._hits = 0
+        self._misses = 0
+
+
+class Telemetry:
+    """Collect per-model telemetry: latency, success rate, token usage."""
+
+    def __init__(self):
+        self._records: dict[str, list[dict]] = {}
+
+    def record(self, model: str, result: SubagentResult) -> None:
+        self._records.setdefault(model, []).append({
+            "task_id": result.task_id,
+            "success": result.success,
+            "elapsed_seconds": result.elapsed_seconds,
+            "tokens_used": result.tokens_used,
+            "timestamp": time.time(),
+        })
+
+    def get(self) -> dict[str, list[dict]]:
+        return {k: list(v) for k, v in self._records.items()}
+
+    def summary(self) -> dict[str, dict[str, Any]]:
+        summary = {}
+        for model, records in self._records.items():
+            if not records:
+                continue
+            latencies = [r["elapsed_seconds"] for r in records]
+            successes = [r["success"] for r in records]
+            tokens = [r["tokens_used"] for r in records]
+            summary[model] = {
+                "count": len(records),
+                "success_rate": sum(successes) / len(successes),
+                "avg_latency": sum(latencies) / len(latencies),
+                "max_latency": max(latencies),
+                "total_tokens": sum(tokens),
+            }
+        return summary
+
+    def aggregate(self, results: list[SubagentResult]) -> dict[str, dict[str, Any]]:
+        grouped: dict[str, list[SubagentResult]] = {}
+        for result in results:
+            model = result.model_used or "unknown"
+            grouped.setdefault(model, []).append(result)
+        summary = {}
+        for model, runs in grouped.items():
+            if not runs:
+                continue
+            latencies = [r.elapsed_seconds for r in runs]
+            successes = [r.success for r in runs]
+            tokens = [r.tokens_used for r in runs]
+            summary[model] = {
+                "count": len(runs),
+                "success_rate": sum(successes) / len(successes),
+                "avg_latency": sum(latencies) / len(latencies),
+                "max_latency": max(latencies),
+                "total_tokens": sum(tokens),
+            }
+        return summary
+
+    def clear(self) -> None:
+        self._records.clear()
 
 
 class SubagentOrchestrator:

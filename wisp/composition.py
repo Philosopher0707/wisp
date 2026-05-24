@@ -117,6 +117,7 @@ class CompositionRoot:
             config=self.config,
             workspace=wsp,
             tool_executor=None,  # will be set in phase 2 below
+            hook_manager=self._hook_manager,
         )
 
         # Create ToolExecutor wired with all dependencies

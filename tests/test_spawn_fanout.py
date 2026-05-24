@@ -152,7 +152,7 @@ class TestSpawnTool:
 
     @pytest.mark.asyncio
     async def test_spawn_legacy_prompt_alias(self, tmp_path):
-        """spawn_subagent used 'prompt' key — verify it works as alias for 'task'."""
+        """Legacy 'prompt' key works as alias for 'task'."""
         orch = _mock_orchestrator(success=True, output="ok")
         te = _mk_te(tmp_path, orch)
         result = await te._spawn({"prompt": "old style task"}, str(tmp_path))
@@ -160,16 +160,17 @@ class TestSpawnTool:
         assert data["data"]["ok"] is True
 
     @pytest.mark.asyncio
-    async def test_spawn_wires_hook_manager(self, tmp_path):
-        orch = _mock_orchestrator()
-        orch.hook_manager = None  # Explicit None — orchestrators start without hooks
+    async def test_spawn_hook_manager_at_construction(self, tmp_path):
+        """hook_manager wired at construction, not runtime-patched by _spawn."""
         hm = MagicMock()
+        orch = _mock_orchestrator()
+        orch.hook_manager = hm  # Set at construction as CompositionRoot does
         cfg = WispConfig()
         cfg.workspace = str(tmp_path)
         cfg.auto_approve = True
         te = ToolExecutor(config=cfg, hook_manager=hm, subagent_orchestrator=orch)
         await te._spawn({"task": "test"}, str(tmp_path))
-        assert orch.hook_manager is hm
+        assert orch.hook_manager is hm  # Was set by constructor, not patched by _spawn
 
 
 class TestFanoutTool:
@@ -294,8 +295,8 @@ class TestFanoutTool:
         assert c.tools == ROLE_CONFIGS["coder"].allowed_tools
 
 
-class TestSpawnSubagentLegacy:
-    """spawn_subagent tool name routes through _spawn()."""
+class TestSpawnLegacy:
+    """Legacy tool names route through _spawn()."""
 
     @pytest.mark.asyncio
     async def test_legacy_name_works(self, tmp_path):
