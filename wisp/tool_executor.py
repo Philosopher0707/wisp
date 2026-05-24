@@ -165,8 +165,9 @@ class ToolExecutor:
         # ── Approval gating ──
         needs_approval = func_name in _get_write_tools(self.config)
         forced_approval = self._needs_forced_approval(func_name)
+        is_full_mode = getattr(self.config, "permission_mode", PermissionMode.AUTO_EDIT) == PermissionMode.FULL
         was_auto_approved = False
-        if needs_approval and (not getattr(self.config, "auto_approve", False) or forced_approval):
+        if needs_approval and not is_full_mode and (not getattr(self.config, "auto_approve", False) or forced_approval):
             if not approval_handler:
                 if forced_approval:
                     yield _tool_result_event(
@@ -186,7 +187,7 @@ class ToolExecutor:
                 if not approved:
                     yield _tool_result_event(func_name, f"[Blocked: user declined {func_name}]")
                     return
-        elif needs_approval and getattr(self.config, "auto_approve", False):
+        elif needs_approval and (is_full_mode or getattr(self.config, "auto_approve", False)):
             was_auto_approved = True
 
         # ── Event-specific pre-hooks (PRE_BASH, PRE_FILE_WRITE) ──
@@ -487,16 +488,6 @@ class ToolExecutor:
                 self.hook_manager.load_project_hooks()
             except Exception:
                 pass
-
-        # event-specific pre-hooks
-        if func_name == "run_bash":
-            _block = await self._run_pre_bash_hooks(func_args, workspace)
-            if _block:
-                return _block, 0.0
-        if func_name in ("write_file", "edit_file", "edit_file_multi"):
-            _block = await self._run_pre_file_hooks(func_name, func_args, workspace)
-            if _block:
-                return _block, 0.0
 
         if func_name == "spawn":
             result = await self._spawn(func_args, workspace)
@@ -921,7 +912,9 @@ class ToolExecutor:
         # ── Lint ──────────────────────────────────────────────────────
         try:
             from wisp.tools.lsp import tool_lsp_diagnostics
-            lint_result = tool_lsp_diagnostics(path=file_path, workspace=workspace)
+            lint_result = await asyncio.to_thread(
+                tool_lsp_diagnostics, path=file_path, workspace=workspace
+            )
             if lint_result and "No issues found" not in lint_result \
                and "No diagnostics available" not in lint_result \
                and not lint_result.startswith("Error:"):
@@ -932,7 +925,9 @@ class ToolExecutor:
         # ── Affected tests ────────────────────────────────────────────
         try:
             from wisp.tools.tests import tool_run_tests
-            test_result = tool_run_tests(files=[file_path], workspace=workspace, timeout=60)
+            test_result = await asyncio.to_thread(
+                tool_run_tests, files=[file_path], workspace=workspace, timeout=60
+            )
             if test_result:
                 # Only include if tests were actually found and run
                 if "0/0 passed" not in test_result and "no tests" not in test_result.lower():
