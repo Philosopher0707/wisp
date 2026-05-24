@@ -4,11 +4,19 @@ Covers signal propagation, _expand_continuation (now a no-op), and
 interrupt state management on the CLITransport + AgentAdapter API.
 """
 
+import asyncio
+import signal
 from unittest.mock import patch, MagicMock
 
 import pytest
 
-from wisp.transport.cli import CLITransport, _handle_sigint, _transport_instances
+from wisp.transport.cli import (
+    CLITransport,
+    _handle_sigint,
+    _install_signal_handler,
+    _restore_signal_handler,
+    _transport_instances,
+)
 
 
 def _make_transport(messages=None):
@@ -54,6 +62,69 @@ class TestSigintPropagation:
         _handle_sigint(None, None)
         assert t1._interrupted is True
         assert t2._interrupted is True
+
+
+class TestSignalHandlerRegistration:
+    """Signal handler must be installed before REPL and restored after."""
+
+    def setup_method(self):
+        _cleanup_transport_instances()
+        # Save original handler
+        self._orig_handler = signal.getsignal(signal.SIGINT)
+
+    def teardown_method(self):
+        _cleanup_transport_instances()
+        # Restore original handler
+        signal.signal(signal.SIGINT, self._orig_handler)
+
+    def test_install_signal_handler_registers_custom_handler(self):
+        """_install_signal_handler should register _handle_sigint."""
+        transport, _ = _make_transport()
+        _install_signal_handler()
+        current = signal.getsignal(signal.SIGINT)
+        assert current is _handle_sigint
+        _restore_signal_handler()
+
+    def test_restore_signal_handler_restores_original(self):
+        """_restore_signal_handler should restore the previous handler."""
+        transport, _ = _make_transport()
+        _install_signal_handler()
+        _restore_signal_handler()
+        current = signal.getsignal(signal.SIGINT)
+        assert current is self._orig_handler
+
+    def test_install_resets_interrupted_flags(self):
+        """Installing handler should reset _interrupted on all instances."""
+        t1, _ = _make_transport()
+        t2, _ = _make_transport()
+        t1._interrupted = True
+        t2._interrupted = True
+        _install_signal_handler()
+        assert t1._interrupted is False
+        assert t2._interrupted is False
+        _restore_signal_handler()
+
+
+class TestCancelTasks:
+    """_cancel_tasks must work when called from outside an async task."""
+
+    def test_cancel_tasks_does_not_crash_outside_task(self):
+        """Cancel all tasks should not crash when called from main thread."""
+        loop = asyncio.new_event_loop()
+        try:
+            async def dummy_task():
+                await asyncio.sleep(10)
+
+            task = loop.create_task(dummy_task())
+            # Simulate what _cancel_tasks does but safely
+            for t in asyncio.all_tasks(loop):
+                if not t.done():
+                    t.cancel()
+            # Let the loop process cancellations
+            loop.run_until_complete(asyncio.sleep(0))
+            assert task.cancelled() or task.done()
+        finally:
+            loop.close()
 
 
 class TestExpandContinuation:
@@ -117,6 +188,25 @@ class TestInterruptFlag:
         adapter = _make_agent_adapter()
         adapter._interrupted = True
         assert adapter._interrupted is True
+
+
+class TestInterruptedFlagIsChecked:
+    """The _interrupted flag must actually be checked during streaming."""
+
+    def test_clitransport_has_check_interrupted_method(self):
+        """CLITransport should expose a way to check if interrupted."""
+        transport, _ = _make_transport()
+        assert hasattr(transport, "is_interrupted")
+
+    def test_is_interrupted_returns_false_by_default(self):
+        transport, _ = _make_transport()
+        assert transport.is_interrupted() is False
+
+    def test_is_interrupted_returns_true_after_sigint(self):
+        transport, _ = _make_transport()
+        transport._interrupted = False
+        _handle_sigint(None, None)
+        assert transport.is_interrupted() is True
 
 
 def _make_agent_adapter(messages=None):

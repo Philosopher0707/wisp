@@ -15,7 +15,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from wisp.mcp import MCPTool, MCPManager, _SHADOW_BUILTIN_TOOLS
+from wisp.mcp import MCPTool, MCPManager
+from wisp.mcp.manager import _SHADOW_BUILTIN_TOOLS
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -126,7 +127,7 @@ class TestToolRouting:
         manager.servers = [fake]
         manager._initialized = True
 
-        with patch("wisp.mcp.call_tool") as mock_call:
+        with patch("wisp.mcp.manager.call_tool") as mock_call:
             mock_call.return_value = "ok"
             result = manager.call_tool("mcp:remote/execute", {"x": 1})
             mock_call.assert_called_once()
@@ -142,7 +143,7 @@ class TestToolRouting:
         manager.servers = [fake]
         manager._initialized = True
 
-        with patch("wisp.mcp.call_tool") as mock_call:
+        with patch("wisp.mcp.manager.call_tool") as mock_call:
             mock_call.return_value = "legacy ok"
             result = manager.call_tool("legacy_tool", {})
             assert result == "legacy ok"

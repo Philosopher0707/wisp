@@ -2,7 +2,7 @@
 
 import pytest
 
-from wisp.multi_agent._telemetry import Telemetry
+from wisp.multi_agent.subagent_orchestrator import Telemetry
 from wisp.multi_agent.task import SubagentResult
 
 

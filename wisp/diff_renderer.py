@@ -83,6 +83,7 @@ def _pygmentize(code: str, language: str, base_style: Style) -> Text:
 _LINE_NUM_STYLE = Style(color="#555555")
 
 
+
 def _parse_diff_line_parts(line: str) -> tuple[str, str, str]:
     """Extract (prefix, line_number, code) from a diff line.
 
@@ -112,24 +113,31 @@ def _parse_diff_line_parts(line: str) -> tuple[str, str, str]:
     return (prefix, "", line[1:])
 
 
-def _build_diff_line(line: str, language: Optional[str] = None) -> Text:
-    """Build a Rich Text for a single diff line, with line numbers."""
+def _build_diff_line(line: str, language: Optional[str] = None, num_width: int = 3) -> Text:
+    """Build a Rich Text for a single diff line, with line numbers.
+
+    Format (tight, no extra gaps):
+         11  
+         12   from __future__ import annotations
+         14  +import warnings
+         17   import asyncio
+    """
     stripped = line.rstrip("\n")
 
     prefix, line_num, code = _parse_diff_line_parts(stripped)
 
-    # Width for line numbers — right-aligned, padded to 4 chars min
-    num_str = f"{line_num:>4} " if line_num else "     "
+    # Right-aligned line number in a compact column
+    num_str = f"{line_num:>{num_width}} " if line_num else " " * (num_width + 1)
 
     if prefix == "+":
-        text = Text(f"+{num_str}", style=_ADD_STYLE)
+        text = Text(f"{num_str}+", style=_ADD_STYLE)
         if language and code.strip():
             text.append_text(_pygmentize(code, language, _ADD_STYLE))
         else:
             text.append(code, style=_ADD_STYLE)
         return text
     elif prefix == "-":
-        text = Text(f"-{num_str}", style=_DEL_STYLE)
+        text = Text(f"{num_str}-", style=_DEL_STYLE)
         if language and code.strip():
             text.append_text(_pygmentize(code, language, _DEL_STYLE))
         else:
@@ -140,10 +148,9 @@ def _build_diff_line(line: str, language: Optional[str] = None) -> Text:
     elif stripped.startswith("---") or stripped.startswith("+++"):
         return Text(stripped, style=_HEADER_STYLE)
     elif stripped.strip() in ("...",) or stripped.startswith("..."):
-        # For skip lines, preserve the original spacing
         return Text(stripped, style=_SKIP_STYLE)
     else:
-        text = Text(f" {num_str}", style=_CONTEXT_STYLE)
+        text = Text(num_str, style=_CONTEXT_STYLE)
         if language and code.strip():
             text.append_text(_pygmentize(code, language, _CONTEXT_STYLE))
         else:
@@ -151,7 +158,7 @@ def _build_diff_line(line: str, language: Optional[str] = None) -> Text:
         return text
 
 
-def colorize_diff(diff_text, language: Optional[str] = None) -> str:
+def colorize_diff(diff_text, language: Optional[str] = None, num_width: int = 3) -> str:
     """Apply Rich ANSI colors to a unified diff."""
     if hasattr(diff_text, 'diff'):
         diff_text = diff_text.diff
@@ -162,7 +169,7 @@ def colorize_diff(diff_text, language: Optional[str] = None) -> str:
     for i, line in enumerate(lines):
         if i > 0:
             text.append("\n")
-        text.append(_build_diff_line(line, language=language))
+        text.append(_build_diff_line(line, language=language, num_width=num_width))
     return str(text)
 
 
@@ -205,22 +212,28 @@ def render_diff_panel(
         lines = lines[:max_lines]
         lines.append(f"... ({total - max_lines} more lines)")
 
-    text = _build_diff_text_with_dmp(lines, language=language)
+    # Compute tight line-number width from actual content
+    num_width = 2
+    for ln in lines:
+        _, num, _ = _parse_diff_line_parts(ln.rstrip("\n"))
+        if num:
+            num_width = max(num_width, len(num))
+
+    text = _build_diff_text_with_dmp(lines, language=language, num_width=num_width)
 
     buf = StringIO()
     console = Console(file=buf, width=width or 120, force_terminal=True)
 
     if box_mode and title:
-        # Simple rule header instead of a heavy box border
-        rule_width = min(len(title) + 8, width or 120)
-        console.print(Text(f"─── {title} ", style=Style(color="#555555")))
+        console.print(Text(f"─── {title}", style=Style(color="#555555")))
 
     console.print(text)
     return buf.getvalue().rstrip("\n")
 
 
 def _build_diff_text_with_dmp(lines: list[str],
-                               language: Optional[str] = None) -> Text:
+                               language: Optional[str] = None,
+                               num_width: int = 3) -> Text:
     """Build Rich Text with word-level diff and syntax coloring."""
     text = Text()
     dmp = None
@@ -240,19 +253,19 @@ def _build_diff_text_with_dmp(lines: list[str],
             diffs = dmp.diff_main(old_code, new_code)
             dmp.diff_cleanupSemantic(diffs)
 
-            old_num_str = f"{old_num:>4} " if old_num else "     "
-            new_num_str = f"{new_num:>4} " if new_num else "     "
+            old_num_str = f"{old_num:>{num_width}} " if old_num else " " * (num_width + 1)
+            new_num_str = f"{new_num:>{num_width}} " if new_num else " " * (num_width + 1)
 
             if i > 0:
                 text.append("\n")
-            text.append(f"-{old_num_str}", style=_DEL_STYLE)
+            text.append(f"{old_num_str}-", style=_DEL_STYLE)
             for op, fragment in diffs:
                 if op == 1:  # addition — skip on deletion line
                     continue
                 style = _DEL_CHANGE if op == -1 else _DEL_STYLE
                 text.append(fragment, style=style)
             text.append("\n")
-            text.append(f"+{new_num_str}", style=_ADD_STYLE)
+            text.append(f"{new_num_str}+", style=_ADD_STYLE)
             for op, fragment in diffs:
                 if op == -1:  # deletion — skip on addition line
                     continue
@@ -263,6 +276,6 @@ def _build_diff_text_with_dmp(lines: list[str],
 
         if i > 0:
             text.append("\n")
-        text.append(_build_diff_line(line, language=language))
+        text.append(_build_diff_line(line, language=language, num_width=num_width))
         i += 1
     return text

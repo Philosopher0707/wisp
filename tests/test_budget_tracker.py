@@ -2,7 +2,7 @@
 
 import pytest
 
-from wisp.multi_agent._budget_tracker import BudgetTracker
+from wisp.multi_agent.subagent_orchestrator import BudgetTracker
 
 
 class TestBudgetTracker:

@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from wisp.multi_agent._result_cache import ResultCache
+from wisp.multi_agent.subagent_orchestrator import ResultCache
 from wisp.multi_agent.task import SubagentContract, SubagentResult
 
 

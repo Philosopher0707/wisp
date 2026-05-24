@@ -479,15 +479,27 @@ class UnifiedStore:
 
     def bg_update(self, run_id: str, **kwargs) -> None:
         """Update fields of a background run."""
-        allowed = {"status", "started_at", "finished_at", "content", "error", "iterations"}
+        allowed = {"status", "started_at", "finished_at", "content", "error", "iterations", "tool_calls", "files_changed"}
         fields = {k: v for k, v in kwargs.items() if k in allowed}
         if not fields:
             return
+        # Serialize JSON fields
+        if "tool_calls" in fields:
+            fields["tool_calls"] = json.dumps(fields["tool_calls"])
+        if "files_changed" in fields:
+            fields["files_changed"] = json.dumps(fields["files_changed"])
         sets = ", ".join(f"{k} = :{k}" for k in fields)
         fields["id"] = run_id
         self._get_conn().execute(
             f"UPDATE background_runs SET {sets} WHERE id = :id",
             fields,
+        )
+
+    def bg_delete(self, run_id: str) -> None:
+        """Delete a background run by ID."""
+        self._get_conn().execute(
+            "DELETE FROM background_runs WHERE id = ?",
+            (run_id,),
         )
 
     def bg_list(self) -> list[dict]:

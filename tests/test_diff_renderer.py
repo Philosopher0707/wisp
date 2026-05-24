@@ -2,7 +2,7 @@
 
 import pytest
 from wisp.diff_renderer import (
-    _strip_line_number,
+    _parse_diff_line_parts,
     _build_diff_line,
     _build_diff_text_with_dmp,
     colorize_diff,
@@ -10,53 +10,53 @@ from wisp.diff_renderer import (
 )
 
 
-class TestStripLineNumber:
+
+
+
+class TestParseDiffLineParts:
     def test_add_line_with_number(self):
-        assert _strip_line_number("+  42 def hello():") == "+def hello():"
+        assert _parse_diff_line_parts("+  42 def hello():") == ("+", "42", "def hello():")
 
     def test_remove_line_with_number(self):
-        assert _strip_line_number("-   1 import os") == "-import os"
+        assert _parse_diff_line_parts("-   1 import os") == ("-", "1", "import os")
 
     def test_context_line_with_number(self):
-        assert _strip_line_number("     5     pass") == "     pass"
+        assert _parse_diff_line_parts("     5     pass") == (" ", "5", "    pass")
 
     def test_single_digit_line(self):
-        assert _strip_line_number("+ 1 x") == "+x"
+        assert _parse_diff_line_parts("+ 1 x") == ("+", "1", "x")
 
     def test_no_line_number_unchanged(self):
-        assert _strip_line_number("+hello") == "+hello"
-        assert _strip_line_number("-hello") == "-hello"
+        assert _parse_diff_line_parts("+hello") == ("+", "", "hello")
+        assert _parse_diff_line_parts("-hello") == ("-", "", "hello")
 
     def test_empty_line(self):
-        assert _strip_line_number("") == ""
-        assert _strip_line_number("+") == "+"
+        assert _parse_diff_line_parts("") == ("", "", "")
+        assert _parse_diff_line_parts("+") == ("", "", "+")
 
     def test_hunk_header_unchanged(self):
-        assert _strip_line_number("@@ -1,5 +1,5 @@") == "@@ -1,5 +1,5 @@"
+        assert _parse_diff_line_parts("@@ -1,5 +1,5 @@") == ("", "", "@@ -1,5 +1,5 @@")
 
     def test_skip_marker_unchanged(self):
-        assert _strip_line_number("      ...") == "      ..."
+        assert _parse_diff_line_parts("      ...") == (" ", "", "     ...")
 
 
 class TestBuildDiffLine:
-    def test_add_line_strips_number(self):
+    def test_add_line_contains_code(self):
         text = _build_diff_line("+  42 def hello():", language="python")
         rendered = str(text)
-        # Should contain the code content, not the line number
+        # Should contain the code content
         assert "def hello():" in rendered
-        assert "  42" not in rendered
 
-    def test_remove_line_strips_number(self):
+    def test_remove_line_contains_code(self):
         text = _build_diff_line("-   1 import os", language="python")
         rendered = str(text)
         assert "import os" in rendered
-        assert "   1" not in rendered
 
-    def test_context_line_strips_number(self):
+    def test_context_line_contains_code(self):
         text = _build_diff_line("     5     pass", language="python")
         rendered = str(text)
         assert "    pass" in rendered
-        assert "    5" not in rendered
 
     def test_hunk_header_preserved(self):
         text = _build_diff_line("@@ -10,5 +12,8 @@")
@@ -70,7 +70,7 @@ class TestBuildDiffLine:
 
 
 class TestBuildDiffTextWithDMP:
-    def test_dmp_strips_line_numbers(self):
+    def test_dmp_compares_code_content(self):
         lines = [
             "-  41 def old_func():",
             "+  41 def new_func():",
@@ -78,11 +78,8 @@ class TestBuildDiffTextWithDMP:
         text = _build_diff_text_with_dmp(lines, language="python")
         rendered = str(text)
         # DMP should compare "def old_func():" vs "def new_func():"
-        # not "  41 def old_func():" vs "  41 def new_func():"
         assert "old_func" in rendered
         assert "new_func" in rendered
-        # Line numbers should not appear in the rendered output
-        assert "  41" not in rendered
 
     def test_no_dmp_fallback(self):
         lines = [
@@ -98,7 +95,9 @@ class TestBuildDiffTextWithDMP:
 class TestColorizeDiff:
     def test_empty_diff(self):
         assert colorize_diff("") == ""
-        assert colorize_diff("   ") == " "  # whitespace-only line renders as context
+        # whitespace-only line renders as context with line number padding
+        result = colorize_diff("   ")
+        assert result.strip() == ""
 
     def test_basic_diff(self):
         diff_text = " 1 hello\n-2 world\n+2 universe\n"

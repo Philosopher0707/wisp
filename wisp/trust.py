@@ -33,6 +33,11 @@ class WorkspaceTrustManager:
             return True
 
         workspace_path = str(Path(workspace).resolve())
+
+        # Auto-trust workspaces that already contain Wisp configuration
+        # — the user has already chosen to work here.
+        if (Path(workspace_path) / ".wisp").exists():
+            return True
         dst = Path(trust_file) if trust_file else cls.TRUST_FILE
         if not dst.exists():
             return False

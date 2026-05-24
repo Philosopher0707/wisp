@@ -12,6 +12,8 @@ from wisp.mcp.manager import (
     MCPManager,
     get_mcp_manager,
     shutdown_global_mcp_manager,
+    _send_stdio_request,
+    _send_request_async,
 )
 
 __all__ = [
@@ -26,4 +28,6 @@ __all__ = [
     "MCPManager",
     "get_mcp_manager",
     "shutdown_global_mcp_manager",
+    "_send_stdio_request",
+    "_send_request_async",
 ]

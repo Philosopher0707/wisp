@@ -54,21 +54,23 @@ def _is_interactive() -> bool:
     return sys.stdin.isatty()
 
 
-def _input_line(prompt: str, allow_multiline: bool = True) -> str:
-    """Read a line from stdin."""
+def _input_line(prompt: str, allow_multiline: bool = True) -> str | None:
+    """Read a line from stdin. Returns None on EOF."""
     try:
         if sys.stdin.isatty():
             return input(prompt)
         # Non-tty: read from buffer to handle piped input
-        data = sys.stdin.buffer.readline()
-        if not data:
-            return ""
-        return data.decode("utf-8", errors="replace").rstrip("\n\r")
+        # StringIO (used in tests) doesn't have .buffer — fall back to readline()
+        if hasattr(sys.stdin, "buffer"):
+            data = sys.stdin.buffer.readline()
+            if not data:
+                return None
+            return data.decode("utf-8", errors="replace").rstrip("\n\r")
+        return sys.stdin.readline().rstrip("\n\r")
     except EOFError:
-        return ""
+        return None
     except UnicodeDecodeError:
-        return ""
-
+        return None
 
 def _args_preview(args: dict) -> str:
     """Compact preview of tool arguments."""
@@ -340,8 +342,7 @@ class AgentAdapter:
     def client(self):
         """Return the provider from the cached core, if available."""
         try:
-            core = self.runtime._get_core()
-            return getattr(core, "provider", None)
+            return self.runtime.get_core_provider()
         except Exception:
             return None
 
@@ -385,8 +386,40 @@ class AgentAdapter:
     def _add_message(self, role: str, content: str) -> None:
         self.messages.append({"role": role, "content": content})
 
+    _CONTINUATION_TRIGGERS = frozenset({
+        "continue", "go on", "more", "and?", "keep going", "next", "proceed",
+        "finish", "tell me more", "expand on that", "elaborate", "what else",
+    })
+
     def _expand_continuation(self, text: str) -> str:
-        return text
+        """Rewrite bare continuation words into explicit, anaphora-free prompts.
+
+        After compaction the model may have lost the exact last assistant message.
+        This hook disambiguates 'continue' by injecting the topic from the
+        compacted summary or the last verbatim assistant message.
+        """
+        lowered = text.strip().lower().rstrip("?.!")
+        if lowered not in self._CONTINUATION_TRIGGERS:
+            return text
+
+        parts: list[str] = [text]
+
+        # Try to grab the last verbatim assistant message in hot context
+        last_assistant = ""
+        for m in reversed(self.messages):
+            if m.get("role") == "assistant":
+                last_assistant = m.get("content", "") or ""
+                break
+
+        if last_assistant:
+            tail = last_assistant[-200:].replace("\n", " ")
+            parts.append(
+                f"\n[Context: Continue your previous response. "
+                f"Do NOT repeat anything already said. "
+                f"Pick up exactly after: {tail}]"
+            )
+
+        return "\n".join(parts)
 
     def _run_turn_streaming(self, system: str) -> dict:
         """Backward-compat for /continue."""
@@ -428,6 +461,10 @@ class CLITransport(Transport):
         self._phase: str = "understand"
         self._interrupted: bool = False
         _transport_instances.append(self)
+
+    def is_interrupted(self) -> bool:
+        """Return True if this transport has been interrupted (Ctrl+C)."""
+        return self._interrupted
 
     # ── Transport ABC implementation ────────────────────────────────
 
@@ -487,6 +524,11 @@ class CLITransport(Transport):
         if tool_name in self._approval_state.denied_tools:
             return False
 
+        # Stop spinner so its background thread doesn't overwrite the
+        # approval prompt with \r frames while waiting for input().
+        if self._spinner is not None:
+            self._spinner.stop()
+
         # Show interactive prompt
         width = self._term_width() if hasattr(self, "_term_width") else 80
         print(file=sys.stdout)  # blank line before prompt
@@ -510,12 +552,15 @@ class CLITransport(Transport):
         choice = raw.strip().lower()
 
         if choice == "y":
+            self._get_spinner().start(f"{tool_name} {_args_preview(args_map)}")
             return True
         if choice == "Y":
             self._approval_state.allow_tool(tool_name)
+            self._get_spinner().start(f"{tool_name} {_args_preview(args_map)}")
             return True
         if choice == "a":
             self._approval_state.set_auto()
+            self._get_spinner().start(f"{tool_name} {_args_preview(args_map)}")
             return True
         if choice == "n":
             return False

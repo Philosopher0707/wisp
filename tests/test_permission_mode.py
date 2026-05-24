@@ -184,8 +184,8 @@ class TestFullMode:
         assert "Blocked" not in data, f"{tool} should not be blocked in full mode: {data}"
 
     @pytest.mark.asyncio
-    async def test_full_respects_auto_approve_false(self):
-        """full mode + auto_approve=False still routes writes to approval_handler."""
+    async def test_full_skips_approval_handler_when_auto_approve_false(self):
+        """full mode + auto_approve=False should NOT route writes to approval_handler."""
         executor = _make_executor("full", auto_approve=False)
         handler = AsyncMock(return_value=(True, None))
         events = []
@@ -198,7 +198,7 @@ class TestFullMode:
             events.append(event)
 
         approval_events = [e for e in events if e.type == TYPE_APPROVAL_REQUEST]
-        assert len(approval_events) >= 1
+        assert len(approval_events) == 0
 
 
 # ── PermissionMode enum ──────────────────────────────────────────────

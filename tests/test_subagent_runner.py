@@ -383,20 +383,19 @@ class ErrorEventCore(FakeCore):
 class MultiTurnCore(FakeCore):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.turn_count = 0
 
     async def turn(self, session_dict, task):
-        self.turn_count += 1
-        if self.turn_count < 3:
+        # Emit multiple tool calls in single turn(), matching real engine behavior
+        # (engine handles all internal iterations; runner calls turn() once)
+        for i in range(2):
             session_dict["messages"].append({
                 "role": "assistant",
-                "content": f"Turn {self.turn_count}",
+                "content": f"Turn {i + 1}",
                 "tool_calls": [{"function": {"name": "read_file", "arguments": '{"filepath":"a.py"}'}}],
             })
             yield {"type": "tool_call", "name": "read_file", "arguments": {"filepath": "a.py"}}
-        else:
-            yield {"type": "content", "text": "Final answer"}
-            yield {"type": "done"}
+        yield {"type": "content", "text": "Final answer"}
+        yield {"type": "done"}
 
 
 @pytest.mark.asyncio

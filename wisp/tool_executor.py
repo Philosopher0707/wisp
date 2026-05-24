@@ -187,7 +187,7 @@ class ToolExecutor:
                 if not approved:
                     yield _tool_result_event(func_name, f"[Blocked: user declined {func_name}]")
                     return
-        elif needs_approval and (is_full_mode or getattr(self.config, "auto_approve", False)):
+        elif needs_approval and getattr(self.config, "auto_approve", False):
             was_auto_approved = True
 
         # ── Event-specific pre-hooks (PRE_BASH, PRE_FILE_WRITE) ──

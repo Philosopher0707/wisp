@@ -393,6 +393,7 @@ class OllamaClient:
                                 content_mode = "token-delta"
                         # else: first chunk, leave mode as None
 
+                    if content_mode == "cumulative":
                         if content.startswith(prev_content):
                             # Still cumulative — extract delta
                             if len(content) > len(prev_content):

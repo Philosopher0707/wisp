@@ -74,6 +74,8 @@ class BackgroundRun:
             started_at=row.get("started_at"),
             finished_at=row.get("finished_at"),
             content=row.get("content", ""),
+            tool_calls=row.get("tool_calls", []),
+            files_changed=row.get("files_changed", []),
             iterations=row.get("iterations", 0) or 0,
             error=row.get("error"),
         )
@@ -164,6 +166,9 @@ class BackgroundRunner:
                 content=run.content,
                 error=run.error,
                 iterations=run.iterations,
+                finished_at=run.finished_at,
+                tool_calls=run.tool_calls,
+                files_changed=run.files_changed,
             )
 
     def get(self, run_id: str) -> Optional[BackgroundRun]:
@@ -177,6 +182,14 @@ class BackgroundRunner:
         """List all runs (reads from SQLite — works across processes)."""
         rows = self._store.bg_list()
         return [BackgroundRun.from_db_row(r) for r in rows]
+
+    # Alias for API compatibility
+    list = list_runs
+
+    def delete(self, run_id: str) -> bool:
+        """Delete a run from the store."""
+        self._store.bg_delete(run_id)
+        return True
 
     def cancel(self, run_id: str) -> bool:
         """Cancel a running background task (must be called on the worker

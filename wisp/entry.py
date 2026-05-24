@@ -11,6 +11,9 @@ Pattern:
 
 from __future__ import annotations
 
+import warnings
+warnings.filterwarnings("ignore", category=SyntaxWarning)
+
 import asyncio
 import logging
 from pathlib import Path
@@ -18,7 +21,7 @@ from typing import Any
 
 from wisp.composition import CompositionRoot
 from wisp.config import WispConfig
-from wisp.transport.cli import CLITransport, _input_line
+from wisp.transport.cli import CLITransport, _input_line, _install_signal_handler, _restore_signal_handler
 from wisp.transport.tui import TUITransport
 from wisp.transport.renderer import render_turn_stats, render_file_ticker
 from wisp.colors import dim
@@ -162,6 +165,9 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
     is_continuation = len(session.get("messages", [])) > 0
     skill = kwargs.get("skill")
     
+    # Install custom SIGINT handler for graceful Ctrl+C during turns
+    _install_signal_handler()
+
     if is_continuation:
         transport.print_continuation_banner(sys.stdout, session, config.model)
     else:
@@ -180,10 +186,9 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
         sys.stdout.flush()
 
     def _cancel_tasks() -> None:
-        """Cancel all pending tasks except the current one."""
-        current_task = asyncio.current_task(loop)
+        """Cancel all pending tasks safely, even when called from outside a task."""
         for task in asyncio.all_tasks(loop):
-            if task is not current_task and not task.done():
+            if not task.done():
                 task.cancel()
 
     def _run_turn(prompt: str) -> None:
@@ -227,7 +232,7 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
             break
         except Exception:
             break
-        if not line:
+        if line is None:
             break
 
         prompt = line.strip()
@@ -256,6 +261,9 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
 
         # Run one turn
         _run_turn(prompt)
+
+    # Restore original signal handler before cleanup
+    _restore_signal_handler()
 
     # Clean up: close the persistent loop (only if we own it)
     try:
