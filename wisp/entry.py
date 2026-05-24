@@ -18,7 +18,7 @@ from typing import Any
 
 from wisp.composition import CompositionRoot
 from wisp.config import WispConfig
-from wisp.transport.cli import CLITransport
+from wisp.transport.cli import CLITransport, _input_line
 from wisp.transport.tui import TUITransport
 from wisp.transport.renderer import render_turn_stats, render_file_ticker
 from wisp.colors import dim
@@ -220,7 +220,7 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
 
     while True:
         try:
-            line = sys.stdin.readline()
+            line = _input_line("➜ ")
         except KeyboardInterrupt:
             # Ctrl+C at prompt — exit gracefully
             _show_exit()
