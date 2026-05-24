@@ -114,13 +114,31 @@ class Spinner:
                 return
             frame = self._frames[self._index]
             label = self._current_label
-            self._stdout.write(f"\r{frame} {label}")
+            # Truncate to terminal width so \r can overwrite a single physical line.
+            # Long labels (e.g. bash commands) wrap across multiple lines and \r
+            # only returns to the start of the last wrapped line, leaking old frames.
+            max_width = _term_width()
+            prefix = f"{frame} "
+            max_label = max_width - len(prefix) - 1
+            if max_label < 10:
+                max_label = 10
+            if len(label) > max_label:
+                label = label[: max_label - 1] + "…"
+            self._stdout.write(f"\r{prefix}{label}\033[K")
             self._stdout.flush()
 
     def _write_line(self, text: str) -> None:
         with self._lock:
             self._stdout.write(text)
             self._stdout.flush()
+
+
+def _term_width() -> int:
+    try:
+        import shutil
+        return shutil.get_terminal_size().columns
+    except Exception:
+        return 80
 
 
 def _success_icon(mode: OutputMode) -> str:

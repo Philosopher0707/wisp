@@ -148,3 +148,41 @@ class TestSpinnerStop:
         s.stop()
         # No exception, no extra output beyond first stop
         assert s._active is False
+
+
+class TestSpinnerLongLabel:
+    """Long labels must be truncated to fit terminal width.
+
+    If a label wraps across multiple physical lines, \\r can only
+    return to the start of the last line, leaking old spinner frames.
+    """
+
+    def test_long_label_truncated_in_initial_frame(self):
+        out = io.StringIO()
+        s = Spinner(out, OutputMode.ASCII)
+        long_label = "run_bash " + ("x" * 200)
+        s.start(long_label)
+        s.stop()
+        output = out.getvalue()
+        # Label must be truncated; should not appear in full
+        assert "x" * 200 not in output
+        # Truncation marker present
+        assert "…" in output
+
+    def test_normal_label_not_truncated(self):
+        out = io.StringIO()
+        s = Spinner(out, OutputMode.ASCII)
+        s.start("short label")
+        s.stop()
+        output = out.getvalue()
+        assert "short label" in output
+
+    def test_long_label_truncated_with_ansi_clear(self):
+        out = io.StringIO()
+        s = Spinner(out, OutputMode.ASCII)
+        long_label = "run_bash " + ("x" * 200)
+        s.start(long_label)
+        s.stop()
+        output = out.getvalue()
+        # \\033[K clears to end of line to prevent leftover chars
+        assert "\033[K" in output
