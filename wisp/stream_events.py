@@ -65,6 +65,7 @@ class StreamComplete(StreamEvent):
     total_tokens: int
     tool_calls: list[dict] | None
     validation_hash: str  # Must match last checkpoint
+    done_reason: str = ""  # Ollama done_reason (e.g. "stop", "length")
 
 
 @dataclass(frozen=True)

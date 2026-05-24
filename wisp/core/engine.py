@@ -37,9 +37,14 @@ if TYPE_CHECKING:
     from wisp.infra.extensions import ExtensionHost
     from wisp.tool_executor import ToolExecutor
     from wisp.config import WispConfig
-    from wisp.context_assembler import ContextAssembler
 
 logger = logging.getLogger(__name__)
+
+# Module-level caches shared across all core instances (parent + subagents).
+# Per-instance caches were useless because subagents create fresh cores,
+# discarding the parent's cached system prompt on every spawn.
+_ASSEMBLER: ContextAssembler | None = None
+_SYSTEM_PROMPT_CACHE: dict[tuple[str, float], str] = {}
 
 
 def _flatten_event(ev: AgentEvent | dict) -> dict:
@@ -62,9 +67,6 @@ class WispAgentCore:
     extensions: ExtensionHost | None = None
     tool_executor: ToolExecutor | None = None
 
-    # Caches for expensive context building
-    _assembler_cache: ContextAssembler | None = field(default=None, repr=False)
-    _static_prompt_cache: dict = field(default_factory=dict, repr=False)
     _approval_gate: ApprovalGate | None = field(default=None, repr=False)
 
     async def turn(self, session: dict, prompt: str, approval_handler=None) -> AsyncIterator[dict]:
@@ -233,6 +235,11 @@ class WispAgentCore:
                 )
                 return
 
+            # ── Check for truncation ──
+            truncated = any(e.get("done_reason") == "length" for e in provider_events)
+            if truncated:
+                yield _flatten_event(system("Response truncated: max_tokens limit reached. Consider increasing max_tokens in config.", level="warning"))
+
             # ── If no tool calls, the model produced final content ──
             if not has_tool_calls:
                 yield _flatten_event(done_event(session.get("id", "")))
@@ -352,10 +359,11 @@ class WispAgentCore:
         ws = session.get("workspace", ".")
         ws_path = Path(ws).resolve()
 
-        # Lazy-init assembler
-        if self._assembler_cache is None:
-            self._assembler_cache = ContextAssembler()
-        assembler = self._assembler_cache
+        # Lazy-init assembler (module-level, shared across all core instances)
+        global _ASSEMBLER
+        if _ASSEMBLER is None:
+            _ASSEMBLER = ContextAssembler()
+        assembler = _ASSEMBLER
 
         # Check cache for static prompt — include mtimes of key context files
         # so that edits to rules.md, skills, etc. invalidate the cache.
@@ -369,7 +377,7 @@ class WispAgentCore:
             except OSError:
                 pass
         cache_key = (ws, context_mt)
-        static_prompt = self._static_prompt_cache.get(cache_key)
+        static_prompt = _SYSTEM_PROMPT_CACHE.get(cache_key)
 
         if static_prompt is None:
             skills_block = self._build_skills_block(ws)
@@ -411,7 +419,7 @@ class WispAgentCore:
             if module_summary:
                 static_prompt += "\n\n" + module_summary
 
-            self._static_prompt_cache[cache_key] = static_prompt
+            _SYSTEM_PROMPT_CACHE[cache_key] = static_prompt
 
         # Add query-specific context
         if query:
@@ -428,7 +436,7 @@ class WispAgentCore:
 
     def invalidate_caches(self) -> None:
         """Invalidate all caches — call when workspace context changes."""
-        self._static_prompt_cache.clear()
+        _SYSTEM_PROMPT_CACHE.clear()
         logger.debug("Engine caches invalidated")
 
     def _build_skills_block(self, workspace: str) -> str:
@@ -949,6 +957,7 @@ class WispAgentCore:
             "tool_call_id",
             "id",
             "calls",
+            "done_reason",
         }
         for field_name in safe_fields:
             if hasattr(event, field_name):

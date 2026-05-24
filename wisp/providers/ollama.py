@@ -112,7 +112,7 @@ class OllamaProvider(Provider):
                     import json
                     data = json.loads(line)
                     if data.get("done"):
-                        yield {"type": "done"}
+                        yield {"type": "done", "done_reason": data.get("done_reason", "")}
                         break
                     msg = data.get("message", {})
                     if msg.get("tool_calls"):

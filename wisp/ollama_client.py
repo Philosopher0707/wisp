@@ -309,6 +309,7 @@ class OllamaClient:
         accumulated_content = ""
         tool_calls = None
         token_counter = 0
+        done_reason = ""
         self.stream_response = None
 
         # Batcher to reduce I/O operations
@@ -392,7 +393,6 @@ class OllamaClient:
                                 content_mode = "token-delta"
                         # else: first chunk, leave mode as None
 
-                    if content_mode == "cumulative":
                         if content.startswith(prev_content):
                             # Still cumulative — extract delta
                             if len(content) > len(prev_content):
@@ -446,10 +446,11 @@ class OllamaClient:
                         accumulated_content,
                         token_counter
                     )
-                    token_counter = 0  # Reset counter
+                    token_counter = 0
 
                 # ── Stream end ───────────────────────────────────────
                 if chunk.get("done", False):
+                    done_reason = chunk.get("done_reason", "")
                     break
 
             # Flush remaining batches
@@ -483,7 +484,8 @@ class OllamaClient:
                 final_content=accumulated_content,
                 total_tokens=len(accumulated_thinking) + len(accumulated_content),
                 tool_calls=tool_calls,
-                validation_hash=final_hash
+                validation_hash=final_hash,
+                done_reason=done_reason
             )
 
         except KeyboardInterrupt:
