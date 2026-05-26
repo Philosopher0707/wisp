@@ -151,4 +151,36 @@ export class UnifiedStore {
       // graceful
     }
   }
+
+  private _inMemoryIdempotency = new Map<string, { events: Array<Record<string, unknown>>; timestamp: number }>();
+
+  getIdempotency(key: string): { events: Array<Record<string, unknown>>; timestamp: number } | null {
+    try {
+      const db = this._db();
+      const row = db.prepare("SELECT result, created_at FROM idempotency WHERE key = ?").get(key) as { result: string; created_at: number } | undefined;
+      db.close();
+      if (!row) return this._inMemoryIdempotency.get(key) ?? null;
+      const age = Date.now() - row.created_at;
+      if (age > 300_000) return null; // 5 min TTL
+      return JSON.parse(row.result) as { events: Array<Record<string, unknown>>; timestamp: number };
+    } catch {
+      return this._inMemoryIdempotency.get(key) ?? null;
+    }
+  }
+
+  setIdempotency(key: string, result: { events: Array<Record<string, unknown>>; timestamp: number }): void {
+    try {
+      const db = this._db();
+      const stmt = db.prepare("INSERT INTO idempotency (key, result, created_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET result=excluded.result, created_at=excluded.created_at");
+      stmt.run(key, JSON.stringify(result), Date.now());
+      db.close();
+    } catch {
+      // graceful — fallback to in-memory
+    }
+    this._inMemoryIdempotency.set(key, result);
+    if (this._inMemoryIdempotency.size > 256) {
+      const first = this._inMemoryIdempotency.keys().next().value;
+      if (first) this._inMemoryIdempotency.delete(first);
+    }
+  }
 }

@@ -7,6 +7,7 @@ import { SecurityPolicy, SecurityDecision } from "../infra/security.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { TokenCounter } from "../infra/token_counter.js";
 import { TOOL_SCHEMAS } from "../tools/schemas.js";
+import { buildSystemPrompt } from "../context_assembler.js";
 
 export interface ToolCallEvent {
   type: "tool_call";
@@ -161,34 +162,14 @@ export class WispAgentCore {
 
   private _buildSystemPrompt(session: Record<string, unknown>): string {
     const ws = String(session.workspace ?? ".");
-    const parts: string[] = [];
-
-    parts.push(`You are Wisp, a helpful coding assistant. Workspace: ${ws}`);
-
-    // Tool descriptions
-    parts.push("\n## Tools available");
-    const descriptions: Record<string, string> = {
-      read_file: "Read file contents",
-      write_file: "Create or overwrite a file",
-      edit_file: "Targeted text replacement",
-      run_bash: "Execute shell commands",
-      list_files: "Explore directory structure",
-      git_status: "Show git status",
-      git_diff: "Show git diff",
-      git_commit: "Stage and commit",
-      git_push: "Push to remote",
-    };
-    for (const [name, desc] of Object.entries(descriptions)) {
-      parts.push(`- ${name}: ${desc}`);
-    }
-
-    // Compaction notice
     const compactionHistory = session.compaction_history as Array<unknown> | undefined;
-    if (compactionHistory && compactionHistory.length > 0) {
-      parts.push(`\n[Session compacted ${compactionHistory.length} times.]`);
-    }
-
-    return parts.join("\n");
+    const lastPrompt = session.last_prompt as string | undefined;
+    return buildSystemPrompt({
+      workspace: ws,
+      query: lastPrompt,
+      tokenCounter: this.tokenCounter,
+      compactionHistory: compactionHistory ?? undefined,
+    });
   }
 
   private _getToolSchemas(): Record<string, unknown>[] {

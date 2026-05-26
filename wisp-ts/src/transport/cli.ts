@@ -19,6 +19,7 @@ import { success, error, warning, info, dim } from "../colors.js";
 import { getOutputMode, displayWidth, isAccessible } from "../terminal_width.js";
 import { AgentRuntime } from "../core/runtime.js";
 import { Session } from "../core/session.js";
+import { StdinQueue } from "./queue.js";
 
 function termWidth(): number {
   return process.stdout.columns || 80;
@@ -37,6 +38,17 @@ function argsPreview(args: Record<string, unknown>): string {
   return sv.length > 40 ? `${k}=${sv.slice(0, 37)}...` : `${k}=${sv}`;
 }
 
+const FULL_OUTPUT_TOOLS = new Set([
+  "run_bash",
+  "git_status",
+  "git_diff",
+  "lsp_diagnostics",
+  "diagnose",
+  "run_tests",
+  "search_codebase",
+  "search_symbols",
+]);
+
 export class CLITransport implements Transport {
   runtime: AgentRuntime;
   config: WispConfig;
@@ -51,6 +63,8 @@ export class CLITransport implements Transport {
   private _interrupted = false;
   private _approvalState = { allowedTools: new Set<string>(), deniedTools: new Set<string>(), autoMode: false, blockMode: false };
   private _oldSigint: NodeJS.SignalsListener | null = null;
+  private _stdinQueue = new StdinQueue();
+  private _readerActive = false;
   showThinking: boolean;
   showToolOutput: boolean;
 
@@ -66,17 +80,7 @@ export class CLITransport implements Transport {
   }
 
   async recv(): Promise<string | null> {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    return new Promise((resolve) => {
-      rl.question(dim("wisp> "), (answer) => {
-        rl.close();
-        if (answer.toLowerCase() === "exit" || answer.toLowerCase() === "quit") {
-          resolve(null);
-        } else {
-          resolve(answer);
-        }
-      });
-    });
+    return this._stdinQueue.next();
   }
 
   async approve(toolCall: Record<string, unknown>): Promise<boolean> {
@@ -125,7 +129,7 @@ export class CLITransport implements Transport {
           this._approvalState.blockMode = true;
           resolve(false);
         } else {
-          resolve(false); // default deny
+          resolve(false);
         }
       });
     });
@@ -141,10 +145,13 @@ export class CLITransport implements Transport {
       process.removeListener("SIGINT", process.listeners("SIGINT").pop()!);
       process.on("SIGINT", () => process.exit(130));
     });
+    this._startStdinReader();
   }
 
   stop(): void {
     if (this._oldSigint) process.on("SIGINT", this._oldSigint);
+    this._stdinQueue.close();
+    this._readerActive = false;
   }
 
   isInterrupted(): boolean {
@@ -176,12 +183,31 @@ export class CLITransport implements Transport {
     if (skill) lines.push(`  Skill:      ${skill}`);
     lines.push("");
     lines.push("  /help for commands  ·  Ctrl+C/D to exit");
-    const box = require("../terminal_width.js").BoxChars;
-    const boxChars = new box();
+    const boxModule = require("../terminal_width.js");
+    const BoxChars = boxModule.BoxChars;
+    const boxChars = new BoxChars();
     const top = boxChars.top(width, "Wisp TS");
     const body = lines.map((l) => boxChars.line(width, l)).join("\n");
     const bottom = boxChars.bottom(width);
     process.stdout.write(dim([top, body, bottom].join("\n")) + "\n\n");
+  }
+
+  private _startStdinReader(): void {
+    if (this._readerActive) return;
+    this._readerActive = true;
+    const rl = readline.createInterface({ input: process.stdin });
+    rl.on("line", (line) => {
+      const trimmed = line.trim();
+      if (trimmed.toLowerCase() === "exit" || trimmed.toLowerCase() === "quit") {
+        this._stdinQueue.close();
+        rl.close();
+      } else {
+        this._stdinQueue.push(trimmed);
+      }
+    });
+    rl.on("close", () => {
+      this._stdinQueue.close();
+    });
   }
 
   async runRepl(session: Session): Promise<void> {
@@ -288,8 +314,8 @@ export class CLITransport implements Transport {
         if (rendered) {
           stdout.write(rendered + "\n");
           if (typeof (stdout as unknown as { flush?: () => void }).flush === "function") {
-          (stdout as unknown as { flush: () => void }).flush();
-        }
+            (stdout as unknown as { flush: () => void }).flush();
+          }
         }
         break;
       }
@@ -381,14 +407,80 @@ export class CLITransport implements Transport {
     return false;
   }
 
-  private _renderToolResult(name: string, result: unknown, _durationMs: number | undefined, _width: number): string | null {
-    let resultText = "";
-    if (result && typeof result === "object") {
-      resultText = String((result as Record<string, unknown>).data ?? JSON.stringify(result));
+  private _renderToolResult(name: string, result: unknown, _durationMs: number | undefined, width: number, skipHeader = false): string | null {
+    // Parse JSON
+    let meta: Record<string, unknown> | null = null;
+    let parsed: Record<string, unknown> | null = null;
+    let resultText: string;
+    if (typeof result === "string" && result.startsWith("{")) {
+      try {
+        const parsedLocal = JSON.parse(result) as Record<string, unknown>;
+        meta = (parsedLocal.metadata as Record<string, unknown> | null) ?? null;
+        resultText = String(parsedLocal.data ?? result);
+        parsed = parsedLocal;
+      } catch {
+        resultText = result;
+      }
+    } else if (result && typeof result === "object") {
+      meta = (result as Record<string, unknown>).metadata as Record<string, unknown> | null ?? null;
+      resultText = String((result as Record<string, unknown>).data ?? result);
     } else {
       resultText = String(result ?? "");
     }
+
+    const isError = (parsed != null && parsed.status === "error") || (result != null && typeof result === "object" && (result as Record<string, unknown>).status === "error") || resultText.startsWith("[") || resultText.startsWith("Error");
+    const icon = isAccessible() ? (isError ? "[FAIL]" : "[PASS]") : (isError ? "✗" : "✓");
+    const diffText = meta?.diff ? String(meta.diff) : "";
+    const isEditTool = name === "write_file" || name === "edit_file" || name === "edit_file_multi";
+
+    // Helper: header with dot padding
+    const buildHeader = (iconStr: string, toolName: string) => {
+      const prefix = `  ${iconStr} ${toolName} `;
+      const prefixWidth = displayWidth(prefix);
+      const fillWidth = width - prefixWidth - 2;
+      if (fillWidth > 0) return dim(prefix + "·".repeat(fillWidth));
+      return dim(prefix);
+    };
+
+    // Edit tools with diff
+    if (isEditTool && diffText) {
+      const summary = dim(`     → ${resultText.slice(0, 200).replace(/\n/g, " ")}`);
+      const header = skipHeader ? "" : buildHeader(icon, name);
+      const lines = [header, summary, dim(`     Diff (${diffText.split("\n").length} lines)`), dim(diffText.slice(0, 800))];
+      return lines.filter(Boolean).join("\n");
+    }
+
+    // Full-output tools
+    if (FULL_OUTPUT_TOOLS.has(name) && !isEditTool) {
+      const outputStr = resultText;
+      if (!this.showToolOutput) {
+        const lineCount = outputStr.split("\n").length;
+        if (isAccessible()) {
+          return dim(`  ${icon} ${name} — ${lineCount} lines of output`);
+        }
+        const label = `${icon} ${name} — ${lineCount} lines`;
+        const dots = " ·".repeat(Math.max(0, width - displayWidth(label) - 2));
+        return dim(`  ${label}${dots}`);
+      }
+      const label = isAccessible() ? `${name} output` : `📤 ${name} output`;
+      const rule = dim("  " + "─".repeat(Math.max(0, width - 4)));
+      const wrapped = outputStr.split("\n").slice(0, 40);
+      const indented = wrapped.map((line) => dim(`    ${line.slice(0, width - 8)}`)).join("\n");
+      const header = skipHeader ? "" : buildHeader(icon, name);
+      return [header, `  ${dim(label)}`, rule, indented].filter(Boolean).join("\n");
+    }
+
+    // Compact / default
+    if (!this.showToolOutput) {
+      if (skipHeader) return null;
+      const fillContent = `  ${icon} ${name}`;
+      const fillWidth = displayWidth(fillContent);
+      const dots = " ·".repeat(Math.max(0, width - fillWidth - 2));
+      return dim(fillContent + dots);
+    }
     const preview = resultText.slice(0, 200).replace(/\n/g, " ");
-    return dim(`     → ${preview}${resultText.length > 200 ? "..." : ""}`);
+    const suffix = resultText.length > 200 ? "..." : "";
+    if (skipHeader) return dim(`     → ${preview}${suffix}`);
+    return buildHeader(icon, name) + "\n" + dim(`     → ${preview}${suffix}`);
   }
 }

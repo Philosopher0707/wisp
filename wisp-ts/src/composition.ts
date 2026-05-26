@@ -47,7 +47,7 @@ export class CompositionRoot {
       return new WispAgentCore(config, provider, this.security, this.toolRegistry, this.tokenCounter);
     };
 
-    this.runtime = new AgentRuntime(this.store, coreFactory, this.orchestrator, this.tokenCounter);
+    this.runtime = new AgentRuntime(this.store, coreFactory, this.orchestrator, this.tokenCounter, this.auditTrail);
   }
 
   start(): void {

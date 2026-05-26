@@ -4,6 +4,7 @@ import { WispAgentCore } from "./engine.js";
 import { Session } from "./session.js";
 import { UnifiedStore } from "../infra/store.js";
 import { TokenCounter } from "../infra/token_counter.js";
+import { AuditTrail } from "../infra/audit.js";
 import { SubagentOrchestrator } from "../multi_agent/orchestrator.js";
 import { DelegationAnalyzer, getDelegationAnalyzer } from "../multi_agent/delegation.js";
 
@@ -12,6 +13,7 @@ export class AgentRuntime {
   coreFactory: () => WispAgentCore;
   orchestrator: SubagentOrchestrator;
   tokenCounter: TokenCounter;
+  auditTrail?: AuditTrail;
   private _sessionLocks = new Map<string, Promise<void>>();
   private _maxMessages: number;
   private _maxContextTokens: number;
@@ -23,12 +25,14 @@ export class AgentRuntime {
     store: UnifiedStore,
     coreFactory: () => WispAgentCore,
     orchestrator: SubagentOrchestrator,
-    tokenCounter: TokenCounter
+    tokenCounter: TokenCounter,
+    auditTrail?: AuditTrail
   ) {
     this.store = store;
     this.coreFactory = coreFactory;
     this.orchestrator = orchestrator;
     this.tokenCounter = tokenCounter;
+    this.auditTrail = auditTrail;
     this._maxMessages = 50;
     this._maxContextTokens = 128000;
     this._autoCompact = true;
@@ -48,9 +52,11 @@ export class AgentRuntime {
       session.compactionHistory = (stored.compaction_history as Array<{ before_count: number; after_count: number; summary: string; timestamp: number }>) ?? [];
       session.createdAt = new Date(stored.created_at as string).getTime() / 1000;
       session.updatedAt = new Date(stored.updated_at as string).getTime() / 1000;
+      this.auditTrail?.record("session_loaded", { actor: "runtime", metadata: { session_id: sessionId, workspace } });
       return session;
     }
     const session = new Session(sessionId, model, workspace);
+    this.auditTrail?.record("session_created", { actor: "runtime", metadata: { session_id: sessionId, workspace, model } });
     this._saveToStore(session);
     return session;
   }
@@ -84,12 +90,26 @@ export class AgentRuntime {
     approvalHandler?: (toolCall: Record<string, unknown>) => Promise<boolean>
   ): AsyncGenerator<Record<string, unknown>> {
     const start = performance.now();
+    const turnId = `turn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    this.auditTrail?.record("turn_started", { actor: "runtime", metadata: { session_id: session.sessionId, turn_id: turnId, prompt_length: prompt.length } });
+
+    // Idempotency: if identical prompt recently run, yield cached result
+    const idemKey = `${session.sessionId}:${prompt}`;
+    const idem = this.store.getIdempotency(idemKey);
+    if (idem) {
+      this.auditTrail?.record("turn_idempotent", { actor: "runtime", metadata: { session_id: session.sessionId, turn_id: turnId } });
+      yield { type: "system", message: "Returning cached result for identical prompt", level: "info" };
+      for (const ev of idem.events ?? []) yield ev;
+      return;
+    }
 
     // Auto-compact before turn
     if (this._autoCompact) {
       const shouldCompact = this._shouldCompact(session);
       if (shouldCompact) {
         this._compactSession(session, this._compactKeepRecent);
+        this.auditTrail?.record("session_compacted", { actor: "runtime", metadata: { session_id: session.sessionId, before_count: session.compactionHistory[session.compactionHistory.length - 1]?.before_count, after_count: session.compactionHistory[session.compactionHistory.length - 1]?.after_count } });
         yield { type: "system", message: "Session auto-compacted", level: "info" };
       }
     }
@@ -119,11 +139,13 @@ export class AgentRuntime {
     const assistantContent: string[] = [];
     const toolCalls: Record<string, unknown>[] = [];
     const toolResults: Record<string, unknown>[] = [];
+    const allEvents: Record<string, unknown>[] = [];
     let turnSucceeded = false;
 
     try {
       for await (const event of core.turn(session.toDict(), prompt, approvalHandler)) {
         yield event;
+        allEvents.push(event);
         const etype = event.type;
         if (etype === "content") assistantContent.push(String(event.text ?? ""));
         else if (etype === "tool_call") toolCalls.push(event);
@@ -163,10 +185,16 @@ export class AgentRuntime {
       session.updatedAt = Date.now() / 1000;
       this._saveToStore(session);
 
-      // Telemetry
+      // Telemetry + audit
       const latencyMs = performance.now() - start;
       const tokenCounts = this.tokenCounter.countMessages(session.messages);
-      // (In production, log to telemetry service)
+      this.auditTrail?.record("turn_ended", {
+        actor: "runtime",
+        metadata: { session_id: session.sessionId, turn_id: turnId, latency_ms: latencyMs, tokens_in: tokenCounts.input, tokens_out: tokenCounts.output, succeeded: turnSucceeded },
+      });
+
+      // Cache idempotency
+      this.store.setIdempotency(idemKey, { events: allEvents, timestamp: Date.now() });
     }
   }
 
