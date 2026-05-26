@@ -248,6 +248,12 @@ class WorktreeManager:
                 break
 
             err_text = stderr.decode("utf-8", errors="replace").strip()
+            # If git says "not a working tree", the worktree was already
+            # removed or was never properly linked — skip retries.
+            if "not a working tree" in err_text:
+                logger.debug("Worktree %s already removed from git: %s", worktree_path.name, err_text)
+                break
+
             logger.warning(
                 "git worktree remove failed (attempt %d/%d, exit %d): %s",
                 attempt + 1, max_attempts, proc.returncode, err_text

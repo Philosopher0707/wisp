@@ -321,7 +321,7 @@ class SubagentOrchestrator:
                 self.workspace = git_root
                 return
 
-        logger.warning(
+        logger.info(
             "Workspace %s is not in a git repo (cwd=%s) — "
             "subagent worktree isolation will be disabled",
             self.workspace, Path.cwd().resolve(),
