@@ -138,7 +138,7 @@ class AgentRuntime:
             except Exception:
                 pass  # table might not exist
 
-        # Track events for idempotency cache
+        # Track events for session persistence
         emitted_events: list[dict] = []
         seq_num = 0
         if self.session_repo is not None:
@@ -148,26 +148,6 @@ class AgentRuntime:
                 pass
 
         async with session_lock:
-            # Idempotency: same prompt within 5s window returns cached result
-            # MUST be inside the lock to prevent race conditions
-            import hashlib
-            idem_key = hashlib.sha256(
-                f"{sid}:{prompt}:{int(time.time() / 5)}".encode()
-            ).hexdigest()
-            try:
-                conn = self.store._get_conn()
-                row = conn.execute(
-                    "SELECT result FROM idempotency WHERE key = ?",
-                    (idem_key,),
-                ).fetchone()
-                if row is not None:
-                    import json as _json
-                    cached = _json.loads(row["result"])
-                    for ev in cached:
-                        yield ev
-                    return
-            except Exception:
-                pass  # idempotency table may not exist yet — not critical
             # Auto-compact before turn to prevent context overflow
             await self.maybe_compact(session)
 
@@ -312,18 +292,6 @@ class AgentRuntime:
                 self.store.save_session(session)
 
                 # Cache result for idempotency (1h TTL)
-                try:
-                    import json as _json
-                    self.store._get_conn().execute(
-                        "INSERT OR REPLACE INTO idempotency (key, result, created_at) VALUES (?, ?, ?)",
-                        (idem_key, _json.dumps(emitted_events, default=str), time.time()),
-                    )
-                except Exception:
-                    pass
-
-                # Clean up stale idempotency entries (older than 1 hour)
-                self._cleanup_idempotency(ttl_seconds=3600)
-
                 # Record telemetry
                 latency_ms = (time.time() - start) * 1000
                 from wisp.infra.token_counter import TokenCounter
@@ -456,15 +424,18 @@ class AgentRuntime:
         with self._core_lock:
             self._core_cache = None
 
-    async def maybe_compact(self, session: dict, max_messages: int | None = None) -> None:
+    async def maybe_compact(self, session: dict, max_messages: int | None = None, force: bool = False) -> dict | None:
         """Compact session if it exceeds max_messages.
 
         Uses LLM-powered summarization when compactor is configured,
         falls back to simple truncation otherwise.
+
+        Returns a dict with compaction results if compaction was performed,
+        or None if skipped.
         """
         threshold = max_messages or self.max_messages
-        if len(session["messages"]) <= threshold:
-            return
+        if not force and len(session["messages"]) <= threshold:
+            return None
 
         old_count = len(session["messages"])
         keep = threshold // 2
@@ -508,6 +479,13 @@ class AgentRuntime:
         logger.info("Compacted session %s: %d → %d messages",
                     session.get("id"), old_count, len(session["messages"]))
 
+        return {
+            "compacted": True,
+            "before_count": old_count,
+            "after_count": len(session["messages"]),
+            "summary": summary,
+        }
+
     def _evict_old_session_locks(self) -> None:
         """Evict least-recently-used session locks if we exceed the limit."""
         if len(self._session_locks) <= self._max_session_locks:
@@ -523,15 +501,6 @@ class AgentRuntime:
         for k in sorted_keys[:to_evict]:
             self._session_locks.pop(k, None)
             self._session_access.pop(k, None)
-
-    def _cleanup_idempotency(self, ttl_seconds: int = 3600) -> None:
-        """Remove idempotency entries older than the TTL (default 1 hour)."""
-        cutoff = time.time() - ttl_seconds
-        try:
-            conn = self.store._get_conn()
-            conn.execute("DELETE FROM idempotency WHERE created_at < ?", (cutoff,))
-        except Exception:
-            pass  # table may not exist yet — not critical
 
     async def start_background_run(
         self,

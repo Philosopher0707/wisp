@@ -74,7 +74,11 @@ class WispAgentCore:
 
         Loops internally: provider → tool_calls → execute → append → provider
         until the model returns content (no tool calls) or max iterations.
+
+        Has a wall-clock timeout (default 10 min) to prevent infinite hangs.
         """
+        import asyncio as _asyncio
+        turn_timeout = getattr(self.config, "turn_timeout", 600) if self.config else 600
         # Build messages list
         messages = list(session.get("messages", []))
         # Avoid duplicating the user message if runtime already added it
@@ -93,6 +97,24 @@ class WispAgentCore:
 
         max_iterations = getattr(self.config, "max_iterations", 30)
 
+        try:
+            async with _asyncio.timeout(turn_timeout):
+                async for event in self._turn_inner(
+                    session, prompt, messages, system_prompt, tools,
+                    max_iterations, approval_handler,
+                ):
+                    yield event
+        except _asyncio.TimeoutError:
+            yield _flatten_event(error_event(
+                f"Turn timed out after {turn_timeout}s", recoverable=False,
+            ))
+            yield _flatten_event(done_event(session.get("id", "")))
+
+    async def _turn_inner(
+        self, session, prompt, messages, system_prompt, tools,
+        max_iterations, approval_handler,
+    ) -> AsyncIterator[dict]:
+        """Inner turn loop, separated for timeout wrapping."""
         for iteration in range(max_iterations):
             pending_tool_calls: list[dict] = []
             provider_events: list[dict] = []
@@ -224,6 +246,23 @@ class WispAgentCore:
                     yield normalized
 
             except Exception as exc:
+                # Retry transient errors (connection, timeout, 5xx) up to 2 times
+                exc_str = str(exc).lower()
+                is_transient = any(
+                    s in exc_str for s in ("connection", "timeout", "reset", "502", "503", "504", "refused", "broken pipe")
+                )
+                if is_transient and iteration < 2:
+                    import asyncio as _aio
+                    backoff = 2 ** iteration  # 1s, 2s
+                    logger.warning("Transient provider error (attempt %d), retrying in %ds: %s",
+                                   iteration + 1, backoff, exc)
+                    yield _flatten_event(system(
+                        f"Connection issue, retrying in {backoff}s...",
+                        level="warning",
+                    ))
+                    await _aio.sleep(backoff)
+                    continue  # Retry this iteration
+
                 logger.exception("Provider stream failed")
                 if partial_content:
                     yield _flatten_event(content_event("".join(partial_content)))
@@ -321,9 +360,12 @@ class WispAgentCore:
         # We spawn a thread that pushes events into an asyncio.Queue,
         # then yield from the queue. This preserves streaming without
         # blocking the event loop.
+        import threading
+
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue = asyncio.Queue()
         done = object()  # sentinel
+        cancelled = threading.Event()  # signals producer to stop
 
         def _sync_producer():
             try:
@@ -332,25 +374,33 @@ class WispAgentCore:
                     messages=messages,
                     tools=tools,
                 ):
+                    if cancelled.is_set():
+                        break
                     loop.call_soon_threadsafe(queue.put_nowait, event)
                 loop.call_soon_threadsafe(queue.put_nowait, done)
             except Exception:
                 loop.call_soon_threadsafe(queue.put_nowait, done)
                 raise
 
-        # Start producer thread
-        import threading
-
         thread = threading.Thread(target=_sync_producer, daemon=True)
         thread.start()
 
-        while True:
-            event = await queue.get()
-            if event is done:
-                break
-            yield event
-
-        thread.join(timeout=5.0)
+        try:
+            while True:
+                event = await queue.get()
+                if event is done:
+                    break
+                yield event
+        finally:
+            # Signal producer thread to stop if we're abandoned (e.g. timeout)
+            cancelled.set()
+            # Drain remaining queued items so the queue doesn't hold references
+            while not queue.empty():
+                try:
+                    queue.get_nowait()
+                except Exception:
+                    break
+            thread.join(timeout=5.0)
 
     def _build_system_prompt(self, session: dict, query: str | None = None) -> str:
         """Build rich system prompt from session context."""

@@ -873,8 +873,14 @@ class CLITransport(Transport):
 
                     adapter = AgentAdapter(self.runtime, self.config, session)
                     try:
-                        if dispatch(prompt, adapter):
-                            continue
+                        result = dispatch(prompt, adapter)
+                        if result is False:
+                            pass  # Not a slash command
+                        elif isinstance(result, str):
+                            # Command returned a prompt to run (e.g. /continue)
+                            prompt = result  # Fall through to run_turn below
+                        else:
+                            continue  # Consumed, no follow-up
                     except ExitREPL:
                         break
                     except Exception as exc:
@@ -994,10 +1000,16 @@ class CLITransport(Transport):
         elif etype == EventType.DONE:
             self._flush_thinking(stdout, width)
             self._flush_content(stdout, width)
+            # Ensure spinner is stopped on turn completion
+            if self._spinner is not None:
+                self._spinner.stop()
 
         elif etype == EventType.ERROR:
             self._flush_thinking(stdout, width)
             self._flush_content(stdout, width)
+            # Stop spinner on errors so it doesn't keep spinning
+            if self._spinner is not None:
+                self._spinner.stop()
             msg = ev.data.get("message", "")
             error_prefix = "[ERROR] " if is_accessible() else "✗ "
             stdout.write(

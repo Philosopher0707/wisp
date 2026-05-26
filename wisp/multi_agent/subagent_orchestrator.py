@@ -258,6 +258,7 @@ class SubagentOrchestrator:
         tool_executor: Any = None,
         hook_manager: Any = None,
         agent_runtime: Any = None,
+        store: Any = None,
     ):
         self.parent = parent_agent
         self.config = config or (getattr(parent_agent, "config", None) if parent_agent else WispConfig())
@@ -286,7 +287,9 @@ class SubagentOrchestrator:
         self._telemetry = Telemetry()
         self._persistence = Persistence(self.workspace / ".wisp" / "subagent_results.jsonl")
         self._worktree_mgr = WorktreeManager(self.workspace)
-        self._runner = SubagentRunner(self.config, self.workspace, tool_executor=tool_executor, agent_runtime=agent_runtime)
+        # Derive store from parent_agent if not explicitly provided
+        _store = store or (getattr(parent_agent, "store", None) if parent_agent else None)
+        self._runner = SubagentRunner(self.config, self.workspace, store=_store, tool_executor=tool_executor, agent_runtime=agent_runtime)
 
         # Config-driven limits
         self._max_depth = getattr(self.config, "max_subagent_depth", _MAX_SUBAGENT_DEPTH_DEFAULT)
@@ -919,7 +922,8 @@ class SubagentOrchestrator:
                             "Subagent %s timed out — retrying with %ds budget (attempt %d/%d)",
                             contract.name, new_timeout, attempt + 1, max_retries + 1,
                         )
-                        contract.timeout_seconds = new_timeout
+                        import dataclasses
+                        contract = dataclasses.replace(contract, timeout_seconds=new_timeout)
                         continue
                     logger.warning("Subagent %s timed out — no retries left", contract.name)
                     return result

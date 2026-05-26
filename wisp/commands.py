@@ -56,11 +56,13 @@ def all_commands() -> list[Command]:
     return result
 
 
-def dispatch(text: str, agent) -> bool:
+def dispatch(text: str, agent) -> str | None | bool:
     """Parse text as a slash command and execute it.
 
-    Returns True if the input was consumed (known or unknown /command).
-    Returns False if text does not start with '/'.
+    Returns:
+        True  — input was consumed (no follow-up turn needed)
+        False — input was not a slash command
+        str   — prompt to run as a follow-up turn (e.g. /continue)
     """
     text = text.strip()
     if not text.startswith("/"):
@@ -82,7 +84,10 @@ def dispatch(text: str, agent) -> bool:
         return True
 
     try:
-        cmd.handler(agent, args.strip())
+        result = cmd.handler(agent, args.strip())
+        # If handler returns a string, it's a prompt to run as a follow-up turn
+        if isinstance(result, str) and result:
+            return result
     except ExitREPL:
         raise
     except Exception as e:
@@ -326,24 +331,57 @@ def cmd_compact(agent, args: str):
     if agent.session is None:
         print(warning("⚠ No active session to compact."))
         return
-    if len(agent.messages) <= agent.config.compact_keep_recent:
-        print(dim(f"Session has only {len(agent.messages)} messages — not enough to compact."))
+
+    msg_count = len(agent.messages)
+    if msg_count <= 10:
+        print(dim(f"Session has only {msg_count} messages — not enough to compact."))
         return
 
-    print(info(f"Compacting session ({len(agent.messages)} messages, keeping last {agent.config.compact_keep_recent})..."))
-    result = agent.session.compact(
-        keep_recent=agent.config.compact_keep_recent,
-        chars_per_token=agent.config.chars_per_token,
-    )
+    print(info(f"Compacting session ({msg_count} messages)..."))
 
-    if result.get("compacted"):
-        agent.messages = list(agent.session.messages)
-        saved = result["before_count"] - result["after_count"]
-        print(success(f"✓ Compacted: {result['before_count']} → {result['after_count']} messages ({saved} removed)"))
-        if result.get("summary"):
-            print(dim(f"  Summary: {result['summary'][:120]}..."))
+    # Use the runtime's Compactor (LLM summarization) if available
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if hasattr(agent, 'runtime') and hasattr(agent.runtime, 'maybe_compact') and loop is not None:
+        try:
+            session_dict = agent.session.to_dict() if hasattr(agent.session, 'to_dict') else agent.session._data
+            before = len(session_dict.get("messages", []))
+            # Force compaction regardless of message count threshold
+            result = asyncio.run_coroutine_threadsafe(
+                agent.runtime.maybe_compact(session_dict, force=True),
+                loop,
+            ).result(timeout=30)
+            if result and result.get("compacted"):
+                agent.messages = list(session_dict.get("messages", agent.messages))
+                after = len(agent.messages)
+                print(success(f"✓ Compacted: {before} → {after} messages ({before - after} removed)"))
+                if result.get("summary"):
+                    print(dim(f"  Summary: {result['summary'][:120]}..."))
+            else:
+                print(dim("Compaction skipped: not enough messages to summarize."))
+        except Exception as exc:
+            logger.warning("LLM compaction failed, falling back to truncation: %s", exc)
+            # Fall back to simple truncation
+            _compact_truncate(agent)
     else:
-        print(dim("Compaction skipped: not enough messages to summarize."))
+        # No runtime or no event loop — use simple truncation
+        _compact_truncate(agent)
+
+
+def _compact_truncate(agent):
+    """Fallback compaction: simple truncation keeping recent messages."""
+    keep_recent = getattr(agent.config, 'compact_keep_recent', 10)
+    msg_count = len(agent.messages)
+    if msg_count <= keep_recent:
+        print(dim(f"Session has only {msg_count} messages — not enough to compact."))
+        return
+    removed = msg_count - keep_recent
+    agent.messages[:] = agent.messages[-keep_recent:]
+    print(success(f"✓ Truncated: {msg_count} → {keep_recent} messages ({removed} removed)"))
 
 
 @register("approve", "Toggle auto-approve for tool calls", aliases=("y",), usage="/approve")
@@ -677,20 +715,19 @@ def cmd_new(agent, args: str):
 def cmd_continue(agent, args: str):
     """Explicitly continue from the last assistant message.
 
-    Builds an expanded continuation prompt using the same logic as the
-    automatic _expand_continuation hook, but shows the user what context
-    is being resumed before sending it.
+    Builds an expanded continuation prompt and returns it so the REPL
+    can run a follow-up turn immediately.
     """
     if not agent.messages:
         print(warning("⚠ No conversation history to continue from."))
-        return
+        return True
 
     expanded = agent._expand_continuation("continue")
 
     # If expansion did nothing useful, warn and bail
     if expanded == "continue":
         print(warning("⚠ No previous assistant message found to continue from."))
-        return
+        return True
 
     # Show the user what we're continuing from (first line only for brevity)
     context_preview = expanded.split("\n")[-1] if "\n" in expanded else expanded
@@ -700,8 +737,8 @@ def cmd_continue(agent, args: str):
         print(info("⏩ Continuing previous response…"))
 
     agent._add_message("user", expanded)
-    # Signal the REPL to auto-trigger the next turn
-    agent._pending_continue = True
+    # Return the prompt so the REPL loop runs a follow-up turn
+    return expanded
 
 
 @register("exit", "Exit Wisp", aliases=("quit", "q", "bye"), usage="/exit")

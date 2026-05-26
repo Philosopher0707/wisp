@@ -106,6 +106,12 @@ class OllamaClient:
     def stream_response(self, value: Optional[dict]) -> None:
         _ollama_stream_response.set(value)
 
+    def close(self) -> None:
+        """Close the underlying requests session."""
+        if self._session is not None:
+            self._session.close()
+            self._session = None
+
     def check_health(self) -> bool:
         """Verify Ollama is running and the model is available."""
         try:

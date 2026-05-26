@@ -132,6 +132,9 @@ class CompositionRoot:
         )
 
         # Create runtime before orchestrator so orchestrator can receive it
+        from wisp.core.session_repo import SessionRepository
+        session_repo = SessionRepository(self.store)
+
         self.runtime = AgentRuntime(
             store=self.store,
             security=self.security,
@@ -140,6 +143,7 @@ class CompositionRoot:
             core_factory=self._create_core,
             compactor=self.compactor,
             orchestrator=None,
+            session_repo=session_repo,
         )
 
         # Create subagent orchestrator with tool_executor wired at construction time
@@ -149,6 +153,7 @@ class CompositionRoot:
             tool_executor=self.tool_executor,
             hook_manager=self._tool_hook_manager,
             agent_runtime=self.runtime,
+            store=self.store,
         )
 
         # Wire orchestrator back into runtime and tool_executor for spawn/fanout dispatch
@@ -170,6 +175,10 @@ class CompositionRoot:
             factory = ProviderFactory()
             provider = factory.from_config(self.config)
         else:
+            logger.warning(
+                "No LLM provider configured. Set WISP_PROVIDER or provider in config. "
+                "Using null provider — turns will produce no output."
+            )
             provider = _NullProvider()
 
         return WispAgentCore(

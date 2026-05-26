@@ -369,6 +369,10 @@ class WispConfig:
         object.__setattr__(self, "max_reflections",
             _parse_int(get_setting("max_reflections", "3"), 3, 0, 10)
         )
+        # Per-tool timeout in seconds (prevents stuck tools from hanging the agent)
+        object.__setattr__(self, "tool_timeout",
+            _parse_int(get_setting("tool_timeout", "300"), 300, 10, 3600)
+        )
         # Context window guard: trim oldest messages when estimated tokens exceed this
         raw_ctx = get_setting("max_context_tokens")
         object.__setattr__(self, "max_context_tokens",

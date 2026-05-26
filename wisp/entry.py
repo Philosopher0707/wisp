@@ -170,6 +170,13 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
     else:
         transport.print_banner(sys.stdout, session, config.model, skill=skill)
 
+    # Warn if no provider is configured — turns will produce no output
+    provider_name = getattr(config, "provider", None)
+    if not provider_name:
+        sys.stdout.write("\n⚠  No LLM provider configured. Set WISP_PROVIDER or add 'provider' to config.\n")
+        sys.stdout.write("   Example: wisp repl -m llama3   or   export WISP_PROVIDER=ollama\n\n")
+        sys.stdout.flush()
+
     def _show_resume() -> None:
         """Print the resume command for this session."""
         sys.stdout.write("\n⏸  Turn interrupted. Session saved.\n")
@@ -245,8 +252,13 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
             from wisp.transport.cli import AgentAdapter
             adapter = AgentAdapter(root.runtime, config, session)
             try:
-                if dispatch(prompt, adapter):
-                    continue
+                result = dispatch(prompt, adapter)
+                if result is False:
+                    pass  # Not a slash command — fall through
+                elif isinstance(result, str):
+                    # Command returned a prompt to run (e.g. /continue)
+                    _run_turn(result)
+                # True or None means consumed, no follow-up turn
             except ExitREPL:
                 break
             except Exception as exc:

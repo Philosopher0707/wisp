@@ -76,6 +76,12 @@ class OllamaProvider(Provider):
         except Exception:
             return {"id": model, "context_length": 128000}
 
+    def close(self) -> None:
+        """Close the underlying client and release connections."""
+        if self._client is not None:
+            self._client.close()
+            self._client = None
+
     def generate(self, system_prompt: str, messages: list[dict], tools: Optional[list] = None) -> dict:
         if self._client is not None:
             return self._client.generate(system_prompt, messages, tools)

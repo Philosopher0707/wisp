@@ -129,6 +129,8 @@ class SubagentRunner:
 
             from datetime import datetime, timezone
             session["updated_at"] = datetime.now(timezone.utc).isoformat()
+            # Sync messages back from the working copy that core.turn() modified
+            session["messages"] = result_dict.get("messages", session.get("messages", []))
             self._store.save_session(session)
 
             duration = time.monotonic() - start
@@ -266,81 +268,85 @@ class SubagentRunner:
         factory = ProviderFactory()
         provider = factory.from_config(config)
 
-        security = SecurityPolicy(
-            permission_mode=getattr(config, "permission_mode", "full"),
-        )
-        extensions = ExtensionHost()
-
-        core = StatelessCore(
-            provider=provider,
-            security=security,
-            extensions=extensions,
-            config=config,
-            tool_executor=self._tool_executor,
-        )
-
-        session_dict = dict(session)
-        if system_prompt:
-            session_dict["messages"] = [{"role": "system", "content": system_prompt}] + list(session_dict.get("messages", []))
-
-        # Partition context — only pass relevant history to subagent
-        raw_messages = list(session_dict.get("messages", []))
-        if len(raw_messages) > 10:
-            from .context_partition import ContextPartitioner
-            partitioner = ContextPartitioner(max_messages=10, max_tokens=4000)
-            filtered = partitioner.partition(raw_messages, contract.task, include_system=True)
-            # Always ensure the task message is present
-            task_msg = {"role": "user", "content": contract.task}
-            has_task = any(
-                m.get("role") == "user" and m.get("content") == contract.task
-                for m in filtered
+        try:
+            security = SecurityPolicy(
+                permission_mode=getattr(config, "permission_mode", "full"),
             )
-            if not has_task:
-                filtered.append(task_msg)
-            session_dict["messages"] = filtered
-            logger.debug(
-                "Context partitioned for %s: %d → %d messages",
-                contract.name, len(raw_messages), len(filtered),
+            extensions = ExtensionHost()
+
+            core = StatelessCore(
+                provider=provider,
+                security=security,
+                extensions=extensions,
+                config=config,
+                tool_executor=self._tool_executor,
             )
 
-        output_text = ""
-        engine_iterations = 0
+            session_dict = dict(session)
+            if system_prompt:
+                session_dict["messages"] = [{"role": "system", "content": system_prompt}] + list(session_dict.get("messages", []))
 
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise asyncio.TimeoutError("contract deadline reached")
+            # Partition context — only pass relevant history to subagent
+            raw_messages = list(session_dict.get("messages", []))
+            if len(raw_messages) > 10:
+                from .context_partition import ContextPartitioner
+                partitioner = ContextPartitioner(max_messages=10, max_tokens=4000)
+                filtered = partitioner.partition(raw_messages, contract.task, include_system=True)
+                # Always ensure the task message is present
+                task_msg = {"role": "user", "content": contract.task}
+                has_task = any(
+                    m.get("role") == "user" and m.get("content") == contract.task
+                    for m in filtered
+                )
+                if not has_task:
+                    filtered.append(task_msg)
+                session_dict["messages"] = filtered
+                logger.debug(
+                    "Context partitioned for %s: %d → %d messages",
+                    contract.name, len(raw_messages), len(filtered),
+                )
 
-        async with asyncio.timeout(remaining):
-            async for event in core.turn(session_dict, contract.task):
-                etype = event.get("type")
-                if etype == "content":
-                    output_text = event.get("text", "")
-                elif etype == "tool_call":
-                    engine_iterations += 1
-                    name = event.get("name", "")
-                    args = event.get("arguments", {})
-                    arg_preview = self._compact_args(args)
-                    tool_calls_log.append({"name": name, "args_preview": arg_preview})
-                elif etype == "error":
-                    output_text = event.get("message", "")
-                    return {
-                        "success": False,
-                        "output": output_text,
-                        "error": output_text,
-                        "files_changed": [],
-                        "iterations_used": engine_iterations,
-                        "messages": session_dict.get("messages", []),
-                    }
+            output_text = ""
+            engine_iterations = 0
 
-        files_changed = self._extract_files_changed(output_text)
-        return {
-            "success": True,
-            "output": output_text,
-            "error": None,
-            "files_changed": files_changed,
-            "iterations_used": engine_iterations,
-            "messages": session_dict.get("messages", []),
-        }
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise asyncio.TimeoutError("contract deadline reached")
+
+            async with asyncio.timeout(remaining):
+                async for event in core.turn(session_dict, contract.task):
+                    etype = event.get("type")
+                    if etype == "content":
+                        output_text = event.get("text", "")
+                    elif etype == "tool_call":
+                        engine_iterations += 1
+                        name = event.get("name", "")
+                        args = event.get("arguments", {})
+                        arg_preview = self._compact_args(args)
+                        tool_calls_log.append({"name": name, "args_preview": arg_preview})
+                    elif etype == "error":
+                        output_text = event.get("message", "")
+                        return {
+                            "success": False,
+                            "output": output_text,
+                            "error": output_text,
+                            "files_changed": [],
+                            "iterations_used": engine_iterations,
+                            "messages": session_dict.get("messages", []),
+                        }
+
+            files_changed = self._extract_files_changed(output_text)
+            return {
+                "success": True,
+                "output": output_text,
+                "error": None,
+                "files_changed": files_changed,
+                "iterations_used": engine_iterations,
+                "messages": session_dict.get("messages", []),
+            }
+        finally:
+            if hasattr(provider, "close"):
+                provider.close()
 
 
     async def _run_via_runtime(

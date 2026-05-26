@@ -548,16 +548,28 @@ class ToolExecutor:
                 }
                 result = json.dumps(structured, ensure_ascii=False)
         else:
+            # Per-tool timeout to prevent hanging the agent on stuck tools
+            tool_timeout = getattr(self.config, "tool_timeout", 300) if self.config else 300
             try:
-                result = await asyncio.to_thread(
-                    execute_tool,
-                    func_name,
-                    func_args,
-                    workspace,
-                    max_data_chars=8000,
-                    file_lock=self.file_lock,
-                    lsp_manager=self.lsp_manager,
-                )
+                async with asyncio.timeout(tool_timeout):
+                    result = await asyncio.to_thread(
+                        execute_tool,
+                        func_name,
+                        func_args,
+                        workspace,
+                        max_data_chars=8000,
+                        file_lock=self.file_lock,
+                        lsp_manager=self.lsp_manager,
+                    )
+            except asyncio.TimeoutError:
+                logger.error("Tool %s timed out after %ds", func_name, tool_timeout)
+                structured = {
+                    "status": "error",
+                    "tool": func_name,
+                    "data": f"Tool timed out after {tool_timeout}s",
+                    "metadata": _build_tool_metadata(func_name, func_args, ""),
+                }
+                result = json.dumps(structured, ensure_ascii=False)
             except ToolError as e:
                 tb = traceback.format_exc()
                 from wisp.tools.registry import _build_tool_metadata
@@ -611,9 +623,6 @@ class ToolExecutor:
                             result["data"] = str(result.get("data", "")) + lint_feedback
                 except Exception:
                     logger.debug("Write-verify lint failed for %s", file_path, exc_info=True)
-
-        # fire post-hooks (non-blocking, best-effort)
-        await self._run_post_tool_hooks(func_name, func_args, result, workspace)
 
         return result, duration_ms
 
