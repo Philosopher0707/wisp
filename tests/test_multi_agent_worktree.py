@@ -3,7 +3,6 @@
 Mocks git subprocess calls to avoid needing a real git repository.
 """
 
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -34,13 +33,15 @@ class TestWorktreeManager:
     @pytest.mark.asyncio
     async def test_create_failure(self, tmp_path):
         mgr = WorktreeManager(tmp_path)
-        mock_proc = AsyncMock()
-        mock_proc.returncode = 128
-        mock_proc.communicate.return_value = (b"", b"fatal: not a git repo")
+        # Mock _check_git_repo to return True so we reach the worktree add step
+        with patch.object(mgr, "_check_git_repo", return_value=True):
+            mock_proc = AsyncMock()
+            mock_proc.returncode = 128
+            mock_proc.communicate.return_value = (b"", b"fatal: not a git repo")
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
-            with pytest.raises(RuntimeError, match="git worktree add failed"):
-                await mgr.create("test-agent")
+            with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+                with pytest.raises(RuntimeError, match="git worktree add failed"):
+                    await mgr.create("test-agent")
 
     @pytest.mark.asyncio
     async def test_cleanup_success(self, tmp_path):

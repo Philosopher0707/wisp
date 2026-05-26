@@ -69,24 +69,33 @@ class WorkspaceTrustManager:
         """
         workspace_path = str(Path(workspace).resolve())
         dst = Path(trust_file) if trust_file else cls.TRUST_FILE
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        dst.touch(exist_ok=True)
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.touch(exist_ok=True)
+        except (PermissionError, OSError):
+            # If we can't write the trust file, the workspace is effectively
+            # trusted for this session.  This keeps Wisp usable in read-only
+            # environments (CI, sandboxes, ephemeral containers).
+            return
 
-        with open(dst, "r+", encoding="utf-8") as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-            try:
+        try:
+            with open(dst, "r+", encoding="utf-8") as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
                 try:
-                    f.seek(0)
-                    content = f.read()
-                    trusted = json.loads(content) if content.strip() else []
-                except Exception:
-                    trusted = []
+                    try:
+                        f.seek(0)
+                        content = f.read()
+                        trusted = json.loads(content) if content.strip() else []
+                    except Exception:
+                        trusted = []
 
-                if workspace_path not in trusted:
-                    trusted.append(workspace_path)
-                    f.seek(0)
-                    f.truncate()
-                    json.dump(trusted, f, indent=2)
-                    f.write("\n")
-            finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                    if workspace_path not in trusted:
+                        trusted.append(workspace_path)
+                        f.seek(0)
+                        f.truncate()
+                        json.dump(trusted, f, indent=2)
+                        f.write("\n")
+                finally:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        except (PermissionError, OSError):
+            pass

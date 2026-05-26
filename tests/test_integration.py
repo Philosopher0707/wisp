@@ -17,26 +17,10 @@ enforce security boundaries.
 
 import json
 import pytest
-from pathlib import Path
 
 from wisp.tools import (
     execute_tool,
     ToolError,
-    tool_read_file,
-    tool_write_file,
-    tool_edit_file,
-    tool_run_bash,
-    tool_list_files,
-    tool_web_fetch,
-    tool_search_symbols,
-    tool_remember,
-    tool_recall,
-    tool_git_status,
-    tool_git_diff,
-    tool_diagnose,
-    tool_plan_task,
-    tool_mark_step_done,
-    tool_update_plan,
     _build_tool_metadata,
 )
 
@@ -210,9 +194,12 @@ class TestIntegrationListFiles:
 
 class TestIntegrationWebFetch:
     def test_web_fetch_success(self, temp_workspace):
+        import pytest
         # Use httpbin for reliable testing
         raw = execute_tool("web_fetch", {"url": "https://httpbin.org/get", "max_chars": 2000}, str(temp_workspace))
         result = parse_tool_result(raw)
+        if result["status"] == "error" and "DNS resolution failed" in result["data"]:
+            pytest.skip("Network/DNS unavailable in this environment")
         assert result["status"] == "ok"
         assert "httpbin" in result["data"].lower() or "200" in result["data"]
         assert result["metadata"]["url"] == "https://httpbin.org/get"

@@ -30,10 +30,35 @@ class UnifiedStore:
 
     def __init__(self, db_path: Path | str):
         self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self.name = "store"
-        self._init_schema()
+        self._initialized = False
+
+    def _ensure_initialized(self) -> None:
+        """Lazy init: create parent dirs and schema on first connection."""
+        if self._initialized:
+            return
+        with self._lock:
+            if self._initialized:
+                return
+            try:
+                self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            except (PermissionError, OSError):
+                pass
+            try:
+                self._init_schema()
+                self._initialized = True
+            except (PermissionError, OSError, sqlite3.OperationalError) as e:
+                import tempfile
+                fallback = Path(tempfile.gettempdir()) / "wisp_fallback.db"
+                logger.warning(
+                    "UnifiedStore: cannot open %s (%s) — falling back to %s",
+                    self.db_path, e, fallback
+                )
+                self.db_path = fallback
+                self.db_path.parent.mkdir(parents=True, exist_ok=True)
+                self._init_schema()
+                self._initialized = True
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(
@@ -50,6 +75,7 @@ class UnifiedStore:
 
     def _get_conn(self) -> sqlite3.Connection:
         """Get a connection for the current thread."""
+        self._ensure_initialized()
         if not hasattr(self, "_local"):
             self._local = threading.local()
         if not hasattr(self._local, "conn") or self._local.conn is None:
@@ -84,8 +110,9 @@ class UnifiedStore:
     # ── Schema ──────────────────────────────────────────────────────
 
     def _init_schema(self) -> None:
-        with self._lock:
-            conn = self._get_conn()
+        # Called from _ensure_initialized which already holds the lock
+        conn = self._connect()
+        try:
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS sessions (
@@ -191,6 +218,8 @@ class UnifiedStore:
                     )
                 """)
                 conn.execute("CREATE INDEX idx_bg_runs_status ON background_runs(status)")
+        finally:
+            conn.close()
 
     def _list_tables(self) -> list[str]:
         cursor = self._get_conn().execute(
@@ -231,6 +260,7 @@ class UnifiedStore:
         return session
 
     def save_session(self, session: dict) -> None:
+        self._ensure_initialized()
         with self._lock:
             data = {
                 "id": session["id"],

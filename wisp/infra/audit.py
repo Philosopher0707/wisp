@@ -33,9 +33,14 @@ class AuditTrail:
 
     def __init__(self, path: Path | None = None):
         self._path = path or Path(os.environ.get("WISP_AUDIT_LOG", str(DEFAULT_AUDIT_PATH)))
-        self._path.parent.mkdir(parents=True, exist_ok=True)
         self._last_hash: str = ""
         self._entry_count: int = 0
+        self._disabled: bool = False
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+        except (PermissionError, OSError):
+            logger.warning("AuditTrail: cannot create directory %s — audit logging disabled", self._path.parent)
+            self._disabled = True
         self._init_state()
 
     def _init_state(self) -> None:
@@ -80,6 +85,8 @@ class AuditTrail:
 
         Returns the entry hash for cross-referencing.
         """
+        if self._disabled:
+            return ""
         entry: dict[str, Any] = {
             "timestamp": time.time(),
             "action": action,
@@ -268,5 +275,33 @@ class ImmutableAuditTrail:
         return [dict(r) for r in rows]
 
 
-# Global singleton for config-level audit
-audit = AuditTrail()
+# ═══════════════════════════════════════════════════════════════════
+# Lazy singleton (avoid import-time side effects in sandboxed/tests)
+# ═══════════════════════════════════════════════════════════════════
+
+_audit_instance: AuditTrail | None = None
+
+
+def get_audit() -> AuditTrail:
+    """Return the singleton AuditTrail, creating it on first use."""
+    global _audit_instance
+    if _audit_instance is None:
+        _audit_instance = AuditTrail()
+    return _audit_instance
+
+
+class _LazyAuditProxy:
+    """Proxy that delays AuditTrail instantiation until first attribute access."""
+
+    def __getattr__(self, name: str):
+        return getattr(get_audit(), name)
+
+    def __setattr__(self, name: str, value) -> None:
+        if name.startswith("__"):
+            super().__setattr__(name, value)
+        else:
+            setattr(get_audit(), name, value)
+
+
+# Public module-level name (backward compatible)
+audit = _LazyAuditProxy()

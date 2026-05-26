@@ -92,7 +92,8 @@ class TestStoreConstruction:
 
     def test_creates_database_file(self, tmp_db):
         from wisp.infra.store import UnifiedStore
-        UnifiedStore(tmp_db)
+        store = UnifiedStore(tmp_db)
+        store._ensure_initialized()  # lazy init on first use
         assert tmp_db.exists()
 
     def test_creates_sessions_table(self, tmp_db):

@@ -28,10 +28,13 @@ Structure:
 import json
 import logging
 import os
+import tempfile
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+
+from wisp.config import WISP_CONFIG_DIR
 
 # ── Write-coalescing state ───────────────────────────────────────────────
 # Every list_all_facts / recall / add_fact used to call _save() synchronously,
@@ -45,11 +48,6 @@ logger = logging.getLogger(__name__)
 
 _SAVE_DEBOUNCE_SECONDS = 2.0
 _MAX_FACTS = 100  # Max total facts before LRU eviction kicks in
-
-from wisp.config import WISP_CONFIG_DIR
-
-
-
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -73,8 +71,20 @@ def _resolve_workspace(workspace: str) -> str:
 
 
 def _get_memory_file() -> Path:
-    WISP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    return WISP_CONFIG_DIR / "memory.json"
+    try:
+        WISP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        # Verify the directory is actually writable — it may exist but be
+        # read-only in sandboxed/CI environments.
+        probe = WISP_CONFIG_DIR / ".write_probe"
+        probe.write_text("")
+        probe.unlink()
+        return WISP_CONFIG_DIR / "memory.json"
+    except (PermissionError, OSError):
+        # Fallback to temp directory when ~/.config/wisp is not writable
+        # (CI, sandboxes, ephemeral containers).
+        fallback = Path(tempfile.gettempdir()) / "wisp_memory" / "memory.json"
+        fallback.parent.mkdir(parents=True, exist_ok=True)
+        return fallback
 
 
 def load_memory() -> dict:

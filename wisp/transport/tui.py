@@ -52,7 +52,7 @@ class TUITransport(Transport):
 
         Posts the event to the TUI's message queue for rendering.
         """
-        if self._app is not None:
+        if self._started and self._app is not None:
             try:
                 # Textual apps can post messages to widgets
                 self._app.post_message(event)
@@ -86,7 +86,7 @@ class TUITransport(Transport):
         WorkspaceScreen. Uses an asyncio.Event to bridge between
         the agent runtime and the TUI event loop.
         """
-        if self._app is not None:
+        if self._started and self._app is not None:
             try:
                 tool_name = tool_call.get("name", "?")
                 args = tool_call.get("arguments", {})

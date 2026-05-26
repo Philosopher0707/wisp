@@ -5,8 +5,7 @@ Clean separation: transport owns the wire protocol, runtime owns the logic.
 """
 
 import pytest
-from dataclasses import dataclass
-from typing import Any, AsyncIterator
+from typing import AsyncIterator
 
 
 # ── Minimal mock runtime for testing ───────────────────────────────
@@ -26,7 +25,7 @@ class _MockRuntime:
             }
         return self.sessions[session_id]
 
-    async def run_turn(self, session: dict, prompt: str) -> AsyncIterator[dict]:
+    async def run_turn(self, session: dict, prompt: str, **kwargs) -> AsyncIterator[dict]:
         self.turns.append((session["id"], prompt))
         yield {"type": "content", "text": f"echo: {prompt}"}
         yield {"type": "done"}
@@ -186,7 +185,7 @@ class TestErrorHandling:
         class _BrokenRuntime:
             async def get_or_create_session(self, **kwargs):
                 return {"id": "s1"}
-            async def run_turn(self, session, prompt):
+            async def run_turn(self, session, prompt, **kwargs):
                 raise RuntimeError("boom")
                 yield  # make it an async generator
 

@@ -204,20 +204,30 @@ class SQLiteRateLimiter:
         return conn
 
     def _init_db(self) -> None:
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS rate_limits (
-                    client_ip TEXT PRIMARY KEY,
-                    timestamps TEXT NOT NULL DEFAULT '[]',
-                    updated_at REAL NOT NULL DEFAULT 0
+        self._disabled: bool = False
+        try:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        except (PermissionError, OSError):
+            logger.warning("SQLiteRateLimiter: cannot create directory %s — rate limiting disabled", self.db_path.parent)
+            self._disabled = True
+            return
+        try:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS rate_limits (
+                        client_ip TEXT PRIMARY KEY,
+                        timestamps TEXT NOT NULL DEFAULT '[]',
+                        updated_at REAL NOT NULL DEFAULT 0
+                    )
+                    """
                 )
-                """
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_rate_updated ON rate_limits(updated_at)"
-            )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_rate_updated ON rate_limits(updated_at)"
+                )
+        except (sqlite3.OperationalError, PermissionError, OSError):
+            logger.warning("SQLiteRateLimiter: cannot initialize DB — rate limiting disabled")
+            self._disabled = True
 
     def _get_timestamps(self, client_ip: str) -> list[float]:
         with self._connect() as conn:
@@ -250,6 +260,8 @@ class SQLiteRateLimiter:
         return [t for t in timestamps if t > cutoff]
 
     def is_allowed(self, client_ip: str) -> bool:
+        if getattr(self, "_disabled", False):
+            return True
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
@@ -290,9 +302,74 @@ class SQLiteRateLimiter:
             raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
 
-# Default rate limiter: 30 requests per 60 seconds
-RATE_LIMITER = SQLiteRateLimiter(
-    db_path=Path.home() / ".config" / "wisp" / "rate_limits.db",
-    max_requests=30,
-    window_seconds=60,
-)
+# ═══════════════════════════════════════════════════════════════════
+# Lazy singletons (avoid import-time side effects in sandboxed/tests)
+# ═══════════════════════════════════════════════════════════════════
+
+_auth_instance: _AuthConfig | None = None
+_rate_limiter_instance: SQLiteRateLimiter | None = None
+
+
+def get_auth() -> _AuthConfig:
+    """Return the singleton _AuthConfig, creating it on first use."""
+    global _auth_instance
+    if _auth_instance is None:
+        _auth_instance = _AuthConfig()
+    return _auth_instance
+
+
+def get_rate_limiter() -> SQLiteRateLimiter:
+    """Return the singleton SQLiteRateLimiter, creating it on first use."""
+    global _rate_limiter_instance
+    if _rate_limiter_instance is None:
+        _rate_limiter_instance = SQLiteRateLimiter(
+            db_path=Path.home() / ".config" / "wisp" / "rate_limits.db",
+            max_requests=30,
+            window_seconds=60,
+        )
+    return _rate_limiter_instance
+
+
+class _LazyAuthProxy:
+    """Proxy that delays _AuthConfig instantiation until first attribute access."""
+
+    def __getattr__(self, name: str):
+        return getattr(get_auth(), name)
+
+    def __setattr__(self, name: str, value) -> None:
+        if name.startswith("__"):
+            super().__setattr__(name, value)
+        else:
+            setattr(get_auth(), name, value)
+
+    def __delattr__(self, name: str) -> None:
+        if name.startswith("__"):
+            super().__delattr__(name)
+        else:
+            delattr(get_auth(), name)
+
+
+class _LazyRateLimiterProxy:
+    """Proxy that delays SQLiteRateLimiter instantiation until first call."""
+
+    async def __call__(self, request: Request) -> None:
+        return await get_rate_limiter()(request)
+
+
+# Public module-level names (backward compatible)
+_auth = _LazyAuthProxy()
+RATE_LIMITER = _LazyRateLimiterProxy()
+
+# Lazy exports for API_KEY compatibility
+API_KEY = _auth
+
+
+class _APIKeyStr:
+    def __str__(self):
+        return get_auth().key
+
+    def __repr__(self):
+        return repr(get_auth().key)
+
+
+API_KEY_STR = _APIKeyStr()

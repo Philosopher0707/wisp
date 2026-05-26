@@ -261,14 +261,16 @@ class SubagentOrchestrator:
     ):
         self.parent = parent_agent
         self.config = config or (getattr(parent_agent, "config", None) if parent_agent else WispConfig())
-        _ws = (
+        _explicit_ws = (
             workspace
             or (Path(self.config.workspace).resolve() if self.config.workspace else None)
-            or Path.cwd().resolve()
         )
+        _ws = _explicit_ws or Path.cwd().resolve()
         self.workspace = Path(_ws).resolve() if not isinstance(_ws, Path) else _ws.resolve()
+        self._explicit_workspace = _explicit_ws is not None
 
         # Resolve workspace to git root so worktree creation always works.
+        # Only resolve when workspace was not explicitly provided.
         # If cwd isn't a git repo, walk up to find one — covers the case
         # where REPL starts from home dir but project is in a subdirectory.
         self._resolve_git_root()
@@ -309,6 +311,9 @@ class SubagentOrchestrator:
         Covers the case where REPL starts from ~ but user navigated
         to a project directory inside the session.
         """
+        if self._explicit_workspace:
+            return
+
         import subprocess
 
         for candidate in [self.workspace, Path.cwd().resolve()]:
@@ -755,7 +760,6 @@ class SubagentOrchestrator:
 
     def _default_system_prompt(self, contract: SubagentContract) -> str:
         """Build a concise default system prompt when none is provided."""
-        from .roles import AgentRole
 
         role_cfg = ROLE_CONFIGS.get(contract.role)
         if role_cfg:
