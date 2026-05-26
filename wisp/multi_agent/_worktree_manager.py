@@ -19,9 +19,40 @@ class WorktreeManager:
     def __init__(self, workspace: Path):
         self.workspace = workspace
         self._worktrees_root = workspace / ".wisp" / "worktrees"
+        self._git_available: bool | None = None
+
+    async def _check_git_repo(self) -> bool:
+        """Verify workspace is inside a git repository."""
+        if self._git_available is not None:
+            return self._git_available
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git", "rev-parse", "--show-toplevel",
+                cwd=str(self.workspace),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode == 0:
+                self._git_available = True
+            else:
+                logger.warning(
+                    "Workspace %s is not a git repository — worktree isolation disabled",
+                    self.workspace,
+                )
+                self._git_available = False
+        except Exception:
+            self._git_available = False
+        return self._git_available
 
     async def create(self, agent_name: str) -> Path:
         """Create an isolated git worktree."""
+        if not await self._check_git_repo():
+            raise RuntimeError(
+                f"Workspace {self.workspace} is not a git repository — "
+                "cannot create worktree for isolated subagent execution"
+            )
+
         self._worktrees_root.mkdir(parents=True, exist_ok=True)
 
         short_id = uuid.uuid4().hex[:8]
