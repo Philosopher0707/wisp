@@ -42,34 +42,8 @@ def cmd_repl(model=None, skill=None, workspace=None, session_id=None, show_think
              session_id=session_id, show_thinking=show_thinking, auto_approve=auto_approve)
 
 
-def cmd_tui(model=None, workspace=None, show_thinking=False, auto_approve=False, use_ink=False):
+def cmd_tui(model=None, workspace=None, show_thinking=False, auto_approve=False):
     """Run the experimental full-screen terminal app."""
-    if use_ink:
-        import subprocess
-        import os
-
-        wisp_tui_dir = os.path.join(os.path.dirname(__file__), '..', 'wisp-tui')
-        mjs_path = os.path.join(wisp_tui_dir, 'dist', 'wisp-tui.mjs')
-        if not os.path.exists(mjs_path):
-            print(error("✗ React TUI not built. Run: cd wisp-tui && npm run build"))
-            return
-        env = os.environ.copy()
-        if model:
-            # The React TUI doesn't take model directly, but server URL includes it
-            pass
-        if workspace:
-            env['WISP_WORKSPACE'] = workspace
-        server_url = env.get('WISP_SERVER', 'http://localhost:8000')
-        try:
-            subprocess.run(['node', mjs_path, '--server', server_url], env=env, check=True)
-        except FileNotFoundError:
-            print(error("✗ Node.js not found. Install Node.js to use the React TUI."))
-        except KeyboardInterrupt:
-            pass  # Ctrl+C is the normal way to exit the TUI
-        except subprocess.CalledProcessError:
-            # Non-zero exit from node — usually a real error was already printed
-            pass
-        return
 
     config = WispConfig()
     if model:
@@ -876,13 +850,12 @@ def main():
     flags_show_thinking = False
     flags_print = None
     flags_output_format = "json"
-    flags_ink = False
     flags_quiet = False
 
     def extract_global_flags(args):
         """Extract global flags from args list, return remaining args."""
         nonlocal flags_model, flags_skill, flags_session, flags_workspace, flags_auto, flags_show_thinking
-        nonlocal flags_ink, flags_print, flags_output_format, flags_quiet
+        nonlocal flags_print, flags_output_format, flags_quiet
         result = []
         i = 0
         while i < len(args):
@@ -911,9 +884,6 @@ def main():
             elif a == "--output-format" and i + 1 < len(args):
                 flags_output_format = args[i + 1].lower()
                 i += 2
-            elif a == "--ink":
-                flags_ink = True
-                i += 1
             elif a == "--quiet":
                 flags_quiet = True
                 i += 1
@@ -935,7 +905,7 @@ def main():
             cmd_repl(flags_model, flags_skill, flags_workspace, flags_session, flags_show_thinking, flags_auto)
 
         elif first == "tui":
-            cmd_tui(flags_model, flags_workspace, flags_show_thinking, flags_auto, flags_ink)
+            cmd_tui(flags_model, flags_workspace, flags_show_thinking, flags_auto)
 
         elif first == "session":
             if not rest:

@@ -78,3 +78,16 @@ class TestConfigFile:
         save_config({"model": "saved-model"})
         loaded = load_config()
         assert loaded["model"] == "saved-model"
+
+
+class TestPermissionMode:
+    """PermissionMode must be a single canonical enum — not duplicated."""
+
+    def test_single_source_of_truth(self):
+        from wisp.config import PermissionMode as CfgPM
+        from wisp.infra.security import PermissionMode as SecPM
+        assert CfgPM is SecPM, "PermissionMode is duplicated across modules"
+
+    def test_all_members_present(self):
+        from wisp.config import PermissionMode
+        assert {m.value for m in PermissionMode} == {"full", "ask_all", "auto_edit", "read_only"}

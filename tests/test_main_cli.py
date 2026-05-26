@@ -286,3 +286,20 @@ class TestCmdMcp:
             mock_add.return_value = None
             main_mod.cmd_mcp(["add", "test-server", "python", "-m", "test"])
         mock_add.assert_called_once()
+
+
+import inspect
+
+
+class TestCmdTui:
+    """cmd_tui must have a single code path — no React/Ink bifurcation."""
+
+    def test_no_use_ink_parameter(self):
+        import inspect
+        sig = inspect.signature(main_mod.cmd_tui)
+        assert "use_ink" not in sig.parameters, "cmd_tui should not expose use_ink"
+
+    def test_no_react_path_in_body(self):
+        src = inspect.getsource(main_mod.cmd_tui)
+        assert "subprocess.run" not in src, "cmd_tui contains legacy React/Ink subprocess path"
+        assert "wisp-tui.mjs" not in src, "cmd_tui references legacy wisp-tui.mjs"

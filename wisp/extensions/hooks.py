@@ -16,15 +16,16 @@ class HookExtension:
 
     name = "hooks"
 
-    def __init__(self, config_dir: str | None = None, manager=None):
+    def __init__(self, config_dir: str | None = None, manager=None, intercept_manager=None):
         self._config_dir = config_dir
-        self._manager = manager  # can be injected for shared instance
+        # intercept_manager takes precedence; manager is kept for backward compat
+        self._manager = intercept_manager or manager
 
     def start(self) -> None:
         """Start the hook extension — load project hooks."""
-        from wisp.infra.hook_types import HookManager
+        from wisp.infra.hook_types import InterceptHookManager
         if self._manager is None:
-            self._manager = HookManager(config_dir=self._config_dir)
+            self._manager = InterceptHookManager(config_dir=self._config_dir)
         self._manager.load_hooks()
         logger.debug("HookExtension started")
 

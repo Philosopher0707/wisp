@@ -198,3 +198,56 @@ class TestTelemetryIntegration:
         metrics = runtime.telemetry.metrics()
         assert metrics["turns_total"] == 1
         assert metrics["turn_latency_ms_avg"] >= 0
+
+
+class TestConfigFingerprint:
+    """AgentRuntime must invalidate its core cache when config changes."""
+
+    @pytest.mark.asyncio
+    async def test_core_cache_invalidated_on_model_change(self, tmp_store):
+        from wisp.core.runtime import AgentRuntime
+        from wisp.infra.security import SecurityPolicy, PermissionMode
+        from wisp.infra.extensions import ExtensionHost
+        from wisp.infra.telemetry import Telemetry
+        from wisp.config import WispConfig
+
+        config = WispConfig()
+        config.model = "model-a"
+
+        rt = AgentRuntime(
+            store=tmp_store,
+            security=SecurityPolicy(permission_mode=PermissionMode.FULL),
+            extensions=ExtensionHost(),
+            telemetry=Telemetry(),
+            config=config,
+            core_factory=lambda: _MockCore(),
+        )
+
+        core1 = rt._get_core()
+        config.model = "model-b"
+        core2 = rt._get_core()
+        assert core1 is not core2, "core cache should invalidate when config model changes"
+
+    @pytest.mark.asyncio
+    async def test_core_cache_reused_when_config_unchanged(self, tmp_store):
+        from wisp.core.runtime import AgentRuntime
+        from wisp.infra.security import SecurityPolicy, PermissionMode
+        from wisp.infra.extensions import ExtensionHost
+        from wisp.infra.telemetry import Telemetry
+        from wisp.config import WispConfig
+
+        config = WispConfig()
+        config.model = "model-a"
+
+        rt = AgentRuntime(
+            store=tmp_store,
+            security=SecurityPolicy(permission_mode=PermissionMode.FULL),
+            extensions=ExtensionHost(),
+            telemetry=Telemetry(),
+            config=config,
+            core_factory=lambda: _MockCore(),
+        )
+
+        core1 = rt._get_core()
+        core2 = rt._get_core()
+        assert core1 is core2, "core cache should be reused when config is unchanged"

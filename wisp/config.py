@@ -4,24 +4,15 @@ Settings are resolved with priority: env vars > config file > defaults.
 Config file is stored at ~/.config/wisp/config.json.
 """
 
+import hashlib
 import os
 import json
 import logging
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Optional
+from wisp.infra.security import PermissionMode
 
-
-class PermissionMode(StrEnum):
-    """Permission levels for tool execution — enforced by ToolExecutor."""
-    FULL = "full"
-    """All tools allowed, no restrictions."""
-    ASK_ALL = "ask_all"
-    """Safe reads auto-approved; writes, edits, and bash require user approval."""
-    AUTO_EDIT = "auto_edit"
-    """File edits and writes auto-approved; bash and git writes require approval."""
-    READ_ONLY = "read_only"
-    """Only safe reads allowed; all write/edit/bash operations are blocked."""
 
 logger = logging.getLogger(__name__)
 
@@ -579,6 +570,25 @@ class WispConfig:
             errors.append("model: cannot be empty")
 
         return errors
+
+
+    def fingerprint(self) -> str:
+        """Return a stable hash of config fields that affect core behavior.
+
+        Changing any of these fields should invalidate the core cache
+        because they affect system prompts, tool schemas, or provider.
+        """
+        parts = [
+            str(self.provider),
+            str(self.model),
+            str(self.temperature),
+            str(self.ollama_url),
+            str(self.permission_mode.value if hasattr(self.permission_mode, "value") else self.permission_mode),
+            str(self.show_thinking),
+            str(self.workspace or ""),
+        ]
+        data = "|".join(parts)
+        return hashlib.sha256(data.encode("utf-8")).hexdigest()[:16]
 
     def __repr__(self):
         return (

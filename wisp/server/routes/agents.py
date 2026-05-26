@@ -126,6 +126,8 @@ async def agent_websocket(websocket: WebSocket):
             if msg_type == "tool_approval":
                 call_id = msg.get("id")
                 approved = msg.get("approved", False)
+                if transport is not None:
+                    transport.resolve_approval(approved)
                 await websocket.send_json({"type": "tool_approved", "id": call_id, "approved": approved})
                 continue
 

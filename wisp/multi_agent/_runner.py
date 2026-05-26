@@ -47,12 +47,14 @@ class SubagentRunner:
         workspace: Path,
         store: UnifiedStore | None = None,
         tool_executor: Any | None = None,
+        agent_runtime: Any | None = None,
     ):
         self.parent_config = parent_config
         self.workspace = workspace
         default_db = Path(workspace) / ".wisp" / "wisp.db"
         self._store = store or UnifiedStore(default_db)
         self._tool_executor = tool_executor
+        self._agent_runtime = agent_runtime
 
     async def run(
         self,
@@ -80,16 +82,28 @@ class SubagentRunner:
         from datetime import datetime, timezone
         session_id = f"sess-{uuid.uuid4().hex[:12]}"
         now = datetime.now(timezone.utc).isoformat()
-        session = {
-            "id": session_id,
-            "model": child_cfg.model,
-            "workspace": agent_workspace,
-            "messages": [{"role": "user", "content": contract.task}],
-            "compaction_history": [],
-            "created_at": now,
-            "updated_at": now,
-            "title": f"[sub] {contract.name}",
-        }
+        if self._agent_runtime is not None:
+            session = {
+                "id": session_id,
+                "model": child_cfg.model,
+                "workspace": agent_workspace,
+                "messages": [],
+                "compaction_history": [],
+                "created_at": now,
+                "updated_at": now,
+                "title": f"[sub] {contract.name}",
+            }
+        else:
+            session = {
+                "id": session_id,
+                "model": child_cfg.model,
+                "workspace": agent_workspace,
+                "messages": [{"role": "user", "content": contract.task}],
+                "compaction_history": [],
+                "created_at": now,
+                "updated_at": now,
+                "title": f"[sub] {contract.name}",
+            }
         self._store.create_session(session_id, child_cfg.model, agent_workspace, title=f"[sub] {contract.name}")
 
         # Emit start event
@@ -229,6 +243,11 @@ class SubagentRunner:
         Uses the new engine (wisp.core.engine) instead of the deprecated
         stateful core (wisp.core.agent).
         """
+        # Route through AgentRuntime when available (Issue 2)
+        if self._agent_runtime is not None:
+            return await self._run_via_runtime(
+                contract, config, session, system_prompt, workspace_path, tool_calls_log, deadline
+            )
         from wisp.core.engine import WispAgentCore as StatelessCore
         from wisp.providers.factory import ProviderFactory
         from wisp.infra.security import SecurityPolicy
@@ -319,6 +338,70 @@ class SubagentRunner:
             "files_changed": files_changed,
             "iterations_used": engine_iterations,
             "messages": session_dict.get("messages", []),
+        }
+
+
+    async def _run_via_runtime(
+        self,
+        contract: SubagentContract,
+        config: WispConfig,
+        session: Session,
+        system_prompt: str,
+        workspace_path: str,
+        tool_calls_log: list[dict],
+        deadline: float,
+    ) -> dict:
+        """Route subagent execution through AgentRuntime instead of bypassing."""
+        session_dict = dict(session)
+        if system_prompt:
+            session_dict["messages"] = [{"role": "system", "content": system_prompt}]
+        else:
+            session_dict["messages"] = []
+
+        # Ensure session exists in runtime store
+        sid = session_dict.get("id", "")
+        model = session_dict.get("model", "")
+        ws = session_dict.get("workspace", "")
+        runtime_session = await self._agent_runtime.get_or_create_session(sid, model, ws)
+        runtime_session["messages"] = list(session_dict["messages"])
+
+        output_text = ""
+        engine_iterations = 0
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise asyncio.TimeoutError("contract deadline reached")
+
+        async with asyncio.timeout(remaining):
+            async for event in self._agent_runtime.run_turn(runtime_session, contract.task):
+                etype = event.get("type")
+                if etype == "content":
+                    output_text = event.get("text", "")
+                elif etype == "tool_call":
+                    engine_iterations += 1
+                    name = event.get("name", "")
+                    args = event.get("arguments", {})
+                    arg_preview = self._compact_args(args)
+                    tool_calls_log.append({"name": name, "args_preview": arg_preview})
+                elif etype == "error":
+                    output_text = event.get("message", "")
+                    return {
+                        "success": False,
+                        "output": output_text,
+                        "error": output_text,
+                        "files_changed": [],
+                        "iterations_used": engine_iterations,
+                        "messages": runtime_session.get("messages", []),
+                    }
+
+        files_changed = self._extract_files_changed(output_text)
+        return {
+            "success": True,
+            "output": output_text,
+            "error": None,
+            "files_changed": files_changed,
+            "iterations_used": engine_iterations,
+            "messages": runtime_session.get("messages", []),
         }
 
     def _build_child_config(self, contract: SubagentContract, workspace: str) -> WispConfig:

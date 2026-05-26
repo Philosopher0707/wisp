@@ -164,3 +164,38 @@ class TestExtensionHostIntegration:
         host.stop()
         mock_ext1.stop.assert_called_once()
         mock_ext2.stop.assert_called_once()
+
+
+class TestHookManagerSeparation:
+    """Issue 9: HookManager split into InterceptHookManager and ToolHookManager."""
+
+    def test_intercept_hook_manager_exists(self):
+        from wisp.infra.hook_types import InterceptHookManager
+        assert InterceptHookManager is not None
+
+    def test_tool_hook_manager_exists(self):
+        from wisp.infra.hook_types import ToolHookManager
+        assert ToolHookManager is not None
+
+    def test_intercept_hook_manager_run_hooks_evaluates_matching_hooks(self):
+        from wisp.infra.hook_types import InterceptHookManager, HookEvent, HookConfig
+        mgr = InterceptHookManager()
+        mgr.register(HookConfig(name="blocker", event=HookEvent.TOOL_CALL, command="exit 2", enabled=True))
+        event = HookEvent(HookEvent.TOOL_CALL, name="bash", args={"cmd": "ls"})
+        result = mgr.run_hooks(event)
+        assert result.decision == "block"
+
+    def test_tool_hook_manager_run_hooks_returns_list(self):
+        from wisp.infra.hook_types import ToolHookManager, HookEvent, HookConfig
+        mgr = ToolHookManager()
+        mgr.register(HookConfig(name="pre", event=HookEvent.PRE_TOOL_USE, command="exit 0", enabled=True))
+        results = mgr.run_hooks(HookEvent.PRE_TOOL_USE, {"tool_name": "bash"})
+        assert isinstance(results, list)
+        assert len(results) == 1
+        assert results[0].decision == "allow"
+
+    def test_intercept_and_tool_managers_are_distinct_instances(self):
+        from wisp.infra.hook_types import InterceptHookManager, ToolHookManager
+        i = InterceptHookManager()
+        t = ToolHookManager()
+        assert i is not t

@@ -140,3 +140,57 @@ class TestCompositionErrors:
         from wisp.composition import CompositionRoot
         with pytest.raises(TypeError):
             CompositionRoot(None)
+
+
+class TestTwoPhaseElimination:
+    """CompositionRoot must wire dependencies at construction time,
+    not via post-hoc private-attribute patching."""
+
+    def test_no_private_runner_patching(self, config):
+        import inspect
+        from wisp.composition import CompositionRoot
+        src = inspect.getsource(CompositionRoot.__post_init__)
+        assert "_runner._tool_executor" not in src, (
+            "CompositionRoot patches private _runner._tool_executor; "
+            "use constructor injection instead"
+        )
+
+    def test_orchestrator_receives_tool_executor_at_construction(self, config):
+        from wisp.composition import CompositionRoot
+        root = CompositionRoot(config)
+        assert root.subagent_orchestrator._runner._tool_executor is root.tool_executor
+
+
+class TestHookManagerSeparation:
+    """Issue 9: CompositionRoot wires separate InterceptHookManager and ToolHookManager."""
+
+    def test_composition_creates_separate_hook_managers(self, config):
+        from wisp.composition import CompositionRoot
+        from wisp.infra.hook_types import InterceptHookManager, ToolHookManager
+        root = CompositionRoot(config)
+        assert isinstance(root._intercept_hook_manager, InterceptHookManager)
+        assert isinstance(root._tool_hook_manager, ToolHookManager)
+        assert root._intercept_hook_manager is not root._tool_hook_manager
+
+    def test_hook_extension_uses_intercept_manager(self, config):
+        from wisp.composition import CompositionRoot
+        from wisp.extensions.hooks import HookExtension
+        from wisp.infra.hook_types import InterceptHookManager
+        root = CompositionRoot(config)
+        for ext in root.extensions._extensions:
+            if isinstance(ext, HookExtension):
+                assert isinstance(ext._manager, InterceptHookManager)
+                return
+        pytest.fail("HookExtension not found in CompositionRoot")
+
+    def test_tool_executor_uses_tool_hook_manager(self, config):
+        from wisp.composition import CompositionRoot
+        from wisp.infra.hook_types import ToolHookManager
+        root = CompositionRoot(config)
+        assert isinstance(root.tool_executor.hook_manager, ToolHookManager)
+
+    def test_subagent_orchestrator_uses_tool_hook_manager(self, config):
+        from wisp.composition import CompositionRoot
+        from wisp.infra.hook_types import ToolHookManager
+        root = CompositionRoot(config)
+        assert isinstance(root.subagent_orchestrator.hook_manager, ToolHookManager)

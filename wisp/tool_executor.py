@@ -23,7 +23,8 @@ import traceback
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
-from wisp.config import WispConfig, PermissionMode
+from wisp.config import WispConfig
+from wisp.infra.security import PermissionMode
 from wisp.core.events import (
     AgentEvent,
     TYPE_TOOL_RESULT,
@@ -110,6 +111,7 @@ class ToolExecutor:
         file_lock: Any | None = None,
         lsp_manager: Any | None = None,
         subagent_orchestrator: Any | None = None,
+        audit_trail: Any | None = None,
     ):
         self.config = config
         self.hook_manager = hook_manager
@@ -118,6 +120,7 @@ class ToolExecutor:
         self.file_lock = file_lock
         self.lsp_manager = lsp_manager
         self.subagent_orchestrator = subagent_orchestrator
+        self.audit_trail = audit_trail
 
     # ── Public API ───────────────────────────────────────────────────
 
@@ -213,7 +216,10 @@ class ToolExecutor:
             except Exception:
                 mode = "auto_edit"
             try:
-                audit = AuditLog(Path(workspace).resolve() / ".wisp" / "audit.jsonl")
+                if self.audit_trail is not None:
+                    audit = AuditLog(store=self.audit_trail._store)
+                else:
+                    audit = AuditLog(Path(workspace).resolve() / ".wisp" / "audit.jsonl")
                 if was_auto_approved:
                     audit.log_auto_approved(
                         func_name, func_args, workspace, result, duration_ms,

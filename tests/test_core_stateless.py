@@ -234,3 +234,16 @@ class _BlockingExtension:
         if event.get("type") == "tool_call" and event.get("name") == "run_bash":
             return {"action": "block", "reason": "blocked by extension"}
         return {"action": "allow"}
+
+
+class TestModuleLocation:
+    """WispAgentCore lives in wisp.core.stateless to break circular imports."""
+
+    def test_can_import_from_stateless_module(self):
+        from wisp.core.stateless import WispAgentCore
+        assert WispAgentCore is not None
+
+    def test_engine_reexports_for_backward_compat(self):
+        from wisp.core.engine import WispAgentCore as EngineCore
+        from wisp.core.stateless import WispAgentCore as StatelessCore
+        assert EngineCore is StatelessCore

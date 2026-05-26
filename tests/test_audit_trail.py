@@ -145,3 +145,70 @@ class TestAuditLogUnit:
         for line in lines:
             assert json.loads(line)["arg_summary"]["path"].startswith("t")
 
+
+
+# ── 2. Consolidated audit trail tests ───────────────────────────────────
+
+class TestConsolidatedAuditTrail:
+    """AuditLog delegates to ImmutableAuditTrail when a store is provided."""
+
+    def test_audit_log_delegates_to_sqlite_when_store_given(self, tmp_path):
+        from wisp.infra.store import UnifiedStore
+        from wisp.infra.audit import ImmutableAuditTrail
+
+        store = UnifiedStore(tmp_path / "test.db")
+        audit = AuditLog(store=store)
+        audit.log_auto_approved(
+            func_name="write_file",
+            func_args={"path": "test.md", "content": "hello"},
+            workspace=str(tmp_path),
+            result='{"status": "ok", "path": "test.md"}',
+            duration_ms=42.5,
+            mode="full",
+            forced=False,
+        )
+
+        trail = ImmutableAuditTrail(store)
+        entries = trail.entries()
+        assert len(entries) >= 1
+        last = entries[0]
+        assert last["tool_name"] == "write_file"
+        assert last["workspace"] == str(tmp_path)
+        assert last["allowed"] == 1
+
+    def test_blocked_entry_delegates_to_sqlite(self, tmp_path):
+        from wisp.infra.store import UnifiedStore
+        from wisp.infra.audit import ImmutableAuditTrail
+
+        store = UnifiedStore(tmp_path / "test.db")
+        audit = AuditLog(store=store)
+        audit.log_blocked(
+            func_name="run_bash",
+            func_args={"command": "rm -rf /"},
+            workspace=str(tmp_path),
+            reason="Dangerous command blocked",
+            mode="auto_edit",
+        )
+
+        trail = ImmutableAuditTrail(store)
+        entries = trail.entries()
+        assert len(entries) >= 1
+        last = entries[0]
+        assert last["tool_name"] == "run_bash"
+        assert last["allowed"] == 0
+        assert "Dangerous command blocked" in last["reason"]
+
+    def test_tool_executor_wires_audit_trail(self, tmp_path):
+        """ToolExecutor passes audit_trail to AuditLog for consolidated storage."""
+        from wisp.infra.store import UnifiedStore
+        from wisp.infra.audit import ImmutableAuditTrail
+        from wisp.tool_executor import ToolExecutor
+        from wisp.config import WispConfig
+
+        store = UnifiedStore(tmp_path / "test.db")
+        trail = ImmutableAuditTrail(store)
+        te = ToolExecutor(
+            config=WispConfig(),
+            audit_trail=trail,
+        )
+        assert te.audit_trail is trail

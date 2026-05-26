@@ -449,3 +449,39 @@ class HookManager:
 def build_hook_context(**kwargs) -> dict:
     """Build a context dict for hook execution."""
     return kwargs
+
+
+class InterceptHookManager(HookManager):
+    """HookManager for intercept path (HookExtension).
+
+    Overrides ``run_hooks`` so that a 1-arg call with a HookEvent
+    actually evaluates matching hooks instead of short-circuiting to allow.
+    """
+
+    def run_hooks(self, event, context=None):
+        if context is not None:
+            return super().run_hooks(event, context)
+        # 1-arg path: event is a HookEvent instance
+        event_type = event.event_type if hasattr(event, "event_type") else str(event)
+        tool_name = getattr(event, "name", "")
+        tool_args = getattr(event, "args", {})
+        ctx = {
+            "tool_name": tool_name,
+            "tool_args": tool_args,
+            "event": event_type,
+            "workspace": self.workspace or "",
+        }
+        results = self._run_matching_hooks(event_type, ctx)
+        for r in results:
+            if getattr(r, "is_blocking", False) or getattr(r, "action", "") == "block":
+                return r
+        return results[0] if results else HookResult(decision="allow")
+
+
+class ToolHookManager(HookManager):
+    """HookManager for tool execution path (ToolExecutor).
+
+    Inherits all behaviour from HookManager unchanged; the separate
+    class exists to make the architectural split explicit.
+    """
+    pass

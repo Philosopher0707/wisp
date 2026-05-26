@@ -257,6 +257,7 @@ class SubagentOrchestrator:
         workspace: Optional[Path] = None,
         tool_executor: Any = None,
         hook_manager: Any = None,
+        agent_runtime: Any = None,
     ):
         self.parent = parent_agent
         self.config = config or (getattr(parent_agent, "config", None) if parent_agent else WispConfig())
@@ -283,7 +284,7 @@ class SubagentOrchestrator:
         self._telemetry = Telemetry()
         self._persistence = Persistence(self.workspace / ".wisp" / "subagent_results.jsonl")
         self._worktree_mgr = WorktreeManager(self.workspace)
-        self._runner = SubagentRunner(self.config, self.workspace, tool_executor=tool_executor)
+        self._runner = SubagentRunner(self.config, self.workspace, tool_executor=tool_executor, agent_runtime=agent_runtime)
 
         # Config-driven limits
         self._max_depth = getattr(self.config, "max_subagent_depth", _MAX_SUBAGENT_DEPTH_DEFAULT)

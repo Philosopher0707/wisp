@@ -690,3 +690,58 @@ class TestRunAgentEdgeCases:
 
         assert captured_config._subagent_depth == 3
         assert captured_config._subagent_branch_count == 2
+
+
+class TestAgentRuntimeRouting:
+    """Issue 2: SubagentRunner must route through AgentRuntime instead of bypassing."""
+
+    @pytest.mark.asyncio
+    async def test_runner_accepts_agent_runtime(self, config, contract):
+        """SubagentRunner constructor accepts an agent_runtime parameter."""
+        mock_runtime = MagicMock()
+        runner = SubagentRunner(config, Path("/tmp"), agent_runtime=mock_runtime)
+        assert runner._agent_runtime is mock_runtime
+
+    @pytest.mark.asyncio
+    async def test_run_uses_agent_runtime_when_provided(self, config, contract):
+        """When agent_runtime is provided, _run_agent uses runtime.run_turn instead of creating WispAgentCore."""
+        from dataclasses import dataclass, field
+
+        @dataclass
+        class FakeRuntime:
+            turn_calls: list = field(default_factory=list)
+
+            async def get_or_create_session(self, session_id, model, workspace):
+                return {
+                    "id": session_id,
+                    "model": model,
+                    "workspace": workspace,
+                    "messages": [],
+                    "compaction_history": [],
+                    "created_at": "2024-01-01T00:00:00",
+                    "updated_at": "2024-01-01T00:00:00",
+                }
+
+            async def run_turn(self, session, prompt):
+                self.turn_calls.append((session["id"], prompt))
+                yield {"type": "content", "text": "runtime output"}
+                yield {"type": "done"}
+
+        fake_runtime = FakeRuntime()
+        runner = SubagentRunner(config, Path("/tmp"), agent_runtime=fake_runtime)
+        result = await runner.run(contract, "/tmp", "You are a coder.")
+
+        assert result.success
+        assert "runtime output" in result.output
+        assert len(fake_runtime.turn_calls) == 1
+        assert fake_runtime.turn_calls[0][1] == contract.task
+
+    @pytest.mark.asyncio
+    async def test_run_falls_back_to_core_when_no_runtime(self, config, contract):
+        """When no agent_runtime is provided, runner falls back to direct WispAgentCore creation."""
+        runner = SubagentRunner(config, Path("/tmp"))
+        with patch("wisp.core.engine.WispAgentCore", FakeCore):
+            with patch("wisp.providers.factory.ProviderFactory") as mock_factory:
+                mock_factory.return_value.from_config.return_value = MagicMock()
+                result = await runner.run(contract, "/tmp", "prompt")
+        assert result.success

@@ -1,0 +1,22 @@
+{
+  "name": "wisp-ts",
+  "version": "0.1.0",
+  "description": "TypeScript port of Wisp — local-first coding agent REPL",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "wisp-ts": "dist/bin.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "test": "node --test dist/tests/**/*.test.js",
+    "repl": "node dist/bin.js repl"
+  },
+  "keywords": ["agent", "repl", "llm", "ollama"],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}

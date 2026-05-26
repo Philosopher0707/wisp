@@ -19,6 +19,16 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Deferred import to avoid circular references
+_ImmutableAuditTrail = None
+
+def _get_immutable_audit_trail():
+    global _ImmutableAuditTrail
+    if _ImmutableAuditTrail is None:
+        from wisp.infra.audit import ImmutableAuditTrail
+        _ImmutableAuditTrail = ImmutableAuditTrail
+    return _ImmutableAuditTrail
+
 
 class AuditLog:
     """Thread-safe JSONL audit trail for destructive tool executions.
@@ -26,12 +36,17 @@ class AuditLog:
     One entry per tool call that modifies workspace state (the set of
 tools in ``_WRITE_TOOLS``).  Records the decision path — auto-approved
     when headless, blocked when forbidden, or explicit via approval handler.
+
+    When *store* is provided, writes are delegated to the consolidated
+    ``ImmutableAuditTrail`` (SQLite-backed) instead of a separate JSONL file.
     """
 
-    def __init__(self, audit_path: Path | str):
-        self._path = Path(audit_path)
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.touch(exist_ok=True)
+    def __init__(self, audit_path: Path | str | None = None, *, store: Any = None):
+        self._path = Path(audit_path) if audit_path else None
+        self._store = store
+        if self._path is not None:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            self._path.touch(exist_ok=True)
 
     # ------------------------------------------------------------------
     # Public recording methods
@@ -108,6 +123,37 @@ tools in ``_WRITE_TOOLS``).  Records the decision path — auto-approved
     # ------------------------------------------------------------------
 
     def _append_entry(self, entry: dict) -> None:
+        if self._store is not None:
+            try:
+                trail = _get_immutable_audit_trail()(self._store)
+                # Map AuditLog entry to ImmutableAuditTrail.record_decision
+                allowed = entry["decision"] in ("auto_approved", "approved")
+                reason = entry.get("block_reason", "")
+                if not reason and entry["decision"] == "auto_approved":
+                    reason = f"auto_approved (forced={entry.get('forced', False)}, mode={entry.get('mode', '')})"
+                elif not reason and entry["decision"] == "approved":
+                    reason = f"explicit_approved (mode={entry.get('mode', '')})"
+                args_summary = json.dumps({
+                    "args_keys": entry.get("args_keys", []),
+                    "arg_summary": entry.get("arg_summary", {}),
+                    "duration_ms": entry.get("duration_ms", 0),
+                    "result_status": entry.get("result_status", ""),
+                }, ensure_ascii=False)
+                trail.record_decision(
+                    action=entry.get("tool", ""),
+                    tool_name=entry.get("tool", ""),
+                    workspace=entry.get("workspace", ""),
+                    allowed=allowed,
+                    reason=reason,
+                    args_summary=args_summary,
+                )
+            except Exception:
+                logger.warning("Audit SQLite append failed for %s", entry.get("tool", "?"), exc_info=True)
+            return
+
+        if self._path is None:
+            return
+
         try:
             with open(self._path, "a", encoding="utf-8") as f:
                 fcntl.flock(f, fcntl.LOCK_EX)

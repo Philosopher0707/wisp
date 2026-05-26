@@ -200,3 +200,25 @@ class TestRunChain:
         assert "step-2" in result.output
         # But step-3 still ran
         assert "step-3" in result.output or "ok" in result.output
+
+
+class TestNoNestedEventLoops:
+    """Issue 6: multi-agent code must never use nested event loops or threads."""
+
+    def test_patterns_module_has_no_asyncio_run(self):
+        import inspect
+        import wisp.multi_agent._patterns as mod
+        source = inspect.getsource(mod)
+        assert "asyncio.run(" not in source, "_patterns must not use asyncio.run"
+        assert "asyncio.new_event_loop(" not in source, "_patterns must not create new event loops"
+        assert "run_until_complete(" not in source, "_patterns must not use run_until_complete"
+        assert "threading.Thread" not in source, "_patterns must not spawn threads"
+
+    def test_runner_module_has_no_asyncio_run(self):
+        import inspect
+        import wisp.multi_agent._runner as mod
+        source = inspect.getsource(mod)
+        assert "asyncio.run(" not in source, "_runner must not use asyncio.run"
+        assert "asyncio.new_event_loop(" not in source, "_runner must not create new event loops"
+        assert "run_until_complete(" not in source, "_runner must not use run_until_complete"
+        assert "threading.Thread" not in source, "_runner must not spawn threads"

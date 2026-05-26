@@ -84,18 +84,19 @@ class CompositionRoot:
         from wisp.extensions import PluginExtension, HookExtension, MCPExtension, SkillExtension
         from wisp.mcp import MCPManager
         from wisp.file_lock import FileLock
-        from wisp.infra.hook_types import HookManager
+        from wisp.infra.hook_types import InterceptHookManager, ToolHookManager
         workspace = getattr(self.config, "workspace", ".")
         wsp = Path(workspace).resolve()
 
-        # Create HookManager — shared between HookExtension (intercept) and ToolExecutor (hooks)
-        self._hook_manager = HookManager(workspace=str(workspace))
+        # Create separate hook managers for intercept and tool execution paths
+        self._intercept_hook_manager = InterceptHookManager(workspace=str(workspace))
+        self._tool_hook_manager = ToolHookManager(workspace=str(workspace))
 
         # Create MCPManager — shared between MCPExtension (tools) and ToolExecutor (dispatch)
         self._mcp_manager = MCPManager(str(workspace))
 
         self.extensions.register(PluginExtension())
-        self.extensions.register(HookExtension(manager=self._hook_manager))
+        self.extensions.register(HookExtension(manager=self._intercept_hook_manager))
         self.extensions.register(MCPExtension(workspace=str(workspace), manager=self._mcp_manager))
         self.extensions.register(SkillExtension(workspace=str(workspace)))
 
@@ -112,26 +113,15 @@ class CompositionRoot:
         # Create ToolRegistry (shared state with module-level TOOL_SCHEMAS/TOOL_IMPLS)
         self.tool_registry = ToolRegistry()
 
-        # Create subagent orchestrator (phase 1: without tool_executor)
-        self.subagent_orchestrator = SubagentOrchestrator(
-            config=self.config,
-            workspace=wsp,
-            tool_executor=None,  # will be set in phase 2 below
-            hook_manager=self._hook_manager,
-        )
-
-        # Create ToolExecutor wired with all dependencies
+        # Create ToolExecutor first (subagent_orchestrator wired below)
         self.tool_executor = ToolExecutor(
             config=self.config,
-            hook_manager=self._hook_manager,
+            hook_manager=self._tool_hook_manager,
             mcp=self._mcp_manager,
             file_lock=self._file_lock,
             lsp_manager=self._lsp_manager,
-            subagent_orchestrator=self.subagent_orchestrator,
+            subagent_orchestrator=None,
         )
-
-        # Phase 2: inject tool_executor into orchestrator's runner
-        self.subagent_orchestrator._runner._tool_executor = self.tool_executor
 
         # Create Compactor for LLM-powered summarization
         compaction_model = getattr(self.config, "compaction_model", "") or ""
@@ -141,7 +131,7 @@ class CompositionRoot:
             chars_per_token=getattr(self.config, "chars_per_token", 4),
         )
 
-        # Create runtime with injected dependencies
+        # Create runtime before orchestrator so orchestrator can receive it
         self.runtime = AgentRuntime(
             store=self.store,
             security=self.security,
@@ -149,8 +139,21 @@ class CompositionRoot:
             telemetry=self.telemetry,
             core_factory=self._create_core,
             compactor=self.compactor,
-            orchestrator=self.subagent_orchestrator,
+            orchestrator=None,
         )
+
+        # Create subagent orchestrator with tool_executor wired at construction time
+        self.subagent_orchestrator = SubagentOrchestrator(
+            config=self.config,
+            workspace=wsp,
+            tool_executor=self.tool_executor,
+            hook_manager=self._tool_hook_manager,
+            agent_runtime=self.runtime,
+        )
+
+        # Wire orchestrator back into runtime and tool_executor for spawn/fanout dispatch
+        self.runtime.orchestrator = self.subagent_orchestrator
+        self.tool_executor.subagent_orchestrator = self.subagent_orchestrator
 
         # Register services for lifecycle management
         self._registry = ServiceRegistry()

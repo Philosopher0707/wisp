@@ -43,8 +43,11 @@ class AgentRuntime:
     compactor: Any = None
     orchestrator: Any = None  # SubagentOrchestrator — set by CompositionRoot
 
+    config: Any = None
+
     # Cached core instance — avoids rebuilding system prompt caches every turn
     _core_cache: Any = field(default=None, repr=False)
+    _core_fingerprint: str | None = field(default=None, repr=False)
     _core_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     # Per-session locks — prevents concurrent turns on same session
@@ -429,10 +432,15 @@ class AgentRuntime:
         """Get cached core instance, creating if needed.
 
         Thread-safe: uses _core_lock to prevent race conditions.
+        Invalidates cache when config fingerprint changes.
         """
         with self._core_lock:
-            if self._core_cache is None:
+            current_fp = None
+            if self.config is not None and hasattr(self.config, "fingerprint"):
+                current_fp = self.config.fingerprint()
+            if self._core_cache is None or self._core_fingerprint != current_fp:
                 self._core_cache = self.core_factory()
+                self._core_fingerprint = current_fp
             return self._core_cache
 
     def get_core_provider(self) -> Any:
