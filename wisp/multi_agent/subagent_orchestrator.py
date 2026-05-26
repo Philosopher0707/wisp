@@ -293,6 +293,7 @@ class SubagentOrchestrator:
         self._pool_size = getattr(self.config, "subagent_pool_size", 4)
         self._active = 0
         self._semaphore = asyncio.Semaphore(self._pool_size)
+        self._patch_lock = asyncio.Lock()  # Serialize patch application to avoid conflicts
 
     # ── Workspace resolution ────────────────────────────────────────────
 
@@ -523,12 +524,13 @@ class SubagentOrchestrator:
                 except Exception as exc:
                     logger.debug("Git file detection failed for %s: %s", worktree_path, exc)
 
-            # Apply patch to parent workspace
+            # Apply patch to parent workspace (serialized to avoid concurrent write conflicts)
             if result.worktree_patch and result.success:
-                try:
-                    result.patch_applied = await self._worktree_mgr.apply_patch(result.worktree_patch)
-                except Exception as exc:
-                    logger.warning("Failed to apply worktree patch for %s: %s", worktree_path, exc)
+                async with self._patch_lock:
+                    try:
+                        result.patch_applied = await self._worktree_mgr.apply_patch(result.worktree_patch)
+                    except Exception as exc:
+                        logger.warning("Failed to apply worktree patch for %s: %s", worktree_path, exc)
 
             if not os.environ.get("WISP_KEEP_WORKTREES", "").lower() == "true":
                 try:
