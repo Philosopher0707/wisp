@@ -648,13 +648,12 @@ Please give me a clear, concise final answer that:
 Write this as a direct report to me, the user. No preamble — just the synthesis.
 """
     try:
-        system = agent._build_system_prompt()
-        # Synthesize on a temporary copy of messages to avoid mutating live state
+        # Inject the synthesis prompt as a temporary user message
         saved_messages = agent.messages
         try:
             agent.messages = list(saved_messages)
             agent.messages.append({"role": "user", "content": prompt})
-            response = agent._run_turn_streaming(system)
+            response = agent._run_turn_streaming()
         finally:
             agent.messages = saved_messages
         content = response.get("message", {}).get("content", "") if isinstance(response.get("message"), dict) else ""

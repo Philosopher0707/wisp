@@ -18,7 +18,6 @@ from wisp.acp_protocol import (
     ToolCallContent,
     ToolResultContent,
 )
-from wisp.agent import WispAgent
 from wisp.config import WispConfig
 from wisp.infra.store import UnifiedStore
 from wisp.tools import execute_tool, ToolError
@@ -27,13 +26,24 @@ logger = logging.getLogger(__name__)
 
 
 class AcpSession:
-    """Wraps a WispAgent for use inside an ACP session."""
+    """Wraps a WispAgentCore for use inside an ACP session.
 
-    def __init__(self, session_id: str, workspace: str, config: WispConfig):
+    Uses CompositionRoot to get a fully-wired core with provider,
+    security, extensions, and tool_executor injected.
+    """
+
+    def __init__(
+        self,
+        session_id: str,
+        workspace: str,
+        config: WispConfig,
+        composition_root: Optional[object] = None,
+    ):
         self.session_id = session_id
         self.workspace = workspace
         self.config = config
-        self.agent: Optional[WispAgent] = None  # Lazy init
+        self._composition_root = composition_root
+        self._core: Optional[object] = None  # Lazy WispAgentCore from CompositionRoot
         self.messages: list[dict] = []
         self.title: str = ""
         self.created_at = _now_iso()
@@ -41,13 +51,34 @@ class AcpSession:
         self.mode: str = "default"
         self._pending_tool_calls: dict[str, ToolCallContent] = {}
         self._waiting_for_tool_result: bool = False
+        self._interrupted: bool = False
+        self._active_skill: Optional[str] = None
 
-    def _ensure_agent(self) -> WispAgent:
-        """Lazy initialization of WispAgent."""
-        if self.agent is None:
-            logger.info("Lazy-init WispAgent for session %s", self.session_id)
-            self.agent = WispAgent(self.config)
-        return self.agent
+    def _ensure_core(self):
+        """Lazy initialization of WispAgentCore via CompositionRoot."""
+        if self._core is not None:
+            return self._core
+
+        if self._composition_root is not None:
+            self._core = self._composition_root._create_core()
+        else:
+            # Fallback: bare core with config only (limited — no provider/tools)
+            from wisp.core.engine import WispAgentCore
+            self._core = WispAgentCore(config=self.config)
+            logger.warning(
+                "AcpSession created without CompositionRoot — "
+                "agent will have no provider or tool_executor"
+            )
+        return self._core
+
+    @property
+    def agent(self):
+        """Backward-compat: returns the underlying core.
+
+        Code that used session.agent to access _interrupted, _active_skill,
+        or client should migrate to session._ensure_core().
+        """
+        return self._ensure_core()
 
     def add_user_message(self, content: str) -> None:
         """Add a user message to the session."""
@@ -81,7 +112,7 @@ class AcpSession:
         if not self.messages:
             return
 
-        # Build session dict for new API
+        # Build session dict
         session_dict = {
             "id": self.session_id,
             "model": getattr(self.config, "model", "unknown"),
@@ -89,72 +120,79 @@ class AcpSession:
             "messages": list(self.messages),
         }
 
-        # Build system prompt
-        system = self._ensure_agent()._build_system_prompt(session_dict)
-
-        # Get the last user message
+        # Get the last user message as prompt
         last_user_msg = self.messages[-1]
         if last_user_msg.get("role") != "user":
             return
 
-        user_content = last_user_msg.get("content", "")
+        prompt = last_user_msg.get("content", "")
 
-        # Run one turn with streaming — suppress stdout to avoid corrupting JSON-RPC
+        # Run one turn via the stateless core
         captured_output = io.StringIO()
         try:
-            with contextlib.redirect_stdout(captured_output):
-                response = self._ensure_agent()._run_turn_streaming(system)
+            from wisp.async_utils import run_sync_coro
 
-            if not response:
+            with contextlib.redirect_stdout(captured_output):
+                core = self._ensure_core()
+                events = run_sync_coro(self._collect_events(core, session_dict, prompt))
+
+            # Process events into content blocks
+            content_parts: list[str] = []
+            thinking_parts: list[str] = []
+            tool_calls: list[dict] = []
+
+            for event in events:
+                etype = event.get("type", "")
+                if etype == "content":
+                    content_parts.append(event.get("text", ""))
+                elif etype == "thinking":
+                    thinking_parts.append(event.get("text", ""))
+                elif etype == "tool_call":
+                    tool_calls.append(event)
+
+            if not events and not content_parts and not thinking_parts and not tool_calls:
                 yield TextContent(text="(No response)")
                 return
 
-            msg = response.get("message", {})
-            content = msg.get("content", "") or ""
-            thinking = msg.get("thinking", "") or ""
-
             # Yield thinking first
-            if thinking:
-                yield ThinkingContent(text=thinking)
+            if thinking_parts:
+                yield ThinkingContent(text="".join(thinking_parts))
 
-            # Parse tool calls from response
-            def _parse_tool_call(response: dict) -> list[dict] | None:
-                msg = response.get("message", {})
-                if not isinstance(msg, dict):
-                    return None
-                tool_calls = msg.get("tool_calls")
-                if tool_calls and isinstance(tool_calls, list):
-                    return tool_calls
-                return None
-
-            tool_calls = _parse_tool_call(response)
-
+            # Yield tool calls
             if tool_calls:
-                # Yield text content if any
-                if content:
-                    yield TextContent(text=content)
+                if content_parts:
+                    yield TextContent(text="".join(content_parts))
 
-                # Yield tool calls
                 for tc in tool_calls:
                     func = tc.get("function", {})
+                    if not func and "name" in tc:
+                        # Already in flat format from core
+                        func = {"name": tc.get("name", ""), "arguments": tc.get("arguments", {})}
                     tool_call = ToolCallContent(
                         id=tc.get("id", str(uuid.uuid4())[:8]),
-                        name=func.get("name", ""),
-                        arguments=func.get("arguments", {}),
+                        name=func.get("name", tc.get("name", "")),
+                        arguments=func.get("arguments", tc.get("arguments", {})),
                     )
                     self._pending_tool_calls[tool_call.id] = tool_call
                     self._waiting_for_tool_result = True
                     yield tool_call
             else:
                 # Just text response
-                if content:
-                    yield TextContent(text=content)
-                # Track in local messages for session persistence
-                self.add_assistant_message(content)
+                text = "".join(content_parts)
+                if text:
+                    yield TextContent(text=text)
+                self.add_assistant_message(text)
 
         except Exception as e:
             logger.exception("Error in agent turn")
             yield TextContent(text=f"Error: {e}")
+
+    async def _collect_events(self, core, session_dict: dict, prompt: str) -> list[dict]:
+        """Collect all events from one core.turn() call."""
+        events: list[dict] = []
+        async for event in core.turn(session_dict, prompt):
+            events.append(event)
+        return events
 
     def execute_tool(self, tool_call_id: str) -> ToolResultContent:
         """Execute a pending tool call and return the result."""
@@ -208,9 +246,9 @@ class AcpSession:
         }
 
     @classmethod
-    def from_session(cls, session: dict, config: WispConfig) -> "AcpSession":
+    def from_session(cls, session: dict, config: WispConfig, composition_root=None) -> "AcpSession":
         """Restore an ACP session from a persistent session dict."""
-        acp = cls(session["id"], session["workspace"], config)
+        acp = cls(session["id"], session["workspace"], config, composition_root=composition_root)
         acp.messages = list(session.get("messages", []))
         acp.title = session.get("title", "Wisp Session")
         acp.created_at = session.get("created_at", _now_iso())
@@ -221,8 +259,9 @@ class AcpSession:
 class AcpSessionManager:
     """Manages multiple ACP sessions with optional disk persistence."""
 
-    def __init__(self, store: UnifiedStore | None = None):
+    def __init__(self, store: UnifiedStore | None = None, composition_root=None):
         self._store = store
+        self._composition_root = composition_root
         self._active: dict[str, AcpSession] = {}
 
     def _get_store(self) -> UnifiedStore:
@@ -233,7 +272,7 @@ class AcpSessionManager:
 
     def create(self, workspace: str, config: WispConfig, title: str = "") -> AcpSession:
         session_id = f"wisp-{uuid.uuid4().hex[:12]}"
-        session = AcpSession(session_id, workspace, config)
+        session = AcpSession(session_id, workspace, config, composition_root=self._composition_root)
         session.title = title or "Wisp Session"
         self._active[session_id] = session
 
@@ -297,7 +336,7 @@ class AcpSessionManager:
         from wisp.config import WispConfig
         config = WispConfig()
         config.workspace = session.workspace
-        acp = AcpSession.from_session(session, config)
+        acp = AcpSession.from_session(session, config, composition_root=self._composition_root)
         self._active[session_id] = acp
         return acp
 

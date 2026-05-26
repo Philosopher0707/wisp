@@ -60,12 +60,65 @@ class WispAgent(WispAgentCore):
         transport.repl(skill_name, session_id)
 
     def _run_turn_streaming(self, system: str) -> dict:
-        """Backward compat: run one turn via core events, return raw response dict.
+        """Sync-over-async wrapper: run one turn via core.turn(), collect events, return response dict.
 
-        No terminal output — used by orchestrator for programmatic access.
-        Delegates directly to the sync core method to avoid thread overhead.
+        Used by AcpSession and /continue for programmatic access without terminal output.
+        Returns dict with 'message' key containing content, thinking, and tool_calls.
         """
-        return super()._run_turn_streaming(system)
+        # Build a session dict from self.messages (backward compat)
+        session_dict: dict = {
+            "id": getattr(self, "agent_id", None) or "default",
+            "model": getattr(self.config, "model", "unknown"),
+            "workspace": getattr(self.config, "workspace", "."),
+            "messages": list(getattr(self, "messages", [])),
+        }
+
+        # Derive prompt from last user message
+        messages = session_dict.get("messages", [])
+        prompt = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                prompt = msg.get("content", "")
+                break
+
+        events = run_sync_coro(self._collect_turn_events(session_dict, prompt))
+
+        # Assemble response dict from collected events
+        content_parts: list[str] = []
+        thinking_parts: list[str] = []
+        tool_calls: list[dict] = []
+
+        for event in events:
+            etype = event.get("type", "")
+            if etype == "content":
+                content_parts.append(event.get("text", ""))
+            elif etype == "thinking":
+                thinking_parts.append(event.get("text", ""))
+            elif etype == "tool_call":
+                tc = {
+                    "id": event.get("id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": event.get("name", ""),
+                        "arguments": event.get("arguments", {}),
+                    },
+                }
+                tool_calls.append(tc)
+
+        message = {"content": "".join(content_parts)}
+        if thinking_parts:
+            message["thinking"] = "".join(thinking_parts)
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+
+        return {"message": message}
+
+    async def _collect_turn_events(self, session_dict: dict, prompt: str) -> list[dict]:
+        """Collect all events from one turn into a list."""
+        events: list[dict] = []
+        async for event in self.turn(session_dict, prompt):
+            events.append(event)
+        return events
 
     def _execute_loop(self, system: str, workspace: str, auto_approve: bool = True):
         """Execute a single turn (used by /continue and programmatic callers).

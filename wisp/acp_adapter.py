@@ -294,10 +294,9 @@ class AcpAdapter:
         if req.key == "model":
             original_value = session.config.model
             session.config.model = req.value
-            session.agent.client.model = req.value
         elif req.key == "skill":
-            original_value = getattr(session.agent, "_active_skill", None)
-            session.agent._active_skill = req.value
+            original_value = getattr(session, "_active_skill", None)
+            session._active_skill = req.value
         elif req.key == "auto_approve":
             original_value = session.config.auto_approve
             session.config.auto_approve = req.value.lower() in ("true", "1", "yes")
@@ -319,7 +318,7 @@ class AcpAdapter:
         session_id = params.get("session_id", "")
         session = self.session_mgr.get(session_id)
         if session:
-            session.agent._interrupted = True
+            session._interrupted = True
         return {"status": "ok"}
 
     # ── Notification Handlers ──────────────────────────────────────────────

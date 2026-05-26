@@ -1,12 +1,12 @@
 """Tests for wisp.acp_session — ACP session management."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 
 from wisp.acp_session import AcpSession, AcpSessionManager
 from wisp.infra.store import UnifiedStore
-from wisp.acp_protocol import TextContent, ToolCallContent, ToolResultContent
+from wisp.acp_protocol import TextContent, ThinkingContent, ToolCallContent, ToolResultContent
 
 
 class TestAcpSession:
@@ -50,16 +50,15 @@ class TestAcpSession:
         session = AcpSession("s1", "/tmp", MagicMock())
         session.add_user_message("hello")
 
-        # Mock the agent's _run_turn_streaming to return a simple response
-        mock_response = {
-            "message": {
-                "content": "Hello!",
-                "thinking": "",
-            }
-        }
-        agent = session._ensure_agent()
-        agent._run_turn_streaming = MagicMock(return_value=mock_response)
-        agent._build_system_prompt = MagicMock(return_value="")
+        # Mock the core's turn() to yield content events
+        mock_core = MagicMock()
+
+        async def fake_turn(session_dict, prompt, approval_handler=None):
+            yield {"type": "content", "text": "Hello!"}
+            yield {"type": "done", "session_id": "s1"}
+
+        mock_core.turn = fake_turn
+        session._core = mock_core
 
         blocks = list(session.run_turn())
         assert len(blocks) == 1
@@ -70,21 +69,79 @@ class TestAcpSession:
         session = AcpSession("s1", "/tmp", MagicMock())
         session.add_user_message("hello")
 
-        mock_response = {
-            "message": {
-                "content": "Hello!",
-                "thinking": "Let me think...",
-            }
-        }
-        agent = session._ensure_agent()
-        agent._run_turn_streaming = MagicMock(return_value=mock_response)
-        agent._build_system_prompt = MagicMock(return_value="")
+        # Mock the core's turn() to yield thinking + content events
+        mock_core = MagicMock()
+
+        async def fake_turn(session_dict, prompt, approval_handler=None):
+            yield {"type": "thinking", "text": "Let me think..."}
+            yield {"type": "content", "text": "Hello!"}
+            yield {"type": "done", "session_id": "s1"}
+
+        mock_core.turn = fake_turn
+        session._core = mock_core
 
         blocks = list(session.run_turn())
         assert len(blocks) == 2
-        from wisp.acp_protocol import ThinkingContent
         assert isinstance(blocks[0], ThinkingContent)
         assert blocks[0].text == "Let me think..."
+        assert isinstance(blocks[1], TextContent)
+        assert blocks[1].text == "Hello!"
+
+    def test_run_turn_with_tool_calls(self):
+        session = AcpSession("s1", "/tmp", MagicMock())
+        session.add_user_message("hello")
+
+        # Mock the core's turn() to yield tool_call events
+        mock_core = MagicMock()
+
+        async def fake_turn(session_dict, prompt, approval_handler=None):
+            yield {"type": "content", "text": "Let me check."}
+            yield {
+                "type": "tool_call",
+                "id": "tc1",
+                "name": "read_file",
+                "arguments": {"path": "test.py"},
+            }
+            yield {"type": "done", "session_id": "s1"}
+
+        mock_core.turn = fake_turn
+        session._core = mock_core
+
+        blocks = list(session.run_turn())
+        # Should yield: TextContent, ToolCallContent
+        assert len(blocks) == 2
+        assert isinstance(blocks[0], TextContent)
+        assert blocks[0].text == "Let me check."
+        assert isinstance(blocks[1], ToolCallContent)
+        assert blocks[1].name == "read_file"
+
+    def test_run_turn_with_composition_root(self):
+        """Test that AcpSession uses CompositionRoot to create core."""
+        mock_root = MagicMock()
+        mock_core = MagicMock()
+
+        async def fake_turn(session_dict, prompt, approval_handler=None):
+            yield {"type": "content", "text": "From composition root"}
+            yield {"type": "done", "session_id": "s1"}
+
+        mock_core.turn = fake_turn
+        mock_root._create_core.return_value = mock_core
+
+        session = AcpSession("s1", "/tmp", MagicMock(), composition_root=mock_root)
+        session.add_user_message("hello")
+
+        blocks = list(session.run_turn())
+        assert mock_root._create_core.called
+        assert len(blocks) == 1
+        assert blocks[0].text == "From composition root"
+
+    def test_ensure_core_without_composition_root_warns(self):
+        """Without CompositionRoot, AcpSession falls back to bare WispAgentCore."""
+        session = AcpSession("s1", "/tmp", MagicMock())
+        core = session._ensure_core()
+        # Should be a WispAgentCore with only config set
+        from wisp.core.engine import WispAgentCore
+        assert isinstance(core, WispAgentCore)
 
     def test_execute_tool_not_found(self):
         session = AcpSession("s1", "/tmp", MagicMock())
@@ -160,3 +217,11 @@ class TestAcpSessionManager:
         cfg = MagicMock(); cfg.model = "llama3"; session = mgr.create("/tmp", cfg)
         loaded = mgr.load(session.session_id)
         assert loaded is session
+
+    def test_create_with_composition_root(self, store):
+        mock_root = MagicMock()
+        mgr = AcpSessionManager(store=store, composition_root=mock_root)
+        cfg = MagicMock(); cfg.model = "llama3"
+        session = mgr.create("/tmp", cfg, title="WithRoot")
+        # Session should have composition_root set
+        assert session._composition_root is mock_root

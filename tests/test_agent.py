@@ -44,12 +44,12 @@ class TestInputLine:
         with patch("wisp.transport.cli.sys.stdin", mock_stdin):
             assert _input_line("➜ ") == "hi � world"
 
-    def test_non_tty_eof_returns_empty(self):
+    def test_non_tty_eof_returns_none(self):
         mock_stdin = MagicMock()
         mock_stdin.isatty.return_value = False
         mock_stdin.buffer.readline.return_value = b""
         with patch("wisp.transport.cli.sys.stdin", mock_stdin):
-            assert _input_line("➜ ") == ""
+            assert _input_line("➜ ") is None
 
 
 # ── _args_preview ─────────────────────────────────────────────────────

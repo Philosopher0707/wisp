@@ -16,11 +16,19 @@ import asyncio
 import datetime
 import json
 import logging
+import re
 import shutil
 import signal
 import sys
 import threading
 from typing import Any, Optional
+
+# Import readline to enable arrow-key/editing support in input().
+# Silently skip on platforms where it's unavailable (e.g. some Docker images).
+try:
+    import readline  # noqa: F401
+except ImportError:
+    pass
 
 from .base import Transport
 from .renderer import (
@@ -54,11 +62,23 @@ def _is_interactive() -> bool:
     return sys.stdin.isatty()
 
 
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\].*?\x07|\x1b[()][AB0DEHM]|[^\x20-\x7e\s]")
+
+
+def _strip_ansi(s: str) -> str:
+    """Remove ANSI escape sequences and non-printable control chars from a string."""
+    return _ANSI_ESCAPE_RE.sub("", s)
+
+
 def _input_line(prompt: str, allow_multiline: bool = True) -> str | None:
-    """Read a line from stdin. Returns None on EOF."""
+    """Read a line from stdin. Returns None on EOF.
+
+    Strips any ANSI escape sequences that leak through when readline
+    is unavailable (e.g. arrow keys emitted as raw ESC sequences).
+    """
     try:
         if sys.stdin.isatty():
-            return input(prompt)
+            return _strip_ansi(input(prompt))
         # Non-tty: read from buffer to handle piped input
         # StringIO (used in tests) doesn't have .buffer — fall back to readline()
         if hasattr(sys.stdin, "buffer"):
@@ -70,7 +90,7 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str | None:
     except EOFError:
         return None
     except UnicodeDecodeError:
-        return None
+        return ""
 
 def _args_preview(args: dict) -> str:
     """Compact preview of tool arguments."""
