@@ -1181,6 +1181,9 @@ def _handle_sigint(signum, frame):
             inst.runtime._interrupted = True
         if hasattr(inst, "core") and hasattr(inst.core, "_interrupted"):
             inst.core._interrupted = True
+        # Stop spinner immediately so it doesn't keep writing frames
+        if inst._spinner is not None:
+            inst._spinner.stop()
     print(error("\n\n⏹  Interrupted. Finishing current step... (Ctrl+C again to force quit)"))
     signal.signal(signal.SIGINT, signal.default_int_handler)
 

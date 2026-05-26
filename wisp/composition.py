@@ -220,10 +220,12 @@ class CompositionRoot:
         except Exception:
             pass
         try:
-            from wisp.async_utils import shutdown_background_loop, _SHARED_EXECUTOR
+            from wisp.async_utils import shutdown_background_loop, get_shared_executor
             shutdown_background_loop(timeout=5.0)
-            if _SHARED_EXECUTOR is not None:
-                _SHARED_EXECUTOR.shutdown(wait=False)
+            executor = get_shared_executor()
+            # Wait for in-flight work to finish (up to 5s) so Python's
+            # atexit doesn't hang trying to join daemon threads.
+            executor.shutdown(wait=True, cancel_futures=True)
         except Exception:
             pass
 
