@@ -1,15 +1,10 @@
 import os
-import pytest
-import asyncio
-import threading
-from fastapi import HTTPException
 
 
 class TestHeadlessAutoApprove:
     """Tests that /api/prompt (headless mode) does not auto-approve by default."""
 
     def test_headless_defaults_to_no_auto_approve(self, monkeypatch):
-        from wisp.server import _run_agent_headless
         from wisp.config import WispConfig
 
         # Ensure env var is NOT set

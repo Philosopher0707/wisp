@@ -279,7 +279,7 @@ class PluginRegistry:
         errors = new_manifest.validate()
         if errors:
             raise ValueError(
-                f"Invalid manifest for upgrade:\n"
+                "Invalid manifest for upgrade:\n"
                 + "\n".join(f"  - {e}" for e in errors)
             )
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from textual.app import App, ComposeResult
+from textual.app import App
 from textual.binding import Binding
 from textual.reactive import reactive
 from textual.widget import Widget

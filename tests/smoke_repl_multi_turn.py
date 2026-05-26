@@ -109,11 +109,11 @@ def test_ctrl_c_during_turn_survives():
     stderr_str = stderr.getvalue()
 
     if "Event loop is closed" in stderr_str:
-        print(f"FAILED: 'Event loop is closed' in stderr", file=sys.stderr)
+        print("FAILED: 'Event loop is closed' in stderr", file=sys.stderr)
         sys.exit(1)
 
     if "RuntimeError" in stderr_str:
-        print(f"FAILED: RuntimeError in stderr", file=sys.stderr)
+        print("FAILED: RuntimeError in stderr", file=sys.stderr)
         sys.exit(1)
 
     if call_count != 2:

@@ -11,7 +11,6 @@ import logging
 import os
 import sys
 import threading
-import time
 from pathlib import Path
 from typing import Optional
 
@@ -20,29 +19,23 @@ from wisp.infra.audit import audit
 from wisp.acp_protocol import (
     AgentCapabilities,
     ConfigSetRequest,
-    ConfigUpdate,
     ErrorCode,
     Implementation,
     InitializeRequest,
     InitializeResponse,
     ListSessionsResponse,
     LoadSessionRequest,
-    Message,
-    ModeUpdate,
     NewSessionRequest,
     NewSessionResponse,
     PermissionRequest,
+    PermissionOption,
     PermissionResponse,
     PromptRequest,
-    SessionInfoUpdate,
     TextContent,
     ThinkingContent,
-    ToolResultContent,
     ToolResultRequest,
-    content_block_to_dict,
     make_error,
     make_notification,
-    make_request,
     make_response,
 )
 from wisp.acp_session import AcpSessionManager
@@ -136,7 +129,7 @@ class AcpAdapter:
         if handler:
             try:
                 handler(params)
-            except Exception as e:
+            except Exception:
                 logger.exception("Error handling notification %s", method)
 
     # ── Method Handlers ──────────────────────────────────────────────────
@@ -380,9 +373,9 @@ class AcpAdapter:
             tool_name=tool_name,
             description=description,
             options=[
-                PermissionRequest.PermissionOption(id="allow", label="Allow"),
-                PermissionRequest.PermissionOption(id="deny", label="Deny"),
-                PermissionRequest.PermissionOption(id="allow_once", label="Allow Once"),
+                PermissionOption(id="allow", label="Allow"),
+                PermissionOption(id="deny", label="Deny"),
+                PermissionOption(id="allow_once", label="Allow Once"),
             ],
         )
         self._send_notification("permission/request", req.to_dict())

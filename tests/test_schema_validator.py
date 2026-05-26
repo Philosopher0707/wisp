@@ -1,11 +1,9 @@
 """Tests for schema validation."""
-import pytest
 from wisp.multi_agent.schema_validator import (
     validate_json_schema,
     validate_subagent_output,
     extract_json_from_markdown,
     build_retry_prompt,
-    SchemaValidationError,
 )
 
 

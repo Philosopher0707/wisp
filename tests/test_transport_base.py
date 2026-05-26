@@ -5,7 +5,6 @@ This decouples the core from any specific transport.
 """
 
 import pytest
-from typing import Any
 
 
 # ═══════════════════════════════════════════════════════════════════

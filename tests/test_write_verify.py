@@ -1,9 +1,7 @@
 """Tests for write-verify pipeline — auto-lint + auto-test on file write."""
 
-import json
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
-from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from wisp.config import WispConfig
 from wisp.tool_executor import ToolExecutor

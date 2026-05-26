@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from wisp.server.deps import verify_api_key
+from wisp.server.routes.workspace import WORKSPACE_ROOT
 
 logger = logging.getLogger(__name__)
 

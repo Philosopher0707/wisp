@@ -33,19 +33,16 @@ except ImportError:
 from .base import Transport
 from .renderer import (
     format_duration as _format_duration,
-    format_arg_value as _format_arg_value,
-    wrap_text as _wrap_text,
     render_tool_call as _render_tool_call,
     render_thinking_block as _render_thinking_block,
     render_content_block as _render_content_block,
-    render_done_reason as _render_done_reason,
     _box,
     _rule,
 )
-from wisp.colors import dim, error, warning, success, info, accent
+from wisp.colors import dim, error, warning, success, info
 from wisp.approval_state import ApprovalSessionState, SessionPolicy
 from wisp.core.events import AgentEvent, EventType
-from wisp.terminal_width import display_width, is_accessible, OutputMode, get_output_mode, wrap_text_wide
+from wisp.terminal_width import display_width, is_accessible, get_output_mode, wrap_text_wide
 from wisp.transport.progress import ProgressTracker
 from wisp.transport.spinner import Spinner
 from wisp.transport.renderer import render_phase_bar, render_turn_stats, render_file_ticker
@@ -1220,19 +1217,19 @@ def _render_event(
         raw = event.text
         if not box_mode:
             return raw
-        return render_content_block(raw, box_mode=True, width=80)
+        return _render_content_block(raw, box_mode=True, width=80)
 
     if etype == EventType.THINKING:
         text = event.text
         if not show_thinking:
             line_count = text.count("\n") + 1
             return dim(f"  🧠 Thinking... ({line_count} lines — /thinking to expand)")
-        return render_thinking_block(text, box_mode=True, width=80)
+        return _render_thinking_block(text, box_mode=True, width=80)
 
     if etype == EventType.TOOL_CALL:
         name = event.data.get("name", "")
         args = event.data.get("arguments", {})
-        return render_tool_call(name, args, box_mode=True)
+        return _render_tool_call(name, args, box_mode=True)
 
     if etype == EventType.TOOL_RESULT:
         name = event.data.get("name", "")

@@ -99,7 +99,6 @@ class TestWebFetchErrors:
 
     def test_successful_fetch_returns_data_without_prefix(self):
         """Successful fetches should NOT have [WEB_FETCH_FAILED] prefix."""
-        from wisp.tools.web import _TextExtractor
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.headers = {"Content-Type": "text/html"}

@@ -5,7 +5,6 @@ Separates content (stdout) from metadata (typed events) for clean I/O handling.
 
 from dataclasses import dataclass
 from typing import Iterator, Literal
-import json
 import hashlib
 
 

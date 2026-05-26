@@ -6,7 +6,6 @@ structured diagnosis with root cause and fix suggestions.
 
 import logging
 
-from wisp.tools._utils import _validate_string
 
 logger = logging.getLogger(__name__)
 

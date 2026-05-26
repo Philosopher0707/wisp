@@ -11,7 +11,6 @@ These tests verify:
 4. The collision guard catches ambiguous NFKC matches
 """
 
-import pytest
 from wisp.diff import (
     normalize_for_fuzzy_match,
     fuzzy_find_text,

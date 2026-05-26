@@ -1,6 +1,5 @@
 """Tests for wisp.error_diagnosis — error classification and diagnosis."""
 
-import pytest
 
 from wisp.error_diagnosis import (
     Diagnosis,

@@ -1,7 +1,6 @@
 """Tests for wisp.transport.server — ServerTransport event serialization."""
 
 import pytest
-import asyncio
 from unittest.mock import AsyncMock
 
 from wisp.transport.server import ServerTransport, PendingApproval

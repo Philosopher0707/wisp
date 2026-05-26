@@ -12,10 +12,11 @@ from typing import Optional
 from wisp.async_utils import run_sync_coro
 
 # Re-export helpers from transport layer for backward compatibility
+
 from wisp.transport.cli import (
-    _is_interactive,
-    _input_line,
-    _args_preview,
+    _is_interactive,  # noqa: F401
+    _input_line,      # noqa: F401
+    _args_preview,    # noqa: F401
 )
 
 from wisp.core.engine import WispAgentCore

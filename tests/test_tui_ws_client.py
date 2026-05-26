@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, call
 
 from wisp.tui.data.ws_client import WispWSClient
 

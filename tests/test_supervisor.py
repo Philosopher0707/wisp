@@ -5,7 +5,6 @@ import pytest
 from wisp.config import WispConfig
 from wisp.core.events import content, done
 from wisp.infra.store import UnifiedStore
-from wisp.runtime_protocol import AppEvent
 from wisp.supervisor import WispSupervisor
 
 

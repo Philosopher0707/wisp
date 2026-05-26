@@ -1,9 +1,8 @@
 """Test that thinking and tool results display correctly in CLI."""
 
 import pytest
-import asyncio
 from io import StringIO
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 
 class FakeProvider:

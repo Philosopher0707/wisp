@@ -3,11 +3,10 @@
 Handles WebSocket agent connections using WebSocketTransport + AgentRuntime.
 """
 
-import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from wisp.server.deps import _auth
 from wisp.transport.websocket import WebSocketTransport

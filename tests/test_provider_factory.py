@@ -4,7 +4,6 @@ Manages provider registration, discovery, and instantiation.
 """
 
 import pytest
-from typing import Any
 
 
 # ═══════════════════════════════════════════════════════════════════

@@ -1,11 +1,9 @@
 """Tests for wisp.git_context — git state extraction."""
 
-import os
 import subprocess
 import tempfile
 from pathlib import Path
 
-import pytest
 
 from wisp.git_context import (
     GitState,

@@ -4,7 +4,7 @@ Tests that old transports can be wrapped to implement Transport ABC.
 """
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 
 class TestCLITransportAdapter:

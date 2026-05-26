@@ -4,7 +4,6 @@ When multiple context sources mention the same file,
 the assembler should not duplicate information.
 """
 
-import pytest
 from wisp.context_assembler import ContextAssembler
 
 

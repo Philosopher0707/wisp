@@ -1,7 +1,6 @@
 """TDD tests for Spinner — terminal inline progress indicator."""
 
 import io
-import pytest
 from wisp.transport.spinner import Spinner
 from wisp.terminal_width import OutputMode
 

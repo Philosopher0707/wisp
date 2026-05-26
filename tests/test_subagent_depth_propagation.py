@@ -9,7 +9,6 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 from wisp.multi_agent import SubagentOrchestrator, SubagentContract
-from wisp.multi_agent.task import SubagentResult
 
 
 class FakeStatelessCore:

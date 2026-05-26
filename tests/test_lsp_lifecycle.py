@@ -12,8 +12,6 @@ never called shutdown_all() before the request ended. After this fix:
 
 import pytest
 from unittest.mock import MagicMock, patch
-import tempfile
-import os
 
 
 class TestGlobalSingleton:

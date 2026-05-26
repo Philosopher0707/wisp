@@ -9,7 +9,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from wisp.server.deps import verify_api_key, RATE_LIMITER
-from wisp.server.routes.workspace import WORKSPACE_ROOT
 from wisp.server.routes.files import _resolve_path
 
 logger = logging.getLogger(__name__)

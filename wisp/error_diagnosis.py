@@ -9,8 +9,6 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +60,7 @@ _ERROR_PATTERNS = {
     },
     "AttributeError": {
         "pattern": re.compile(r"AttributeError:\s*(?:'(\w+)'\s*object has no attribute\s+'(\w+)'|module\s+'(\w+)'\s*has no attribute\s+'(\w+)')"),
-        "suggest": lambda m: f"Check spelling of the attribute or verify the object type. The attribute may have been renamed or removed.",
+        "suggest": lambda m: "Check spelling of the attribute or verify the object type. The attribute may have been renamed or removed.",
         "cause": "Typo or API change",
     },
     "SyntaxError": {
@@ -308,10 +306,10 @@ def diagnose_tool_error(tool_name: str, args: dict, error: str, workspace: str =
 
     # Add tool-specific context
     if tool_name == "edit_file":
-        diag.suggestion += f"\n   The edit_file tool requires old_text to match exactly. Check for whitespace, line endings, or the text may have already been changed."
+        diag.suggestion += "\n   The edit_file tool requires old_text to match exactly. Check for whitespace, line endings, or the text may have already been changed."
         diag.likely_cause += " (edit_file mismatch)"
     elif tool_name == "write_file":
-        diag.suggestion += f"\n   Ensure the directory exists and you have write permissions."
+        diag.suggestion += "\n   Ensure the directory exists and you have write permissions."
     elif tool_name == "run_bash":
         cmd = args.get("command", "")
         if "pytest" in cmd or "python -m pytest" in cmd:

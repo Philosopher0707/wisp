@@ -5,7 +5,6 @@ and ad-hoc audit logging scattered across the codebase.
 """
 
 import pytest
-from dataclasses import dataclass
 from pathlib import Path
 
 

@@ -1,6 +1,5 @@
 """Tests for wisp.semantic_compressor — semantic context compression."""
 
-import pytest
 
 from wisp.semantic_compressor import (
     SemanticCompressor,
@@ -457,7 +456,7 @@ class TestTier3Reachability:
     """Regression: Tier 3 must actually fire when old messages exceed trigger threshold."""
 
     def test_tier3_fires_when_over_trigger(self, monkeypatch):
-        from wisp.semantic_compressor import _llm_summarize, CompressionResult
+        from wisp.semantic_compressor import CompressionResult
 
         def fake_summarize(messages, **kwargs):
             return CompressionResult(
@@ -505,7 +504,7 @@ class TestTier3Reachability:
         assert result.compression_stats["tier3_threshold"] == 500
 
     def test_default_tier3_threshold_is_quarter_of_budget(self, monkeypatch):
-        from wisp.semantic_compressor import _llm_summarize, CompressionResult
+        from wisp.semantic_compressor import CompressionResult
 
         def fake_summarize(messages, **kwargs):
             return CompressionResult(

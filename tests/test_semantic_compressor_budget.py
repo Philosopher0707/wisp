@@ -5,16 +5,13 @@ Existing tests cover deduplication. This tests:
 - Tool results that are shorter than limit pass through unchanged
 """
 
-import pytest
 from wisp.semantic_compressor import (
     SemanticCompressor,
     _classify_message,
     _truncate_tool_result,
     _truncate_assistant_message,
     _apply_truncation,
-    _dedup_tool_results,
     _dedup_exact_duplicates,
-    ConversationGraph,
     MessageNode,
     MessageType,
 )

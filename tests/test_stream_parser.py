@@ -1,7 +1,6 @@
 """Tests for stream_parser.py — NDJSON, SSE, auto-detect, split-line buffering."""
 
 import json
-import pytest
 from wisp.stream_parser import EventStreamParser, parse_stream
 
 

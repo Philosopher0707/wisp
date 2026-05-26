@@ -4,8 +4,6 @@ Run these FIRST. Then after Phase 7.1 completes, these same tests confirm
 consumers pointing at new locations still work.
 """
 
-import pytest
-from pathlib import Path
 
 
 class TestGetStoreMigration:

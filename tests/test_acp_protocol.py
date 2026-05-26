@@ -1,12 +1,10 @@
 """Tests for wisp.acp_protocol — ACP message types and serialization."""
 
-import pytest
 
 from wisp.acp_protocol import (
     AgentCapabilities,
     ClientCapabilities,
     ConfigSetRequest,
-    ConfigUpdate,
     ErrorCode,
     Implementation,
     InitializeRequest,
@@ -16,7 +14,6 @@ from wisp.acp_protocol import (
     Message,
     ModeUpdate,
     NewSessionRequest,
-    NewSessionResponse,
     PermissionOption,
     PermissionRequest,
     PermissionResponse,

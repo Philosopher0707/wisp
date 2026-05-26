@@ -6,7 +6,6 @@ use O_NOFOLLOW to detect the swap and raise ToolError instead of
 silently following the symlink.
 """
 
-import os
 import sys
 from pathlib import Path
 
@@ -17,7 +16,6 @@ from wisp.tools._utils import (
     _safe_read_text,
     _safe_write_text,
     _safe_open_read,
-    _resolve_path,
 )
 
 

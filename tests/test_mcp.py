@@ -1,11 +1,8 @@
 """Tests for MCP client — config discovery, server connection, tool management."""
 
 import json
-from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 from wisp.mcp import (
-    MCPServerConfig,
     MCPTool,
     discover_mcp_configs,
     MCPManager,

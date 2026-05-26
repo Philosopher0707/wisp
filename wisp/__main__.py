@@ -79,7 +79,7 @@ def cmd_skills(workspace=None):
 
 def cmd_config(set_kv=None, validate=False):
     """View or set configuration."""
-    from wisp.config import load_config, save_config, validate_config, get_schema, _type_name
+    from wisp.config import validate_config, get_schema, _type_name
 
     if set_kv:
         key, value = set_kv.split("=", 1)
@@ -539,7 +539,7 @@ def cmd_git(args: list[str]):
 
 def cmd_plan(args: list[str]):
     """Manage structured plans."""
-    from wisp.planner import PlanStore, parse_plan_from_text
+    from wisp.planner import PlanStore
     from wisp.progress import format_progress, list_plans
 
     if not args:

@@ -1,12 +1,10 @@
 """Tests for wisp.agent_memory — session summary persistence."""
 
-import json
 import tempfile
 from pathlib import Path
 
-import pytest
 
-from wisp.agent_memory import AgentMemory, AGENT_MEMORY_DIR, SESSIONS_FILE
+from wisp.agent_memory import AgentMemory, AGENT_MEMORY_DIR
 from wisp.summarizer import SessionSummary
 
 

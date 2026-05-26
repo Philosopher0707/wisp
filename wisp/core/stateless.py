@@ -22,12 +22,11 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
 
 from wisp.core.events import (
     AgentEvent,
-    thinking as thinking_event,
     content as content_event,
-    tool_call as tool_call_event,
     tool_result as tool_result_event,
     error as error_event,
     done as done_event,
+    system,
 )
 from wisp.core.approval_gate import ApprovalGate
 
@@ -37,6 +36,7 @@ if TYPE_CHECKING:
     from wisp.infra.extensions import ExtensionHost
     from wisp.tool_executor import ToolExecutor
     from wisp.config import WispConfig
+    from wisp.context_assembler import ContextAssembler
 
 logger = logging.getLogger(__name__)
 
@@ -334,7 +334,7 @@ class WispAgentCore:
                 ):
                     loop.call_soon_threadsafe(queue.put_nowait, event)
                 loop.call_soon_threadsafe(queue.put_nowait, done)
-            except Exception as exc:
+            except Exception:
                 loop.call_soon_threadsafe(queue.put_nowait, done)
                 raise
 
@@ -782,7 +782,6 @@ class WispAgentCore:
                 yield _flatten_event(agent_event)
         else:
             # Fallback: direct execution when no ToolExecutor wired
-            import json
             from wisp.tools import execute_tool
             start = time.time()
             try:

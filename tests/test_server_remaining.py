@@ -3,7 +3,6 @@
 Tests that migrated routers have actual implementations.
 """
 
-import pytest
 
 
 class TestMCPRouter:

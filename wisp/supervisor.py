@@ -9,10 +9,9 @@ import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
 
 from wisp.config import WISP_CONFIG_DIR
-from wisp.core.events import TYPE_DONE, TYPE_ERROR, AgentEvent
+from wisp.core.events import TYPE_DONE, AgentEvent
 from wisp.runtime_protocol import AppEvent
 from wisp.infra.store import UnifiedStore, get_store
 

@@ -1,7 +1,7 @@
 """Tests for permission_mode enforcement — verifies all four modes block/allow correctly."""
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock
 
 from wisp.config import PermissionMode, WispConfig
 from wisp.tool_executor import ToolExecutor

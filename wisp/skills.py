@@ -175,7 +175,6 @@ def match_skills(query: str, workspace: str, min_score: float = 0.0) -> list[tup
     
     Only skills with score > min_score are returned.
     """
-    import re
     skills = discover_skills(workspace)
     query_lower = query.lower()
     query_words = set(re.findall(r"[a-zA-Z0-9]{2,}", query_lower))

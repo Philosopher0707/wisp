@@ -5,7 +5,7 @@ Clean separation: transport owns the wire protocol, runtime owns the logic.
 """
 
 import pytest
-from typing import Any, AsyncIterator
+from typing import AsyncIterator
 
 
 # ── Minimal mock runtime for testing ───────────────────────────────

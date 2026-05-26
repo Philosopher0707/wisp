@@ -3,9 +3,7 @@
 import json
 import tempfile
 import threading
-import time
 
-import pytest
 
 from wisp.file_lock import FileLock
 

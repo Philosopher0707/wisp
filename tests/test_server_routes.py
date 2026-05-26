@@ -3,8 +3,6 @@
 Tests that extracted routers work correctly.
 """
 
-import pytest
-from typing import Any
 
 
 # ═══════════════════════════════════════════════════════════════════

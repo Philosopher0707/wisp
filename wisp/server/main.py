@@ -79,7 +79,6 @@ app.add_middleware(
 # ── Security Headers Middleware ──
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import Response
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):

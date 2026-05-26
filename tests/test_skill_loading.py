@@ -12,9 +12,8 @@ Covers the full skill loading lifecycle:
 
 import pytest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
-from wisp.skills import parse_skill, discover_skills, find_skill, match_skills, Skill
+from wisp.skills import parse_skill, discover_skills, find_skill, match_skills
 from wisp.commands import cmd_skill
 
 

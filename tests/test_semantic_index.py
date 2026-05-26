@@ -7,13 +7,12 @@ Verifies that:
 4. Performance is reasonable for moderate dataset sizes
 """
 
-import json
 import struct
 
 import numpy as np
 import pytest
 
-from wisp.semantic_index import SemanticIndex, SearchResult
+from wisp.semantic_index import SemanticIndex
 
 
 def _make_embedding(text_seed: str, dim: int = 768) -> list[float]:

@@ -7,7 +7,6 @@ the old API that wisp/commands.py expects.
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from wisp.transport.cli import AgentAdapter
 

@@ -3,7 +3,6 @@
 Tests that all domain routers are properly defined and mountable.
 """
 
-import pytest
 from fastapi import FastAPI
 
 

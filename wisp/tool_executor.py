@@ -27,8 +27,6 @@ from wisp.config import WispConfig
 from wisp.infra.security import PermissionMode
 from wisp.core.events import (
     AgentEvent,
-    TYPE_TOOL_RESULT,
-    TYPE_APPROVAL_REQUEST,
     tool_result as _tool_result_event,
     approval_request as _approval_request_event,
 )

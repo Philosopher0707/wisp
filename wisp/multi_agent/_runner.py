@@ -8,13 +8,13 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import json
 import logging
 import time
 from pathlib import Path
 from typing import Any
 
 from wisp.config import WispConfig
+from wisp.core.session import Session
 from wisp.infra.store import UnifiedStore
 
 from .task import EventKind, OrchestratorEvent, SubagentContract, SubagentResult

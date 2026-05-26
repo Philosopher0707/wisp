@@ -1,6 +1,5 @@
 """Tests for wisp.multi_agent.context_partition."""
 
-import pytest
 from wisp.multi_agent.context_partition import ContextPartitioner, partition_context
 
 

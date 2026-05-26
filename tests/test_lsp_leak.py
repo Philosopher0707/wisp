@@ -9,9 +9,6 @@ Covers:
   6. atexit handler — shutdown_global_lsp_manager is idempotent
 """
 
-import atexit
-import gc
-import os
 import tempfile
 import threading
 from pathlib import Path
@@ -24,7 +21,6 @@ from wisp.lsp.manager import (
     LSPManager,
     get_lsp_manager,
     shutdown_global_lsp_manager,
-    _GLOBAL_LSP_LOCK,
 )
 
 
@@ -184,7 +180,6 @@ class TestServerEndpointUsage:
     ])
     def test_endpoints_use_singleton_source(self, router_file):
         """Read the router source and assert it imports get_lsp_manager."""
-        from pathlib import Path
         router_py = Path(__file__).resolve().parent.parent / router_file
         assert router_py.exists(), f"{router_file} must exist"
         source = router_py.read_text()

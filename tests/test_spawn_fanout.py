@@ -2,12 +2,11 @@
 
 import json
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
-from pathlib import Path
+from unittest.mock import MagicMock, AsyncMock
 
 from wisp.config import WispConfig
 from wisp.tool_executor import ToolExecutor
-from wisp.multi_agent.task import SubagentContract, SubagentResult
+from wisp.multi_agent.task import SubagentResult
 
 
 def _mock_orchestrator(success=True, files=None, output="done", elapsed=1.5,

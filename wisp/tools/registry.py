@@ -7,7 +7,7 @@ TOOL_IMPLS (name → function mapping) for all built-in tools.
 import json
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from wisp.tools.errors import ToolError
 

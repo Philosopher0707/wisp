@@ -13,7 +13,6 @@ from io import StringIO
 from typing import Optional
 
 from rich.console import Console
-from rich.panel import Panel
 from rich.style import Style
 from rich.text import Text
 

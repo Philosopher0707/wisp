@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path
 
 from wisp.plugins.manifest import PluginManifest
 

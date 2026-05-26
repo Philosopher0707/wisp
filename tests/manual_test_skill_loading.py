@@ -4,7 +4,6 @@
 Run: python tests/manual_test_skill_loading.py
 """
 
-import os
 import sys
 import tempfile
 import shutil

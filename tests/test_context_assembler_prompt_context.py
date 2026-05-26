@@ -4,7 +4,6 @@ Verifies that the new structured API works and that the old
 positional API remains backward-compatible.
 """
 
-import pytest
 from wisp.context_assembler import ContextAssembler, PromptContext, PlanState
 
 

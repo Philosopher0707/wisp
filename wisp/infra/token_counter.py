@@ -6,7 +6,6 @@ Replaces ad-hoc ``len(text) // chars_per_token`` estimates across the codebase.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 

@@ -1,7 +1,6 @@
 """Tests for tools.py — file ops, security boundaries, validation, bash."""
 
 import pytest
-from pathlib import Path
 from wisp.tools import (
     tool_read_file,
     tool_write_file,

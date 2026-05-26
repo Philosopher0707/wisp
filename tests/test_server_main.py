@@ -3,7 +3,6 @@
 Tests that the new server main can be started.
 """
 
-import pytest
 from unittest.mock import patch
 
 
@@ -29,7 +28,7 @@ class TestServerMain:
 
     def test_main_can_disable_auth(self):
         from wisp.server.main import main, app
-        from wisp.server.deps import _auth, verify_api_key
+        from wisp.server.deps import _auth
         # Save original state
         orig_no_auth = _auth._no_auth
         orig_key = _auth._key

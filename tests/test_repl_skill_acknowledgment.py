@@ -3,9 +3,7 @@ acknowledgment message to the LLM when /skill is used in REPL mode.
 """
 
 import pytest
-import asyncio
 from pathlib import Path
-from unittest.mock import MagicMock, patch, AsyncMock
 
 from wisp.commands import cmd_skill
 

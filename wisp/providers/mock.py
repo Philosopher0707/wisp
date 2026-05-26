@@ -27,8 +27,6 @@ Usage:
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 from typing import Iterator, Optional
 
@@ -37,7 +35,6 @@ from wisp.stream_events import (
     TokenBatch,
     ToolCallBatch,
     StreamComplete,
-    StreamError,
     StreamEvent,
 )
 

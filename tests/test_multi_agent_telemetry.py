@@ -1,6 +1,5 @@
 """Unit tests for Telemetry."""
 
-import pytest
 
 from wisp.multi_agent.subagent_orchestrator import Telemetry
 from wisp.multi_agent.task import SubagentResult

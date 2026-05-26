@@ -1,7 +1,5 @@
 """Integration test: slash commands through the actual _run_repl path."""
 
-import pytest
-import asyncio
 import sys
 from io import StringIO
 from unittest.mock import MagicMock, patch

@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Any, AsyncIterator, TypeVar, Iterator
+from typing import Any, AsyncIterator, TypeVar
 
 T = TypeVar("T")
 

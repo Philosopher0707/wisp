@@ -6,8 +6,6 @@ Uses mocks for external dependencies (WebSocket, file system, supervisor).
 
 from __future__ import annotations
 
-import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
 
 from wisp.tui.widgets.title_bar import TitleBar
 from wisp.tui.widgets.status_bar import StatusBar
@@ -20,14 +18,10 @@ from wisp.tui.widgets.chat.content_block import ContentBlock
 from wisp.tui.widgets.chat.tool_call_card import ToolCallCard
 from wisp.tui.widgets.chat.user_message import UserMessage
 from wisp.tui.widgets.chat.diff_block import DiffBlock
-from wisp.tui.widgets.tools.tool_history import ToolHistoryTable
 from wisp.tui.widgets.file_tree.tree_view import FileTree
 from wisp.tui.widgets.file_tree.code_preview import CodePreview
-from wisp.tui.widgets.file_tree.repo_map_summary import RepoMapSummary
 from wisp.tui.widgets.agents.agent_grid import AgentGrid, AgentCard
-from wisp.tui.widgets.agents.task_tree import TaskTree
 from wisp.tui.widgets.agents.token_gauge import TokenGauge
-from wisp.tui.widgets.monitor.log_viewer import LogViewer
 from wisp.tui.widgets.monitor.metrics import PerformanceMetrics
 
 

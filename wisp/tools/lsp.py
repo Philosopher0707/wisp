@@ -7,7 +7,6 @@ and symbol listing via language servers.
 import logging
 
 from wisp.tools._utils import (
-    ToolError,
     _resolve_path,
     _lsp_manager_ctx,
 )

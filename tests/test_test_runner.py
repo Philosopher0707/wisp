@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-import pytest
 
 from wisp.test_runner import (
     UnitTestResult,

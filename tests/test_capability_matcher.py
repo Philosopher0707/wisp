@@ -1,5 +1,4 @@
 """Tests for capability mismatch detection."""
-import pytest
 from wisp.multi_agent.capability_matcher import (
     CapabilityMatcher,
     CapabilityMismatch,

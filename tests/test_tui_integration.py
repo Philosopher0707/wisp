@@ -7,11 +7,8 @@ chat flow, and WebSocket message simulation.
 
 from __future__ import annotations
 
-import json
 import pytest
-from unittest.mock import patch, AsyncMock
 
-from wisp.config import WispConfig
 from wisp.tui.app import WispTUIApp
 
 

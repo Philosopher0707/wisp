@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import subprocess
 import time
 import uuid
@@ -19,11 +18,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from wisp.config import WispConfig
-from wisp.core.events import (
-    AgentEvent, TYPE_CONTENT, TYPE_DONE, TYPE_ERROR,
-    TYPE_TOOL_CALL, TYPE_TOOL_RESULT,
-)
 from wisp.multi_agent._worktree_manager import WorktreeManager
 
 logger = logging.getLogger(__name__)

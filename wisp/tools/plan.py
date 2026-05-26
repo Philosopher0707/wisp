@@ -5,7 +5,6 @@ Delegates to wisp.planner for plan storage and management.
 
 import logging
 
-from wisp.tools._utils import _validate_string
 
 logger = logging.getLogger(__name__)
 

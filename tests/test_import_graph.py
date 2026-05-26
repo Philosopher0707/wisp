@@ -1,10 +1,7 @@
 """Tests for wisp.import_graph."""
 
-import ast
-import tempfile
 from pathlib import Path
 
-import pytest
 
 from wisp.import_graph import (
     _extract_imports_from_file,

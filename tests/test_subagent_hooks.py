@@ -1,12 +1,10 @@
 """Tests for subagent lifecycle hooks — SUBAGENT_SPAWN, COMPLETE, FAIL."""
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
-from pathlib import Path
 
 from wisp.config import WispConfig
 from wisp.infra.hook_types import HookEvent, HookManager, HookResult
-from wisp.multi_agent.task import SubagentContract, SubagentResult
+from wisp.multi_agent.task import SubagentContract
 
 
 class SpyHookManager(HookManager):

@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
 from enum import StrEnum
-from typing import Optional
 
 
 class SessionPolicy(StrEnum):

@@ -3,8 +3,7 @@
 Tests that __main__.py delegates to wisp.entry.run_mode.
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 class TestMainDelegatesToEntry:

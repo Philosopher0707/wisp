@@ -29,7 +29,7 @@ from wisp.stream_events import (
     StreamError,
     StreamEvent,
 )
-from wisp.stream_parser import parse_stream, EventStreamError
+from wisp.stream_parser import parse_stream
 
 logger = logging.getLogger(__name__)
 _loop_local = threading.local()

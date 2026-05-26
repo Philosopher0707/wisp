@@ -3,7 +3,6 @@
 Verifies that extracted rendering logic produces correct output.
 """
 
-import pytest
 
 
 class TestFormatDuration:

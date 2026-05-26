@@ -102,7 +102,7 @@ def validate_json_schema(data: Any, schema: dict) -> tuple[bool, list[str]]:
                 if not re.match(pattern, data):
                     errors.append(f"String does not match pattern: {pattern}")
             except Exception:
-                errors.append(f"Invalid pattern in schema")
+                errors.append("Invalid pattern in schema")
 
     # Number validation
     elif schema_type in ("number", "integer") and isinstance(data, (int, float)):

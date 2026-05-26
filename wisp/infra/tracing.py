@@ -11,8 +11,6 @@ import contextvars
 import os
 import time
 import uuid
-from dataclasses import dataclass, field
-from typing import Optional
 
 
 # ── UUID7 generator (RFC 9562) ──────────────────────────────────────

@@ -13,9 +13,7 @@ semantic paraphrasing). Instead:
 4. The LLM itself is instructed to treat all skill content as advisory.
 """
 
-import pytest
-from pathlib import Path
-from wisp.skills import parse_skill, Skill
+from wisp.skills import parse_skill
 from wisp.context_assembler import ContextAssembler
 
 

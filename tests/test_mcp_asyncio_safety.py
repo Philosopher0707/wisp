@@ -5,7 +5,6 @@ import time
 
 import pytest
 
-from unittest.mock import MagicMock
 
 
 class FakePopen:
@@ -107,7 +106,7 @@ class TestMCPManagerAsync:
     @pytest.mark.asyncio
     async def test_health_check_offloads_sync_io(self):
         """health_check must wrap _send_request in asyncio.to_thread."""
-        from wisp.mcp import MCPManager, MCPServer, MCPServerConfig
+        from wisp.mcp import MCPManager
         import inspect
 
         # Verify the method exists and is declared async

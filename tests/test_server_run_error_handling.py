@@ -10,7 +10,7 @@ Exception fall through to the handler below it.
 
 import asyncio
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 
 class FakeTransport:

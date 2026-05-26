@@ -30,7 +30,6 @@ class TestPermissionModeSingleSourceOfTruth:
     def test_config_module_does_not_redefine_permission_mode(self):
         """The class object in wisp.config must NOT be defined there."""
         import wisp.config as cfg_mod
-        import wisp.infra.security as sec_mod
 
         # If config defines its own class, __module__ will be wisp.config
         # After fix, the re-exported symbol's __module__ should be wisp.infra.security

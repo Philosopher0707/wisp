@@ -4,12 +4,9 @@ Red phase: these tests define the interface and will fail until
 wisp/infra/store.py is implemented.
 """
 
-import json
 import pytest
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
 
 
 # ── Test fixtures ──────────────────────────────────────────────────

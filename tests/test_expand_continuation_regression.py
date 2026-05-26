@@ -7,7 +7,6 @@ The fix should restore the continuation expansion logic from the old
 WispAgentCore._expand_continuation().
 """
 
-import pytest
 
 from wisp.transport.cli import AgentAdapter
 

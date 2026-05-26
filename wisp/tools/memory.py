@@ -43,7 +43,7 @@ def tool_recall(query: str, workspace: Optional[str] = None, limit: int = 10) ->
         limit = 10
 
     from wisp.memory import list_all_facts
-    from wisp.agent_memory import AgentMemory, get_agent_memory
+    from wisp.agent_memory import get_agent_memory
 
     query_lower = query.lower()
     query_words = [w for w in query_lower.split() if len(w) > 2]

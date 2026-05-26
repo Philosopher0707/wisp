@@ -6,7 +6,6 @@ Bug 4: _run_write_verify calls sync tool_run_tests, blocking the event loop.
 """
 
 import asyncio
-import time as time_mod
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

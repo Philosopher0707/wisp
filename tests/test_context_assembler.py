@@ -4,8 +4,6 @@ Verifies that ContextAssembler correctly assembles system prompt
 sections from various context sources.
 """
 
-import pytest
-from pathlib import Path
 
 
 class TestContextAssemblerConstruction:

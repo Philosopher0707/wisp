@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import ast
 import logging
-import sys
 from pathlib import Path
 from typing import Optional
 

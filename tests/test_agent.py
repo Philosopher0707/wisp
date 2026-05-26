@@ -1,6 +1,5 @@
 """Tests for agent.py — _is_interactive, _args_preview, _input_line, auto-detect context."""
 
-import pytest
 from unittest.mock import patch, MagicMock
 from wisp.agent import _is_interactive, _args_preview, _input_line
 

@@ -1,8 +1,5 @@
 """Tests for pre-loaded context injection — module summary + lint context."""
 
-import os
-import pytest
-from pathlib import Path
 from unittest.mock import patch
 
 from wisp.core.engine import WispAgentCore

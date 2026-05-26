@@ -1,11 +1,9 @@
 """Tests for wisp.change_tracker — change tracking."""
 
 import tempfile
-from pathlib import Path
 
-import pytest
 
-from wisp.change_tracker import ChangeTracker, ChangeRecord
+from wisp.change_tracker import ChangeTracker
 
 
 class TestChangeTracker:

@@ -7,7 +7,6 @@ This is the migration safety net — if this passes, the legacy code can be dele
 import pytest
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator
 
 
 # ── Minimal mock provider ──────────────────────────────────────────
@@ -76,7 +75,6 @@ class TestRuntimeCoreIntegration:
     @pytest.mark.asyncio
     async def test_full_turn(self, config):
         from wisp.composition import CompositionRoot
-        from wisp.core.engine import WispAgentCore
 
         root = CompositionRoot(config)
 

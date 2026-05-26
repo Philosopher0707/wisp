@@ -1,6 +1,5 @@
 """Unit tests for BudgetTracker."""
 
-import pytest
 
 from wisp.multi_agent.subagent_orchestrator import BudgetTracker
 

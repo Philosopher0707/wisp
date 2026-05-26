@@ -8,10 +8,7 @@ Requires: pip install tree-sitter tree-sitter-python tree-sitter-rust
 """
 
 import logging
-import re
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -51,11 +48,11 @@ if _HAVE_TREE_SITTER:
 from wisp.code_index import (
     Symbol,
     CodeIndex,
-    search_symbols,
-    format_index_summary,
+    search_symbols,       # noqa: F401
+    format_index_summary,   # noqa: F401
     _MAX_SCAN_FILES,
     _MAX_FILE_LINES,
-    _EXTENSIONS,
+    _EXTENSIONS,            # noqa: F401
 )
 
 # ── Tree-sitter query patterns for each language ─────────────────────

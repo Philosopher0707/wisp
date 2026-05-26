@@ -1,7 +1,5 @@
 """Tests for terminal_width — width-aware rendering, box modes, unicode width."""
 
-import os
-import pytest
 from wisp.terminal_width import (
     display_width,
     wrap_text_wide,

@@ -1,7 +1,6 @@
 """Test HeadlessTransport with AgentEvent objects."""
 
 import pytest
-import asyncio
 from wisp.transport.headless import HeadlessTransport
 from wisp.core.events import AgentEvent, TYPE_CONTENT, TYPE_TOOL_CALL, TYPE_TOOL_RESULT, TYPE_ERROR, TYPE_DONE
 

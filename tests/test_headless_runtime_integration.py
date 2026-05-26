@@ -4,7 +4,7 @@ Verifies that HeadlessTransport can collect events from AgentRuntime.run_turn().
 """
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock
 
 from wisp.transport.headless import HeadlessTransport
 from wisp.core.runtime import AgentRuntime

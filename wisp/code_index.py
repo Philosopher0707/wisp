@@ -258,7 +258,7 @@ def _extract_python(lines: list[str], file_path: str) -> list[Symbol]:
         # Check the ORIGINAL line (before strip) to detect indentation.
         # Also reset on blank lines when inside a class (they separate methods from top-level code).
         if current_class:
-            if not line or not line[0] in (" ", "\t"):
+            if not line or line[0] not in (" ", "\t"):
                 # Blank line or non-indented line
                 if not line.startswith(("def ", "class ", "async ", "@", "#", ")")):
                     current_class = None
@@ -412,7 +412,7 @@ def _extract_javascript(lines: list[str], file_path: str, lang: str) -> list[Sym
                 continue
 
         # Reset class context on non-indented closing brace
-        if current_class and line.strip() == "}" and not line[0] in (" ", "\t"):
+        if current_class and line.strip() == "}" and line[0] not in (" ", "\t"):
             current_class = None
 
     return symbols

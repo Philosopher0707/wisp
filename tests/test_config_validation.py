@@ -3,8 +3,6 @@
 Verifies that invalid configs fail fast with clear error messages.
 """
 
-import pytest
-from unittest.mock import patch
 
 
 class TestConfigValidation:

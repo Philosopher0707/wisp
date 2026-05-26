@@ -6,18 +6,14 @@ CI/compliance can retrospectively audit what ran without operator consent.
 """
 
 import json
-import os
-import tempfile
-from pathlib import Path
 
-import pytest
 
 # We can't easily exercise ToolExecutor.execute() end-to-end without
 # mocking the LLM client, so we test:
 #   1. AuditLog directly (unit-level)
 #   2. ToolExecutor.execute() via mocked backend (integration-level)
 
-from wisp.tools.audit import AuditLog, _result_status
+from wisp.tools.audit import AuditLog
 
 
 # ── 1. Direct AuditLog tests ────────────────────────────────────────────

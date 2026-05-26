@@ -6,9 +6,8 @@ interrupt state management on the CLITransport + AgentAdapter API.
 
 import asyncio
 import signal
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
-import pytest
 
 from wisp.transport.cli import (
     CLITransport,

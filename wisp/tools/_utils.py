@@ -9,7 +9,6 @@ This module contains common helpers used by all tool domains:
 """
 
 import contextvars
-import json
 import logging
 import os
 import re

@@ -117,7 +117,6 @@ async def create_hook(req: HookCreateRequest):
 @router.post("/api/hooks/{name}/test", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
 async def test_hook(name: str, request: dict):
     from wisp.infra.hook_types import HookManager, build_hook_context
-    import asyncio
 
     manager = HookManager(workspace=WORKSPACE_ROOT)
     manager.load_project_hooks()

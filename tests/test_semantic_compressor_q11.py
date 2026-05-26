@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 import threading
 import pytest
 
-from wisp.semantic_compressor import _llm_summarize, CompressionResult
+from wisp.semantic_compressor import _llm_summarize
 
 
 class TestClientReuse:

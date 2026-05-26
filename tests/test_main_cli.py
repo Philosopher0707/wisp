@@ -5,9 +5,7 @@ and utility functions.  Does NOT cover commands that require a live LLM
 (cmd_run, cmd_repl, cmd_server, cmd_tui, cmd_models, cmd_check).
 """
 
-import json
 import sys
-from io import StringIO
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -57,11 +55,11 @@ class TestCmdSkills:
 
 class TestCmdConfig:
     def test_set_key_value(self, capsys, monkeypatch):
-        with patch("wisp.config.load_config", return_value={"model": "llama3"}):
+        with patch("wisp.__main__.load_config", return_value={"model": "llama3"}):
             saved = {}
             def fake_save(cfg):
                 saved.update(cfg)
-            with patch("wisp.config.save_config", side_effect=fake_save):
+            with patch("wisp.__main__.save_config", side_effect=fake_save):
                 main_mod.cmd_config(set_kv="workspace=/tmp/test")
         assert saved.get("workspace") == "/tmp/test"
 

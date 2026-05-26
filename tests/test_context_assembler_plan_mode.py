@@ -4,7 +4,6 @@ When plan_mode=True, a large static block is injected at priority 1.
 This must not starve critical sections (priority 0).
 """
 
-import pytest
 from wisp.context_assembler import ContextAssembler
 
 

@@ -4,7 +4,6 @@ Tests that OllamaProvider conforms to the Provider protocol
 and correctly interacts with the Ollama HTTP API.
 """
 
-import pytest
 from unittest.mock import Mock, patch
 
 

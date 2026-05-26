@@ -1,6 +1,5 @@
 """Tests for researcher role prompt — verifies fail-fast guidance for web_fetch."""
 
-import pytest
 
 from wisp.multi_agent.roles import ROLE_CONFIGS, AgentRole
 

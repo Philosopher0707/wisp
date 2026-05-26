@@ -2,7 +2,7 @@
 
 from unittest.mock import patch, MagicMock
 import pytest
-from wisp.ollama_client import OllamaClient, OllamaError
+from wisp.ollama_client import OllamaClient
 
 
 class FakeConfig:

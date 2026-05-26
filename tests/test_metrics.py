@@ -1,6 +1,5 @@
 """Tests for wisp.metrics — AgentMetrics."""
 
-import pytest
 from wisp.metrics import AgentMetrics
 
 

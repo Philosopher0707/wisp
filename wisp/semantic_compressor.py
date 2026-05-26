@@ -20,7 +20,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
-from wisp.core.message_format import extract_text
 from wisp.summarizer import (
     ExtractiveSummarizer,
     SessionSummary,
@@ -670,7 +669,7 @@ def _llm_summarize(
                  for a short summary.
     """
     try:
-        from wisp.ollama_client import OllamaClient, OllamaError
+        from wisp.ollama_client import OllamaClient
         from wisp.config import WispConfig
 
         # Reuse an injected client (e.g., the agent's own client) so we do not

@@ -4,15 +4,12 @@ MockProvider implements BaseProvider without network calls.
 It yields predefined responses for reliable, fast tests.
 """
 
-import pytest
-from unittest.mock import MagicMock
 
 from wisp.providers.base import BaseProvider
 from wisp.stream_events import (
     TokenBatch,
     ToolCallBatch,
     StreamComplete,
-    StreamError,
 )
 
 

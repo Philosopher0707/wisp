@@ -11,7 +11,6 @@ from typing import Iterator, Optional
 
 from wisp.acp_protocol import (
     ContentBlock,
-    Message,
     SessionInfo,
     TextContent,
     ThinkingContent,

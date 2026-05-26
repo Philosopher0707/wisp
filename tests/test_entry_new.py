@@ -4,8 +4,7 @@ Tests the refactored entry point pattern.
 """
 
 import pytest
-import asyncio
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch
 
 
 class TestNewEntryPoint:

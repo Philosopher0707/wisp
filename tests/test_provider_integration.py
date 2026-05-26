@@ -3,7 +3,6 @@
 Tests that CompositionRoot creates real providers via ProviderFactory.
 """
 
-import pytest
 from unittest.mock import patch, MagicMock
 
 

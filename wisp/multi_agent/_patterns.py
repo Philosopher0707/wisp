@@ -166,7 +166,6 @@ async def run_vote(
         )
 
     # Robust consensus: group by normalized similarity
-    from collections import Counter
 
     def _normalize(text: str) -> str:
         return " ".join(text.lower().strip().split())

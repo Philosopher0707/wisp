@@ -4,7 +4,6 @@ import tempfile
 import time
 from pathlib import Path
 
-import pytest
 
 from wisp.file_lock import FileLock, _generate_agent_id
 

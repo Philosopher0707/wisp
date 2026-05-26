@@ -9,9 +9,8 @@ Run with:  pytest tests/test_security_integration.py -v
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 

@@ -5,10 +5,9 @@ for Model A and Model B, preventing concurrent filesystem corruption.
 """
 
 import pytest
-import tempfile
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 
 class TestArenaIsolation:

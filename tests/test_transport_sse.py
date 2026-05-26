@@ -5,7 +5,6 @@ FastAPI's StreamingResponse. It does not send raw HTTP headers.
 """
 
 import pytest
-import asyncio
 from typing import AsyncIterator
 
 

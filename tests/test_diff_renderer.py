@@ -1,6 +1,5 @@
 """Tests for wisp.diff_renderer — terminal diff rendering with Rich."""
 
-import pytest
 from wisp.diff_renderer import (
     _parse_diff_line_parts,
     _build_diff_line,

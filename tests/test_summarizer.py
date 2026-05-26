@@ -1,6 +1,5 @@
 """Tests for wisp.summarizer — extractive session summarization."""
 
-import pytest
 from wisp.summarizer import ExtractiveSummarizer, SessionSummary
 
 

@@ -1,10 +1,8 @@
 """Tests for wisp.planner — structured planning and task decomposition."""
 
-import json
 import tempfile
 from pathlib import Path
 
-import pytest
 
 from wisp.planner import (
     PLANS_DIR,

@@ -1,7 +1,5 @@
 """Tests for config.py — defaults, env var override, config file loading."""
 
-import os
-import pytest
 from wisp.config import WispConfig, get_setting, load_config, save_config
 
 

@@ -16,12 +16,11 @@ import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from wisp.infra.policy_engine import (
     Action as EngineAction,
     EvalContext,
-    PolicyDecision,
     PolicyEngine,
     PriorityRuleEngine,
     Rule,

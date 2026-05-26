@@ -1,7 +1,6 @@
 """Tests for skills.py trigger-based auto-detection and matching."""
 
-from pathlib import Path
-from wisp.skills import parse_skill, Skill, match_skills
+from wisp.skills import parse_skill, match_skills
 
 
 class TestTriggerParsing:

@@ -6,7 +6,6 @@ CSS loading, theme, and splash→session_picker→workspace transitions.
 
 from __future__ import annotations
 
-import pytest
 
 from wisp.config import WispConfig
 from wisp.tui.app import WispTUIApp

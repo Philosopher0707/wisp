@@ -1,16 +1,8 @@
 """TDD tests for ProgressTracker — phase detection, file tracking, tool counting."""
 
-import time
-import pytest
 from wisp.transport.progress import ProgressTracker, TurnProgress
 from wisp.core.events import (
-    thinking,
-    content,
     tool_call,
-    tool_result,
-    done,
-    error,
-    system,
 )
 
 

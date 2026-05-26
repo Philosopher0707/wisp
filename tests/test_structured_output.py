@@ -1,13 +1,10 @@
 """Tests for wisp.structured_output — JSON extraction and enforcement."""
 
-import json
 
 import pytest
 
 from wisp.structured_output import (
     JsonExtractionError,
-    SchemaValidationError,
-    ExtractedJson,
     _find_json,
     _strip_fences,
     extract_json,

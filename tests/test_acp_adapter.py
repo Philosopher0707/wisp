@@ -1,11 +1,7 @@
 """Tests for wisp.acp_adapter — ACP adapter core."""
 
-import json
-import io
-import sys
 from unittest.mock import patch, MagicMock
 
-import pytest
 
 from wisp.acp_adapter import AcpAdapter
 from wisp.acp_session import AcpSessionManager
@@ -13,10 +9,6 @@ from wisp.infra.store import UnifiedStore
 from wisp.acp_adapter import ACP_PROTOCOL_VERSION
 from wisp.acp_protocol import (
     ErrorCode,
-    Implementation,
-    SessionInfo,
-    make_request,
-    make_notification,
 )
 
 

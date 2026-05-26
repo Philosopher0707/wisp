@@ -1,6 +1,5 @@
 """Tests for auto-delegation triggers."""
-import pytest
-from wisp.multi_agent.delegation import DelegationAnalyzer, DelegationSignal
+from wisp.multi_agent.delegation import DelegationAnalyzer
 
 
 class TestDelegationAnalyzer:

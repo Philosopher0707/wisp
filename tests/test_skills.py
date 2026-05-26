@@ -1,9 +1,7 @@
 """Tests for skills.py — SKILL.md parsing and discovery."""
 
-import pytest
-import yaml
 from pathlib import Path
-from wisp.skills import parse_skill, discover_skills, find_skill, Skill
+from wisp.skills import parse_skill, discover_skills, find_skill
 
 
 class TestParseSkill:

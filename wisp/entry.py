@@ -17,7 +17,6 @@ warnings.filterwarnings("ignore", category=SyntaxWarning)
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any
 
 from wisp.composition import CompositionRoot
 from wisp.config import WispConfig
@@ -87,8 +86,6 @@ def _run_cli(root: CompositionRoot, prompt: str | None = None, **kwargs) -> None
     This avoids cross-loop issues (RuntimeWarning, orphaned background tasks)
     caused by ``asyncio.run()`` creating a fresh loop each time.
     """
-    import sys
-    import uuid
 
     config = root.config
     transport = CLITransport(root.runtime, config)
@@ -175,13 +172,13 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
 
     def _show_resume() -> None:
         """Print the resume command for this session."""
-        sys.stdout.write(f"\n⏸  Turn interrupted. Session saved.\n")
+        sys.stdout.write("\n⏸  Turn interrupted. Session saved.\n")
         sys.stdout.write(f"   Resume: wisp repl -S {session_id}\n\n")
         sys.stdout.flush()
 
     def _show_exit() -> None:
         """Print exit message with resume command."""
-        sys.stdout.write(f"\n👋  Exiting. Session saved.\n")
+        sys.stdout.write("\n👋  Exiting. Session saved.\n")
         sys.stdout.write(f"   Resume: wisp repl -S {session_id}\n\n")
         sys.stdout.flush()
 

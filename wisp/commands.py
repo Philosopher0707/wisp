@@ -5,9 +5,7 @@ They receive the WispAgent instance and can mutate its state directly.
 """
 
 import logging
-import os
 import subprocess
-import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -727,13 +725,13 @@ def cmd_init(agent, args: str):
 
     if wisp_md.exists() and "overwrite" not in args.lower():
         print(warning(f"⚠ {wisp_md.name} already exists."))
-        print(dim(f"   Run '/init overwrite' to regenerate."))
+        print(dim("   Run '/init overwrite' to regenerate."))
         return
 
     print(info(f"🔍 Analyzing {ws.name}…"))
 
     # ── Gather project metadata ──
-    from wisp.project_context import detect_project_context, format_context
+    from wisp.project_context import detect_project_context
     ctx = detect_project_context(str(ws))
 
     # ── Gather file structure ──

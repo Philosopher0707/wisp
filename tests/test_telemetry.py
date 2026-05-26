@@ -5,7 +5,6 @@ with structured metrics, health checks, and tracing.
 """
 
 import pytest
-import time
 
 
 @pytest.fixture

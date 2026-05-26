@@ -9,7 +9,6 @@ import asyncio
 import hashlib
 import json
 import time
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -85,7 +84,6 @@ class TestIdempotencyRaceCondition:
     @pytest.mark.asyncio
     async def test_idempotency_key_is_consistent_for_same_prompt(self, runtime, tmp_store):
         """Same prompt within the same time window should produce the same idempotency key."""
-        import hashlib
         import time
 
         sid = "sess-1"
@@ -98,7 +96,6 @@ class TestIdempotencyRaceCondition:
     @pytest.mark.asyncio
     async def test_different_prompts_get_different_idempotency_keys(self, runtime, tmp_store):
         """Different prompts should produce different idempotency keys."""
-        import hashlib
         import time
 
         sid = "sess-1"

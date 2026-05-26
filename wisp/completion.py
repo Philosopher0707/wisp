@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
 
 from wisp.config import WispConfig
 from wisp.providers import get_provider

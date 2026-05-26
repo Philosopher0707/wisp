@@ -19,7 +19,6 @@ import os
 import threading
 import weakref
 from pathlib import Path
-from typing import Optional
 
 from wisp.lsp.client import (
     LSPServer,

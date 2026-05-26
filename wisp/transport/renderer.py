@@ -9,7 +9,6 @@ modes: unicode, ascii, accessible, minimal.
 
 from __future__ import annotations
 
-import textwrap
 from typing import Optional
 
 from wisp.colors import dim, error, warning, success
@@ -17,7 +16,6 @@ from wisp.core.events import AgentEvent
 from wisp.terminal_width import (
     display_width,
     wrap_text_wide,
-    pad_right as _pad_right,
     BoxChars,
     OutputMode,
     get_output_mode,
@@ -119,7 +117,7 @@ def render_content_block(text: str, box_mode: bool, width: int) -> Optional[str]
     wrapped = wrap_text(text.strip(), inner_w)
     if box_mode:
         if is_accessible():
-            return f"[Response]\n" + "\n".join(wrapped)
+            return "[Response]\n" + "\n".join(wrapped)
         header = _rule("─", "Response", style_fn=dim, width=width)
         return f"{header}\n" + "\n".join(wrapped)
     else:

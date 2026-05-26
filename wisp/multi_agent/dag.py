@@ -11,7 +11,7 @@ import logging
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -218,7 +218,7 @@ class DAGScheduler:
 
 def _timeout_result(name: str) -> Any:
     """Create a timeout error result compatible with SubagentResult."""
-    return _make_fallback(name, False, f"Timed out", "timeout")
+    return _make_fallback(name, False, "Timed out", "timeout")
 
 
 def _error_result(name: str, error: str) -> Any:

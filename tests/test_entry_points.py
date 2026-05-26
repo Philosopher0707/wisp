@@ -3,7 +3,6 @@
 Tests that __main__.py uses CompositionRoot.
 """
 
-import pytest
 
 
 class TestEntryPoint:

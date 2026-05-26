@@ -7,7 +7,6 @@ from wisp.markdown_parser import (
     extract_front_matter,
     strip_markdown,
     format_code_block,
-    MarkdownDocument,
     CodeBlock,
 )
 

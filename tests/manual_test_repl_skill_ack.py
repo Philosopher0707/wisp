@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from wisp.skills import discover_skills, find_skill
+from wisp.skills import discover_skills
 from wisp.commands import cmd_skill
 
 
@@ -120,7 +120,7 @@ def main():
 
         # Command is dispatched
         cmd_skill(agent, "coder")
-        print(f"\n  ✅ Skill loaded: coder")
+        print("\n  ✅ Skill loaded: coder")
         print(f"  ✅ _active_skill = '{agent._active_skill}'")
         print(f"  ✅ Cache cleared: {len(agent._system_prompt_cache) == 0}")
 
@@ -134,11 +134,11 @@ def main():
             f"The '{skill_name}' skill has been activated. "
             f"Confirm you understand and are ready to use this skill mode."
         )
-        print(f"\n  📝 Acknowledgment message:")
+        print("\n  📝 Acknowledgment message:")
         print(f"     '{ack}'")
 
         agent._add_message("user", ack)
-        print(f"\n  ✅ Added as user message to conversation history")
+        print("\n  ✅ Added as user message to conversation history")
 
         # ═══════════════════════════════════════════════════════════
         # STEP 3: Build system prompt with skill
@@ -189,9 +189,9 @@ def main():
 
         # System prompt still includes skill
         system2 = agent._build_system_prompt(agent._active_skill, query=user_prompt)
-        print(f"\n  📦 System prompt still includes MANDATORY Mode: coder")
+        print("\n  📦 System prompt still includes MANDATORY Mode: coder")
         assert "MANDATORY Mode: coder" in system2
-        print(f"  ✅ Verified: skill remains active for subsequent turns")
+        print("  ✅ Verified: skill remains active for subsequent turns")
 
         # ═══════════════════════════════════════════════════════════
         # SUMMARY
@@ -210,7 +210,7 @@ def main():
     finally:
         skills_mod.GLOBAL_SKILL_DIRS = original_global
         shutil.rmtree(tmpdir, ignore_errors=True)
-        print(f"\n  🧹 Cleanup done.")
+        print("\n  🧹 Cleanup done.")
 
 
 if __name__ == "__main__":

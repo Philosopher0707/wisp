@@ -1,7 +1,6 @@
 """Test slash commands work in the new REPL."""
 
 import pytest
-import asyncio
 from unittest.mock import MagicMock, patch
 from io import StringIO
 

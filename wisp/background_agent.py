@@ -9,7 +9,6 @@ Refactored for multi-process safety:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 import uuid
@@ -17,12 +16,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from wisp.config import WispConfig
-from wisp.core.events import (
-    AgentEvent, TYPE_CONTENT, TYPE_THINKING, TYPE_TOOL_CALL,
-    TYPE_TOOL_RESULT, TYPE_ERROR, TYPE_DONE,
-)
-from wisp.transport.headless import HeadlessTransport
 
 logger = logging.getLogger(__name__)
 

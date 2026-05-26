@@ -5,7 +5,6 @@ One schema for all events, validated and typed.
 """
 
 import pytest
-from typing import Any
 
 
 # ═══════════════════════════════════════════════════════════════════

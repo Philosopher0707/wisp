@@ -3,7 +3,6 @@
 Verifies LRU eviction, memory pressure handling, and cache correctness.
 """
 
-import pytest
 from wisp.context_assembler import ContextAssembler
 
 

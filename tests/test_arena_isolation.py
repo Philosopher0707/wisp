@@ -7,7 +7,7 @@ fails closed with a clear error instead.
 """
 
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 from pathlib import Path
 
 from wisp.arena import ArenaRunner, ArenaCompareRequest

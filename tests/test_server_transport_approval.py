@@ -12,7 +12,7 @@ natural `if msg is not None` guard handles it without special-casing.
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from wisp.transport.server import ServerTransport, PendingApproval
+from wisp.transport.server import ServerTransport
 from wisp.core.events import AgentEvent, TYPE_APPROVAL_REQUEST, TYPE_CONTENT
 
 

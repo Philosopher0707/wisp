@@ -12,7 +12,7 @@ import json
 import time
 from dataclasses import dataclass, field
 
-from wisp.core.events import AgentEvent, EventType
+from wisp.core.events import AgentEvent
 
 # ── Phase constants ─────────────────────────────────────────────
 

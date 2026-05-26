@@ -1,6 +1,5 @@
 """Test runner tool — execute pytest and format results for LLM consumption."""
 
-from typing import Optional
 
 
 def tool_run_tests(

@@ -6,7 +6,6 @@ After Phase 7.1, these test the new canonical module locations:
   - SessionDTO → wisp.infra.session_dto
 """
 
-import pytest
 
 
 # ═══════════════════════════════════════════════════════════════════

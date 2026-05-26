@@ -3,7 +3,7 @@
 import asyncio
 import threading
 import time
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import patch
 import pytest
 import requests.exceptions
 

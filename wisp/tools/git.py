@@ -5,7 +5,6 @@ All operations delegate to wisp.git_context for actual git commands.
 
 import logging
 
-from wisp.tools._utils import _validate_string
 
 logger = logging.getLogger(__name__)
 
