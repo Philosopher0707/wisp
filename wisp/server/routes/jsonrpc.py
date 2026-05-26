@@ -38,7 +38,7 @@ async def jsonrpc(req: JsonRpcRequest):
     """JSON-RPC 2.0 endpoint for app-style clients."""
     from wisp.config import WispConfig
     config = WispConfig()
-    config.workspace = str(WORKSPACE_ROOT)
+    config = config.replace(workspace=str(WORKSPACE_ROOT))
 
     server = _get_app_server()
     # Convert Pydantic model to dict for the handler

@@ -25,7 +25,7 @@ async def get_context():
     """Get loaded project context for display in UI."""
     from wisp.config import WispConfig
     config = WispConfig()
-    config.workspace = str(WORKSPACE_ROOT)
+    config = config.replace(workspace=str(WORKSPACE_ROOT))
     content = config.load_context_files()
     files_found: list[str] = list(config._context_mtimes.keys()) if content else []
     return {

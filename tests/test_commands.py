@@ -21,6 +21,11 @@ class MockConfig:
         self.chars_per_token = 4
         self._context_tokens_explicit = False
 
+    def replace(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+        return self
+
 
 class MockClient:
     def __init__(self):

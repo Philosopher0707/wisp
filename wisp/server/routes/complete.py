@@ -31,7 +31,7 @@ async def complete(req: CompletionRequest):
     from wisp.config import WispConfig
 
     config = WispConfig()
-    config.workspace = str(WORKSPACE_ROOT)
+    config = config.replace(workspace=str(WORKSPACE_ROOT))
 
     result = await generate_completion(
         CR(

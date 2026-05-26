@@ -28,15 +28,17 @@ from wisp.multi_agent.task import EventKind, SubagentContract, SubagentResult
 
 def _make_config(**overrides):
     cfg = WispConfig()
-    cfg.model = "test-model"
-    cfg.provider = "ollama"
-    cfg.workspace = "/tmp"
-    cfg.chars_per_token = 4
-    cfg.max_context_tokens = 128000
-    cfg.permission_mode = "full"
-    cfg.ollama_url = "http://localhost:11434"
+    cfg = cfg.replace(
+        model="test-model",
+        provider="ollama",
+        workspace="/tmp",
+        chars_per_token=4,
+        max_context_tokens=128000,
+        permission_mode="full",
+        ollama_url="http://localhost:11434",
+    )
     for k, v in overrides.items():
-        setattr(cfg, k, v)
+        cfg = cfg.replace(**{k: v})
     return cfg
 
 

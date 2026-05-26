@@ -29,9 +29,7 @@ from wisp.transport.server import ServerTransport, PendingApproval
 def core():
     """Shared WispAgentCore fixture used by both transports."""
     config = WispConfig()
-    config.model = "test-model"
-    config.workspace = "/tmp"
-    config.auto_compact = False
+    config = config.replace(model="test-model", workspace="/tmp", auto_compact=False)
     return WispAgentCore(config=config)
 
 

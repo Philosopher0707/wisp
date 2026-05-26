@@ -47,13 +47,13 @@ def cmd_tui(model=None, workspace=None, show_thinking=False, auto_approve=False)
 
     config = WispConfig()
     if model:
-        config.model = model
+        config = config.replace(model=model)
     if workspace:
-        config.workspace = workspace
+        config = config.replace(workspace=workspace)
     if show_thinking:
-        config.show_thinking = True
+        config = config.replace(show_thinking=True)
     if auto_approve:
-        config.auto_approve = True
+        config = config.replace(auto_approve=True)
 
     from wisp.tui.app import WispTUIApp
 
@@ -212,7 +212,7 @@ def cmd_check(model=None):
     """Check if Ollama is available and the model is usable."""
     config = WispConfig()
     if model:
-        config.model = model
+        config = config.replace(model=model)
     client = get_provider(config)
     ok = client.check_health()
     if ok:

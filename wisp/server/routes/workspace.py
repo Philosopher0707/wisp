@@ -66,7 +66,7 @@ async def set_workspace(req: WorkspaceRequest, request: Request):
     # Update CompositionRoot config if available
     root = getattr(request.app.state, "root", None)
     if root is not None:
-        root.config.workspace = str(new_root)
+        root.config = root.config.replace(workspace=str(new_root))
         root.runtime.invalidate_core_cache()
     logger.info("Workspace changed to %s", WORKSPACE_ROOT)
     return {"path": str(WORKSPACE_ROOT)}

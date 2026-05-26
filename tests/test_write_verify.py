@@ -9,8 +9,7 @@ from wisp.tool_executor import ToolExecutor
 
 def _mk_te(tmp_path):
     cfg = WispConfig()
-    cfg.workspace = str(tmp_path)
-    cfg.auto_approve = True
+    cfg = cfg.replace(workspace=str(tmp_path), auto_approve=True)
     return ToolExecutor(
         config=cfg,
         hook_manager=MagicMock(),

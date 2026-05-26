@@ -194,7 +194,7 @@ class AcpAdapter:
                     f"Invalid workspace path: {workspace}"
                 )
 
-        config.workspace = str(Path(workspace).resolve())
+        config = config.replace(workspace=str(Path(workspace).resolve()))
         session = self.session_mgr.create(config.workspace, config, title=req.title)
         return NewSessionResponse(session=session.to_info()).to_dict()
 
@@ -286,16 +286,16 @@ class AcpAdapter:
         original_value = None
         if req.key == "model":
             original_value = session.config.model
-            session.config.model = req.value
+            session.config = session.config.replace(model=req.value)
         elif req.key == "skill":
             original_value = getattr(session, "_active_skill", None)
             session._active_skill = req.value
         elif req.key == "auto_approve":
             original_value = session.config.auto_approve
-            session.config.auto_approve = req.value.lower() in ("true", "1", "yes")
+            session.config = session.config.replace(auto_approve=req.value.lower() in ("true", "1", "yes"))
         elif req.key == "show_thinking":
             original_value = session.config.show_thinking
-            session.config.show_thinking = req.value.lower() in ("true", "1", "yes")
+            session.config = session.config.replace(show_thinking=req.value.lower() in ("true", "1", "yes"))
 
         audit.record(
             "config_change",

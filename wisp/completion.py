@@ -115,11 +115,10 @@ async def generate_completion(
         prefix, suffix, request.path, request.language
     )
 
-    # Save and temporarily override temperature for completions
-    original_temp = getattr(config, "temperature", 0.7)
-    config.temperature = 0.1  # Low temp for precise completions
+    # Use lower temperature for precise completions
+    completion_config = config.replace(temperature=0.1)
     try:
-        provider = get_provider(config)
+        provider = get_provider(completion_config)
 
         messages = [{"role": "user", "content": prompt}]
         response = provider.generate(system_prompt="", messages=messages)
@@ -151,5 +150,3 @@ async def generate_completion(
     except Exception as e:
         logger.warning("Completion generation failed: %s", e)
         return CompletionResult(text="", finish_reason="error")
-    finally:
-        config.temperature = original_temp

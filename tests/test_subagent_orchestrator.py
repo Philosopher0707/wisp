@@ -18,11 +18,16 @@ class FakeStatelessCore:
     """Minimal fake stateless core for testing SubagentOrchestrator."""
 
     def __init__(self, provider=None, security=None, extensions=None, config=None):
-        self.config = config or MagicMock()
-        self.config.workspace = "/tmp"
-        # Handle MagicMock provider gracefully
+        from wisp.config import WispConfig
+        cfg = config or MagicMock()
         prov = getattr(config, "provider", None) if config else None
-        self.config.provider = prov if prov and not isinstance(prov, MagicMock) else "ollama"
+        provider_val = prov if prov and not isinstance(prov, MagicMock) else "ollama"
+        if isinstance(cfg, WispConfig):
+            cfg = cfg.replace(workspace="/tmp", provider=provider_val)
+        else:
+            cfg.workspace = "/tmp"
+            cfg.provider = provider_val
+        self.config = cfg
         self.messages = [
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": "Do the task."},
@@ -135,7 +140,7 @@ def test_orchestrator_inherits_from_parent(mock_parent_agent):
 def test_orchestrator_with_explicit_config():
     from wisp.config import WispConfig
     cfg = WispConfig()
-    cfg.model = "explicit-model"
+    cfg = cfg.replace(model="explicit-model")
     o = SubagentOrchestrator(config=cfg)
     assert o.config.model == "explicit-model"
     assert o.parent is None
@@ -965,7 +970,7 @@ async def test_run_schema_jsonschema_not_installed(monkeypatch):
     """Schema validation works without jsonschema (built-in validator)."""
     from wisp.config import WispConfig
     cfg = WispConfig()
-    cfg.model = "test-model"
+    cfg = cfg.replace(model="test-model")
     fresh_orch = SubagentOrchestrator(config=cfg)
 
     class JSONAgent(FakeWispAgentCore):
@@ -995,8 +1000,7 @@ def test_orchestrator_with_explicit_workspace(tmp_path):
     """Orchestrator accepts explicit workspace path."""
     from wisp.config import WispConfig
     cfg = WispConfig()
-    cfg.model = "test-model"
-    cfg.workspace = str(tmp_path)
+    cfg = cfg.replace(model="test-model", workspace=str(tmp_path))
     orch = SubagentOrchestrator(config=cfg)
     assert str(orch.workspace) == str(tmp_path)
 

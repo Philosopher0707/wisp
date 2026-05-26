@@ -62,10 +62,7 @@ class TestRunSync:
         from wisp.providers.mock import MockProvider
 
         config = WispConfig()
-        config.model = "mock"
-        config.auto_approve = True
-        config.workspace = "/tmp"
-        config.max_iterations = 2
+        config = config.replace(model="mock", auto_approve=True, workspace="/tmp", max_iterations=2)
         core = WispAgentCore(config=config)
         core.provider = MockProvider(responses=["Hello!"])
 

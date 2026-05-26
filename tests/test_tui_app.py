@@ -30,7 +30,7 @@ class TestWispTUIApp:
 
     def test_app_constructs_with_config(self):
         config = WispConfig()
-        config.model = "codellama"
+        config = config.replace(model="codellama")
         app = WispTUIApp(config=config)
         assert app.wisp_config.model == "codellama"
 
@@ -79,7 +79,7 @@ class TestScreenNavigation:
 
     def test_workspace_screen_constructed_with_config(self):
         config = WispConfig()
-        config.model = "llama3.2"
+        config = config.replace(model="llama3.2")
         screen = WorkspaceScreen(server_url="http://localhost:8000", config=config)
         assert screen.wisp_config.model == "llama3.2"
 

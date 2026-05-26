@@ -334,7 +334,7 @@ class AcpSessionManager:
         # Need config to restore — use default
         from wisp.config import WispConfig
         config = WispConfig()
-        config.workspace = session.workspace
+        config = config.replace(workspace=session.workspace)
         acp = AcpSession.from_session(session, config, composition_root=self._composition_root)
         self._active[session_id] = acp
         return acp

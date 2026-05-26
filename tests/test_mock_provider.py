@@ -159,10 +159,7 @@ class TestMockProviderWithAgentCore:
         from wisp.providers.mock import MockProvider
 
         config = WispConfig()
-        config.model = "mock-model"
-        config.auto_approve = True
-        config.max_iterations = 2
-        config.workspace = "/tmp"
+        config = config.replace(model="mock-model", auto_approve=True, max_iterations=2, workspace="/tmp")
 
         provider = MockProvider(responses=["I am a mock model"])
         core = WispAgentCore(config=config)
@@ -187,10 +184,7 @@ class TestMockProviderWithAgentCore:
         from wisp.providers.mock import MockProvider
 
         config = WispConfig()
-        config.model = "mock-model"
-        config.auto_approve = True
-        config.max_iterations = 2
-        config.workspace = "/tmp"
+        config = config.replace(model="mock-model", auto_approve=True, max_iterations=2, workspace="/tmp")
 
         provider = MockProvider(
             responses=[""],

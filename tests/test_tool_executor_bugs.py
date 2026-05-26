@@ -16,9 +16,7 @@ from wisp.tool_executor import ToolExecutor
 
 def _mk_config(workspace: str, permission_mode=PermissionMode.FULL, auto_approve=False):
     cfg = WispConfig()
-    cfg.workspace = workspace
-    cfg.permission_mode = permission_mode
-    cfg.auto_approve = auto_approve
+    cfg = cfg.replace(workspace=workspace, permission_mode=permission_mode, auto_approve=auto_approve)
     return cfg
 
 

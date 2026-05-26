@@ -240,7 +240,7 @@ class TestMCPToolPermissions:
         from wisp.config import WispConfig, PermissionMode
 
         cfg = WispConfig()
-        cfg.permission_mode = PermissionMode.AUTO_EDIT
+        cfg = cfg.replace(permission_mode=PermissionMode.AUTO_EDIT)
         executor = ToolExecutor(config=cfg)
 
         # Every MCP tool name must force approval regardless of mode
@@ -255,7 +255,7 @@ class TestMCPToolPermissions:
         from wisp.config import WispConfig, PermissionMode
 
         cfg = WispConfig()
-        cfg.permission_mode = PermissionMode.READ_ONLY
+        cfg = cfg.replace(permission_mode=PermissionMode.READ_ONLY)
         executor = ToolExecutor(config=cfg)
 
         msg = executor._check_permission_mode("mcp:exfil/to_attacker")
@@ -267,7 +267,7 @@ class TestMCPToolPermissions:
         from wisp.config import WispConfig, PermissionMode
 
         cfg = WispConfig()
-        cfg.permission_mode = PermissionMode.FULL
+        cfg = cfg.replace(permission_mode=PermissionMode.FULL)
         executor = ToolExecutor(config=cfg)
 
         # In FULL mode MCP tools are not hard-blocked, but they still

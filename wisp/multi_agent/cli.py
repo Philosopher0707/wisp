@@ -51,9 +51,9 @@ def cmd_swarm(goal: str, roles: list[str] | None = None, model: str | None = Non
     global _last_orchestrator
     config = WispConfig()
     if model:
-        config.model = model
+        config = config.replace(model=model)
     if workspace:
-        config.workspace = workspace
+        config = config.replace(workspace=workspace)
 
     if roles is None:
         roles = [AgentRole.CODER, AgentRole.REVIEWER, AgentRole.TESTER, AgentRole.RESEARCHER]

@@ -50,8 +50,8 @@ def _mock_orchestrator(success=True, files=None, output="done", elapsed=1.5,
 def _mk_te(tmp_path, orch=None):
     """Build a ToolExecutor with mock orchestrator."""
     cfg = WispConfig()
-    cfg.workspace = str(tmp_path)
-    cfg.auto_approve = True
+    cfg = cfg.replace(workspace=str(tmp_path))
+    cfg = cfg.replace(auto_approve=True)
     return ToolExecutor(
         config=cfg,
         hook_manager=MagicMock(),
@@ -81,7 +81,7 @@ class TestSpawnTool:
     @pytest.mark.asyncio
     async def test_spawn_no_orchestrator(self, tmp_path):
         cfg = WispConfig()
-        cfg.workspace = str(tmp_path)
+        cfg = cfg.replace(workspace=str(tmp_path))
         te = ToolExecutor(config=cfg)
         result = await te._spawn({"task": "do stuff"}, str(tmp_path))
         data = json.loads(result)
@@ -165,8 +165,8 @@ class TestSpawnTool:
         orch = _mock_orchestrator()
         orch.hook_manager = hm  # Set at construction as CompositionRoot does
         cfg = WispConfig()
-        cfg.workspace = str(tmp_path)
-        cfg.auto_approve = True
+        cfg = cfg.replace(workspace=str(tmp_path))
+        cfg = cfg.replace(auto_approve=True)
         te = ToolExecutor(config=cfg, hook_manager=hm, subagent_orchestrator=orch)
         await te._spawn({"task": "test"}, str(tmp_path))
         assert orch.hook_manager is hm  # Was set by constructor, not patched by _spawn
@@ -218,7 +218,7 @@ class TestFanoutTool:
     @pytest.mark.asyncio
     async def test_fanout_no_orchestrator(self, tmp_path):
         cfg = WispConfig()
-        cfg.workspace = str(tmp_path)
+        cfg = cfg.replace(workspace=str(tmp_path))
         te = ToolExecutor(config=cfg)
         result = await te._fanout({"tasks": [{"task": "do"}]}, str(tmp_path))
         data = json.loads(result)

@@ -53,9 +53,8 @@ async def run_swarm(req: SwarmRunRequest):
     from wisp.config import WispConfig
     config = WispConfig()
     if req.model:
-        config.model = req.model
-    config.workspace = str(WORKSPACE_ROOT)
-    config.auto_approve = True
+        config = config.replace(model=req.model)
+    config = config.replace(workspace=str(WORKSPACE_ROOT), auto_approve=True)
 
     try:
         from wisp.multi_agent.orchestrator import SwarmOrchestrator

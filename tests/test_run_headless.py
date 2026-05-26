@@ -30,6 +30,7 @@ class TestRunHeadless:
                 config_instance.permission_mode = "full"
                 config_instance.auto_approve = True
                 config_instance.show_thinking = True
+                config_instance.replace.return_value = config_instance
                 mock_config.return_value = config_instance
 
                 runtime = MagicMock()
@@ -67,6 +68,7 @@ class TestRunHeadless:
                 config_instance.permission_mode = "full"
                 config_instance.auto_approve = True
                 config_instance.show_thinking = True
+                config_instance.replace.return_value = config_instance
                 mock_config.return_value = config_instance
 
                 runtime = MagicMock()
@@ -104,6 +106,7 @@ class TestRunHeadless:
                 config_instance.permission_mode = "full"
                 config_instance.auto_approve = True
                 config_instance.show_thinking = True
+                config_instance.replace.return_value = config_instance
                 mock_config.return_value = config_instance
 
                 runtime = MagicMock()

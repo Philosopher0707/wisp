@@ -191,7 +191,7 @@ def cmd_model(agent, args: str):
                     return
 
     # Apply the switch
-    agent.config.model = new_model
+    agent.config = agent.config.replace(model=new_model)
     if hasattr(agent, "client") and agent.client:
         agent.client.model = new_model
         # Re-detect context window for the new model
@@ -203,7 +203,7 @@ def cmd_model(agent, args: str):
                         "Auto-detected context window for %s: %d tokens",
                         new_model, detected,
                     )
-                    agent.config.max_context_tokens = detected
+                    agent.config = agent.config.replace(max_context_tokens=detected)
             except Exception:
                 pass
     if hasattr(agent, "_system_prompt_cache"):
@@ -348,14 +348,14 @@ def cmd_compact(agent, args: str):
 
 @register("approve", "Toggle auto-approve for tool calls", aliases=("y",), usage="/approve")
 def cmd_approve(agent, args: str):
-    agent.config.auto_approve = not agent.config.auto_approve
+    agent.config = agent.config.replace(auto_approve=not agent.config.auto_approve)
     state = "ON" if agent.config.auto_approve else "OFF"
     print(success(f"✓ Auto-approve: {state}"))
 
 
 @register("thinking", "Toggle reasoning trace display", aliases=("T",), usage="/thinking")
 def cmd_thinking(agent, args: str):
-    agent.config.show_thinking = not agent.config.show_thinking
+    agent.config = agent.config.replace(show_thinking=not agent.config.show_thinking)
     state = "ON" if agent.config.show_thinking else "OFF"
     print(success(f"✓ Show thinking: {state}"))
 
@@ -404,7 +404,7 @@ def cmd_workspace(agent, args: str):
     if not path.is_dir():
         print(error(f"✗ Not a directory: {path}"))
         return
-    agent.config.workspace = str(path.resolve())
+    agent.config = agent.config.replace(workspace=str(path.resolve()))
     # Invalidate system prompt cache because skill discovery is workspace-relative
     if hasattr(agent, "_system_prompt_cache"):
         agent._system_prompt_cache.clear()

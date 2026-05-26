@@ -127,7 +127,7 @@ class WispAgent(WispAgentCore):
         Creates a temporary transport, runs the async turn, and shuts down.
         """
         transport = CLITransport(self)
-        self.config.auto_approve = auto_approve
+        self.config = self.config.replace(auto_approve=auto_approve)
         self._safe_run_sync(transport._execute_turn(system, workspace))
 
     # ── Helpers ────────────────────────────────────────────────────

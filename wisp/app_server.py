@@ -38,9 +38,9 @@ class WispAppServer:
                 prompt = self._require_param(request, "prompt")
                 effective_config = config or WispConfig()
                 if "workspace" in request.params:
-                    effective_config.workspace = request.params["workspace"]
+                    effective_config = effective_config.replace(workspace=request.params["workspace"])
                 if "model" in request.params:
-                    effective_config.model = request.params["model"]
+                    effective_config = effective_config.replace(model=request.params["model"])
 
                 thread, run, events = await self.supervisor.execute_prompt(
                     effective_config,

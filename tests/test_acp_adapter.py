@@ -7,6 +7,7 @@ from wisp.acp_adapter import AcpAdapter
 from wisp.acp_session import AcpSessionManager
 from wisp.infra.store import UnifiedStore
 from wisp.acp_adapter import ACP_PROTOCOL_VERSION
+from wisp.config import WispConfig
 from wisp.acp_protocol import (
     ErrorCode,
 )
@@ -113,7 +114,7 @@ class TestAcpAdapterSessionManagement:
     def test_session_list_with_sessions(self, tmp_path):
         store = UnifiedStore(tmp_path / "sessions" / "wisp.db")
         adapter = AcpAdapter(session_mgr=AcpSessionManager(store=store))
-        adapter.session_mgr.create("/tmp", MagicMock(model="llama3"), title="Session 1")
+        adapter.session_mgr.create("/tmp", WispConfig().replace(model="llama3"), title="Session 1")
 
         with patch.object(adapter, "_send_response") as mock_send:
             adapter._handle_request({
@@ -170,7 +171,7 @@ class TestAcpAdapterToolResult:
 
     def test_tool_result(self):
         adapter = AcpAdapter()
-        session = adapter.session_mgr.create("/tmp", MagicMock(model="llama3"))
+        session = adapter.session_mgr.create("/tmp", WispConfig().replace(model="llama3"))
 
         with patch.object(adapter, "_send_response") as mock_send:
             adapter._handle_request({
@@ -195,7 +196,7 @@ class TestAcpAdapterConfig:
 
     def test_config_set_model(self):
         adapter = AcpAdapter()
-        session = adapter.session_mgr.create("/tmp", MagicMock(model="llama3"))
+        session = adapter.session_mgr.create("/tmp", WispConfig().replace(model="llama3"))
 
         with patch.object(adapter, "_send_response"):
             adapter._handle_request({
@@ -213,7 +214,7 @@ class TestAcpAdapterConfig:
 
     def test_config_set_auto_approve(self):
         adapter = AcpAdapter()
-        session = adapter.session_mgr.create("/tmp", MagicMock(model="llama3"))
+        session = adapter.session_mgr.create("/tmp", WispConfig().replace(model="llama3"))
 
         with patch.object(adapter, "_send_response"):
             adapter._handle_request({
@@ -235,7 +236,7 @@ class TestAcpAdapterCancel:
 
     def test_cancel(self):
         adapter = AcpAdapter()
-        session = adapter.session_mgr.create("/tmp", MagicMock(model="llama3"))
+        session = adapter.session_mgr.create("/tmp", WispConfig().replace(model="llama3"))
         session._interrupted = False
 
         with patch.object(adapter, "_send_response") as mock_send:
@@ -278,7 +279,7 @@ class TestAcpAdapterNotifications:
 
     def test_mode_update(self):
         adapter = AcpAdapter()
-        session = adapter.session_mgr.create("/tmp", MagicMock(model="llama3"))
+        session = adapter.session_mgr.create("/tmp", WispConfig().replace(model="llama3"))
 
         adapter._handle_notification({
             "jsonrpc": "2.0",

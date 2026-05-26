@@ -47,7 +47,7 @@ class TestOrchestratorHooks:
 
         hm = SpyHookManager()
         config = WispConfig()
-        config.workspace = "/tmp"
+        config = config.replace(workspace="/tmp")
 
         orch = SubagentOrchestrator(config=config, hook_manager=hm)
         contract = SubagentContract(
@@ -74,7 +74,7 @@ class TestOrchestratorHooks:
 
         hm = SpyHookManager()
         config = WispConfig()
-        config.workspace = "/tmp"
+        config = config.replace(workspace="/tmp")
 
         orch = SubagentOrchestrator(config=config, hook_manager=hm)
         contract = SubagentContract(
@@ -103,7 +103,7 @@ class TestOrchestratorHooks:
 
         hm = SpyHookManager()
         config = WispConfig()
-        config.workspace = "/tmp"
+        config = config.replace(workspace="/tmp")
 
         orch = SubagentOrchestrator(config=config, hook_manager=hm)
         contract = SubagentContract(
@@ -131,7 +131,7 @@ class TestOrchestratorHooks:
         from wisp.multi_agent.subagent_orchestrator import SubagentOrchestrator
 
         config = WispConfig()
-        config.workspace = "/tmp"
+        config = config.replace(workspace="/tmp")
         orch = SubagentOrchestrator(config=config, hook_manager=None)
         contract = SubagentContract(
             name="test-sub", role="generalist", task="hi",
@@ -148,7 +148,7 @@ class TestOrchestratorHooks:
 
         hm = SpyHookManager()
         config = WispConfig()
-        config.workspace = "/tmp"
+        config = config.replace(workspace="/tmp")
 
         orch = SubagentOrchestrator(config=config, hook_manager=hm)
 
@@ -178,7 +178,7 @@ class TestOrchestratorHooks:
 
         hm = SpyHookManager()
         config = WispConfig()
-        config.workspace = "/tmp"
+        config = config.replace(workspace="/tmp")
 
         orch = SubagentOrchestrator(config=config, hook_manager=hm)
         orch._max_depth = 1  # Force depth limit
@@ -207,7 +207,7 @@ class TestHookContextTruncation:
 
         hm = SpyHookManager()
         config = WispConfig()
-        config.workspace = "/tmp"
+        config = config.replace(workspace="/tmp")
 
         orch = SubagentOrchestrator(config=config, hook_manager=hm)
         long_task = "x" * 1000

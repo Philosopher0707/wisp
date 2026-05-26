@@ -208,7 +208,7 @@ class TestConfigFingerprint:
         from wisp.config import WispConfig
 
         config = WispConfig()
-        config.model = "model-a"
+        config = config.replace(model="model-a")
 
         rt = AgentRuntime(
             store=tmp_store,
@@ -220,7 +220,7 @@ class TestConfigFingerprint:
         )
 
         core1 = rt._get_core()
-        config.model = "model-b"
+        rt.config = config.replace(model="model-b")
         core2 = rt._get_core()
         assert core1 is not core2, "core cache should invalidate when config model changes"
 
@@ -233,7 +233,7 @@ class TestConfigFingerprint:
         from wisp.config import WispConfig
 
         config = WispConfig()
-        config.model = "model-a"
+        config = config.replace(model="model-a")
 
         rt = AgentRuntime(
             store=tmp_store,

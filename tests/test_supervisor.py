@@ -43,7 +43,7 @@ async def test_supervisor_executes_prompt_and_persists_events(tmp_path):
         artifacts_dir=tmp_path / "artifacts",
     )
     config = WispConfig()
-    config.workspace = "/tmp/project"
+    config = config.replace(workspace="/tmp/project")
 
     # Mock run_headless to avoid calling real Ollama API
     from unittest.mock import patch

@@ -33,6 +33,13 @@ class FakeConfig:
     chars_per_token = 4
     permission_mode = "auto"
 
+    def replace(self, **kwargs):
+        import copy
+        inst = copy.copy(self)
+        for k, v in kwargs.items():
+            setattr(inst, k, v)
+        return inst
+
 
 @pytest.fixture
 def transport():

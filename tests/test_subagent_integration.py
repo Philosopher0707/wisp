@@ -52,14 +52,16 @@ class MockProvider:
 def wisp_config(tmp_path):
     """Create a real WispConfig for testing."""
     cfg = WispConfig()
-    cfg.workspace = str(tmp_path)
-    cfg.model = "test-model"
-    cfg.provider = "ollama"
-    cfg.permission_mode = "full"
-    cfg.ollama_url = "http://localhost:11434"
-    cfg.thread_pool_size = 2
-    cfg.chars_per_token = 4
-    cfg.auto_delegate = False
+    cfg = cfg.replace(
+        workspace=str(tmp_path),
+        model="test-model",
+        provider="ollama",
+        permission_mode="full",
+        ollama_url="http://localhost:11434",
+        thread_pool_size=2,
+        chars_per_token=4,
+        auto_delegate=False,
+    )
     return cfg
 
 

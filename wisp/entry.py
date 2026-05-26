@@ -54,14 +54,14 @@ def run_mode(mode: str, prompt: str | None = None, **kwargs) -> None:
     # Apply overrides from kwargs (model, workspace, etc.)
     model = kwargs.get("model")
     if model:
-        config.model = model
+        config = config.replace(model=model)
     workspace = kwargs.get("workspace")
     if workspace:
-        config.workspace = workspace
+        config = config.replace(workspace=workspace)
     if kwargs.get("show_thinking") is not None:
-        config.show_thinking = kwargs["show_thinking"]
+        config = config.replace(show_thinking=kwargs["show_thinking"])
     if kwargs.get("auto_approve") is not None:
-        config.auto_approve = kwargs["auto_approve"]
+        config = config.replace(auto_approve=kwargs["auto_approve"])
 
     root = CompositionRoot(config)
 
@@ -375,12 +375,10 @@ async def run_headless(prompt: str, model: str | None = None,
 
     config = WispConfig()
     if model:
-        config.model = model
+        config = config.replace(model=model)
     if workspace:
-        config.workspace = workspace
-    config.permission_mode = permission_mode
-    config.auto_approve = True
-    config.show_thinking = True
+        config = config.replace(workspace=workspace)
+    config = config.replace(permission_mode=permission_mode, auto_approve=True, show_thinking=True)
 
     own_root = root is None
     if own_root:

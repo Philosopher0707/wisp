@@ -61,14 +61,12 @@ class Wisp:
     ):
         config = WispConfig()
         if model:
-            config.model = model
+            config = config.replace(model=model)
         if workspace:
-            config.workspace = workspace
+            config = config.replace(workspace=workspace)
         if temperature is not None:
-            config.temperature = temperature
-        config.auto_approve = auto_approve
-        config.show_thinking = show_thinking
-        config.max_iterations = max_iterations
+            config = config.replace(temperature=temperature)
+        config = config.replace(auto_approve=auto_approve, show_thinking=show_thinking, max_iterations=max_iterations)
 
         self._config = config
         self._skill_name = skill_name

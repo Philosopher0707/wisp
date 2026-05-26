@@ -78,8 +78,7 @@ class TestAutoDetectContext:
         from wisp.config import WispConfig
 
         config = WispConfig()
-        config._context_tokens_explicit = False
-        config.max_context_tokens = 128000
+        config = config.replace(_context_tokens_explicit=False, max_context_tokens=128000)
 
         agent = WispAgent.__new__(WispAgent)
         agent.config = config
@@ -95,7 +94,7 @@ class TestAutoDetectContext:
         # Simulate what __init__ does for auto-detection
         if not agent.config._context_tokens_explicit:
             detected = agent.client.get_context_length()
-            agent.config.max_context_tokens = detected
+            agent.config = agent.config.replace(max_context_tokens=detected)
 
         assert agent.config.max_context_tokens == 262144
 
@@ -104,8 +103,7 @@ class TestAutoDetectContext:
         from wisp.config import WispConfig
 
         config = WispConfig()
-        config._context_tokens_explicit = True
-        config.max_context_tokens = 64000
+        config = config.replace(_context_tokens_explicit=True, max_context_tokens=64000)
 
         agent = WispAgent.__new__(WispAgent)
         agent.config = config
@@ -121,6 +119,6 @@ class TestAutoDetectContext:
         # Auto-detection should be skipped
         if not agent.config._context_tokens_explicit:
             detected = agent.client.get_context_length()
-            agent.config.max_context_tokens = detected
+            agent.config = agent.config.replace(max_context_tokens=detected)
 
         assert agent.config.max_context_tokens == 64000

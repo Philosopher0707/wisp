@@ -38,13 +38,13 @@ async def execute_prompt(req: PromptRequest, request: Request):
     config = copy.deepcopy(root.config)
 
     if req.model:
-        config.model = req.model
-    config.permission_mode = req.permission_mode
+        config = config.replace(model=req.model)
+    config = config.replace(permission_mode=req.permission_mode)
     # Security: default is False; operator can override via env var for backward compat.
     env_auto_approve = os.environ.get("WISP_HEADLESS_AUTO_APPROVE", "").lower() == "true"
     # Per-request flag wins, then env var, then safe default (False).
     effective_auto_approve = req.auto_approve if req.auto_approve else env_auto_approve
-    config.auto_approve = effective_auto_approve
+    config = config.replace(auto_approve=effective_auto_approve)
 
     transport = HeadlessTransport(auto_approve=req.auto_approve)
     transport.start()

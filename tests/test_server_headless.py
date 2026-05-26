@@ -11,7 +11,7 @@ class TestHeadlessAutoApprove:
         monkeypatch.delenv("WISP_HEADLESS_AUTO_APPROVE", raising=False)
 
         config = WispConfig()
-        config.auto_approve = os.environ.get("WISP_HEADLESS_AUTO_APPROVE", "") == "1"
+        config = config.replace(auto_approve=os.environ.get("WISP_HEADLESS_AUTO_APPROVE", "") == "1")
         assert config.auto_approve is False
 
     def test_headless_auto_approve_with_env_var(self, monkeypatch):
@@ -19,7 +19,7 @@ class TestHeadlessAutoApprove:
 
         monkeypatch.setenv("WISP_HEADLESS_AUTO_APPROVE", "1")
         config = WispConfig()
-        config.auto_approve = os.environ.get("WISP_HEADLESS_AUTO_APPROVE", "") == "1"
+        config = config.replace(auto_approve=os.environ.get("WISP_HEADLESS_AUTO_APPROVE", "") == "1")
         assert config.auto_approve is True
 
     def test_prompt_request_default_permission_mode(self):

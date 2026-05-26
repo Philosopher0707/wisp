@@ -36,7 +36,7 @@ class SettingsScreen(ModalScreen):
         elif event.button.id == "save-settings":
             model = self.query_one("#setting-model", Input).value
             if hasattr(self.app, 'wisp_config'):
-                self.app.wisp_config.model = model
+                self.app.wisp_config = self.app.wisp_config.replace(model=model)
             self.dismiss()
 
     def action_dismiss(self) -> None:

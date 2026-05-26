@@ -255,8 +255,10 @@ class SubagentRunner:
 
         # Propagate subagent depth/branch from contract to config so the core
         # can access them (and tests can verify propagation).
-        config._subagent_depth = getattr(contract, "_subagent_depth", 0)
-        config._subagent_branch_count = getattr(contract, "_subagent_branch_count", 0)
+        config = config.replace(
+            _subagent_depth=getattr(contract, "_subagent_depth", 0),
+            _subagent_branch_count=getattr(contract, "_subagent_branch_count", 0),
+        )
 
         provider_name = getattr(config, "provider", None)
         if not isinstance(provider_name, str):
@@ -406,12 +408,13 @@ class SubagentRunner:
 
     def _build_child_config(self, contract: SubagentContract, workspace: str) -> WispConfig:
         """Clone the parent config with optional per-subagent overrides."""
-        child = copy.deepcopy(self.parent_config)
-        child.model = contract.model or self.parent_config.model
-        child.workspace = workspace
-        child.auto_approve = contract.auto_approve
-        child.max_context_tokens = contract.max_tokens or self.parent_config.max_context_tokens
-        child.max_iterations = contract.max_iterations
+        child = self.parent_config.replace(
+            model=contract.model or self.parent_config.model,
+            workspace=workspace,
+            auto_approve=contract.auto_approve,
+            max_context_tokens=contract.max_tokens or self.parent_config.max_context_tokens,
+            max_iterations=contract.max_iterations,
+        )
         return child
 
     def _estimate_tokens(self, messages: list[dict]) -> tuple[int, int, int]:

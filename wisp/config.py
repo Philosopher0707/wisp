@@ -10,6 +10,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Any, Optional
+from dataclasses import dataclass, field
 from wisp.infra.security import PermissionMode
 
 
@@ -306,19 +307,20 @@ def _parse_float(value: Any, default: float, min_val: float | None = None, max_v
     return result
 
 
+@dataclass(frozen=True, init=False)
 class WispConfig:
-    """Resolved Wisp configuration.
+    """Resolved Wisp configuration — immutable.
 
     Reads from env vars, config file, and defaults (in priority order).
+    Use config.replace(key=value) to create a modified copy.
     """
-
     def __init__(self):
-        self.provider: str = get_setting("provider", "ollama")
-        self.ollama_url: str = get_setting("ollama_url", DEFAULT_OLLAMA_URL)
-        self.model: str = get_setting("model", DEFAULT_MODEL)
-        self.temperature: float = float(get_setting("temperature", "0.2"))
+        object.__setattr__(self, "provider", get_setting("provider", "ollama"))
+        object.__setattr__(self, "ollama_url", get_setting("ollama_url", DEFAULT_OLLAMA_URL))
+        object.__setattr__(self, "model", get_setting("model", DEFAULT_MODEL))
+        object.__setattr__(self, "temperature", float(get_setting("temperature", "0.2")))
         raw_max_tokens = get_setting("max_tokens", 32768)
-        self.max_tokens: Optional[int] = (
+        object.__setattr__(self, "max_tokens",
             int(raw_max_tokens) if raw_max_tokens is not None else None
         )
         raw_skill_dirs = get_setting(
@@ -331,67 +333,99 @@ class WispConfig:
         )
         # Ensure it's a list (env vars come as strings, config file may have list)
         if isinstance(raw_skill_dirs, str):
-            self.skill_dirs = [d.strip() for d in raw_skill_dirs.split(",") if d.strip()]
+            object.__setattr__(self, "skill_dirs",
+                [d.strip() for d in raw_skill_dirs.split(",") if d.strip()]
+            )
         elif isinstance(raw_skill_dirs, list):
-            self.skill_dirs = raw_skill_dirs
+            object.__setattr__(self, "skill_dirs", raw_skill_dirs)
         else:
-            self.skill_dirs = [".agents/skills", ".warp/skills", ".claude/skills"]
-        self.workspace: Optional[str] = get_setting("workspace", os.getcwd())
+            object.__setattr__(self, "skill_dirs",
+                [".agents/skills", ".warp/skills", ".claude/skills"]
+            )
+        object.__setattr__(self, "workspace", get_setting("workspace", os.getcwd()))
         # Auto-approve tool calls (default FALSE — require explicit opt-in).
         # When false, every mutating tool call triggers an approval_request
         # event and the transport layer must confirm before execution.
-        self.auto_approve: bool = _parse_bool(get_setting("auto_approve", "false"), False)
+        object.__setattr__(self, "auto_approve",
+            _parse_bool(get_setting("auto_approve", "false"), False)
+        )
         # Show reasoning trace inline
-        self.show_thinking: bool = _parse_bool(get_setting("show_thinking", "true"), True)
+        object.__setattr__(self, "show_thinking",
+            _parse_bool(get_setting("show_thinking", "true"), True)
+        )
         # Show full tool output (when false, collapse to one-liners)
-        self.show_tool_output: bool = _parse_bool(get_setting("show_tool_output", "true"), True)
+        object.__setattr__(self, "show_tool_output",
+            _parse_bool(get_setting("show_tool_output", "true"), True)
+        )
         # Minimal rendering mode — no boxes, flat output, good for pipes/narrow terminals
-        self.compact_mode: bool = _parse_bool(get_setting("compact_mode", "false"), False)
+        object.__setattr__(self, "compact_mode",
+            _parse_bool(get_setting("compact_mode", "false"), False)
+        )
         # Max agent loop iterations per user turn
-        self.max_iterations: int = _parse_int(get_setting("max_iterations", "30"), 30, 1, 100)
+        object.__setattr__(self, "max_iterations",
+            _parse_int(get_setting("max_iterations", "30"), 30, 1, 100)
+        )
         # Max repeated identical tool calls before stopping (0 = disabled)
-        self.max_reflections: int = _parse_int(get_setting("max_reflections", "3"), 3, 0, 10)
+        object.__setattr__(self, "max_reflections",
+            _parse_int(get_setting("max_reflections", "3"), 3, 0, 10)
+        )
         # Context window guard: trim oldest messages when estimated tokens exceed this
         raw_ctx = get_setting("max_context_tokens")
-        self.max_context_tokens: int = _parse_int(raw_ctx, DEFAULT_MAX_CONTEXT_TOKENS, 1024)
+        object.__setattr__(self, "max_context_tokens",
+            _parse_int(raw_ctx, DEFAULT_MAX_CONTEXT_TOKENS, 1024)
+        )
         # Track whether user explicitly set context window (disables auto-detection)
-        self._context_tokens_explicit: bool = raw_ctx is not None
+        object.__setattr__(self, "_context_tokens_explicit", raw_ctx is not None)
         # Permissions: full (all allowed) | ask_all (ask for writes) | auto_edit (ask for bash only) | read_only (no writes)
-        self.permission_mode: PermissionMode = PermissionMode(get_setting("permission_mode", PermissionMode.FULL))
+        object.__setattr__(self, "permission_mode",
+            PermissionMode(get_setting("permission_mode", PermissionMode.FULL))
+        )
         # Plan mode: agent plans only, no tool execution
-        self.plan_mode: bool = _parse_bool(get_setting("plan_mode", "false"), False)
+        object.__setattr__(self, "plan_mode",
+            _parse_bool(get_setting("plan_mode", "false"), False)
+        )
         # Plan context: approved plan injected into system prompt
-        self.plan_context: Optional[str] = None
+        object.__setattr__(self, "plan_context", None)
         # Tokens per character estimate for context budget (4 is conservative for code/text)
-        self.chars_per_token: int = _parse_int(get_setting("chars_per_token", "4"), 4, 1, 10)
+        object.__setattr__(self, "chars_per_token",
+            _parse_int(get_setting("chars_per_token", "4"), 4, 1, 10)
+        )
         # Auto-compaction settings
-        self.auto_compact: bool = _parse_bool(get_setting("auto_compact", "true"), True)
-        self.compact_threshold_tokens: int = _parse_int(get_setting("compact_threshold_tokens", "75"), 75, 10, 95)
-        self.compact_keep_recent: int = _parse_int(get_setting("compact_keep_recent", "6"), 6, 4, 50)
-        self.compaction_model: str = get_setting("compaction_model", "") or ""
+        object.__setattr__(self, "auto_compact",
+            _parse_bool(get_setting("auto_compact", "true"), True)
+        )
+        object.__setattr__(self, "compact_threshold_tokens",
+            _parse_int(get_setting("compact_threshold_tokens", "75"), 75, 10, 95)
+        )
+        object.__setattr__(self, "compact_keep_recent",
+            _parse_int(get_setting("compact_keep_recent", "6"), 6, 4, 50)
+        )
+        object.__setattr__(self, "compaction_model",
+            get_setting("compaction_model", "") or ""
+        )
         # Concurrency limits
-        self.thread_pool_size: int = _parse_int(
+        object.__setattr__(self, "thread_pool_size", _parse_int(
             get_setting("thread_pool_size", "8"), 8, 1, 64
-        )
-        self.subagent_pool_size: int = _parse_int(
+        ))
+        object.__setattr__(self, "subagent_pool_size", _parse_int(
             get_setting("subagent_pool_size", "4"), 4, 1, 32
-        )
-        self.max_subagent_timeout: int = _parse_int(
+        ))
+        object.__setattr__(self, "max_subagent_timeout", _parse_int(
             get_setting("max_subagent_timeout", "600"), 600, 30, 3600
-        )
-        self.max_subagent_depth: int = _parse_int(
+        ))
+        object.__setattr__(self, "max_subagent_depth", _parse_int(
             get_setting("max_subagent_depth", "2"), 2, 0, 10
-        )
-        self.max_subagent_branching: int = _parse_int(
+        ))
+        object.__setattr__(self, "max_subagent_branching", _parse_int(
             get_setting("max_subagent_branching", "3"), 3, 1, 20
-        )
+        ))
         # Auto-delegation: detect multi-faceted prompts and split into subagents
-        self.auto_delegate: bool = _parse_bool(
+        object.__setattr__(self, "auto_delegate", _parse_bool(
             get_setting("auto_delegate", "true"), True
-        )
-        self.delegation_threshold: float = _parse_float(
+        ))
+        object.__setattr__(self, "delegation_threshold", _parse_float(
             get_setting("delegation_threshold", "0.18"), 0.18, 0.05, 0.95
-        )
+        ))
         # Write-classification tools requiring approval in restricted modes
         raw_write_tools = get_setting(
             "write_tools",
@@ -399,37 +433,52 @@ class WispConfig:
              "gh_pr_create", "spawn_subagent"],
         )
         if isinstance(raw_write_tools, str):
-            self.write_tools: list[str] = [t.strip() for t in raw_write_tools.split(",") if t.strip()]
+            object.__setattr__(self, "write_tools",
+                [t.strip() for t in raw_write_tools.split(",") if t.strip()]
+            )
         elif isinstance(raw_write_tools, list):
-            self.write_tools = raw_write_tools
+            object.__setattr__(self, "write_tools", raw_write_tools)
         else:
-            self.write_tools = ["write_file", "edit_file", "run_bash", "git_commit",
-                                "git_push", "gh_pr_create", "spawn_subagent"]
+            object.__setattr__(self, "write_tools",
+                ["write_file", "edit_file", "run_bash", "git_commit",
+                 "gh_pr_create", "git_push", "spawn_subagent"]
+            )
         # Subagent model fallback priority (tried in order for local subagent execution)
         raw_subagent_models = get_setting(
             "subagent_models",
             ["llama3.2", "llama3.1", "qwen2.5", "phi4", "gemma2"],
         )
         if isinstance(raw_subagent_models, str):
-            self.subagent_models: list[str] = [m.strip() for m in raw_subagent_models.split(",") if m.strip()]
+            object.__setattr__(self, "subagent_models",
+                [m.strip() for m in raw_subagent_models.split(",") if m.strip()]
+            )
         elif isinstance(raw_subagent_models, list):
-            self.subagent_models = raw_subagent_models
+            object.__setattr__(self, "subagent_models", raw_subagent_models)
         else:
-            self.subagent_models = ["llama3.2", "llama3.1", "qwen2.5", "phi4", "gemma2"]
+            object.__setattr__(self, "subagent_models",
+                ["llama3.2", "llama3.1", "qwen2.5", "phi4", "gemma2"]
+            )
         # Context files
         raw_context_files = get_setting(
             "context_files",
             ["wisp.md", "CLAUDE.md", "AGENTS.md", ".wisp/rules.md", "GEMINI.md"],
         )
         if isinstance(raw_context_files, str):
-            self.context_files: list[str] = [f.strip() for f in raw_context_files.split(",") if f.strip()]
+            object.__setattr__(self, "context_files",
+                [f.strip() for f in raw_context_files.split(",") if f.strip()]
+            )
         elif isinstance(raw_context_files, list):
-            self.context_files = raw_context_files
+            object.__setattr__(self, "context_files", raw_context_files)
         else:
-            self.context_files = ["wisp.md", "CLAUDE.md", "AGENTS.md", ".wisp/rules.md", "GEMINI.md"]
-        self.loaded_context: str = ""
-        self._context_mtimes: dict[str, float] = {}
-        self._last_workspace_for_context: Optional[str] = None
+            object.__setattr__(self, "context_files",
+                ["wisp.md", "CLAUDE.md", "AGENTS.md", ".wisp/rules.md", "GEMINI.md"]
+            )
+        object.__setattr__(self, "loaded_context", "")
+        object.__setattr__(self, "_context_mtimes", {})
+        object.__setattr__(self, "_last_workspace_for_context", None)
+        # Subagent depth/branch tracking for propagation
+        object.__setattr__(self, "_subagent_depth", 0)
+        object.__setattr__(self, "_subagent_branch_count", 0)
 
     def load_context_files(self) -> str:
         """Load and concatenate context files from workspace root.
@@ -493,14 +542,14 @@ class WispConfig:
                 logger.warning("Failed to read context file %s: %s", fpath, e)
 
         if blocks:
-            self.loaded_context = (
+            object.__setattr__(self, "loaded_context",
                 "## Project Context\n\n" + "\n".join(blocks)
             )
         else:
-            self.loaded_context = ""
+            object.__setattr__(self, "loaded_context", "")
 
-        self._context_mtimes = mtimes
-        self._last_workspace_for_context = str(ws_path)
+        object.__setattr__(self, "_context_mtimes", mtimes)
+        object.__setattr__(self, "_last_workspace_for_context", str(ws_path))
         logger.debug("Loaded %d context file(s) for workspace %s", len(found_files), ws_path)
         return self.loaded_context
 
@@ -570,6 +619,21 @@ class WispConfig:
 
         return errors
 
+    def replace(self, **kwargs):
+        """Return a new WispConfig with specified fields replaced."""
+        new = object.__new__(WispConfig)
+        # Copy all current fields
+        for attr in dir(self):
+            if not attr.startswith('__') and not callable(getattr(self, attr, None)):
+                try:
+                    val = getattr(self, attr)
+                    object.__setattr__(new, attr, val)
+                except Exception:
+                    pass
+        # Apply overrides
+        for key, value in kwargs.items():
+            object.__setattr__(new, key, value)
+        return new
 
     def fingerprint(self) -> str:
         """Return a stable hash of config fields that affect core behavior.

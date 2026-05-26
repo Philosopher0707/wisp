@@ -21,9 +21,7 @@ from wisp.config import WispConfig
 @pytest.fixture
 def core():
     config = WispConfig()
-    config.model = "test-model"
-    config.workspace = "/tmp"
-    config.auto_compact = False
+    config = config.replace(model="test-model", workspace="/tmp", auto_compact=False)
     return WispAgentCore(config=config)
 
 
