@@ -266,6 +266,21 @@ class SubagentOrchestrator:
             or Path.cwd().resolve()
         )
         self.workspace = Path(_ws).resolve() if not isinstance(_ws, Path) else _ws.resolve()
+
+        # Resolve workspace to git root so worktree creation always works
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                capture_output=True, text=True, cwd=str(self.workspace),
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                git_root = Path(result.stdout.strip()).resolve()
+                if git_root != self.workspace:
+                    logger.debug("Workspace resolved from %s to git root %s", self.workspace, git_root)
+                self.workspace = git_root
+        except Exception:
+            pass  # not a git repo — WorktreeManager will handle gracefully
         self.hook_manager = hook_manager
 
         # Unique cache namespace — prevents cross-session cache collisions
