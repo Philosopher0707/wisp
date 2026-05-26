@@ -267,20 +267,10 @@ class SubagentOrchestrator:
         )
         self.workspace = Path(_ws).resolve() if not isinstance(_ws, Path) else _ws.resolve()
 
-        # Resolve workspace to git root so worktree creation always works
-        try:
-            import subprocess
-            result = subprocess.run(
-                ["git", "rev-parse", "--show-toplevel"],
-                capture_output=True, text=True, cwd=str(self.workspace),
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                git_root = Path(result.stdout.strip()).resolve()
-                if git_root != self.workspace:
-                    logger.debug("Workspace resolved from %s to git root %s", self.workspace, git_root)
-                self.workspace = git_root
-        except Exception:
-            pass  # not a git repo — WorktreeManager will handle gracefully
+        # Resolve workspace to git root so worktree creation always works.
+        # If cwd isn't a git repo, walk up to find one — covers the case
+        # where REPL starts from home dir but project is in a subdirectory.
+        self._resolve_git_root()
         self.hook_manager = hook_manager
 
         # Unique cache namespace — prevents cross-session cache collisions
@@ -303,6 +293,39 @@ class SubagentOrchestrator:
         self._pool_size = getattr(self.config, "subagent_pool_size", 4)
         self._active = 0
         self._semaphore = asyncio.Semaphore(self._pool_size)
+
+    # ── Workspace resolution ────────────────────────────────────────────
+
+    def _resolve_git_root(self) -> None:
+        """Resolve workspace to git root.
+
+        Tries in order:
+        1. config.workspace (may have been updated by /cd)
+        2. os.getcwd() (may have changed via bash cd)
+        3. Walk up from cwd looking for .git
+
+        Covers the case where REPL starts from ~ but user navigated
+        to a project directory inside the session.
+        """
+        import subprocess
+
+        for candidate in [self.workspace, Path.cwd().resolve()]:
+            result = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                capture_output=True, text=True, cwd=str(candidate),
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                git_root = Path(result.stdout.strip()).resolve()
+                if git_root != self.workspace:
+                    logger.debug("Workspace resolved from %s to git root %s", self.workspace, git_root)
+                self.workspace = git_root
+                return
+
+        logger.warning(
+            "Workspace %s is not in a git repo (cwd=%s) — "
+            "subagent worktree isolation will be disabled",
+            self.workspace, Path.cwd().resolve(),
+        )
 
     # ── Token budget API ───────────────────────────────────────────────
 
