@@ -13,7 +13,7 @@ const DANGEROUS_PATTERNS = [
   /:(){ :|: \u0026 };:/,
 ];
 
-function checkDangerousCommand(command: string): string | null {
+export function checkDangerousCommand(command: string): string | null {
   for (const pattern of DANGEROUS_PATTERNS) {
     if (pattern.test(command)) return `Blocked dangerous pattern: ${pattern.source}`;
   }
