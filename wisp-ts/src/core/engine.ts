@@ -98,8 +98,11 @@ export class WispAgentCore {
           }
         }
       } catch (exc) {
-        if (partialContent.length > 0) yield { type: "content", text: partialContent.join("") };
-        yield { type: "error", message: String(exc), recoverable: true };
+        // Graceful degradation on model failure: yield partial content if any, then error
+        if (partialContent.length > 0) {
+          yield { type: "content", text: partialContent.join("") };
+        }
+        yield { type: "error", message: `Model error: ${exc}`, recoverable: true };
         return;
       }
 
@@ -108,7 +111,8 @@ export class WispAgentCore {
         return;
       }
 
-      // Execute tools
+      // Execute tools with timeout
+      const toolTimeoutMs = (this.config.tool_timeout ?? 120) * 1000;
       const toolResults: Record<string, unknown>[] = [];
       for (const tc of pendingToolCalls) {
         const start = performance.now();
@@ -122,7 +126,12 @@ export class WispAgentCore {
             continue;
           }
 
-          const rawResult = await this.toolRegistry.execute(tc.name, tc.arguments, workspace);
+          // Execute with timeout
+          const rawResult = await this._executeWithTimeout(
+            () => this.toolRegistry.execute(tc.name, tc.arguments, workspace),
+            toolTimeoutMs,
+            tc.name
+          );
           const durationMs = performance.now() - start;
           const normalized = this._normalizeToolResult(rawResult);
           yield { type: "tool_result", name: tc.name, result: normalized, duration_ms: durationMs, tool_call_id: tc.id };
@@ -197,5 +206,22 @@ export class WispAgentCore {
       return result as Record<string, unknown>;
     }
     return { status: "ok", data: String(result ?? "") };
+  }
+
+  private async _executeWithTimeout<T>(fn: () => Promise<T>, timeoutMs: number, toolName: string): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`Tool '${toolName}' timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      fn()
+        .then((result) => {
+          clearTimeout(timer);
+          resolve(result);
+        })
+        .catch((err) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+    });
   }
 }

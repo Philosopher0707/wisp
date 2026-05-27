@@ -1,5 +1,6 @@
 /** Production-grade AgentRuntime — session lifecycle manager. */
 
+import crypto from "node:crypto";
 import { WispAgentCore } from "./engine.js";
 import { Session } from "./session.js";
 import { UnifiedStore } from "../infra/store.js";
@@ -15,6 +16,8 @@ export class AgentRuntime {
   tokenCounter: TokenCounter;
   auditTrail?: AuditTrail;
   private _sessionLocks = new Map<string, Promise<void>>();
+  private _turnCounts = new Map<string, number>();
+  private _maxTurns = 100;
   private _maxMessages: number;
   private _maxContextTokens: number;
   private _autoCompact: boolean;
@@ -70,16 +73,28 @@ export class AgentRuntime {
       throw new Error(`Invalid prompt: ${prompt}`);
     }
 
-    // Per-session lock serialization
+    // Per-session lock serialization — atomic acquisition
     const sid = session.sessionId;
+    let resolveLock!: () => void;
+    const lockPromise = new Promise<void>((resolve) => { resolveLock = resolve; });
+
+    // Wait for any existing lock, then atomically claim ours
     while (this._sessionLocks.has(sid)) {
       await this._sessionLocks.get(sid);
     }
-    const lockPromise = this._consumeGenerator(this._runTurnLocked(session, prompt, approvalHandler));
     this._sessionLocks.set(sid, lockPromise);
+
+    const turnCount = (this._turnCounts.get(sid) ?? 0) + 1;
+    if (turnCount > this._maxTurns) {
+      yield { type: "error", message: `Max turns (${this._maxTurns}) reached for this session. Start a new session.`, recoverable: false };
+      return;
+    }
+    this._turnCounts.set(sid, turnCount);
+
     try {
       yield* this._runTurnLocked(session, prompt, approvalHandler);
     } finally {
+      resolveLock();
       this._sessionLocks.delete(sid);
     }
   }
@@ -95,7 +110,7 @@ export class AgentRuntime {
     this.auditTrail?.record("turn_started", { actor: "runtime", metadata: { session_id: session.sessionId, turn_id: turnId, prompt_length: prompt.length } });
 
     // Idempotency: if identical prompt recently run, yield cached result
-    const idemKey = `${session.sessionId}:${prompt}`;
+    const idemKey = `${session.sessionId}:${crypto.createHash("sha256").update(prompt).digest("hex")}`;
     const idem = this.store.getIdempotency(idemKey);
     if (idem) {
       this.auditTrail?.record("turn_idempotent", { actor: "runtime", metadata: { session_id: session.sessionId, turn_id: turnId } });
@@ -219,11 +234,6 @@ export class AgentRuntime {
       summary,
       timestamp: Date.now() / 1000,
     });
-  }
-
-  private async _consumeGenerator(gen: AsyncGenerator<Record<string, unknown>>): Promise<void> {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    for await (const _ of gen) { /* drain */ }
   }
 
   private _saveToStore(session: Session): void {

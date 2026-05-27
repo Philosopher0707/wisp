@@ -16,7 +16,7 @@ import {
   renderContentBlock,
 } from "./renderer.js";
 import { success, error, warning, info, dim } from "../colors.js";
-import { getOutputMode, displayWidth, isAccessible } from "../terminal_width.js";
+import { getOutputMode, displayWidth, isAccessible, BoxChars } from "../terminal_width.js";
 import { AgentRuntime } from "../core/runtime.js";
 import { Session } from "../core/session.js";
 import { StdinQueue } from "./queue.js";
@@ -62,9 +62,10 @@ export class CLITransport implements Transport {
   private _phase = "understand";
   private _interrupted = false;
   private _approvalState = { allowedTools: new Set<string>(), deniedTools: new Set<string>(), autoMode: false, blockMode: false };
-  private _oldSigint: NodeJS.SignalsListener | null = null;
+  private _sigintHandler: (() => void) | null = null;
   private _stdinQueue = new StdinQueue();
   private _readerActive = false;
+  private _stdinRl: readline.Interface | null = null;
   showThinking: boolean;
   showToolOutput: boolean;
 
@@ -80,6 +81,7 @@ export class CLITransport implements Transport {
   }
 
   async recv(): Promise<string | null> {
+    process.stdout.write(dim("wisp> "));
     return this._stdinQueue.next();
   }
 
@@ -104,54 +106,69 @@ export class CLITransport implements Transport {
       dim("     [y] yes  [Y] always this  [a] all on  [n] no  [N] always no  [d] all off  [c] cancel") + "\n"
     );
 
+    // Pause background stdin reader so it doesn't steal approval input
+    this._stdinRl?.close();
+    this._stdinRl = null;
+    this._readerActive = false;
+
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     return new Promise((resolve) => {
       rl.question(dim("Approve? "), (raw) => {
         rl.close();
         const choice = raw.trim();
+        let result = false;
         if (choice === "y") {
-          this._getSpinner().start(`${name} ${argsText}`);
-          resolve(true);
+          result = true;
         } else if (choice === "Y") {
           this._approvalState.allowedTools.add(name);
-          this._getSpinner().start(`${name} ${argsText}`);
-          resolve(true);
+          result = true;
         } else if (choice === "a") {
           this._approvalState.autoMode = true;
-          this._getSpinner().start(`${name} ${argsText}`);
-          resolve(true);
+          result = true;
         } else if (choice === "n") {
-          resolve(false);
+          result = false;
         } else if (choice === "N") {
           this._approvalState.deniedTools.add(name);
-          resolve(false);
+          result = false;
         } else if (choice === "d") {
           this._approvalState.blockMode = true;
-          resolve(false);
-        } else {
-          resolve(false);
+          result = false;
         }
+        if (result) {
+          this._getSpinner().start(`${name} ${argsText}`);
+        }
+        // Resume background reader
+        this._startStdinReader();
+        resolve(result);
       });
     });
   }
 
   start(): void {
     this._interrupted = false;
-    this._oldSigint = process.listeners("SIGINT").pop() ?? null;
-    process.on("SIGINT", () => {
+    this._sigintHandler = () => {
       this._interrupted = true;
       this._spinner?.stop();
       process.stdout.write(error("\n\n⏹  Interrupted. Finishing current step... (Ctrl+C again to force quit)\n"));
-      process.removeListener("SIGINT", process.listeners("SIGINT").pop()!);
-      process.on("SIGINT", () => process.exit(130));
-    });
+      // Remove ourselves and install a one-shot force-quit handler
+      if (this._sigintHandler) {
+        process.removeListener("SIGINT", this._sigintHandler);
+      }
+      process.once("SIGINT", () => process.exit(130));
+    };
+    process.on("SIGINT", this._sigintHandler);
     this._startStdinReader();
   }
 
   stop(): void {
-    if (this._oldSigint) process.on("SIGINT", this._oldSigint);
+    if (this._sigintHandler) {
+      process.removeListener("SIGINT", this._sigintHandler);
+      this._sigintHandler = null;
+    }
     this._stdinQueue.close();
     this._readerActive = false;
+    this._stdinRl?.close();
+    this._stdinRl = null;
   }
 
   isInterrupted(): boolean {
@@ -164,6 +181,7 @@ export class CLITransport implements Transport {
     this._inThinking = false;
     this._inContent = false;
     this._spinner?.stop();
+    this._interrupted = false;
     this._turnNumber += 1;
     this._progress.startTurn(this._turnNumber);
     this._phase = "understand";
@@ -183,8 +201,6 @@ export class CLITransport implements Transport {
     if (skill) lines.push(`  Skill:      ${skill}`);
     lines.push("");
     lines.push("  /help for commands  ·  Ctrl+C/D to exit");
-    const boxModule = require("../terminal_width.js");
-    const BoxChars = boxModule.BoxChars;
     const boxChars = new BoxChars();
     const top = boxChars.top(width, "Wisp TS");
     const body = lines.map((l) => boxChars.line(width, l)).join("\n");
@@ -195,17 +211,17 @@ export class CLITransport implements Transport {
   private _startStdinReader(): void {
     if (this._readerActive) return;
     this._readerActive = true;
-    const rl = readline.createInterface({ input: process.stdin });
-    rl.on("line", (line) => {
+    this._stdinRl = readline.createInterface({ input: process.stdin });
+    this._stdinRl.on("line", (line) => {
       const trimmed = line.trim();
       if (trimmed.toLowerCase() === "exit" || trimmed.toLowerCase() === "quit") {
         this._stdinQueue.close();
-        rl.close();
+        this._stdinRl?.close();
       } else {
         this._stdinQueue.push(trimmed);
       }
     });
-    rl.on("close", () => {
+    this._stdinRl.on("close", () => {
       this._stdinQueue.close();
     });
   }
@@ -246,7 +262,7 @@ export class CLITransport implements Transport {
       } catch (exc) {
         this._flushThinking(process.stdout);
         this._flushContent(process.stdout);
-        this.resetBuffers();
+        // Do NOT resetBuffers() here — failed turns shouldn't increment the turn counter
         process.stdout.write(error(`Error: ${exc}`) + "\n");
       }
     }

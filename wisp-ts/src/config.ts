@@ -169,6 +169,14 @@ const SETTINGS_SCHEMA: Record<string, SettingSchema> = {
     min: 4,
     max: 50,
   },
+  tool_timeout: {
+    type: "number",
+    default: 120,
+    description: "Timeout in seconds for individual tool calls",
+    envVar: "WISP_TOOL_TIMEOUT",
+    min: 1,
+    max: 600,
+  },
 };
 
 export function getSchema(): Record<string, SettingSchema> {
@@ -230,6 +238,7 @@ export interface WispConfigData {
   auto_compact: boolean;
   compact_threshold_tokens: number;
   compact_keep_recent: number;
+  tool_timeout: number;
 }
 
 export class WispConfig implements WispConfigData {
@@ -254,6 +263,7 @@ export class WispConfig implements WispConfigData {
   auto_compact = true;
   compact_threshold_tokens = 75;
   compact_keep_recent = 10;
+  tool_timeout = 120;
 
   constructor(overrides?: Partial<WispConfigData>) {
     this._loadFromEnv();
@@ -310,6 +320,7 @@ export class WispConfig implements WispConfigData {
       auto_compact: this.auto_compact,
       compact_threshold_tokens: this.compact_threshold_tokens,
       compact_keep_recent: this.compact_keep_recent,
+      tool_timeout: this.tool_timeout,
     };
   }
 }
