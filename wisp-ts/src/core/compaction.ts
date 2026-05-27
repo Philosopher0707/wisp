@@ -177,8 +177,8 @@ ${conversationText}`;
 
   private _extractSection(text: string, label: string): string[] {
     const pattern = new RegExp(
-      `(?i)${label}[:\\s]*(.*?)(?=\\n\\n|\\n[A-Z]|$)`,
-      "s"
+      `${label}[:\\s]*(.*?)(?=\\n\\n|\\n[A-Z]|$)`,
+      "is"
     );
     const match = pattern.exec(text);
     if (!match) return [];
