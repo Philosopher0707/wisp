@@ -8,6 +8,7 @@ import { TokenCounter } from "../infra/token_counter.js";
 import { AuditTrail } from "../infra/audit.js";
 import { SubagentOrchestrator } from "../multi_agent/orchestrator.js";
 import { DelegationAnalyzer, getDelegationAnalyzer } from "../multi_agent/delegation.js";
+import { Compactor } from "./compaction.js";
 
 export class AgentRuntime {
   store: UnifiedStore;
@@ -123,7 +124,7 @@ export class AgentRuntime {
     if (this._autoCompact) {
       const shouldCompact = this._shouldCompact(session);
       if (shouldCompact) {
-        this._compactSession(session, this._compactKeepRecent);
+        await this._compactSession(session, this._compactKeepRecent);
         this.auditTrail?.record("session_compacted", { actor: "runtime", metadata: { session_id: session.sessionId, before_count: session.compactionHistory[session.compactionHistory.length - 1]?.before_count, after_count: session.compactionHistory[session.compactionHistory.length - 1]?.after_count } });
         yield { type: "system", message: "Session auto-compacted", level: "info" };
       }
@@ -221,9 +222,37 @@ export class AgentRuntime {
     return estimatedTokens > threshold;
   }
 
-  private _compactSession(session: Session, keepRecent: number): void {
+  private async _compactSession(session: Session, keepRecent: number): Promise<void> {
     const msgs = session.messages;
     if (msgs.length <= keepRecent) return;
+
+    // Try LLM-powered compaction first
+    const core = this.coreFactory();
+    const compactor = new Compactor(core.provider, this.tokenCounter);
+    try {
+      const result = await compactor.compact(msgs, keepRecent);
+      session.messages = [{ role: "system", content: result.summary }, ...msgs.slice(-keepRecent)];
+      session.compactionHistory.push({
+        before_count: msgs.length,
+        after_count: session.messages.length,
+        summary: result.summary,
+        timestamp: Date.now() / 1000,
+      });
+      this.auditTrail?.record("session_compacted", {
+        actor: "runtime",
+        metadata: {
+          session_id: session.sessionId,
+          before_count: msgs.length,
+          after_count: session.messages.length,
+          llm_compacted: !result.fallbackTruncation,
+        },
+      });
+      return;
+    } catch {
+      // Fall through to truncation
+    }
+
+    // Fallback: simple truncation
     const toSummarize = msgs.slice(0, -keepRecent);
     const keep = msgs.slice(-keepRecent);
     const summary = `[Previous conversation: ${toSummarize.length} messages summarized]`;
