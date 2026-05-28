@@ -184,7 +184,7 @@ class OllamaClient:
             logger.warning("Could not auto-detect context length: %s", e)
         return 128000  # conservative default
 
-    def _post_with_retry(self, endpoint: str, payload: dict, timeout: int = 300):
+    def _post_with_retry(self, endpoint: str, payload: dict, timeout: int = 600):
         """Make a POST request with exponential backoff retry.
 
         Retries on transient failures (5xx errors, connection errors).
@@ -541,7 +541,7 @@ class OllamaClient:
                 # Stream error - stop yielding
                 break
 
-    def _post_stream(self, endpoint: str, payload: dict, timeout: int = 300):
+    def _post_stream(self, endpoint: str, payload: dict, timeout: int = 600):
         """Stream a response from Ollama using unified NDJSON/SSE parser.
 
         Auto-detects format (NDJSON vs text/event-stream) and yields

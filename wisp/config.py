@@ -52,7 +52,7 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
     },
     "max_tokens": {
         "type": (int, type(None)),
-        "default": 32768,
+        "default": 131072,
         "description": "Max tokens per response (set to null/None for no limit)",
         "env_var": "WISP_MAX_TOKENS",
     },
@@ -112,17 +112,17 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
     },
     "max_iterations": {
         "type": int,
-        "default": 30,
+        "default": 50,
         "min": 1,
-        "max": 100,
+        "max": 200,
         "description": "Max agent loop iterations per user turn",
         "env_var": "WISP_MAX_ITERATIONS",
     },
     "turn_timeout": {
         "type": int,
-        "default": 600,
+        "default": 1800,
         "min": 10,
-        "max": 3600,
+        "max": 7200,
         "description": "Max seconds for a single agent turn before timeout",
         "env_var": "WISP_TURN_TIMEOUT",
     },
@@ -334,7 +334,7 @@ class WispConfig:
         object.__setattr__(self, "ollama_url", get_setting("ollama_url", DEFAULT_OLLAMA_URL))
         object.__setattr__(self, "model", get_setting("model", DEFAULT_MODEL))
         object.__setattr__(self, "temperature", float(get_setting("temperature", "0.2")))
-        raw_max_tokens = get_setting("max_tokens", 32768)
+        raw_max_tokens = get_setting("max_tokens", 131072)
         object.__setattr__(self, "max_tokens",
             int(raw_max_tokens) if raw_max_tokens is not None else None
         )
@@ -378,11 +378,11 @@ class WispConfig:
         )
         # Max agent loop iterations per user turn
         object.__setattr__(self, "max_iterations",
-            _parse_int(get_setting("max_iterations", "30"), 30, 1, 100)
+            _parse_int(get_setting("max_iterations", "50"), 50, 1, 200)
         )
         # Max seconds for a single agent turn before timeout
         object.__setattr__(self, "turn_timeout",
-            _parse_int(get_setting("turn_timeout", "600"), 600, 10, 3600)
+            _parse_int(get_setting("turn_timeout", "1800"), 1800, 10, 7200)
         )
         # Max repeated identical tool calls before stopping (0 = disabled)
         object.__setattr__(self, "max_reflections",

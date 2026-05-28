@@ -277,7 +277,11 @@ class WispAgentCore:
             # ── Check for truncation ──
             truncated = any(e.get("done_reason") == "length" for e in provider_events)
             if truncated:
-                yield _flatten_event(system("Response truncated: max_tokens limit reached. Consider increasing max_tokens in config.", level="warning"))
+                yield _flatten_event(system(
+                    "Response truncated: max_tokens limit reached. "
+                    "Say 'continue' to resume, or increase max_tokens in config.",
+                    level="warning",
+                ))
 
             # ── If no tool calls, the model produced final content ──
             if not has_tool_calls:
