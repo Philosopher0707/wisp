@@ -339,22 +339,17 @@ def cmd_compact(agent, args: str):
 
     print(info(f"Compacting session ({msg_count} messages)..."))
 
-    # Use the runtime's Compactor (LLM summarization) if available
-    import asyncio
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
+    # Use the runtime's Compactor (LLM summarization) if available.
+    # AgentAdapter carries the REPL's event loop for synchronous compaction.
+    loop = getattr(agent, '_loop', None)
 
     if hasattr(agent, 'runtime') and hasattr(agent.runtime, 'maybe_compact') and loop is not None:
         try:
             session_dict = agent.session.to_dict() if hasattr(agent.session, 'to_dict') else agent.session._data
             before = len(session_dict.get("messages", []))
-            # Force compaction regardless of message count threshold
-            result = asyncio.run_coroutine_threadsafe(
+            result = loop.run_until_complete(
                 agent.runtime.maybe_compact(session_dict, force=True),
-                loop,
-            ).result(timeout=30)
+            )
             if result and result.get("compacted"):
                 agent.messages = list(session_dict.get("messages", agent.messages))
                 after = len(agent.messages)
@@ -365,10 +360,8 @@ def cmd_compact(agent, args: str):
                 print(dim("Compaction skipped: not enough messages to summarize."))
         except Exception as exc:
             logger.warning("LLM compaction failed, falling back to truncation: %s", exc)
-            # Fall back to simple truncation
             _compact_truncate(agent)
     else:
-        # No runtime or no event loop — use simple truncation
         _compact_truncate(agent)
 
 
@@ -736,8 +729,8 @@ def cmd_continue(agent, args: str):
     else:
         print(info("⏩ Continuing previous response…"))
 
-    agent._add_message("user", expanded)
-    # Return the prompt so the REPL loop runs a follow-up turn
+    # Return the prompt so the REPL loop runs a follow-up turn.
+    # The REPL's run_turn will add the user message to the session.
     return expanded
 
 

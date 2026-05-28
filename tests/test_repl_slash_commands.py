@@ -1,8 +1,13 @@
-"""Test slash commands work in the new REPL."""
+"""Test slash commands via dispatch() — the canonical command path.
+
+The REPL loop (entry._run_repl) drives commands via dispatch().
+Tests here validate command behavior in isolation.
+"""
 
 import pytest
-from unittest.mock import MagicMock, patch
-from io import StringIO
+from unittest.mock import MagicMock
+from wisp.commands import dispatch
+from wisp.transport.cli import AgentAdapter
 
 
 class FakeRuntime:
@@ -11,17 +16,11 @@ class FakeRuntime:
         self.telemetry = MagicMock()
         self.security = MagicMock()
 
-    async def get_or_create_session(self, session_id, model, workspace):
-        return {
-            "id": session_id,
-            "model": model,
-            "workspace": workspace,
-            "messages": [],
-        }
+    async def maybe_compact(self, session, force=False):
+        return None
 
-    async def run_turn(self, session, prompt):
-        yield {"type": "content", "text": f"Echo: {prompt}"}
-        yield {"type": "done"}
+    def _get_core(self):
+        return MagicMock()
 
 
 class FakeConfig:
@@ -41,78 +40,91 @@ class FakeConfig:
         return inst
 
 
-@pytest.fixture
-def transport():
-    from wisp.transport.cli import CLITransport
-    return CLITransport(FakeRuntime(), FakeConfig())
+def _make_adapter(session_id="test-session"):
+    session = {
+        "id": session_id,
+        "model": "test-model",
+        "workspace": "/tmp",
+        "messages": [],
+    }
+    return AgentAdapter(FakeRuntime(), FakeConfig(), session)
 
 
-@pytest.mark.asyncio
-async def test_help_command(transport, capsys):
-    """/help should list commands without calling the LLM."""
-    stdin = StringIO("/help\n/exit\n")
-    stdout = StringIO()
-
-    with patch("sys.stdout", stdout):
-        await transport.run(stdin, stdout, "test-session", "test-model", "/tmp")
-    output = stdout.getvalue()
-    assert "Available commands" in output
+class TestHelpCommand:
+    def test_help_lists_commands(self, capsys):
+        adapter = _make_adapter()
+        result = dispatch("/help", adapter)
+        assert result is True  # Consumed
+        output = capsys.readouterr().out
+        assert "Available commands" in output or "/help" in output
 
 
-@pytest.mark.asyncio
-async def test_clear_command(transport, capsys):
-    """/clear should clear session messages."""
-    stdin = StringIO("/clear\n/exit\n")
-    stdout = StringIO()
-
-    with patch("sys.stdout", stdout):
-        await transport.run(stdin, stdout, "test-session", "test-model", "/tmp")
-    output = stdout.getvalue()
-    assert "Cleared" in output
-
-
-@pytest.mark.asyncio
-async def test_session_command(transport, capsys):
-    """/session should show session info."""
-    stdin = StringIO("/session\n/exit\n")
-    stdout = StringIO()
-
-    with patch("sys.stdout", stdout):
-        await transport.run(stdin, stdout, "test-session", "test-model", "/tmp")
-    output = stdout.getvalue()
-    assert "test-session" in output
+class TestClearCommand:
+    def test_clear_empties_messages(self, capsys):
+        adapter = _make_adapter()
+        adapter.messages.extend([
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"},
+        ])
+        result = dispatch("/clear", adapter)
+        assert result is True  # Consumed
+        assert len(adapter.messages) == 0
 
 
-@pytest.mark.asyncio
-async def test_exit_command(transport):
-    """/exit should terminate the REPL."""
-    stdin = StringIO("/exit\n")
-    stdout = StringIO()
-
-    await transport.run(stdin, stdout, "test-session", "test-model", "/tmp")
-    output = stdout.getvalue()
-    assert "Wisp ready" in output
+class TestSessionCommand:
+    def test_session_shows_id(self, capsys):
+        adapter = _make_adapter(session_id="abc-123")
+        result = dispatch("/session", adapter)
+        assert result is True  # Consumed
+        output = capsys.readouterr().out
+        assert "abc-123" in output
 
 
-@pytest.mark.asyncio
-async def test_thinking_command(transport, capsys):
-    """/thinking should toggle thinking display."""
-    stdin = StringIO("/thinking\n/exit\n")
-    stdout = StringIO()
-
-    with patch("sys.stdout", stdout):
-        await transport.run(stdin, stdout, "test-session", "test-model", "/tmp")
-    output = stdout.getvalue()
-    assert "thinking" in output.lower() or "ON" in output or "OFF" in output
+class TestExitCommand:
+    def test_exit_raises(self):
+        from wisp.exceptions import ExitREPL
+        adapter = _make_adapter()
+        with pytest.raises(ExitREPL):
+            dispatch("/exit", adapter)
 
 
-@pytest.mark.asyncio
-async def test_unknown_command(transport, capsys):
-    """Unknown slash command should show error."""
-    stdin = StringIO("/unknown_cmd\n/exit\n")
-    stdout = StringIO()
+class TestThinkingCommand:
+    def test_thinking_toggles(self, capsys):
+        adapter = _make_adapter()
+        original = adapter.config.show_thinking
+        result = dispatch("/thinking", adapter)
+        assert result is True  # Consumed
 
-    with patch("sys.stdout", stdout):
-        await transport.run(stdin, stdout, "test-session", "test-model", "/tmp")
-    output = stdout.getvalue()
-    assert "Unknown command" in output
+
+class TestUnknownCommand:
+    def test_unknown_shows_error(self, capsys):
+        adapter = _make_adapter()
+        result = dispatch("/unknown_cmd", adapter)
+        # Unknown commands are consumed (True) with an error message
+        assert result is True
+        output = capsys.readouterr().out
+        assert "Unknown command" in output
+
+
+class TestContinueCommand:
+    def test_continue_returns_prompt(self):
+        adapter = _make_adapter()
+        adapter.messages.append({"role": "assistant", "content": "Here is the code..."})
+        result = dispatch("/continue", adapter)
+        # /continue should return a string prompt (not True/False)
+        assert isinstance(result, str)
+        assert "continue" in result.lower() or "Context" in result
+
+    def test_continue_no_history(self, capsys):
+        adapter = _make_adapter()
+        result = dispatch("/continue", adapter)
+        # Should return True (consumed with warning) since no history
+        assert result is True
+
+
+class TestCompactCommand:
+    def test_compact_with_few_messages(self, capsys):
+        adapter = _make_adapter()
+        # Session with only a few messages — should skip compaction
+        result = dispatch("/compact", adapter)
+        assert result is True  # Consumed

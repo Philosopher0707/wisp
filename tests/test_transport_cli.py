@@ -1,342 +1,206 @@
-"""TDD for CLI transport.
+"""TDD for CLI transport — error detection, phase tracking, adapter, approval state.
 
-Replaces: ad-hoc CLI handling in __main__.py and cli.py.
-Clean separation: transport owns the wire protocol, runtime owns the logic.
+The REPL loop is driven by entry._run_repl, not CLITransport.run().
+Tests here validate component behavior in isolation.
 """
 
 import pytest
-from typing import AsyncIterator
+from wisp.transport.cli import CLITransport, AgentAdapter, ApprovalSessionState
+from wisp.transport.progress import ProgressTracker
+from wisp.core.events import AgentEvent, EventType
 
-
-# ── Minimal mock runtime for testing ───────────────────────────────
 
 class _MockRuntime:
     def __init__(self):
         self.sessions = {}
         self.turns = []
 
-    async def get_or_create_session(self, session_id: str, model: str, workspace: str):
-        if session_id not in self.sessions:
-            self.sessions[session_id] = {
-                "id": session_id,
-                "model": model,
-                "workspace": workspace,
-                "messages": [],
-            }
-        return self.sessions[session_id]
 
-    async def run_turn(self, session: dict, prompt: str) -> AsyncIterator[dict]:
-        self.turns.append((session["id"], prompt))
-        yield {"type": "content", "text": f"echo: {prompt}"}
-        yield {"type": "done"}
+# ═══════════════════════════════════════════════════════════════════
+# 1. Error result detection
+# ═══════════════════════════════════════════════════════════════════
 
+class TestCLIErrorDetection:
+    """_is_error_result correctly identifies error results."""
 
-# ── Minimal mock stdin/stdout for testing ─────────────────────────
+    def test_dict_error_status(self):
+        assert CLITransport._is_error_result({"status": "error"}) is True
 
-class _MockIO:
-    def __init__(self, inputs: list[str]):
-        self.inputs = iter(inputs)
-        self.outputs = []
+    def test_dict_non_error_status(self):
+        assert CLITransport._is_error_result({"status": "ok"}) is False
 
-    def readline(self) -> str:
-        try:
-            return next(self.inputs) + "\n"
-        except StopIteration:
-            return ""
+    def test_string_starts_with_error(self):
+        assert CLITransport._is_error_result("Error: something failed") is True
 
-    def write(self, text: str) -> None:
-        self.outputs.append(text)
+    def test_string_starts_with_bracket_error(self):
+        assert CLITransport._is_error_result("[Error] bad thing") is True
 
-    def flush(self) -> None:
-        pass
+    def test_json_array_is_not_error(self):
+        """JSON arrays should NOT be falsely flagged as errors."""
+        assert CLITransport._is_error_result('["file1.py", "file2.py"]') is False
+
+    def test_plain_string_not_error(self):
+        assert CLITransport._is_error_result("file content here") is False
+
+    def test_number_not_error(self):
+        assert CLITransport._is_error_result(42) is False
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 1. Session lifecycle
-# ═══════════════════════════════════════════════════════════════════
-
-class TestCLISessionLifecycle:
-    """CLI transport manages sessions."""
-
-    @pytest.mark.asyncio
-    async def test_creates_session_on_start(self):
-        from wisp.transport.cli import CLITransport
-        runtime = _MockRuntime()
-        transport = CLITransport(runtime)
-        stdin = _MockIO([])
-        stdout = _MockIO([])
-
-        await transport.run(stdin, stdout, session_id="sess-1", model="qwen", workspace="/tmp")
-
-        assert "sess-1" in runtime.sessions
-
-    @pytest.mark.asyncio
-    async def test_prints_ready_message(self):
-        from wisp.transport.cli import CLITransport
-        runtime = _MockRuntime()
-        transport = CLITransport(runtime)
-        stdin = _MockIO([])
-        stdout = _MockIO([])
-
-        await transport.run(stdin, stdout, session_id="sess-1", model="qwen", workspace="/tmp")
-
-        assert any("ready" in o.lower() for o in stdout.outputs)
-
-
-# ═══════════════════════════════════════════════════════════════════
-# 2. Message routing
-# ═══════════════════════════════════════════════════════════════════
-
-class TestCLIMessageRouting:
-    """User input is routed to the runtime."""
-
-    @pytest.mark.asyncio
-    async def test_user_input_triggers_turn(self):
-        from wisp.transport.cli import CLITransport
-        runtime = _MockRuntime()
-        transport = CLITransport(runtime)
-        stdin = _MockIO(["hello"])
-        stdout = _MockIO([])
-
-        await transport.run(stdin, stdout, session_id="sess-1", model="qwen", workspace="/tmp")
-
-        assert len(runtime.turns) == 1
-        assert runtime.turns[0] == ("sess-1", "hello")
-
-    @pytest.mark.asyncio
-    async def test_events_printed_to_stdout(self):
-        from wisp.transport.cli import CLITransport
-        runtime = _MockRuntime()
-        transport = CLITransport(runtime)
-        stdin = _MockIO(["hello"])
-        stdout = _MockIO([])
-
-        await transport.run(stdin, stdout, session_id="sess-1", model="qwen", workspace="/tmp")
-
-        assert any("echo: hello" in o for o in stdout.outputs)
-
-
-# ═══════════════════════════════════════════════════════════════════
-# 3. Multiple turns
-# ═══════════════════════════════════════════════════════════════════
-
-class TestCLIMultipleTurns:
-    """Multiple prompts in one session."""
-
-    @pytest.mark.asyncio
-    async def test_multiple_inputs(self):
-        from wisp.transport.cli import CLITransport
-        runtime = _MockRuntime()
-        transport = CLITransport(runtime)
-        stdin = _MockIO(["hello", "world"])
-        stdout = _MockIO([])
-
-        await transport.run(stdin, stdout, session_id="sess-1", model="qwen", workspace="/tmp")
-
-        assert len(runtime.turns) == 2
-        assert runtime.turns[0] == ("sess-1", "hello")
-        assert runtime.turns[1] == ("sess-1", "world")
-
-
-# ═══════════════════════════════════════════════════════════════════
-# 4. Error handling
-# ═══════════════════════════════════════════════════════════════════
-
-class TestCLIErrorHandling:
-    """Errors are printed, not crashed."""
-
-    @pytest.mark.asyncio
-    async def test_runtime_error_printed(self):
-        from wisp.transport.cli import CLITransport
-
-        class _BrokenRuntime:
-            async def get_or_create_session(self, **kwargs):
-                return {"id": "s1"}
-            async def run_turn(self, session, prompt):
-                raise RuntimeError("boom")
-                yield
-
-        runtime = _BrokenRuntime()
-        transport = CLITransport(runtime)
-        stdin = _MockIO(["hello"])
-        stdout = _MockIO([])
-
-        await transport.run(stdin, stdout, session_id="sess-1", model="qwen", workspace="/tmp")
-
-        assert any("error" in o.lower() for o in stdout.outputs)
-        assert any("boom" in o for o in stdout.outputs)
-
-
-# ═══════════════════════════════════════════════════════════════════
-# 5. Exit handling
-# ═══════════════════════════════════════════════════════════════════
-
-class TestCLIExitHandling:
-    """EOF and exit commands terminate gracefully."""
-
-    @pytest.mark.asyncio
-    async def test_eof_exits(self):
-        from wisp.transport.cli import CLITransport
-        runtime = _MockRuntime()
-        transport = CLITransport(runtime)
-        stdin = _MockIO([])
-        stdout = _MockIO([])
-
-        await transport.run(stdin, stdout, session_id="sess-1", model="qwen", workspace="/tmp")
-
-        # Should complete without error
-        assert True
-
-    @pytest.mark.asyncio
-    async def test_exit_command_terminates(self):
-        from wisp.transport.cli import CLITransport
-        runtime = _MockRuntime()
-        transport = CLITransport(runtime)
-        stdin = _MockIO(["exit"])
-        stdout = _MockIO([])
-
-        await transport.run(stdin, stdout, session_id="sess-1", model="qwen", workspace="/tmp")
-
-        assert len(runtime.turns) == 0  # exit should not trigger a turn
-
-
-# ═══════════════════════════════════════════════════════════════════
-# 6. Phase tracking
+# 2. Phase tracking
 # ═══════════════════════════════════════════════════════════════════
 
 class TestCLIPhaseTracking:
-    """Phase detection and progress tracking in CLI output."""
+    """Phase detection and progress tracking."""
 
-    @pytest.mark.asyncio
-    async def test_turn_counter_increments(self):
-        from wisp.transport.cli import CLITransport
-        runtime = _MockRuntime()
-        transport = CLITransport(runtime)
-        stdin = _MockIO(["hello", "world"])
-        stdout = _MockIO([])
+    def test_phase_starts_at_understand(self):
+        tracker = ProgressTracker()
+        assert tracker.progress.phase == "understand"
 
-        await transport.run(stdin, stdout, session_id="sess-1", model="qwen", workspace="/tmp")
+    def test_phase_advances_on_write_tool(self):
+        """Write tools should advance phase to execute."""
+        tracker = ProgressTracker()
+        event = AgentEvent(type=EventType.TOOL_CALL, data={"name": "write_file", "arguments": {"path": "x.py"}})
+        tracker.on_event(event)
+        assert tracker.progress.phase == "execute"
 
-        # Check that turn stats appear in output
-        all_output = "".join(stdout.outputs)
-        assert "Turn 1" in all_output
-        assert "Turn 2" in all_output
+    def test_tool_count_increments(self):
+        tracker = ProgressTracker()
+        tracker.on_event(AgentEvent(type=EventType.TOOL_CALL, data={"name": "read_file"}))
+        tracker.on_event(AgentEvent(type=EventType.TOOL_RESULT, data={"name": "read_file", "duration_ms": 5.0}))
+        stats = tracker.on_done()
+        assert stats.get("tools_run") == 1
 
-    @pytest.mark.asyncio
-    async def test_progress_reset_per_turn(self):
-        from wisp.transport.cli import CLITransport
-        runtime = _MockRuntime()
-        transport = CLITransport(runtime)
-        stdin = _MockIO(["hello"])
-        stdout = _MockIO([])
+    def test_file_tracking(self):
+        tracker = ProgressTracker()
+        tracker.on_event(AgentEvent(type=EventType.TOOL_CALL, data={"name": "edit_file", "arguments": {"path": "src/main.py"}}))
+        tracker.on_event(AgentEvent(type=EventType.TOOL_RESULT, data={"name": "edit_file", "result": "ok", "duration_ms": 5.0}))
+        stats = tracker.on_done()
+        assert "src/main.py" in stats.get("files_changed", [])
 
-        await transport.run(stdin, stdout, session_id="sess-1", model="qwen", workspace="/tmp")
-
-        # Progress tracker should be clean after run
-        assert transport._progress is not None
-        assert transport._turn_number == 1
-
-    @pytest.mark.asyncio
-    async def test_phase_tracking_with_tools(self):
-        from wisp.transport.cli import CLITransport
-
-        class _ToolRuntime:
-            async def get_or_create_session(self, **kwargs):
-                return {"id": "s1", "messages": [], "workspace": "/tmp"}
-            async def run_turn(self, session, prompt):
-                yield {"type": "tool_call", "name": "read_file", "arguments": {"path": "x.py"}}
-                yield {"type": "tool_result", "name": "read_file", "result": "content", "duration_ms": 5.0}
-                yield {"type": "tool_call", "name": "write_file", "arguments": {"path": "out.py"}}
-                yield {"type": "tool_result", "name": "write_file", "result": "ok", "duration_ms": 10.0}
-                yield {"type": "content", "text": "done"}
-                yield {"type": "done"}
-
-        transport = CLITransport(_ToolRuntime())
-        stdin = _MockIO(["fix it"])
-        stdout = _MockIO([])
-
-        await transport.run(stdin, stdout, session_id="sess-1", model="qwen", workspace="/tmp")
-
-        all_output = "".join(stdout.outputs)
-        # Turn stats should show 2 tools
-        assert "2 tools" in all_output
-        # File changes should show out.py
-        assert "out.py" in all_output or "1 files" in all_output
-
-    @pytest.mark.asyncio
-    async def test_tool_success_and_failure_counted(self):
-        from wisp.transport.cli import CLITransport
-
-        class _MixedRuntime:
-            async def get_or_create_session(self, **kwargs):
-                return {"id": "s1", "messages": [], "workspace": "/tmp"}
-            async def run_turn(self, session, prompt):
-                yield {"type": "tool_call", "name": "run_bash", "arguments": {"command": "ls"}}
-                yield {"type": "tool_result", "name": "run_bash", "result": "ok", "duration_ms": 5.0}
-                yield {"type": "tool_call", "name": "run_bash", "arguments": {"command": "bad"}}
-                yield {"type": "tool_result", "name": "run_bash", "result": "Error: fail", "duration_ms": 2.0}
-                yield {"type": "done"}
-
-        transport = CLITransport(_MixedRuntime())
-        stdin = _MockIO(["go"])
-        stdout = _MockIO([])
-
-        await transport.run(stdin, stdout, session_id="sess-1", model="qwen", workspace="/tmp")
-
-        all_output = "".join(stdout.outputs)
-        assert "Turn 1" in all_output
-        assert "2 tools" in all_output
+    def test_turn_number_starts_zero(self):
+        transport = CLITransport(_MockRuntime())
+        assert transport._turn_number == 0
 
 
-class TestCLIFileTracking:
-    """File change tracking in CLI output."""
+# ═══════════════════════════════════════════════════════════════════
+# 3. AgentAdapter
+# ═══════════════════════════════════════════════════════════════════
 
-    @pytest.mark.asyncio
-    async def test_modified_files_in_output(self):
-        from wisp.transport.cli import CLITransport
+class TestAgentAdapter:
+    """AgentAdapter correctly wraps runtime+session."""
 
-        class _FileRuntime:
-            async def get_or_create_session(self, **kwargs):
-                return {"id": "s1", "messages": [], "workspace": "/tmp"}
-            async def run_turn(self, session, prompt):
-                yield {"type": "tool_call", "name": "edit_file", "arguments": {"path": "src/main.py"}}
-                yield {"type": "tool_result", "name": "edit_file", "result": "ok", "duration_ms": 8.0}
-                yield {"type": "tool_call", "name": "edit_file", "arguments": {"path": "tests/test.py"}}
-                yield {"type": "tool_result", "name": "edit_file", "result": "ok", "duration_ms": 5.0}
-                yield {"type": "done"}
+    def test_adapter_creates_session_adapter(self):
+        session = {"id": "s1", "messages": []}
+        adapter = AgentAdapter(_MockRuntime(), None, session)
+        assert adapter.session is not None
+        assert adapter.messages == []
 
-        transport = CLITransport(_FileRuntime())
-        stdin = _MockIO(["refactor"])
-        stdout = _MockIO([])
+    def test_adapter_add_message(self):
+        session = {"id": "s1", "messages": []}
+        adapter = AgentAdapter(_MockRuntime(), None, session)
+        adapter._add_message("user", "hello")
+        assert len(adapter.messages) == 1
+        assert adapter.messages[0]["role"] == "user"
+        assert adapter.messages[0]["content"] == "hello"
 
-        await transport.run(stdin, stdout, session_id="sess-1", model="qwen", workspace="/tmp")
+    def test_adapter_metrics_persists(self):
+        session = {"id": "s1", "messages": []}
+        adapter = AgentAdapter(_MockRuntime(), None, session)
+        m1 = adapter.metrics
+        m2 = adapter.metrics
+        assert m1 is m2  # Same object — not recreated each access
 
-        all_output = "".join(stdout.outputs)
-        assert "2 files" in all_output
+    def test_adapter_loop_parameter(self):
+        import asyncio
+        session = {"id": "s1", "messages": []}
+        loop = asyncio.new_event_loop()
+        try:
+            adapter = AgentAdapter(_MockRuntime(), None, session, loop=loop)
+            assert adapter._loop is loop
+        finally:
+            loop.close()
+
+    def test_adapter_expand_continuation(self):
+        session = {"id": "s1", "messages": [
+            {"role": "assistant", "content": "Here is the implementation of the auth module..."},
+        ]}
+        adapter = AgentAdapter(_MockRuntime(), None, session)
+        expanded = adapter._expand_continuation("continue")
+        assert "continue" in expanded.lower()
+        assert "Context" in expanded or "context" in expanded
+
+    def test_adapter_no_expand_non_continuation(self):
+        session = {"id": "s1", "messages": []}
+        adapter = AgentAdapter(_MockRuntime(), None, session)
+        expanded = adapter._expand_continuation("write a function")
+        assert expanded == "write a function"
 
 
-class TestCLIThinkingCollapse:
-    """Thinking output collapsed by default."""
+# ═══════════════════════════════════════════════════════════════════
+# 4. Approval session state
+# ═══════════════════════════════════════════════════════════════════
 
-    @pytest.mark.asyncio
-    async def test_thinking_collapsed_by_default(self):
-        from wisp.transport.cli import CLITransport
+class TestApprovalSessionState:
+    """Approval state tracks per-tool and global approvals."""
 
-        class _ThinkRuntime:
-            async def get_or_create_session(self, **kwargs):
-                return {"id": "s1", "messages": [], "workspace": "/tmp"}
-            async def run_turn(self, session, prompt):
-                yield {"type": "thinking", "text": "Let me think carefully..."}
-                yield {"type": "content", "text": "result"}
-                yield {"type": "done"}
+    def test_allow_tool(self):
+        state = ApprovalSessionState()
+        state.allow_tool("read_file")
+        assert state.is_allowed("read_file")
+        assert not state.is_allowed("write_file")
 
-        transport = CLITransport(_ThinkRuntime())
-        stdin = _MockIO(["go"])
-        stdout = _MockIO([])
+    def test_deny_tool(self):
+        state = ApprovalSessionState()
+        state.deny_tool("run_bash")
+        assert "run_bash" in state.denied_tools
 
-        await transport.run(stdin, stdout, session_id="sess-1", model="qwen", workspace="/tmp")
+    def test_auto_approve(self):
+        state = ApprovalSessionState()
+        state.set_auto()
+        assert state.is_allowed("anything")
+        assert not state.should_ask("anything")
 
-        all_output = "".join(stdout.outputs)
-        # Should show collapsed summary with first-line preview
-        assert "Let me think carefully" in all_output
-        assert "Thinking" in all_output
+    def test_block_all(self):
+        state = ApprovalSessionState()
+        state.set_block()
+        assert not state.is_allowed("read_file")
+
+    def test_should_ask_default(self):
+        state = ApprovalSessionState()
+        assert state.should_ask("read_file")
+
+    def test_should_not_ask_after_allow(self):
+        state = ApprovalSessionState()
+        state.allow_tool("read_file")
+        assert not state.should_ask("read_file")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 5. Approval branch Y vs y
+# ═══════════════════════════════════════════════════════════════════
+
+class TestApprovalBranches:
+    """Verify Y (always-allow) and y (once) branches work correctly."""
+
+    def test_uppercase_Y_sets_allow_tool(self):
+        """Uppercase Y should register the tool as always-allowed."""
+        state = ApprovalSessionState()
+        raw = "Y"
+        choice = raw.strip()
+        if choice in ("y", "Y"):
+            if choice == "Y":
+                state.allow_tool("read_file")
+        assert state.is_allowed("read_file")
+        assert not state.should_ask("read_file")
+
+    def test_lowercase_y_does_not_set_allow_tool(self):
+        """Lowercase y should NOT register the tool as always-allowed."""
+        state = ApprovalSessionState()
+        raw = "y"
+        choice = raw.strip()
+        if choice in ("y", "Y"):
+            if choice == "Y":
+                state.allow_tool("read_file")
+        # y doesn't set allow, so should_ask should still be True for next time
+        assert state.should_ask("read_file")

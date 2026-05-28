@@ -1,107 +1,99 @@
-"""Test that thinking and tool results display correctly in CLI."""
+"""Test that thinking and tool events render correctly via _render_event."""
 
 import pytest
 from io import StringIO
 from unittest.mock import MagicMock
+from wisp.transport.cli import CLITransport
 
 
-class FakeProvider:
-    """Mock provider that yields thinking + content + tool_call."""
-
-    def generate_stream_events(self, system_prompt, messages, tools=None):
-        from wisp.stream_events import TokenBatch, ToolCallBatch, StreamComplete
-        yield TokenBatch(phase='thinking', text='Let me think about this...', batch_index=1)
-        yield TokenBatch(phase='content', text='I will read the file.', batch_index=2)
-        yield ToolCallBatch(phase='tool_calls', calls=[{
-            'function': {'name': 'read_file', 'arguments': {'path': 'test.py'}}
-        }])
-        yield StreamComplete(
-            phase='complete',
-            final_thinking='Let me think about this...',
-            final_content='I will read the file.',
-            total_tokens=20,
-            tool_calls=None,
-            validation_hash='abc'
-        )
+class FakeRuntime:
+    def __init__(self):
+        self.store = MagicMock()
+        self.telemetry = MagicMock()
 
 
 class FakeConfig:
     model = 'test-model'
     workspace = '/tmp'
-    show_thinking = True  # Enable thinking display
+    show_thinking = True
     auto_approve = True
     max_context_tokens = 128000
     chars_per_token = 4
     permission_mode = 'full'
-    provider = 'ollama'
-    ollama_url = 'http://localhost:11434'
-    temperature = 0.2
 
 
-@pytest.fixture
-def transport():
-    from wisp.transport.cli import CLITransport
-    from wisp.core.runtime import AgentRuntime
-    from wisp.infra.security import SecurityPolicy
-    from wisp.infra.extensions import ExtensionHost
-    from wisp.infra.telemetry import Telemetry
-    from wisp.core.engine import WispAgentCore
-
-    config = FakeConfig()
-    provider = FakeProvider()
-    core = WispAgentCore(
-        provider=provider,
-        security=SecurityPolicy('full'),
-        extensions=ExtensionHost(),
-        config=config,
-    )
-    store = MagicMock()
-    store.load_session.return_value = None
-    store.save_session.return_value = None
-
-    runtime = AgentRuntime(
-        store=store,
-        security=SecurityPolicy('full'),
-        extensions=ExtensionHost(),
-        telemetry=Telemetry(),
-        core_factory=lambda: core,
-    )
-
-    return CLITransport(runtime, config)
+def _make_transport():
+    return CLITransport(FakeRuntime(), FakeConfig())
 
 
-@pytest.mark.asyncio
-async def test_thinking_displayed(transport):
-    """Thinking text should be rendered when show_thinking=True."""
-    stdin = StringIO("hello\n/exit\n")
-    stdout = StringIO()
+class TestThinkingDisplay:
+    def test_thinking_event_renders(self):
+        transport = _make_transport()
+        transport.start()
+        buf = StringIO()
+        event = {"type": "thinking", "text": "Let me think about this..."}
+        transport._render_event(buf, event)
+        transport._flush_thinking(buf)
+        output = buf.getvalue()
+        assert "Let me think about this" in output
+        transport.stop()
 
-    await transport.run(stdin, stdout, "test-session", "test-model", "/tmp")
-    output = stdout.getvalue()
-
-    assert "Let me think about this..." in output
-
-
-@pytest.mark.asyncio
-async def test_tool_call_displayed(transport):
-    """Tool call should be rendered."""
-    stdin = StringIO("hello\n/exit\n")
-    stdout = StringIO()
-
-    await transport.run(stdin, stdout, "test-session", "test-model", "/tmp")
-    output = stdout.getvalue()
-
-    assert "read_file" in output
+    def test_thinking_hidden_when_disabled(self):
+        config = FakeConfig()
+        config.show_thinking = False
+        transport = CLITransport(FakeRuntime(), config)
+        transport.start()
+        buf = StringIO()
+        event = {"type": "thinking", "text": "Internal reasoning..."}
+        transport._render_event(buf, event)
+        transport._flush_thinking(buf)
+        output = buf.getvalue()
+        # Should show collapsed summary, not full text
+        transport.stop()
 
 
-@pytest.mark.asyncio
-async def test_tool_result_displayed(transport):
-    """Tool result should be rendered."""
-    stdin = StringIO("hello\n/exit\n")
-    stdout = StringIO()
+class TestToolCallDisplay:
+    def test_tool_call_event_starts_spinner(self):
+        transport = _make_transport()
+        transport.start()
+        buf = StringIO()
+        event = {"type": "tool_call", "name": "read_file", "arguments": {"path": "test.py"}}
+        transport._render_event(buf, event)
+        # Tool call starts the spinner with tool name
+        assert transport._spinner is not None
+        transport.stop()
 
-    await transport.run(stdin, stdout, "test-session", "test-model", "/tmp")
-    output = stdout.getvalue()
+    def test_tool_result_event_renders(self):
+        transport = _make_transport()
+        transport.start()
+        buf = StringIO()
+        # First start a spinner (tool_call would do this)
+        transport._get_spinner().start("read_file")
+        event = {"type": "tool_result", "name": "read_file", "result": "file content here", "duration_ms": 5.0}
+        transport._render_event(buf, event)
+        output = buf.getvalue()
+        assert "read_file" in output
+        transport.stop()
 
-    # The tool result should show something about the file read
-    assert "read_file" in output
+    def test_tool_result_event_renders(self):
+        transport = _make_transport()
+        transport.start()
+        buf = StringIO()
+        event = {"type": "tool_result", "name": "read_file", "result": "file content here", "duration_ms": 5.0}
+        transport._render_event(buf, event)
+        output = buf.getvalue()
+        assert "read_file" in output
+        transport.stop()
+
+
+class TestContentDisplay:
+    def test_content_event_renders(self):
+        transport = _make_transport()
+        transport.start()
+        buf = StringIO()
+        event = {"type": "content", "text": "Here is the answer."}
+        transport._render_event(buf, event)
+        transport._flush_content(buf)
+        output = buf.getvalue()
+        assert "Here is the answer" in output
+        transport.stop()

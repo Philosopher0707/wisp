@@ -16,6 +16,7 @@ class _TestConfig:
     db_path: Path
     permission_mode: str
     model: str
+    turn_timeout: int = 600
 
 
 @pytest.fixture

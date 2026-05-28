@@ -30,6 +30,7 @@ class _TestConfig:
     db_path: Path
     permission_mode: str
     model: str
+    turn_timeout: int = 600
 
 
 @pytest.fixture
@@ -129,9 +130,10 @@ class TestTransportRuntimeIntegration:
     """Transport and Runtime work together."""
 
     @pytest.mark.asyncio
-    async def test_cli_transport_e2e(self, config):
+    async def test_cli_transport_renders_events(self, config):
         from wisp.composition import CompositionRoot
         from wisp.transport.cli import CLITransport
+        from io import StringIO
 
         root = CompositionRoot(config)
         original_factory = root.runtime.core_factory
@@ -142,27 +144,16 @@ class TestTransportRuntimeIntegration:
         root.runtime.core_factory = mock_factory
 
         transport = CLITransport(root.runtime)
+        transport.start()
+        buf = StringIO()
 
-        class _MockIO:
-            def __init__(self, inputs):
-                self.inputs = iter(inputs)
-                self.outputs = []
-            def readline(self):
-                try:
-                    return next(self.inputs) + "\n"
-                except StopIteration:
-                    return ""
-            def write(self, text):
-                self.outputs.append(text)
-            def flush(self):
-                pass
+        # Render events directly through the transport pipeline
+        event = {"type": "content", "text": "echo: hello"}
+        transport._render_event(buf, event)
+        transport._flush_content(buf)
 
-        stdin = _MockIO(["hello"])
-        stdout = _MockIO([])
-
-        await transport.run(stdin, stdout, session_id="sess-1", model="qwen", workspace="/tmp")
-
-        assert any("echo: hello" in o for o in stdout.outputs)
+        assert "echo: hello" in buf.getvalue()
+        transport.stop()
 
 
 # ═══════════════════════════════════════════════════════════════════

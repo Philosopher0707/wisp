@@ -76,7 +76,7 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
     },
     "auto_approve": {
         "type": bool,
-        "default": True,
+        "default": False,
         "description": "Auto-approve tool calls without prompting",
         "env_var": "WISP_AUTO_APPROVE",
     },
@@ -118,6 +118,21 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Max agent loop iterations per user turn",
         "env_var": "WISP_MAX_ITERATIONS",
     },
+    "turn_timeout": {
+        "type": int,
+        "default": 600,
+        "min": 10,
+        "max": 3600,
+        "description": "Max seconds for a single agent turn before timeout",
+        "env_var": "WISP_TURN_TIMEOUT",
+    },
+    "write_tools": {
+        "type": list,
+        "default": ["write_file", "edit_file", "run_bash", "git_commit", "git_push",
+                     "gh_pr_create", "spawn_subagent"],
+        "description": "Tools that require approval in restricted permission modes",
+        "env_var": "WISP_WRITE_TOOLS",
+    },
     "max_reflections": {
         "type": int,
         "default": 3,
@@ -157,7 +172,7 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
     },
     "compact_keep_recent": {
         "type": int,
-        "default": 10,
+        "default": 6,
         "min": 4,
         "max": 50,
         "description": "Number of recent messages to preserve during compaction (must be even to preserve turn symmetry)",
@@ -364,6 +379,10 @@ class WispConfig:
         # Max agent loop iterations per user turn
         object.__setattr__(self, "max_iterations",
             _parse_int(get_setting("max_iterations", "30"), 30, 1, 100)
+        )
+        # Max seconds for a single agent turn before timeout
+        object.__setattr__(self, "turn_timeout",
+            _parse_int(get_setting("turn_timeout", "600"), 600, 10, 3600)
         )
         # Max repeated identical tool calls before stopping (0 = disabled)
         object.__setattr__(self, "max_reflections",
@@ -605,6 +624,10 @@ class WispConfig:
             errors.append(
                 f"compact_keep_recent: {self.compact_keep_recent} is below minimum 4"
             )
+        if self.compact_keep_recent > 50:
+            errors.append(
+                f"compact_keep_recent: {self.compact_keep_recent} exceeds maximum 50"
+            )
 
         # Permission mode
         valid_modes = {m.value for m in PermissionMode}
@@ -624,13 +647,19 @@ class WispConfig:
         return errors
 
     def replace(self, **kwargs):
-        """Return a new WispConfig with specified fields replaced."""
+        """Return a new WispConfig with specified fields replaced.
+
+        Deep-copies mutable containers (dict, list, set) so mutations
+        on the new config don't leak back to the original.
+        """
+        import copy
         new = object.__new__(WispConfig)
-        # Copy all current fields
         for attr in dir(self):
             if not attr.startswith('__') and not callable(getattr(self, attr, None)):
                 try:
                     val = getattr(self, attr)
+                    if isinstance(val, (dict, list, set)):
+                        val = copy.deepcopy(val)
                     object.__setattr__(new, attr, val)
                 except Exception:
                     pass

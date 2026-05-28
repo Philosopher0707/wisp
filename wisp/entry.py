@@ -177,6 +177,10 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
         sys.stdout.write("   Example: wisp repl -m llama3   or   export WISP_PROVIDER=ollama\n\n")
         sys.stdout.flush()
 
+    # Create adapter once for the session — persists metrics across turns
+    from wisp.transport.cli import AgentAdapter
+    adapter = AgentAdapter(root.runtime, config, session, loop=loop)
+
     def _show_resume() -> None:
         """Print the resume command for this session."""
         sys.stdout.write("\n⏸  Turn interrupted. Session saved.\n")
@@ -189,11 +193,12 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
         sys.stdout.write(f"   Resume: wisp repl -S {session_id}\n\n")
         sys.stdout.flush()
 
+    _current_turn_task: asyncio.Task | None = None
+
     def _cancel_tasks() -> None:
-        """Cancel all pending tasks safely, even when called from outside a task."""
-        for task in asyncio.all_tasks(loop):
-            if not task.done():
-                task.cancel()
+        """Cancel the current turn task, not background services."""
+        if _current_turn_task is not None and not _current_turn_task.done():
+            _current_turn_task.cancel()
 
     def _run_turn(prompt: str) -> None:
         """Run one turn on the persistent loop."""
@@ -203,7 +208,10 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
 
         transport._reset_buffers()
         try:
-            loop.run_until_complete(_turn())
+            nonlocal _current_turn_task
+            coro = _turn()
+            _current_turn_task = loop.create_task(coro)
+            loop.run_until_complete(_current_turn_task)
             transport._flush_thinking(sys.stdout)
             transport._flush_content(sys.stdout)
             # Turn stats + file ticker + separator
@@ -226,6 +234,8 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
             traceback.print_exc(file=sys.stderr)
             sys.stdout.write(f"Error: {exc}\n")
             sys.stdout.flush()
+        finally:
+            _current_turn_task = None
 
     while True:
         try:
@@ -249,8 +259,6 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
         if prompt.startswith("/"):
             from wisp.commands import dispatch
             from wisp.exceptions import ExitREPL
-            from wisp.transport.cli import AgentAdapter
-            adapter = AgentAdapter(root.runtime, config, session)
             try:
                 result = dispatch(prompt, adapter)
                 if result is False:
@@ -274,10 +282,10 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
     # Restore original signal handler before cleanup
     _restore_signal_handler()
 
-    # Clean up: close the persistent loop (only if we own it)
+    # Clean up: cancel any in-progress turn and shut down services
     try:
         _cancel_tasks()
-        loop.run_until_complete(asyncio.sleep(0.1))  # Let cancellations settle
+        loop.run_until_complete(asyncio.sleep(0.05))  # Let cancellation settle
     finally:
         if own_loop:
             loop.close()

@@ -78,7 +78,7 @@ class WispAgentCore:
         Has a wall-clock timeout (default 10 min) to prevent infinite hangs.
         """
         import asyncio as _asyncio
-        turn_timeout = getattr(self.config, "turn_timeout", 600) if self.config else 600
+        turn_timeout = self.config.turn_timeout if self.config else 600
         # Build messages list
         messages = list(session.get("messages", []))
         # Avoid duplicating the user message if runtime already added it

@@ -102,12 +102,24 @@ class TestAgentAdapterSession:
 
 class TestAgentAdapterCompaction:
 
-    def test_maybe_compact(self):
+    def test_maybe_compact_with_loop(self):
+        """When a loop is provided, _maybe_compact_session uses loop.run_until_complete."""
         runtime = MagicMock()
         adapter = _make_adapter(runtime=runtime)
-        with patch("wisp.transport.cli.asyncio.create_task") as mock_create:
+        mock_loop = MagicMock()
+        mock_loop.is_closed.return_value = False
+        adapter._loop = mock_loop
+        adapter._maybe_compact_session()
+        mock_loop.run_until_complete.assert_called_once()
+
+    def test_maybe_compact_without_loop(self):
+        """When no loop is provided, _maybe_compact_session falls back to asyncio.run."""
+        runtime = MagicMock()
+        adapter = _make_adapter(runtime=runtime)
+        adapter._loop = None
+        with patch("wisp.transport.cli.asyncio.run") as mock_run:
             adapter._maybe_compact_session()
-            mock_create.assert_called_once()
+            mock_run.assert_called_once()
 
 
 class TestAgentAdapterInterrupted:

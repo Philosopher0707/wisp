@@ -320,7 +320,7 @@ class _SessionAdapter:
             {
                 "before": len(msgs),
                 "after": len(self._session["messages"]),
-                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
         )
         return {
@@ -341,7 +341,7 @@ class AgentAdapter:
     modification.
     """
 
-    def __init__(self, runtime: Any, config: Any, session: dict):
+    def __init__(self, runtime: Any, config: Any, session: dict, loop: asyncio.AbstractEventLoop | None = None):
         self.runtime = runtime
         self.config = config
         self.session = _SessionAdapter(session)
@@ -352,6 +352,7 @@ class AgentAdapter:
         self._interrupted: bool = False
         self._paused = asyncio.Event()
         self._paused.set()
+        self._loop = loop
 
     # ── Provider access ─────────────────────────────────────────────
 
@@ -380,7 +381,12 @@ class AgentAdapter:
             store.save_session(self.session.to_dict())
 
     def _maybe_compact_session(self) -> None:
-        asyncio.create_task(self.runtime.maybe_compact(self.session.to_dict()))
+        if self._loop is not None and not self._loop.is_closed():
+            self._loop.run_until_complete(
+                self.runtime.maybe_compact(self.session.to_dict())
+            )
+        else:
+            asyncio.run(self.runtime.maybe_compact(self.session.to_dict()))
 
     def _build_system_prompt(
         self, skill_name: str | None = None, query: str = ""
@@ -566,23 +572,20 @@ class CLITransport(Transport):
             raw = await asyncio.to_thread(input, dim("Approve? "))
         except (EOFError, OSError):
             return False
-        choice = raw.strip().lower()
+        choice = raw.strip()
 
-        if choice == "y":
-            self._get_spinner().start(f"{tool_name} {_args_preview(args_map)}")
-            return True
-        if choice == "Y":
-            self._approval_state.allow_tool(tool_name)
+        if choice in ("y", "Y"):
+            if choice == "Y":
+                self._approval_state.allow_tool(tool_name)
             self._get_spinner().start(f"{tool_name} {_args_preview(args_map)}")
             return True
         if choice == "a":
             self._approval_state.set_auto()
             self._get_spinner().start(f"{tool_name} {_args_preview(args_map)}")
             return True
-        if choice == "n":
-            return False
-        if choice == "N":
-            self._approval_state.deny_tool(tool_name)
+        if choice in ("n", "N"):
+            if choice == "N":
+                self._approval_state.deny_tool(tool_name)
             return False
         if choice == "d":
             self._approval_state.set_block()
@@ -807,116 +810,10 @@ class CLITransport(Transport):
         if isinstance(result, dict):
             return result.get("status") == "error"
         if isinstance(result, str):
-            return result.startswith("Error") or result.startswith("[")
+            return result.startswith("Error") or result.startswith("[Error")
         return False
 
     # ── CLI-specific methods ──────────────────────────────────────
-
-    async def run(
-        self, stdin: Any, stdout: Any, session_id: str, model: str, workspace: str
-    ) -> None:
-        """Run the CLI REPL loop.
-
-        Uses a background thread for stdin reads to avoid blocking
-        the asyncio event loop on TTY readline().
-        """
-        session = await self.runtime.get_or_create_session(
-            session_id=session_id,
-            model=model,
-            workspace=workspace,
-        )
-
-        stdout.write("Wisp ready.\n")
-        stdout.flush()
-
-        # Dedicated thread + queue for stdin — avoids asyncio.to_thread
-        # blocking issues on real TTYs where readline() can't be cancelled.
-        queue: asyncio.Queue[str | None] = asyncio.Queue()
-        stop_event = threading.Event()
-        loop = asyncio.get_running_loop()
-
-        def _put(item: str | None) -> None:
-            """Thread-safe put into asyncio queue via call_soon_threadsafe."""
-            queue.put_nowait(item)
-
-        def _reader() -> None:
-            while not stop_event.is_set():
-                try:
-                    line = stdin.readline()
-                except Exception:
-                    loop.call_soon_threadsafe(_put, None)
-                    return
-                if not line:
-                    loop.call_soon_threadsafe(_put, None)
-                    return
-                prompt = line.strip()
-                if prompt.lower() in ("exit", "quit"):
-                    loop.call_soon_threadsafe(_put, None)
-                    return
-                loop.call_soon_threadsafe(_put, prompt)
-
-        reader_thread = threading.Thread(target=_reader, daemon=True)
-        reader_thread.start()
-
-        try:
-            while True:
-                prompt = await queue.get()
-                if prompt is None:
-                    break
-                if not prompt:
-                    continue
-
-                # ── Slash commands ──────────────────────────────────────
-                if prompt.startswith("/"):
-                    from wisp.commands import dispatch
-                    from wisp.exceptions import ExitREPL
-
-                    adapter = AgentAdapter(self.runtime, self.config, session)
-                    try:
-                        result = dispatch(prompt, adapter)
-                        if result is False:
-                            pass  # Not a slash command
-                        elif isinstance(result, str):
-                            # Command returned a prompt to run (e.g. /continue)
-                            prompt = result  # Fall through to run_turn below
-                        else:
-                            continue  # Consumed, no follow-up
-                    except ExitREPL:
-                        break
-                    except Exception as exc:
-                        logger.exception("Slash command failed")
-                        stdout.write(f"Error: {exc}\n")
-                        stdout.flush()
-                        continue
-
-                self._reset_buffers()
-                try:
-                    async for event in self.runtime.run_turn(session, prompt):
-                        self._render_event(stdout, event)
-                    self._flush_thinking(stdout)
-                    self._flush_content(stdout)
-                    # Show turn stats after turn completes
-                    stats = self._progress.on_done()
-                    stats_line = render_turn_stats(stats, _term_width())
-                    if stats_line:
-                        stdout.write(stats_line + "\n")
-                    files = stats.get("files_changed", [])
-                    if files:
-                        ticker = render_file_ticker(files, _term_width())
-                        if ticker:
-                            stdout.write(ticker + "\n")
-                    stdout.write("\n" + dim("─" * _term_width()) + "\n\n")
-                    stdout.flush()
-                except Exception as exc:
-                    logger.exception("Error during turn")
-                    self._flush_thinking(stdout)
-                    self._flush_content(stdout)
-                    self._reset_buffers()
-                    stdout.write(f"Error: {exc}\n")
-                    stdout.flush()
-        finally:
-            stop_event.set()
-            reader_thread.join(timeout=1.0)
 
     def _render_event(self, stdout: Any, event: AgentEvent | dict) -> None:
         """Render an event to stdout with structured formatting.

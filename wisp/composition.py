@@ -192,20 +192,16 @@ class CompositionRoot:
     def _create_compaction_provider(self, model: str):
         """Create a provider for compaction summarization.
 
-        Returns None if model is empty or provider creation fails,
-        signalling the Compactor to use truncation fallback.
+        Uses the same provider as the main config (Ollama, OpenAI, etc.)
+        rather than hardcoding Ollama. Falls back to truncation on failure.
         """
         if not model:
             return None
         try:
             from wisp.providers.factory import ProviderFactory
             factory = ProviderFactory()
-            provider = factory.create(
-                "ollama",
-                config=self.config,
-                base_url=getattr(self.config, "ollama_url", "http://localhost:11434"),
-                model=model,
-            )
+            provider = factory.from_config(self.config)
+            provider.model = model
             return provider
         except Exception:
             logger.warning("Failed to create compaction provider for model=%s", model, exc_info=True)
@@ -251,7 +247,10 @@ class CompositionRoot:
 
 
 class _NullProvider:
-    """Placeholder provider that yields nothing."""
+    """Placeholder provider that yields an error event when no provider is configured."""
 
     def generate_stream_events(self, **kwargs):
-        return iter([])
+        return iter([{
+            "type": "error",
+            "text": "No LLM provider configured. Set WISP_PROVIDER or add 'provider' to config.",
+        }])
