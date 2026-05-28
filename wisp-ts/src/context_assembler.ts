@@ -4,6 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { TokenCounter } from "./infra/token_counter.js";
 import { discoverSkills, matchSkills } from "./skills.js";
+import { buildCodeIndex, searchSymbols, formatCodeIndex } from "./code_index.js";
+import { RepoMap } from "./repo_map.js";
 
 export const DEFAULT_SYSTEM = `You are Wisp, a helpful coding agent.
 
@@ -134,22 +136,49 @@ export class ContextAssembler {
   }
 
   private _findRelevantFiles(workspace: string, query: string): string[] {
+    const files: string[] = [];
+    const queryLower = query.toLowerCase();
+
+    // Try code index search first
+    try {
+      const index = buildCodeIndex(workspace, 200);
+      const symbols = searchSymbols(index, query, 10);
+      for (const sym of symbols) {
+        if (!files.includes(sym.file)) files.push(sym.file);
+        if (files.length >= 5) break;
+      }
+    } catch { /* ignore */ }
+
+    if (files.length >= 5) return files;
+
+    // Fall back to repo map importance
+    try {
+      const repoMap = new RepoMap();
+      repoMap.build(workspace);
+      const top = repoMap.topFiles(5);
+      for (const entry of top) {
+        if (!files.includes(entry.path)) files.push(entry.path);
+        if (files.length >= 5) break;
+      }
+    } catch { /* ignore */ }
+
+    if (files.length >= 5) return files;
+
+    // Ultimate fallback: naive name matching
     try {
       const entries = fs.readdirSync(workspace, { recursive: true, withFileTypes: true });
-      const files: string[] = [];
-      const queryLower = query.toLowerCase();
       for (const entry of entries) {
         if (!entry.isFile()) continue;
         const name = entry.name.toLowerCase();
         if (queryLower.includes(name.replace(/\.(ts|js|py|rs|go)$/, ""))) {
-          files.push(path.relative(workspace, path.join(entry.parentPath ?? workspace, entry.name)));
+          const rel = path.relative(workspace, path.join(entry.parentPath ?? workspace, entry.name));
+          if (!files.includes(rel)) files.push(rel);
+          if (files.length >= 5) break;
         }
-        if (files.length >= 5) break;
       }
-      return files;
-    } catch {
-      return [];
-    }
+    } catch { /* ignore */ }
+
+    return files;
   }
 
   private _fitSections(sections: Array<{ label: string; priority: number; content: string }>, maxTokens: number): string {
