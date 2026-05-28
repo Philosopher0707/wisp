@@ -19,6 +19,7 @@ import { success, error, warning, info, dim } from "../colors.js";
 import { getOutputMode, displayWidth, isAccessible, BoxChars } from "../terminal_width.js";
 import { AgentRuntime } from "../core/runtime.js";
 import { Session } from "../core/session.js";
+import { dispatch, AgentAdapter } from "../commands.js";
 import { StdinQueue } from "./queue.js";
 
 function termWidth(): number {
@@ -229,18 +230,21 @@ export class CLITransport implements Transport {
   async runRepl(session: Session): Promise<void> {
     this.printBanner(session, this.config.model);
     while (true) {
-      const prompt = await this.recv();
+      let prompt = await this.recv();
       if (prompt === null) break;
       if (!prompt.trim()) continue;
       if (prompt.startsWith("/")) {
         if (prompt === "/exit" || prompt === "/quit") break;
-        if (prompt === "/help") {
-          process.stdout.write("Commands: /exit, /help, /thinking\n");
-          continue;
-        }
-        if (prompt === "/thinking") {
-          this.showThinking = !this.showThinking;
-          process.stdout.write(`Thinking display: ${this.showThinking ? "on" : "off"}\n`);
+        // Dispatch to commands.ts — handles /help, /clear, /tokens, etc.
+        const adapter = new AgentAdapter(this.config, this.runtime, session);
+        adapter.messages = session.messages as Array<{ role: string; content: string }> ?? [];
+        adapter.activeSkill = (session as any)._activeSkill;
+        const result = dispatch(prompt, adapter);
+        if (result === true) continue;
+        if (typeof result === "string") {
+          // /continue returns a prompt string to run as follow-up
+          prompt = result;
+        } else {
           continue;
         }
       }
