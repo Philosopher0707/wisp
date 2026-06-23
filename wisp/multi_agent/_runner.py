@@ -81,6 +81,27 @@ class SubagentRunner:
         # Build child config
         child_cfg = self._build_child_config(contract, agent_workspace)
 
+        # Quick provider health check — fail fast if model is unreachable
+        # instead of waiting for the full timeout.
+        provider_name = getattr(child_cfg, "provider", "ollama")
+        cache_key = f"{provider_name}:{child_cfg.model}"
+        cached_provider = self._provider_cache.get(cache_key)
+        if cached_provider is not None:
+            try:
+                health = cached_provider.health_check()
+                if hasattr(health, "get") and health.get("status") == "unhealthy":
+                    error_msg = f"Provider unhealthy: {health.get('error', 'unknown')}"
+                    logger.warning("Subagent %s provider check failed: %s", contract.name, error_msg)
+                    return SubagentResult(
+                        task_id=contract.name,
+                        success=False,
+                        output=f"[PROVIDER UNREACHABLE] {error_msg}",
+                        error=error_msg,
+                        elapsed_seconds=0.0,
+                    )
+            except Exception as exc:
+                logger.debug("Provider health check error for %s: %s", contract.name, exc)
+
         # Create session dict
         import uuid
         from datetime import datetime, timezone
@@ -203,10 +224,19 @@ class SubagentRunner:
                     EventKind.TASK_FAILED,
                     {"error": f"Timeout after {contract.timeout_seconds}s"},
                 )
+            # Build a helpful diagnostic message
+            diag_parts = [f"Timed out after {duration:.1f}s"]
+            if tool_calls_log:
+                diag_parts.append(f"made {len(tool_calls_log)} tool calls")
+                last_tool = tool_calls_log[-1]["name"] if tool_calls_log else "none"
+                diag_parts.append(f"last tool: {last_tool}")
+            else:
+                diag_parts.append("no tool calls were made")
+                diag_parts.append("(model may be unreachable or too slow — check `ollama ps`)")
             return SubagentResult(
                 task_id=contract.name,
                 success=False,
-                output=f"[TIMED OUT after {duration:.1f}s]",
+                output=f"[TIMED OUT] {' — '.join(diag_parts)}",
                 tool_calls=list(tool_calls_log),
                 elapsed_seconds=duration,
                 error=f"Timeout after {contract.timeout_seconds}s",
@@ -310,8 +340,12 @@ class SubagentRunner:
             )
 
             session_dict = dict(session)
+            # Don't inject system prompt into messages — core.turn() builds its own
+            # via _build_system_prompt(). Passing it as a message would create
+            # duplicate system prompts and confuse the LLM.
+            # Instead, store it in session metadata for the context assembler.
             if system_prompt:
-                session_dict["messages"] = [{"role": "system", "content": system_prompt}] + list(session_dict.get("messages", []))
+                session_dict["subagent_system_prompt"] = system_prompt
 
             # Partition context — only pass relevant history to subagent
             raw_messages = list(session_dict.get("messages", []))
@@ -415,12 +449,23 @@ class SubagentRunner:
         tool_calls_log: list[dict],
         deadline: float,
     ) -> dict:
-        """Route subagent execution through AgentRuntime instead of bypassing."""
+        """Route subagent execution through AgentRuntime instead of bypassing.
+
+        The runtime's run_turn() will:
+        - Add the user message (contract.task) itself
+        - Call core.turn() which builds its own system prompt
+        - Handle compaction, session persistence, etc.
+
+        We pass the contract's system prompt via session metadata so
+        core._build_system_prompt() can use it as role_extra, avoiding
+        double system prompts.
+        """
         session_dict = dict(session)
+        # Don't inject system prompt into messages — core.turn() builds its own.
+        # Instead, pass it via session metadata for the context assembler.
+        session_dict["messages"] = []
         if system_prompt:
-            session_dict["messages"] = [{"role": "system", "content": system_prompt}]
-        else:
-            session_dict["messages"] = []
+            session_dict["subagent_system_prompt"] = system_prompt
 
         # Ensure session exists in runtime store
         sid = session_dict.get("id", "")
@@ -428,6 +473,9 @@ class SubagentRunner:
         ws = session_dict.get("workspace", "")
         runtime_session = await self._agent_runtime.get_or_create_session(sid, model, ws)
         runtime_session["messages"] = list(session_dict["messages"])
+        if system_prompt:
+            runtime_session["subagent_system_prompt"] = system_prompt
+            runtime_session["workspace"] = ws
 
         output_text = ""
         engine_iterations = 0

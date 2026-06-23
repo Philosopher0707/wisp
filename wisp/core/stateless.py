@@ -434,13 +434,18 @@ class WispAgentCore:
         static_prompt = _SYSTEM_PROMPT_CACHE.get(cache_key)
 
         if static_prompt is None:
-            skills_block = self._build_skills_block(ws)
+            # For subagents, skip heavy context building (repo map, lint, module
+            # summary) — the orchestrator's system prompt already includes
+            # relevant context. This saves 5-10s of I/O per subagent spawn.
+            is_subagent = bool(session.get("subagent_system_prompt"))
+
+            skills_block = self._build_skills_block(ws) if not is_subagent else ""
             project_ctx = self._detect_project_context(ws)
-            memory_block = self._build_memory_block(ws)
-            git_ctx = self._build_git_context(ws)
-            repo_map = self._build_repo_map(ws)
-            lint_ctx = self._build_lint_context(ws)
-            module_summary = self._build_module_summary(ws)
+            memory_block = self._build_memory_block(ws) if not is_subagent else ""
+            git_ctx = self._build_git_context(ws) if not is_subagent else ""
+            repo_map = self._build_repo_map(ws) if not is_subagent else ""
+            lint_ctx = self._build_lint_context(ws) if not is_subagent else ""
+            module_summary = self._build_module_summary(ws) if not is_subagent else ""
 
             # Load rules.md if present
             rules_path = ws_path / ".wisp" / "rules.md"
@@ -450,6 +455,13 @@ class WispAgentCore:
                     role_extra = rules_path.read_text(encoding="utf-8")
                 except Exception:
                     pass
+
+            # If the session has a subagent system prompt (set by SubagentRunner),
+            # use it as role_extra so it's included in the assembled prompt
+            # instead of creating a duplicate system message.
+            subagent_prompt = session.get("subagent_system_prompt", "")
+            if subagent_prompt:
+                role_extra = (role_extra + "\n\n" + subagent_prompt).strip() if role_extra else subagent_prompt
 
             ctx = PromptContext.from_legacy(
                 workspace=ws,

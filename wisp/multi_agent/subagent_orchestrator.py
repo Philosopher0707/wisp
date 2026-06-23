@@ -1040,10 +1040,10 @@ class SubagentOrchestrator:
         """Run a contract with retry on failure.
 
         Failed subagents retry with exponential backoff. Timed-out subagents
-        retry once with 1.5x timeout budget (capped at config max).
+        do NOT retry — a timeout means the model is too slow or unreachable,
+        and retrying would block the parent agent for far too long.
         """
         max_retries = contract.max_retries
-        max_timeout = getattr(self.config, "max_subagent_timeout", 600)
         last_error = ""
         for attempt in range(max_retries + 1):
             try:
@@ -1051,20 +1051,19 @@ class SubagentOrchestrator:
                 if result.success:
                     return result
                 last_error = result.error or "subagent failed"
+                # Don't retry on timeouts — the model is too slow or unreachable
                 if result.timed_out:
-                    if attempt < max_retries:
-                        new_timeout = min(int(contract.timeout_seconds * 1.5), max_timeout)
-                        logger.warning(
-                            "Subagent %s timed out — retrying with %ds budget (attempt %d/%d)",
-                            contract.name, new_timeout, attempt + 1, max_retries + 1,
-                        )
-                        import dataclasses
-                        contract = dataclasses.replace(contract, timeout_seconds=new_timeout)
-                        continue
-                    logger.warning("Subagent %s timed out — no retries left", contract.name)
+                    logger.warning(
+                        "Subagent %s timed out after %.1fs — not retrying (model too slow)",
+                        contract.name, result.elapsed_seconds,
+                    )
                     return result
                 if "timeout" in last_error.lower():
                     logger.warning("Subagent %s timed out — not retrying", contract.name)
+                    return result
+                # Don't retry on budget exhaustion
+                if "BUDGET EXHAUSTED" in (result.output or "") or "BUDGET" in (last_error or ""):
+                    logger.warning("Subagent %s budget exhausted — not retrying", contract.name)
                     return result
                 if attempt < max_retries:
                     backoff = 2 ** attempt
@@ -1165,7 +1164,9 @@ class SubagentOrchestrator:
                 logger.warning("[sub] %s failed: %s", event.task_id, event.payload.get("error", ""))
 
         contract.progress_callback = _progress
-        contract.max_retries = int(auto_retry) * 2
+        # auto_retry only retries on non-timeout failures (e.g. transient errors).
+        # Timeouts are never retried — see _run_with_retry.
+        contract.max_retries = int(auto_retry) * 1
 
         # ── Run with retry ───────────────────────────────────────────
         result = await self._run_with_retry(contract)
