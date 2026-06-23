@@ -47,7 +47,7 @@ _ASSEMBLER: ContextAssembler | None = None
 _SYSTEM_PROMPT_CACHE: dict[tuple[str, float], str] = {}
 
 
-def _flatten_event(ev: AgentEvent | dict) -> dict:
+def _flatten_event(ev: AgentEvent | dict[str, Any]) -> dict[str, Any]:
     """Convert canonical AgentEvent to flat dict for backward compatibility."""
     if isinstance(ev, dict):
         return dict(ev)
@@ -69,7 +69,7 @@ class WispAgentCore:
 
     _approval_gate: ApprovalGate | None = field(default=None, repr=False)
 
-    async def turn(self, session: dict, prompt: str, approval_handler=None) -> AsyncIterator[dict]:
+    async def turn(self, session: dict[str, Any], prompt: str, approval_handler: Any = None) -> AsyncIterator[dict[str, Any]]:
         """Run one turn, yielding events.
 
         Loops internally: provider → tool_calls → execute → append → provider
@@ -78,7 +78,7 @@ class WispAgentCore:
         Has a wall-clock timeout (default 10 min) to prevent infinite hangs.
         """
         import asyncio as _asyncio
-        turn_timeout = self.config.turn_timeout if self.config else 600
+        turn_timeout = getattr(self.config, "turn_timeout", 600) if self.config else 600
         # Build messages list
         messages = list(session.get("messages", []))
         # Avoid duplicating the user message if runtime already added it
@@ -111,13 +111,13 @@ class WispAgentCore:
             yield _flatten_event(done_event(session.get("id", "")))
 
     async def _turn_inner(
-        self, session, prompt, messages, system_prompt, tools,
-        max_iterations, approval_handler,
-    ) -> AsyncIterator[dict]:
+        self, session: dict[str, Any], prompt: str, messages: list[dict[str, Any]], system_prompt: str, tools: list[dict[str, Any]] | None,
+        max_iterations: int, approval_handler: Any,
+    ) -> AsyncIterator[dict[str, Any]]:
         """Inner turn loop, separated for timeout wrapping."""
         for iteration in range(max_iterations):
-            pending_tool_calls: list[dict] = []
-            provider_events: list[dict] = []
+            pending_tool_calls: list[dict[str, Any]] = []
+            provider_events: list[dict[str, Any]] = []
             partial_content: list[str] = []
             has_tool_calls = False
 
@@ -289,7 +289,7 @@ class WispAgentCore:
                 return
 
             # ── Execute tools and feed results back to messages ──
-            tool_results_events: list[dict] = []
+            tool_results_events: list[dict[str, Any]] = []
             has_tool_results = any(e.get("type") == "tool_result" for e in provider_events)
             if pending_tool_calls and not has_tool_results:
                 for tc in pending_tool_calls:
@@ -300,7 +300,7 @@ class WispAgentCore:
                         yield result_event
 
             # Append assistant + tool messages to continue the conversation
-            assistant_msg = {"role": "assistant", "content": "".join(partial_content)}
+            assistant_msg: dict[str, Any] = {"role": "assistant", "content": "".join(partial_content)}
             if pending_tool_calls:
                 import json
                 import uuid as _uuid
@@ -339,9 +339,9 @@ class WispAgentCore:
     async def _stream_events_async(
         self,
         system_prompt: str,
-        messages: list[dict],
-        tools: list[dict] | None,
-    ):
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+    ) -> AsyncIterator[dict[str, Any]]:
         """Wrap a synchronous provider generator in an async iterator.
 
         Runs the blocking I/O in a thread to avoid blocking the event loop.
@@ -349,7 +349,8 @@ class WispAgentCore:
         """
         import asyncio
 
-        # Check if the provider already has an async version
+        if self.provider is None:
+            raise RuntimeError("WispAgentCore has no provider configured")
         provider = self.provider
         if hasattr(provider, "generate_stream_events_async"):
             async for event in provider.generate_stream_events_async(
@@ -367,11 +368,11 @@ class WispAgentCore:
         import threading
 
         loop = asyncio.get_running_loop()
-        queue: asyncio.Queue = asyncio.Queue()
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         done = object()  # sentinel
         cancelled = threading.Event()  # signals producer to stop
 
-        def _sync_producer():
+        def _sync_producer() -> None:
             try:
                 for event in provider.generate_stream_events(
                     system_prompt=system_prompt,
@@ -381,9 +382,9 @@ class WispAgentCore:
                     if cancelled.is_set():
                         break
                     loop.call_soon_threadsafe(queue.put_nowait, event)
-                loop.call_soon_threadsafe(queue.put_nowait, done)
+                loop.call_soon_threadsafe(queue.put_nowait, done)  # type: ignore[arg-type]
             except Exception:
-                loop.call_soon_threadsafe(queue.put_nowait, done)
+                loop.call_soon_threadsafe(queue.put_nowait, done)  # type: ignore[arg-type]
                 raise
 
         thread = threading.Thread(target=_sync_producer, daemon=True)
@@ -406,7 +407,7 @@ class WispAgentCore:
                     break
             thread.join(timeout=5.0)
 
-    def _build_system_prompt(self, session: dict, query: str | None = None) -> str:
+    def _build_system_prompt(self, session: dict[str, Any], query: str | None = None) -> str:
         """Build rich system prompt from session context."""
         from wisp.context_assembler import ContextAssembler, PromptContext
 
@@ -416,7 +417,7 @@ class WispAgentCore:
         # Lazy-init assembler (module-level, shared across all core instances)
         global _ASSEMBLER
         if _ASSEMBLER is None:
-            _ASSEMBLER = ContextAssembler()
+            _ASSEMBLER = ContextAssembler()  # type: ignore[no-untyped-call]  # context_assembler not yet annotated
         assembler = _ASSEMBLER
 
         # Check cache for static prompt — include mtimes of key context files
@@ -789,9 +790,9 @@ class WispAgentCore:
             lines.append(f"- {name}: {desc}")
         return "\n".join(lines)
 
-    def _get_tool_schemas(self) -> list[dict]:
+    def _get_tool_schemas(self) -> list[dict[str, Any]]:
         """Get all tool schemas — built-in + extensions."""
-        from wisp.tools import TOOL_SCHEMAS
+        from wisp.tools.registry import TOOL_SCHEMAS
 
         schemas = list(TOOL_SCHEMAS)
 
@@ -805,7 +806,7 @@ class WispAgentCore:
 
         return schemas
 
-    async def _execute_tool(self, event: dict, session: dict, approval_handler=None) -> AsyncIterator[dict]:
+    async def _execute_tool(self, event: dict[str, Any], session: dict[str, Any], approval_handler: Any = None) -> AsyncIterator[dict[str, Any]]:
         """Execute a tool call via ToolExecutor, yielding flattened events.
 
         Schema validation is done here as defense-in-depth.
@@ -835,7 +836,7 @@ class WispAgentCore:
             # (name, args, reason) -> (approved, modified_args_or_none)
             wrapped_handler = None
             if approval_handler is not None:
-                async def _wrap_approval(name, args, reason):
+                async def _wrap_approval(name: str, args: dict[str, Any], reason: str) -> tuple[bool, None]:
                     approved = await approval_handler({"name": name, "arguments": args})
                     return approved, None
                 wrapped_handler = _wrap_approval
@@ -848,10 +849,10 @@ class WispAgentCore:
                 yield _flatten_event(agent_event)
         else:
             # Fallback: direct execution when no ToolExecutor wired
-            from wisp.tools import execute_tool
+            from wisp.tools.registry import execute_tool
             start = time.time()
             try:
-                raw_result = execute_tool(name, args, workspace=workspace)
+                raw_result: str | dict[str, Any] = execute_tool(name, args, workspace=workspace)
             except Exception as e:
                 logger.exception("Tool execution failed: %s", name)
                 raw_result = {"status": "error", "data": str(e)}
@@ -863,7 +864,7 @@ class WispAgentCore:
                 )
             )
 
-    def _normalize_tool_result(self, result: Any) -> dict:
+    def _normalize_tool_result(self, result: Any) -> dict[str, Any]:
         """Normalize any tool result to a standard JSON-serializable schema.
 
         Schema:
@@ -986,7 +987,7 @@ class WispAgentCore:
         except (TypeError, ValueError):
             return str(value)
 
-    def _normalize_event(self, event: Any) -> dict:
+    def _normalize_event(self, event: Any) -> dict[str, Any]:
         """Normalize provider event to standard format.
 
         Whitelist known fields instead of copying __dict__ to avoid
@@ -1033,13 +1034,13 @@ class WispAgentCore:
 
         return result
 
-    def _validate_tool_args(self, name: str, args: dict) -> Optional[str]:
+    def _validate_tool_args(self, name: str, args: dict[str, Any]) -> Optional[str]:
         """Validate tool arguments against the registered JSON schema.
 
         Returns an error message string if validation fails, or None
         if the tool is not found or validation succeeds.
         """
-        from wisp.tools import TOOL_SCHEMAS
+        from wisp.tools.registry import TOOL_SCHEMAS
 
         # Find the schema for this tool
         schema = None
@@ -1064,7 +1065,7 @@ class WispAgentCore:
             self._approval_gate = ApprovalGate(self.security)
         return self._approval_gate
 
-    def _make_action(self, event: dict) -> Any:
+    def _make_action(self, event: dict[str, Any]) -> Any:
         """Create Action from tool_call event."""
         from wisp.infra.security import Action
 
@@ -1073,7 +1074,7 @@ class WispAgentCore:
             args=event.get("arguments", {}),
         )
 
-    def _make_context(self, session: dict) -> Any:
+    def _make_context(self, session: dict[str, Any]) -> Any:
         """Create Context from session."""
         from pathlib import Path
         from wisp.infra.security import Context

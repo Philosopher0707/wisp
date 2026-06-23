@@ -44,7 +44,7 @@ from wisp.tools.tests import tool_run_tests
 
 logger = logging.getLogger(__name__)
 
-TOOL_SCHEMAS = [
+TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
