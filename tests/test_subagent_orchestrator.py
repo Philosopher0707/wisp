@@ -938,8 +938,8 @@ async def test_output_token_truncation(orch):
         result = await orch.run(contract)
 
     assert result.success is True
-    assert "OUTPUT TRUNCATED" in result.output
-    assert len(result.output) < 200  # truncated
+    assert "OUTPUT COMPRESSED" in result.output
+    assert len(result.output) < 200  # compressed
 
 
 @pytest.mark.asyncio

@@ -546,8 +546,8 @@ class TestRunnerRun:
             with patch("wisp.core.engine.WispAgentCore", VerboseCore):
                 result = await runner.run(contract, "/tmp", "prompt")
 
-        assert "OUTPUT TRUNCATED" in result.output
-        assert len(result.output) <= 20 + len("OUTPUT TRUNCATED") + 50
+        assert "OUTPUT COMPRESSED" in result.output
+        assert len(result.output) <= 20 + len("OUTPUT COMPRESSED") + 50
 
     async def test_output_truncation_max_tokens(self, config, contract):
         contract.max_output_tokens = 1
@@ -564,7 +564,7 @@ class TestRunnerRun:
             with patch("wisp.core.engine.WispAgentCore", VeryVerboseCore):
                 result = await runner.run(contract, "/tmp", "prompt")
 
-        assert "OUTPUT TRUNCATED" in result.output
+        assert "OUTPUT COMPRESSED" in result.output
 
 
 # ── Context Partitioning in _run_agent ───────────────────────────────────

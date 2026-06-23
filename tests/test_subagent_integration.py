@@ -457,8 +457,8 @@ class TestSpawnWithGuardsIntegration:
                 max_iterations=3,
             )
 
-        assert "truncated" in output.lower()
-        assert len(output) <= 13000  # 12000 + truncation suffix
+        assert "compressed" in output.lower()
+        assert len(output) <= 13000  # 12000 + compression suffix
 
     @pytest.mark.asyncio
     async def test_spawn_parallel_depth_guard(self, orch_for_test):

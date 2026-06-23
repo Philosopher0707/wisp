@@ -619,7 +619,11 @@ class SubagentRunner:
         notice = f"\n\n[OUTPUT COMPRESSED: {reason}. Original: {len(text)} chars.]"
         budget = max_chars - len(notice)
         if budget < 200:
-            return text[:budget] + notice
+            # Small budget (can be negative when the notice itself exceeds
+            # max_chars): keep as much original text as fits alongside the
+            # notice, then hard-cap so output never exceeds max_chars.
+            keep = max(0, budget)
+            return (text[:keep] + notice)[:max_chars]
 
         # Split into sections by markdown headers
         sections = re.split(r'(\n#{1,4}\s+.+)', text)
