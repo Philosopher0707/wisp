@@ -39,10 +39,10 @@ class TestConfigValidation:
         assert any("max_iterations" in e.lower() for e in errors)
 
     def test_max_iterations_too_high(self):
-        """max_iterations above 100 should fail."""
+        """max_iterations above 200 should fail."""
         from wisp.config import WispConfig
         config = WispConfig()
-        config = config.replace(max_iterations=200)
+        config = config.replace(max_iterations=500)
         errors = config.validate()
         assert any("max_iterations" in e.lower() for e in errors)
 

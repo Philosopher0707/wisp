@@ -29,7 +29,7 @@ class TestWispConfig:
         assert cfg.ollama_url == "http://localhost:11434"
         assert cfg.provider == "ollama"
         assert cfg.temperature == 0.2
-        assert cfg.max_tokens == 32768  # Default cap to prevent infinite repetition
+        assert cfg.max_tokens == 131072  # Raised to match industry-grade coding agent limits
         assert cfg.max_context_tokens == 256000
         assert cfg.chars_per_token == 4
         assert cfg.auto_approve is False

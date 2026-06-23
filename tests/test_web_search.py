@@ -5,8 +5,18 @@ fixture so the parser can be verified without making live HTTP calls.
 """
 
 import json
+import socket
 
 import pytest
+
+
+def _network_available(host: str = 'duckduckgo.com', port: int = 443, timeout: float = 2.0) -> bool:
+    """Quick TCP probe -- True if we can reach the search backend."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 # The _ResultParser is module-local inside tool_web_search; import it by
 # executing the fallback path via a private helper.
@@ -158,6 +168,8 @@ class TestWebSearchLive:
         reason="urllib not available",
     )
     def test_live_web_search_returns_results(self):
+        if not _network_available():
+            pytest.skip("Network unavailable in this environment")
         from wisp.tools import tool_web_search
 
         raw = tool_web_search("python dataclasses tutorial", num_results=3)

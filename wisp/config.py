@@ -590,9 +590,9 @@ class WispConfig:
             )
 
         # Max iterations
-        if not (1 <= self.max_iterations <= 100):
+        if not (1 <= self.max_iterations <= 200):
             errors.append(
-                f"max_iterations: {self.max_iterations} is out of range [1, 100]"
+                f"max_iterations: {self.max_iterations} is out of range [1, 200]"
             )
 
         # Max reflections

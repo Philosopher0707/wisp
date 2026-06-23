@@ -46,7 +46,7 @@ class TestValidateConfig:
 
     def test_max_iterations_too_high(self):
         """Max iterations above maximum fails."""
-        errors = validate_config({"max_iterations": 200})
+        errors = validate_config({"max_iterations": 500})
         assert len(errors) == 1
 
     def test_valid_bool(self):

@@ -34,6 +34,37 @@ class FakeStatelessCore:
         cls.created_instances = []
 
 
+def _child_config(overrides):
+    """Build a config-like MagicMock with real scalar attribute values.
+
+    Production code paths (providers.factory.from_config -> _validate_ollama_url,
+    infra.security.SecurityPolicy) need real strings/ints, not auto-generated
+    MagicMocks. This mimics WispConfig.replace() by returning a fresh mock
+    carrying the parent's scalar defaults with the supplied overrides applied.
+    """
+    child = MagicMock()
+    child.provider = "ollama"
+    child.ollama_url = "http://localhost:11434"
+    child.model = "test-model"
+    child.workspace = "/tmp"
+    child.show_thinking = False
+    child.chars_per_token = 4
+    child.temperature = 0.2
+    child.max_context_tokens = 128000
+    child._context_tokens_explicit = True
+    child.permission_mode = "auto"
+    child.max_iterations = 30
+    child.subagent_pool_size = 4
+    child.max_subagent_depth = 2
+    child.max_subagent_branching = 3
+    child.auto_approve = False
+    for key, value in overrides.items():
+        setattr(child, key, value)
+    # Keep .replace chainable so repeated .replace() calls stay real-valued
+    child.replace = MagicMock(side_effect=lambda **kw: _child_config(kw))
+    return child
+
+
 @pytest.fixture
 def mock_parent_agent():
     agent = MagicMock()
@@ -52,6 +83,7 @@ def mock_parent_agent():
     agent.config.chars_per_token = 4
     agent.config.max_subagent_depth = 2
     agent.config.max_subagent_branching = 3
+    agent.config.replace = MagicMock(side_effect=lambda **kw: _child_config(kw))
     return agent
 
 
