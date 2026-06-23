@@ -66,7 +66,8 @@ async def run_swarm(req: SwarmRunRequest):
         )
 
     orch = SwarmOrchestrator(config, max_parallel=req.max_parallel)
-    run_id = f"swarm-{secrets.token_hex(6)}"
+    # SECURITY (audit P2 #41): 128 bits of entropy, not 48.
+    run_id = f"swarm-{secrets.token_urlsafe(16)}"
     event_log: list[dict] = []
 
     async def collect_events(evt: SwarmEvent) -> None:

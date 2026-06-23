@@ -134,6 +134,9 @@ class ResultCache:
         self._misses = 0
 
     def _key(self, contract: SubagentContract) -> str:
+        # SECURITY: include isolation flags so results cached at one depth /
+        # branch / worktree / approval mode are never reused in a context
+        # with different isolation guarantees (audit P3 #47).
         parts = [
             contract.task,
             contract.role,
@@ -144,6 +147,10 @@ class ResultCache:
             str(contract.output_schema or ""),
             str(contract.system_prompt or ""),
             contract._cache_context,
+            f"depth={contract._subagent_depth}",
+            f"branch={contract._subagent_branch_count}",
+            f"worktree_isolated={contract.worktree_isolated}",
+            f"auto_approve={contract.auto_approve}",
         ]
         raw = "|".join(parts)
         return hashlib.sha256(raw.encode()).hexdigest()[:32]

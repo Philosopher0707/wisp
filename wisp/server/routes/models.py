@@ -3,6 +3,7 @@
 Handles model listing.
 """
 
+import logging
 import subprocess
 
 import requests
@@ -10,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from wisp.server.deps import verify_api_key, RATE_LIMITER
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -35,4 +37,7 @@ async def list_models():
         models = [m.get("name", "") for m in data.get("models", [])]
         return {"models": models}
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Ollama error: {e}")
+        # SECURITY (audit P2 #38): log the real error server-side, send a
+        # generic message to the client to avoid leaking backend details.
+        logger.warning("Ollama models lookup failed: %s", e)
+        raise HTTPException(status_code=503, detail="Ollama backend unavailable")

@@ -22,9 +22,11 @@ class DiffRequest(BaseModel):
 
 
 class InlineEditRequest(BaseModel):
-    path: str = Field(..., description="File path relative to workspace")
-    selection: str = Field(..., min_length=1, description="Selected code to replace")
-    instruction: str = Field(..., min_length=1, description="Natural language edit instruction")
+    path: str = Field(..., min_length=1, max_length=4096, description="File path relative to workspace")
+    # SECURITY (audit P2 #40): bound selection/instruction so a client can't
+    # push an unbounded blob into the model context.
+    selection: str = Field(..., min_length=1, max_length=200_000, description="Selected code to replace")
+    instruction: str = Field(..., min_length=1, max_length=20_000, description="Natural language edit instruction")
     model: str | None = None
 
 

@@ -98,8 +98,17 @@ def validate_json_schema(data: Any, schema: dict) -> tuple[bool, list[str]]:
         pattern = schema.get("pattern")
         if pattern:
             import re
+            # SECURITY (audit P1 #19): bound the input before applying an
+            # attacker-influenced pattern. Without a length cap a pattern
+            # with catastrophic backtracking (e.g. ``(a+)+$``) against an
+            # unbounded string is a ReDoS vector. Python's ``re`` has no
+            # timeout, so we cap the haystack; callers wanting longer
+            # matches must declare ``maxLength`` explicitly.
+            _MAX_PATTERN_INPUT = 10_000
             try:
-                if not re.match(pattern, data):
+                if len(data) > _MAX_PATTERN_INPUT:
+                    errors.append("Input too long for pattern validation")
+                elif not re.match(pattern, data):
                     errors.append(f"String does not match pattern: {pattern}")
             except Exception:
                 errors.append("Invalid pattern in schema")

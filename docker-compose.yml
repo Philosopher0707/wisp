@@ -27,7 +27,12 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - WISP_API_KEY=${WISP_API_KEY:-change-me-in-production}
+      # SECURITY (audit P1 #28): refuse to start with the placeholder key.
+      # docker compose fails fast if WISP_API_KEY is unset/empty, forcing
+      # explicit configuration for deployments. Local dev can run the server
+      # directly (auth auto-disabled when WISP_API_KEY is unset).
+      - WISP_API_KEY=${WISP_API_KEY:?WISP_API_KEY must be set (see README)}
+
       - WISP_WORKSPACE=/workspace
       - OLLAMA_HOST=http://ollama:11434
       - PYTHONUNBUFFERED=1
