@@ -23,10 +23,10 @@ class Provider(ABC):
     def generate_stream_events(
         self,
         system_prompt: str,
-        messages: list[dict],
-        tools: list[dict] | None = None,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
         checkpoint_every: int = 50,
-    ) -> Generator[dict, None, None]:
+    ) -> Generator[dict[str, Any], None, None]:
         """Generate a stream of events from the model.
 
         Yields standardized event dictionaries:

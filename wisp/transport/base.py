@@ -12,13 +12,14 @@ Design:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 
 class Transport(ABC):
     """Abstract base class for all transports."""
 
     @abstractmethod
-    async def send(self, event: dict) -> None:
+    async def send(self, event: dict[str, Any]) -> None:
         """Send an event to the user.
 
         Events are standardized dictionaries:
@@ -40,7 +41,7 @@ class Transport(ABC):
         ...
 
     @abstractmethod
-    async def approve(self, tool_call: dict) -> bool:
+    async def approve(self, tool_call: dict[str, Any]) -> bool:
         """Ask the user to approve a tool call.
 
         Returns True if approved, False if rejected.

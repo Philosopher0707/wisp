@@ -75,19 +75,19 @@ class AgentEvent:
     @property
     def text(self) -> str:
         """Shortcut for content/thinking events."""
-        return self.data.get("text", "")
+        return str(self.data.get("text", ""))
 
     @property
     def tool_name(self) -> str:
         """Shortcut for tool_call / tool_result events."""
-        return self.data.get("name", "")
+        return str(self.data.get("name", ""))
 
     @property
     def is_final(self) -> bool:
         """True if this event signals the end of a turn."""
         return self.type in (TYPE_DONE, TYPE_ERROR)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to JSON-friendly dict.
 
         Canonical format: {"type": str, "data": {...}, "timestamp": float,
@@ -106,7 +106,7 @@ class AgentEvent:
         return d
 
     @classmethod
-    def from_dict(cls, data: dict) -> AgentEvent:
+    def from_dict(cls, data: dict[str, Any]) -> AgentEvent:
         """Deserialize from dict (round-trips with to_dict).
 
         Handles both canonical format ({type, data}) and flat format
@@ -211,7 +211,7 @@ def _trace_ctx() -> tuple[str, str]:
         return "", ""
 
 
-def _make_event(event_type: EventType | str, data: dict) -> AgentEvent:
+def _make_event(event_type: EventType | str, data: dict[str, Any]) -> AgentEvent:
     """Create an AgentEvent with trace context and schema version auto-populated."""
     tid, sid = _trace_ctx()
     return AgentEvent(

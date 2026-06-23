@@ -30,11 +30,11 @@ jobs:
       - name: Ruff (Pyflakes gate)
         run: ruff check wisp/
 
-      - name: Mypy on typed spine (advisory ratchet)
-        # Strict mypy on the core spine. Advisory for now (continue-on-error)
-        # until the long tail of untyped modules is annotated. Ratchet to a
-        # hard gate once the spine is clean.
-        continue-on-error: true
+      - name: Mypy on typed spine (hard gate)
+        # Strict mypy on the fully-annotated contract seams (events.py,
+        # providers/protocol.py, transport/base.py). Hard gate -- these are
+        # the seams every consumer depends on. Ratchet target: add
+        # stateless.py + multi_agent/task.py once WispConfig attrs are typed.
         run: mypy
 
       - name: Compile all wisp sources
