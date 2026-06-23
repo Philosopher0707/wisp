@@ -629,7 +629,7 @@ def cmd_locks(args: list[str]):
         since = lock.get("since", "?")[:19]
         expires = lock.get("expires", "?")[:19]
         file = lock.get("_file", "?")
-        print(f"  {accent(file):<40} {dim(agent):<20} expires {expires}")
+        print(f"  {accent(file):<40} {dim(agent):<20} since {since} expires {expires}")
 
 
 def cmd_changes(args: list[str]):

@@ -40,7 +40,6 @@ class SessionRepository:
 
     def append_events(self, session_id: str, events: list[SessionEvent]) -> None:
         """Persist multiple events in a single transaction."""
-        conn = self._store._get_conn()
         with self._store.transaction() as conn:
             for ev in events:
                 conn.execute(

@@ -244,13 +244,6 @@ class AgentMemory:
 _agent_memory_singleton: AgentMemory | None = None
 
 
-def get_agent_memory() -> AgentMemory:
-    """Return the module-level singleton AgentMemory instance."""
-    global _agent_memory_singleton
-    if _agent_memory_singleton is None:
-        _agent_memory_singleton = AgentMemory()
-    return _agent_memory_singleton
-
 
 # ── Singleton ───────────────────────────────────────────────────────
 

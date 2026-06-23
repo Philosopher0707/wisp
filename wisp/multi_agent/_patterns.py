@@ -154,7 +154,6 @@ async def run_vote(
 
     successful = [r for r in results if r.success]
     total = len(results)
-    passed = len(successful)
 
     if total == 0:
         return SubagentResult(

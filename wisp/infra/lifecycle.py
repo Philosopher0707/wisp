@@ -63,7 +63,6 @@ class ServiceRegistry:
                     started.add(name)
                     progressed = True
             if not progressed and pending:
-                names = [getattr(s, "name", type(s).__name__) for s in pending]
                 missing = []
                 for svc in pending:
                     name = getattr(svc, "name", type(svc).__name__)

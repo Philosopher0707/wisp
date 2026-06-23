@@ -7,7 +7,6 @@ No nested event loops. No threads. Direct async execution with
 from __future__ import annotations
 
 import asyncio
-import copy
 import logging
 import time
 from pathlib import Path

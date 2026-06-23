@@ -778,7 +778,6 @@ def cmd_init(agent, args: str):
     # ── Gather source file stats ──
     from wisp.code_index import build_index
     index = build_index(str(ws))
-    lang_list = sorted(index.languages) if index.languages else [ctx.language or "Unknown"]
 
     # ── Find key source files (entry points, main modules) ──
     key_files = []

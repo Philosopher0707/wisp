@@ -376,7 +376,6 @@ def _dedup_tool_results(graph: ConversationGraph) -> list[dict]:
             continue
 
         # Build a dedup key
-        result_hash = node.content_hash
         similar_key = f"{tool_name}:{args_hash}"
 
         if similar_key in seen:

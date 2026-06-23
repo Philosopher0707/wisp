@@ -572,7 +572,7 @@ class RepoMap:
         filtered: list[Path] = []
         for f in found:
             try:
-                rel = f.relative_to(ws)
+                f.relative_to(ws)
             except ValueError:
                 continue
             filtered.append(f)
@@ -712,7 +712,6 @@ class RepoMap:
         # Check if any tracked file is newer than cache
         cache_ts = meta.get("timestamp", 0)
         cached_files = set(meta.get("files", []))
-        cache_mtime = meta.get("cache_mtime", cache_ts)
 
         for fpath in list(cached_files)[:50]:  # Sample check for speed
             full_path = self.workspace / fpath

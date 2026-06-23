@@ -13,14 +13,12 @@ Design:
 from __future__ import annotations
 
 import asyncio
-import datetime
 import json
 import logging
 import re
 import shutil
 import signal
 import sys
-import threading
 from typing import Any, Optional
 
 # Import readline to enable arrow-key/editing support in input().
@@ -45,7 +43,7 @@ from wisp.core.events import AgentEvent, EventType
 from wisp.terminal_width import display_width, is_accessible, get_output_mode, wrap_text_wide
 from wisp.transport.progress import ProgressTracker
 from wisp.transport.spinner import Spinner
-from wisp.transport.renderer import render_phase_bar, render_turn_stats, render_file_ticker
+from wisp.transport.renderer import render_phase_bar
 
 logger = logging.getLogger(__name__)
 
@@ -307,6 +305,7 @@ class _SessionAdapter:
         self._session["updated_at"] = datetime.now(timezone.utc).isoformat()
 
     def compact(self, keep_recent: int = 4, max_context_tokens: int = 4096, chars_per_token: int = 4) -> "dict":
+        from datetime import datetime, timezone
         """Compact session messages, keeping recent ones."""
         msgs = self._session.get("messages", [])
         if len(msgs) <= keep_recent:
@@ -553,7 +552,6 @@ class CLITransport(Transport):
             self._spinner.stop()
 
         # Show interactive prompt
-        width = self._term_width() if hasattr(self, "_term_width") else 80
         print(file=sys.stdout)  # blank line before prompt
         print(
             warning(
@@ -567,7 +565,6 @@ class CLITransport(Transport):
         )
         sys.stdout.flush()
 
-        loop = asyncio.get_event_loop()
         try:
             raw = await asyncio.to_thread(input, dim("Approve? "))
         except (EOFError, OSError):

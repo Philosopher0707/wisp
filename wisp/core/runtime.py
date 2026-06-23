@@ -104,7 +104,6 @@ class AgentRuntime:
         - Compaction runs automatically before turn if needed
         - Concurrent turns on same session are serialized
         """
-        import time
         start = time.time()
 
         # Input validation
@@ -122,7 +121,7 @@ class AgentRuntime:
 
         # Start trace context for this turn
         from wisp.infra.tracing import new_trace
-        trace_id = new_trace(session_id=sid)
+        new_trace(session_id=sid)
 
         # Crash recovery: if last event in session_events isn't DONE,
         # replay from last UserMessage to rebuild state
@@ -492,7 +491,6 @@ class AgentRuntime:
             return
         # Evict oldest 20% by last access time (true LRU)
         to_evict = int(self._max_session_locks * 0.2)
-        now = time.monotonic()
         # Sort by access time, oldest first; missing entries get epoch 0
         sorted_keys = sorted(
             self._session_locks.keys(),

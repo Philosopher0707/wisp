@@ -163,6 +163,7 @@ class TestWebSearchHTMLParser:
 class TestWebSearchLive:
     """Optional live test — skipped if no network or DDG blocks request."""
 
+    @pytest.mark.live
     @pytest.mark.skipif(
         pytest.importorskip("urllib.request") is None,
         reason="urllib not available",

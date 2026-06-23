@@ -28,7 +28,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "httpx>=0.27", "pytest-asyncio>=1.3.0"]
+dev = ["pytest>=7.0", "httpx>=0.27", "pytest-asyncio>=1.3.0", "ruff>=0.6", "mypy>=1.10"]
 
 [project.scripts]
 wisp = "wisp.__main__:main"
@@ -45,3 +45,28 @@ dev = [
 filterwarnings = [
     "ignore:coroutine '_run_single_prompt' was never awaited:RuntimeWarning",
 ]
+markers = [
+    "live: tests that require network access (excluded from CI by default)",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+# Pyflakes only: real bugs (undefined names, unused imports/vars, redefinitions).
+# Style rules (E/W) intentionally excluded -- this codebase has intentional
+# conditional imports and legacy patterns that would generate noise.
+select = ["F"]
+
+[tool.ruff.lint.per-file-ignores]
+# __init__.py files re-export public APIs by design.
+"**/__init__.py" = ["F401"]
+
+[tool.mypy]
+python_version = "3.12"
+# Strict on the typed spine; the flat sprawl stays untyped for now.
+files = ["wisp/core", "wisp/providers", "wisp/transport/base.py", "wisp/multi_agent/task.py"]
+strict = true
+# Incremental ratchet: don't fail CI on day 1 for the long tail of untyped deps.
+ignore_missing_imports = true
