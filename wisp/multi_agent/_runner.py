@@ -54,6 +54,11 @@ class SubagentRunner:
         self._store = store or UnifiedStore(default_db)
         self._tool_executor = tool_executor
         self._agent_runtime = agent_runtime
+        # Warm cache: reuse provider/security/extensions across subagent runs
+        # to avoid re-creating HTTP connections and re-loading config on every spawn.
+        self._provider_cache: dict[str, Any] = {}
+        self._security_cache: Any | None = None
+        self._extensions_cache: Any | None = None
 
     async def run(
         self,
@@ -159,16 +164,16 @@ class SubagentRunner:
                         "Subagent %s output tokens %d exceed limit %d",
                         contract.name, out_tok, contract.max_output_tokens,
                     )
-                    subagent_result.output = (
-                        subagent_result.output[:contract.max_output_chars]
-                        + f"\n\n[OUTPUT TRUNCATED: exceeded {contract.max_output_tokens} output tokens]"
+                    subagent_result.output = self._compress_output(
+                        subagent_result.output, contract.max_output_chars,
+                        reason=f"exceeded {contract.max_output_tokens} output tokens",
                     )
 
             # Enforce per-contract output char limit
             if len(subagent_result.output) > contract.max_output_chars:
-                subagent_result.output = (
-                    subagent_result.output[:contract.max_output_chars]
-                    + f"\n\n[OUTPUT TRUNCATED: exceeded {contract.max_output_chars} characters]"
+                subagent_result.output = self._compress_output(
+                    subagent_result.output, contract.max_output_chars,
+                    reason=f"exceeded {contract.max_output_chars} characters",
                 )
 
             # Emit completion event
@@ -264,14 +269,37 @@ class SubagentRunner:
         provider_name = getattr(config, "provider", None)
         if not isinstance(provider_name, str):
             provider_name = "ollama"
-        factory = ProviderFactory()
-        provider = factory.from_config(config)
 
-        try:
-            security = SecurityPolicy(
+        # Reuse cached provider when model + provider match (warm pool optimization).
+        # Provider creation may establish HTTP connections; caching avoids this overhead.
+        cache_key = f"{provider_name}:{config.model}"
+        provider = self._provider_cache.get(cache_key)
+        if provider is None:
+            factory = ProviderFactory()
+            provider = factory.from_config(config)
+            self._provider_cache[cache_key] = provider
+
+        # Reuse security policy and extensions (stateless, safe to share)
+        if self._security_cache is None:
+            self._security_cache = SecurityPolicy(
                 permission_mode=getattr(config, "permission_mode", "full"),
             )
-            extensions = ExtensionHost()
+        if self._extensions_cache is None:
+            self._extensions_cache = ExtensionHost()
+
+        security = self._security_cache
+        extensions = self._extensions_cache
+
+        try:
+            # Register share_finding tool when shared context is active
+            if contract._shared_context is not None:
+                from .shared_context import build_shared_context_tool_schema, build_shared_context_tool_impl
+                share_schema = build_shared_context_tool_schema()
+                share_impl = build_shared_context_tool_impl(contract.name, contract._shared_context)
+                # Add as a temporary extension tool
+                if not hasattr(extensions, '_shared_context_tools'):
+                    extensions._shared_context_tools = {}
+                extensions._shared_context_tools[share_schema["function"]["name"]] = (share_schema, share_impl)
 
             core = StatelessCore(
                 provider=provider,
@@ -308,6 +336,16 @@ class SubagentRunner:
             output_text = ""
             engine_iterations = 0
 
+            # Set up resource budget from contract metadata or contract fields
+            from .resource_budget import ResourceBudget
+            budget = ResourceBudget()
+            if contract.max_tokens:
+                budget.max_tokens = contract.max_tokens
+            if contract.max_input_tokens:
+                budget.max_tokens = (budget.max_tokens or contract.max_input_tokens)
+            budget.max_wall_time = deadline - time.monotonic()
+            budget.start()
+
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise asyncio.TimeoutError("contract deadline reached")
@@ -319,10 +357,30 @@ class SubagentRunner:
                         output_text = event.get("text", "")
                     elif etype == "tool_call":
                         engine_iterations += 1
+                        budget.record_tool_call()
                         name = event.get("name", "")
                         args = event.get("arguments", {})
                         arg_preview = self._compact_args(args)
                         tool_calls_log.append({"name": name, "args_preview": arg_preview})
+                        budget_error = budget.check()
+                        if budget_error:
+                            logger.warning(
+                                "Subagent %s budget exhausted: %s",
+                                contract.name, budget_error,
+                            )
+                            output_text = f"[BUDGET EXHAUSTED] {budget_error}"
+                            break
+                    elif etype == "tool_result":
+                        result_data = event.get("result", "")
+                        if isinstance(result_data, str):
+                            budget.record_tokens(len(result_data) // 4)
+                        budget_error = budget.check()
+                        if budget_error:
+                            logger.warning(
+                                "Subagent %s budget exhausted: %s",
+                                contract.name, budget_error,
+                            )
+                            break
                     elif etype == "error":
                         output_text = event.get("message", "")
                         return {
@@ -344,8 +402,7 @@ class SubagentRunner:
                 "messages": session_dict.get("messages", []),
             }
         finally:
-            if hasattr(provider, "close"):
-                provider.close()
+            pass  # Provider is cached for reuse — do not close
 
 
     async def _run_via_runtime(
@@ -375,6 +432,15 @@ class SubagentRunner:
         output_text = ""
         engine_iterations = 0
 
+        from .resource_budget import ResourceBudget
+        budget = ResourceBudget()
+        if contract.max_tokens:
+            budget.max_tokens = contract.max_tokens
+        if contract.max_input_tokens:
+            budget.max_tokens = (budget.max_tokens or contract.max_input_tokens)
+        budget.max_wall_time = deadline - time.monotonic()
+        budget.start()
+
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise asyncio.TimeoutError("contract deadline reached")
@@ -386,10 +452,30 @@ class SubagentRunner:
                     output_text = event.get("text", "")
                 elif etype == "tool_call":
                     engine_iterations += 1
+                    budget.record_tool_call()
                     name = event.get("name", "")
                     args = event.get("arguments", {})
                     arg_preview = self._compact_args(args)
                     tool_calls_log.append({"name": name, "args_preview": arg_preview})
+                    budget_error = budget.check()
+                    if budget_error:
+                        logger.warning(
+                            "Subagent %s budget exhausted: %s",
+                            contract.name, budget_error,
+                        )
+                        output_text = f"[BUDGET EXHAUSTED] {budget_error}"
+                        break
+                elif etype == "tool_result":
+                    result_data = event.get("result", "")
+                    if isinstance(result_data, str):
+                        budget.record_tokens(len(result_data) // 4)
+                    budget_error = budget.check()
+                    if budget_error:
+                        logger.warning(
+                            "Subagent %s budget exhausted: %s",
+                            contract.name, budget_error,
+                        )
+                        break
                 elif etype == "error":
                     output_text = event.get("message", "")
                     return {
@@ -410,6 +496,16 @@ class SubagentRunner:
             "iterations_used": engine_iterations,
             "messages": runtime_session.get("messages", []),
         }
+
+    def close(self) -> None:
+        """Close cached providers and release resources."""
+        for provider in self._provider_cache.values():
+            if hasattr(provider, "close"):
+                try:
+                    provider.close()
+                except Exception:
+                    pass
+        self._provider_cache.clear()
 
     def _build_child_config(self, contract: SubagentContract, workspace: str) -> WispConfig:
         """Clone the parent config with optional per-subagent overrides."""
@@ -502,6 +598,102 @@ class SubagentRunner:
                 callback(event)
         except Exception as e:
             logger.warning("Progress callback failed for %s: %s", task_id, e)
+
+    @staticmethod
+    def _compress_output(text: str, max_chars: int, reason: str) -> str:
+        """Compress output to fit within max_chars while preserving key content.
+
+        Strategy (preserves the most useful information for the parent agent):
+        1. Keep the first section (problem statement / summary)
+        2. Keep all code blocks (truncated if individually too long)
+        3. Keep headings and bullet points
+        4. Keep the last section (final conclusions / file list)
+        5. Fill remaining budget with prose from the middle
+        """
+        if len(text) <= max_chars:
+            return text
+
+        import re
+
+        # Reserve space for the truncation notice
+        notice = f"\n\n[OUTPUT COMPRESSED: {reason}. Original: {len(text)} chars.]"
+        budget = max_chars - len(notice)
+        if budget < 200:
+            return text[:budget] + notice
+
+        # Split into sections by markdown headers
+        sections = re.split(r'(\n#{1,4}\s+.+)', text)
+        # Reassemble sections with their headers
+        chunks: list[tuple[str, str]] = []  # (header, body)
+        current_header = ""
+        current_body = ""
+        for part in sections:
+            if re.match(r'\n#{1,4}\s+', part):
+                if current_body or current_header:
+                    chunks.append((current_header, current_body))
+                current_header = part.strip()
+                current_body = ""
+            else:
+                current_body += part
+        if current_body or current_header:
+            chunks.append((current_header, current_body))
+
+        # If no sections found, fall back to beginning + end
+        if len(chunks) <= 1:
+            keep_start = int(budget * 0.6)
+            keep_end = int(budget * 0.3)
+            return text[:keep_start] + "\n...\n" + text[-keep_end:] + notice
+
+        # Prioritize: first section, last section, code blocks, headings
+        result_parts: list[str] = []
+        used = 0
+
+        # Always keep first section (context/summary)
+        first_header, first_body = chunks[0]
+        first_text = (first_header + "\n" + first_body).strip()
+        if len(first_text) > budget * 0.4:
+            first_text = first_text[:int(budget * 0.4)] + "..."
+        result_parts.append(first_text)
+        used += len(first_text)
+
+        # Always keep last section (conclusions/files)
+        if len(chunks) > 1:
+            last_header, last_body = chunks[-1]
+            last_text = (last_header + "\n" + last_body).strip()
+            if len(last_text) > budget * 0.3:
+                last_text = last_text[:int(budget * 0.3)] + "..."
+            if used + len(last_text) < budget:
+                result_parts.append("...\n" + last_text)
+                used += len(last_text) + 4
+
+        # Fill remaining budget with middle sections, prioritizing code blocks
+        remaining = budget - used - 10  # 10 for separators
+        if remaining > 100 and len(chunks) > 2:
+            middle_chunks = chunks[1:-1]
+            # Sort by code block presence (code-heavy sections first)
+            def _has_code(chunk):
+                return "```" in chunk[1]
+            middle_chunks.sort(key=_has_code, reverse=True)
+
+            middle_parts: list[str] = []
+            for header, body in middle_chunks:
+                chunk_text = (header + "\n" + body).strip()
+                if used + len(chunk_text) < budget:
+                    middle_parts.append(chunk_text)
+                    used += len(chunk_text) + 4
+                else:
+                    # Truncate this chunk
+                    fits = budget - used - 10
+                    if fits > 50:
+                        middle_parts.append(chunk_text[:fits] + "...")
+                        used += fits + 4
+                    break
+
+            if middle_parts:
+                # Re-sort middle parts by original order
+                result_parts.insert(1, "\n...\n".join(middle_parts))
+
+        return "\n...\n".join(result_parts) + notice
 
     @staticmethod
     def _compact_args(args: dict) -> str:

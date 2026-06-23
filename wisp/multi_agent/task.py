@@ -157,6 +157,9 @@ class SubagentContract:
     _cache_context: str = ""
     """Session-scoped context for cache key isolation. Set by orchestrator."""
 
+    _shared_context: Any = None
+    """SharedContext instance for inter-subagent communication in parallel runs."""
+
     def __post_init__(self):
         """Normalize backward-compat aliases."""
         if self.prompt and not self.task:

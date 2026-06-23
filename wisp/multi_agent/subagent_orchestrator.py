@@ -348,6 +348,99 @@ class SubagentOrchestrator:
     def get_token_budget_remaining(self) -> Optional[int]:
         return self._budget.get_remaining()
 
+    # ── Cost estimation API ────────────────────────────────────────────
+
+    def estimate_cost(self, contract: SubagentContract) -> dict[str, Any]:
+        """Estimate token usage and wall-clock time for a subagent before running.
+
+        Uses heuristic estimates based on task length, configured iterations,
+        and historical telemetry. Does NOT execute the subagent.
+
+        Returns:
+            {
+                "estimated_input_tokens": int,
+                "estimated_output_tokens": int,
+                "estimated_total_tokens": int,
+                "estimated_wall_time_seconds": float,
+                "estimated_tool_calls": int,
+                "confidence": "low" | "medium" | "high",
+            }
+        """
+        from wisp.infra.token_counter import TokenCounter
+
+        chars_per_token = getattr(self.config, "chars_per_token", 4)
+        counter = TokenCounter(chars_per_token=chars_per_token)
+
+        # Estimate input tokens from task + system prompt
+        task_tokens = counter.estimate_chars(len(contract.task))
+        system_prompt_len = len(contract.system_prompt or "") or 500  # default prompt ~500 chars
+        system_tokens = counter.estimate_chars(system_prompt_len)
+        context_tokens = 0
+        if contract.context_files:
+            # Estimate ~2000 chars per file (average for code files)
+            context_tokens = counter.estimate_chars(len(contract.context_files) * 2000)
+
+        estimated_input_tokens = task_tokens + system_tokens + context_tokens
+
+        # Estimate output tokens: ~100 tokens per iteration (conservative)
+        estimated_output_tokens = contract.max_iterations * 100
+
+        # Account for tool call overhead (each tool call adds ~50 tokens to context)
+        estimated_tool_calls = min(contract.max_iterations, 10)  # cap at 10
+        tool_overhead = estimated_tool_calls * 50
+        estimated_input_tokens += tool_overhead * contract.max_iterations // 2
+
+        # Estimate wall time: ~5s per iteration (model inference + tool execution)
+        estimated_wall_time = min(
+            contract.max_iterations * 5.0,
+            contract.timeout_seconds,
+        )
+
+        # Confidence based on telemetry history
+        telemetry = self._telemetry.summary()
+        model_key = contract.model or self.config.model or "unknown"
+        confidence = "low"
+        if model_key in telemetry and telemetry[model_key]["count"] >= 5:
+            confidence = "high"
+            # Use historical averages for better estimates
+            hist = telemetry[model_key]
+            estimated_wall_time = min(
+                hist["avg_latency"] * contract.max_iterations / 10,  # scale by iterations
+                contract.timeout_seconds,
+            )
+            avg_tokens = hist["total_tokens"] / hist["count"]
+            estimated_output_tokens = int(avg_tokens * 0.3)  # output is ~30% of total
+        elif model_key in telemetry:
+            confidence = "medium"
+
+        return {
+            "estimated_input_tokens": int(estimated_input_tokens),
+            "estimated_output_tokens": int(estimated_output_tokens),
+            "estimated_total_tokens": int(estimated_input_tokens + estimated_output_tokens),
+            "estimated_wall_time_seconds": round(estimated_wall_time, 1),
+            "estimated_tool_calls": estimated_tool_calls,
+            "confidence": confidence,
+        }
+
+    def estimate_parallel_cost(self, contracts: list[SubagentContract]) -> dict[str, Any]:
+        """Estimate total cost for a parallel run of multiple contracts.
+
+        Accounts for concurrency — total wall time is bounded by the slowest
+        contract, not the sum of all contracts.
+        """
+        individual = [self.estimate_cost(c) for c in contracts]
+        total_tokens = sum(e["estimated_total_tokens"] for e in individual)
+        max_wall_time = max(e["estimated_wall_time_seconds"] for e in individual) if individual else 0
+        total_tool_calls = sum(e["estimated_tool_calls"] for e in individual)
+
+        return {
+            "contracts": len(contracts),
+            "total_estimated_tokens": total_tokens,
+            "estimated_wall_time_seconds": round(max_wall_time, 1),
+            "total_estimated_tool_calls": total_tool_calls,
+            "per_contract": individual,
+        }
+
     # ── Cache API ──────────────────────────────────────────────────────
 
     def get_cache_stats(self) -> dict[str, int | float]:
@@ -553,8 +646,23 @@ class SubagentOrchestrator:
         contracts: list[SubagentContract],
         max_concurrent: int = 4,
         adaptive: bool = True,
+        shared_context: bool = True,
     ) -> list[SubagentResult]:
-        """Run multiple subagent contracts concurrently."""
+        """Run multiple subagent contracts concurrently.
+
+        When ``shared_context`` is True (default), a ``SharedContext`` is
+        created and injected into each contract's system prompt so parallel
+        subagents can share findings and avoid duplicate work.
+        """
+        from .shared_context import SharedContext
+
+        ctx = SharedContext() if (shared_context and len(contracts) > 1) else None
+
+        if ctx is not None:
+            for contract in contracts:
+                if not contract._shared_context:
+                    contract._shared_context = ctx
+
         effective_max = max_concurrent
         if adaptive:
             effective_max = self._adaptive_max_concurrent(max_concurrent, len(contracts))
@@ -818,13 +926,41 @@ class SubagentOrchestrator:
         if contract.context_files:
             parts.append("")
             parts.append("## Context Files")
+            ws_base = Path(contract.workspace or self.workspace)
+            max_chars_per_file = 8000
+            total_chars = 0
+            max_total_chars = 24000
             for f in contract.context_files:
-                parts.append(f"- {f}")
+                f_path = Path(f)
+                if not f_path.is_absolute():
+                    f_path = ws_base / f_path
+                try:
+                    content = f_path.read_text(encoding="utf-8", errors="replace")
+                    if len(content) > max_chars_per_file:
+                        content = content[:max_chars_per_file] + f"\n... [truncated: {len(content)} total chars]"
+                    parts.append(f"\n### {f}\n```\n{content}\n```")
+                    total_chars += len(content)
+                    if total_chars >= max_total_chars:
+                        parts.append("\n(remaining context files omitted due to size limit)")
+                        break
+                except OSError as exc:
+                    parts.append(f"- {f} (could not read: {exc})")
 
         if contract.system_prompt_extra:
             parts.append("")
             parts.append("## Additional Instructions")
             parts.append(contract.system_prompt_extra)
+
+        # Inject shared context for parallel subagent communication
+        if contract._shared_context is not None:
+            shared_block = contract._shared_context.format_for_prompt(contract.name)
+            if shared_block:
+                parts.append("")
+                parts.append(shared_block)
+                parts.append(
+                    "\nYou can share findings with sibling agents via the `share_finding` tool. "
+                    "Post key discoveries so siblings can benefit instead of duplicating work."
+                )
 
         return "\n".join(parts)
 

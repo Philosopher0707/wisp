@@ -36,6 +36,18 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Ollama API endpoint URL",
         "env_var": "WISP_OLLAMA_URL",
     },
+    "api_key": {
+        "type": str,
+        "default": "",
+        "description": "API key for cloud providers (OpenAI, Anthropic, etc.)",
+        "env_var": "WISP_API_KEY",
+    },
+    "api_base": {
+        "type": str,
+        "default": "",
+        "description": "Base URL for OpenAI-compatible API endpoints",
+        "env_var": "WISP_API_BASE",
+    },
     "model": {
         "type": str,
         "default": DEFAULT_MODEL,
@@ -332,6 +344,8 @@ class WispConfig:
     def __init__(self):
         object.__setattr__(self, "provider", get_setting("provider", "ollama"))
         object.__setattr__(self, "ollama_url", get_setting("ollama_url", DEFAULT_OLLAMA_URL))
+        object.__setattr__(self, "api_key", get_setting("api_key", ""))
+        object.__setattr__(self, "api_base", get_setting("api_base", ""))
         object.__setattr__(self, "model", get_setting("model", DEFAULT_MODEL))
         object.__setattr__(self, "temperature", float(get_setting("temperature", "0.2")))
         raw_max_tokens = get_setting("max_tokens", 131072)
@@ -679,6 +693,7 @@ class WispConfig:
             str(self.model),
             str(self.temperature),
             str(self.ollama_url),
+            str(self.api_base or ""),
             str(self.permission_mode.value if hasattr(self.permission_mode, "value") else self.permission_mode),
             str(self.show_thinking),
             str(self.workspace or ""),
@@ -688,6 +703,7 @@ class WispConfig:
 
     def __repr__(self):
         return (
-            f"WispConfig(provider={self.provider}, ollama_url={self.ollama_url}, model={self.model}, "
+            f"WispConfig(provider={self.provider}, ollama_url={self.ollama_url}, "
+            f"api_base={self.api_base}, model={self.model}, "
             f"workspace={self.workspace})"
         )

@@ -56,6 +56,7 @@ from .schema_validator import (
     validate_json_schema,
     validate_subagent_output,
 )
+from .shared_context import SharedContext, Finding
 
 __all__ = [
     "AgentRole",
@@ -76,4 +77,6 @@ __all__ = [
     "extract_json_from_markdown",
     "build_retry_prompt",
     "SchemaValidationError",
+    "SharedContext",
+    "Finding",
 ]

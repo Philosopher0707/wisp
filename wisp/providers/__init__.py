@@ -6,9 +6,10 @@ from wisp.config import WispConfig
 
 from .base import BaseProvider
 from .ollama import OllamaProvider
+from .openai import OpenAIProvider
 from .mock import MockProvider
 
-__all__ = ["BaseProvider", "OllamaProvider", "MockProvider", "get_provider"]
+__all__ = ["BaseProvider", "OllamaProvider", "OpenAIProvider", "MockProvider", "get_provider"]
 
 
 def get_provider(config: WispConfig) -> BaseProvider:
@@ -18,6 +19,8 @@ def get_provider(config: WispConfig) -> BaseProvider:
         provider_name = "ollama"
     if provider_name == "ollama":
         return OllamaProvider(config)
+    if provider_name == "openai":
+        return OpenAIProvider(config)
     if provider_name == "mock":
         return MockProvider()
     raise ValueError(f"Unsupported provider: {provider_name}")

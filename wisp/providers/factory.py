@@ -13,6 +13,7 @@ from typing import Any, Type
 
 from .protocol import Provider
 from .ollama import OllamaProvider
+from .openai import OpenAIProvider
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class ProviderFactory:
     def _register_builtins(self) -> None:
         """Register built-in providers."""
         self.register("ollama", OllamaProvider)
+        self.register("openai", OpenAIProvider)
 
     def register(self, name: str, provider_class: Type[Provider]) -> None:
         """Register a provider class under a name."""
@@ -82,6 +84,15 @@ class ProviderFactory:
                 config=config,
                 base_url=base_url,
                 model=getattr(config, "model", "qwen2.5-coder"),
+            )
+
+        if name == "openai":
+            return self.create(
+                "openai",
+                config=config,
+                base_url=getattr(config, "api_base", "") or "",
+                model=getattr(config, "model", "gpt-4o"),
+                api_key=getattr(config, "api_key", "") or "",
             )
 
         return self.create(name, config=config)
