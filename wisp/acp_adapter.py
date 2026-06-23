@@ -89,6 +89,13 @@ class AcpAdapter:
         """Parse a JSON-RPC message from a line."""
         try:
             msg = json.loads(line)
+            # Reject non-object payloads (e.g. bare numbers, strings, arrays)
+            # before calling .get() -- otherwise a malformed JSON-RPC frame
+            # raises AttributeError and kills the adapter (DoS).
+            if not isinstance(msg, dict):
+                logger.warning("JSON-RPC payload is not an object: %s", type(msg).__name__)
+                self._send_error(None, ErrorCode.PARSE_ERROR, "JSON-RPC payload must be an object")
+                return None
             if msg.get("jsonrpc") != "2.0":
                 logger.warning("Invalid JSON-RPC version: %s", msg.get("jsonrpc"))
                 return None
