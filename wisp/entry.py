@@ -262,11 +262,17 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
             try:
                 result = dispatch(prompt, adapter)
                 if result is False:
-                    pass  # Not a slash command — fall through
+                    pass  # Not a slash command — fall through to _run_turn
                 elif isinstance(result, str):
                     # Command returned a prompt to run (e.g. /continue)
                     _run_turn(result)
-                # True or None means consumed, no follow-up turn
+                    continue
+                else:
+                    # True/None: command consumed the input — do NOT send the
+                    # literal "/<cmd>" text to the model as a prompt (previously
+                    # fell through to _run_turn(prompt), causing e.g. "/model 1"
+                    # to both switch the model AND be echoed to the LLM).
+                    continue
             except ExitREPL:
                 break
             except Exception as exc:

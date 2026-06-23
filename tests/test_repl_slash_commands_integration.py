@@ -139,3 +139,33 @@ def test_repl_normal_prompt_still_works():
 
     output = stdout.getvalue()
     assert "Echo: hello" in output
+
+
+def test_repl_consumed_command_does_not_run_turn():
+    """A consumed slash command must NOT also be sent to the model as a prompt.
+
+    Regression: ``/model 1`` (and any consumed ``/<cmd>``) used to fall through
+    to ``_run_turn(prompt)``, so the literal ``/model 1`` text was echoed to the
+    LLM *in addition to* the command running. The model would then reply "I
+    can't switch models", which is exactly what users reported.
+    """
+    from wisp.entry import _run_repl
+    from wisp.transport.cli import CLITransport
+
+    root = FakeRoot()
+    transport = CLITransport(root.runtime, root.config)
+
+    # /help is consumed (returns True); "hello" is a real prompt.
+    stdin = StringIO("/help\nhello\n/exit\n")
+    stdout = StringIO()
+
+    with patch.object(sys, "stdin", stdin), patch.object(sys, "stdout", stdout):
+        _run_repl(transport, root, root.config)
+
+    output = stdout.getvalue()
+    # The consumed command's text must never reach the model:
+    assert "Echo: /help" not in output
+    # A genuine prompt still runs through the runtime:
+    assert "Echo: hello" in output
+    # And the command itself still ran:
+    assert "Available commands" in output
