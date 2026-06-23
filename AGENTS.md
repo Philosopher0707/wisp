@@ -14,11 +14,12 @@ Guidance for AI coding agents working in the Wisp codebase.
 
 | Module | Purpose | Key exports |
 |--------|---------|-------------|
-| `wisp/core/engine.py` | Agent turn loop | `WispAgentCore.turn(session, prompt, approval_handler)` → `AsyncIterator[dict]` |
+| `wisp/core/stateless.py` | Stateless turn engine | `WispAgentCore.turn(session, prompt, approval_handler)` → `AsyncIterator[dict]` |
+| `wisp/core/engine.py` | Back-compat shim | Re-exports `WispAgentCore` from `stateless.py` |
 | `wisp/core/events.py` | Event system | `AgentEvent`, 12 factory functions (`thinking()`, `tool_call()`, etc.), `EventType` enum |
 | `wisp/core/runtime.py` | Session management | `AgentRuntime`: session CRUD, per-session locks, core caching |
 | `wisp/transport/base.py` | Transport ABC | `Transport`: `send()`, `recv()`, `approve()`, `start()`, `stop()` |
-| `wisp/transport/cli_v2.py` | CLI transport | `CLITransport`: REPL loop, event rendering, thinking/content buffering |
+| `wisp/transport/cli.py` | CLI transport | `CLITransport`: REPL loop, event rendering, thinking/content buffering |
 | `wisp/transport/renderer.py` | Terminal rendering | Pure functions: `render_tool_call()`, `_box()`, `_rule()`, `render_phase_bar()`, `render_turn_stats()` |
 | `wisp/transport/progress.py` | Progress tracking | `ProgressTracker`, `TurnProgress` — phase detection, tool counting, file tracking |
 | `wisp/transport/spinner.py` | Terminal spinner | `Spinner` — inline `\r`-based spinner with mode-aware frames |
@@ -44,7 +45,7 @@ Guidance for AI coding agents working in the Wisp codebase.
 
 ### Adding CLI rendering
 1. Add pure function to `wisp/transport/renderer.py` (mode-aware, testable)
-2. Call from `CLITransport._render_event()` in `cli_v2.py`
+2. Call from `CLITransport._render_event()` in `cli.py`
 3. Follow existing patterns: use `BoxChars`, `display_width()`, `dim()`/`success()`/`error()`
 
 ## Testing
@@ -68,4 +69,4 @@ python -m pytest tests/test_*.py -v
 - Tests mirror source paths: `wisp/transport/progress.py` → `tests/test_progress.py`
 - New modules go in `wisp/` subpackage, not flat
 - Transport modules: one class per file, shared utilities in `renderer.py`
-- No `__init__.py` changes needed for internal transport modules used only by `cli_v2.py`
+- No `__init__.py` changes needed for internal transport modules used only by `cli.py`

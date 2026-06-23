@@ -63,3 +63,12 @@ MagicMock/
 .wisp/audit.jsonl
 .wisp/repo_map.json
 workspace/.wisp/repo_map.json
+
+# Wisp runtime artifacts (generated, must not be tracked)
+.wisp/*.db
+.wisp/*.db-shm
+.wisp/*.db-wal
+.wisp/repo_map.json
+.wisp/repo_map.json.rej
+.wisp/semantic_index.db
+wisp/graphify-out/
