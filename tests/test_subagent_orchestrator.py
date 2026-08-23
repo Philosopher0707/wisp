@@ -1395,7 +1395,9 @@ class TestWorktreeFallbackNoise:
             worktree_isolated=True,
         )
 
-    def test_non_git_workspace_warns_exactly_once(self, orchestrator, caplog):
+    def test_non_git_workspace_logs_once_at_info_not_warning(
+        self, orchestrator, caplog
+    ):
         import logging
 
         with caplog.at_level(logging.DEBUG, logger="wisp.multi_agent.subagent_orchestrator"):
@@ -1405,10 +1407,16 @@ class TestWorktreeFallbackNoise:
 
         warnings = [
             r for r in caplog.records
-            if r.levelno == logging.WARNING
+            if r.levelno >= logging.WARNING
             and r.name == "wisp.multi_agent.subagent_orchestrator"
         ]
-        assert len(warnings) == 1, f"expected 1 warning, got {len(warnings)}"
+        assert not warnings, "fallback is designed behavior — never WARNING"
+        infos = [
+            r for r in caplog.records
+            if r.levelno == logging.INFO
+            and r.name == "wisp.multi_agent.subagent_orchestrator"
+        ]
+        assert len(infos) == 1, f"expected exactly 1 INFO, got {len(infos)}"
 
     def test_permanent_cause_skips_manager_after_first_failure(
         self, orchestrator

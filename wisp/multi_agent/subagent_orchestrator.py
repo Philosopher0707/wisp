@@ -502,8 +502,8 @@ class SubagentOrchestrator:
         """Return an isolation worktree path, or None to share the workspace.
 
         Isolation failing is designed degradation, not an error storm: the
-        first failure warns once; a *permanent* cause (non-git workspace)
-        is memoized so later children skip the attempt entirely.
+        first failure logs once at INFO; a *permanent* cause (non-git
+        workspace) is memoized so later children skip the attempt entirely.
         """
         if not contract.worktree_isolated:
             return None
@@ -526,8 +526,11 @@ class SubagentOrchestrator:
                     contract.name, exc,
                 )
             else:
-                logger.warning(
-                    "Worktree creation failed for %s, falling back to shared workspace: %s",
+                # INFO: running from a non-git workspace is normal, and the
+                # shared-workspace fallback is designed behavior — not an
+                # error the user must fix.
+                logger.info(
+                    "Worktree isolation unavailable; %s runs in shared workspace (%s)",
                     contract.name, exc,
                 )
                 self._worktree_fallback_warned = True

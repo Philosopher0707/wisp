@@ -132,6 +132,7 @@ Rules:
             "read_file",
             "list_files",
             "search_symbols",
+            "web_search",
             "web_fetch",
             "run_bash",  # For diagnostics only (e.g., grep, find)
             "git_status",
