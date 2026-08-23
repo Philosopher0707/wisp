@@ -9,7 +9,7 @@ import os
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 from dataclasses import dataclass
 from wisp.infra.security import PermissionMode
 
@@ -222,7 +222,7 @@ def get_schema() -> dict[str, dict[str, Any]]:
     return dict(SETTINGS_SCHEMA)
 
 
-def validate_config(config: dict) -> list[str]:
+def validate_config(config: dict[str, Any]) -> list[str]:
     """Validate config values against the schema.
 
     Returns a list of error messages (empty if valid).
@@ -259,7 +259,7 @@ def validate_config(config: dict) -> list[str]:
     return errors
 
 
-def _type_name(tp: type | tuple) -> str:
+def _type_name(tp: type | tuple[type, ...]) -> str:
     """Get a human-readable type name, handling unions."""
     if isinstance(tp, tuple):
         return " or ".join(t.__name__ for t in tp if t is not type(None)) + " or None"
@@ -275,18 +275,19 @@ def get_config_path() -> Path:
     return WISP_CONFIG_DIR / "config.json"
 
 
-def load_config() -> dict:
+def load_config() -> dict[str, Any]:
     """Load config from ~/.config/wisp/config.json."""
     cfg_path = get_config_path()
     if cfg_path.exists():
         try:
-            return json.loads(cfg_path.read_text())
+            loaded: Any = json.loads(cfg_path.read_text())
+            return loaded if isinstance(loaded, dict) else {}
         except (json.JSONDecodeError, OSError):
             pass
     return {}
 
 
-def save_config(config: dict):
+def save_config(config: dict[str, Any]) -> None:
     """Save config to ~/.config/wisp/config.json.
 
     Validates the config against the schema before saving.
@@ -301,7 +302,7 @@ def save_config(config: dict):
     cfg_path.write_text(json.dumps(config, indent=2) + "\n")
 
 
-def get_setting(key: str, default=None):
+def get_setting(key: str, default: Any = None) -> Any:
     """Resolve a setting: env var > config file > default."""
     config = load_config()
     env_key = f"WISP_{key.upper()}"
@@ -330,7 +331,7 @@ def _parse_int(value: Any, default: int, min_val: int | None = None, max_val: in
         result = value
     else:
         try:
-            result = int(value)  # type: ignore[arg-type]
+            result = int(value)
         except (TypeError, ValueError):
             return default
     if min_val is not None and result < min_val:
@@ -348,7 +349,7 @@ def _parse_float(value: Any, default: float, min_val: float | None = None, max_v
         result = float(value)
     else:
         try:
-            result = float(value)  # type: ignore[arg-type]
+            result = float(value)
         except (TypeError, ValueError):
             return default
     if min_val is not None and result < min_val:
@@ -364,8 +365,73 @@ class WispConfig:
 
     Reads from env vars, config file, and defaults (in priority order).
     Use config.replace(key=value) to create a modified copy.
+
+    Fields are declared so mypy can verify every consumer; __init__ assigns
+    them via object.__setattr__ because the dataclass is frozen.
     """
-    def __init__(self):
+
+    # ── Provider ──────────────────────────────────────────────────
+    provider: str
+    ollama_url: str
+    api_key: str
+    api_base: str
+    model: str
+    temperature: float
+    max_tokens: Optional[int]
+
+    # ── Workspace & skills ────────────────────────────────────────
+    skill_dirs: list[str]
+    workspace: str
+    context_files: list[str]
+    loaded_context: str
+    _context_mtimes: dict[str, float]
+    _last_workspace_for_context: Optional[str]
+
+    # ── Rendering & interaction ───────────────────────────────────
+    auto_approve: bool
+    show_thinking: bool
+    show_tool_output: bool
+    compact_mode: bool
+
+    # ── Turn loop limits ──────────────────────────────────────────
+    max_iterations: int
+    turn_timeout: int
+    max_reflections: int
+    tool_timeout: int
+    max_context_tokens: int
+    _context_tokens_explicit: bool
+    chars_per_token: int
+
+    # ── Modes & permissions ───────────────────────────────────────
+    permission_mode: PermissionMode | str
+    plan_mode: bool
+    plan_context: Optional[str]
+
+    # ── Compaction ────────────────────────────────────────────────
+    auto_compact: bool
+    compact_threshold_tokens: int
+    compact_keep_recent: int
+    compaction_model: str
+
+    # ── Circuit breaker ───────────────────────────────────────────
+    circuit_breaker_failure_threshold: int
+    circuit_breaker_success_threshold: int
+    circuit_breaker_recovery_timeout: float
+
+    # ── Concurrency & subagents ───────────────────────────────────
+    thread_pool_size: int
+    subagent_pool_size: int
+    max_subagent_timeout: int
+    max_subagent_depth: int
+    max_subagent_branching: int
+    auto_delegate: bool
+    delegation_threshold: float
+    write_tools: list[str]
+    subagent_models: list[str]
+    _subagent_depth: int
+    _subagent_branch_count: int
+
+    def __init__(self) -> None:
         object.__setattr__(self, "provider", get_setting("provider", "ollama"))
         object.__setattr__(self, "ollama_url", get_setting("ollama_url", DEFAULT_OLLAMA_URL))
         object.__setattr__(self, "api_key", get_setting("api_key", ""))
@@ -603,14 +669,18 @@ class WispConfig:
 
         # 4. Read and concatenate
         blocks: list[str] = []
-        for fpath in found_files:
+        for file_path in found_files:
             try:
-                content = fpath.read_text(encoding="utf-8", errors="replace")
-                rel = fpath.relative_to(ws_path) if str(fpath).startswith(str(ws_path)) else fpath
+                content = file_path.read_text(encoding="utf-8", errors="replace")
+                rel = (
+                    file_path.relative_to(ws_path)
+                    if str(file_path).startswith(str(ws_path))
+                    else file_path
+                )
                 blocks.append(f"## Project Context: {rel}\n{content}\n---\n")
-                mtimes[str(fpath)] = fpath.stat().st_mtime
+                mtimes[str(file_path)] = file_path.stat().st_mtime
             except Exception as e:
-                logger.warning("Failed to read context file %s: %s", fpath, e)
+                logger.warning("Failed to read context file %s: %s", file_path, e)
 
         if blocks:
             object.__setattr__(self, "loaded_context",
@@ -714,7 +784,7 @@ class WispConfig:
 
         return errors
 
-    def replace(self, **kwargs):
+    def replace(self, **kwargs: Any) -> "WispConfig":
         """Return a new WispConfig with specified fields replaced.
 
         Deep-copies mutable containers (dict, list, set) so mutations
@@ -755,7 +825,7 @@ class WispConfig:
         data = "|".join(parts)
         return hashlib.sha256(data.encode("utf-8")).hexdigest()[:16]
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return (
             f"WispConfig(provider={self.provider}, ollama_url={self.ollama_url}, "
             f"api_base={self.api_base}, model={self.model}, "

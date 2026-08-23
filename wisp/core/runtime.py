@@ -64,7 +64,7 @@ class AgentRuntime:
         session_id: str,
         model: str,
         workspace: str,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Load existing session or create new one.
 
         Validates inputs to prevent crashes deep in the stack.
@@ -77,8 +77,10 @@ class AgentRuntime:
         if not workspace or not isinstance(workspace, str):
             raise ValueError(f"Invalid workspace: {workspace!r}")
 
-        session = self.store.load_session(session_id)
-        if session is not None:
+        # Store boundary is unannotated; validate shape before trusting it.
+        loaded: Any = self.store.load_session(session_id)
+        if isinstance(loaded, dict) and "messages" in loaded:
+            session: dict[str, Any] = loaded
             return session
 
         now = datetime.now(timezone.utc).isoformat()
@@ -94,7 +96,7 @@ class AgentRuntime:
         self.store.save_session(session)
         return session
 
-    async def run_turn(self, session: dict, prompt: str, approval_handler=None) -> AsyncIterator[dict]:
+    async def run_turn(self, session: dict[str, Any], prompt: str, approval_handler: Any = None) -> AsyncIterator[dict[str, Any]]:
         """Run one turn, yielding events.
 
         Guarantees session consistency even if the turn aborts:
@@ -138,7 +140,7 @@ class AgentRuntime:
                 pass  # table might not exist
 
         # Track events for session persistence
-        emitted_events: list[dict] = []
+        emitted_events: list[dict[str, Any]] = []
         seq_num = 0
         if self.session_repo is not None:
             try:
@@ -187,8 +189,8 @@ class AgentRuntime:
                 })
 
             assistant_content: list[str] = []
-            tool_calls: list[dict] = []
-            tool_results: list[dict] = []
+            tool_calls: list[dict[str, Any]] = []
+            tool_results: list[dict[str, Any]] = []
             turn_succeeded = False
 
             try:
@@ -304,7 +306,7 @@ class AgentRuntime:
                 )
 
     async def _maybe_delegate(
-        self, prompt: str, session: dict, config: Any,
+        self, prompt: str, session: dict[str, Any], config: Any,
     ) -> str | None:
         """Analyze prompt and auto-delegate to subagents if warranted.
 
@@ -423,7 +425,7 @@ class AgentRuntime:
         with self._core_lock:
             self._core_cache = None
 
-    async def maybe_compact(self, session: dict, max_messages: int | None = None, force: bool = False) -> dict | None:
+    async def maybe_compact(self, session: dict[str, Any], max_messages: int | None = None, force: bool = False) -> dict[str, Any] | None:
         """Compact session if it exceeds max_messages.
 
         Uses LLM-powered summarization when compactor is configured,
@@ -530,6 +532,7 @@ class AgentRuntime:
             run["status"] = status
             self.store.save_run(run)
 
-    async def list_background_runs(self, session_id: str) -> list[dict]:
+    async def list_background_runs(self, session_id: str) -> list[dict[str, Any]]:
         """List background runs for a session."""
-        return self.store.list_runs(session_id=session_id)
+        runs: Any = self.store.list_runs(session_id=session_id)
+        return runs  # type: ignore[no-any-return]  # store boundary is unannotated
