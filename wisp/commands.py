@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from wisp.colors import success, error, warning, info, dim, accent
+from wisp.core.session_view import SessionView
 from wisp.exceptions import ExitREPL
 
 logger = logging.getLogger(__name__)
@@ -247,17 +248,18 @@ def cmd_skill(agent, args: str):
 
 @register("session", "Show session info", usage="/session")
 def cmd_session(agent, args: str):
-    if agent.session is None:
+    view = SessionView.coerce(agent.session)
+    if view is None:
         print(dim("No active session."))
         return
     active_skill = getattr(agent, "_active_skill", None)
     print(info("Session info:"))
-    print(f"  {dim('Session ID:')}    {agent.session.get('id', '(none)')}")
-    print(f"  {dim('Title:')}         {agent.session.get('title') or '(untitled)'}")
+    print(f"  {dim('Session ID:')}    {view.id or '(none)'}")
+    print(f"  {dim('Title:')}         {view.display_title()}")
     print(f"  {dim('Model:')}         {agent.config.model}")
     print(f"  {dim('Workspace:')}     {agent.config.workspace or '.'}")
     print(f"  {dim('Active skill:')}  {active_skill or '(none)'}")
-    print(f"  {dim('Messages:')}      {len(agent.messages)}")
+    print(f"  {dim('Messages:')}      {len(view.messages)}")
     print(f"  {dim('Auto-approve:')}  {agent.config.auto_approve}")
     print(f"  {dim('Show thinking:')} {agent.config.show_thinking}")
 
@@ -265,8 +267,9 @@ def cmd_session(agent, args: str):
 @register("save", "Force-save the current session", usage="/save")
 def cmd_save(agent, args: str):
     agent._save_session()
-    if agent.session:
-        print(success(f"✓ Session saved: {agent.session.get('id', '(unknown)')}"))
+    view = SessionView.coerce(agent.session)
+    if view is not None:
+        print(success(f"✓ Session saved: {view.id or '(unknown)'}"))
     else:
         print(dim("✓ Nothing to save (no session)."))
 
@@ -704,8 +707,9 @@ def cmd_new(agent, args: str):
         workspace=agent.config.workspace or ".",
         first_prompt="New session",
     ).to_dict()
-    agent.messages = agent.session["messages"]
-    print(success(f"✓ New session started: {agent.session.get('id', '(unknown)')}"))
+    view = SessionView(agent.session)
+    agent.messages = view.messages
+    print(success(f"✓ New session started: {view.id}"))
 
 
 @register("continue", "Continue the assistant's previous response", aliases=("c", "go", "on"), usage="/continue")
