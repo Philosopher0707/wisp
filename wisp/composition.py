@@ -209,6 +209,8 @@ class CompositionRoot:
 
     def start(self) -> None:
         """Start all services."""
+        # Validate config before starting services
+        self.config.validate_or_raise()
         self._registry.start()
 
     def stop(self) -> None:
