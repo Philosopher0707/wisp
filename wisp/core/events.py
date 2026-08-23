@@ -34,6 +34,7 @@ class EventType(StrEnum):
     STEERING_PAUSED = "steering_paused"
     STEERING_INJECT = "steering_inject"
     STEERING_RESUMED = "steering_resumed"
+    PROVIDER_STATUS = "provider_status"
 
 
 # ── Backward-compatible aliases ──────────────────────────────────────
@@ -192,6 +193,7 @@ _EVENT_DESCRIPTIONS: dict[str, str] = {
     EventType.DONE: "Turn complete",
     EventType.SYSTEM: "System notification",
     EventType.APPROVAL_REQUEST: "User approval required",
+    EventType.PROVIDER_STATUS: "Provider availability change",
 }
 
 
@@ -276,6 +278,19 @@ def approval_request(tool_name: str, args: dict[str, Any], reason: str = "") -> 
     return _make_event(TYPE_APPROVAL_REQUEST, {"name": tool_name, "arguments": args, "reason": reason})
 
 
+def provider_status(status: str, detail: str = "", retry_after: Optional[float] = None) -> AgentEvent:
+    """Provider availability signal (circuit breaker lifecycle).
+
+    status: "circuit_open" or "circuit_closed". retry_after carries the
+    seconds until recovery is attempted when the circuit opens, so
+    transports can render honest expectations instead of a hang.
+    """
+    data: dict[str, Any] = {"status": status, "detail": detail}
+    if retry_after is not None:
+        data["retry_after"] = retry_after
+    return _make_event(EventType.PROVIDER_STATUS, data)
+
+
 __all__ = [
     "AgentEvent",
     "EventType",
@@ -303,5 +318,6 @@ __all__ = [
     "steering_resumed",
     "steering_feedback",
     "approval_request",
+    "provider_status",
     "normalize_event",
 ]

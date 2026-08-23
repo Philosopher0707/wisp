@@ -34,6 +34,14 @@ class CircuitBreakerConfig:
 
 
 @dataclass
+class CircuitTransition:
+    """A recorded state change, consumed by callers to surface honest UX."""
+
+    from_state: CircuitState
+    to_state: CircuitState
+
+
+@dataclass
 class CircuitBreaker:
     """Async circuit breaker for protecting downstream services."""
 
@@ -42,6 +50,7 @@ class CircuitBreaker:
     _failure_count: int = field(default=0, init=False)
     _success_count: int = field(default=0, init=False)
     _last_failure_time: float = field(default=0.0, init=False)
+    last_transition: Optional[CircuitTransition] = field(default=None, init=False)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
 
     @property
@@ -51,6 +60,18 @@ class CircuitBreaker:
             if time.monotonic() - self._last_failure_time >= self.config.recovery_timeout:
                 return CircuitState.HALF_OPEN
         return self._state
+
+    def retry_after(self) -> float:
+        """Seconds until recovery is attempted; 0.0 when not open."""
+        if self._state != CircuitState.OPEN:
+            return 0.0
+        remaining = self.config.recovery_timeout - (time.monotonic() - self._last_failure_time)
+        return max(remaining, 0.0)
+
+    def consume_transition(self) -> Optional[CircuitTransition]:
+        """Return and clear the most recent transition record."""
+        transition, self.last_transition = self.last_transition, None
+        return transition
 
     async def call(self, func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
         """Execute a function with circuit breaker protection.
@@ -119,6 +140,7 @@ class CircuitBreaker:
             if current_state == CircuitState.HALF_OPEN:
                 self._success_count += 1
                 if self._success_count >= self.config.success_threshold:
+                    self.last_transition = CircuitTransition(current_state, CircuitState.CLOSED)
                     self._state = CircuitState.CLOSED
                     self._failure_count = 0
                     self._success_count = 0
@@ -134,12 +156,14 @@ class CircuitBreaker:
 
             if self._state == CircuitState.HALF_OPEN:
                 # Any failure in half-open goes back to open
+                self.last_transition = CircuitTransition(CircuitState.HALF_OPEN, CircuitState.OPEN)
                 self._state = CircuitState.OPEN
                 self._success_count = 0
                 logger.warning("Circuit breaker OPEN — failure during recovery")
             elif self._state == CircuitState.CLOSED:
                 self._failure_count += 1
                 if self._failure_count >= self.config.failure_threshold:
+                    self.last_transition = CircuitTransition(CircuitState.CLOSED, CircuitState.OPEN)
                     self._state = CircuitState.OPEN
                     logger.warning(
                         "Circuit breaker OPEN after %d consecutive failures. "

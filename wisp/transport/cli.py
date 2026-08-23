@@ -43,7 +43,7 @@ from wisp.core.events import AgentEvent, EventType
 from wisp.terminal_width import display_width, is_accessible, get_output_mode, wrap_text_wide
 from wisp.transport.progress import ProgressTracker
 from wisp.transport.spinner import Spinner
-from wisp.transport.renderer import render_phase_bar
+from wisp.transport.renderer import render_phase_bar, render_provider_status
 
 logger = logging.getLogger(__name__)
 
@@ -936,6 +936,13 @@ class CLITransport(Transport):
             )
             stdout.flush()
 
+        elif etype == EventType.PROVIDER_STATUS:
+            self._flush_thinking(stdout, width)
+            rendered = render_provider_status(ev, width)
+            if rendered:
+                stdout.write(rendered + "\n")
+                stdout.flush()
+
         elif etype == EventType.SYSTEM:
             level = ev.data.get("level", "info")
             if level == "debug":
@@ -1159,6 +1166,9 @@ def _render_event(
 
     if etype == EventType.SYSTEM:
         return f"  ℹ {event.data.get('message', '')}"
+
+    if etype == EventType.PROVIDER_STATUS:
+        return render_provider_status(event, width=80)
 
     if etype == EventType.DONE:
         return None

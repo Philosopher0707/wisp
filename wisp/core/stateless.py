@@ -27,9 +27,14 @@ from wisp.core.events import (
     error as error_event,
     done as done_event,
     system,
+    provider_status as provider_status_event,
 )
 from wisp.core.approval_gate import ApprovalGate
-from wisp.infra.circuit_breaker import CircuitBreaker
+from wisp.infra.circuit_breaker import (
+    CircuitBreaker,
+    CircuitOpenError,
+    CircuitState,
+)
 
 if TYPE_CHECKING:
     from wisp.providers.protocol import Provider
@@ -427,10 +432,49 @@ class WispAgentCore:
 
         # Use circuit breaker if configured
         if self._circuit_breaker is not None:
-            # For streaming, we need to handle the generator specially
-            # The circuit breaker's stream method handles async generators
-            async for event in self._circuit_breaker.stream(_call_provider):
-                yield event
+            breaker = self._circuit_breaker
+
+            async def _emit_circuit_open() -> AsyncIterator[dict[str, Any]]:
+                retry = breaker.retry_after()
+                yield _flatten_event(provider_status_event(
+                    "circuit_open",
+                    detail="Provider failing repeatedly — pausing requests.",
+                    retry_after=retry,
+                ))
+                yield _flatten_event(error_event(
+                    f"Provider temporarily unavailable (circuit open, "
+                    f"retry in {retry:.0f}s).",
+                    recoverable=True,
+                ))
+
+            # Fail honestly instead of letting CircuitOpenError surface as a
+            # generic stream error — transports render the status event.
+            if breaker.state is CircuitState.OPEN:
+                async for event in _emit_circuit_open():
+                    yield event
+                return
+
+            try:
+                async for event in self._circuit_breaker.stream(_call_provider):
+                    yield event
+            except CircuitOpenError:
+                # Raced into OPEN between the state check and the call.
+                async for event in _emit_circuit_open():
+                    yield event
+                return
+            except Exception:
+                transition = breaker.consume_transition()
+                if transition is not None and transition.to_state is CircuitState.OPEN:
+                    async for event in _emit_circuit_open():
+                        yield event
+                raise
+            else:
+                transition = breaker.consume_transition()
+                if transition is not None and transition.to_state is CircuitState.CLOSED:
+                    yield _flatten_event(provider_status_event(
+                        "circuit_closed",
+                        detail="Provider recovered — resuming normal operation.",
+                    ))
         else:
             async for event in _call_provider():
                 yield event

@@ -363,3 +363,37 @@ def render_file_ticker(files: list[str], width: int = 80) -> str:
     file_list = ", ".join(shown) + more
 
     return dim(f"{prefix}{file_list}")
+
+
+def render_provider_status(event: AgentEvent, width: int = 80) -> Optional[str]:
+    """Render a provider availability change (circuit breaker lifecycle).
+
+    circuit_open warns with the retry horizon; circuit_closed confirms
+    recovery. Minimal mode returns empty — the error event accompanying an
+    open circuit carries the turn-relevant information.
+    """
+    status = str(event.data.get("status", ""))
+    detail = str(event.data.get("detail", "")).rstrip()
+    retry_after = event.data.get("retry_after")
+    mode = get_output_mode()
+
+    if mode == OutputMode.MINIMAL:
+        return ""
+
+    retry_part = ""
+    if isinstance(retry_after, (int, float)) and retry_after > 0:
+        retry_part = f" — retry in ~{retry_after:.0f}s"
+
+    if status == "circuit_open":
+        if mode == OutputMode.ACCESSIBLE:
+            return warning(f"\n  [PROVIDER] Circuit open. {detail}{retry_part}")
+        marker = "◌" if mode == OutputMode.UNICODE else "-"
+        return warning(f"\n  {marker} Provider paused{retry_part}")
+
+    if status == "circuit_closed":
+        if mode == OutputMode.ACCESSIBLE:
+            return success(f"\n  [PROVIDER] Recovered. {detail}".rstrip())
+        check = "✓" if mode == OutputMode.UNICODE else "+"
+        return success(f"\n  {check} Provider recovered")
+
+    return None

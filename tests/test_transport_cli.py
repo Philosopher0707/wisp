@@ -203,3 +203,54 @@ class TestApprovalBranches:
                 state.allow_tool("read_file")
         # y doesn't set allow, so should_ask should still be True for next time
         assert state.should_ask("read_file")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 6. Provider status rendering (circuit breaker visibility)
+# ═══════════════════════════════════════════════════════════════════
+
+class TestProviderStatusRendering:
+    """CLITransport renders provider_status events honestly."""
+
+    def _render(self, event, mode_setup=None):
+        from io import StringIO
+
+        from wisp.terminal_width import OutputMode, set_output_mode
+
+        old = None
+        if mode_setup is not None:
+            from wisp.terminal_width import get_output_mode
+            old = get_output_mode()
+            set_output_mode(mode_setup)
+        try:
+            transport = CLITransport(_MockRuntime())
+            out = StringIO()
+            transport._render_event(out, event)
+            return out.getvalue()
+        finally:
+            if old is not None:
+                set_output_mode(old)
+
+    def test_circuit_open_renders_with_retry_horizon(self):
+        out = self._render({
+            "type": EventType.PROVIDER_STATUS,
+            "status": "circuit_open",
+            "detail": "Provider failing repeatedly.",
+            "retry_after": 12.0,
+        })
+        assert "Provider paused" in out
+        assert "12s" in out
+
+    def test_flat_dict_event_is_normalized(self):
+        """The transport accepts flat provider_status dicts from the core."""
+        out = self._render({"type": "provider_status", "status": "circuit_closed"})
+        assert "recovered" in out.lower()
+
+    def test_minimal_mode_stays_silent(self):
+        from wisp.terminal_width import OutputMode
+
+        out = self._render(
+            {"type": EventType.PROVIDER_STATUS, "status": "circuit_open", "retry_after": 5.0},
+            mode_setup=OutputMode.MINIMAL,
+        )
+        assert out == ""

@@ -5,6 +5,7 @@ from wisp.transport.renderer import (
     render_phase_bar,
     render_turn_stats,
     render_file_ticker,
+    render_provider_status,
 )
 from wisp.terminal_width import OutputMode, set_output_mode, get_output_mode
 
@@ -124,3 +125,43 @@ class TestFileTicker:
         set_output_mode(OutputMode.MINIMAL)
         line = render_file_ticker(["x.py"], 80)
         assert "x.py" in line
+
+
+class TestProviderStatus:
+    """render_provider_status surfaces circuit breaker lifecycle honestly."""
+
+    def _event(self, status, retry_after=None):
+        from wisp.core.events import provider_status
+
+        return provider_status(status, detail="Provider failing repeatedly.", retry_after=retry_after)
+
+    def test_open_shows_retry_horizon(self):
+        out = render_provider_status(self._event("circuit_open", retry_after=12.3), 80)
+        assert "Provider paused" in out
+        assert "12s" in out
+
+    def test_closed_confirms_recovery(self):
+        out = render_provider_status(self._event("circuit_closed"), 80)
+        assert "recovered" in out.lower()
+
+    def test_ascii_mode_uses_ascii_marker(self):
+        set_output_mode(OutputMode.ASCII)
+        out = render_provider_status(self._event("circuit_open", retry_after=5), 80)
+        assert "-" in out and "Provider paused" in out
+        assert "◌" not in out
+
+    def test_accessible_mode_labels_change(self):
+        set_output_mode(OutputMode.ACCESSIBLE)
+        out = render_provider_status(self._event("circuit_open", retry_after=7), 80)
+        assert "[PROVIDER]" in out and "Circuit open" in out
+
+    def test_minimal_mode_silent(self):
+        set_output_mode(OutputMode.MINIMAL)
+        assert render_provider_status(self._event("circuit_open", retry_after=3), 80) == ""
+
+    def test_unknown_status_renders_nothing(self):
+        assert render_provider_status(self._event("warp_field_fluctuation"), 80) is None
+
+    def test_open_without_retry_omits_horizon(self):
+        out = render_provider_status(self._event("circuit_open"), 80)
+        assert "retry" not in out
