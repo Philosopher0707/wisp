@@ -58,6 +58,9 @@ detaching `agent.messages`) was caught by luck, not by types. Hardening:
 - [ ] Retire `AgentAdapter`'s legacy-shim role gradually: move each slash
       command's dependency onto explicit parameters (runtime, session, config)
       so the adapter becomes a thin REPL loop concern instead of a god object.
+- [x] Codify the REPL operating contracts — every layer (input, routing,
+      commands, turns, rendering, persistence, lifecycle) now has written
+      invariants with regression coverage: see `docs/repl_contracts.md`.
 
 ## Theme 2 — Provider maturity
 

@@ -81,8 +81,7 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str | None:
 
     Supports:
       - Multiline with trailing backslash (\)
-      - Bracketed paste mode detection
-      - Readline history/editing when available
+      - Readline history/editing when the tty provides it
     """
     try:
         if sys.stdin.isatty():

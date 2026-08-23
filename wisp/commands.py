@@ -31,12 +31,21 @@ _REGISTRY: dict[str, Command] = {}
 
 
 def register(name: str, description: str, aliases: tuple[str, ...] = (), usage: str = ""):
-    """Decorator to register a slash command."""
+    """Decorator to register a slash command.
+
+    Raises ValueError on alias theft: a name/alias already owned by a
+    different command fails at import time instead of silently rebinding.
+    """
     def decorator(fn: Callable):
         cmd = Command(name, description, fn, aliases, usage)
-        _REGISTRY[name] = cmd
-        for alias in aliases:
-            _REGISTRY[alias] = cmd
+        for key in (name, *aliases):
+            existing = _REGISTRY.get(key)
+            if existing is not None and existing.name != name:
+                raise ValueError(
+                    f"Command '{name}' cannot claim /{key}: already owned "
+                    f"by '{existing.name}'. Aliases must be unique."
+                )
+            _REGISTRY[key] = cmd
         return fn
     return decorator
 
@@ -329,7 +338,7 @@ def cmd_metrics(agent, args: str):
                   f"{', ' + str(stats['errors']) + ' errors' if stats.get('errors') else ''}")
 
 
-@register("compact", "Compact session history to save context", aliases=("c",), usage="/compact")
+@register("compact", "Compact session history to save context", usage="/compact")
 def cmd_compact(agent, args: str):
     if agent.session is None:
         print(warning("⚠ No active session to compact."))

@@ -150,10 +150,6 @@ def test_cmd_model_show(agent, capsys):
     commands_module.cmd_model(agent, "")
     captured = capsys.readouterr()
     assert "test-model" in captured.out
-def test_cmd_model_show(agent, capsys):
-    commands_module.cmd_model(agent, "")
-    captured = capsys.readouterr()
-    assert "test-model" in captured.out
     assert "Available models" in captured.out
     assert "qwen2.5-coder" in captured.out
     assert "(cloud)" in captured.out
@@ -177,10 +173,9 @@ def test_cmd_model_switch_by_prefix(agent, capsys):
     assert agent.config.model == "deepseek-v4-flash"
 
 
-def test_cmd_model_switch_by_display_name(agent, capsys):
+def test_cmd_model_switch_by_display_name(agent):
     """Switching by name without :cloud suffix should resolve."""
     commands_module.cmd_model(agent, "qwen2.5-coder")
-    captured = capsys.readouterr()
     assert agent.config.model == "qwen2.5-coder"
 
 
@@ -419,3 +414,32 @@ def test_cmd_init_content_structure(agent, tmp_path, capsys):
     assert "## Testing" in content or "tests/" in content
     assert "## Conventions" in content
     assert "Wisp Agent Notes" in content
+
+
+class TestRegistryIntegrity:
+    """C3: aliases are unique and registration failures are loud."""
+
+    def test_no_alias_collisions_in_registry(self):
+        from wisp.commands import _REGISTRY
+
+        by_key = {}
+        for key, cmd in _REGISTRY.items():
+            owner = by_key.setdefault(key, cmd.name)
+            assert owner == cmd.name, f"/{key} claimed twice: {owner} vs {cmd.name}"
+
+    def test_c_belongs_to_continue(self):
+        from wisp.commands import _REGISTRY
+
+        assert _REGISTRY["c"].name == "continue"
+        assert _REGISTRY["compact"].name == "compact"
+
+    def test_registering_stolen_alias_raises(self):
+        import pytest as _pytest
+
+        from wisp.commands import register
+
+        with _pytest.raises(ValueError, match="already owned"):
+
+            @register("impostor", "tries to steal an alias", aliases=("exit",))
+            def _cmd_impostor(agent, args):
+                return True
