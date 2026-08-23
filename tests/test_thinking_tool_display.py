@@ -1,6 +1,5 @@
 """Test that thinking and tool events render correctly via _render_event."""
 
-import pytest
 from io import StringIO
 from unittest.mock import MagicMock
 from wisp.transport.cli import CLITransport

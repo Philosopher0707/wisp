@@ -8,11 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import pytest
-from pathlib import Path
 
 from wisp.config import WispConfig
 from wisp.multi_agent.subagent_orchestrator import SubagentOrchestrator
-from wisp.multi_agent.task import SubagentContract, SubagentResult
+from wisp.multi_agent.task import SubagentContract
 
 
 # ── Mock providers ────────────────────────────────────────────────

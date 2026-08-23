@@ -7,7 +7,6 @@ import pytest
 
 from wisp.multi_agent.shared_context import (
     SharedContext,
-    Finding,
     build_shared_context_tool_schema,
     build_shared_context_tool_impl,
 )

@@ -1,0 +1,9 @@
+diff a/tests/test_transport_cli.py b/tests/test_transport_cli.py	(rejected hunks)
+@@ -4,7 +4,6 @@ The REPL loop is driven by entry._run_repl, not CLITransport.run().
+ Tests here validate component behavior in isolation.
+ """
+ 
+-import pytest
+ from wisp.transport.cli import CLITransport, AgentAdapter, ApprovalSessionState
+ from wisp.transport.progress import ProgressTracker
+ from wisp.core.events import AgentEvent, EventType

@@ -1,0 +1,9 @@
+diff a/tests/test_output_compression.py b/tests/test_output_compression.py	(rejected hunks)
+@@ -2,7 +2,6 @@
+ 
+ from __future__ import annotations
+ 
+-import pytest
+ 
+ from wisp.multi_agent._runner import SubagentRunner
+ 

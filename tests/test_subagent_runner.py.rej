@@ -1,0 +1,31 @@
+diff a/tests/test_subagent_runner.py b/tests/test_subagent_runner.py	(rejected hunks)
+@@ -604,7 +604,13 @@ class TestContextPartitioning:
+ @pytest.mark.asyncio
+ class TestRunAgentEdgeCases:
+     async def test_system_prompt_prepended_in_session(self, config, contract):
+-        """System prompt is prepended to messages in the session dict."""
++        """System prompt is carried via session metadata, not injected as a message.
++
++        core.turn() builds its own system prompt via _build_system_prompt(); an
++        extra system message here would duplicate it and cause retry storms
++        (see commit c54281b). The runner stores the role prompt in
++        ``subagent_system_prompt`` for the context assembler to pick up.
++        """
+         runner = SubagentRunner(config, Path("/tmp"))
+         captured_session = None
+ 
+@@ -621,9 +627,11 @@ class TestRunAgentEdgeCases:
+                 await runner.run(contract, "/tmp", "You are a test agent.")
+ 
+         assert captured_session is not None
+-        # System prompt should be prepended
+-        contents = [m.get("content", "") for m in captured_session["messages"]]
+-        assert "You are a test agent." in contents
++        # System prompt is stored in metadata for the context assembler.
++        assert captured_session.get("subagent_system_prompt") == "You are a test agent."
++        # And not duplicated as a message.
++        roles = [m.get("role") for m in captured_session.get("messages", [])]
++        assert "system" not in roles
+ 
+     async def test_empty_system_prompt_not_prepended(self, config, contract):
+         """When system_prompt is empty string, no system message added."""

@@ -1,0 +1,8 @@
+diff a/tests/test_thinking_tool_display.py b/tests/test_thinking_tool_display.py	(rejected hunks)
+@@ -1,6 +1,5 @@
+ """Test that thinking and tool events render correctly via _render_event."""
+ 
+-import pytest
+ from io import StringIO
+ from unittest.mock import MagicMock
+ from wisp.transport.cli import CLITransport
