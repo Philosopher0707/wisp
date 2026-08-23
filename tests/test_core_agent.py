@@ -91,7 +91,8 @@ class TestAgentAdapterSession:
         }
         adapter = _make_adapter(session=session)
         assert adapter.session is not None
-        assert adapter.session.title == "test"
+        # AgentAdapter carries the session dict directly (see cli.py).
+        assert adapter.session["title"] == "test"
 
     def test_save_session(self):
         runtime = MagicMock()
