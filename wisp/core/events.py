@@ -35,6 +35,7 @@ class EventType(StrEnum):
     STEERING_INJECT = "steering_inject"
     STEERING_RESUMED = "steering_resumed"
     PROVIDER_STATUS = "provider_status"
+    SUBAGENT = "subagent"
 
 
 # ── Backward-compatible aliases ──────────────────────────────────────
@@ -194,6 +195,7 @@ _EVENT_DESCRIPTIONS: dict[str, str] = {
     EventType.SYSTEM: "System notification",
     EventType.APPROVAL_REQUEST: "User approval required",
     EventType.PROVIDER_STATUS: "Provider availability change",
+    EventType.SUBAGENT: "Subagent lifecycle update",
 }
 
 
@@ -291,6 +293,25 @@ def provider_status(status: str, detail: str = "", retry_after: Optional[float] 
     return _make_event(EventType.PROVIDER_STATUS, data)
 
 
+def subagent(
+    kind: str,
+    name: str = "",
+    role: str = "",
+    detail: str = "",
+    **extra: Any,
+) -> AgentEvent:
+    """Subagent lifecycle signal from the orchestrator's progress channel.
+
+    kind mirrors multi_agent.task.EventKind values (task_started,
+    task_progress, task_completed, task_failed, task_retry, done) so the
+    orchestrator converts without remapping. detail is a short human
+    fragment; structured fields ride along as extra keys.
+    """
+    data: dict[str, Any] = {"kind": kind, "name": name, "role": role, "detail": detail}
+    data.update(extra)
+    return _make_event(EventType.SUBAGENT, data)
+
+
 __all__ = [
     "AgentEvent",
     "EventType",
@@ -319,5 +340,6 @@ __all__ = [
     "steering_feedback",
     "approval_request",
     "provider_status",
+    "subagent",
     "normalize_event",
 ]

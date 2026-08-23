@@ -29,6 +29,7 @@ from wisp.core.events import (
     AgentEvent,
     tool_result as _tool_result_event,
     approval_request as _approval_request_event,
+    subagent as _subagent_event,
 )
 from wisp.tools.errors import ToolError
 from wisp.tools._utils import check_dangerous_command
@@ -39,6 +40,49 @@ logger = logging.getLogger(__name__)
 
 # (tool_name, args, danger_reason) -> (approved, modified_args_or_none)
 ApprovalHandler = Callable[[str, dict, str], Awaitable[tuple[bool, Optional[dict]]]]
+
+
+def orchestrator_event_to_agent_event(orch_ev: Any) -> AgentEvent:
+    """Convert an OrchestratorEvent to a canonical subagent AgentEvent.
+
+    The mapping keeps the EventKind vocabulary intact and squeezes the
+    payload into one short detail fragment per kind — enough for live
+    status lines without dumping raw payloads into the event stream.
+    """
+    p = getattr(orch_ev, "payload", None) or {}
+    if not isinstance(p, dict):
+        p = {}
+    kind = str(getattr(orch_ev, "event_type", "") or "")
+    name = str(getattr(orch_ev, "task_id", "") or "")
+    role = str(p.get("role", ""))
+
+    if kind == "task_started":
+        detail = str(p.get("description", ""))[:80]
+    elif kind == "task_completed":
+        try:
+            detail = f"{float(p.get('elapsed', 0)):.1f}s"
+        except (TypeError, ValueError):
+            detail = ""
+        files = p.get("files_changed") or []
+        if files:
+            detail += f" · {len(files)} file{'s' if len(files) != 1 else ''}"
+    elif kind == "task_failed":
+        detail = str(p.get("error", ""))[:120]
+    elif kind == "task_retry":
+        attempt = p.get("retry", p.get("attempt", "?"))
+        backoff = p.get("backoff_seconds")
+        detail = f"retry #{attempt}"
+        if isinstance(backoff, (int, float)) and backoff > 0:
+            detail += f" in {backoff:.0f}s"
+    else:
+        detail = ""
+
+    extras: dict[str, Any] = {}
+    if isinstance(p.get("elapsed"), (int, float)):
+        extras["elapsed"] = p["elapsed"]
+    if p.get("error"):
+        extras["error"] = str(p["error"])
+    return _subagent_event(kind=kind, name=name, role=role, detail=detail, **extras)
 
 # Tools that modify workspace state and require approval when auto_approve=False
 _DEFAULT_WRITE_TOOLS: set[str] = {
@@ -119,6 +163,9 @@ class ToolExecutor:
         self.lsp_manager = lsp_manager
         self.subagent_orchestrator = subagent_orchestrator
         self.audit_trail = audit_trail
+        # Set per spawn/fanout execution; carries AgentEvents from the
+        # orchestrator's sync progress callbacks into execute()'s stream.
+        self._sub_event_queue: Optional[asyncio.Queue] = None
 
     # ── Public API ───────────────────────────────────────────────────
 
@@ -204,7 +251,30 @@ class ToolExecutor:
                 return
 
         # ── Execute tool ──
-        result, duration_ms = await self._execute_tool(func_name, func_args, workspace)
+        if func_name in ("spawn", "fanout"):
+            # Stream subagent lifecycle events while the orchestrator runs:
+            # the progress callback lands on a queue from inside the exec
+            # task, and this generator interleaves it with waiting.
+            queue: asyncio.Queue = asyncio.Queue()
+            self._sub_event_queue = queue
+            exec_task = asyncio.create_task(
+                self._execute_tool(func_name, func_args, workspace)
+            )
+            try:
+                while not exec_task.done():
+                    try:
+                        yield await asyncio.wait_for(queue.get(), timeout=0.1)
+                    except asyncio.TimeoutError:
+                        continue
+                while not queue.empty():
+                    yield queue.get_nowait()
+                result, duration_ms = exec_task.result()
+            finally:
+                self._sub_event_queue = None
+                if not exec_task.done():
+                    exec_task.cancel()
+        else:
+            result, duration_ms = await self._execute_tool(func_name, func_args, workspace)
 
         # ── Audit logging (Q22) ──
         if needs_approval and self.config is not None:
@@ -742,6 +812,12 @@ class ToolExecutor:
                 max_retries=int(auto_retry) * 2,
             )
 
+            queue = self._sub_event_queue
+            if queue is not None:
+                contract.progress_callback = lambda ev: queue.put_nowait(
+                    orchestrator_event_to_agent_event(ev)
+                )
+
             result = await self.subagent_orchestrator._run_with_retry(contract)
 
             return json.dumps({
@@ -864,6 +940,13 @@ class ToolExecutor:
                 workspace=workspace,
                 auto_approve=spec.get("auto_approve", False),
             ))
+
+        queue = self._sub_event_queue
+        if queue is not None:
+            for c in contracts:
+                c.progress_callback = lambda ev: queue.put_nowait(
+                    orchestrator_event_to_agent_event(ev)
+                )
 
         try:
             results = await self.subagent_orchestrator.run_parallel(

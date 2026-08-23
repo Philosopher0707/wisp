@@ -538,21 +538,49 @@ def cmd_drop(agent, args: str):
     print(success(f"✓ Dropped last message ({role}): {preview}..."))
 
 
+def _get_orchestrator(agent):
+    """Prefer the composition-wired orchestrator over a degraded bare one.
+
+    The runtime's orchestrator carries tool_executor, agent_runtime, and
+    store wiring; a freshly built one only inherits config/workspace.
+    """
+    from wisp.multi_agent import SubagentOrchestrator
+
+    wired = getattr(getattr(agent, "runtime", None), "orchestrator", None)
+    if wired is not None:
+        return wired
+    return SubagentOrchestrator(parent_agent=agent)
+
+
+def _print_subagent_progress(event) -> None:
+    """Render an OrchestratorEvent through the shared subagent renderer."""
+    import sys
+
+    from wisp.tool_executor import orchestrator_event_to_agent_event
+    from wisp.transport.renderer import render_subagent_status
+
+    line = render_subagent_status(orchestrator_event_to_agent_event(event))
+    if line:
+        sys.stdout.write(line + "\n")
+        sys.stdout.flush()
+
+
 @register("spawn", "Spawn a subagent for a scoped task", aliases=("sub", "delegate"), usage="/spawn <task description>")
 def cmd_spawn(agent, args: str):
     if not args:
         print(info("Usage: /spawn <task description>"))
         print(dim("Example: /spawn research the best Python HTTP client library"))
         return
-    from wisp.multi_agent import SubagentOrchestrator, SubagentContract
+    from wisp.multi_agent import SubagentContract
     from wisp.async_utils import run_sync_coro
     contract = SubagentContract(
         name="spawn",
         task=args,
         timeout_seconds=120,
         max_iterations=15,
+        progress_callback=_print_subagent_progress,
     )
-    orch = SubagentOrchestrator(parent_agent=agent)
+    orch = _get_orchestrator(agent)
     print(accent(f"🧬 Spawning subagent: {args[:60]}..."))
     result = run_sync_coro(orch.run(contract))
     status = success("✓") if result.success else error("✗")
@@ -588,7 +616,7 @@ def cmd_swarm(agent, args: str):
         print(dim("Example: /swarm add user authentication with JWT tokens"))
         return
 
-    from wisp.multi_agent import SubagentOrchestrator, SubagentContract
+    from wisp.multi_agent import SubagentContract
     from wisp.async_utils import run_sync_coro
 
     roles = ["coder", "reviewer", "tester", "researcher"]
@@ -611,7 +639,7 @@ def cmd_swarm(agent, args: str):
     print(dim(f"   Roles: {', '.join(roles)}"))
     print()
 
-    orch = SubagentOrchestrator(parent_agent=agent)
+    orch = _get_orchestrator(agent)
     try:
         results = run_sync_coro(orch.run_parallel(contracts, max_concurrent=4))
     except KeyboardInterrupt:

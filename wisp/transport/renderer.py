@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from wisp.colors import bold, dim, error, warning, success
+from wisp.colors import bold, dim, error, warning, success, accent
 from wisp.core.events import AgentEvent
 from wisp.terminal_width import (
     display_width,
@@ -395,5 +395,50 @@ def render_provider_status(event: AgentEvent, width: int = 80) -> Optional[str]:
             return success(f"\n  [PROVIDER] Recovered. {detail}".rstrip())
         check = "✓" if mode == OutputMode.UNICODE else "+"
         return success(f"\n  {check} Provider recovered")
+
+    return None
+
+
+def render_subagent_status(event: AgentEvent, width: int = 80) -> Optional[str]:
+    """Render a subagent lifecycle update from the orchestrator.
+
+    task_started announces the child, task_completed confirms with elapsed
+    time, task_failed/task_retry warn. Minimal mode returns empty — the
+    final tool_result already carries the full outcome for the transcript.
+    """
+    kind = str(event.data.get("kind", ""))
+    role = str(event.data.get("role", "")).strip()
+    name = str(event.data.get("name", "")).strip()
+    detail = str(event.data.get("detail", "")).rstrip()
+    mode = get_output_mode()
+
+    if mode == OutputMode.MINIMAL:
+        return ""
+
+    who = f"[{role}]" if role else (f"[{name}]" if name else "[subagent]")
+    body = f"{who} {detail}".rstrip()
+
+    if kind == "task_started":
+        if mode == OutputMode.ACCESSIBLE:
+            return dim(f"\n  [SUBAGENT] Started. {body}")
+        marker = "🧬" if mode == OutputMode.UNICODE else ">"
+        return accent(f"\n  {marker} {body}")
+    if kind == "task_progress":
+        return dim(f"\n  · {body}")
+    if kind == "task_completed":
+        if mode == OutputMode.ACCESSIBLE:
+            return success(f"\n  [SUBAGENT] Done. {body}")
+        check = "✓" if mode == OutputMode.UNICODE else "+"
+        return success(f"\n  {check} {body}")
+    if kind == "task_retry":
+        if mode == OutputMode.ACCESSIBLE:
+            return warning(f"\n  [SUBAGENT] Retrying. {body}")
+        marker = "↻" if mode == OutputMode.UNICODE else "~"
+        return warning(f"\n  {marker} {body}")
+    if kind == "task_failed":
+        if mode == OutputMode.ACCESSIBLE:
+            return error(f"\n  [SUBAGENT] Failed. {body}")
+        cross = "✗" if mode == OutputMode.UNICODE else "x"
+        return error(f"\n  {cross} {body}")
 
     return None
