@@ -67,7 +67,7 @@ select = ["F"]
 python_version = "3.12"
 # Strict, hard-gated on the contract seams that are fully annotated.
 # Ratchet target: wisp/multi_agent/task.py, then the transport layer.
-files = ["wisp/core/events.py", "wisp/core/session_view.py", "wisp/core/stateless.py", "wisp/core/runtime.py", "wisp/config.py", "wisp/providers/protocol.py", "wisp/transport/base.py"]
+files = ["wisp/core/events.py", "wisp/core/session_view.py", "wisp/core/stateless.py", "wisp/core/runtime.py", "wisp/config.py", "wisp/providers/protocol.py", "wisp/transport/base.py", "wisp/benchmark/scoring.py"]
 strict = true
 ignore_missing_imports = true
 # Don't surface errors from imported untyped modules -- only the spine is gated.

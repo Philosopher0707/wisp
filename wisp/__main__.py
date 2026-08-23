@@ -808,6 +808,7 @@ Subcommands:
   swarm 'goal'             Spawn multi-agent swarm to accomplish a goal
   agents list              List available agent roles
   agents status            Show running swarm agent status
+  bench -m model1,model2   Benchmark models on deterministic tasks
 
 Examples:
   wisp 'add error handling to main.py'
@@ -838,7 +839,7 @@ def main():
         print_help()
         return
 
-    _SUBCOMMANDS = {"run", "repl", "tui", "skills", "config", "check", "models", "session", "memory", "mcp", "git", "plan", "progress", "diagnose", "locks", "changes", "acp", "server", "compact", "swarm", "agents"}
+    _SUBCOMMANDS = {"run", "repl", "tui", "skills", "config", "check", "models", "session", "memory", "mcp", "git", "plan", "progress", "diagnose", "locks", "changes", "acp", "server", "compact", "swarm", "agents", "bench"}
     first = argv[0]
 
     # Global flags
@@ -1050,6 +1051,10 @@ def main():
             else:
                 print(error(f"✗ Unknown agents subcommand: {sub}"))
                 print(dim("  Try: list, status"))
+
+    elif first == "bench":
+        from wisp.benchmark.cli import run_bench
+        sys.exit(run_bench(rest))
 
     else:
         # Implicit mode: wisp [flags] 'prompt'  OR  wisp --print "prompt"

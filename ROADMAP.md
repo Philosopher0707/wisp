@@ -108,6 +108,23 @@ The circuit breaker exists; wire it into the paths users actually feel:
 - [ ] Delegation analyzer outputs consumed by the planner so subagent
       contracts are derived, not hand-written.
 
+## Theme 6 — Evidence: the local-model scoreboard (current)
+
+Wisp claims "local-first"; the benchmark harness turns that claim into
+data. `wisp bench -m llama3.1:8b,qwen2.5-coder` runs deterministic
+tasks in isolated workspaces, verifies outcomes by executing code
+(never an LLM judge), and scores models from the event stream.
+
+- [x] v1 harness: task suite + headless runner + event-stream scoring +
+      scoreboard report + `wisp bench` CLI (`wisp/benchmark/`).
+- [ ] Grow the suite: medium-difficulty tasks (multi-file edit, run
+      tests to green), plus a token-usage column once providers surface
+      usage in events.
+- [ ] Publish periodic scoreboards for popular local models; use results
+      to tune per-model defaults (timeouts, iteration budgets, roles).
+- [ ] SUBAGENT/PROVIDER_STATUS rendering parity in server + TUI
+      transports so bench-style observability holds everywhere.
+
 ## Non-goals
 
 - No plugin marketplace, no telemetry home, no hosted control plane. Wisp
