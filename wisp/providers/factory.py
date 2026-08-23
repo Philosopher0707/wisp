@@ -14,6 +14,7 @@ from typing import Any, Type
 from .protocol import Provider
 from .ollama import OllamaProvider
 from .openai import OpenAIProvider
+from .nvidia import NVIDIAProvider
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class ProviderFactory:
         """Register built-in providers."""
         self.register("ollama", OllamaProvider)
         self.register("openai", OpenAIProvider)
+        self.register("nvidia", NVIDIAProvider)
 
     def register(self, name: str, provider_class: Type[Provider]) -> None:
         """Register a provider class under a name."""
@@ -92,6 +94,42 @@ class ProviderFactory:
                 config=config,
                 base_url=getattr(config, "api_base", "") or "",
                 model=getattr(config, "model", "gpt-4o"),
+                api_key=getattr(config, "api_key", "") or "",
+            )
+
+        if name == "nvidia":
+            return self.create(
+                "nvidia",
+                config=config,
+                base_url=getattr(config, "api_base", "") or "",
+                model=getattr(config, "model", "nemotron-3-ultra"),
+                api_key=getattr(config, "api_key", "") or "",
+            )
+
+        if name == "nvidia":
+            return self.create(
+                "nvidia",
+                config=config,
+                base_url=getattr(config, "api_base", "") or "",
+                model=getattr(config, "model", "nemotron-3-ultra"),
+                api_key=getattr(config, "api_key", "") or "",
+            )
+
+        if name == "nvidia":
+            return self.create(
+                "nvidia",
+                config=config,
+                base_url=getattr(config, "api_base", "") or "",
+                model=getattr(config, "model", "nemotron-3-ultra"),
+                api_key=getattr(config, "api_key", "") or "",
+            )
+
+        if name == "nvidia":
+            return self.create(
+                "nvidia",
+                config=config,
+                base_url=getattr(config, "api_base", "") or "",
+                model=getattr(config, "model", "nemotron-3-ultra"),
                 api_key=getattr(config, "api_key", "") or "",
             )
 

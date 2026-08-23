@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-from pathlib import Path
 
 from wisp.config import WispConfig
 from wisp.multi_agent.subagent_orchestrator import SubagentOrchestrator

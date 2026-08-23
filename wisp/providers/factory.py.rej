@@ -1,0 +1,17 @@
+diff a/wisp/providers/factory.py b/wisp/providers/factory.py	(rejected hunks)
+@@ -14,6 +14,7 @@ from typing import Any, Type
+ from .protocol import Provider
+ from .ollama import OllamaProvider
+ from .openai import OpenAIProvider
++from .nvidia import NVIDIAProvider
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -30,6 +31,7 @@ class ProviderFactory:
+         """Register built-in providers."""
+         self.register("ollama", OllamaProvider)
+         self.register("openai", OpenAIProvider)
++        self.register("nvidia", NVIDIAProvider)
+ 
+     def register(self, name: str, provider_class: Type[Provider]) -> None:
+         """Register a provider class under a name."""
