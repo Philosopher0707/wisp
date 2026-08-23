@@ -99,10 +99,11 @@ class WispAgentCore:
         Loops internally: provider → tool_calls → execute → append → provider
         until the model returns content (no tool calls) or max iterations.
 
-        Has a wall-clock timeout (default 10 min) to prevent infinite hangs.
+        Has a wall-clock timeout (config turn_timeout, default 30 min) to
+        prevent infinite hangs.
         """
         import asyncio as _asyncio
-        turn_timeout = getattr(self.config, "turn_timeout", 600) if self.config else 600
+        turn_timeout = getattr(self.config, "turn_timeout", 1800) if self.config else 1800
         # Build messages list
         messages = list(session.get("messages", []))
         # Avoid duplicating the user message if runtime already added it
