@@ -27,7 +27,7 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
     "provider": {
         "type": str,
         "default": "ollama",
-        "description": "Model provider backend",
+        "description": "Model provider backend: ollama, openai, nvidia",
         "env_var": "WISP_PROVIDER",
     },
     "ollama_url": {
@@ -189,6 +189,30 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         "max": 50,
         "description": "Number of recent messages to preserve during compaction (must be even to preserve turn symmetry)",
         "env_var": "WISP_COMPACT_KEEP_RECENT",
+    },
+    "circuit_breaker_failure_threshold": {
+        "type": int,
+        "default": 5,
+        "min": 1,
+        "max": 20,
+        "description": "Consecutive provider failures before circuit opens",
+        "env_var": "WISP_CB_FAILURE_THRESHOLD",
+    },
+    "circuit_breaker_success_threshold": {
+        "type": int,
+        "default": 2,
+        "min": 1,
+        "max": 10,
+        "description": "Consecutive successes in half-open before circuit closes",
+        "env_var": "WISP_CB_SUCCESS_THRESHOLD",
+    },
+    "circuit_breaker_recovery_timeout": {
+        "type": float,
+        "default": 30.0,
+        "min": 1.0,
+        "max": 300.0,
+        "description": "Seconds before attempting recovery after circuit opens",
+        "env_var": "WISP_CB_RECOVERY_TIMEOUT",
     },
 }
 
@@ -440,6 +464,16 @@ class WispConfig:
         object.__setattr__(self, "compaction_model",
             get_setting("compaction_model", "") or ""
         )
+        # Circuit breaker settings
+        object.__setattr__(self, "circuit_breaker_failure_threshold",
+            _parse_int(get_setting("circuit_breaker_failure_threshold", "5"), 5, 1, 20)
+        )
+        object.__setattr__(self, "circuit_breaker_success_threshold",
+            _parse_int(get_setting("circuit_breaker_success_threshold", "2"), 2, 1, 10)
+        )
+        object.__setattr__(self, "circuit_breaker_recovery_timeout",
+            _parse_float(get_setting("circuit_breaker_recovery_timeout", "30.0"), 30.0, 1.0, 300.0)
+        )
         # Concurrency limits
         object.__setattr__(self, "thread_pool_size", _parse_int(
             get_setting("thread_pool_size", "8"), 8, 1, 64
@@ -590,6 +624,12 @@ class WispConfig:
         logger.debug("Loaded %d context file(s) for workspace %s", len(found_files), ws_path)
         return self.loaded_context
 
+    def validate_or_raise(self) -> None:
+        """Validate this config instance, raising ValueError on failure."""
+        errors = self.validate()
+        if errors:
+            raise ValueError("Invalid config:\n" + "\n".join(f"  - {e}" for e in errors))
+
     def validate(self) -> list[str]:
         """Validate this config instance against the schema.
 
@@ -641,6 +681,20 @@ class WispConfig:
         if self.compact_keep_recent > 50:
             errors.append(
                 f"compact_keep_recent: {self.compact_keep_recent} exceeds maximum 50"
+            )
+
+        # Circuit breaker
+        if not (1 <= self.circuit_breaker_failure_threshold <= 20):
+            errors.append(
+                f"circuit_breaker_failure_threshold: {self.circuit_breaker_failure_threshold} is out of range [1, 20]"
+            )
+        if not (1 <= self.circuit_breaker_success_threshold <= 10):
+            errors.append(
+                f"circuit_breaker_success_threshold: {self.circuit_breaker_success_threshold} is out of range [1, 10]"
+            )
+        if not (1.0 <= self.circuit_breaker_recovery_timeout <= 300.0):
+            errors.append(
+                f"circuit_breaker_recovery_timeout: {self.circuit_breaker_recovery_timeout} is out of range [1.0, 300.0]"
             )
 
         # Permission mode
