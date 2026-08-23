@@ -114,7 +114,10 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str | None:
             if not data:
                 return None
             return data.decode("utf-8", errors="replace").rstrip("\n\r")
-        return sys.stdin.readline().rstrip("\n\r")
+        line = sys.stdin.readline()
+        if not line:
+            return None
+        return line.rstrip("\n\r")
     except EOFError:
         return None
     except UnicodeDecodeError:
@@ -123,16 +126,23 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str | None:
 
 def _input_multiline(prompt: str = "➜ ", continuation_prompt: str = "... ") -> str | None:
     """Read multiline input with explicit continuation.
-    
+
     Uses blank line (double Enter) to terminate, or Ctrl+D.
     More intuitive than backslash for pasted code blocks.
     """
     if not sys.stdin.isatty():
-        # Non-interactive: just read all stdin
+        # Non-interactive: read what remains of stdin. Exhausted stdin is
+        # EOF (None), not an empty submission — otherwise piped sessions
+        # would spin forever on empty prompts.
         if hasattr(sys.stdin, "buffer"):
             data = sys.stdin.buffer.read()
+            if not data:
+                return None
             return data.decode("utf-8", errors="replace").strip()
-        return sys.stdin.read().strip()
+        data = sys.stdin.read()
+        if not data:
+            return None
+        return data.strip()
     
     print(prompt, end="", flush=True)
     lines = []
@@ -245,6 +255,8 @@ def _preview_lines(text: str, max_lines: int = 3, max_line_width: int = 200) -> 
     """
     if not text:
         return ""
+    if not isinstance(text, str):
+        text = _coerce_tool_data(text)
     lines = text.split("\n")
     while lines and lines[-1].strip() == "":
         lines.pop()
@@ -809,22 +821,24 @@ class CLITransport(Transport):
                         preview += "..."
                     break
             if preview:
+                plural = "line" if line_count == 1 else "lines"
                 if is_accessible():
                     stdout.write(
-                        dim(f'  [Thinking] "{preview}" — {line_count} lines, /thinking to expand\n')
+                        dim(f'  [Thinking] "{preview}" — {line_count} {plural}, /thinking to expand\n')
                     )
                 else:
                     stdout.write(
-                        dim(f'  🧠 Thinking: "{preview}" ({line_count} lines — /thinking to expand)\n')
+                        dim(f'  🧠 Thinking: "{preview}" ({line_count} {plural} — /thinking to expand)\n')
                     )
             else:
+                plural = "line" if line_count == 1 else "lines"
                 if is_accessible():
                     stdout.write(
-                        dim(f"  [Thinking] {line_count} lines — use /thinking to expand\n")
+                        dim(f"  [Thinking] {line_count} {plural} — use /thinking to expand\n")
                     )
                 else:
                     stdout.write(
-                        dim(f"  🧠 Thinking... ({line_count} lines — /thinking to expand)\n")
+                        dim(f"  🧠 Thinking... ({line_count} {plural} — /thinking to expand)\n")
                     )
         stdout.flush()
 
@@ -1054,7 +1068,9 @@ class CLITransport(Transport):
                 result_text = str(result)
         elif isinstance(result, dict):
             meta = result.get("metadata", {})
-            result_text = result.get("data", str(result))
+            # Structured payloads (spawn/fanout/MCP) carry non-string data;
+            # coercing here keeps preview/wrap code on strings downstream.
+            result_text = _coerce_tool_data(result.get("data", result))
         else:
             result_text = str(result)
 

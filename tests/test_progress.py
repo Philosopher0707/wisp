@@ -275,3 +275,46 @@ class TestCurrentTool:
         pt.on_tool_call("read_file")
         pt.on_tool_result("read_file", "ok", 1.0)
         assert pt.progress.current_tool is None
+
+
+class TestDelegationFileTracking:
+    """Subagent-reported files must count toward turn stats."""
+
+    def _tracker_with_spawn_call(self):
+        from wisp.transport.progress import ProgressTracker
+
+        tracker = ProgressTracker()
+        tracker.start_turn(1)
+        tracker.on_tool_call("spawn", {"task": "x", "role": "coder"})
+        return tracker
+
+    def test_dict_result_files_counted(self):
+        tracker = self._tracker_with_spawn_call()
+        tracker.on_tool_result("spawn", {
+            "status": "ok",
+            "data": {"ok": True, "summary": "done"},
+            "metadata": {"files_changed": ["a.py", "b.py"]},
+        })
+        assert tracker.progress.files_changed == ["a.py", "b.py"]
+
+    def test_json_string_result_files_counted(self):
+        import json
+
+        tracker = self._tracker_with_spawn_call()
+        tracker.on_tool_result("spawn", json.dumps({
+            "status": "ok",
+            "data": {"files": ["c.py"]},
+        }))
+        assert tracker.progress.files_changed == ["c.py"]
+
+    def test_no_double_counting_across_shapes(self):
+        tracker = self._tracker_with_spawn_call()
+        tracker.on_tool_result("spawn", {
+            "status": "ok",
+            "metadata": {"files_changed": ["a.py"]},
+        })
+        tracker.on_tool_result("spawn", {
+            "status": "ok",
+            "metadata": {"files_changed": ["a.py", "d.py"]},
+        })
+        assert tracker.progress.files_changed == ["a.py", "d.py"]

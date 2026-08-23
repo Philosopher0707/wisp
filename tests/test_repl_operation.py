@@ -317,3 +317,67 @@ class TestMultilineInterruptContract:
 
         result = _input_multiline("➜ ", "... ")
         assert result == "", "Ctrl+C in multiline clears input, never exits"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 7. Piped stdin EOF terminates the REPL (no 100%-CPU spin)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestPipedEofTermination:
+    def test_single_mode_eof_exits_cleanly(self, monkeypatch, capsys, no_signal_side_effects):
+        runtime = _StubRuntime()
+        _feed_stdin("only prompt\n", monkeypatch)  # EOF after this line
+
+        transport = CLITransport(MagicMock())
+        _run_repl(transport, _StubRoot(runtime), _StubConfig(), session_id="s")
+
+        out = capsys.readouterr().out
+        assert "Exiting" in out, "EOF must take the graceful exit path"
+
+    def test_input_line_returns_none_at_eof(self, monkeypatch):
+        import io
+
+        from wisp.transport.cli import _input_line
+
+        fake = io.StringIO("one\n")
+        monkeypatch.setattr("sys.stdin", fake)
+        assert _input_line("? ") == "one"
+        assert _input_line("? ") is None, "exhausted readline must signal EOF"
+        assert _input_line("? ") is None, "must stay None, never spin empty"
+
+    def test_multiline_mode_eof_exits(self, monkeypatch, capsys, no_signal_side_effects):
+        runtime = _StubRuntime()
+        _feed_stdin("/multiline\n", monkeypatch)
+
+        transport = CLITransport(MagicMock())
+        _run_repl(transport, _StubRoot(runtime), _StubConfig(), session_id="s")
+
+        out = capsys.readouterr().out
+        assert "Exiting" in out, "multiline EOF must not loop forever"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 8. Thinking summary grammar
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestThinkingGrammar:
+    def _flush(self, transport, buffer):
+        import io as _io
+
+        transport._thinking_buffer = buffer
+        buf = _io.StringIO()
+        transport._flush_thinking(buf, width=80)
+        return buf.getvalue()
+
+    def test_single_line_thinking_says_line(self):
+        transport = CLITransport(MagicMock())
+        out = self._flush(transport, ["just one thought"])
+        assert "(1 line " in out, out
+        assert "1 lines" not in out
+
+    def test_multi_line_thinking_says_lines(self):
+        transport = CLITransport(MagicMock())
+        out = self._flush(transport, ["thought one\nthought two"])
+        assert "2 lines" in out, out

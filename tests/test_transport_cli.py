@@ -215,7 +215,7 @@ class TestProviderStatusRendering:
     def _render(self, event, mode_setup=None):
         from io import StringIO
 
-        from wisp.terminal_width import OutputMode, set_output_mode
+        from wisp.terminal_width import set_output_mode
 
         old = None
         if mode_setup is not None:
@@ -254,3 +254,25 @@ class TestProviderStatusRendering:
             mode_setup=OutputMode.MINIMAL,
         )
         assert out == ""
+
+class TestStructuredToolResultRender:
+    """Spawn/MCP results carry dict data — must render, never crash."""
+
+    def test_dict_data_result_renders_without_split_error(self):
+        transport = CLITransport(_MockRuntime())
+        result = {
+            "status": "ok",
+            "data": {"ok": True, "summary": "extracted DEFAULTS"},
+            "metadata": {},
+        }
+        rendered = transport._render_tool_result(
+            "spawn", result, duration_ms=8100.0, width=80
+        )
+        assert rendered is not None
+        assert "spawn" in rendered
+
+    def test_preview_lines_coerces_non_string(self):
+        from wisp.transport.cli import _preview_lines
+
+        out = _preview_lines({"k": "v"})
+        assert "k" in out

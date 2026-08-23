@@ -132,9 +132,39 @@ class ProgressTracker:
         self.progress.current_tool = None
         self._classify_result(result)
         self._track_files(name, self.progress.current_tool_args)
+        self._track_result_files(result)
         self.progress.current_tool_args = {}
 
     # ── Internal ────────────────────────────────────────────────
+
+    def _track_result_files(self, result: Any) -> None:
+        """Track files reported by delegation results (spawn/fanout).
+
+        Subagents change files the parent never passed as arguments, so
+        their result payloads carry a files_changed list — otherwise turn
+        stats would report 0 files for delegated work.
+        """
+        payload = None
+        if isinstance(result, dict):
+            payload = result
+        elif isinstance(result, str):
+            try:
+                parsed = json.loads(result)
+                if isinstance(parsed, dict):
+                    payload = parsed
+            except (json.JSONDecodeError, TypeError):
+                return
+        if not payload:
+            return
+        files = payload.get("files_changed")
+        if not files and isinstance(payload.get("data"), dict):
+            files = payload["data"].get("files") or payload["data"].get("files_changed")
+        if not files:
+            files = (payload.get("metadata") or {}).get("files_changed")
+        for path in files or []:
+            if isinstance(path, str) and path and path not in self._seen_files:
+                self._seen_files.add(path)
+                self.progress.files_changed.append(path)
 
     def _maybe_advance_phase(self, tool_name: str) -> str | None:
         """Check if tool call triggers a phase transition."""
