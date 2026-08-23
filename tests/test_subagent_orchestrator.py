@@ -1054,6 +1054,7 @@ async def test_cache_ttl_expires(orch):
     # Should be a miss (re-executed)
     stats = orch.get_cache_stats()
     assert stats["misses"] >= 2
+    assert result2 is not None
 
 
 @pytest.mark.asyncio
@@ -1369,3 +1370,93 @@ async def test_subagent_uses_skills_in_run(mock_parent_agent, tmp_path):
     with patch("wisp.core.engine.WispAgentCore", FakeWispAgentCore):
         result = await orch.run(contract)
     assert result.success
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Worktree fallback noise: one warning, permanent memoization
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestWorktreeFallbackNoise:
+    """Designed degradation logs once; non-git workspaces never re-attempt."""
+
+    @pytest.fixture
+    def orchestrator(self, tmp_path):
+        return SubagentOrchestrator(
+            config=_child_config({}), workspace=tmp_path
+        )
+
+    def _contract(self):
+        from wisp.multi_agent.task import SubagentContract
+
+        return SubagentContract(
+            name="researcher",
+            task="research 12 years of policy",
+            worktree_isolated=True,
+        )
+
+    def test_non_git_workspace_warns_exactly_once(self, orchestrator, caplog):
+        import logging
+
+        with caplog.at_level(logging.DEBUG, logger="wisp.multi_agent.subagent_orchestrator"):
+            for _ in range(5):
+                path = asyncio.run(orchestrator._resolve_worktree(self._contract()))
+                assert path is None, "non-git workspace must fall back to shared"
+
+        warnings = [
+            r for r in caplog.records
+            if r.levelno == logging.WARNING
+            and r.name == "wisp.multi_agent.subagent_orchestrator"
+        ]
+        assert len(warnings) == 1, f"expected 1 warning, got {len(warnings)}"
+
+    def test_permanent_cause_skips_manager_after_first_failure(
+        self, orchestrator
+    ):
+        from unittest.mock import AsyncMock, MagicMock
+
+        spy = MagicMock()
+        spy.create = AsyncMock(
+            side_effect=RuntimeError("not a git repository — cannot create")
+        )
+        orchestrator._worktree_mgr = spy
+
+        for _ in range(4):
+            path = asyncio.run(orchestrator._resolve_worktree(self._contract()))
+            assert path is None
+
+        assert spy.create.call_count == 1, (
+            "permanent failure must be memoized — later children skip create()"
+        )
+
+    def test_transient_failures_retry_but_still_warn_once(self, orchestrator):
+        from unittest.mock import AsyncMock, MagicMock
+
+        spy = MagicMock()
+        spy.create = AsyncMock(side_effect=RuntimeError("disk hiccup"))
+        orchestrator._worktree_mgr = spy
+
+
+        for _ in range(3):
+            path = asyncio.run(orchestrator._resolve_worktree(self._contract()))
+            assert path is None
+
+        assert spy.create.call_count == 3, "transient failures keep retrying"
+        # The warn-once flag is set; a fresh warning would be spam.
+        assert orchestrator._worktree_fallback_warned is True
+        assert orchestrator._worktree_unavailable_reason is None
+
+    def test_no_isolation_requested_touches_nothing(self, orchestrator):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from wisp.multi_agent.task import SubagentContract
+
+        spy = MagicMock()
+        spy.create = AsyncMock()
+        orchestrator._worktree_mgr = spy
+
+        contract = SubagentContract(name="r", task="t", worktree_isolated=False)
+        path = asyncio.run(orchestrator._resolve_worktree(contract))
+
+        assert path is None
+        spy.create.assert_not_called()

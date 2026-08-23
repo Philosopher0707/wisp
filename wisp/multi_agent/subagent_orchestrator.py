@@ -294,6 +294,11 @@ class SubagentOrchestrator:
         self._telemetry = Telemetry()
         self._persistence = Persistence(self.workspace / ".wisp" / "subagent_results.jsonl")
         self._worktree_mgr = WorktreeManager(self.workspace)
+        # Worktree isolation degrades to a shared workspace when it cannot
+        # work (e.g. non-git workspace). Remember that so a fanout of ten
+        # children logs one warning instead of one per spawn attempt.
+        self._worktree_unavailable_reason: str | None = None
+        self._worktree_fallback_warned: bool = False
         # Derive store from parent_agent if not explicitly provided
         _store = store or (getattr(parent_agent, "store", None) if parent_agent else None)
         self._runner = SubagentRunner(self.config, self.workspace, store=_store, tool_executor=tool_executor, agent_runtime=agent_runtime)
@@ -493,6 +498,41 @@ class SubagentOrchestrator:
 
     # ── Public API ─────────────────────────────────────────────────────
 
+    async def _resolve_worktree(self, contract: SubagentContract) -> Path | None:
+        """Return an isolation worktree path, or None to share the workspace.
+
+        Isolation failing is designed degradation, not an error storm: the
+        first failure warns once; a *permanent* cause (non-git workspace)
+        is memoized so later children skip the attempt entirely.
+        """
+        if not contract.worktree_isolated:
+            return None
+
+        if self._worktree_unavailable_reason is not None:
+            logger.debug(
+                "Worktree isolation unavailable (%s); %s uses shared workspace",
+                self._worktree_unavailable_reason, contract.name,
+            )
+            return None
+
+        try:
+            return await self._worktree_mgr.create(contract.name)
+        except Exception as exc:
+            if "not a git repository" in str(exc).lower():
+                self._worktree_unavailable_reason = str(exc)
+            if self._worktree_fallback_warned:
+                logger.debug(
+                    "Worktree creation failed for %s, falling back to shared workspace: %s",
+                    contract.name, exc,
+                )
+            else:
+                logger.warning(
+                    "Worktree creation failed for %s, falling back to shared workspace: %s",
+                    contract.name, exc,
+                )
+                self._worktree_fallback_warned = True
+            return None
+
     async def run(
         self,
         contract: SubagentContract,
@@ -574,16 +614,7 @@ class SubagentOrchestrator:
             return result
 
         # ── Worktree ───────────────────────────────────────────────────
-        worktree_path: Path | None = None
-        if contract.worktree_isolated:
-            try:
-                worktree_path = await self._worktree_mgr.create(contract.name)
-            except Exception as exc:
-                logger.warning(
-                    "Worktree creation failed for %s, falling back to shared workspace: %s",
-                    contract.name, exc,
-                )
-                worktree_path = None
+        worktree_path = await self._resolve_worktree(contract)
 
         agent_workspace = str(worktree_path or self.workspace)
 

@@ -36,7 +36,9 @@ class WorktreeManager:
             if proc.returncode == 0:
                 self._git_available = True
             else:
-                logger.warning(
+                # Debug, not warning: the orchestrator owns the user-facing
+                # fallback decision and logs it once at its own layer.
+                logger.debug(
                     "Workspace %s is not a git repository — worktree isolation disabled",
                     self.workspace,
                 )
