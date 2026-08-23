@@ -23,7 +23,7 @@ from wisp.config import WispConfig
 from wisp.transport.cli import CLITransport, _input_line, _input_multiline, _install_signal_handler, _restore_signal_handler
 from wisp.transport.tui import TUITransport
 from wisp.transport.renderer import render_turn_stats, render_file_ticker
-from wisp.colors import dim
+from wisp.colors import dim, error
 import shutil
 
 logger = logging.getLogger(__name__)
@@ -187,14 +187,30 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
     def _show_resume() -> None:
         """Print the resume command for this session."""
         sys.stdout.write("\n⏸  Turn interrupted. Session saved.\n")
-        sys.stdout.write(f"   Resume: wisp repl -S {session_id}\n\n")
+        sys.stdout.write(f"   Resume: wisp repl -S {_current_session_id()}\n\n")
         sys.stdout.flush()
 
     def _show_exit() -> None:
         """Print exit message with resume command."""
         sys.stdout.write("\n👋  Exiting. Session saved.\n")
-        sys.stdout.write(f"   Resume: wisp repl -S {session_id}\n\n")
+        sys.stdout.write(f"   Resume: wisp repl -S {_current_session_id()}\n\n")
         sys.stdout.flush()
+
+    def _current_session_id() -> str:
+        """Live session id — /new swaps adapter.session mid-REPL."""
+        sid = getattr(adapter.session, "get", lambda *_: None)("id")
+        return str(sid) if sid else session_id
+
+    def _force_save() -> bool:
+        """Best-effort save of the live session; returns success."""
+        try:
+            store = getattr(root.runtime, "store", None)
+            if store is not None and isinstance(adapter.session, dict):
+                store.save_session(adapter.session)
+            return True
+        except Exception:
+            logger.warning("Failed to save session on exit", exc_info=True)
+            return False
 
     _current_turn_task: asyncio.Task | None = None
 
@@ -206,7 +222,9 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
     def _run_turn(prompt: str) -> None:
         """Run one turn on the persistent loop."""
         async def _turn():
-            async for event in root.runtime.run_turn(session, prompt, approval_handler=getattr(transport, "approve", None)):
+            # Read the session through the adapter at call time: commands
+            # like /new replace adapter.session mid-REPL.
+            async for event in root.runtime.run_turn(adapter.session, prompt, approval_handler=getattr(transport, "approve", None)):
                 transport._render_event(sys.stdout, event)
 
         transport._reset_buffers()
@@ -225,7 +243,7 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
             transport._flush_content(sys.stdout)
             _show_resume()
         except asyncio.CancelledError:
-            # Task was cancelled (likely Ctrl+C)
+            # Task was cancelled (likely Ctrl+C or approval [c]ancel)
             transport._flush_thinking(sys.stdout)
             transport._flush_content(sys.stdout)
             _show_resume()
@@ -239,6 +257,28 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
             sys.stdout.flush()
         finally:
             _current_turn_task = None
+            # The cooperative handler de-arms itself on first press so a
+            # second Ctrl+C force-quits; re-arm it for the next turn.
+            _install_signal_handler()
+
+    _VALID_MODES = ("single", "multi")
+
+    def _handle_multiline_command(args: str) -> None:
+        """Toggle/validate input mode without round-tripping dispatch."""
+        nonlocal input_mode
+        args = args.strip().lower()
+        if args in _VALID_MODES:
+            input_mode = args
+        elif args:
+            sys.stdout.write(f"{error('✗')} Unknown mode '{args}'. Use single or multi.\n")
+            return
+        else:
+            input_mode = "multi" if input_mode == "single" else "single"
+        from wisp.colors import success, dim
+        sys.stdout.write(f"{success('✓')} Input mode: {input_mode}\n")
+        if input_mode == "multi":
+            sys.stdout.write(f"{dim('  Enter blank line twice to submit, Ctrl+C to clear input')}\n")
+        sys.stdout.flush()
 
     while True:
         try:
@@ -247,12 +287,18 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
             else:
                 line = _input_line("➜ ")
         except KeyboardInterrupt:
-            # Ctrl+C at prompt — exit gracefully
+            # Single-line mode: Ctrl+C at prompt exits gracefully
+            _show_exit()
+            break
+        except EOFError:
             _show_exit()
             break
         except Exception:
+            logger.exception("Input read failed")
+            _show_exit()
             break
         if line is None:
+            _show_exit()
             break
 
         # In multiline mode, empty input (just pressing Enter twice) continues
@@ -270,33 +316,23 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
         if prompt.lower() in ("exit", "quit"):
             break
 
+        # ── Input-mode command (intercepted before dispatch so it never
+        # hits the registry as an unknown command) ────────────────────
+        if prompt.startswith("/multiline"):
+            parts = prompt.split(maxsplit=1)
+            _handle_multiline_command(parts[1] if len(parts) > 1 else "")
+            continue
+
         # ── Slash commands ──────────────────────────────────────
         if prompt.startswith("/"):
             from wisp.commands import dispatch
             from wisp.exceptions import ExitREPL
             try:
                 result = dispatch(prompt, adapter)
-                if result is False:
-                    pass  # Not a slash command — fall through to _run_turn
-                elif isinstance(result, str):
+                if isinstance(result, str) and result:
                     # Command returned a prompt to run (e.g. /continue)
                     _run_turn(result)
-                    continue
-                else:
-                    # True/None: command consumed the input
-                    # Check if it was a multiline toggle
-                    if prompt.startswith("/multiline"):
-                        parts = prompt.split()
-                        if len(parts) > 1:
-                            input_mode = parts[1]
-                        else:
-                            input_mode = "multi" if input_mode == "single" else "single"
-                        from wisp.colors import success, dim
-                        sys.stdout.write(f"{success('✓')} Input mode: {input_mode}\n")
-                        if input_mode == "multi":
-                            sys.stdout.write(f"{dim('  Enter blank line twice to submit, Ctrl+C to cancel')}\n")
-                        sys.stdout.flush()
-                    continue
+                continue
             except ExitREPL:
                 break
             except Exception as exc:
@@ -313,12 +349,17 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
     _restore_signal_handler()
 
     # Clean up: cancel any in-progress turn and shut down services
+    saved = False
     try:
         _cancel_tasks()
         loop.run_until_complete(asyncio.sleep(0.05))  # Let cancellation settle
     finally:
+        saved = _force_save()
         if own_loop:
             loop.close()
+    if not saved:
+        sys.stdout.write("\n⚠  Could not save session.\n")
+        sys.stdout.flush()
 
 
 async def _run_single_prompt(transport: CLITransport, root: CompositionRoot, prompt: str, config: WispConfig, **kwargs) -> None:
@@ -339,13 +380,18 @@ async def _run_single_prompt(transport: CLITransport, root: CompositionRoot, pro
         from wisp.transport.cli import AgentAdapter
         adapter = AgentAdapter(root.runtime, config, session)
         try:
-            if dispatch(prompt, adapter):
-                return
+            result = dispatch(prompt, adapter)
         except Exception as exc:
             import logging
             logging.getLogger(__name__).exception("Slash command failed")
             sys.stdout.write(f"Error: {exc}\n")
             sys.stdout.flush()
+            return
+        if isinstance(result, str) and result:
+            # Command returned a follow-up prompt (e.g. /continue) — run it,
+            # same as the REPL does, instead of silently dropping it.
+            prompt = result
+        else:
             return
 
     transport._reset_buffers()

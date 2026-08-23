@@ -16,9 +16,11 @@ import asyncio
 import json
 import logging
 import re
+import select
 import shutil
 import signal
 import sys
+import threading
 from typing import Any, Optional
 
 # Import readline to enable arrow-key/editing support in input().
@@ -156,13 +158,15 @@ def _input_multiline(prompt: str = "➜ ", continuation_prompt: str = "... ") ->
             
             lines.append(line)
             print(continuation_prompt, end="", flush=True)
-        
+
         if not lines:
             return None
         return "\n".join(lines)
     except KeyboardInterrupt:
-        print()  # Newline after ^C
-        raise
+        # Multiline mode's documented contract: Ctrl+C clears the current
+        # input, it does not exit the REPL. Empty string re-prompts.
+        print("\n✗ Input cleared")
+        return ""
 
 def _args_preview(args: dict) -> str:
     """Compact preview of tool arguments."""
@@ -601,7 +605,7 @@ class CLITransport(Transport):
         sys.stdout.flush()
 
         try:
-            raw = await asyncio.to_thread(input, dim("Approve? "))
+            raw = await self._read_approval_answer()
         except (EOFError, OSError):
             return False
         choice = raw.strip()
@@ -623,10 +627,44 @@ class CLITransport(Transport):
             self._approval_state.set_block()
             return False
         if choice == "c":
-            # Cancel = treat as deny
-            return False
+            # Honest cancel: unwind the turn (the REPL renders it like an
+            # interrupt), not a silent deny that lets the agent continue.
+            print(dim("⏹  Turn cancelled."), file=sys.stdout)
+            raise asyncio.CancelledError(
+                f"User cancelled the turn at the approval prompt for {tool_name}"
+            )
         # Any other key = deny
         return False
+
+    @staticmethod
+    def _read_approval_line(prompt_text: str, stop: threading.Event) -> str:
+        """Blocking stdin read that notices cancellation within ~0.2s.
+
+        select() keeps the worker thread polling instead of parking inside
+        input(), so a cancelled approval can't leave an orphaned reader
+        swallowing the user's next typed line.
+        """
+        sys.stdout.write(prompt_text)
+        sys.stdout.flush()
+        use_select = hasattr(sys.stdin, "isatty") and sys.stdin.isatty() and hasattr(select, "select")
+        if not use_select:
+            return input(prompt_text)
+        while not stop.is_set():
+            try:
+                ready, _, _ = select.select([sys.stdin], [], [], 0.2)
+            except (OSError, ValueError):
+                return input(prompt_text)
+            if ready:
+                return sys.stdin.readline()
+        return ""
+
+    async def _read_approval_answer(self) -> str:
+        """Await one approval line; cancellation releases the reader thread."""
+        stop = threading.Event()
+        try:
+            return await asyncio.to_thread(self._read_approval_line, dim("Approve? "), stop)
+        finally:
+            stop.set()
 
     async def _send(self, event: dict) -> None:
         """Send compatibility shim.
