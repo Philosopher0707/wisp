@@ -1,0 +1,155 @@
+diff a/wisp/core/stateless.py b/wisp/core/stateless.py	(rejected hunks)
+@@ -29,6 +29,7 @@ from wisp.core.events import (
+     system,
+ )
+ from wisp.core.approval_gate import ApprovalGate
++from wisp.infra.circuit_breaker import CircuitBreaker
+ 
+ if TYPE_CHECKING:
+     from wisp.providers.protocol import Provider
+@@ -68,6 +69,24 @@ class WispAgentCore:
+     tool_executor: ToolExecutor | None = None
+ 
+     _approval_gate: ApprovalGate | None = field(default=None, repr=False)
++    _circuit_breaker: CircuitBreaker | None = field(default=None, repr=False, init=False)
++
++    def __post_init__(self) -> None:
++        if self.config is not None:
++            cb_config = self.config.get("circuit_breaker") if hasattr(self.config, "get") else None
++            if cb_config is None:
++                # Check for circuit breaker settings on config object
++                failure_threshold = getattr(self.config, "circuit_breaker_failure_threshold", 5)
++                success_threshold = getattr(self.config, "circuit_breaker_success_threshold", 2)
++                recovery_timeout = getattr(self.config, "circuit_breaker_recovery_timeout", 30.0)
++                from wisp.infra.circuit_breaker import CircuitBreakerConfig
++                cb_config = CircuitBreakerConfig(
++                    failure_threshold=failure_threshold,
++                    success_threshold=success_threshold,
++                    recovery_timeout=recovery_timeout,
++                )
++            if cb_config:
++                self._circuit_breaker = CircuitBreaker(cb_config)
+ 
+     async def turn(self, session: dict[str, Any], prompt: str, approval_handler: Any = None) -> AsyncIterator[dict[str, Any]]:
+         """Run one turn, yielding events.
+@@ -346,66 +365,75 @@ class WispAgentCore:
+ 
+         Runs the blocking I/O in a thread to avoid blocking the event loop.
+         This allows concurrent requests in FastAPI and responsive REPL.
++        Uses circuit breaker to fail fast when provider is unhealthy.
+         """
+         import asyncio
+ 
+         if self.provider is None:
+             raise RuntimeError("WispAgentCore has no provider configured")
+         provider = self.provider
+-        if hasattr(provider, "generate_stream_events_async"):
+-            async for event in provider.generate_stream_events_async(
+-                system_prompt=system_prompt,
+-                messages=messages,
+-                tools=tools,
+-            ):
+-                yield event
+-            return
+ 
+-        # Fallback: run sync generator in a thread via queue.
+-        # We spawn a thread that pushes events into an asyncio.Queue,
+-        # then yield from the queue. This preserves streaming without
+-        # blocking the event loop.
+-        import threading
+-
+-        loop = asyncio.get_running_loop()
+-        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+-        done = object()  # sentinel
+-        cancelled = threading.Event()  # signals producer to stop
+-
+-        def _sync_producer() -> None:
+-            try:
+-                for event in provider.generate_stream_events(
++        # Define the streaming callable for circuit breaker
++        async def _call_provider() -> AsyncIterator[dict[str, Any]]:
++            if hasattr(provider, "generate_stream_events_async"):
++                async for event in provider.generate_stream_events_async(
+                     system_prompt=system_prompt,
+                     messages=messages,
+                     tools=tools,
+                 ):
+-                    if cancelled.is_set():
+-                        break
+-                    loop.call_soon_threadsafe(queue.put_nowait, event)
+-                loop.call_soon_threadsafe(queue.put_nowait, done)  # type: ignore[arg-type]
+-            except Exception:
+-                loop.call_soon_threadsafe(queue.put_nowait, done)  # type: ignore[arg-type]
+-                raise
++                    yield event
++                return
+ 
+-        thread = threading.Thread(target=_sync_producer, daemon=True)
+-        thread.start()
++            # Fallback: run sync generator in a thread via queue.
++            import threading
+ 
+-        try:
+-            while True:
+-                event = await queue.get()
+-                if event is done:
+-                    break
+-                yield event
+-        finally:
+-            # Signal producer thread to stop if we're abandoned (e.g. timeout)
+-            cancelled.set()
+-            # Drain remaining queued items so the queue doesn't hold references
+-            while not queue.empty():
++            loop = asyncio.get_running_loop()
++            queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
++            done = object()  # sentinel
++            cancelled = threading.Event()
++
++            def _sync_producer() -> None:
+                 try:
+-                    queue.get_nowait()
++                    for event in provider.generate_stream_events(
++                        system_prompt=system_prompt,
++                        messages=messages,
++                        tools=tools,
++                    ):
++                        if cancelled.is_set():
++                            break
++                        loop.call_soon_threadsafe(queue.put_nowait, event)
++                    loop.call_soon_threadsafe(queue.put_nowait, done)  # type: ignore[arg-type]
+                 except Exception:
+-                    break
+-            thread.join(timeout=5.0)
++                    loop.call_soon_threadsafe(queue.put_nowait, done)  # type: ignore[arg-type]
++                    raise
++
++            thread = threading.Thread(target=_sync_producer, daemon=True)
++            thread.start()
++
++            try:
++                while True:
++                    event = await queue.get()
++                    if event is done:
++                        break
++                    yield event
++            finally:
++                cancelled.set()
++                while not queue.empty():
++                    try:
++                        queue.get_nowait()
++                    except Exception:
++                        break
++                thread.join(timeout=5.0)
++
++        # Use circuit breaker if configured
++        if self._circuit_breaker is not None:
++            # For streaming, we need to handle the generator specially
++            # The circuit breaker's stream method handles async generators
++            async for event in self._circuit_breaker.stream(_call_provider):
++                yield event
++        else:
++            async for event in _call_provider():
++                yield event
+ 
+     def _build_system_prompt(self, session: dict[str, Any], query: str | None = None) -> str:
+         """Build rich system prompt from session context."""

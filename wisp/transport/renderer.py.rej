@@ -1,0 +1,81 @@
+diff a/wisp/transport/renderer.py b/wisp/transport/renderer.py	(rejected hunks)
+@@ -11,7 +11,7 @@ from __future__ import annotations
+ 
+ from typing import Optional
+ 
+-from wisp.colors import dim, error, warning, success
++from wisp.colors import bold, dim, error, warning, success
+ from wisp.core.events import AgentEvent
+ from wisp.terminal_width import (
+     display_width,
+@@ -110,18 +110,18 @@ def render_thinking_block(text: str, box_mode: bool, width: int) -> Optional[str
+ 
+ 
+ def render_content_block(text: str, box_mode: bool, width: int) -> Optional[str]:
+-    """Render buffered content text as a block."""
++    """Render buffered content text as a block.
++
++    The assistant's answer is left to breathe — no framing rule. Accessible
++    mode keeps a ``[Response]`` label so screen readers can announce it.
++    """
+     if not text.strip():
+         return None
+     inner_w = width - 4
+     wrapped = wrap_text(text.strip(), inner_w)
+-    if box_mode:
+-        if is_accessible():
+-            return "[Response]\n" + "\n".join(wrapped)
+-        header = _rule("─", "Response", style_fn=dim, width=width)
+-        return f"{header}\n" + "\n".join(wrapped)
+-    else:
+-        return "\n".join(wrapped)
++    if is_accessible():
++        return "[Response]\n" + "\n".join(wrapped)
++    return "\n".join(wrapped)
+ 
+ 
+ def render_done_reason(event: AgentEvent, iterations: int) -> Optional[str]:
+@@ -281,14 +281,13 @@ def _rule(char: str = "─", label: str = "", style_fn=None,
+ # ── Phase bar ────────────────────────────────────────────────────
+ 
+ _PHASES = ("understand", "plan", "execute", "verify")
+-_PHASE_ICONS = {"understand": "🔍", "plan": "📋", "execute": "⚡", "verify": "✅"}
+ 
+ 
+ def render_phase_bar(phase: str, stats: dict, width: int = 80) -> str:
+     """Render a phase progress indicator.
+ 
+-    Shows all four phases with the current one highlighted.
+-    Returns empty string in minimal mode.
++    Done phases get a check, the current phase gets a pointer and bold name,
++    future phases get an empty circle. Returns empty string in minimal mode.
+     """
+     mode = get_output_mode()
+     if mode == OutputMode.MINIMAL:
+@@ -303,18 +302,19 @@ def render_phase_bar(phase: str, stats: dict, width: int = 80) -> str:
+                 segments.append(p)
+         return dim("  " + " > ".join(segments))
+ 
+-    # Unicode / ASCII: progress bar style
+-    segments = []
+     current_idx = _PHASES.index(phase) if phase in _PHASES else 0
++    segments = []
+     for i, p in enumerate(_PHASES):
+-        icon = _PHASE_ICONS.get(p, "")
+         if i < current_idx:
+-            segments.append(dim(f"{icon} {p}"))
++            mark = "✓" if mode == OutputMode.UNICODE else "x"
++            segments.append(dim(f"{mark} {p}"))
+         elif i == current_idx:
+-            segments.append(f"{icon} {p}")
++            ptr = "❯" if mode == OutputMode.UNICODE else ">"
++            segments.append(f"{bold(ptr)} {bold(p)}")
+         else:
+-            segments.append(dim(f"{icon} {p}"))
+-    return "  " + "  →  ".join(segments)
++            mark = "○" if mode == OutputMode.UNICODE else "o"
++            segments.append(dim(f"{mark} {p}"))
++    return "  " + "  ".join(segments)
+ 
+ 
+ def render_turn_stats(stats: dict, width: int = 80) -> str:

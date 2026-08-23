@@ -1,0 +1,33 @@
+diff a/wisp/multi_agent/_runner.py b/wisp/multi_agent/_runner.py	(rejected hunks)
+@@ -81,8 +81,11 @@ class SubagentRunner:
+         # Build child config
+         child_cfg = self._build_child_config(contract, agent_workspace)
+ 
+-        # Quick provider health check — fail fast if model is unreachable
+-        # instead of waiting for the full timeout.
++        # Soft provider health hint — informational only. We do NOT hard-fail
++        # here: ollama reports "model not found" the same as "server down", and
++        # a missing model may auto-pull on first request, while tests and
++        # mocked cores don't need a live provider at all. The actual run +
++        # contract timeout bound any genuinely unreachable provider.
+         provider_name = getattr(child_cfg, "provider", "ollama")
+         cache_key = f"{provider_name}:{child_cfg.model}"
+         cached_provider = self._provider_cache.get(cache_key)
+@@ -90,14 +93,9 @@ class SubagentRunner:
+             try:
+                 health = cached_provider.health_check()
+                 if hasattr(health, "get") and health.get("status") == "unhealthy":
+-                    error_msg = f"Provider unhealthy: {health.get('error', 'unknown')}"
+-                    logger.warning("Subagent %s provider check failed: %s", contract.name, error_msg)
+-                    return SubagentResult(
+-                        task_id=contract.name,
+-                        success=False,
+-                        output=f"[PROVIDER UNREACHABLE] {error_msg}",
+-                        error=error_msg,
+-                        elapsed_seconds=0.0,
++                    logger.debug(
++                        "Subagent %s provider reported unhealthy (%s); proceeding — run will time out if truly unreachable.",
++                        contract.name, health.get("error", "unknown"),
+                     )
+             except Exception as exc:
+                 logger.debug("Provider health check error for %s: %s", contract.name, exc)

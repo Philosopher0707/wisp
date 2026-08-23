@@ -1,0 +1,433 @@
+diff a/wisp/transport/cli.py b/wisp/transport/cli.py	(rejected hunks)
+@@ -37,7 +37,7 @@ from .renderer import (
+     _box,
+     _rule,
+ )
+-from wisp.colors import dim, error, warning, success, info
++from wisp.colors import bold, dim, error, warning, success, info
+ from wisp.approval_state import ApprovalSessionState, SessionPolicy
+ from wisp.core.events import AgentEvent, EventType
+ from wisp.terminal_width import display_width, is_accessible, get_output_mode, wrap_text_wide
+@@ -57,7 +57,13 @@ def _is_interactive() -> bool:
+     return sys.stdin.isatty()
+ 
+ 
+-_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\].*?\x07|\x1b[()][AB0DEHM]|[^\x20-\x7e\s]")
++_ANSI_ESCAPE_RE = re.compile(
++    r"\x1b\[[0-9;]*[A-Za-z]"           # CSI sequences (colors, cursor, etc.)
++    r"|\x1b\].*?\x07"                   # OSC sequences (title, etc.)
++    r"|\x1b[()][AB0DEHM]"               # Character set selection
++    r"|\x1b\[[0-9;]*~"                  # Bracketed paste (200~, 201~) and function keys
++    r"|[^\x20-\x7e\s]"                  # Non-printable control chars (keep newlines/tabs)
++)
+ 
+ 
+ def _strip_ansi(s: str) -> str:
+@@ -70,10 +76,35 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str | None:
+ 
+     Strips any ANSI escape sequences that leak through when readline
+     is unavailable (e.g. arrow keys emitted as raw ESC sequences).
++
++    Supports:
++      - Multiline with trailing backslash (\)
++      - Bracketed paste mode detection
++      - Readline history/editing when available
+     """
+     try:
+         if sys.stdin.isatty():
+-            return _strip_ansi(input(prompt))
++            # Interactive mode - use input() with readline support
++            line = input(prompt)
++            line = _strip_ansi(line)
++            
++            # Handle multiline with trailing backslash
++            if allow_multiline and line.rstrip().endswith("\\"):
++                lines = [line.rstrip()[:-1]]  # Remove trailing backslash
++                while True:
++                    try:
++                        cont = input("... ")
++                        cont = _strip_ansi(cont)
++                        if cont.rstrip().endswith("\\"):
++                            lines.append(cont.rstrip()[:-1])
++                        else:
++                            lines.append(cont)
++                            break
++                    except EOFError:
++                        break
++                return "\n".join(lines)
++            return line
++        
+         # Non-tty: read from buffer to handle piped input
+         # StringIO (used in tests) doesn't have .buffer — fall back to readline()
+         if hasattr(sys.stdin, "buffer"):
+@@ -87,6 +118,52 @@ def _input_line(prompt: str, allow_multiline: bool = True) -> str | None:
+     except UnicodeDecodeError:
+         return ""
+ 
++
++def _input_multiline(prompt: str = "➜ ", continuation_prompt: str = "... ") -> str | None:
++    """Read multiline input with explicit continuation.
++    
++    Uses blank line (double Enter) to terminate, or Ctrl+D.
++    More intuitive than backslash for pasted code blocks.
++    """
++    if not sys.stdin.isatty():
++        # Non-interactive: just read all stdin
++        if hasattr(sys.stdin, "buffer"):
++            data = sys.stdin.buffer.read()
++            return data.decode("utf-8", errors="replace").strip()
++        return sys.stdin.read().strip()
++    
++    print(prompt, end="", flush=True)
++    lines = []
++    empty_count = 0
++    
++    try:
++        while True:
++            try:
++                line = input()
++                line = _strip_ansi(line)
++            except EOFError:
++                break
++            
++            if line == "":
++                empty_count += 1
++                if empty_count >= 2:
++                    # Double empty line = end of input
++                    if lines and lines[-1] == "":
++                        lines.pop()  # Remove the last empty line
++                    break
++            else:
++                empty_count = 0
++            
++            lines.append(line)
++            print(continuation_prompt, end="", flush=True)
++        
++        if not lines:
++            return None
++        return "\n".join(lines)
++    except KeyboardInterrupt:
++        print()  # Newline after ^C
++        raise
++
+ def _args_preview(args: dict) -> str:
+     """Compact preview of tool arguments."""
+     if not args:
+@@ -154,6 +231,31 @@ def _coerce_tool_data(value: Any) -> str:
+     return str(value)
+ 
+ 
++def _preview_lines(text: str, max_lines: int = 3, max_line_width: int = 200) -> str:
++    """Format multi-line tool output as a clean indented preview.
++
++    Each shown line is dimmed and indented two spaces. Long single lines are
++    truncated to ``max_line_width``. When the source has more than
++    ``max_lines`` lines, a trailing ``… +N more`` marker is appended instead
++    of dumping the whole output.
++    """
++    if not text:
++        return ""
++    lines = text.split("\n")
++    while lines and lines[-1].strip() == "":
++        lines.pop()
++    if not lines:
++        return ""
++    shown: list[str] = []
++    for line in lines[:max_lines]:
++        if len(line) > max_line_width:
++            line = line[: max_line_width - 1] + "…"
++        shown.append(dim(f"  {line}"))
++    if len(lines) > max_lines:
++        shown.append(dim(f"  … +{len(lines) - max_lines} more"))
++    return "\n".join(shown)
++
++
+ def _detect_language(path: str) -> str:
+     """Detect programming language from file extension for diff highlighting."""
+     ext = path.split(".")[-1].lower() if "." in path else ""
+@@ -267,83 +369,17 @@ def _detect_language(path: str) -> str:
+     return lang_map.get(ext, "")
+ 
+ 
+-class _SessionAdapter:
+-    """Wraps a session dict to look like the old Session object."""
+-
+-    def __init__(self, session: dict):
+-        self._session = session
+-
+-    def __getattr__(self, name: str):
+-        if name == "_session":
+-            raise AttributeError(name)
+-        if name in (
+-            "id",
+-            "created_at",
+-            "updated_at",
+-            "model",
+-            "workspace",
+-            "messages",
+-            "title",
+-            "compaction_history",
+-            "task_ids",
+-        ):
+-            return self._session.get(name)
+-        raise AttributeError(f"_SessionAdapter has no attribute '{name}'")
+-
+-    def __setattr__(self, name: str, value):
+-        if name == "_session":
+-            super().__setattr__(name, value)
+-            return
+-        if name in ("messages", "title", "compaction_history", "task_ids"):
+-            self._session[name] = value
+-            return
+-        super().__setattr__(name, value)
+-
+-    def touch(self) -> None:
+-        from datetime import datetime, timezone
+-
+-        self._session["updated_at"] = datetime.now(timezone.utc).isoformat()
+-
+-    def compact(self, keep_recent: int = 4, max_context_tokens: int = 4096, chars_per_token: int = 4) -> "dict":
+-        from datetime import datetime, timezone
+-        """Compact session messages, keeping recent ones."""
+-        msgs = self._session.get("messages", [])
+-        if len(msgs) <= keep_recent:
+-            return {"compacted": False, "before_count": len(msgs), "after_count": len(msgs)}
+-        # Simple compaction: summarize older messages
+-        to_summarize = msgs[:-keep_recent]
+-        keep = msgs[-keep_recent:]
+-        summary = f"[Previous conversation: {len(to_summarize)} messages summarized]"
+-        self._session["messages"] = [{"role": "system", "content": summary}] + keep
+-        self._session.setdefault("compaction_history", []).append(
+-            {
+-                "before": len(msgs),
+-                "after": len(self._session["messages"]),
+-                "timestamp": datetime.now(timezone.utc).isoformat(),
+-            }
+-        )
+-        return {
+-            "compacted": True,
+-            "before_count": len(msgs),
+-            "after_count": len(self._session["messages"]),
+-            "summary": summary,
+-        }
+-
+-    def to_dict(self) -> dict:
+-        return dict(self._session)
+-
+-
+ class AgentAdapter:
+     """Adapts the new runtime+session+config to the old WispAgentCore API.
+ 
+     This lets existing slash commands in wisp/commands.py work without
+-    modification.
++    modification. Uses session dict directly instead of _SessionAdapter.
+     """
+ 
+     def __init__(self, runtime: Any, config: Any, session: dict, loop: asyncio.AbstractEventLoop | None = None):
+         self.runtime = runtime
+         self.config = config
+-        self.session = _SessionAdapter(session)
++        self.session = session  # Use session dict directly
+         self.messages = session["messages"]
+         self._system_prompt_cache: dict = {}
+         self._active_skill: str | None = None
+@@ -377,15 +413,15 @@ class AgentAdapter:
+     def _save_session(self) -> None:
+         store = getattr(self.runtime, "store", None)
+         if store is not None:
+-            store.save_session(self.session.to_dict())
++            store.save_session(self.session)
+ 
+     def _maybe_compact_session(self) -> None:
+         if self._loop is not None and not self._loop.is_closed():
+             self._loop.run_until_complete(
+-                self.runtime.maybe_compact(self.session.to_dict())
++                self.runtime.maybe_compact(self.session)
+             )
+         else:
+-            asyncio.run(self.runtime.maybe_compact(self.session.to_dict()))
++            asyncio.run(self.runtime.maybe_compact(self.session))
+ 
+     def _build_system_prompt(
+         self, skill_name: str | None = None, query: str = ""
+@@ -394,8 +430,7 @@ class AgentAdapter:
+         try:
+             core = self.runtime._get_core()
+             if hasattr(core, "_build_system_prompt"):
+-                session_dict = self.session.to_dict()
+-                return core._build_system_prompt(session_dict, query=query or skill_name or "")
++                return core._build_system_prompt(self.session, query=query or skill_name or "")
+         except Exception:
+             pass
+         # Fallback
+@@ -643,45 +678,40 @@ class CLITransport(Transport):
+     def print_banner(
+         self, stdout: Any, session: dict, model: str, skill: str | None = None
+     ) -> None:
+-        """Print REPL startup banner with session info."""
+-        width = min(72, _term_width() - 4)
++        """Print REPL startup banner with session info.
+ 
++        Compact two-line header — no box panel. The REPL is interactive; a
++        heavy frame on every launch is noise.
++        """
+         sid = session.get("id", "unknown")
+         ws = session.get("workspace", ".")
+         msg_count = len(session.get("messages", []))
+ 
+-        lines = [
+-            f"  Model:      {model}",
+-            f"  Session:    {sid}",
+-            f"  Workspace:  {ws}",
+-        ]
+-        if msg_count:
+-            lines.append(f"  History:    {msg_count} messages")
++        title = bold("🔮 Wisp")
++        meta_bits = [model]
+         if skill:
+-            lines.append(f"  Skill:      {skill}")
+-        lines.append("")
+-        lines.append("  /help for commands  ·  Ctrl+C/D to exit")
+-
+-        banner = _box("\n".join(lines), title="🔮 Wisp", style="dim", width=width)
+-        stdout.write(banner + "\n\n")
++            meta_bits.append(skill)
++        stdout.write(f"\n  {title} {dim('· ' + ' · '.join(meta_bits))}\n")
++        info_bits = [sid, ws]
++        if msg_count:
++            info_bits.append(f"{msg_count} messages")
++        stdout.write(f"  {dim(' · '.join(info_bits))}\n")
++        stdout.write(f"  {dim('/help for commands · Ctrl+C/D to exit')}\n\n")
+         stdout.flush()
+ 
+     def print_continuation_banner(self, stdout: Any, session: dict, model: str) -> None:
+-        """Print session continuation banner."""
+-        width = min(72, _term_width() - 4)
+-
++        """Print session continuation banner — compact, un-boxed."""
+         sid = session.get("id", "unknown")
+         ws = session.get("workspace", ".")
+         msg_count = len(session.get("messages", []))
+         title = session.get("title", "")
+ 
+-        lines = []
++        header = "📋 Continuing Session"
+         if title:
+-            lines.append(f"  Title:      {title}")
+-        lines.append(f"  Model:      {model}")
+-        lines.append(f"  Session:    {sid}")
+-        lines.append(f"  Messages:   {msg_count}")
+-        lines.append(f"  Workspace:  {ws}")
++            header = f"{header} · {title}"
++        stdout.write(f"\n  {bold(header)} {dim('· ' + model)}\n")
++        info_bits = [sid, f"{msg_count} messages", ws]
++        stdout.write(f"  {dim(' · '.join(info_bits))}\n")
+ 
+         # Find last user message
+         last_user = None
+@@ -695,15 +725,9 @@ class CLITransport(Transport):
+             preview = last_user[:80].replace("\n", " ")
+             if len(last_user) > 80:
+                 preview += "..."
+-            lines.append(f"  Last:       {preview}")
+-
+-        lines.append("")
+-        lines.append("  /help for commands  ·  Ctrl+C/D to exit")
++            stdout.write(f"  {dim('Last: ' + preview)}\n")
+ 
+-        banner = _box(
+-            "\n".join(lines), title="📋 Continuing Session", style="dim", width=width
+-        )
+-        stdout.write(banner + "\n\n")
++        stdout.write(f"  {dim('/help for commands · Ctrl+C/D to exit')}\n\n")
+         stdout.flush()
+ 
+     # ── Thinking / content buffering ────────────────────────────────
+@@ -995,20 +1019,18 @@ class CLITransport(Transport):
+         diff_text = (meta or {}).get("diff", "")
+         is_edit_tool = name in ("write_file", "edit_file", "edit_file_multi")
+ 
+-        # Helper: build header with display-width-aware dot padding
++        # Helper: clean header \u2014 icon colored, name plain, duration dim. No fill dots.
+         def _build_header(icon_str: str, tool_name: str, dur_str: str) -> str:
+-            prefix = f"  {icon_str} {tool_name} ({dur_str}) "
+-            prefix_width = display_width(prefix)
+-            fill_width = width - prefix_width - 2  # -2 for border breathing room
+-            if fill_width > 0:
+-                # U+00B7 middle dot has display width 1
+-                fill = "\u00B7" * fill_width
+-                return dim(prefix + fill)
+-            return dim(prefix)
++            icon_color = error if is_error else success
++            head = f"  {icon_color(icon_str)} {tool_name}"
++            if dur_str:
++                dur = "\u00B7 " + dur_str
++                head += f" {dim(dur)}"
++            return head
+ 
+         # Edit tools with a diff: show diff regardless of success/failure
+         if is_edit_tool and diff_text:
+-            summary = dim(f"     → {result_text[:200].replace(chr(10), ' ')}")
++            summary = _preview_lines(result_text, max_lines=1)
+             try:
+                 from wisp.diff_renderer import render_diff_box
+                 lang = _detect_language(meta.get("path", ""))
+@@ -1031,19 +1053,20 @@ class CLITransport(Transport):
+             output_str = result_text
+             if not self.show_tool_output:
+                 line_count = output_str.count("\n") + 1
+-                if is_accessible():
+-                    return dim(f"  {icon} {name} ({duration_str}) — {line_count} lines of output")
+-                return dim(
+-                    f"  {icon} {name} ({duration_str}) — {line_count} lines of output"
+-                    + " \u00B7" * max(0, width - display_width(f"  {icon} {name} ({duration_str}) — {line_count} lines of output") - 2)
+-                )
++                return f"{_build_header(icon, name, duration_str)}{dim(f' — {line_count} lines')}"
+ 
+-            # Light framing: rule header + indented output (no heavy box)
+-            label_str = f"{name} output" if is_accessible() else f"📤 {name} output"
++            # Light framing: thin dim rule + indented output (no heavy box, no emoji)
++            label_str = f"{name} output"
+             rule = _rule("-", label_str, style_fn=dim, width=width)
+             inner_w = width - 4
+             wrapped = wrap_text_wide(output_str.strip(), inner_w)
+-            indented = "\n".join(dim(f"  {line}") for line in wrapped)
++            # Cap floods: show first N wrapped lines, summarize the rest.
++            _MAX_SHOW = 30
++            if len(wrapped) > _MAX_SHOW:
++                indented = "\n".join(dim(f"  {line}") for line in wrapped[:_MAX_SHOW])
++                indented += "\n" + dim(f"  … +{len(wrapped) - _MAX_SHOW} more lines")
++            else:
++                indented = "\n".join(dim(f"  {line}") for line in wrapped)
+             if skip_header:
+                 return indented
+             header = _build_header(icon, name, duration_str)
+@@ -1053,24 +1076,13 @@ class CLITransport(Transport):
+         if not self.show_tool_output:
+             if skip_header:
+                 return None
+-            fill_content = f"  {icon} {name} ({duration_str})"
+-            fill_width = display_width(fill_content)
+-            dots = " \u00B7" * max(0, width - fill_width - 2)
+-            return dim(fill_content + dots)
+-
+-        if is_error:
+-            preview = result_text[:200].replace("\n", " ")
+-            if skip_header:
+-                return dim(f"     → {preview}")
+-            return dim(f"  {icon} {name} ({duration_str})") + "\n" + dim(f"     → {preview}")
++            return _build_header(icon, name, duration_str)
+ 
+-        preview = result_text[:200].replace("\n", " ")
+-        if len(result_text) > 200:
+-            preview += "..."
++        preview = _preview_lines(result_text)
+         if skip_header:
+-            return dim(f"     → {preview}")
++            return preview
+         header = _build_header(icon, name, duration_str)
+-        return f"{header}\n" + dim(f"     → {preview}")
++        return f"{header}\n{preview}" if preview else header
+ 
+ 
+ # ── Signal handling ────────────────────────────────────────────────
