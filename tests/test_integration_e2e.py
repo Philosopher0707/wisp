@@ -32,6 +32,9 @@ class _TestConfig:
     model: str
     turn_timeout: int = 600
 
+    def validate_or_raise(self) -> None:
+        """CompositionRoot.start() validates config before wiring services."""
+
 
 @pytest.fixture
 def config(tmp_path):
