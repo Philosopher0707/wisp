@@ -328,3 +328,68 @@ class TestBannerPolish:
         text = out.getvalue()
         assert "17052f74-2824" not in text
         assert "~/Documents/wisp" in text
+
+
+# ═══════════════════════════════════════════════════════════════════
+# REPL polish: turn hygiene — flush ordering + content separation
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestTurnHygiene:
+    def _transport(self):
+        import io
+
+        from wisp.transport.cli import CLITransport
+        from wisp.transport.progress import ProgressTracker
+        import wisp.terminal_width as TW
+
+        TW.set_output_mode(TW.OutputMode.UNICODE)
+        t = CLITransport.__new__(CLITransport)
+        t._stdout = None
+        t.config = None
+        t._progress = ProgressTracker()
+        t._spinner = None
+        t._thinking_buffer = []
+        t._content_buffer = []
+        t._in_thinking = False
+        t._in_content = False
+        t.show_tool_output = True
+        t._turn_number = 1
+        return t
+
+    def test_system_line_flushes_pending_thinking_first(self):
+        import io
+
+        t = self._transport()
+        out = io.StringIO()
+        t._render_event(out, {"type": "thinking", "text": "Let me reason about this."})
+        t._render_event(out, {"type": "system", "level": "info", "message": "note"})
+        text = out.getvalue()
+        thinking_pos = text.find("Thinking")
+        note_pos = text.find("note")
+        assert thinking_pos != -1 and note_pos != -1
+        assert thinking_pos < note_pos, (
+            f"system line cut ahead of buffered thinking:\n{text!r}"
+        )
+
+    def test_content_after_tool_result_gets_blank_line(self):
+        import io
+
+        t = self._transport()
+        out = io.StringIO()
+        t.show_tool_output = False  # compact header line for result
+        t._render_event(out, {
+            "type": "tool_call", "name": "read_file",
+            "arguments": {"path": "a.txt"},
+        })
+        t._render_event(out, {
+            "type": "tool_result", "name": "read_file",
+            "result": '{"status":"ok"}', "duration_ms": 8,
+        })
+        t._buffer_content("The answer is 4.")
+        t._flush_content(out)
+        text = out.getvalue()
+        # Between the ✓ header line and the response body there is a gap.
+        assert "\n\nThe answer is 4." in text or "\n\n  The answer is 4." in text, (
+            f"no separation before response:\n{text!r}"
+        )

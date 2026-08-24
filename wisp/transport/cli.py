@@ -523,6 +523,7 @@ class CLITransport(Transport):
         self.show_thinking: bool = (
             getattr(config, "show_thinking", False) if config else False
         )
+        self._last_block_was_tool = False
         self.show_tool_output: bool = True
         # Session-level per-tool approval memory
         self._approval_state = ApprovalSessionState()
@@ -869,9 +870,13 @@ class CLITransport(Transport):
         if not full.strip():
             return
         w = width or _term_width()
+        # The response is the payload of the turn; when it follows heavy
+        # tool output, one blank line keeps it from blurring into noise.
+        prefix = "\n" if getattr(self, "_last_block_was_tool", False) else ""
+        self._last_block_was_tool = False
         rendered = _render_content_block(full, box_mode=True, width=w)
         if rendered:
-            stdout.write(rendered + "\n")
+            stdout.write(prefix + rendered + "\n")
         stdout.flush()
 
     def _reset_buffers(self) -> None:
@@ -968,6 +973,7 @@ class CLITransport(Transport):
                     self._spinner.stop()
                 rendered = self._render_tool_result(name, result, duration_ms, width)
                 if rendered:
+                    self._last_block_was_tool = True
                     stdout.write(rendered + "\n")
                     stdout.flush()
             else:
@@ -981,6 +987,7 @@ class CLITransport(Transport):
                 # Show result content below spinner line
                 rendered = self._render_tool_result(name, result, duration_ms, width, skip_header=True)
                 if rendered:
+                    self._last_block_was_tool = True
                     stdout.write(rendered + "\n")
                     stdout.flush()
 
@@ -1019,14 +1026,9 @@ class CLITransport(Transport):
                 stdout.write(rendered + "\n")
                 stdout.flush()
 
-        elif etype == EventType.SUBAGENT:
-            self._flush_thinking(stdout, width)
-            rendered = render_subagent_status(ev, width)
-            if rendered:
-                stdout.write(rendered + "\n")
-                stdout.flush()
-
         elif etype == EventType.SYSTEM:
+            self._flush_thinking(stdout, width)
+            self._flush_content(stdout, width)
             level = ev.data.get("level", "info")
             if level == "debug":
                 return
