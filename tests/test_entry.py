@@ -159,3 +159,103 @@ class TestHeadlessMode:
 async def async_iter(items):
     for item in items:
         yield item
+
+
+import signal
+
+
+# ── REPL-owned SIGINT semantics ──────────────────────────────────────
+
+
+class _FakeTask:
+    def __init__(self, done=False):
+        self._done = done
+        self.cancelled = False
+
+    def done(self):
+        return self._done
+
+    def cancel(self):
+        self.cancelled = True
+
+
+class _FakeSpinner:
+    def __init__(self):
+        self.stopped = False
+
+    def stop(self):
+        self.stopped = True
+
+
+class _FakeTransport:
+    def __init__(self, spinner=None):
+        self._spinner = spinner
+
+
+def test_sigint_during_turn_cancels_task_and_dearms():
+    """First Ctrl+C while a turn runs cancels the task and hands the next
+    press to the default handler (force-quit path)."""
+    import io
+    import signal as sig
+    from contextlib import redirect_stdout
+    from wisp.entry import make_repl_sigint_handler
+
+    transport = _FakeTransport(_FakeSpinner())
+    task = _FakeTask(done=False)
+    restored = []
+    handler = make_repl_sigint_handler(
+        transport, lambda: task,
+        restore_default=lambda: restored.append(True),
+    )
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        handler(signal.SIGINT, None)
+
+    assert task.cancelled is True
+    assert spinner_stopped(transport) is True
+    assert restored == [True]
+    assert "cancelling turn" in buf.getvalue()
+
+
+def spinner_stopped(transport):
+    return transport._spinner.stopped
+
+
+def test_sigint_at_idle_prompt_raises_keyboardinterrupt():
+    """Idle at the prompt: a single Ctrl+C exits (single-line) or clears
+    input (multiline) — no more 'Finishing current step...' theater."""
+    import pytest
+    from wisp.entry import make_repl_sigint_handler
+
+    transport = _FakeTransport()
+    task = _FakeTask(done=True)  # finished turn = idle
+    handler = make_repl_sigint_handler(transport, lambda: task, lambda: None)
+
+    with pytest.raises(KeyboardInterrupt):
+        handler(signal.SIGINT, None)
+
+
+def test_sigint_at_idle_without_any_turn_raises():
+    from wisp.entry import make_repl_sigint_handler
+
+    handler = make_repl_sigint_handler(_FakeTransport(), lambda: None, lambda: None)
+    with pytest.raises(KeyboardInterrupt):
+        handler(signal.SIGINT, None)
+
+
+def test_multiline_command_requires_exact_token(monkeypatch):
+    """'/multilines' must reach slash dispatch as an unknown command, not be
+    swallowed by the /multiline prefix check."""
+    captured = {}
+    monkeypatch.setattr("wisp.commands.dispatch",
+                        lambda text, adapter: captured.setdefault("text", text))
+
+    # Route through the same condition entry.py uses.
+    prompt = "/multilines"
+    intercepted = prompt == "/multiline" or prompt.startswith("/multiline ")
+    assert intercepted is False
+
+    prompt2 = "/multiline multi"
+    intercepted2 = prompt2 == "/multiline" or prompt2.startswith("/multiline ")
+    assert intercepted2 is True

@@ -16,11 +16,12 @@ warnings.filterwarnings("ignore", category=SyntaxWarning)
 
 import asyncio
 import logging
+import signal
 from pathlib import Path
 
 from wisp.composition import CompositionRoot
 from wisp.config import WispConfig
-from wisp.transport.cli import CLITransport, _input_line, _input_multiline, _install_signal_handler, _restore_signal_handler
+from wisp.transport.cli import CLITransport, _input_line, _input_multiline, _restore_signal_handler
 from wisp.transport.tui import TUITransport
 from wisp.transport.renderer import render_turn_stats, render_file_ticker
 from wisp.colors import dim, error
@@ -133,6 +134,38 @@ def _show_turn_stats(transport: CLITransport) -> None:
     sys.stdout.flush()
 
 
+def make_repl_sigint_handler(transport, get_current_task, restore_default):
+    """Build the REPL's SIGINT handler.
+
+    - Turn running: cancel it (first press), then hand control back to the
+      default handler so a second press hard-quits.
+    - Idle at prompt: raise KeyboardInterrupt — a single press exits
+      single-line mode and triggers multiline's documented
+      "Ctrl+C clears input" contract. The previous cooperative handler set
+      a flag that nothing consumed, so the first press only printed a
+      message while the turn kept running.
+    """
+    import sys
+
+    def _repl_sigint_handler(signum, frame):
+        spinner = getattr(transport, "_spinner", None)
+        if spinner is not None:
+            try:
+                spinner.stop()
+            except Exception:
+                pass
+        task = get_current_task()
+        if task is not None and not task.done():
+            task.cancel()
+            sys.stdout.write("\n⏹  Interrupted — cancelling turn… (Ctrl+C again to force quit)\n")
+            sys.stdout.flush()
+            restore_default()
+        else:
+            raise KeyboardInterrupt
+
+    return _repl_sigint_handler
+
+
 def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig, loop: asyncio.AbstractEventLoop | None = None, **kwargs) -> None:
     """Synchronous REPL — single persistent event loop for the session.
 
@@ -161,9 +194,6 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
     # Check if this is a continuation (session has messages)
     is_continuation = len(session.get("messages", [])) > 0
     skill = kwargs.get("skill")
-    
-    # Install custom SIGINT handler for graceful Ctrl+C during turns
-    _install_signal_handler()
 
     if is_continuation:
         transport.print_continuation_banner(sys.stdout, session, config.model)
@@ -219,6 +249,13 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
         if _current_turn_task is not None and not _current_turn_task.done():
             _current_turn_task.cancel()
 
+    def _arm_repl_sigint() -> None:
+        handler = make_repl_sigint_handler(
+            transport, lambda: _current_turn_task,
+            restore_default=lambda: signal.signal(signal.SIGINT, signal.default_int_handler),
+        )
+        signal.signal(signal.SIGINT, handler)
+
     def _stop_spinner(transport) -> None:
         """Kill an active spinner so its \\r-thread can't overwrite error output.
 
@@ -273,9 +310,13 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
             sys.stdout.flush()
         finally:
             _current_turn_task = None
-            # The cooperative handler de-arms itself on first press so a
-            # second Ctrl+C force-quits; re-arm it for the next turn.
-            _install_signal_handler()
+            # The handler de-arms itself on first press (second Ctrl+C
+            # force-quits); re-arm it for the next turn.
+            _arm_repl_sigint()
+
+    # Install REPL-owned SIGINT handler for the session (after the closure
+    # above exists — the handler reads _current_turn_task live).
+    _arm_repl_sigint()
 
     _VALID_MODES = ("single", "multi")
 
@@ -334,7 +375,7 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
 
         # ── Input-mode command (intercepted before dispatch so it never
         # hits the registry as an unknown command) ────────────────────
-        if prompt.startswith("/multiline"):
+        if prompt == "/multiline" or prompt.startswith("/multiline "):
             parts = prompt.split(maxsplit=1)
             _handle_multiline_command(parts[1] if len(parts) > 1 else "")
             continue
