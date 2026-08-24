@@ -67,3 +67,91 @@ class TestDelegationAnalyzer:
             assert "task" in contract
             assert "role" in contract
             assert "timeout_seconds" in contract
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Grill Q3: explicit fast-path bypasses scoring; auto path is stricter
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestExplicitFastPath:
+    """Naming subagents in the prompt IS the decision — confidence 1.0."""
+
+    def test_user_says_subagents_gets_confidence_one(self):
+        analyzer = DelegationAnalyzer()
+        signal = analyzer.analyze(
+            "use subagents to research and findout the details of the "
+            "last 12 years policies launched by Modi government"
+        )
+        assert signal.should_delegate
+        assert signal.confidence == 1.0
+        assert "explicit_request" in signal.reason
+
+    def test_fast_path_skips_llm_classifier(self):
+        import asyncio
+
+        from wisp.multi_agent.delegation import DelegationAnalyzer
+
+        analyzer = DelegationAnalyzer()
+
+        async def boom(_prompt):
+            raise AssertionError("LLM must not be called for explicit requests")
+
+        signal = asyncio.run(analyzer.analyze_with_llm("spawn agents for this", boom))
+        assert signal.should_delegate and signal.confidence == 1.0
+
+    def test_all_explicit_phrasings_match(self):
+        analyzer = DelegationAnalyzer()
+        for phrase in (
+            "use subagents to look into X",
+            "delegate this research",
+            "fanout workers on it",
+            "run parallel agents please",
+        ):
+            signal = analyzer.analyze(phrase)
+            assert signal.should_delegate, phrase
+            assert signal.confidence == 1.0, phrase
+
+
+class TestStricterAutoThreshold:
+    """Implicit auto-delegation now needs 0.45, not 0.18."""
+
+    def test_config_default_raised(self):
+        from wisp.config import WispConfig
+
+        cfg = WispConfig()
+        assert cfg.delegation_threshold == 0.45
+
+    def test_moderate_research_prompt_no_longer_auto_delegates(self, tmp_path):
+        import asyncio
+
+        from wisp.core.runtime import AgentRuntime
+        from wisp.infra.store import UnifiedStore
+        from wisp.infra.extensions import ExtensionHost
+        from wisp.infra.security import PermissionMode, SecurityPolicy
+        from wisp.infra.telemetry import Telemetry
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        runtime = AgentRuntime(
+            store=UnifiedStore(tmp_path / "t.db"),
+            security=SecurityPolicy(permission_mode=PermissionMode.FULL),
+            extensions=ExtensionHost(),
+            telemetry=Telemetry(),
+            core_factory=lambda: _MockCore(),
+        )
+        signal = MagicMock()
+        signal.should_delegate = True
+        signal.confidence = 0.30  # passes old 0.18 gate, fails 0.45
+        signal.reason = "research keywords"
+        signal.suggested_contracts = [{"name": "r", "task": "x"}]
+        analyzer = MagicMock()
+        analyzer.analyze_with_llm = AsyncMock(return_value=signal)
+        with patch(
+            "wisp.multi_agent.delegation.get_delegation_analyzer",
+            return_value=analyzer,
+        ):
+            result = asyncio.run(runtime._maybe_delegate(
+                "research database sharding strategies for our stack",
+                {"id": "s", "messages": []}, MagicMock(delegation_threshold=0.45),
+            ))
+        assert result is None, "implicit 0.30 must not trigger delegation"

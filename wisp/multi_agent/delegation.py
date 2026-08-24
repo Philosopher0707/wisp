@@ -102,6 +102,16 @@ class DelegationAnalyzer:
         Returns:
             DelegationSignal with should_delegate and suggested contracts.
         """
+        # Explicit requests skip the classifier entirely — no 5s LLM call
+        # latency on a decision the user already made.
+        explicit = self._explicit_request_reason(prompt.lower())
+        if explicit:
+            return DelegationSignal(
+                should_delegate=True,
+                reason=explicit,
+                suggested_contracts=self._suggest_contracts(prompt, [explicit]),
+                confidence=1.0,
+            )
         try:
             classify_prompt = _LLM_CLASSIFY_PROMPT.format(task=prompt[:800])
             response = await asyncio.wait_for(
@@ -130,6 +140,17 @@ class DelegationAnalyzer:
         prompt_lower = prompt.lower()
         score = 0.0
         reasons = []
+
+        # Check 0: Explicit request short-circuits scoring — when the user
+        # names subagents, delegation is not a probability, it is the ask.
+        explicit = self._explicit_request_reason(prompt_lower)
+        if explicit:
+            return DelegationSignal(
+                should_delegate=True,
+                reason=explicit,
+                suggested_contracts=self._suggest_contracts(prompt, [explicit]),
+                confidence=1.0,
+            )
 
         # Check 1: Prompt complexity (length + keywords)
         complexity_score = self._score_complexity(prompt_lower)
@@ -178,6 +199,19 @@ class DelegationAnalyzer:
             )
 
         return DelegationSignal(should_delegate=False, confidence=score)
+
+    _EXPLICIT_PATTERNS = (
+        "subagent", "sub-agent", "sub agent",
+        "spawn agent", "delegate", "fanout", "fan out",
+        "parallel agents", "use agents",
+    )
+
+    def _explicit_request_reason(self, prompt_lower: str) -> str | None:
+        """Return the matched phrase when the prompt names delegation."""
+        for pattern in self._EXPLICIT_PATTERNS:
+            if pattern in prompt_lower:
+                return f"explicit_request({pattern})"
+        return None
 
     def _score_complexity(self, prompt: str) -> float:
         """Score prompt complexity (0.0 to 1.0)."""

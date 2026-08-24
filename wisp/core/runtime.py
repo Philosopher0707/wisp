@@ -324,7 +324,7 @@ class AgentRuntime:
             from wisp.multi_agent.delegation import get_delegation_analyzer
             from wisp.multi_agent.task import SubagentContract
 
-            threshold = getattr(config, "delegation_threshold", 0.18)
+            threshold = getattr(config, "delegation_threshold", 0.45)
             analyzer = get_delegation_analyzer()
 
             # Build LLM call wrapper for hybrid classification

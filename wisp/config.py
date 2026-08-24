@@ -561,7 +561,7 @@ class WispConfig:
             get_setting("auto_delegate", "true"), True
         ))
         object.__setattr__(self, "delegation_threshold", _parse_float(
-            get_setting("delegation_threshold", "0.18"), 0.18, 0.05, 0.95
+            get_setting("delegation_threshold", "0.45"), 0.45, 0.05, 0.95
         ))
         # Write-classification tools requiring approval in restricted modes
         raw_write_tools = get_setting(
