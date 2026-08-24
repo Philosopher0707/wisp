@@ -36,6 +36,19 @@ from wisp.infra.circuit_breaker import (
     CircuitState,
 )
 
+from contextvars import ContextVar
+
+# Absolute monotonic deadline of the innermost running turn, published so
+# subagent retries can bound themselves by the parent's remaining clock
+# instead of guessing. None outside a turn.
+_turn_deadline: ContextVar[float | None] = ContextVar("wisp_turn_deadline", default=None)
+
+
+def get_turn_deadline() -> float | None:
+    """Deadline (time.monotonic) of the running turn, or None."""
+    return _turn_deadline.get()
+
+
 if TYPE_CHECKING:
     from wisp.providers.protocol import Provider
     from wisp.infra.security import SecurityPolicy
@@ -104,6 +117,13 @@ class WispAgentCore:
         """
         import asyncio as _asyncio
         turn_timeout = getattr(self.config, "turn_timeout", 1800) if self.config else 1800
+        # Publish the absolute deadline so nested consumers (subagent
+        # orchestrator retries) can budget themselves against the same clock.
+        _turn_deadline.set(time.monotonic() + turn_timeout)
+        # Publish the absolute deadline so nested consumers (subagent
+        # orchestrator retries) can budget themselves against the same clock.
+        # Overwritten by every turn; only read while a turn is live.
+        _turn_deadline.set(time.monotonic() + turn_timeout)
         # Build messages list
         messages = list(session.get("messages", []))
         # Avoid duplicating the user message if runtime already added it

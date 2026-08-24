@@ -1556,3 +1556,116 @@ class TestStreamingOutputAccumulation:
         ])
         assert result.success
         assert result.output == "Final: GST (2017).", f"got {result.output!r}"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Timeout retry: one extra round at ×1.5, bounded by parent turn clock
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestTimeoutRetry:
+    """Slow reasoning models die just past the role budget; recover once."""
+
+    def _timed_out_result(self):
+        from wisp.multi_agent.task import SubagentResult
+
+        return SubagentResult(
+            task_id="r", success=False, output="[TIMED OUT]",
+            error="Timeout after 120s", files_changed=[],
+            iterations_used=0, timed_out=True,
+        )
+
+    def test_timeout_triggers_single_retry_at_1_5x(self, tmp_path, monkeypatch):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from wisp.config import WispConfig
+        from wisp.multi_agent.task import SubagentContract
+
+        cfg = WispConfig().replace(workspace=str(tmp_path))
+        o = SubagentOrchestrator(config=cfg, workspace=tmp_path)
+
+        timeouts_seen = []
+        ok = self._timed_out_result()
+        ok_success = SubagentResult(
+            task_id="r", success=True, output="done late but done",
+            files_changed=[], iterations_used=1,
+        )
+
+        async def fake_run(contract, **kwargs):
+            timeouts_seen.append(contract.timeout_seconds)
+            return ok_success if len(timeouts_seen) > 1 else ok
+
+        monkeypatch.setattr(o._runner, "run", fake_run)
+        with patch("wisp.core.stateless.get_turn_deadline", return_value=None), \
+             patch.object(o, "_resolve_worktree", new=AsyncMock(return_value=None)), \
+             patch.object(o, "_fire_subagent_hook", new=AsyncMock()):
+            result = asyncio.run(o.run(
+                SubagentContract(name="r", task="t", timeout_seconds=120,
+                                 worktree_isolated=False)
+            ))
+
+        assert result.success
+        assert timeouts_seen == [120, 180], timeouts_seen
+
+    def test_retry_skipped_when_turn_clock_exhausted(self, tmp_path, monkeypatch):
+        import asyncio
+        import time as _time
+        from unittest.mock import AsyncMock, patch
+
+        from wisp.config import WispConfig
+        from wisp.multi_agent.task import SubagentContract
+
+        cfg = WispConfig().replace(workspace=str(tmp_path))
+        o = SubagentOrchestrator(config=cfg, workspace=tmp_path)
+
+        calls = []
+        ok = self._timed_out_result()
+
+        async def fake_run(contract, **kwargs):
+            calls.append(contract.timeout_seconds)
+            return ok
+
+        monkeypatch.setattr(o._runner, "run", fake_run)
+        exhausted = _time.monotonic() + 1.0  # 1s left — hopeless
+        with patch("wisp.core.stateless.get_turn_deadline", return_value=exhausted), \
+             patch.object(o, "_resolve_worktree", new=AsyncMock(return_value=None)), \
+             patch.object(o, "_fire_subagent_hook", new=AsyncMock()):
+            result = asyncio.run(o.run(
+                SubagentContract(name="r", task="t", timeout_seconds=120,
+                                 worktree_isolated=False)
+            ))
+
+        assert not result.success and result.timed_out
+        assert calls == [120], "no second run when the turn clock is gone"
+
+    def test_non_timeout_failures_never_retry(self, tmp_path, monkeypatch):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from wisp.config import WispConfig
+        from wisp.multi_agent.task import SubagentContract, SubagentResult
+
+        cfg = WispConfig().replace(workspace=str(tmp_path))
+        o = SubagentOrchestrator(config=cfg, workspace=tmp_path)
+
+        calls = []
+        failed = SubagentResult(
+            task_id="r", success=False, output="", error="API 500",
+            files_changed=[], iterations_used=0, timed_out=False,
+        )
+
+        async def fake_run(contract, **kwargs):
+            calls.append(1)
+            return failed
+
+        monkeypatch.setattr(o._runner, "run", fake_run)
+        with patch("wisp.core.stateless.get_turn_deadline", return_value=None), \
+             patch.object(o, "_resolve_worktree", new=AsyncMock(return_value=None)), \
+             patch.object(o, "_fire_subagent_hook", new=AsyncMock()):
+            result = asyncio.run(o.run(
+                SubagentContract(name="r", task="t", timeout_seconds=120,
+                                 worktree_isolated=False)
+            ))
+
+        assert calls == [1]

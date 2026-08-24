@@ -637,6 +637,27 @@ class SubagentOrchestrator:
             finally:
                 self._active -= 1
 
+        # ── Timeout retry: one extra round at ×1.5, bounded by the ─────
+        # parent turn's remaining clock. Slow reasoning models (nemotron
+        # ultra) regularly need just a bit more than a role's base budget.
+        if result.timed_out and contract.retry_count == 0:
+            from wisp.core.stateless import get_turn_deadline
+
+            budget = contract.timeout_seconds * 1.5
+            deadline = get_turn_deadline()
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                budget = min(budget, remaining - 5.0)
+            if budget >= 30.0:
+                logger.info(
+                    "Subagent %s timed out after %.0fs; retrying once with %.0fs",
+                    contract.name, contract.timeout_seconds, budget,
+                )
+                retry_dict = dict(contract.__dict__)
+                retry_dict["timeout_seconds"] = budget
+                retry_dict["retry_count"] = 1
+                return await self.run(SubagentContract(**retry_dict))
+
         # ── Schema validation ────────────────────────────────────────
         if contract.output_schema and result.success:
             result = await self._validate_output(result, contract)
