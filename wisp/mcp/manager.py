@@ -689,6 +689,10 @@ class MCPManager:
         ``mcp:server_name/tool_name``.
         """
         self.initialize()
+        # Legacy double-underscore form: mcp__server__tool -> canonical
+        if tool_name.startswith("mcp__") and tool_name.count("__") >= 2:
+            _, srv, bare = tool_name.split("__", 2)
+            tool_name = f"mcp:{srv}/{bare}"
         # Canonical form: mcp:server/tool
         if tool_name.startswith("mcp:"):
             _, rest = tool_name.split(":", 1)

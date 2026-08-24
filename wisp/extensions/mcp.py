@@ -64,7 +64,9 @@ class MCPExtension:
                         tools.append({
                             "type": "function",
                             "function": {
-                                "name": f"mcp__{server.config.name}__{tool.get('name', 'unknown')}",
+                                # Canonical MCP tool name (MCPTool.prefixed_name):
+                                # mcp:server/tool — matches manager.call_tool dispatch.
+                                "name": f"mcp:{server.config.name}/{tool.get('name', 'unknown')}",
                                 "description": tool.get("description", ""),
                                 "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
                             },
