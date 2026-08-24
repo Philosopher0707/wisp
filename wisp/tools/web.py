@@ -153,7 +153,9 @@ def _fetch_via_reader_proxy(url: str, max_chars: int, reason: str) -> str:
     """
     proxy_url = f"{_READER_PROXY_BASE}{url}"
     try:
-        resp = requests.get(proxy_url, timeout=30)
+        # Shorter than the direct 30s: a fallback must not eat the
+        # child's whole budget when several fetches get blocked.
+        resp = requests.get(proxy_url, timeout=12)
         resp.raise_for_status()
     except requests.exceptions.RequestException as e:
         logger.debug("Reader proxy failed for %s: %s", url, e)
