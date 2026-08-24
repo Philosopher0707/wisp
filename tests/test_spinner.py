@@ -221,3 +221,31 @@ class TestSpinnerLongLabel:
         output = out.getvalue()
         # \\033[K clears to end of line to prevent leftover chars
         assert "\033[K" in output
+
+
+class TestClosedStreamTolerance:
+    """The animation thread can lose the race with stop()/exit and write to
+    a closed stream — that must degrade silently, not raise."""
+
+    def test_write_frame_after_close_is_silent(self):
+        import io
+        from wisp.transport.spinner import Spinner
+
+        stream = io.StringIO()
+        sp = Spinner(stream, mode="unicode")
+        sp.start("working")
+        sp.stop()
+        stream.close()
+        # Direct call simulates the thread's post-close tick.
+        sp._write_frame()  # must not raise
+
+    def test_write_line_on_closed_stream_deactivates(self):
+        import io
+        from wisp.transport.spinner import Spinner
+
+        stream = io.StringIO()
+        sp = Spinner(stream, mode="unicode")
+        sp._active = True
+        stream.close()
+        sp._write_line("\r\033[K\n")  # must not raise
+        assert sp._active is False

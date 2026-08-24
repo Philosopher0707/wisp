@@ -129,13 +129,24 @@ class Spinner:
                 max_label = 10
             if display_width(label) > max_label:
                 label = truncate(label, max_label)
-            self._stdout.write(f"\r{prefix}{label}\033[K")
-            self._stdout.flush()
+            try:
+                self._stdout.write(f"\r{prefix}{label}\033[K")
+                self._stdout.flush()
+            except (ValueError, OSError):
+                # Stream closed between the _active check and the write —
+                # the animation thread lost the race with stop()/exit.
+                # Silence this frame; the thread exits on its next tick.
+                self._active = False
 
     def _write_line(self, text: str) -> None:
         with self._lock:
-            self._stdout.write(text)
-            self._stdout.flush()
+            try:
+                self._stdout.write(text)
+                self._stdout.flush()
+            except (ValueError, OSError):
+                # Terminal went away (interpreter shutdown, closed capture
+                # buffer) — nothing sensible to do with the line.
+                self._active = False
 
 
 def _term_width() -> int:
