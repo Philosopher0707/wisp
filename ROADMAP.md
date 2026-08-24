@@ -102,10 +102,11 @@ The circuit breaker exists; wire it into the paths users actually feel:
 
 ## Theme 5 — Multi-agent as a product, not a demo
 
-- [ ] `SubagentContract.worktree_isolated` defaults True while the
-      spawn/fanout tool schema advertises "Default false" — decide the
-      standard (role-aware isolation: read-only roles like researcher
-      should not demand worktrees) and align dataclass, schema, and docs.
+- [x] Role-aware isolation standard (grill session): RoleConfig.wants_isolation;
+      researcher/planner never isolate; contract default False matches schema.
+      Same session: timeout retry x1.5 bounded by turn clock, explicit
+      delegation fast-path + auto threshold 0.45, reader-proxy fallback for
+      bot-blocked fetches, report = final-round-with-fallback.
 - [ ] Budget enforcement (`resource_budget.py`) wired into orchestrator
       admission, not just reporting.
 - [ ] Worktree isolation tested against concurrent same-repo agents.
