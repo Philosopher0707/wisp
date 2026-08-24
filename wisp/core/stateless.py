@@ -120,9 +120,6 @@ class WispAgentCore:
         turn_timeout = getattr(self.config, "turn_timeout", 1800) if self.config else 1800
         # Publish the absolute deadline so nested consumers (subagent
         # orchestrator retries) can budget themselves against the same clock.
-        _turn_deadline.set(time.monotonic() + turn_timeout)
-        # Publish the absolute deadline so nested consumers (subagent
-        # orchestrator retries) can budget themselves against the same clock.
         # Overwritten by every turn; only read while a turn is live.
         _turn_deadline.set(time.monotonic() + turn_timeout)
         # Build messages list
@@ -168,7 +165,7 @@ class WispAgentCore:
             has_tool_calls = False
 
             try:
-                async for event in self._stream_events_async(
+                async for event in self._guarded_provider_stream(
                     system_prompt=system_prompt,
                     messages=messages,
                     tools=tools if tools else None,
@@ -1086,6 +1083,88 @@ class WispAgentCore:
             return json.loads(json.dumps(value, default=str))
         except (TypeError, ValueError):
             return str(value)
+
+    # Silent-stall / empty-stream guard for parent turns. Same knob as
+    # SubagentRunner: a healthy provider starts streaming in seconds, so
+    # silence past this deadline means the request is dead.
+    FIRST_TOKEN_DEADLINE_S = float(os.environ.get("WISP_FIRST_TOKEN_DEADLINE", "90"))
+
+    # Provider bookkeeping events that don't count as real output when
+    # deciding whether a stream came back empty.
+    _BOOKKEEPING_TYPES = {"done", "stream_complete", "checkpoint", "usage"}
+
+    async def _guarded_provider_stream(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Wrap one provider round-trip with stall + empty-stream recovery.
+
+        Observed against NVIDIA's endpoint: ~1-in-5 identical requests
+        close cleanly with ZERO deltas (fast, silent, useless), and some
+        hold requests with no first byte indefinitely. Both previously
+        produced a silently empty turn. Now: one transparent retry on a
+        fresh request; a second failure surfaces as a visible error
+        instead of nothing.
+        """
+        import asyncio as _aio
+
+        for attempt in (1, 2):
+            got_meaningful = False
+            stream = self._stream_events_async(
+                system_prompt=system_prompt,
+                messages=messages,
+                tools=tools,
+            )
+            stalled = False
+            try:
+                while True:
+                    if not got_meaningful:
+                        try:
+                            event = await _aio.wait_for(
+                                stream.__anext__(),
+                                timeout=self.FIRST_TOKEN_DEADLINE_S,
+                            )
+                        except StopAsyncIteration:
+                            break  # clean end, no meaningful events
+                        except _aio.TimeoutError:
+                            stalled = True
+                            break
+                    else:
+                        try:
+                            event = await stream.__anext__()
+                        except StopAsyncIteration:
+                            break
+                    normalized = self._normalize_event(event)
+                    if str(normalized.get("type", "")) not in self._BOOKKEEPING_TYPES:
+                        got_meaningful = True
+                    yield event
+            finally:
+                if stalled or not got_meaningful:
+                    aclose = getattr(stream, "aclose", None)
+                    if aclose is not None:
+                        await aclose()
+
+            if got_meaningful:
+                return
+
+            if attempt == 1:
+                reason = (
+                    f"no data for {self.FIRST_TOKEN_DEADLINE_S:.0f}s" if stalled
+                    else "closed without any content"
+                )
+                logger.warning(
+                    "Provider stream %s (attempt %d) — retrying once",
+                    reason, attempt,
+                )
+                continue
+
+            yield _flatten_event(error_event(
+                "Provider returned no usable response after a retry — "
+                "the model endpoint is misbehaving. Try again shortly.",
+                recoverable=True,
+            ))
 
     def _normalize_event(self, event: Any) -> dict[str, Any]:
         """Normalize provider event to standard format.

@@ -448,3 +448,60 @@ class TestDelegationLiveStreaming:
         sys_msgs = [e["message"] for e in events if e.get("type") == "system"]
         assert any("Auto-delegating" in m for m in sys_msgs)
         assert any("delegation failed" in m for m in sys_msgs)
+
+
+class TestDelegationClassifyBounded:
+    """A stalled classifier must not hang the turn before it starts."""
+
+    def test_hanging_classify_skips_delegation_quickly(self, runtime):
+        import asyncio
+        import time as _time
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        analyzer = MagicMock()
+
+        async def _hang(prompt_fn):
+            # The real analyze_with_llm awaits prompt_fn() for the LLM call.
+            await asyncio.sleep(30)
+            s = MagicMock()
+            s.should_delegate = False
+            return s
+
+        async def fake_analyze(prompt, llm_classify):
+            text = await llm_classify("classify me")
+            return await _hang(text)
+
+        analyzer.analyze_with_llm = fake_analyze
+
+        class _HangingProvider:
+            def generate_stream_events(self, messages=None, **kw):
+                import time as t
+                t.sleep(30)
+                yield {"type": "done"}
+
+        class _Core:
+            config = MagicMock()
+            config.delegation_threshold = 0.45
+
+            class provider:
+                pass
+
+        cfg = MagicMock()
+        cfg.delegation_threshold = 0.45
+        runtime._get_core = lambda: _Core()
+        _Core.provider = type("P", (), {})()
+        _Core.provider.generate_stream_events = lambda self, messages=None: iter([])
+
+        with patch(
+            "wisp.multi_agent.delegation.get_delegation_analyzer",
+            return_value=analyzer,
+        ):
+            t0 = _time.monotonic()
+            result = asyncio.run(runtime._maybe_delegate(
+                "research something thoroughly please",
+                {"id": "s", "messages": []}, cfg,
+            ))
+            elapsed = _time.monotonic() - t0
+
+        assert result is None, "timeout must skip delegation"
+        assert elapsed < 5, f"classify timeout not applied: {elapsed:.1f}s"

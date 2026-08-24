@@ -347,18 +347,36 @@ class AgentRuntime:
             threshold = getattr(config, "delegation_threshold", 0.45)
             analyzer = get_delegation_analyzer()
 
-            # Build LLM call wrapper for hybrid classification
+            # Build LLM call wrapper for hybrid classification.
+            # Bounded: a stalled classify must not hang the whole turn
+            # before the main stream even starts. On timeout we skip
+            # delegation and answer directly.
+            classify_timeout = float(
+                getattr(config, "delegation_classify_timeout", 10.0)
+            )
+
             async def _llm_classify(classify_prompt: str) -> str:
                 core = self._get_core()
                 messages = [{"role": "user", "content": classify_prompt}]
                 events = []
-                async for event in core.provider.generate_stream_events(messages=messages):
-                    events.append(event)
-                    if event.get("type") == "done":
-                        break
-                return "".join(
-                    e.get("text", "") for e in events if e.get("type") == "content"
-                )
+
+                async def _collect() -> str:
+                    async for event in core.provider.generate_stream_events(messages=messages):
+                        events.append(event)
+                        if event.get("type") == "done":
+                            break
+                    return "".join(
+                        e.get("text", "") for e in events if e.get("type") == "content"
+                    )
+
+                try:
+                    return await asyncio.wait_for(_collect(), timeout=classify_timeout)
+                except asyncio.TimeoutError:
+                    logger.info(
+                        "Delegation classify timed out after %.0fs — skipping delegation",
+                        classify_timeout,
+                    )
+                    return ""
 
             signal = await analyzer.analyze_with_llm(prompt, _llm_classify)
 

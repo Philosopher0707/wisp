@@ -300,3 +300,99 @@ class TestToolsRunOffLoop:
 
         with patch("wisp.tools.registry.execute_tool", slow_tool):
             asyncio.run(scenario())
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Parent-turn stream guard: empty streams retry once, stalls fail fast
+# ═══════════════════════════════════════════════════════════════════
+
+
+class _ScriptedProvider:
+    """Yields canned response lists per call; records call count."""
+
+    def __init__(self, scripts):
+        self.scripts = list(scripts)
+        self.calls = 0
+
+    def generate_stream_events(self, system_prompt, messages, tools=None, checkpoint_every=50):
+        script = self.scripts.pop(0) if self.scripts else []
+        self.calls += 1
+        yield from script
+
+
+class TestParentStreamGuard:
+    def _core(self, provider):
+        from wisp.core.engine import WispAgentCore
+        return WispAgentCore(provider=provider)
+
+    async def _collect(self, core):
+        session = {"id": "s", "messages": [], "workspace": "/tmp"}
+        return [ev async for ev in core.turn(session, "hi")]
+
+    def test_empty_stream_retries_once_and_recovers(self):
+        import asyncio
+
+        provider = _ScriptedProvider([
+            [],  # clean close, zero deltas — the observed NVIDIA failure
+            [{"type": "thinking", "text": "t"}, {"type": "content", "text": "hi"}],
+        ])
+        core = self._core(provider)
+        events = asyncio.run(self._collect(core))
+        types = [e.get("type") for e in events]
+        assert "content" in types
+        assert provider.calls == 2, "empty attempt must be retried exactly once"
+        assert not any("no usable response" in str(e.get("text", "")) for e in events)
+
+    def test_always_empty_surfaces_visible_error_not_silence(self):
+        import asyncio
+
+        provider = _ScriptedProvider([[], []])
+        core = self._core(provider)
+        events = asyncio.run(self._collect(core))
+        types = [e.get("type") for e in events]
+        assert types.count("error") >= 1, f"silence not allowed: {types}"
+        err = next(e for e in events if e.get("type") == "error")
+        msg = str(err.get("message", err.get("text", "")))
+        assert "no usable response" in msg.lower()
+        assert provider.calls == 2
+
+    def test_stalled_first_byte_fails_fast_into_retry(self):
+        import asyncio
+
+        class StallProvider:
+            def __init__(self):
+                self.calls = 0
+
+            def generate_stream_events(self, system_prompt, messages, tools=None, checkpoint_every=50):
+                self.calls += 1
+                import asyncio as aio
+
+                async def _wait():
+                    await aio.sleep(30)
+                    return None
+
+                aio.run(_wait())
+                yield {"type": "content", "text": "late"}
+
+        provider = StallProvider()
+        core = self._core(provider)
+        core.FIRST_TOKEN_DEADLINE_S = 0.2
+        events = asyncio.run(self._collect(core))
+        err = [e for e in events if e.get("type") == "error"]
+        assert provider.calls == 2, "stall must abort and retry"
+        assert any(
+            "no usable response" in str(e.get("message", e.get("text", "")))
+            for e in err
+        )
+
+    def test_healthy_single_pass_no_double_content(self):
+        import asyncio
+
+        provider = _ScriptedProvider([
+            [{"type": "content", "text": "answer"}],
+        ])
+        core = self._core(provider)
+        events = asyncio.run(self._collect(core))
+        contents = [e for e in events if e.get("type") == "content"]
+        assert len(contents) == 1
+        assert provider.calls == 1
