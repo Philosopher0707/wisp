@@ -41,7 +41,6 @@ jobs:
       - name: Run QA
         id: qa
         timeout-minutes: 15
-        continue-on-error: true
         env:
           CI: "true"
           WISP_API_KEY: ${{ secrets.WISP_API_KEY }}

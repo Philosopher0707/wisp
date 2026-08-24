@@ -3,8 +3,16 @@ name: CI
 on:
   push:
     branches: [main, master]
+    paths-ignore:
+      - "android/**"
+      - "wisp-tui/**"
+      - "**.md"
   pull_request:
     branches: [main, master]
+    paths-ignore:
+      - "android/**"
+      - "wisp-tui/**"
+      - "**.md"
 
 jobs:
   test-python:
@@ -28,7 +36,10 @@ jobs:
         run: pytest -m "not live" --tb=short -p no:cacheprovider
 
       - name: Ruff (Pyflakes gate)
-        run: ruff check wisp/
+        run: |
+          ruff check wisp/
+          # Soft gate: surface tests/ findings without failing the build yet.
+          ruff check tests/ --exit-zero
 
       - name: Mypy on typed spine (hard gate)
         # Strict mypy on the fully-annotated contract seams (events.py,
@@ -52,6 +63,15 @@ jobs:
         with:
           java-version: "17"
           distribution: "temurin"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle*', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3

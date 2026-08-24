@@ -26,7 +26,7 @@ jobs:
           pip install pytest
 
       - name: Run tests
-        run: pytest tests/ -v --tb=short
+        run: pytest tests/ -v --tb=short -m "not live"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -46,6 +46,16 @@ jobs:
 
       - name: Build Docker image
         run: docker build -t wisp:${{ github.ref_name }} .
+
+      - name: Push or skip Docker image
+        if: env.DOCKER_USERNAME != '' && env.DOCKER_TOKEN != ''
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+        run: |
+          echo "$DOCKER_TOKEN" | docker login -u "$DOCKER_USERNAME" --password-stdin
+          docker tag wisp:${{ github.ref_name }} "${DOCKER_USERNAME}/wisp:${{ github.ref_name }}"
+          docker push "${DOCKER_USERNAME}/wisp:${{ github.ref_name }}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
