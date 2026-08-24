@@ -247,3 +247,70 @@ class TestConfigFingerprint:
         core1 = rt._get_core()
         core2 = rt._get_core()
         assert core1 is core2, "core cache should be reused when config is unchanged"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Delegation failure visibility: never re-answer in silence
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestDelegationFailureVisibility:
+    """C4/C5: total subagent failure must be visible, not silent."""
+
+    def _runtime_with_orchestrator(self, runtime, orchestrator):
+        runtime.orchestrator = orchestrator
+        return runtime
+
+    def test_all_failed_returns_marker_not_none(self, runtime):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from wisp.multi_agent.task import SubagentResult
+
+        signal = MagicMock()
+        signal.should_delegate = True
+        signal.confidence = 0.9
+        signal.reason = "research request"
+        signal.suggested_contracts = [{"name": "r", "task": "look it up"}]
+
+        analyzer = MagicMock()
+        analyzer.analyze_with_llm = AsyncMock(return_value=signal)
+
+        failed = SubagentResult(
+            task_id="t1", success=False, output="", error="child blew up",
+            files_changed=[], iterations_used=0,
+        )
+        orch = MagicMock()
+        orch.run_parallel = AsyncMock(return_value=[failed])
+        runtime.orchestrator = orch
+
+        cfg = MagicMock()
+        cfg.delegation_threshold = 0.18
+        with patch(
+            "wisp.multi_agent.delegation.get_delegation_analyzer",
+            return_value=analyzer,
+        ):
+            result = asyncio.run(
+                runtime._maybe_delegate(
+                    "research something thoroughly please",
+                    {"id": "s1", "messages": []}, cfg,
+                )
+            )
+        assert result is not None, "failure must flow as marker, not None"
+        assert result.startswith("[DELEGATION FAILED]")
+        assert "child blew up" in result
+
+    def test_no_contracts_still_returns_none(self, runtime):
+        import asyncio
+        from unittest.mock import MagicMock
+
+        orch = MagicMock()
+        orch.analyze = MagicMock(return_value=[])
+        runtime.orchestrator = orch
+
+        result = asyncio.run(
+            runtime._maybe_delegate(
+                "hello", {"id": "s1", "messages": []}, MagicMock()
+            )
+        )
+        assert result is None

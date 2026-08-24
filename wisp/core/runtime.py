@@ -172,9 +172,13 @@ class AgentRuntime:
                     prompt, session, self._get_core().config
                 )
                 if delegation_context:
+                    failed = delegation_context.startswith("[DELEGATION FAILED]")
                     yield {
                         "type": "system",
-                        "message": "Auto-delegating to subagents...",
+                        "message": (
+                            "Subagent delegation failed — answering directly"
+                            if failed else "Auto-delegating to subagents..."
+                        ),
                         "timestamp": time.time(),
                     }
 
@@ -366,10 +370,18 @@ class AgentRuntime:
             failed = [r for r in results if not r.success]
 
             if not succeeded:
+                first_err = failed[0].error if failed else "unknown"
                 logger.warning(
                     "All %d delegation subagents failed", len(results),
                 )
-                return None
+                # A marker string, not None: the caller surfaces it on the
+                # terminal and the model learns why no subagent results
+                # arrived — instead of silently re-answering alone.
+                return (
+                    f"[DELEGATION FAILED] All {len(results)} subagents failed "
+                    f"({first_err}). Answer the user directly from your own "
+                    "knowledge; do not wait for subagent results."
+                )
 
             parts = [
                 "[AUTO-DELEGATION RESULTS]",
