@@ -1741,3 +1741,81 @@ class TestRoleAwareIsolation:
             name="plan", role="planner", task="t", worktree_isolated=True,
         )
         assert asyncio.run(o._resolve_worktree(contract)) is None
+
+
+# ═══════════════════════════════════════════════════════════════════
+# First-token deadline: silent provider stalls fail fast, then retry
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestFirstTokenDeadline:
+    """A stream with no first event must not eat the child's whole budget."""
+
+    def test_silent_stream_aborts_at_deadline_and_retries(self, tmp_path, monkeypatch):
+        import asyncio
+        import time as _time
+        from unittest.mock import AsyncMock, patch
+
+        from wisp.config import WispConfig
+        from wisp.multi_agent.task import SubagentContract
+
+        cfg = WispConfig().replace(workspace=str(tmp_path))
+        o = SubagentOrchestrator(config=cfg, workspace=tmp_path)
+        monkeypatch.setattr(o._runner.__class__, "FIRST_TOKEN_DEADLINE_S", 1.0)
+
+        attempts = []
+
+        class _RevivingCore:
+            def __init__(self, **kwargs):
+                pass
+
+            async def turn(self, session_dict, task):
+                attempts.append(_time.monotonic())
+                if len(attempts) == 1:
+                    await asyncio.sleep(600)  # stall on first attempt
+                yield {"type": "content", "text": "recovered on live socket"}
+                yield {"type": "done"}
+
+        contract = SubagentContract(
+            name="r", task="t", timeout_seconds=60,
+            worktree_isolated=False,
+        )
+        with patch("wisp.core.engine.WispAgentCore", _RevivingCore), \
+             patch("wisp.core.stateless.get_turn_deadline", return_value=None), \
+             patch.object(o, "_resolve_worktree", new=AsyncMock(return_value=None)), \
+             patch.object(o, "_fire_subagent_hook", new=AsyncMock()):
+            result = asyncio.run(o.run(contract))
+
+        assert len(attempts) == 2, "silent attempt must be retried once"
+        assert result.success
+        assert "recovered" in result.output
+
+    def test_healthy_stream_unaffected_by_deadline(self, tmp_path):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from wisp.config import WispConfig
+        from wisp.multi_agent.task import SubagentContract
+
+        cfg = WispConfig().replace(workspace=str(tmp_path))
+        o = SubagentOrchestrator(config=cfg, workspace=tmp_path)
+        monkeypatch = None  # deadline stays at default; stream is instant
+
+        class _FastCore:
+            def __init__(self, **kwargs):
+                pass
+
+            async def turn(self, session_dict, task):
+                yield {"type": "content", "text": "quick"}
+                yield {"type": "done"}
+
+        contract = SubagentContract(
+            name="r", task="t", timeout_seconds=30,
+            worktree_isolated=False,
+        )
+        with patch("wisp.core.engine.WispAgentCore", _FastCore), \
+             patch.object(o, "_resolve_worktree", new=AsyncMock(return_value=None)), \
+             patch.object(o, "_fire_subagent_hook", new=AsyncMock()):
+            result = asyncio.run(o.run(contract))
+
+        assert result.success and result.output == "quick"

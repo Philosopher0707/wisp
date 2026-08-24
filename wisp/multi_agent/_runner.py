@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,18 @@ from wisp.infra.store import UnifiedStore
 from .task import EventKind, OrchestratorEvent, SubagentContract, SubagentResult
 
 logger = logging.getLogger(__name__)
+
+
+class FirstTokenTimeout(asyncio.TimeoutError):
+    """Provider accepted the request but streamed nothing within budget.
+
+    Distinct from a wall-clock timeout so callers can message it honestly
+    while still treating it as retryable (timed_out=True).
+    """
+
+    def __init__(self, deadline_s: float):
+        super().__init__(f"no stream events within {deadline_s:.0f}s")
+        self.deadline_s = deadline_s
 
 
 class SubagentRunner:
@@ -39,6 +52,13 @@ class SubagentRunner:
     - Persistence (see ``Persistence``)
     - Patterns (map-reduce, vote, chain)
     """
+
+    # Silent-stall guard: a healthy provider streams reasoning deltas
+    # within seconds. No first event inside this window means the request
+    # is dead (observed: NVIDIA early-session holds with zero bytes) —
+    # abort so the orchestrator's retry lands on a live socket instead of
+    # burning the whole budget. Env: WISP_FIRST_TOKEN_DEADLINE.
+    FIRST_TOKEN_DEADLINE_S = float(os.environ.get("WISP_FIRST_TOKEN_DEADLINE", "90"))
 
     def __init__(
         self,
@@ -209,6 +229,29 @@ class SubagentRunner:
                 )
 
             return subagent_result
+
+        except FirstTokenTimeout as e:
+            duration = time.monotonic() - start
+            logger.warning(
+                "Subagent %s: %s — failing fast for retry",
+                contract.name, e,
+            )
+            session["updated_at"] = datetime.now(timezone.utc).isoformat()
+            self._store.save_session(session)
+            return SubagentResult(
+                task_id=contract.name,
+                success=False,
+                output=(
+                    f"[FIRST TOKEN TIMEOUT] No stream events within "
+                    f"{e.deadline_s:.0f}s. The provider accepted the request "
+                    f"but streamed nothing."
+                ),
+                tool_calls=list(tool_calls_log),
+                elapsed_seconds=duration,
+                error=str(e),
+                session_id=session["id"],
+                timed_out=True,  # retryable via the orchestrator's ×1.5 path
+            )
 
         except asyncio.TimeoutError:
             duration = time.monotonic() - start
@@ -387,7 +430,24 @@ class SubagentRunner:
                 child_start = time.monotonic()
                 last_event_at = child_start
                 first_event_seen = False
-                async for event in core.turn(session_dict, contract.task):
+                stream = core.turn(session_dict, contract.task)
+                try:
+                    # First-token deadline: wait_for cancels the pending
+                    # __anext__ on stall; the generator is closed below so
+                    # the provider bridge thread stops with it.
+                    first_event = await asyncio.wait_for(
+                        stream.__anext__(), timeout=self.FIRST_TOKEN_DEADLINE_S
+                    )
+                except asyncio.TimeoutError as exc:
+                    await stream.aclose()
+                    raise FirstTokenTimeout(self.FIRST_TOKEN_DEADLINE_S) from exc
+
+                async def _with_first(first, rest):
+                    yield first
+                    async for ev in rest:
+                        yield ev
+
+                async for event in _with_first(first_event, stream):
                     now = time.monotonic()
                     etype = event.get("type")
                     if not first_event_seen:
