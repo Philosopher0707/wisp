@@ -243,3 +243,33 @@ class SecurityPolicy:
             except Exception:
                 pass
         return list(self._audit_log)
+
+
+# Keys whose values must never be echoed to a human or client in approval
+# prompts, logs, or previews. Substring-matched against normalized keys.
+SENSITIVE_ARG_PATTERNS = frozenset({
+    "api_key", "token", "password", "secret", "credential", "auth",
+    "bearer", "authorization", "client_secret", "ssh_key", "private_key",
+    "access_token", "refresh_token",
+})
+
+
+def redact_sensitive_tool_args(args: dict) -> dict:
+    """Redact known sensitive fields from tool arguments before display.
+
+    Pure function; used by every surface that shows tool arguments to a
+    human (approval prompts, event previews).
+    """
+    if not isinstance(args, dict):
+        return args
+    redacted: dict = {}
+    for key, value in args.items():
+        key_lower = str(key).lower().replace("-", "_")
+        if any(p in key_lower for p in SENSITIVE_ARG_PATTERNS):
+            if isinstance(value, str) and len(value) > 4:
+                redacted[key] = value[:4] + "***"
+            else:
+                redacted[key] = "***"
+        else:
+            redacted[key] = value
+    return redacted

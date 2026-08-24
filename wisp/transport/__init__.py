@@ -1,47 +1,32 @@
 """Wisp transport layer — bridges WispAgentCore to I/O backends.
 
 Transports consume AgentEvent instances from WispAgentCore and handle
-presentation (terminal, WebSocket, SSE, etc.) and user interaction.
+presentation (terminal, WebSocket, files, etc.) and user interaction.
 
-New architecture (Transport ABC):
-  - Transport: abstract base class
-  - CLITransport (v2): stdin/stdout via Transport ABC
-  - WebSocketTransport: WebSocket via Transport ABC
-  - SSETransport: Server-Sent Events via Transport ABC
-
-Legacy transports (still supported):
-  - CLITransport (cli.py): original REPL transport
-  - ServerTransport (server.py): original WebSocket transport
+All transports implement the Transport ABC:
+  - CLITransport: interactive REPL (stdin/stdout)
+  - WebSocketTransport: live WebSocket streaming + bidirectional approval
+  - TUITransport: Textual TUI frontend
+  - HeadlessTransport: collects events into a result dict, no I/O
+  - FileTransport / MultiTransport / MetricsTransport: composable wrappers
 """
 
 from wisp.transport.base import Transport
-from wisp.transport.cli import CLITransport as CLITransportV2
+from wisp.transport.cli import CLITransport
 from wisp.transport.websocket import WebSocketTransport
-from wisp.transport.sse import SSETransport
 from wisp.transport.tui import TUITransport
 from wisp.transport.headless import HeadlessTransport
 from wisp.transport.file import FileTransport
 from wisp.transport.multi import MultiTransport
 from wisp.transport.metrics import MetricsTransport
-from wisp.transport.adapters import CLITransportAdapter, ServerTransportAdapter
-
-# Legacy exports for backward compatibility
-from wisp.transport.cli import CLITransport
-from wisp.transport.server import ServerTransport
 
 __all__ = [
     "Transport",
-    "CLITransportV2",
+    "CLITransport",
     "WebSocketTransport",
-    "SSETransport",
     "TUITransport",
     "HeadlessTransport",
     "FileTransport",
     "MultiTransport",
     "MetricsTransport",
-    "CLITransportAdapter",
-    "ServerTransportAdapter",
-    # Legacy
-    "CLITransport",
-    "ServerTransport",
 ]

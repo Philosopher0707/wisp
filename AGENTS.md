@@ -24,7 +24,6 @@ Guidance for AI coding agents working in the Wisp codebase.
 | `wisp/transport/progress.py` | Progress tracking | `ProgressTracker`, `TurnProgress` — phase detection, tool counting, file tracking |
 | `wisp/transport/spinner.py` | Terminal spinner | `Spinner` — inline `\r`-based spinner with mode-aware frames |
 | `wisp/transport/websocket.py` | Live WebSocket transport | `WebSocketTransport`: connection ↔ session routing, event streaming, bidirectional approval; wired through `wisp/server/routes/agents.py` |
-| `wisp/transport/server.py` | Legacy back-compat shim | `ServerTransport`: old API surface over `WebSocketTransport`; no production callers |
 | `wisp/transport/headless.py` | Headless transport | `HeadlessTransport`: collects events into result dict, no I/O |
 | `wisp/tools/registry.py` | Tool definitions | `TOOL_SCHEMAS` (list), `TOOL_IMPLS` (dict), `execute_tool()`, `ToolRegistry` |
 | `wisp/tool_executor.py` | Tool call lifecycle | `ToolExecutor`: approval gating, pre/post hooks, dangerous-command blocking, metrics around `execute_tool()` |
@@ -57,7 +56,7 @@ Guidance for AI coding agents working in the Wisp codebase.
 pytest tests/test_progress.py tests/test_spinner.py tests/test_renderer.py tests/test_transport_cli.py -v
 
 # Transport integration tests
-pytest tests/test_transport_server.py tests/test_transport_integration.py tests/test_transport_headless.py -v
+pytest tests/test_websocket.py tests/test_transport_headless.py -v
 
 # Core + runtime tests
 pytest tests/test_core_stateless.py tests/test_runtime_concurrent.py tests/test_provider_integration.py -v

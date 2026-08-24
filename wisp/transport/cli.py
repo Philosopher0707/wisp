@@ -42,6 +42,7 @@ from .renderer import (
 )
 from wisp.colors import bold, dim, error, warning, success, info
 from wisp.approval_state import ApprovalSessionState, SessionPolicy
+from wisp.infra.security import redact_sensitive_tool_args
 from wisp.core.events import AgentEvent, EventType
 from wisp.terminal_width import (
     is_accessible, get_output_mode, wrap_text_wide,
@@ -581,7 +582,7 @@ class CLITransport(Transport):
         """
         tool_name = tool_call.get("name", "unknown")
         args_text = ""
-        args_map = tool_call.get("arguments", {})
+        args_map = redact_sensitive_tool_args(tool_call.get("arguments", {}))
         if args_map:
             args_text = ", ".join(f"{k}={v!r}" for k, v in list(args_map.items())[:3])
             if len(args_map) > 3:

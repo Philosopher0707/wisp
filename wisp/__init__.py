@@ -37,7 +37,6 @@ from wisp.core.events import AgentEvent
 # ── Transports ────────────────────────────────────────────────────────
 
 from wisp.transport.cli import CLITransport
-from wisp.transport.server import ServerTransport
 
 # ── Configuration ────────────────────────────────────────────────────
 
@@ -48,6 +47,5 @@ __all__ = [
     "WispAgentCore",
     "AgentEvent",
     "CLITransport",
-    "ServerTransport",
     "WispConfig",
 ]

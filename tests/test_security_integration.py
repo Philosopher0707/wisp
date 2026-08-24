@@ -61,20 +61,24 @@ class TestTransportApprovals:
     """Verify transports no longer hardcode approval to True."""
 
     @pytest.mark.asyncio
-    async def test_server_transport_adapter_returns_false(self):
-        from wisp.transport.adapters import ServerTransportAdapter
+    async def test_transport_abc_declares_approve_abstract(self):
+        import inspect
 
-        adapter = ServerTransportAdapter(MagicMock(), MagicMock())
-        result = await adapter.approve({"name": "run_bash"})
-        assert result is False, "ServerTransportAdapter must not auto-approve"
+        from wisp.transport.base import Transport
+
+        # approve must stay abstract: a transport that forgets to implement
+        # it fails at construction instead of silently auto-approving.
+        assert getattr(Transport.approve, "__isabstractmethod__", False), (
+            inspect.getsource(Transport)
+        )
 
     @pytest.mark.asyncio
-    async def test_cli_transport_adapter_returns_false(self):
-        from wisp.transport.adapters import CLITransportAdapter
+    async def test_headless_transport_returns_false(self):
+        from wisp.transport.headless import HeadlessTransport
 
-        adapter = CLITransportAdapter(MagicMock())
-        result = await adapter.approve({"name": "run_bash"})
-        assert result is False, "CLITransportAdapter must not auto-approve"
+        transport = HeadlessTransport()
+        result = await transport.approve({"name": "run_bash"})
+        assert result is False, "HeadlessTransport must not auto-approve"
 
     @pytest.mark.asyncio
     async def test_tui_transport_returns_false(self):
@@ -336,7 +340,7 @@ class TestApprovalRedaction:
     """Verify sensitive fields are stripped from tool approval requests."""
 
     def test_api_key_redacted(self):
-        from wisp.transport.server import _redact_sensitive_tool_args
+        from wisp.infra.security import redact_sensitive_tool_args as _redact_sensitive_tool_args
 
         out = _redact_sensitive_tool_args({"ap" + "i_ke" + "y": "FAKE_KEY_FOR_TESTING", "command": "echo hi"})
         k = "api_" + "key"
@@ -344,7 +348,7 @@ class TestApprovalRedaction:
         assert out["command"] == "echo hi"
 
     def test_password_redacted(self):
-        from wisp.transport.server import _redact_sensitive_tool_args
+        from wisp.infra.security import redact_sensitive_tool_args as _redact_sensitive_tool_args
 
         out = _redact_sensitive_tool_args({"password": "FAKE_PASSWORD_FOR_TESTING", "user": "root"})
         assert "***" in str(out["password"])

@@ -4,6 +4,10 @@ The REPL loop is driven by entry._run_repl, not CLITransport.run().
 Tests here validate component behavior in isolation.
 """
 
+import asyncio
+
+
+from wisp.transport import cli as cli_mod
 from wisp.transport.cli import CLITransport, AgentAdapter, ApprovalSessionState
 from wisp.transport.progress import ProgressTracker
 from wisp.core.events import AgentEvent, EventType
@@ -456,3 +460,33 @@ class TestToolResultIconSelection:
 
         out = self._render('{"status": "ok"}', mode_setup=OutputMode.ACCESSIBLE)
         assert "[PASS]" in out
+
+
+class TestApprovalArgRedaction:
+    """Secrets must never appear verbatim in approval prompts."""
+
+    def test_api_key_redacted_in_prompt(self):
+        import io
+        from unittest.mock import patch
+
+        from wisp.transport.cli import CLITransport
+
+        transport = CLITransport.__new__(CLITransport)
+        transport._approval_state = ApprovalSessionState()
+        transport._force_approval_mode = False
+        transport._spinner = None
+
+        async def deny():
+            return "n"
+
+        transport._read_approval_answer = deny
+        buf = io.StringIO()
+        with patch.object(cli_mod.sys, "stdout", buf):
+            approved = asyncio.run(transport.approve({
+                "name": "run_bash",
+                "arguments": {"command": "deploy", "api_key": "sk-live-999999"},
+            }))
+        assert approved is False
+        out = buf.getvalue()
+        assert "999999" not in out, f"secret leaked: {out!r}"
+        assert "api_key" in out
