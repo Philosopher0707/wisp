@@ -100,7 +100,7 @@ class TestAssistantTruncation:
 
     def test_synthesis_never_truncated(self):
         """SYNTHESIS messages are sacred — never truncated."""
-        comp = SemanticCompressor()
+        SemanticCompressor()
         mtype = _classify_message({
             "role": "assistant",
             "content": "Final answer: done",
@@ -119,7 +119,7 @@ class TestAssistantTruncation:
 
     def test_reasoning_truncated_at_sentence_boundary(self):
         """REASONING messages > 2000 chars get sentence-bounded truncation."""
-        comp = SemanticCompressor()
+        SemanticCompressor()
         mtype = _classify_message({
             "role": "assistant",
             "content": "Let me think. " + "word " * 1_000,
@@ -139,7 +139,7 @@ class TestAssistantTruncation:
 
     def test_code_block_truncated_completely(self):
         """Code blocks > 3000 chars get block-aware truncation."""
-        comp = SemanticCompressor()
+        SemanticCompressor()
         code = "```python\n" + "x = 1\n" * 400 + "```\n"
         mtype = _classify_message({
             "role": "assistant",

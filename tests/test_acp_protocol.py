@@ -113,7 +113,7 @@ class TestMessages:
         assert restored.content == "hello"
 
     def test_prompt_request(self):
-        req = PromptRequest(
+        PromptRequest(
             session_id="s1",
             messages=[Message(role="user", content="hi")],
         )

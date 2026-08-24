@@ -78,7 +78,7 @@ class TestRunMapReduce:
         orch.run_parallel = _run_parallel
 
         items = ["a.py"]
-        result = await run_map_reduce(
+        await run_map_reduce(
             orch, "Review", items,
             lambda item: SubagentContract(name=f"review-{item}", task=f"Review {item}"),
             "Synthesize",

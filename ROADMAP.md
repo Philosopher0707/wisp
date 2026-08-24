@@ -5,7 +5,7 @@ change — not a wish list; every item names its trigger and its definition of d
 
 ## Baseline (this cleanup)
 
-- Full suite green: **2,573 passed / 0 failed**, plus mypy-strict clean on the
+- Full suite green: **2,817 passed / 0 failed**, plus mypy-strict clean on the
   gated contract seams (`wisp/core/events.py`, `wisp/core/stateless.py`,
   `wisp/providers/protocol.py`, `wisp/transport/base.py`) and ruff clean on `wisp/`.
 - Provider protocol fixed at the ABC level instead of patched per provider

@@ -73,7 +73,6 @@ class TestMaxTokensCap:
         _llm_summarize([{"role": "user", "content": "test"}], client=fake_client)
 
         # During generate(), max_tokens was 512
-        generate_call = fake_client.generate.call_args
         assert fake_client.max_tokens == 4096  # Restored after
 
     def test_restores_old_max_tokens_even_on_error(self):
@@ -96,7 +95,7 @@ class TestAsyncOffloading:
     async def test_compact_offloaded_to_thread(self):
         """_maybe_compact_session wrapped in asyncio.to_thread."""
         # Mock a slow compaction to verify it's in a thread
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
         compact_thread_id = None
 
         def _slow_compact():

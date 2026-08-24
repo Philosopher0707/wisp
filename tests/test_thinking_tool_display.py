@@ -46,7 +46,7 @@ class TestThinkingDisplay:
         event = {"type": "thinking", "text": "Internal reasoning..."}
         transport._render_event(buf, event)
         transport._flush_thinking(buf)
-        output = buf.getvalue()
+        buf.getvalue()
         # Should show collapsed summary, not full text
         transport.stop()
 

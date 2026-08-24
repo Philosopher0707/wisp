@@ -164,7 +164,7 @@ class TestConcurrentWorktreeIsolation:
                 await mgr.cleanup(wt)
 
         patches = await asyncio.gather(*(one_writer(i) for i in range(3)))
-        applied = await mgr.apply_patches_sequential(patches)
+        await mgr.apply_patches_sequential(patches)
 
         # Same-file conflicts are expected: a conflicted patch reports
         # False and REVERTS to base, so later patches land cleanly against

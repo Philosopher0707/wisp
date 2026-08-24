@@ -18,7 +18,7 @@ class TestThreadReuse:
 
         async def caller():
             for _ in range(5):
-                result = run_sync_coro(asyncio.sleep(0, result="ok"))
+                run_sync_coro(asyncio.sleep(0, result="ok"))
                 # The global thread should exist and be the same
                 threads_seen.add(threading.current_thread().ident)
 

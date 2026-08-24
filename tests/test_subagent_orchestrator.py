@@ -1677,7 +1677,7 @@ class TestTimeoutRetry:
         with patch("wisp.core.stateless.get_turn_deadline", return_value=None), \
              patch.object(o, "_resolve_worktree", new=AsyncMock(return_value=None)), \
              patch.object(o, "_fire_subagent_hook", new=AsyncMock()):
-            result = asyncio.run(o.run(
+            asyncio.run(o.run(
                 SubagentContract(name="r", task="t", timeout_seconds=120,
                                  worktree_isolated=False)
             ))
@@ -1813,7 +1813,6 @@ class TestFirstTokenDeadline:
 
         cfg = WispConfig().replace(workspace=str(tmp_path))
         o = SubagentOrchestrator(config=cfg, workspace=tmp_path)
-        monkeypatch = None  # deadline stays at default; stream is instant
 
         class _FastCore:
             def __init__(self, **kwargs):

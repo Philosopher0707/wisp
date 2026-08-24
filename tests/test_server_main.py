@@ -34,7 +34,7 @@ class TestServerMain:
         orig_key = _auth._key
         orig_overrides = dict(app.dependency_overrides)
         try:
-            with patch("uvicorn.run") as mock_run:
+            with patch("uvicorn.run"):
                 with patch.object(_auth, "disable") as mock_disable:
                     _auth._no_auth = False
                     _auth._key = "secret"

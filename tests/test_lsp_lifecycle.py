@@ -81,7 +81,7 @@ class TestShutdownGlobal:
         from wisp.lsp.manager import get_lsp_manager, shutdown_global_lsp_manager
         shutdown_global_lsp_manager()
 
-        mgr_obj = get_lsp_manager("/tmp/ws5")
+        get_lsp_manager("/tmp/ws5")
         assert mgr._GLOBAL_LSP is not None
 
         shutdown_global_lsp_manager()

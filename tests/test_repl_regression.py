@@ -21,7 +21,7 @@ from wisp.transport.cli import (
 def _make_transport(messages=None):
     """Build a CLITransport with a mock runtime."""
     runtime = MagicMock()
-    config = MagicMock()
+    MagicMock()
     transport = CLITransport(runtime)
     return transport, runtime
 

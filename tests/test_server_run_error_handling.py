@@ -56,7 +56,6 @@ class FakeCore:
 def _build_run(conn, exc, plan_mode=False):
     """Build the _run coroutine matching server.py logic."""
     client_id = "test-client"
-    session_id = "sess-123"
 
     # Replicate the fixed _run() logic inline so tests don't depend on
     # the exact source line numbers (which move as the file changes).

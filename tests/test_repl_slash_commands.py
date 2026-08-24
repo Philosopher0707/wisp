@@ -91,7 +91,6 @@ class TestExitCommand:
 class TestThinkingCommand:
     def test_thinking_toggles(self, capsys):
         adapter = _make_adapter()
-        original = adapter.config.show_thinking
         result = dispatch("/thinking", adapter)
         assert result is True  # Consumed
 

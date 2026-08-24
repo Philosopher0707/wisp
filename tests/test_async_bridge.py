@@ -84,7 +84,7 @@ class TestSyncGenIterBasic:
             items = await _consume(
                 sync_gen_iter(_make_slow_sync_gen(delay_seconds=0.05, count=4))
             )
-            elapsed = time.monotonic() - start
+            time.monotonic() - start
 
             assert items == [0, 1, 2, 3]
             # If the loop was blocked we would see very few pings.

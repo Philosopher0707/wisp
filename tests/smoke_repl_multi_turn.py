@@ -47,7 +47,7 @@ def test_multi_turn_no_crash():
                     sys.exit(1)
 
     stderr_str = stderr.getvalue()
-    stdout_str = stdout.getvalue()
+    stdout.getvalue()
 
     if "Event loop is closed" in stderr_str:
         print(f"FAILED: 'Event loop is closed' found in stderr:\n{stderr_str}", file=sys.stderr)

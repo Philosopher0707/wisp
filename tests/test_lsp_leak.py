@@ -128,7 +128,7 @@ class TestGlobalShutdown:
 
     def test_global_shutdown_sets_none(self):
         with tempfile.TemporaryDirectory() as td:
-            mgr = get_lsp_manager(td)
+            get_lsp_manager(td)
             assert _lsp_module._GLOBAL_LSP is not None
             shutdown_global_lsp_manager()
             assert _lsp_module._GLOBAL_LSP is None
@@ -141,7 +141,7 @@ class TestGlobalShutdown:
     def test_global_shutdown_thread_safe(self):
         """Concurrent shutdowns must not deadlock or corrupt state."""
         with tempfile.TemporaryDirectory() as td:
-            mgr = get_lsp_manager(td)
+            get_lsp_manager(td)
 
             errors = []
             def _do():

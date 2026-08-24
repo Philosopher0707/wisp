@@ -90,7 +90,7 @@ class TestAsyncSleepIfInLoop:
         keeps processing other tasks."""
         order = []
         loop = asyncio.new_event_loop()
-        stop = threading.Event()
+        threading.Event()
 
         def _host():
             """Runs the event loop on a dedicated host thread."""
