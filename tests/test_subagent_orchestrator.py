@@ -1468,3 +1468,76 @@ class TestWorktreeFallbackNoise:
 
         assert path is None
         spy.create.assert_not_called()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Streaming output accumulation: deltas concatenate, tool rounds reset
+# ═══════════════════════════════════════════════════════════════════
+
+
+class _StreamingCore:
+    """Emits content as many small deltas like real streaming providers."""
+
+    def __init__(self, script):
+        self._script = script
+
+    async def turn(self, session_dict, task):
+        for event in self._script:
+            yield dict(event)
+
+
+class TestStreamingOutputAccumulation:
+    """Regression: runner kept only the LAST content delta (8-char tails).
+
+    Real streaming providers emit content as many small deltas; nemotron's
+    550B reasoning model surfaced this as an 8-char subagent report.
+    """
+
+    def _run(self, tmp_path, script):
+        import asyncio
+        from unittest.mock import patch
+
+        from wisp.config import WispConfig
+        from wisp.multi_agent.task import SubagentContract
+
+        fake_core = _StreamingCore(script)
+
+        def _factory(**kwargs):
+            return fake_core
+
+        workspace = tmp_path / "ws"
+        workspace.mkdir(exist_ok=True)
+        cfg = WispConfig().replace(workspace=str(workspace))
+        o = SubagentOrchestrator(config=cfg, workspace=workspace)
+
+        contract = SubagentContract(
+            name="r", task="t", timeout_seconds=60,
+            worktree_isolated=False,
+        )
+        with patch("wisp.core.engine.WispAgentCore", _factory):
+            return asyncio.run(o.run(contract))
+
+    def test_multi_delta_content_concatenates(self, tmp_path):
+        result = self._run(tmp_path, [
+            {"type": "content", "text": "Policy 1: GST "},
+            {"type": "content", "text": "rolled out in 2017. "},
+            {"type": "content", "text": "Policy 2: IBC 2016."},
+            {"type": "done"},
+        ])
+        assert result.success
+        assert result.output == (
+            "Policy 1: GST rolled out in 2017. Policy 2: IBC 2016."
+        ), f"got {result.output!r}"
+
+    def test_tool_call_resets_pre_action_narration(self, tmp_path):
+        result = self._run(tmp_path, [
+            {"type": "content", "text": "Let me search that up..."},
+            {"type": "tool_call", "name": "web_search",
+             "arguments": {"query": "modi policy"}},
+            {"type": "tool_result", "result": "...findings..."},
+            {"type": "content", "text": "Final: GST "},
+            {"type": "content", "text": "(2017)."},
+            {"type": "done"},
+        ])
+        assert result.success
+        assert result.output == "Final: GST (2017).", f"got {result.output!r}"

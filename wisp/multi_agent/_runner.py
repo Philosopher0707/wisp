@@ -386,7 +386,9 @@ class SubagentRunner:
                 async for event in core.turn(session_dict, contract.task):
                     etype = event.get("type")
                     if etype == "content":
-                        output_text = event.get("text", "")
+                        # Streaming providers emit many small deltas; the
+                        # report is their concatenation, not the last chunk.
+                        output_text += event.get("text", "")
                     elif etype == "tool_call":
                         engine_iterations += 1
                         budget.record_tool_call()
@@ -402,6 +404,9 @@ class SubagentRunner:
                             )
                             output_text = f"[BUDGET EXHAUSTED] {budget_error}"
                             break
+                        # Content after a tool call belongs to the next
+                        # round — pre-action narration is not the answer.
+                        output_text = ""
                     elif etype == "tool_result":
                         result_data = event.get("result", "")
                         if isinstance(result_data, str):
@@ -495,7 +500,9 @@ class SubagentRunner:
             async for event in self._agent_runtime.run_turn(runtime_session, contract.task):
                 etype = event.get("type")
                 if etype == "content":
-                    output_text = event.get("text", "")
+                    # Streaming providers emit many small deltas; the
+                    # report is their concatenation, not the last chunk.
+                    output_text += event.get("text", "")
                 elif etype == "tool_call":
                     engine_iterations += 1
                     budget.record_tool_call()
@@ -511,6 +518,9 @@ class SubagentRunner:
                         )
                         output_text = f"[BUDGET EXHAUSTED] {budget_error}"
                         break
+                    # Content after a tool call belongs to the next
+                    # round — pre-action narration is not the answer.
+                    output_text = ""
                 elif etype == "tool_result":
                     result_data = event.get("result", "")
                     if isinstance(result_data, str):
