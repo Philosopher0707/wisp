@@ -45,6 +45,7 @@ from wisp.approval_state import ApprovalSessionState, SessionPolicy
 from wisp.core.events import AgentEvent, EventType
 from wisp.terminal_width import (
     is_accessible, get_output_mode, wrap_text_wide,
+    status_symbols,
     OutputMode,
 )
 from wisp.transport.progress import ProgressTracker
@@ -178,7 +179,7 @@ def _input_multiline(prompt: str = "➜ ", continuation_prompt: str = "... ") ->
     except KeyboardInterrupt:
         # Multiline mode's documented contract: Ctrl+C clears the current
         # input, it does not exit the REPL. Empty string re-prompts.
-        print("\n✗ Input cleared")
+        print(f"\n{status_symbols()['fail']} Input cleared")
         return ""
 
 def _args_preview(args: dict) -> str:
@@ -610,7 +611,7 @@ class CLITransport(Transport):
         print(file=sys.stdout)  # blank line before prompt
         print(
             warning(
-                f"⚠️  {tool_name}({args_text})"
+                f"{status_symbols()['warn']}  {tool_name}({args_text})"
             ),
             file=sys.stdout,
         )
@@ -645,7 +646,7 @@ class CLITransport(Transport):
         if choice == "c":
             # Honest cancel: unwind the turn (the REPL renders it like an
             # interrupt), not a silent deny that lets the agent continue.
-            print(dim("⏹  Turn cancelled."), file=sys.stdout)
+            print(dim(f"{status_symbols()['cancel']}  Turn cancelled."), file=sys.stdout)
             raise asyncio.CancelledError(
                 f"User cancelled the turn at the approval prompt for {tool_name}"
             )
@@ -849,7 +850,7 @@ class CLITransport(Transport):
                     )
                 else:
                     stdout.write(
-                        dim(f'  🧠 Thinking: "{preview}" ({line_count} {plural} — /thinking to expand)\n')
+                        dim(f'  {status_symbols()["thinking"]} Thinking: "{preview}" ({line_count} {plural} — /thinking to expand)\n')
                     )
             else:
                 plural = "line" if line_count == 1 else "lines"
@@ -859,7 +860,7 @@ class CLITransport(Transport):
                     )
                 else:
                     stdout.write(
-                        dim(f"  🧠 Thinking... ({line_count} {plural} — /thinking to expand)\n")
+                        dim(f"  {status_symbols()['thinking']} Thinking... ({line_count} {plural} — /thinking to expand)\n")
                     )
         stdout.flush()
 
@@ -1008,7 +1009,7 @@ class CLITransport(Transport):
             if self._spinner is not None:
                 self._spinner.stop()
             msg = ev.data.get("message", "")
-            error_prefix = "[ERROR] " if is_accessible() else "✗ "
+            error_prefix = "[ERROR] " if is_accessible() else f"{status_symbols()['fail']} "
             stdout.write(
                 _box(f"{error_prefix}{msg}", title="Error", style="error", double=True, width=width)
                 + "\n"
@@ -1104,13 +1105,8 @@ class CLITransport(Transport):
             is_error = result_text.startswith("[") or result_text.startswith("Error")
 
         # Mode-aware icon selection
-        mode = get_output_mode()
-        if is_accessible():
-            icon = "[FAIL]" if is_error else "[PASS]"
-        elif mode == OutputMode.UNICODE:
-            icon = "✗" if is_error else "✓"
-        else:
-            icon = "[X]" if is_error else "[OK]"
+        sym = status_symbols()
+        icon = sym["fail"] if is_error else sym["ok"]
 
         diff_text = (meta or {}).get("diff", "")
         is_edit_tool = name in ("write_file", "edit_file", "edit_file_multi")
@@ -1248,7 +1244,7 @@ def _render_event(
         text = event.text
         if not show_thinking:
             line_count = text.count("\n") + 1
-            return dim(f"  🧠 Thinking... ({line_count} lines — /thinking to expand)")
+            return dim(f"  {status_symbols()['thinking']} Thinking... ({line_count} lines — /thinking to expand)")
         return _render_thinking_block(text, box_mode=True, width=80)
 
     if etype == EventType.TOOL_CALL:
@@ -1259,10 +1255,10 @@ def _render_event(
     if etype == EventType.TOOL_RESULT:
         name = event.data.get("name", "")
         result = event.data.get("result", "")
-        return f"  ✅ {name}: {result}"[:200]
+        return f"  {status_symbols()['ok']} {name}: {result}"[:200]
 
     if etype == EventType.ERROR:
-        return f"  ❌ Error: {event.text}"
+        return f"  {status_symbols()['fail']} Error: {event.text}"
 
     if etype == EventType.SYSTEM:
         return f"  ℹ {event.data.get('message', '')}"

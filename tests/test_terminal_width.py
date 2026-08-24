@@ -326,3 +326,54 @@ class TestEdgeCases:
         # But soft hyphen (U+00AD) actually has width 1 in wcwidth
         assert display_width("\u200b") == 0  # ZWSP
         assert display_width("\u200c") == 0  # ZWNJ
+
+
+# ── status_symbols: single source of truth for user-facing glyphs ────
+
+
+class TestStatusSymbols:
+    def _sym(self, mode):
+        from wisp.terminal_width import status_symbols, set_output_mode, OutputMode
+        old = set_output_mode(mode)
+        try:
+            return status_symbols()
+        finally:
+            set_output_mode(old)
+
+    def test_unicode_mode_uses_glyphs(self):
+        sym = self._sym(OutputMode.UNICODE)
+        assert sym["ok"] == "✓" and sym["fail"] == "✗" and sym["warn"] == "⚠"
+
+    def test_ascii_mode_printable(self):
+        sym = self._sym(OutputMode.ASCII)
+        assert all(ord(c) < 128 for v in sym.values() if v for c in v), sym
+
+    def test_accessible_spells_words(self):
+        sym = self._sym(OutputMode.ACCESSIBLE)
+        assert sym["ok"] == "[PASS]" and sym["fail"] == "[FAIL]" and sym["warn"] == "[WARN]"
+
+    def test_minimal_keeps_status_drops_decoration(self):
+        sym = self._sym(OutputMode.MINIMAL)
+        assert sym["ok"] == "[OK]" and sym["fail"] == "[X]"
+        assert sym["thinking"] == "" and sym["exit"] == ""
+
+
+class TestNoRawGlyphLiterals:
+    """Glyphs must come from status_symbols()/BoxChars, never be inlined in
+    the transport layer — that's how ASCII/accessibility regressions happen."""
+
+    ALLOWED_FILES = {"terminal_width.py", "renderer.py", "spinner.py", "colors.py"}
+    FORBIDDEN = ["✓", "✗", "⚠️", "🧠", "✅", "❌"]
+
+    def test_transport_and_entry_use_symbol_api(self):
+        import pathlib
+        repo = pathlib.Path(__file__).resolve().parent.parent
+        offenders = []
+        for rel in ("wisp/transport/cli.py", "wisp/entry.py"):
+            text = (repo / rel).read_text(encoding="utf-8")
+            for glyph in self.FORBIDDEN:
+                if glyph in text:
+                    offenders.append(f"{rel}: {glyph!r}")
+        assert not offenders, (
+            f"raw glyphs found — use status_symbols() instead: {offenders}"
+        )

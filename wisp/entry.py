@@ -24,6 +24,7 @@ from wisp.config import WispConfig
 from wisp.transport.cli import CLITransport, _input_line, _input_multiline, _restore_signal_handler
 from wisp.transport.tui import TUITransport
 from wisp.transport.renderer import render_turn_stats, render_file_ticker
+from wisp.terminal_width import status_symbols
 from wisp.colors import dim, error
 import shutil
 
@@ -117,6 +118,45 @@ def _term_width() -> int:
         return 80
 
 
+def _history_path() -> Path:
+    import os
+    custom = os.environ.get("WISP_HISTORY_FILE")
+    return Path(custom).expanduser() if custom else Path.home() / ".wisp" / "history"
+
+
+def _load_command_history() -> bool:
+    """Load prior prompts into readline so up-arrow recalls them."""
+    try:
+        import readline
+    except ImportError:
+        return False
+    path = _history_path()
+    try:
+        if path.exists():
+            readline.read_history_file(str(path))
+        readline.set_history_length(5000)
+        return True
+    except Exception:
+        logger.debug("Could not load command history from %s", path, exc_info=True)
+        return False
+
+
+def _save_command_history() -> bool:
+    try:
+        import readline
+    except ImportError:
+        return False
+    path = _history_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        readline.set_history_length(5000)
+        readline.write_history_file(str(path))
+        return True
+    except Exception:
+        logger.debug("Could not save command history to %s", path, exc_info=True)
+        return False
+
+
 def _show_turn_stats(transport: CLITransport) -> None:
     """Render turn stats, file ticker, and separator after a turn."""
     import sys
@@ -157,7 +197,8 @@ def make_repl_sigint_handler(transport, get_current_task, restore_default):
         task = get_current_task()
         if task is not None and not task.done():
             task.cancel()
-            sys.stdout.write("\n⏹  Interrupted — cancelling turn… (Ctrl+C again to force quit)\n")
+            sym = status_symbols()
+            sys.stdout.write(f"\n{sym['cancel']}  Interrupted — cancelling turn… (Ctrl+C again to force quit)\n")
             sys.stdout.flush()
             restore_default()
         else:
@@ -195,6 +236,9 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
     is_continuation = len(session.get("messages", [])) > 0
     skill = kwargs.get("skill")
 
+    # Up-arrow recall of prompts from previous sessions
+    _load_command_history()
+
     if is_continuation:
         transport.print_continuation_banner(sys.stdout, session, config.model)
     else:
@@ -203,7 +247,7 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
     # Warn if no provider is configured — turns will produce no output
     provider_name = getattr(config, "provider", None)
     if not provider_name:
-        sys.stdout.write("\n⚠  No LLM provider configured. Set WISP_PROVIDER or add 'provider' to config.\n")
+        sys.stdout.write(f"\n{status_symbols()['warn']}  No LLM provider configured. Set WISP_PROVIDER or add 'provider' to config.\n")
         sys.stdout.write("   Example: wisp repl -m llama3   or   export WISP_PROVIDER=ollama\n\n")
         sys.stdout.flush()
 
@@ -216,13 +260,13 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
 
     def _show_resume() -> None:
         """Print the resume command for this session."""
-        sys.stdout.write("\n⏸  Turn interrupted. Session saved.\n")
+        sys.stdout.write(f"\n{status_symbols()['pause']}  Turn interrupted. Session saved.\n")
         sys.stdout.write(f"   Resume: wisp repl -S {_current_session_id()}\n\n")
         sys.stdout.flush()
 
     def _show_exit() -> None:
         """Print exit message with resume command."""
-        sys.stdout.write("\n👋  Exiting. Session saved.\n")
+        sys.stdout.write(f"\n{status_symbols()['exit']}  Exiting. Session saved.\n")
         sys.stdout.write(f"   Resume: wisp repl -S {_current_session_id()}\n\n")
         sys.stdout.flush()
 
@@ -327,12 +371,12 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
         if args in _VALID_MODES:
             input_mode = args
         elif args:
-            sys.stdout.write(f"{error('✗')} Unknown mode '{args}'. Use single or multi.\n")
+            sys.stdout.write(f"{error(status_symbols()['fail'])} Unknown mode '{args}'. Use single or multi.\n")
             return
         else:
             input_mode = "multi" if input_mode == "single" else "single"
         from wisp.colors import success, dim
-        sys.stdout.write(f"{success('✓')} Input mode: {input_mode}\n")
+        sys.stdout.write(f"{success(status_symbols()['ok'])} Input mode: {input_mode}\n")
         if input_mode == "multi":
             sys.stdout.write(f"{dim('  Enter blank line twice to submit, Ctrl+C to clear input')}\n")
         sys.stdout.flush()
@@ -411,11 +455,12 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
         _cancel_tasks()
         loop.run_until_complete(asyncio.sleep(0.05))  # Let cancellation settle
     finally:
+        _save_command_history()
         saved = _force_save()
         if own_loop:
             loop.close()
     if not saved:
-        sys.stdout.write("\n⚠  Could not save session.\n")
+        sys.stdout.write(f"\n{status_symbols()['warn']}  Could not save session.\n")
         sys.stdout.flush()
 
 

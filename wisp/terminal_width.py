@@ -446,3 +446,38 @@ def truncate_no_ellipsis(text: str, max_width: int) -> str:
         result += ch
         current_w += cw
     return result
+
+
+def status_symbols() -> dict[str, str]:
+    """Mode-aware status glyphs for user-facing markers.
+
+    Single source of truth so prompts, banners, and event rendering agree
+    per mode: accessible spells words out, ASCII stays printable, minimal
+    drops decoration entirely, unicode gets the pretty glyphs.
+    """
+    if is_accessible():
+        return {
+            "ok": "[PASS]", "fail": "[FAIL]", "warn": "[WARN]",
+            "info": "[NOTE]", "cancel": "[STOP]", "pause": "[PAUSED]",
+            "thinking": "[THINKING]", "exit": "[EXIT]",
+        }
+    mode = OUTPUT_MODE
+    if mode == OutputMode.ASCII:
+        return {
+            "ok": "[OK]", "fail": "[X]", "warn": "[!]",
+            "info": "*", "cancel": "x", "pause": "||",
+            "thinking": "...", "exit": "bye",
+        }
+    if mode == OutputMode.MINIMAL:
+        # Status markers carry information, so they survive minimality;
+        # purely decorative glyphs do not.
+        return {
+            "ok": "[OK]", "fail": "[X]", "warn": "[!]",
+            "info": "", "cancel": "", "pause": "",
+            "thinking": "", "exit": "",
+        }
+    return {
+        "ok": "✓", "fail": "✗", "warn": "⚠",
+        "info": "•", "cancel": "⏹", "pause": "⏸",
+        "thinking": "🧠", "exit": "👋",
+    }
