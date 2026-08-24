@@ -190,6 +190,8 @@ class _FakeSpinner:
 class _FakeTransport:
     def __init__(self, spinner=None):
         self._spinner = spinner
+        self.print_banner = MagicMock()
+        self.print_continuation_banner = MagicMock()
 
 
 def test_sigint_during_turn_cancels_task_and_dearms():
@@ -259,3 +261,91 @@ def test_multiline_command_requires_exact_token(monkeypatch):
     prompt2 = "/multiline multi"
     intercepted2 = prompt2 == "/multiline" or prompt2.startswith("/multiline ")
     assert intercepted2 is True
+
+
+# ── Persistent command history ───────────────────────────────────────
+
+
+class TestCommandHistory:
+    def test_history_path_env_override(self, monkeypatch, tmp_path):
+        import wisp.entry as entry_mod
+        custom = tmp_path / "custom-history"
+        monkeypatch.setenv("WISP_HISTORY_FILE", str(custom))
+        assert entry_mod._history_path() == custom
+
+    def test_history_path_default_under_home(self, monkeypatch, tmp_path):
+        import wisp.entry as entry_mod
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.delenv("WISP_HISTORY_FILE", raising=False)
+        assert entry_mod._history_path() == tmp_path / ".wisp" / "history"
+
+    def test_load_missing_file_is_noop_true(self, monkeypatch, tmp_path):
+        import wisp.entry as entry_mod
+        monkeypatch.setenv("WISP_HISTORY_FILE", str(tmp_path / "nope"))
+        try:
+            import readline  # noqa: F401
+            has_readline = True
+        except ImportError:
+            has_readline = False
+        result = entry_mod._load_command_history()
+        if has_readline:
+            assert result is True
+        else:
+            assert result is False
+
+    def test_save_creates_file_and_round_trips(self, monkeypatch, tmp_path):
+        import readline
+        import wisp.entry as entry_mod
+        hist_file = tmp_path / "nested" / "history"
+        monkeypatch.setenv("WISP_HISTORY_FILE", str(hist_file))
+
+        readline.clear_history()
+        readline.add_history("/help me")
+        assert entry_mod._save_command_history() is True
+        assert hist_file.exists()
+        content = hist_file.read_text(encoding="utf-8")
+        assert "/help" in content  # readline escapes spaces as \\040
+
+        # Fresh session loads it back
+        readline.clear_history()
+        assert entry_mod._load_command_history() is True
+        assert readline.get_history_item(1) == "/help me"
+
+    def test_repl_persists_entered_prompts(self, monkeypatch, tmp_path):
+        """A full REPL session writes accepted input lines to the file."""
+        from unittest.mock import MagicMock, patch
+        import io
+        import contextlib
+        from wisp.entry import _run_repl
+
+        hist_file = tmp_path / "h" / "history"
+        monkeypatch.setenv("WISP_HISTORY_FILE", str(hist_file))
+
+        transport = _FakeTransport()
+        root = MagicMock()
+        runtime = MagicMock()
+
+        async def get_session(**kw):
+            return {"id": "s", "messages": [], "workspace": "/tmp"}
+
+        runtime.get_or_create_session = get_session
+        root.runtime = runtime
+
+        answers = iter(["/help", None])  # one command, then EOF
+
+        def fake_input(prompt=""):
+            item = next(answers)
+            if item is None:
+                raise EOFError()
+            return item
+
+        with patch("wisp.entry._input_line", side_effect=fake_input), \
+             patch("wisp.entry._restore_signal_handler"), \
+             patch("wisp.commands.dispatch", return_value=True) as dispatch_mock:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                _run_repl(transport, root, root.config)
+
+        dispatch_mock.assert_called_once()
+        assert hist_file.exists()
+        assert "/help" in hist_file.read_text(encoding="utf-8")
