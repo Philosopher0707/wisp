@@ -107,6 +107,13 @@ The circuit breaker exists; wire it into the paths users actually feel:
       Same session: timeout retry x1.5 bounded by turn clock, explicit
       delegation fast-path + auto threshold 0.45, reader-proxy fallback for
       bot-blocked fetches, report = final-round-with-fallback.
+- [ ] Known external limit: NVIDIA integrate endpoint stalls fresh
+      early-session streams with zero bytes (keep-alives defeat idle
+      timeouts) — analyzer-delegated children burned full budgets on
+      silent sockets while later requests flew (47.8s). Instrumented
+      evidence in _runner INFO logs (first-event latency). Mitigation
+      options: prewarm ping before delegation, or first-token deadline
+      inside the runner.
 - [ ] Budget enforcement (`resource_budget.py`) wired into orchestrator
       admission, not just reporting.
 - [ ] Worktree isolation tested against concurrent same-repo agents.
