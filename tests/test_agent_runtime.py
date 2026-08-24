@@ -314,3 +314,137 @@ class TestDelegationFailureVisibility:
             )
         )
         assert result is None
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Live delegation streaming: child lifecycle renders DURING delegation
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestDelegationLiveStreaming:
+    """Auto-delegated children must be visible while they run."""
+
+    def test_lifecycle_events_stream_before_engine_turn(self, runtime):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from wisp.multi_agent.task import SubagentResult
+
+        signal = MagicMock()
+        signal.should_delegate = True
+        signal.confidence = 0.9
+        signal.reason = "research request"
+        signal.suggested_contracts = [{"name": "r", "task": "look it up"}]
+
+        analyzer = MagicMock()
+        analyzer.analyze_with_llm = AsyncMock(return_value=signal)
+
+        captured_callbacks: list = []
+
+        async def fake_run_parallel(contracts, max_concurrent=3):
+            # Fire the real lifecycle the runner would emit.
+            import asyncio as _aio
+            for c in contracts:
+                assert c.progress_callback is not None, (
+                    "delegation must wire progress callbacks for streaming"
+                )
+                captured_callbacks.append(c.progress_callback)
+                c.progress_callback(_orch_event("task_started", c.name))
+                await _aio.sleep(0.05)
+                c.progress_callback(_orch_event("task_completed", c.name))
+            return [SubagentResult(
+                task_id="r", success=True, output="found it",
+                files_changed=[], iterations_used=1,
+            )]
+
+        def _orch_event(kind, name):
+            from wisp.multi_agent.task import OrchestratorEvent
+            payload = {"role": "researcher"}
+            if kind == "task_completed":
+                payload["elapsed"] = 1.2
+            return OrchestratorEvent(
+                task_id=name, event_type=kind, payload=payload,
+            )
+
+        orch = MagicMock()
+        orch.run_parallel = fake_run_parallel
+        runtime.orchestrator = orch
+
+        class _Core:
+            config = MagicMock()
+            config.delegation_threshold = 0.18
+            async def turn(self, session, prompt, approval_handler=None):
+                yield {"type": "content", "text": "answer"}
+                yield {"type": "done"}
+
+        with patch.object(runtime, "_get_core", return_value=_Core()), \
+             patch(
+                 "wisp.multi_agent.delegation.get_delegation_analyzer",
+                 return_value=analyzer,
+             ):
+            events = []
+            async def _drive():
+                async for ev in runtime.run_turn({"id": "s", "messages": []}, "research something thoroughly please"):
+                    events.append(ev)
+            asyncio.run(_drive())
+
+        types = [e.get("type") for e in events]
+        assert "subagent" in types, f"no subagent events in stream: {types}"
+
+        # Announce precedes lifecycle; engine output follows.
+        assert types.index("system") < types.index("subagent")
+        first_sys = next(e for e in events if e.get("type") == "system")
+        assert "Auto-delegating" in first_sys["message"]
+
+        started = [e for e in events if e.get("type") == "subagent"]
+        kinds = [e["kind"] for e in started]
+        assert "task_started" in kinds and "task_completed" in kinds
+        assert started[0]["role"] == "researcher"
+        assert types[-1] == "done"
+
+    def test_failure_still_announces_then_fails(self, runtime):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from wisp.multi_agent.task import SubagentResult
+
+        signal = MagicMock()
+        signal.should_delegate = True
+        signal.confidence = 0.9
+        signal.reason = "research request"
+        signal.suggested_contracts = [{"name": "r", "task": "x"}]
+
+        analyzer = MagicMock()
+        analyzer.analyze_with_llm = AsyncMock(return_value=signal)
+
+        failed = SubagentResult(
+            task_id="r", success=False, output="", error="stalled",
+            files_changed=[], iterations_used=0,
+        )
+        orch = MagicMock()
+        async def _fail_parallel(contracts, max_concurrent=3):
+            return [failed]
+        orch.run_parallel = _fail_parallel
+        runtime.orchestrator = orch
+
+        class _Core:
+            config = MagicMock()
+            config.delegation_threshold = 0.18
+            async def turn(self, session, prompt, approval_handler=None):
+                yield {"type": "content", "text": "direct answer"}
+                yield {"type": "done"}
+
+        with patch.object(runtime, "_get_core", return_value=_Core()), \
+             patch(
+                 "wisp.multi_agent.delegation.get_delegation_analyzer",
+                 return_value=analyzer,
+             ):
+            events = []
+            async def _drive():
+                async for ev in runtime.run_turn({"id": "s", "messages": []}, "research something thoroughly please"):
+                    events.append(ev)
+            asyncio.run(_drive())
+
+        sys_msgs = [e["message"] for e in events if e.get("type") == "system"]
+        assert any("Auto-delegating" in m for m in sys_msgs)
+        assert any("delegation failed" in m for m in sys_msgs)

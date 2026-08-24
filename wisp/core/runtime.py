@@ -168,19 +168,35 @@ class AgentRuntime:
                 self.orchestrator is not None
                 and getattr(self._get_core().config, "auto_delegate", True)
             ):
-                delegation_context = await self._maybe_delegate(
-                    prompt, session, self._get_core().config
+                sub_events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+                delegate_task = asyncio.create_task(
+                    self._maybe_delegate(
+                        prompt, session, self._get_core().config,
+                        progress_queue=sub_events,
+                    )
                 )
+                # Interleave child lifecycle events into the turn stream
+                # while delegation runs, so the terminal shows 🧬/✓ lines
+                # as children start and finish instead of nothing.
+                while not delegate_task.done():
+                    try:
+                        yield await asyncio.wait_for(sub_events.get(), timeout=0.1)
+                    except asyncio.TimeoutError:
+                        continue
+                while not sub_events.empty():
+                    yield sub_events.get_nowait()
+                delegation_context = delegate_task.result()
+
                 if delegation_context:
                     failed = delegation_context.startswith("[DELEGATION FAILED]")
-                    yield {
-                        "type": "system",
-                        "message": (
-                            "Subagent delegation failed — answering directly"
-                            if failed else "Auto-delegating to subagents..."
-                        ),
-                        "timestamp": time.time(),
-                    }
+                    if failed:
+                        yield {
+                            "type": "system",
+                            "message": (
+                                "Subagent delegation failed — answering directly"
+                            ),
+                            "timestamp": time.time(),
+                        }
 
             # Get cached core (warm-start, thread-safe)
             core = self._get_core()
@@ -311,8 +327,12 @@ class AgentRuntime:
 
     async def _maybe_delegate(
         self, prompt: str, session: dict[str, Any], config: Any,
+        progress_queue: "asyncio.Queue[dict[str, Any]] | None" = None,
     ) -> str | None:
         """Analyze prompt and auto-delegate to subagents if warranted.
+
+        When *progress_queue* is given, child lifecycle events are pushed
+        onto it as flattened dicts so the turn stream can render them live.
 
         Returns delegation context string to inject as system message,
         or None if delegation is not needed or fails.
@@ -359,6 +379,29 @@ class AgentRuntime:
 
             if not contracts:
                 return None
+
+            # Announce now — after the verdict, before children launch.
+            if progress_queue is not None:
+                progress_queue.put_nowait({
+                    "type": "system",
+                    "message": "Auto-delegating to subagents...",
+                    "timestamp": time.time(),
+                })
+
+            # Surface child lifecycle on the terminal: same conversion the
+            # explicit spawn path uses, pushed onto the caller's queue.
+            if progress_queue is not None:
+                from wisp.tool_executor import orchestrator_event_to_agent_event
+
+                def _stream_progress(orch_ev: Any) -> None:
+                    agent_ev = orchestrator_event_to_agent_event(orch_ev)
+                    flat = dict(agent_ev.data)
+                    flat["type"] = str(agent_ev.type)
+                    flat["timestamp"] = time.time()
+                    progress_queue.put_nowait(flat)
+
+                for contract in contracts:
+                    contract.progress_callback = _stream_progress
 
             # Run subagents — each contract enforces its own deadline (Phase 1A)
             results = await self.orchestrator.run_parallel(
