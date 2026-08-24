@@ -5,6 +5,8 @@ AgentRuntime owns sessions, compaction, and background runs.
 WispAgentCore (stateless) owns the turn loop.
 """
 
+import json
+
 import pytest
 
 
@@ -456,7 +458,7 @@ class TestDelegationClassifyBounded:
     def test_hanging_classify_skips_delegation_quickly(self, runtime):
         import asyncio
         import time as _time
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import MagicMock, patch
 
         analyzer = MagicMock()
 
@@ -505,3 +507,139 @@ class TestDelegationClassifyBounded:
 
         assert result is None, "timeout must skip delegation"
         assert elapsed < 5, f"classify timeout not applied: {elapsed:.1f}s"
+
+
+class _ToolCore:
+    """A core that emits one tool call/result pair before finishing."""
+
+    def __init__(self, call_event: dict | None = None):
+        self.call_event = call_event or {
+            "type": "tool_call",
+            "name": "read_file",
+            "arguments": {"path": "a.py"},
+        }
+
+    async def turn(self, session: dict, prompt: str, approval_handler=None):
+        yield dict(self.call_event)
+        yield {
+            "type": "tool_result",
+            "name": self.call_event["name"],
+            "result": {"status": "ok", "data": "contents"},
+            "duration_ms": 1.0,
+        }
+        yield {"type": "content", "text": "done"}
+        yield {"type": "done"}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Tool-call persistence: history must survive a persist/reload round
+# trip without breaking OpenAI-style providers.
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestToolCallPersistence:
+    """Assistant tool_calls are persisted as JSON strings with stable ids."""
+
+    async def _run_tool_turn(self, runtime, call_event: dict | None = None) -> dict:
+        runtime.core_factory = lambda: _ToolCore(call_event)
+        session = await runtime.get_or_create_session("sess-tc", "qwen", "/tmp")
+        async for _ in runtime.run_turn(session, "read a.py"):
+            pass
+        return session
+
+    @pytest.mark.asyncio
+    async def test_persists_arguments_as_json_string(self, runtime):
+        session = await self._run_tool_turn(runtime)
+
+        assistant = next(m for m in session["messages"] if m.get("tool_calls"))
+        arguments = assistant["tool_calls"][0]["function"]["arguments"]
+        assert isinstance(arguments, str)
+        assert json.loads(arguments) == {"path": "a.py"}
+
+    @pytest.mark.asyncio
+    async def test_string_arguments_pass_through_unchanged(self, runtime):
+        call_event = {
+            "type": "tool_call",
+            "name": "read_file",
+            "arguments": '{"path": "a.py"}',
+        }
+        session = await self._run_tool_turn(runtime, call_event)
+
+        assistant = next(m for m in session["messages"] if m.get("tool_calls"))
+        arguments = assistant["tool_calls"][0]["function"]["arguments"]
+        assert arguments == '{"path": "a.py"}'
+
+    @pytest.mark.asyncio
+    async def test_provider_call_id_preserved_and_threaded_to_result(self, runtime):
+        call_event = {
+            "type": "tool_call",
+            "name": "read_file",
+            "arguments": {"path": "a.py"},
+            "id": "call_from_provider",
+        }
+        session = await self._run_tool_turn(runtime, call_event)
+
+        assistant = next(m for m in session["messages"] if m.get("tool_calls"))
+        assert assistant["tool_calls"][0]["id"] == "call_from_provider"
+
+        tool_msg = next(m for m in session["messages"] if m.get("role") == "tool")
+        assert tool_msg["tool_call_id"] == "call_from_provider"
+
+    @pytest.mark.asyncio
+    async def test_generated_ids_are_unique_and_matched_to_results(self, runtime):
+        first = _ToolCore().call_event
+        second = dict(first, name="list_files", arguments={"dir": "."})
+
+        class _TwoCallCore(_ToolCore):
+            async def turn(self, session: dict, prompt: str, approval_handler=None):
+                yield dict(first)
+                yield {
+                    "type": "tool_result",
+                    "name": "read_file",
+                    "result": {"status": "ok", "data": "one"},
+                    "duration_ms": 1.0,
+                }
+                yield dict(second)
+                yield {
+                    "type": "tool_result",
+                    "name": "list_files",
+                    "result": {"status": "ok", "data": "two"},
+                    "duration_ms": 1.0,
+                }
+                yield {"type": "content", "text": "done"}
+                yield {"type": "done"}
+
+        runtime.core_factory = lambda: _TwoCallCore(first)
+        session = await runtime.get_or_create_session("sess-tc2", "qwen", "/tmp")
+        async for _ in runtime.run_turn(session, "read then list"):
+            pass
+
+        assistants = [m for m in session["messages"] if m.get("tool_calls")]
+        ids = [m["tool_calls"][0]["id"] for m in assistants]
+        assert len(ids) == 2
+        assert len(set(ids)) == 2, f"generated ids must be unique: {ids}"
+        assert all(i.startswith("call_") for i in ids)
+
+        results = [m for m in session["messages"] if m.get("role") == "tool"]
+        assert [m["tool_call_id"] for m in results] == ids
+
+    @pytest.mark.asyncio
+    async def test_loaded_session_heals_dict_arguments(self, runtime, tmp_store):
+        session = await runtime.get_or_create_session("sess-heal", "qwen", "/tmp")
+        session["messages"].append({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "call_old",
+                "type": "function",
+                "function": {"name": "read_file", "arguments": {"path": "a.py"}},
+            }],
+        })
+        tmp_store.save_session(session)
+
+        loaded = await runtime.get_or_create_session("sess-heal", "qwen", "/tmp")
+
+        tc = loaded["messages"][-1]["tool_calls"][0]
+        assert isinstance(tc["function"]["arguments"], str)
+        assert json.loads(tc["function"]["arguments"]) == {"path": "a.py"}
+        assert tc["id"] == "call_old"

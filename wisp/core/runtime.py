@@ -26,6 +26,19 @@ from wisp.core.events import normalize_event
 logger = logging.getLogger(__name__)
 
 
+def _stringify_tool_call_arguments(messages: list[dict[str, Any]]) -> None:
+    """Heal sessions persisted before tool-call arguments were stored as JSON strings."""
+    import json
+
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        for call in message.get("tool_calls") or []:
+            function = call.get("function") if isinstance(call, dict) else None
+            if isinstance(function, dict) and not isinstance(function.get("arguments"), str):
+                function["arguments"] = json.dumps(function.get("arguments", {}))
+
+
 @dataclass
 class AgentRuntime:
     """Stateful runtime that owns sessions and delegates turns.
@@ -81,6 +94,7 @@ class AgentRuntime:
         loaded: Any = self.store.load_session(session_id)
         if isinstance(loaded, dict) and "messages" in loaded:
             session: dict[str, Any] = loaded
+            _stringify_tool_call_arguments(session["messages"])
             return session
 
         now = datetime.now(timezone.utc).isoformat()
@@ -136,6 +150,7 @@ class AgentRuntime:
                         replayed = self.session_repo.load_session(sid)
                         if replayed is not None:
                             session["messages"] = replayed.messages
+                            _stringify_tool_call_arguments(session["messages"])
             except Exception:
                 pass  # table might not exist
 
@@ -256,19 +271,23 @@ class AgentRuntime:
             finally:
                 # Always record what happened in the session
                 if tool_calls or tool_results:
+                    import json
+
+                    # Providers require assistant tool_calls arguments as a
+                    # JSON string; ids must survive persist/reload so each
+                    # result matches its call.
+                    pending_call_ids: list[str] = []
                     for tc in tool_calls:
-                        import json
                         args = tc.get("arguments", {})
-                        if isinstance(args, str):
-                            try:
-                                args = json.loads(args)
-                            except json.JSONDecodeError:
-                                args = {}
+                        if not isinstance(args, str):
+                            args = json.dumps(args)
+                        call_id = tc.get("id") or f"call_{uuid.uuid4().hex[:8]}"
+                        pending_call_ids.append(call_id)
                         session["messages"].append({
                             "role": "assistant",
                             "content": "",
                             "tool_calls": [{
-                                "id": tc.get("id", f"call_{uuid.uuid4().hex[:8]}"),
+                                "id": call_id,
                                 "type": "function",
                                 "function": {
                                     "name": tc.get("name", ""),
@@ -278,15 +297,17 @@ class AgentRuntime:
                         })
 
                     for tr in tool_results:
-                        import json
                         result = tr.get("result", "")
                         if isinstance(result, dict):
                             content = json.dumps(result)
                         else:
                             content = str(result)
+                        call_id = tr.get("tool_call_id") or (
+                            pending_call_ids.pop(0) if pending_call_ids else ""
+                        )
                         session["messages"].append({
                             "role": "tool",
-                            "tool_call_id": tr.get("tool_call_id", ""),
+                            "tool_call_id": call_id,
                             "content": content,
                         })
 
@@ -517,6 +538,19 @@ class AgentRuntime:
         # Preserve existing system messages (persona, delegation context, etc.)
         existing_system = [m for m in session["messages"] if m.get("role") == "system"]
 
+        def _snap_kept(messages: list[dict[str, Any]], keep_n: int) -> list[dict[str, Any]]:
+            """Slice the kept window on a safe boundary.
+
+            - Never start on a role="tool" result whose assistant tool_calls
+              head was summarized away (strict providers reject orphans).
+            - Drop mid-history system copies; they are preserved up front.
+            """
+            n = len(messages)
+            start = max(0, n - keep_n)
+            while start < n and messages[start].get("role") == "tool":
+                start += 1
+            return [m for m in messages[start:] if m.get("role") != "system"]
+
         if self.compactor is not None:
             try:
                 result = await self.compactor.compact(
@@ -532,13 +566,13 @@ class AgentRuntime:
 
             if result is None or fallback:
                 to_summarize = session["messages"][:-keep]
-                kept = session["messages"][-keep:]
+                kept = _snap_kept(session["messages"], keep)
                 summary = f"[Compacted {len(to_summarize)} messages]"
             else:
-                kept = session["messages"][-keep:]
+                kept = _snap_kept(session["messages"], keep)
         else:
             to_summarize = session["messages"][:-keep]
-            kept = session["messages"][-keep:]
+            kept = _snap_kept(session["messages"], keep)
             summary = f"[Compacted {len(to_summarize)} messages]"
 
         # Build new messages: existing system messages + summary + kept messages
@@ -571,9 +605,19 @@ class AgentRuntime:
             self._session_locks.keys(),
             key=lambda k: self._session_access.get(k, 0.0),
         )
-        for k in sorted_keys[:to_evict]:
+        evicted = 0
+        for k in sorted_keys:
+            if evicted >= to_evict:
+                break
+            lock = self._session_locks.get(k)
+            if lock is not None and lock.locked():
+                # A held lock must never leave the map: eviction would let a
+                # later arrival mint a fresh lock and run concurrently with
+                # the turn still holding the old one.
+                continue
             self._session_locks.pop(k, None)
             self._session_access.pop(k, None)
+            evicted += 1
 
     async def start_background_run(
         self,

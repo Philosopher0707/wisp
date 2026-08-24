@@ -58,6 +58,7 @@ class Compactor:
     token_counter: TokenCounter = field(default_factory=TokenCounter)
     compaction_model: str = ""
     chars_per_token: int = 4
+    summarize_timeout: float = 90.0  # seconds; bounded because compaction runs pre-turn
 
     async def compact(
         self,
@@ -87,7 +88,13 @@ class Compactor:
             )
 
         to_summarize = messages[:-keep_recent]
-        kept = messages[-keep_recent:]
+        # Never start the kept window on orphaned tool results whose assistant
+        # tool_calls head is being summarized away — strict providers reject
+        # the malformed history on the next call.
+        kept_start = len(messages) - keep_recent
+        while 0 < kept_start < len(messages) and messages[kept_start].get("role") == "tool":
+            kept_start += 1
+        kept = messages[kept_start:]
 
         # Try LLM summarization if model configured
         if self.compaction_model:
@@ -121,7 +128,9 @@ Messages to compress:
         if provider is None:
             return None
 
-        # Run sync provider in thread
+        # Run sync provider in thread, bounded — compaction runs pre-turn
+        # OUTSIDE the turn's timeout, so an unstated deadline here hangs the
+        # whole turn indefinitely.
         loop = asyncio.get_running_loop()
         start = time.time()
 
@@ -141,7 +150,12 @@ Messages to compress:
             except Exception as e:
                 summary_parts.append(f"[ERROR: {e}]")
 
-        await loop.run_in_executor(None, _run)
+        try:
+            await asyncio.wait_for(loop.run_in_executor(None, _run), timeout=self.summarize_timeout)
+        except asyncio.TimeoutError:
+            logger.warning("LLM compaction timed out after %.0fs; falling back to truncation",
+                           self.summarize_timeout)
+            return None
 
         summary = "".join(summary_parts).strip()
         if not summary or summary.startswith("[ERROR"):

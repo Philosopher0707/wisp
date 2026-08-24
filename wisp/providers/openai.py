@@ -290,6 +290,16 @@ class OpenAIProvider(Provider):
                     "tool_call_id": msg.get("tool_call_id", ""),
                     "content": str(msg.get("content", "")),
                 })
+            elif role == "assistant" and msg.get("tool_calls"):
+                # OpenAI rejects dict arguments; persisted sessions must
+                # never leak them through even if upstream normalization missed.
+                calls = []
+                for tc in msg["tool_calls"]:
+                    func = dict(tc.get("function", {}))
+                    if not isinstance(func.get("arguments"), str):
+                        func["arguments"] = json.dumps(func.get("arguments", {}))
+                    calls.append({**tc, "function": func})
+                normalized.append({**msg, "tool_calls": calls})
             else:
                 normalized.append(msg)
 

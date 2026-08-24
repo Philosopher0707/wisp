@@ -14,6 +14,8 @@ Design:
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import hashlib
 import logging
 import os
 import time
@@ -64,7 +66,7 @@ logger = logging.getLogger(__name__)
 # Per-instance caches were useless because subagents create fresh cores,
 # discarding the parent's cached system prompt on every spawn.
 _ASSEMBLER: ContextAssembler | None = None
-_SYSTEM_PROMPT_CACHE: dict[tuple[str, float], str] = {}
+_SYSTEM_PROMPT_CACHE: dict[tuple[str, float, str], str] = {}
 
 
 def _flatten_event(ev: AgentEvent | dict[str, Any]) -> dict[str, Any]:
@@ -135,8 +137,21 @@ class WispAgentCore:
         # Build system prompt with full context awareness
         system_prompt = self._build_system_prompt(session, query=prompt)
 
-        # Get tools — built-in + extensions
+        # Get tools — built-in + extensions. Role-restricted subagents only
+        # get their allowed subset (contract.tools), not the full toolset.
         tools = self._get_tool_schemas()
+        allowed = session.get("allowed_tools")
+        if isinstance(allowed, (list, tuple, set)) and "all" not in {str(a).lower() for a in allowed}:
+            allowed_set = {str(a) for a in allowed}
+
+            def _schema_name(t: Any) -> str:
+                if isinstance(t, dict):
+                    fn = t.get("function")
+                    if isinstance(fn, dict) and fn.get("name"):
+                        return str(fn["name"])
+                return str(t.get("name", "")) if isinstance(t, dict) else ""
+
+            tools = [t for t in tools if _schema_name(t) in allowed_set]
 
         max_iterations = getattr(self.config, "max_iterations", 30)
 
@@ -158,6 +173,15 @@ class WispAgentCore:
         max_iterations: int, approval_handler: Any,
     ) -> AsyncIterator[dict[str, Any]]:
         """Inner turn loop, separated for timeout wrapping."""
+        streamed_any_content = False
+        # Role-restricted agents (subagents): reject disallowed tools even if
+        # the model hallucinates them past the filtered schema list.
+        allowed_tools = session.get("allowed_tools")
+        _allowed_set: set[str] | None = None
+        if isinstance(allowed_tools, (list, tuple, set)) and "all" not in {
+            str(a).lower() for a in allowed_tools
+        }:
+            _allowed_set = {str(a) for a in allowed_tools}
         for iteration in range(max_iterations):
             pending_tool_calls: list[dict[str, Any]] = []
             provider_events: list[dict[str, Any]] = []
@@ -177,6 +201,7 @@ class WispAgentCore:
                     # Accumulate partial content for error recovery
                     if normalized.get("type") == "content":
                         partial_content.append(normalized.get("text", ""))
+                        streamed_any_content = True
 
                     # Security + extension checks for tool calls
                     if normalized.get("type") in ("tool_call", "tool_calls"):
@@ -201,6 +226,15 @@ class WispAgentCore:
                                         single["_index"] = func["index"]
                                     # Process each individually
                                     tc_event = dict(single)
+                                    # Role restriction: reject before any gating
+                                    if _allowed_set is not None and str(single.get("name", "")) not in _allowed_set:
+                                        yield _flatten_event(
+                                            error_event(
+                                                f"Blocked: tool '{single.get('name', '')}' is not allowed for this agent's role",
+                                                recoverable=True,
+                                            )
+                                        )
+                                        continue
                                     # Check security BEFORE yielding
                                     gate = self._get_approval_gate()
                                     allowed, reason = await gate.check(
@@ -243,6 +277,16 @@ class WispAgentCore:
                                     pending_tool_calls.append(tc_event)
                                     yield _flatten_event(tc_event)
                                 continue  # Skip the default yield below since we already yielded
+                            continue
+
+                        # Role restriction: reject before any gating
+                        if _allowed_set is not None and str(normalized.get("name", "")) not in _allowed_set:
+                            yield _flatten_event(
+                                error_event(
+                                    f"Blocked: tool '{normalized.get('name', '')}' is not allowed for this agent's role",
+                                    recoverable=True,
+                                )
+                            )
                             continue
 
                         # Check security BEFORE yielding
@@ -289,10 +333,12 @@ class WispAgentCore:
                     yield normalized
 
             except Exception as exc:
-                # Retry transient errors (connection, timeout, 5xx) up to 2 times
+                # Retry transient errors (connection, timeout, 5xx) up to 2 times.
+                # "timed out" matches requests' ReadTimeout wording; "timeout"
+                # alone misses it.
                 exc_str = str(exc).lower()
                 is_transient = any(
-                    s in exc_str for s in ("connection", "timeout", "reset", "502", "503", "504", "refused", "broken pipe")
+                    s in exc_str for s in ("connection", "timeout", "timed out", "reset", "502", "503", "504", "refused", "broken pipe")
                 )
                 if is_transient and iteration < 2:
                     import asyncio as _aio
@@ -307,7 +353,10 @@ class WispAgentCore:
                     continue  # Retry this iteration
 
                 logger.exception("Provider stream failed")
-                if partial_content:
+                if partial_content and not streamed_any_content:
+                    # Only emit accumulated content when NOTHING was streamed
+                    # live — otherwise transports render the text twice and the
+                    # duplicate lands in session history permanently.
                     yield _flatten_event(content_event("".join(partial_content)))
                 yield _flatten_event(
                     error_event(
@@ -414,6 +463,7 @@ class WispAgentCore:
             loop = asyncio.get_running_loop()
             queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
             done = object()  # sentinel
+            producer_error: list[BaseException] = []
             cancelled = threading.Event()
 
             def _sync_producer() -> None:
@@ -427,9 +477,12 @@ class WispAgentCore:
                             break
                         loop.call_soon_threadsafe(queue.put_nowait, event)
                     loop.call_soon_threadsafe(queue.put_nowait, done)  # type: ignore[arg-type]
-                except Exception:
-                    loop.call_soon_threadsafe(queue.put_nowait, done)  # type: ignore[arg-type]
-                    raise
+                except Exception as exc:
+                    # Deliver the failure to the consumer instead of letting it
+                    # die in the thread excepthook as a clean-looking end.
+                    producer_error.append(exc)
+                    with contextlib.suppress(RuntimeError):
+                        loop.call_soon_threadsafe(queue.put_nowait, done)  # type: ignore[arg-type]
 
             thread = threading.Thread(target=_sync_producer, daemon=True)
             thread.start()
@@ -438,6 +491,8 @@ class WispAgentCore:
                 while True:
                     event = await queue.get()
                     if event is done:
+                        if producer_error:
+                            raise producer_error[0]
                         break
                     yield event
             finally:
@@ -522,7 +577,12 @@ class WispAgentCore:
                 context_mt = max(context_mt, candidate.stat().st_mtime)
             except OSError:
                 pass
-        cache_key = (ws, context_mt)
+        # Subagent prompts ride in role_extra; they MUST be part of the cache
+        # key or a subagent's task prompt poisons the parent/siblings (all
+        # cores sharing one workspace share this dict).
+        subagent_prompt = str(session.get("subagent_system_prompt", "") or "")
+        prompt_variant = hashlib.sha256(subagent_prompt.encode("utf-8")).hexdigest()[:16] if subagent_prompt else ""
+        cache_key = (ws, context_mt, prompt_variant)
         static_prompt = _SYSTEM_PROMPT_CACHE.get(cache_key)
 
         if static_prompt is None:

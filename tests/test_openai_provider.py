@@ -80,6 +80,42 @@ class TestOpenAIProviderPayload:
         assert len(tool_msg) == 1
         assert tool_msg[0]["tool_call_id"] == "call_123"
 
+    def test_build_payload_stringifies_dict_tool_call_arguments(self):
+        provider = OpenAIProvider(model="gpt-4o", api_key="sk-test")
+        messages = [
+            {"role": "user", "content": "read foo.py"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": {"path": "foo.py"}},
+                }],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "contents"},
+        ]
+        payload = provider._build_payload("sys", messages, None)
+        tc = payload["messages"][2]["tool_calls"][0]
+        assert isinstance(tc["function"]["arguments"], str)
+        assert json.loads(tc["function"]["arguments"]) == {"path": "foo.py"}
+        assert tc["id"] == "call_1"
+
+    def test_build_payload_keeps_string_tool_call_arguments(self):
+        provider = OpenAIProvider(model="gpt-4o", api_key="sk-test")
+        messages = [{
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "read_file", "arguments": '{"path": "foo.py"}'},
+            }],
+        }]
+        payload = provider._build_payload("sys", messages, None)
+        tc = payload["messages"][1]["tool_calls"][0]
+        assert tc["function"]["arguments"] == '{"path": "foo.py"}'
+
     def test_convert_tools_already_openai_format(self):
         tools = [
             {"type": "function", "function": {"name": "test", "description": "test", "parameters": {}}},

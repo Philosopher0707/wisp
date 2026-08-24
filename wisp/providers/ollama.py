@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Any, Iterator, Optional
 
 from wisp.ollama_client import OllamaClient
@@ -108,6 +109,7 @@ class OllamaProvider(Provider):
     ):
         """Async streaming - wraps sync generator in thread."""
         import asyncio
+        import contextlib
         import threading
 
         if self._client is not None:
@@ -118,6 +120,7 @@ class OllamaProvider(Provider):
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[dict] = asyncio.Queue()
         done = object()
+        producer_error: list[BaseException] = []
         cancelled = threading.Event()
 
         def _sync_producer():
@@ -127,9 +130,12 @@ class OllamaProvider(Provider):
                         break
                     loop.call_soon_threadsafe(queue.put_nowait, event)
                 loop.call_soon_threadsafe(queue.put_nowait, done)
-            except Exception:
-                loop.call_soon_threadsafe(queue.put_nowait, done)
-                raise
+            except Exception as exc:
+                # Deliver the failure to the consumer instead of letting it
+                # die in the thread excepthook as a clean-looking end.
+                producer_error.append(exc)
+                with contextlib.suppress(RuntimeError):
+                    loop.call_soon_threadsafe(queue.put_nowait, done)
 
         thread = threading.Thread(target=_sync_producer, daemon=True)
         thread.start()
@@ -139,6 +145,8 @@ class OllamaProvider(Provider):
                 while True:
                     event = await queue.get()
                     if event is done:
+                        if producer_error:
+                            raise producer_error[0]
                         break
                     yield event
             finally:
@@ -205,6 +213,8 @@ class OllamaProvider(Provider):
                                 "type": "tool_call",
                                 "name": func.get("name", ""),
                                 "arguments": func.get("arguments", {}),
+                                # Ollama omits ids; downstream threading needs one
+                                "id": tc.get("id") or f"call_{uuid.uuid4().hex[:12]}",
                             }
                     elif msg.get("content"):
                         yield {"type": "content", "text": msg["content"]}

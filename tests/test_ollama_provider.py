@@ -83,6 +83,39 @@ class TestGenerateStreamEvents:
         assert len(tool_events) == 1
         assert tool_events[0]["name"] == "read_file"
 
+    def test_assigns_id_to_tool_call_without_one(self):
+        from wisp.providers.ollama import OllamaProvider
+
+        provider = OllamaProvider(base_url="http://localhost:11434", model="qwen")
+        mock_response = Mock()
+        mock_response.iter_lines.return_value = [
+            b'{"message": {"tool_calls": [{"function": {"name": "read_file", "arguments": {"path": "test.py"}}}]}}',
+            b'{"done": true}',
+        ]
+
+        with patch.object(provider, "_stream_post", return_value=mock_response):
+            events = list(provider.generate_stream_events("sys", []))
+
+        tool_events = [e for e in events if e.get("type") == "tool_call"]
+        assert len(tool_events) == 1
+        assert tool_events[0]["id"].startswith("call_")
+
+    def test_preserves_provided_tool_call_id(self):
+        from wisp.providers.ollama import OllamaProvider
+
+        provider = OllamaProvider(base_url="http://localhost:11434", model="qwen")
+        mock_response = Mock()
+        mock_response.iter_lines.return_value = [
+            b'{"message": {"tool_calls": [{"id": "call_abc123", "function": {"name": "read_file", "arguments": {}}}]}}',
+            b'{"done": true}',
+        ]
+
+        with patch.object(provider, "_stream_post", return_value=mock_response):
+            events = list(provider.generate_stream_events("sys", []))
+
+        tool_events = [e for e in events if e.get("type") == "tool_call"]
+        assert tool_events[0]["id"] == "call_abc123"
+
     def test_handles_http_error(self):
         from wisp.providers.ollama import OllamaProvider
 

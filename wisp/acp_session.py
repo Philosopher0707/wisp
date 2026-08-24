@@ -19,7 +19,6 @@ from wisp.acp_protocol import (
 )
 from wisp.config import WispConfig
 from wisp.infra.store import UnifiedStore
-from wisp.tools import execute_tool, ToolError
 
 logger = logging.getLogger(__name__)
 
@@ -193,8 +192,26 @@ class AcpSession:
             events.append(event)
         return events
 
+    def _get_tool_executor(self):
+        """Return the guarded ToolExecutor for this session, or None.
+
+        Prefers the CompositionRoot's shared executor; falls back to a
+        config-driven bare executor so permission gating still applies.
+        Direct ``execute_tool`` calls are no longer permitted from ACP —
+        they bypassed every guard (audit P2 #10).
+        """
+        root = self._composition_root
+        if root is not None and getattr(root, "tool_executor", None) is not None:
+            return root.tool_executor
+        try:
+            from wisp.tool_executor import ToolExecutor
+            return ToolExecutor(self.config, file_lock=getattr(self, "file_lock", None))
+        except Exception:
+            logger.exception("Failed to construct ToolExecutor for ACP session")
+            return None
+
     def execute_tool(self, tool_call_id: str) -> ToolResultContent:
-        """Execute a pending tool call and return the result."""
+        """Execute a pending tool call through ToolExecutor (all guards apply)."""
         tool_call = self._pending_tool_calls.pop(tool_call_id, None)
         if not tool_call:
             return ToolResultContent(
@@ -203,17 +220,37 @@ class AcpSession:
                 is_error=True,
             )
 
-        try:
-            result = execute_tool(
-                tool_call.name,
-                tool_call.arguments,
-                self.workspace,
-                max_data_chars=8000,
-                file_lock=getattr(self, 'file_lock', None),
+        executor = self._get_tool_executor()
+        if executor is None:
+            return ToolResultContent(
+                id=tool_call_id,
+                content="Tool execution unavailable: no ToolExecutor could be constructed",
+                is_error=True,
             )
+
+        from wisp.async_utils import run_sync_coro
+        from wisp.core.events import TYPE_TOOL_RESULT
+
+        def _run() -> str:
+            async def _collect() -> str:
+                parts: list[str] = []
+                async for ev in executor.execute(
+                    tool_call.name,
+                    dict(tool_call.arguments),
+                    self.workspace,
+                    tool_call_id=tool_call_id,
+                ):
+                    if getattr(ev, "type", None) == TYPE_TOOL_RESULT:
+                        payload = getattr(ev, "data", {}) or {}
+                        result = payload.get("result", "")
+                        parts.append(result if isinstance(result, str) else str(result))
+                return "\n".join(parts)
+
+            return run_sync_coro(_collect())
+
+        try:
+            result = _run()
             return ToolResultContent(id=tool_call_id, content=result)
-        except ToolError as e:
-            return ToolResultContent(id=tool_call_id, content=str(e), is_error=True)
         except Exception as e:
             logger.exception("Tool execution failed")
             return ToolResultContent(

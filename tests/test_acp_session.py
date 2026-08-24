@@ -150,15 +150,28 @@ class TestAcpSession:
         assert result.is_error is True
         assert "not found" in result.content
 
+    def _mock_executor(self, content="file contents", error=None):
+        """Build a ToolExecutor mock whose execute() yields a tool_result event."""
+        from wisp.core.events import TYPE_TOOL_RESULT
+
+        executor = MagicMock()
+
+        async def _execute(name, args, workspace, tool_call_id=None, approval_handler=None):
+            if error is not None:
+                raise error
+            yield MagicMock(type=TYPE_TOOL_RESULT, data={"name": name, "result": content})
+
+        executor.execute = _execute
+        return executor
+
     def test_execute_tool_success(self):
         session = AcpSession("s1", "/tmp", MagicMock())
         session._pending_tool_calls["tc1"] = ToolCallContent(
             id="tc1", name="read_file", arguments={"path": "test.py"}
         )
+        session._get_tool_executor = lambda: self._mock_executor(content="file contents")
 
-        with patch("wisp.acp_session.execute_tool") as mock_exec:
-            mock_exec.return_value = "file contents"
-            result = session.execute_tool("tc1")
+        result = session.execute_tool("tc1")
 
         assert isinstance(result, ToolResultContent)
         assert result.content == "file contents"
@@ -170,11 +183,11 @@ class TestAcpSession:
         session._pending_tool_calls["tc1"] = ToolCallContent(
             id="tc1", name="read_file", arguments={"path": "test.py"}
         )
+        session._get_tool_executor = lambda: self._mock_executor(
+            error=RuntimeError("File not found")
+        )
 
-        with patch("wisp.acp_session.execute_tool") as mock_exec:
-            from wisp.tools import ToolError
-            mock_exec.side_effect = ToolError("File not found")
-            result = session.execute_tool("tc1")
+        result = session.execute_tool("tc1")
 
         assert isinstance(result, ToolResultContent)
         assert result.is_error is True
