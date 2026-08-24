@@ -114,8 +114,10 @@ The circuit breaker exists; wire it into the paths users actually feel:
       evidence in _runner INFO logs (first-event latency). Mitigation
       options: prewarm ping before delegation, or first-token deadline
       inside the runner.
-- [ ] Budget enforcement (`resource_budget.py`) wired into orchestrator
-      admission, not just reporting.
+- [x] Budget enforcement at orchestrator admission — ceiling from
+      `subagent_token_budget` (default 2M/session), headroom floor
+      scales with ceiling; conflicts in patch-apply now revert cleanly
+      (no markers/.rej); first-token deadline aborts silent stalls.
 - [ ] Worktree isolation tested against concurrent same-repo agents.
 - [ ] Delegation analyzer outputs consumed by the planner so subagent
       contracts are derived, not hand-written.
