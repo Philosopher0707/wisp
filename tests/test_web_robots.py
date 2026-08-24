@@ -99,7 +99,8 @@ class TestCheckRobotsTxt:
         mock_resp.status_code = 200
         mock_resp.text = "User-agent: *\nDisallow: /\n"
 
-        with patch("wisp.tools.web.requests.get", return_value=mock_resp):
+        with patch("wisp.tools.web._assert_public_url", return_value="93.184.216.34"), \
+             patch("wisp.tools.web.requests.get", return_value=mock_resp):
             result1 = _check_robots_txt(f"https://{domain}/page1")
         assert robots_url in _robots_cache
         assert result1 is False

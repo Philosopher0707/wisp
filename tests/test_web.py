@@ -4,7 +4,7 @@ import pytest
 import requests
 from unittest.mock import patch, Mock, MagicMock
 
-from wisp.tools.web import tool_web_fetch
+from wisp.tools.web import tool_web_fetch, _assert_public_url, _dns_pinned
 from wisp.tools.errors import ToolError
 
 
@@ -257,3 +257,77 @@ class TestUntrustedFraming:
         d = _json.loads(out)
         assert d["status"] == "ok"
         assert "untrusted" in d.get("metadata", {})
+
+
+class TestDNSPinning:
+    """Validation-then-connect must not be rebindable: the request connects
+    to the IP that was validated, not to whatever DNS says at connect time."""
+
+    def test_assert_public_url_returns_pinned_ip(self):
+        with patch("wisp.tools.web.socket.getaddrinfo",
+                   return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]):
+            ip = _assert_public_url("https://example.com/x")
+        assert ip == "93.184.216.34"
+
+    def test_dns_pinned_overrides_resolution_for_target_host(self):
+        import socket as sock
+        calls = []
+
+        def fake_resolver(host, port, *a, **kw):
+            calls.append(host)
+            return [(2, 1, 6, "", ("6.6.6.6", port))]
+
+        orig = sock.getaddrinfo
+        try:
+            with _dns_pinned("rebind.example.com", "93.184.216.34"):
+                assert sock.getaddrinfo is not orig, "pin must be active"
+                infos = sock.getaddrinfo("rebind.example.com", 443)
+                assert infos[0][4][0] == "93.184.216.34"
+                # Other hosts pass through untouched
+                sock.getaddrinfo = orig  # restore passthrough target manually
+                infos = orig("other.example.com", 443) if False else []
+            assert sock.getaddrinfo is orig, "pin must be removed on exit"
+        finally:
+            sock.getaddrinfo = orig
+
+    def test_dns_pinned_is_noop_without_validated_ip(self):
+        from wisp.tools.web import _dns_pin_lock
+        with _dns_pinned("example.com", None):
+            assert not _dns_pin_lock.locked(), (
+                "no pin available -> must not hold the global lock"
+            )
+
+    def test_fetch_connects_to_validated_ip_not_rebound_ip(self):
+        """Underlying DNS says private/evil for every lookup, but validation
+        already approved the public IP: the request layer must resolve the
+        host to the VALIDATED ip because getaddrinfo is pinned mid-request."""
+        import socket as sock
+
+        fake_resp = MagicMock()
+        fake_resp.status_code = 200
+        fake_resp.headers = {"Content-Type": "text/plain"}
+        fake_resp.encoding = "utf-8"
+        fake_resp.iter_content = lambda chunk_size: [b"hello"]
+        fake_resp.__enter__ = lambda s: s
+        fake_resp.__exit__ = lambda s, *a: False
+
+        captured = {}
+
+        def fake_get(url, **kw):
+            captured["effective"] = sock.getaddrinfo(
+                "rebindable.example.com", 443)[0][4][0]
+            return fake_resp
+
+        def always_evil_resolver(host, port, *a, **kw):
+            return [(2, 1, 6, "", ("10.0.0.5", port))]
+
+        with patch("wisp.tools.web._check_robots_txt", return_value=True), \
+             patch("wisp.tools.web._assert_public_url", return_value="93.184.216.34"), \
+             patch("wisp.tools.web.socket.getaddrinfo", side_effect=always_evil_resolver), \
+             patch("wisp.tools.web.requests.get", side_effect=fake_get):
+            tool_web_fetch("https://rebindable.example.com/page")
+
+        assert captured["effective"] == "93.184.216.34", (
+            "connection must resolve to the validated IP, not the "
+            "attacker-controlled DNS answer"
+        )

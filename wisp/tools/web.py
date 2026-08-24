@@ -6,6 +6,8 @@ Uses requests for fetching and DuckDuckGo for search.
 import json as _json
 import logging
 import os
+import socket
+import threading
 import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
@@ -40,11 +42,14 @@ _MAX_REDIRECTS = 5
 _MAX_BODY_BYTES = 2 * 1024 * 1024  # 2 MB — enough for text, caps memory abuse
 
 
-def _assert_public_url(url: str) -> None:
+def _assert_public_url(url: str) -> "str | None":
     """Block SSRF: refuse URLs whose host resolves to a non-public address.
 
     Prevents the agent from being used to reach loopback services, cloud
     metadata endpoints (169.254.169.254), or RFC1918 intranet hosts.
+    Returns the first validated public IP so callers can pin the connection
+    against connect-time DNS rebinding; None when validation was patched
+    out (tests) — callers must treat None as "no pin available".
     """
     import ipaddress
     import socket
@@ -61,6 +66,7 @@ def _assert_public_url(url: str) -> None:
             f"The domain does not exist or cannot be reached. "
             f"Try a different URL or search for the content instead."
         )
+    public_ip: str | None = None
     for info in infos:
         try:
             ip = ipaddress.ip_address(info[4][0])
@@ -72,6 +78,64 @@ def _assert_public_url(url: str) -> None:
                 f"[WEB_FETCH_BLOCKED] {host} resolves to a non-public "
                 f"address ({ip}); fetching internal network resources is disabled."
             )
+        if public_ip is None:
+            public_ip = str(ip)
+    return public_ip
+
+
+# Serializes pinned fetches: the getaddrinfo override below is process-global,
+# so two threads pinning different hosts would race. Correctness over
+# parallelism here — web fetches are not on any hot path.
+_dns_pin_lock = threading.Lock()
+
+
+class _dns_pinned:
+    """Force ``host`` to resolve to a pre-validated IP for one request.
+
+    Validation-then-connect has a classic rebinding window: the resolver can
+    answer differently at connect time than it did during the check. Pinning
+    the validated IP closes that window.
+    """
+
+    def __init__(self, host: "str | None", ip: "str | None"):
+        self._host = host
+        self._ip = ip
+        self._orig_getaddrinfo = None
+        self._acquired = False
+
+    def __enter__(self) -> "_dns_pinned":
+        if not self._host or not isinstance(self._ip, str):
+            return self
+        _dns_pin_lock.acquire()
+        self._acquired = True
+        try:
+            self._orig_getaddrinfo = socket.getaddrinfo
+
+            def _pinned(host, port, *args, **kwargs):
+                if host == self._host:
+                    if ":" in self._ip:
+                        sockaddr = (self._ip, port or 0, 0, 0)
+                        family = socket.AF_INET6
+                    else:
+                        sockaddr = (self._ip, port or 0)
+                        family = socket.AF_INET
+                    return [(family, socket.SOCK_STREAM, 6, "", sockaddr)]
+                return self._orig_getaddrinfo(host, port, *args, **kwargs)
+
+            socket.getaddrinfo = _pinned
+        except Exception:
+            self.__exit__()
+            raise
+        return self
+
+    def __exit__(self, *exc) -> None:
+        try:
+            if self._acquired and self._orig_getaddrinfo is not None:
+                socket.getaddrinfo = self._orig_getaddrinfo
+        finally:
+            if self._acquired:
+                self._acquired = False
+                _dns_pin_lock.release()
 
 # Prompt-injection containment: everything fetched from the web is
 # attacker-writable text. The markers give models a structural signal —
@@ -165,12 +229,29 @@ def _check_robots_txt(target_url: str, user_agent: str = "*") -> bool:
             return allowed
 
     try:
-        resp = requests.get(
-            robots_url,
-            timeout=_ROBOTS_FETCH_TIMEOUT,
-            headers={"User-Agent": user_agent},
-            allow_redirects=True,
-        )
+        try:
+            pinned_ip = _assert_public_url(robots_url)
+        except Exception as exc:
+            # robots.txt is voluntary: an unresolvable/blocked robots host is
+            # treated like an unreachable one (allow). The page fetch itself
+            # re-validates independently.
+            logger.debug("robots.txt preflight failed for %s: %s", cache_key, exc)
+            _robots_cache[cache_key] = (True, now)
+            return True
+        # Redirects are refused here rather than followed: a robots.txt that
+        # bounces to an intranet host must not turn compliance into an SSRF
+        # bypass. Unreachable/misdirected robots.txt stays allow-by-default.
+        with _dns_pinned(urllib.parse.urlparse(robots_url).hostname, pinned_ip):
+            resp = requests.get(
+                robots_url,
+                timeout=_ROBOTS_FETCH_TIMEOUT,
+                headers={"User-Agent": user_agent},
+                allow_redirects=False,
+            )
+        if resp.status_code in (301, 302, 303, 307, 308):
+            logger.debug("robots.txt for %s is a redirect; treating as absent", cache_key)
+            _robots_cache[cache_key] = (True, now)
+            return True
         if resp.status_code == 404:
             # No robots.txt → everything allowed
             _robots_cache[cache_key] = (True, now)
@@ -279,11 +360,12 @@ def tool_web_fetch(url: str, workspace: str = ".", max_chars: int = 10000) -> st
         response = None
         current_url: str = url
         for _hop in range(_MAX_REDIRECTS):
-            _assert_public_url(current_url)
-            response = requests.get(
-                current_url, headers=headers, timeout=30,
-                allow_redirects=False, stream=True,
-            )
+            pinned_ip = _assert_public_url(current_url)
+            with _dns_pinned(urlparse(current_url).hostname, pinned_ip):
+                response = requests.get(
+                    current_url, headers=headers, timeout=30,
+                    allow_redirects=False, stream=True,
+                )
             if response.status_code in (301, 302, 303, 307, 308):
                 location = response.headers.get("Location", "")
                 response.close()
