@@ -35,6 +35,44 @@ _USER_AGENT = "Wisp-Agent/0.1.0 (Web Fetch Tool; Respects robots.txt)"
 
 _READER_PROXY_BASE = "https://r.jina.ai/"
 
+# SSRF / fetch caps
+_MAX_REDIRECTS = 5
+_MAX_BODY_BYTES = 2 * 1024 * 1024  # 2 MB — enough for text, caps memory abuse
+
+
+def _assert_public_url(url: str) -> None:
+    """Block SSRF: refuse URLs whose host resolves to a non-public address.
+
+    Prevents the agent from being used to reach loopback services, cloud
+    metadata endpoints (169.254.169.254), or RFC1918 intranet hosts.
+    """
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+
+    host = urlparse(url).hostname
+    if not host:
+        raise ToolError(f"Invalid URL (no host): {url}")
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror as e:
+        raise ToolError(
+            f"[WEB_FETCH_FAILED] DNS resolution failed for {host}: {e}. "
+            f"The domain does not exist or cannot be reached. "
+            f"Try a different URL or search for the content instead."
+        )
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            continue
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            raise ToolError(
+                f"[WEB_FETCH_BLOCKED] {host} resolves to a non-public "
+                f"address ({ip}); fetching internal network resources is disabled."
+            )
+
 # Prompt-injection containment: everything fetched from the web is
 # attacker-writable text. The markers give models a structural signal —
 # reinforced by role system prompts — that this is quoted data, never
@@ -196,8 +234,12 @@ def tool_web_fetch(url: str, workspace: str = ".", max_chars: int = 10000) -> st
 
     On bot-blocks (403/429, robots refusal) retries once through a
     keyless reader proxy — research agents hit paywalled-to-bots sites
-    constantly and honest failure every time caps their depth. Disable
-    with WISP_WEB_PROXY=off (URLs then never leave the direct path).
+    constantly and honest failure every time caps their depth. The proxy
+    sends the URL to a third party, so it is OFF by default; opt in with
+    WISP_WEB_PROXY=on.
+
+    SSRF: every redirect hop is resolved and rejected if it points at a
+    non-public address. Response bodies are capped before parsing.
     """
     from urllib.parse import urlparse
 
@@ -209,7 +251,10 @@ def tool_web_fetch(url: str, workspace: str = ".", max_chars: int = 10000) -> st
     if parsed.scheme not in ("http", "https"):
         raise ToolError(f"Unsupported URL scheme: {parsed.scheme}")
 
-    proxy_enabled = os.environ.get("WISP_WEB_PROXY", "on").lower() not in ("off", "false", "0")
+    proxy_enabled = os.environ.get("WISP_WEB_PROXY", "off").lower() in ("on", "true", "1")
+
+    # SSRF: reject non-public targets before any network I/O (incl. robots.txt)
+    _assert_public_url(url)
 
     # ── robots.txt compliance ──
     if not _check_robots_txt(url, user_agent=_USER_AGENT):
@@ -229,26 +274,62 @@ def tool_web_fetch(url: str, workspace: str = ".", max_chars: int = 10000) -> st
         headers = {
             "User-Agent": _USER_AGENT
         }
-        response = requests.get(url, headers=headers, timeout=30, allow_redirects=True)
-        response.raise_for_status()
-        
-        content_type = response.headers.get("Content-Type", "").lower()
-        
+        # Manual redirect loop so every hop gets the SSRF check; body is
+        # capped at _MAX_BODY_BYTES before decoding.
+        response = None
+        current_url: str = url
+        for _hop in range(_MAX_REDIRECTS):
+            _assert_public_url(current_url)
+            response = requests.get(
+                current_url, headers=headers, timeout=30,
+                allow_redirects=False, stream=True,
+            )
+            if response.status_code in (301, 302, 303, 307, 308):
+                location = response.headers.get("Location", "")
+                response.close()
+                if not location:
+                    break
+                from urllib.parse import urljoin
+                next_url = urljoin(current_url, location)
+                if urlparse(next_url).scheme not in ("http", "https"):
+                    raise ToolError(f"[WEB_FETCH_BLOCKED] Redirect to unsupported scheme: {next_url}")
+                current_url = next_url
+                continue
+            with response:
+                response.raise_for_status()
+                raw = bytearray()
+                for chunk in response.iter_content(chunk_size=65536):
+                    raw.extend(chunk)
+                    if len(raw) > _MAX_BODY_BYTES:
+                        break
+                content_type = (response.headers.get("Content-Type") or "").lower()
+                encoding = response.encoding or "utf-8"
+            body = bytes(raw[:_MAX_BODY_BYTES])
+            text_response = body.decode(encoding, errors="replace")
+            truncated_body = len(raw) > _MAX_BODY_BYTES
+            break
+        else:
+            raise ToolError(f"[WEB_FETCH_FAILED] Too many redirects fetching {url}")
+        url = current_url
+
         # Get text content
         if "text/html" in content_type:
             # Try to extract readable text from HTML using module-level extractor
             try:
                 extractor = _TextExtractor()
-                extractor.feed(response.text)
+                extractor.feed(text_response)
                 text = extractor.get_text()
             except Exception as e:
                 logger.warning("HTML text extraction failed for %s: %s — falling back to raw HTML", url, e)
-                text = response.text
+                text = text_response
                 if len(text) > max_chars:
                     text = text[:max_chars] + "\n[Warning: HTML parsing failed, showing raw HTML. Results may be hard to read.]"
         else:
-            text = response.text
-        
+            text = text_response
+
+        if truncated_body:
+            text += f"\n[Body truncated at {_MAX_BODY_BYTES} bytes]"
+
         # Truncate if needed
         if len(text) > max_chars:
             text = text[:max_chars] + f"\n... [truncated: {len(text)} total chars]"
@@ -384,16 +465,14 @@ def tool_web_search(query: str, num_results: int = 5) -> str:
                 self._text_buf = ""
 
     try:
-        import ssl
         qs = urllib.parse.urlencode({"q": query})
         url = f"https://html.duckduckgo.com/html/?{qs}"
         req = urllib.request.Request(
             url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"}
         )
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+        # Default verified TLS context — disabling verification would let a
+        # MITM inject search results into the agent's context.
+        with urllib.request.urlopen(req, timeout=10) as resp:
             html = resp.read().decode("utf-8", errors="replace")
 
         parser = _ResultParser()

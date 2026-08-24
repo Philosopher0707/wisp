@@ -165,10 +165,12 @@ class TestToolWebFetchRobotsBlocking:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.headers = {"Content-Type": "text/plain"}
-        mock_response.text = "hello world"
+        mock_response.encoding = "utf-8"
+        mock_response.iter_content = lambda chunk_size=65536: iter([b"hello world"])
 
-        with patch("wisp.tools.web._check_robots_txt", return_value=True):
-            with patch("wisp.tools.web.requests.get", return_value=mock_response):
-                result = tool_web_fetch("https://allowed.com/page", workspace=".")
-                assert "✓ Fetched" in result
-                assert "hello world" in result
+        with patch("wisp.tools.web._check_robots_txt", return_value=True), \
+             patch("wisp.tools.web._assert_public_url"), \
+             patch("wisp.tools.web.requests.get", return_value=mock_response):
+            result = tool_web_fetch("https://allowed.com/page", workspace=".")
+            assert "✓ Fetched" in result
+            assert "hello world" in result
