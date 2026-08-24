@@ -148,8 +148,9 @@ class TestCheckRobotsTxt:
 class TestToolWebFetchRobotsBlocking:
     """Integration tests that tool_web_fetch respects the robots check."""
 
-    def test_blocked_by_robots_txt_raises(self):
+    def test_blocked_by_robots_txt_raises(self, monkeypatch):
         """When robots.txt disallows, tool_web_fetch raises [WEB_FETCH_BLOCKED]."""
+        monkeypatch.setenv("WISP_WEB_PROXY", "off")  # direct path only
         with patch("wisp.tools.web._check_robots_txt", return_value=False):
             with pytest.raises(ToolError) as exc_info:
                 tool_web_fetch("https://blocked.com/secret", workspace=".")

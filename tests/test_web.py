@@ -44,8 +44,9 @@ class TestWebFetchErrors:
             assert "Do NOT retry" in msg, \
                 f"Should tell the agent not to retry, got: {msg}"
 
-    def test_403_error_returns_actionable_message(self):
+    def test_403_error_returns_actionable_message(self, monkeypatch):
         """HTTP 403 errors should mention access denied and suggest alternatives."""
+        monkeypatch.setenv("WISP_WEB_PROXY", "off")  # direct path only
         mock_response = Mock()
         mock_response.status_code = 403
         with patch("wisp.tools.web.requests.get") as mock_get:
@@ -59,8 +60,9 @@ class TestWebFetchErrors:
             assert "403" in msg
             assert "Access denied" in msg or "blocking" in msg
 
-    def test_429_error_returns_actionable_message(self):
+    def test_429_error_returns_actionable_message(self, monkeypatch):
         """HTTP 429 rate limit errors should mention rate limiting."""
+        monkeypatch.setenv("WISP_WEB_PROXY", "off")  # direct path only
         mock_response = Mock()
         mock_response.status_code = 429
         with patch("wisp.tools.web.requests.get") as mock_get:
@@ -108,3 +110,85 @@ class TestWebFetchErrors:
             result = tool_web_fetch("https://example.com", workspace=".")
         assert "[WEB_FETCH_FAILED]" not in result
         assert "✓ Fetched" in result
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Grill Q4: reader-proxy fallback for bot-blocked fetches, default ON
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestReaderProxyFallback:
+    """403/robots-block retry through the reader proxy; honest failure."""
+
+    def _blocked(self, status):
+        resp = Mock()
+        resp.status_code = status
+        return requests.exceptions.HTTPError(
+            f"{status} Client Error", response=resp
+        )
+
+    def test_403_falls_back_to_reader_proxy(self, monkeypatch):
+        monkeypatch.delenv("WISP_WEB_PROXY", raising=False)
+        direct = Mock()
+        direct.status_code = 403
+        proxy_resp = Mock()
+        proxy_resp.status_code = 200
+        proxy_resp.text = "GST launched July 1, 2017"
+
+        calls = []
+        def fake_get(url, **kwargs):
+            calls.append(url)
+            if url.startswith("https://r.jina.ai/"):
+                return proxy_resp
+            raise self._blocked(403)
+
+        with patch("wisp.tools.web.requests.get", side_effect=fake_get), \
+             patch("wisp.tools.web._check_robots_txt", return_value=True):
+            out = tool_web_fetch("https://pib.gov.in/article")
+
+        assert "via reader proxy" in out
+        assert "GST launched" in out
+        assert calls[0] == "https://pib.gov.in/article"
+        assert calls[1] == "https://r.jina.ai/https://pib.gov.in/article"
+
+    def test_robots_block_uses_proxy(self, monkeypatch):
+        monkeypatch.delenv("WISP_WEB_PROXY", raising=False)
+        proxy_resp = Mock()
+        proxy_resp.status_code = 200
+        proxy_resp.text = "wikipedia text"
+        with patch("wisp.tools.web._check_robots_txt", return_value=False), \
+             patch("wisp.tools.web.requests.get", return_value=proxy_resp) as g:
+            out = tool_web_fetch("https://en.wikipedia.org/wiki/GST")
+        assert "via reader proxy" in out
+        assert g.call_args[0][0].startswith("https://r.jina.ai/")
+
+    def test_kill_switch_restores_honest_failure(self, monkeypatch):
+        monkeypatch.setenv("WISP_WEB_PROXY", "off")
+        direct = Mock()
+        direct.status_code = 403
+        with patch("wisp.tools.web.requests.get") as mock_get, \
+             patch("wisp.tools.web._check_robots_txt", return_value=True):
+            mock_get.side_effect = self._blocked(403)
+            with pytest.raises(ToolError, match="HTTP 403"):
+                tool_web_fetch("https://blocked.example.com/x")
+
+    def test_404_never_proxies(self, monkeypatch):
+        monkeypatch.delenv("WISP_WEB_PROXY", raising=False)
+        direct = Mock()
+        direct.status_code = 404
+        with patch("wisp.tools.web.requests.get") as mock_get, \
+             patch("wisp.tools.web._check_robots_txt", return_value=True):
+            mock_get.side_effect = self._blocked(404)
+            with pytest.raises(ToolError, match="HTTP 404"):
+                tool_web_fetch("https://gone.example.com/page")
+        assert mock_get.call_count == 1, "proxy must not be tried for 404"
+
+    def test_proxy_failure_is_honest(self, monkeypatch):
+        monkeypatch.delenv("WISP_WEB_PROXY", raising=False)
+        direct = Mock()
+        direct.status_code = 403
+        with patch("wisp.tools.web.requests.get") as mock_get, \
+             patch("wisp.tools.web._check_robots_txt", return_value=True):
+            mock_get.side_effect = self._blocked(403)
+            with pytest.raises(ToolError, match="Reader-proxy fallback also failed"):
+                tool_web_fetch("https://blocked.example.com/y")
