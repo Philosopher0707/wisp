@@ -144,10 +144,12 @@ class WorktreeManager:
     async def apply_patch(self, patch: str) -> bool:
         """Apply a git patch to the parent workspace.
 
-        Uses --3way for conflict resolution (3-way merge). Falls back to
-        a best-effort apply if 3-way merge fails.
+        Uses --3way first (resolves parallel-agent drift when possible).
+        A conflicted 3-way result is REVERTED — conflict markers must
+        never land in the parent tree — and reported as False so callers
+        (and humans) decide what happens next.
 
-        Returns True if the patch applied cleanly, False on conflict.
+        Returns True only when the patch applied cleanly.
         """
         if not patch.strip():
             return True
@@ -168,16 +170,21 @@ class WorktreeManager:
 
         err_text = stderr.decode("utf-8", errors="replace").strip()
 
-        # If 3-way produced merge conflicts, those are already in the working tree.
-        # git apply --3way exits with non-zero but the conflicted files are written
-        # with conflict markers — that's acceptable for parallel agent runs.
-        if "CONFLICT" in err_text or "conflict" in err_text.lower():
-            logger.info("Patch applied with merge conflicts (auto-resolved where possible): %s", err_text[:200])
-            return True
+        if "conflict" in err_text.lower():
+            # git apply --3way wrote conflict markers into the working
+            # tree before failing. Restore those files to HEAD: a False
+            # return must mean 'nothing changed', not 'changed badly'.
+            await self._restore_conflicted_files(err_text)
+            logger.warning(
+                "Patch conflicted; affected files restored to HEAD: %s",
+                err_text[:200],
+            )
+            return False
 
-        # Fall back to regular apply (rejects on conflict instead of merging)
+        # Retry without 3-way (e.g. missing blob objects), plain apply —
+        # all-or-nothing per file, no .rej debris.
         proc = await asyncio.create_subprocess_exec(
-            "git", "apply", "--reject", "--whitespace=fix",
+            "git", "apply",
             cwd=str(self.workspace),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
@@ -186,13 +193,47 @@ class WorktreeManager:
         stdout, stderr = await proc.communicate(input=patch.encode("utf-8"))
 
         if proc.returncode == 0:
-            logger.info("Patch applied (with whitespace fixes) to %s", self.workspace)
+            logger.info("Patch applied (plain) to %s", self.workspace)
             return True
 
-        # Final attempt: just apply what we can
         err_text = stderr.decode("utf-8", errors="replace").strip()
         logger.warning("git apply failed (exit %d): %s", proc.returncode, err_text[:300])
         return False
+
+    async def _restore_conflicted_files(self, apply_stderr: str) -> None:
+        """Restore every path git considers unmerged after a failed 3-way."""
+        listed = await asyncio.create_subprocess_exec(
+            "git", "diff", "--name-only", "--diff-filter=U",
+            cwd=str(self.workspace),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out, _ = await listed.communicate()
+        conflicted = [l for l in out.decode().splitlines() if l.strip()]
+
+        if not conflicted:
+            # Fallback: derive paths from the patch itself.
+            conflicted = [
+                m.replace("b/", "", 1)
+                for m in re.findall(r"^\+\+\+ b/(.+)$", apply_stderr, re.M)
+            ]
+
+        for name in conflicted:
+            name = name.strip()
+            if not name:
+                continue
+            restore = await asyncio.create_subprocess_exec(
+                "git", "checkout", "-f", "HEAD", "--", name,
+                cwd=str(self.workspace),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, r_err = await restore.communicate()
+            if restore.returncode != 0:
+                logger.error(
+                    "Failed to restore %s after conflict: %s",
+                    name, r_err.decode(errors="replace")[:200],
+                )
 
     async def apply_patches_sequential(self, patches: list[str]) -> dict[str, bool]:
         """Apply multiple patches sequentially. Skips on conflict.
