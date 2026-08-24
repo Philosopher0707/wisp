@@ -1,6 +1,6 @@
 """Tests for wisp.acp_session — ACP session management."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 

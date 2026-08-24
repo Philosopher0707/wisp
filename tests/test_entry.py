@@ -198,7 +198,6 @@ def test_sigint_during_turn_cancels_task_and_dearms():
     """First Ctrl+C while a turn runs cancels the task and hands the next
     press to the default handler (force-quit path)."""
     import io
-    import signal as sig
     from contextlib import redirect_stdout
     from wisp.entry import make_repl_sigint_handler
 

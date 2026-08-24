@@ -333,7 +333,7 @@ class TestEdgeCases:
 
 class TestStatusSymbols:
     def _sym(self, mode):
-        from wisp.terminal_width import status_symbols, set_output_mode, OutputMode
+        from wisp.terminal_width import status_symbols, set_output_mode
         old = set_output_mode(mode)
         try:
             return status_symbols()

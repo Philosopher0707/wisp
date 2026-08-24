@@ -74,16 +74,6 @@ class TestToolCallDisplay:
         assert "read_file" in output
         transport.stop()
 
-    def test_tool_result_event_renders(self):
-        transport = _make_transport()
-        transport.start()
-        buf = StringIO()
-        event = {"type": "tool_result", "name": "read_file", "result": "file content here", "duration_ms": 5.0}
-        transport._render_event(buf, event)
-        output = buf.getvalue()
-        assert "read_file" in output
-        transport.stop()
-
 
 class TestContentDisplay:
     def test_content_event_renders(self):

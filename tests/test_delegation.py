@@ -2,6 +2,15 @@
 from wisp.multi_agent.delegation import DelegationAnalyzer
 
 
+class _MockCore:
+    """Tripwire: delegation-refusal tests must never construct a core."""
+
+    def __init__(self):
+        raise AssertionError(
+            "core_factory was invoked — the gate should have refused before this"
+        )
+
+
 class TestDelegationAnalyzer:
     def test_simple_query_no_delegation(self):
         analyzer = DelegationAnalyzer()
