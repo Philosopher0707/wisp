@@ -200,7 +200,20 @@ class AgentRuntime:
                         continue
                 while not sub_events.empty():
                     yield sub_events.get_nowait()
-                delegation_context = delegate_task.result()
+                try:
+                    delegation_context = delegate_task.result()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    # The delegation probe must never abort the turn before
+                    # persistence — degrade to a direct answer instead.
+                    logger.warning("Delegation probe failed: %s", exc)
+                    yield {
+                        "type": "system",
+                        "message": "Subagent delegation crashed — answering directly",
+                        "timestamp": time.time(),
+                    }
+                    delegation_context = None
 
                 if delegation_context:
                     failed = delegation_context.startswith("[DELEGATION FAILED]")

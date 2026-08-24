@@ -95,6 +95,7 @@ def _run_cli(root: CompositionRoot, prompt: str | None = None, **kwargs) -> None
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    root.bind_loop(loop)
     try:
         if prompt:
             # Single-shot mode: run one prompt on the persistent loop, then exit
@@ -224,6 +225,7 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
     if own_loop:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        root.bind_loop(loop)
 
     # Create session (async, on the persistent loop)
     session = loop.run_until_complete(root.runtime.get_or_create_session(

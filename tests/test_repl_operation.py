@@ -49,6 +49,9 @@ class _StubRoot:
     def __init__(self, runtime):
         self.runtime = runtime
 
+    def bind_loop(self, loop):
+        pass
+
 
 class _StubConfig:
     model = "test-model"

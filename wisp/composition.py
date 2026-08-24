@@ -214,6 +214,20 @@ class CompositionRoot:
             logger.warning("Failed to create compaction provider for model=%s", model, exc_info=True)
             return None
 
+    def bind_loop(self, loop: Any) -> None:
+        """Register the shared thread pool as *loop*'s default executor.
+
+        Must be called after the event loop exists but before turns run —
+        the pool cannot be registered in __post_init__ because no loop is
+        running there, and asyncio.to_thread()/run_in_executor(None) only
+        reach the shared pool through the loop's default executor.
+        """
+        try:
+            from wisp.async_utils import get_shared_executor
+            loop.set_default_executor(get_shared_executor())
+        except Exception:
+            logger.warning("Could not register shared executor", exc_info=True)
+
     def start(self) -> None:
         """Start all services."""
         # Validate config before starting services
@@ -234,6 +248,12 @@ class CompositionRoot:
             pass
         try:
             self._lsp_manager.shutdown_all()
+        except Exception:
+            pass
+        # Disconnect MCP stdio subprocesses explicitly; atexit is the
+        # backstop, not the owner — shutdown() should leave nothing running.
+        try:
+            self._mcp_manager.shutdown()
         except Exception:
             pass
         try:

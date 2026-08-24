@@ -50,6 +50,9 @@ class FakeRoot:
         self.runtime = FakeRuntime()
         self.config = FakeConfig()
 
+    def bind_loop(self, loop):
+        pass
+
 
 def test_repl_help_command():
     """/help in REPL should show commands without LLM call."""

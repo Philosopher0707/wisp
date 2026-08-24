@@ -164,3 +164,45 @@ class TestStricterAutoThreshold:
                 {"id": "s", "messages": []}, MagicMock(delegation_threshold=0.45),
             ))
         assert result is None, "implicit 0.30 must not trigger delegation"
+
+
+class TestDelegationCrashIsolation:
+    """A crashing delegation probe must degrade, not abort the turn."""
+
+    def test_run_turn_survives_probe_exception(self, tmp_path):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from wisp.core.runtime import AgentRuntime
+        from wisp.infra.store import UnifiedStore
+        from wisp.infra.extensions import ExtensionHost
+        from wisp.infra.security import PermissionMode, SecurityPolicy
+        from wisp.infra.telemetry import Telemetry
+
+        runtime = AgentRuntime(
+            store=UnifiedStore(tmp_path / "t.db"),
+            security=SecurityPolicy(permission_mode=PermissionMode.FULL),
+            extensions=ExtensionHost(),
+            telemetry=Telemetry(),
+            core_factory=lambda: MagicMock(),
+        )
+        # Probe explodes; orchestrator present so the probe path is taken.
+        runtime.orchestrator = MagicMock()
+        with patch.object(runtime, "_maybe_delegate",
+                          new=AsyncMock(side_effect=RuntimeError("probe blew up"))):
+            async def collect():
+                events = []
+                async for ev in runtime.run_turn(
+                    {"id": "s", "messages": []},
+                    "hello",
+                    approval_handler=None,
+                ):
+                    events.append(ev)
+                return events
+
+            events = asyncio.run(collect())  # must not raise
+
+        types = [e.get("type") for e in events]
+        assert "system" in types
+        system_msgs = [e for e in events if e.get("type") == "system"]
+        assert any("crashed" in str(e.get("message", "")).lower() for e in system_msgs)

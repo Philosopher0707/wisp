@@ -197,3 +197,50 @@ class TestHookManagerSeparation:
         from wisp.infra.hook_types import ToolHookManager
         root = CompositionRoot(config)
         assert isinstance(root.subagent_orchestrator.hook_manager, ToolHookManager)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Executor binding + MCP teardown (wiring-audit round)
+# ═══════════════════════════════════════════════════════════════════
+
+class TestBindLoop:
+    def test_bind_loop_registers_shared_executor_as_default(self, config):
+        import asyncio
+        from wisp.composition import CompositionRoot
+        from wisp.async_utils import get_shared_executor
+
+        root = CompositionRoot(config)
+        loop = asyncio.new_event_loop()
+        try:
+            root.bind_loop(loop)
+            # to_thread / run_in_executor(None) resolve through the default
+            # executor; it must be the shared configured pool.
+            assert loop._default_executor is get_shared_executor()
+        finally:
+            loop.close()
+
+    def test_bind_loop_survives_executor_failure(self, config):
+        import asyncio
+        from unittest.mock import patch
+        from wisp.composition import CompositionRoot
+
+        root = CompositionRoot(config)
+        loop = asyncio.new_event_loop()
+        try:
+            with patch("wisp.async_utils.get_shared_executor",
+                       side_effect=RuntimeError("pool broken")):
+                root.bind_loop(loop)  # must not raise
+        finally:
+            loop.close()
+
+
+class TestShutdownTearsDownMCP:
+    def test_shutdown_disconnects_mcp_servers(self, config):
+        from unittest.mock import MagicMock
+        from wisp.composition import CompositionRoot
+
+        root = CompositionRoot(config)
+        root._mcp_manager = MagicMock()
+        root._lsp_manager = MagicMock()
+        root.shutdown()
+        root._mcp_manager.shutdown.assert_called_once()

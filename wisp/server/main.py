@@ -4,6 +4,8 @@ Replaces: monolithic 2954-line server.py.
 Mounts all domain routers on a single FastAPI app.
 """
 
+import asyncio
+
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -60,6 +62,8 @@ async def lifespan(app: FastAPI):
     config = WispConfig()
     root = CompositionRoot(config)
     root.start()
+    # Lifespan runs inside the serving loop — bind the shared pool now.
+    root.bind_loop(asyncio.get_running_loop())
     app.state.root = root
     yield
     logger.info("Wisp API Server shutting down...")
