@@ -156,6 +156,13 @@ class CompositionRoot:
             store=self.store,
         )
 
+        # Budget enforcement at admission: the ceiling must reach the
+        # orchestrator or its check() compares against None forever.
+        # getattr-tolerant because test configs may be partial.
+        self.subagent_orchestrator.set_global_token_budget(
+            getattr(self.config, "subagent_token_budget", 0) or None
+        )
+
         # Wire orchestrator back into runtime and tool_executor for spawn/fanout dispatch
         self.runtime.orchestrator = self.subagent_orchestrator
         self.tool_executor.subagent_orchestrator = self.subagent_orchestrator

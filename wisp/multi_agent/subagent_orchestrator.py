@@ -32,6 +32,10 @@ logger = logging.getLogger(__name__)
 
 # Fallback defaults — runtime values come from config
 _MAX_SUBAGENT_DEPTH_DEFAULT = 2
+
+# Below this much remaining budget, a new child cannot even warm up —
+# admission refuses instead of admitting into certain overshoot.
+_MIN_ADMISSION_HEADROOM_TOKENS = 1_000
 _MAX_SUBAGENT_BRANCHING_DEFAULT = 3
 
 
@@ -52,6 +56,10 @@ class BudgetTracker:
         if self._global_budget is None:
             return None
         return max(0, self._global_budget - self._tokens_consumed)
+
+    def get_ceiling(self) -> int:
+        """Configured ceiling; 0 when unlimited."""
+        return self._global_budget or 0
 
     def get_ratio(self) -> float | None:
         if self._global_budget is None or self._global_budget <= 0:
@@ -614,8 +622,23 @@ class SubagentOrchestrator:
             await self._fire_subagent_hook("subagent_complete", contract, cached)
             return cached
 
-        # ── Token budget check ─────────────────────────────────────────
+        # ── Token budget check (admission gate) ────────────────────────
+        # Refuse when exhausted OR when the remaining headroom cannot
+        # plausibly fund even a minimal child — overshoot-by-one-child
+        # is still overshoot.
         budget_error = self._budget.check()
+        if not budget_error:
+            remaining = self._budget.get_remaining()
+            if remaining is not None:
+                # Headroom floor scales down for small ceilings so a
+                # 10-token test budget doesn't trip a 1_000-token floor.
+                floor = min(_MIN_ADMISSION_HEADROOM_TOKENS,
+                            max(1, self._budget.get_ceiling() // 10))
+                if remaining < floor:
+                    budget_error = (
+                        f"only {remaining} tokens of headroom left "
+                        f"(minimum {floor} to admit a child)"
+                    )
         if budget_error:
             logger.warning("Token budget check failed for %s: %s", contract.name, budget_error)
             result = SubagentResult(

@@ -1819,3 +1819,92 @@ class TestFirstTokenDeadline:
             result = asyncio.run(o.run(contract))
 
         assert result.success and result.output == "quick"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Grill campaign item 3: budget enforced at admission, not just recorded
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestBudgetAdmission:
+    """A spent ceiling refuses new children before any execution."""
+
+    def _orch(self, tmp_path):
+        return SubagentOrchestrator(
+            config=_child_config({}), workspace=tmp_path
+        )
+
+    def test_exhausted_budget_blocks_before_runner(self, tmp_path):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from wisp.multi_agent.task import SubagentContract
+
+        o = self._orch(tmp_path)
+        o.set_global_token_budget(1_000)
+        o._budget.record(1_000)  # ceiling reached
+
+        ran = []
+        async def fake_run(**kwargs):
+            ran.append(1)
+            raise AssertionError("runner must not execute past admission")
+
+        contract = SubagentContract(name="r", task="t", worktree_isolated=False)
+        with patch.object(o._runner, "run", fake_run), \
+             patch.object(o, "_resolve_worktree", new=AsyncMock(return_value=None)), \
+             patch.object(o, "_fire_subagent_hook", new=AsyncMock()):
+            result = asyncio.run(o.run(contract))
+
+        assert not ran
+        assert not result.success
+        assert "[TOKEN BUDGET EXCEEDED]" in result.output
+
+    def test_headroom_below_minimum_refuses_admission(self, tmp_path):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from wisp.multi_agent.task import SubagentContract
+
+        o = self._orch(tmp_path)
+        o.set_global_token_budget(10_000)
+        o._budget.record(9_500)  # 500 left < 1_000 headroom floor
+
+        contract = SubagentContract(name="r", task="t", worktree_isolated=False)
+        with patch.object(o._runner, "run", new=AsyncMock()), \
+             patch.object(o, "_resolve_worktree", new=AsyncMock(return_value=None)), \
+             patch.object(o, "_fire_subagent_hook", new=AsyncMock()):
+            result = asyncio.run(o.run(contract))
+
+        assert "[TOKEN BUDGET EXCEEDED]" in result.output
+
+    def test_no_ceiling_never_blocks(self, tmp_path):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from wisp.multi_agent.task import SubagentContract, SubagentResult
+
+        o = self._orch(tmp_path)
+        # set_global_token_budget never called → None → unlimited
+
+        ok = SubagentResult(
+            task_id="r", success=True, output="fine",
+            files_changed=[], iterations_used=1,
+        )
+        async def fake_run(**kwargs):
+            return ok
+
+        contract = SubagentContract(name="r", task="t", worktree_isolated=False)
+        with patch.object(o._runner, "run", new=fake_run), \
+             patch.object(o, "_resolve_worktree", new=AsyncMock(return_value=None)), \
+             patch.object(o, "_fire_subagent_hook", new=AsyncMock()):
+            result = asyncio.run(o.run(contract))
+
+        assert result.success
+
+    def test_composition_wires_config_ceiling(self):
+        from wisp.config import WispConfig
+
+        cfg = WispConfig()
+        assert cfg.subagent_token_budget > 0, (
+            "default must be a finite ceiling for admission to ever fire"
+        )

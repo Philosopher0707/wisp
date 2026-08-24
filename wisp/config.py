@@ -421,6 +421,7 @@ class WispConfig:
     # ── Concurrency & subagents ───────────────────────────────────
     thread_pool_size: int
     subagent_pool_size: int
+    subagent_token_budget: int
     max_subagent_timeout: int
     max_subagent_depth: int
     max_subagent_branching: int
@@ -487,6 +488,12 @@ class WispConfig:
         # Max seconds for a single agent turn before timeout
         object.__setattr__(self, "turn_timeout",
             _parse_int(get_setting("turn_timeout", "1800"), 1800, 10, 7200)
+        )
+        # Session-wide subagent token ceiling; admission refuses new
+        # children once spent (0 = unlimited)
+        object.__setattr__(self, "subagent_token_budget",
+            _parse_int(get_setting("subagent_token_budget", "2000000"),
+                       2000000, 0, 100_000_000)
         )
         # Max repeated identical tool calls before stopping (0 = disabled)
         object.__setattr__(self, "max_reflections",
