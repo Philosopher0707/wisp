@@ -222,3 +222,25 @@ class TestNoNestedEventLoops:
         assert "asyncio.new_event_loop(" not in source, "_runner must not create new event loops"
         assert "run_until_complete(" not in source, "_runner must not use run_until_complete"
         assert "threading.Thread" not in source, "_runner must not spawn threads"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Injection guard: web-capable role prompts carry the containment rule
+# ═══════════════════════════════════════════════════════════════════
+
+
+def test_web_capable_roles_carry_injection_guard():
+    from wisp.multi_agent.roles import ROLE_CONFIGS
+
+    for role in ("researcher", "generalist"):
+        prompt = ROLE_CONFIGS[role].system_prompt
+        assert "UNTRUSTED WEB DATA" in prompt or "quoted material" in prompt, (
+            f"{role} can fetch the web but has no injection guard"
+        )
+
+
+def test_researcher_guard_forbids_executing_page_instructions():
+    from wisp.multi_agent.roles import ROLE_CONFIGS
+
+    prompt = ROLE_CONFIGS["researcher"].system_prompt
+    assert "REPORT ABOUT, not to obey" in prompt
