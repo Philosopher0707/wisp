@@ -15,6 +15,7 @@ from wisp.colors import bold, dim, error, warning, success, accent
 from wisp.core.events import AgentEvent
 from wisp.terminal_width import (
     display_width,
+    pad_right,
     wrap_text_wide,
     BoxChars,
     OutputMode,
@@ -234,11 +235,10 @@ def _box(content: str, title: str = "", style: str = "dim",
         # Use display_width-aware wrapping
         wrapped = wrap_text(line, inner_width)
         for w in wrapped:
+            padded = pad_right(w, inner_width)
             if mode == OutputMode.ACCESSIBLE:
-                padded = w.ljust(inner_width)
                 result_lines.append(style_fn(f"  {padded}"))
             else:
-                padded = w.ljust(inner_width)
                 result_lines.append(style_fn(f"{box.vt} {padded} {box.vt}"))
 
     if title:

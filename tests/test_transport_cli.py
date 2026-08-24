@@ -337,8 +337,6 @@ class TestBannerPolish:
 
 class TestTurnHygiene:
     def _transport(self):
-        import io
-
         from wisp.transport.cli import CLITransport
         from wisp.transport.progress import ProgressTracker
         import wisp.terminal_width as TW
@@ -393,3 +391,68 @@ class TestTurnHygiene:
         assert "\n\nThe answer is 4." in text or "\n\n  The answer is 4." in text, (
             f"no separation before response:\n{text!r}"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 7. Tool result icons follow output mode
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestToolResultIconSelection:
+    """Icon selection follows output mode, not a character-width probe."""
+
+    def _render(self, result, mode_setup=None):
+        from wisp.terminal_width import get_output_mode, set_output_mode
+
+        old = None
+        if mode_setup is not None:
+            old = get_output_mode()
+            set_output_mode(mode_setup)
+        try:
+            transport = CLITransport(_MockRuntime())
+            return transport._render_tool_result(
+                "read_file", result, duration_ms=None, width=80
+            )
+        finally:
+            if old is not None:
+                set_output_mode(old)
+
+    def test_unicode_success_uses_checkmark(self):
+        from wisp.terminal_width import OutputMode
+
+        out = self._render('{"status": "ok"}', mode_setup=OutputMode.UNICODE)
+        assert "✓" in out
+        assert "[OK]" not in out
+
+    def test_unicode_error_uses_cross(self):
+        from wisp.terminal_width import OutputMode
+
+        out = self._render('{"status": "error"}', mode_setup=OutputMode.UNICODE)
+        assert "✗" in out
+
+    def test_ascii_success_uses_ok_marker(self):
+        from wisp.terminal_width import OutputMode
+
+        out = self._render('{"status": "ok"}', mode_setup=OutputMode.ASCII)
+        assert "[OK]" in out
+        assert "✓" not in out
+
+    def test_ascii_error_uses_x_marker(self):
+        from wisp.terminal_width import OutputMode
+
+        out = self._render('{"status": "error"}', mode_setup=OutputMode.ASCII)
+        assert "[X]" in out
+        assert "✗" not in out
+
+    def test_minimal_success_uses_ok_marker(self):
+        from wisp.terminal_width import OutputMode
+
+        out = self._render('{"status": "ok"}', mode_setup=OutputMode.MINIMAL)
+        assert "[OK]" in out
+        assert "✓" not in out
+
+    def test_accessible_success_uses_pass_marker(self):
+        from wisp.terminal_width import OutputMode
+
+        out = self._render('{"status": "ok"}', mode_setup=OutputMode.ACCESSIBLE)
+        assert "[PASS]" in out

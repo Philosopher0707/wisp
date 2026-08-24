@@ -44,7 +44,7 @@ from wisp.colors import bold, dim, error, warning, success, info
 from wisp.approval_state import ApprovalSessionState, SessionPolicy
 from wisp.core.events import AgentEvent, EventType
 from wisp.terminal_width import (
-    display_width, is_accessible, get_output_mode, wrap_text_wide,
+    is_accessible, get_output_mode, wrap_text_wide,
     OutputMode,
 )
 from wisp.transport.progress import ProgressTracker
@@ -78,7 +78,7 @@ def _strip_ansi(s: str) -> str:
 
 
 def _input_line(prompt: str, allow_multiline: bool = True) -> str | None:
-    """Read a line from stdin. Returns None on EOF.
+    r"""Read a line from stdin. Returns None on EOF.
 
     Strips any ANSI escape sequences that leak through when readline
     is unavailable (e.g. arrow keys emitted as raw ESC sequences).
@@ -1104,13 +1104,12 @@ class CLITransport(Transport):
             is_error = result_text.startswith("[") or result_text.startswith("Error")
 
         # Mode-aware icon selection
+        mode = get_output_mode()
         if is_accessible():
             icon = "[FAIL]" if is_error else "[PASS]"
-        elif display_width("✓") == 1:
-            # Terminal supports emoji
+        elif mode == OutputMode.UNICODE:
             icon = "✗" if is_error else "✓"
         else:
-            # Terminal renders emoji as 2 columns or garbled
             icon = "[X]" if is_error else "[OK]"
 
         diff_text = (meta or {}).get("diff", "")

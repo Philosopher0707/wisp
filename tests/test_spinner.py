@@ -1,8 +1,10 @@
 """TDD tests for Spinner — terminal inline progress indicator."""
 
 import io
+import shutil
+
 from wisp.transport.spinner import Spinner
-from wisp.terminal_width import OutputMode
+from wisp.terminal_width import OutputMode, display_width
 
 
 class TestSpinnerFrames:
@@ -101,6 +103,15 @@ class TestSpinnerSucceed:
         s.succeed("x done")
         assert out.getvalue().endswith("\n")
 
+    def test_succeed_minimal_clears_line_and_ends_it(self):
+        out = io.StringIO()
+        s = Spinner(out, OutputMode.MINIMAL)
+        s.start("work")
+        s.succeed("work done")
+        output = out.getvalue()
+        assert output.endswith("\n")
+        assert "\033[K" in output
+
 
 class TestSpinnerFail:
     """fail() replaces spinner with X mark."""
@@ -127,6 +138,15 @@ class TestSpinnerFail:
         s.fail("x failed")
         assert s._active is False
 
+    def test_fail_minimal_clears_line_and_ends_it(self):
+        out = io.StringIO()
+        s = Spinner(out, OutputMode.MINIMAL)
+        s.start("work")
+        s.fail("work failed")
+        output = out.getvalue()
+        assert output.endswith("\n")
+        assert "\033[K" in output
+
 
 class TestSpinnerStop:
     """stop() clears the spinner line."""
@@ -148,6 +168,15 @@ class TestSpinnerStop:
         # No exception, no extra output beyond first stop
         assert s._active is False
 
+    def test_stop_minimal_ends_line(self):
+        out = io.StringIO()
+        s = Spinner(out, OutputMode.MINIMAL)
+        s.start("work")
+        s.stop()
+        output = out.getvalue()
+        assert output.endswith("\n")
+        assert "\033[K" in output
+
 
 class TestSpinnerLongLabel:
     """Long labels must be truncated to fit terminal width.
@@ -166,7 +195,14 @@ class TestSpinnerLongLabel:
         # Label must be truncated; should not appear in full
         assert "x" * 200 not in output
         # Truncation marker present
-        assert "…" in output
+        assert "..." in output
+
+    def test_wide_char_label_truncated_to_display_width(self):
+        out = io.StringIO()
+        s = Spinner(out, OutputMode.UNICODE)
+        s.start("読" * 120)
+        initial_frame = out.getvalue().split("\r")[1].removesuffix("\033[K")
+        assert display_width(initial_frame) <= shutil.get_terminal_size().columns
 
     def test_normal_label_not_truncated(self):
         out = io.StringIO()

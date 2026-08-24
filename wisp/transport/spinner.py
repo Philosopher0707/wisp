@@ -14,7 +14,7 @@ import threading
 import time
 from typing import TextIO
 
-from wisp.terminal_width import OutputMode
+from wisp.terminal_width import OutputMode, display_width, truncate
 
 _BRAILLE_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 _ASCII_FRAMES = ["|", "/", "-", "\\"]
@@ -68,6 +68,7 @@ class Spinner:
         """Replace spinner with success marker and stop animation."""
         self._active = False
         if self._mode == OutputMode.MINIMAL:
+            self._write_line("\r\033[K\n")
             return
         icon = _success_icon(self._mode)
         self._write_line(f"\r{icon} {label}\n")
@@ -76,6 +77,7 @@ class Spinner:
         """Replace spinner with failure marker and stop animation."""
         self._active = False
         if self._mode == OutputMode.MINIMAL:
+            self._write_line("\r\033[K\n")
             return
         icon = _fail_icon(self._mode)
         self._write_line(f"\r{icon} {label}\n")
@@ -83,6 +85,9 @@ class Spinner:
     def stop(self) -> None:
         """Clear spinner line without leaving a result."""
         self._active = False
+        if self._mode == OutputMode.MINIMAL:
+            self._write_line("\r\033[K\n")
+            return
         self._write_line("\r\033[K")
 
     # ── Animation ───────────────────────────────────────────────
@@ -119,11 +124,11 @@ class Spinner:
             # only returns to the start of the last wrapped line, leaking old frames.
             max_width = _term_width()
             prefix = f"{frame} "
-            max_label = max_width - len(prefix) - 1
+            max_label = max_width - display_width(prefix) - 1
             if max_label < 10:
                 max_label = 10
-            if len(label) > max_label:
-                label = label[: max_label - 1] + "…"
+            if display_width(label) > max_label:
+                label = truncate(label, max_label)
             self._stdout.write(f"\r{prefix}{label}\033[K")
             self._stdout.flush()
 

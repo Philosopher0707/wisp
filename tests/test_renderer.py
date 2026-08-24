@@ -1,13 +1,15 @@
 """TDD tests for renderer additions — phase_bar, turn_stats, file_ticker."""
 
 import pytest
+from wisp.colors import strip_ansi
 from wisp.transport.renderer import (
+    _box,
     render_phase_bar,
     render_turn_stats,
     render_file_ticker,
     render_provider_status,
 )
-from wisp.terminal_width import OutputMode, set_output_mode, get_output_mode
+from wisp.terminal_width import OutputMode, set_output_mode, get_output_mode, display_width
 
 
 @pytest.fixture(autouse=True)
@@ -165,3 +167,19 @@ class TestProviderStatus:
     def test_open_without_retry_omits_horizon(self):
         out = render_provider_status(self._event("circuit_open"), 80)
         assert "retry" not in out
+
+
+class TestBoxPadding:
+    """_box pads by display width so right borders align for wide chars."""
+
+    def test_wide_chars_align_right_border(self):
+        plain = _box("hello world", width=24)
+        wide = _box("こんにちは世界", width=24)
+        for rendered in (plain, wide):
+            body = strip_ansi(rendered.splitlines()[1])
+            assert body.endswith("│")
+            assert display_width(body) == 24
+
+    def test_ascii_content_unchanged_by_display_width_padding(self):
+        body = strip_ansi(_box("hello world", width=24).splitlines()[1])
+        assert body == "│ hello world" + " " * 9 + " │"
