@@ -13,6 +13,7 @@ Design:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -945,7 +946,13 @@ class WispAgentCore:
             from wisp.tools.registry import execute_tool
             start = time.time()
             try:
-                raw_result: str | dict[str, Any] = execute_tool(name, args, workspace=workspace)
+                # Tools are blocking I/O (web requests, subprocess); run them
+                # off the loop or one slow fetch freezes every concurrent
+                # turn — parent AND sibling subagents — while their wall-
+                # clock timeouts keep ticking.
+                raw_result: str | dict[str, Any] = await asyncio.to_thread(
+                    execute_tool, name, args, workspace=workspace
+                )
             except Exception as e:
                 logger.exception("Tool execution failed: %s", name)
                 raw_result = {"status": "error", "data": str(e)}

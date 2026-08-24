@@ -245,3 +245,58 @@ class TestModuleLocation:
         from wisp.core.engine import WispAgentCore as EngineCore
         from wisp.core.stateless import WispAgentCore as StatelessCore
         assert EngineCore is StatelessCore
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Tools must run off-loop: blocking I/O froze concurrent turns
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestToolsRunOffLoop:
+    """A slow tool must not stall the event loop while it blocks."""
+
+    def test_slow_tool_does_not_block_concurrent_stream(
+        self, core, monkeypatch
+    ):
+        import asyncio
+        import time as _time
+        from unittest.mock import patch
+
+        monkeypatch.delenv("WISP_WEB_PROXY", raising=False)
+
+        def slow_tool(name, args, workspace="."):
+            _time.sleep(1.0)
+            return {"status": "ok", "data": "finally done"}
+
+        async def scenario():
+            ticks = {"count": 0}
+
+            async def ticker():
+                while True:
+                    await asyncio.sleep(0.05)
+                    ticks["count"] += 1
+
+            tool_call = {
+                "type": "tool_call",
+                "name": "web_fetch",
+                "arguments": {"url": "https://slow.example.com"},
+                "id": "tc-1",
+            }
+            ticker_task = asyncio.create_task(ticker())
+            try:
+                start = _time.monotonic()
+                async for _ in core._execute_tool(
+                    tool_call, {"id": "s", "messages": []}
+                ):
+                    pass
+                elapsed = _time.monotonic() - start
+            finally:
+                ticker_task.cancel()
+            # The loop kept ticking during the 1s tool: proves to_thread.
+            assert ticks["count"] >= 8, (
+                f"loop starved during tool execution ({ticks['count']} ticks)"
+            )
+            assert elapsed >= 0.9, "tool must still run to completion"
+
+        with patch("wisp.tools.registry.execute_tool", slow_tool):
+            asyncio.run(scenario())
