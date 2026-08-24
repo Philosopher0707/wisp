@@ -23,9 +23,11 @@ Guidance for AI coding agents working in the Wisp codebase.
 | `wisp/transport/renderer.py` | Terminal rendering | Pure functions: `render_tool_call()`, `_box()`, `_rule()`, `render_phase_bar()`, `render_turn_stats()` |
 | `wisp/transport/progress.py` | Progress tracking | `ProgressTracker`, `TurnProgress` — phase detection, tool counting, file tracking |
 | `wisp/transport/spinner.py` | Terminal spinner | `Spinner` — inline `\r`-based spinner with mode-aware frames |
-| `wisp/transport/server.py` | WebSocket transport | `ServerTransport`: event → JSON serialization, async approval |
+| `wisp/transport/websocket.py` | Live WebSocket transport | `WebSocketTransport`: connection ↔ session routing, event streaming, bidirectional approval; wired through `wisp/server/routes/agents.py` |
+| `wisp/transport/server.py` | Legacy back-compat shim | `ServerTransport`: old API surface over `WebSocketTransport`; no production callers |
 | `wisp/transport/headless.py` | Headless transport | `HeadlessTransport`: collects events into result dict, no I/O |
 | `wisp/tools/registry.py` | Tool definitions | `TOOL_SCHEMAS` (list), `TOOL_IMPLS` (dict), `execute_tool()`, `ToolRegistry` |
+| `wisp/tool_executor.py` | Tool call lifecycle | `ToolExecutor`: approval gating, pre/post hooks, dangerous-command blocking, metrics around `execute_tool()` |
 | `wisp/multi_agent/` | Subagent system | `SubagentOrchestrator`, `SubagentRunner`, `WorktreeManager`, `DelegationAnalyzer` |
 | `wisp/config.py` | Configuration | `WispConfig` dataclass |
 | `wisp/colors.py` | Terminal colors | `success()`, `error()`, `warning()`, `dim()`, `info()`, `accent()`, `bold()` |
@@ -60,7 +62,7 @@ pytest tests/test_transport_server.py tests/test_transport_integration.py tests/
 # Core + runtime tests
 pytest tests/test_core_stateless.py tests/test_runtime_concurrent.py tests/test_provider_integration.py -v
 
-# Full suite (some files may not collect due to pre-existing issues)
+# Full suite (all 184 test files collect cleanly — 2,765+ tests)
 python -m pytest tests/test_*.py -v
 ```
 

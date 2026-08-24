@@ -49,12 +49,13 @@ probe time, and mocked cores in tests must not require a live provider.
 The `/new` command bug (a DTO assigned into a dict-typed slot, silently
 detaching `agent.messages`) was caught by luck, not by types. Hardening:
 
-- [ ] Give `WispConfig` real annotations and pull `wisp/config.py`,
-      `wisp/core/runtime.py` into the mypy-strict gate (the ratchet already
-      names them).
-- [ ] Introduce a typed `SessionView` (read-only accessor over the session
+- [x] Give `WispConfig` real annotations and pull `wisp/config.py`,
+      `wisp/core/runtime.py` into the mypy-strict gate — both are named in
+      `[tool.mypy]` in pyproject.toml and passing.
+- [x] Introduce a typed `SessionView` (read-only accessor over the session
       dict) and route command code through it, so `session["id"]` vs
-      `session.id` stops being a judgment call.
+      `session.id` stops being a judgment call. Shipped as
+      `wisp/core/session_view.py`, inside the mypy-strict gate.
 - [ ] Retire `AgentAdapter`'s legacy-shim role gradually: move each slash
       command's dependency onto explicit parameters (runtime, session, config)
       so the adapter becomes a thin REPL loop concern instead of a god object.
@@ -95,8 +96,9 @@ The circuit breaker exists; wire it into the paths users actually feel:
 
 - [ ] CI gates `ruff check wisp/ tests/` and collects the whole suite
       explicitly; no more "some files may not collect".
-- [ ] Extend the ruff F841 sweep to `tests/` (24 remaining, mostly dead
-      assignments from old debugging).
+- [x] Ruff F841 sweep: clean on `wisp/` (0 findings). The remainder lives in
+      `tests/` (23 as of this pass, mostly dead assignments from old
+      debugging); sweeping those is follow-up work.
 - [ ] One-command onboarding: `make dev` (install, doctor-check ollama, run
       fast tests). The CONTRIBUTING.md refresh started this.
 
@@ -113,7 +115,8 @@ The circuit breaker exists; wire it into the paths users actually feel:
       silent sockets while later requests flew (47.8s). Instrumented
       evidence in _runner INFO logs (first-event latency). Mitigation
       options: prewarm ping before delegation, or first-token deadline
-      inside the runner.
+      inside the runner. Status: the first-token deadline is implemented on
+      the direct runner path (`_runner.py`), not yet on `_run_via_runtime`.
 - [x] Budget enforcement at orchestrator admission — ceiling from
       `subagent_token_budget` (default 2M/session), headroom floor
       scales with ceiling; conflicts in patch-apply now revert cleanly
@@ -141,5 +144,8 @@ tasks in isolated workspaces, verifies outcomes by executing code
 
 ## Non-goals
 
-- No plugin marketplace, no telemetry home, no hosted control plane. Wisp
-  runs on your machine and stays boring to trust.
+- No telemetry home, no hosted control plane. Plugins/extensions run
+  locally, and the code ships a marketplace *client* (`MarketplaceRegistry`
+  + the `/api/plugins/marketplace` route) aimed at a remote marketplace URL —
+  but the project operates no hosted marketplace service. Wisp runs on your
+  machine and stays boring to trust.

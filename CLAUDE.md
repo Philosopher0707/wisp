@@ -14,15 +14,15 @@ python -m pytest tests/test_progress.py -v   # Single file
 python -m pytest tests/test_transport_cli.py tests/test_progress.py tests/test_spinner.py tests/test_renderer.py -v  # Transport + UX
 python -m pytest tests/ -v              # Full suite (may need explicit file list)
 
-# Type checking
-mypy wisp/ --ignore-missing-imports
+# Type checking (bare mypy uses the strict [tool.mypy] gate in pyproject.toml)
+mypy
 ```
 
 ## Architecture layers
 
 ```
 wisp/core/         Pure logic, zero I/O: WispAgentCore (turn loop), AgentEvent, AgentRuntime
-wisp/transport/    I/O layer: Transport ABC + CLITransportV2, ServerTransport, HeadlessTransport, TUITransport
+wisp/transport/    I/O layer: Transport ABC + CLITransport, ServerTransport (legacy shim), HeadlessTransport, TUITransport
 wisp/tools/        TOOL_SCHEMAS + TOOL_IMPLS in registry.py (~30 tools)
 wisp/multi_agent/  Subagent orchestration: runner, orchestrator, worktree, delegation
 wisp/infra/        Security, telemetry, extensions, store
@@ -43,7 +43,7 @@ wisp/infra/        Security, telemetry, extensions, store
 - `wisp/transport/spinner.py` — `Spinner`: inline terminal spinner with `\r` overwrites. Mode-aware frames.
 - `wisp/transport/renderer.py` — `render_phase_bar()`, `render_turn_stats()`, `render_file_ticker()` added
 
-## CLI v2 event rendering flow
+## CLI event rendering flow
 
 ```
 Tool Call → spinner.start(label)

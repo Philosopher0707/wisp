@@ -98,9 +98,9 @@ docker exec -it wisp-ollama ollama pull deepseek-v4-flash:cloud
 
 Then install the Android APK and connect to `wss://your-domain.com`.
 
-**Full guides:**
-- [Cloud Deployment Guide](CLOUD_DEPLOYMENT_GUIDE.md) — VPS setup, TLS, Docker
-- [Android Usage Guide](ANDROID_USAGE_GUIDE.md) — Build, install, configure
+**Full guides** (in `docs/archive/`):
+- [Cloud Deployment Guide](docs/archive/CLOUD_DEPLOYMENT_GUIDE.md) — VPS setup, TLS, Docker
+- [Android Usage Guide](docs/archive/ANDROID_USAGE_GUIDE.md) — Build, install, configure
 
 ---
 
@@ -267,7 +267,7 @@ cd android
 
 ## CLI UX
 
-The CLI transport (`CLITransportV2`) renders agent activity as a **live dashboard** rather than a plain log stream:
+The CLI transport (`CLITransport`) renders agent activity as a **live dashboard** rather than a plain log stream:
 
 - **Phase bar** — Shows `understand → plan → execute → verify` phases, highlighting the current one
 - **Tool spinners** — Inline `⠋` spinner with live elapsed time during tool execution; replaced by `✓`/`✗` on completion
@@ -291,7 +291,6 @@ wisp/
 │   │   └── ...
 │   ├── transport/           # I/O layer (Transport ABC)
 │   │   ├── base.py          # Transport abstract base class
-│   │   ├── cli_v2.py        # CLI transport (live dashboard)
 │   │   ├── server.py        # WebSocket server transport
 │   │   ├── headless.py      # Headless transport (CI/API)
 │   │   ├── tui.py           # Textual TUI transport
@@ -309,11 +308,12 @@ wisp/
 │   └── ...
 ├── android/                 # Android app
 │   └── app/src/main/java/   # Jetpack Compose UI
-├── tests/                   # 35+ test files
+├── tests/                   # 184 test files
 ├── skills/                  # Warp-compatible skill files
 ├── docker-compose.yml       # One-command cloud deploy
-├── CLOUD_DEPLOYMENT_GUIDE.md
-└── ANDROID_USAGE_GUIDE.md
+└── docs/archive/            # Historical guides & reports
+    ├── CLOUD_DEPLOYMENT_GUIDE.md
+    └── ANDROID_USAGE_GUIDE.md
 ```
 
 ---
@@ -353,7 +353,7 @@ export WISP_WORKSPACE_MUTABLE="true"         # Set to "false" to lock workspace 
 
 ### Security Audit Report
 
-Full audit report: [SECURITY_AUDIT_2025-05-21.md](SECURITY_AUDIT_2025-05-21.md)
+Full audit report: [SECURITY_AUDIT_2025-05-21.md](docs/archive/SECURITY_AUDIT_2025-05-21.md)
 
 ### Legacy Controls
 
@@ -373,7 +373,7 @@ Wisp is now built as a layered SDK:
 ```
 ┌─────────────────────────────────────────┐
 │  Transports (I/O layer)                 │
-│  - CLITransportV2   → live dashboard    │
+│  - CLITransport     → live dashboard    │
 │  - ServerTransport  → WebSocket         │
 │  - HeadlessTransport → CI/API           │
 │  - TUITransport     → Textual TUI       │
