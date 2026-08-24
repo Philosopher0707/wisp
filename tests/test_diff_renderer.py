@@ -122,3 +122,77 @@ class TestRenderDiffPanel:
         result = render_diff_panel(diff_text, box_mode=False)
         assert "hello" in result
         assert "world" in result
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Diff rendering functionality: no phantom blanks, plain mode, titles
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestDiffRenderingFunctionality:
+    DIFF = (
+        '   1 def greet(name):\n'
+        '-2     return "hello"\n'
+        '+2     return f"hello, {name}!"\n'
+        '   3 \n'
+        '   5     greet("world")\n'
+    )
+
+    def test_pygmentized_lines_not_double_spaced(self):
+        """pygments ensurenl must not inject a phantom newline per line."""
+        out = render_diff_panel(self.DIFF, title="D", width=100, language="python")
+        lines = out.split("\n")
+        blanks = [l for l in lines if not l.strip()]
+        assert not blanks, f"blank rows in diff box: {lines!r}"
+
+    def test_plain_mode_emits_no_ansi(self):
+        out = render_diff_panel(self.DIFF, title="D", width=100,
+                                language="python", plain=True)
+        assert "\x1b[" not in out, "plain mode must be screen-reader safe"
+        assert 'return "hello"' in out
+        assert "-    return" in out and "+    return" in out
+
+    def test_long_path_title_keeps_basename_with_leader(self):
+        from wisp.diff_renderer import shorten_diff_title
+
+        deep = "/very/long/prefix/repeated/over/and/over/again/src/pkg/app.py"
+        title = shorten_diff_title(deep)
+        assert title.startswith("Diff — …")
+        assert "app.py" in title
+        assert len(title) <= 60
+        # Short paths pass through untouched.
+        assert shorten_diff_title("src/app.py") == "Diff — src/app.py"
+
+    def test_minimal_mode_skips_diff_box_in_cli(self):
+        from unittest.mock import patch as mpatch
+
+        import wisp.terminal_width as TW
+        from wisp.transport.cli import CLITransport
+        from wisp.transport.progress import ProgressTracker
+
+        TW.set_output_mode(TW.OutputMode.MINIMAL)
+        try:
+            t = CLITransport.__new__(CLITransport)
+            t._stdout = None; t.config = None
+            t._progress = ProgressTracker(); t._spinner = None
+            t._thinking_buffer = []; t._content_buffer = []
+            t._in_thinking = False; t._in_content = False
+            t.show_tool_output = True; t._turn_number = 1
+            t._last_block_was_tool = False; t._phase = "understand"
+
+            result = __import__("json").dumps({
+                "status": "ok",
+                "data": "Edited app.py — 1 edit",
+                "metadata": {
+                    "path": "app.py",
+                    "diff": self.DIFF,
+                },
+            })
+            with mpatch("wisp.diff_renderer.render_diff_box",
+                        side_effect=AssertionError("diff box must not render in minimal")):
+                rendered = t._render_tool_result(
+                    "edit_file", result, 12.0, 80)
+            assert "─── Diff" not in (rendered or "")
+            assert "app.py" in rendered
+        finally:
+            TW.set_output_mode(TW.OutputMode.UNICODE)

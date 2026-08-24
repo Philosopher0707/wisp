@@ -43,7 +43,10 @@ from .renderer import (
 from wisp.colors import bold, dim, error, warning, success, info
 from wisp.approval_state import ApprovalSessionState, SessionPolicy
 from wisp.core.events import AgentEvent, EventType
-from wisp.terminal_width import display_width, is_accessible, get_output_mode, wrap_text_wide
+from wisp.terminal_width import (
+    display_width, is_accessible, get_output_mode, wrap_text_wide,
+    OutputMode,
+)
 from wisp.transport.progress import ProgressTracker
 from wisp.transport.spinner import Spinner
 from wisp.transport.renderer import render_phase_bar, render_provider_status, render_subagent_status
@@ -1122,18 +1125,29 @@ class CLITransport(Transport):
                 head += f" {dim(dur)}"
             return head
 
-        # Edit tools with a diff: show diff regardless of success/failure
+        # Edit tools with a diff: show diff regardless of success/failure.
+        # Minimal mode skips the box entirely (summary line is enough);
+        # accessible mode strips ANSI so screen readers get clean text.
         if is_edit_tool and diff_text:
+            mode = get_output_mode()
+            if mode == OutputMode.MINIMAL:
+                summary = _preview_lines(result_text, max_lines=1)
+                header = _build_header(icon, name, duration_str) \
+                    if not skip_header else ""
+                parts = [p for p in (header, summary) if p]
+                return "\n".join(parts)
             summary = _preview_lines(result_text, max_lines=1)
             try:
-                from wisp.diff_renderer import render_diff_box
+                from wisp.diff_renderer import render_diff_box, shorten_diff_title
                 lang = _detect_language(meta.get("path", ""))
+                plain_diff = mode == OutputMode.ACCESSIBLE
                 diff_box = render_diff_box(
                     diff_text,
-                    title=f"Diff — {meta.get('path', '')}"[:60],
+                    title=shorten_diff_title(meta.get("path", "")),
                     width=width,
                     box_mode=True,
-                    language=lang,
+                    language=None if plain_diff else lang,
+                    plain=plain_diff,
                 )
                 if skip_header:
                     return f"{summary}\n{diff_box}"

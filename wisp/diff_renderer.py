@@ -10,6 +10,7 @@ Uses Rich Panel + Text + pygments for styled diffs with:
 from __future__ import annotations
 
 from io import StringIO
+from pathlib import Path
 from typing import Optional
 
 from rich.console import Console
@@ -69,7 +70,9 @@ def _pygmentize(code: str, language: str, base_style: Style) -> Text:
     try:
         from pygments import lex
         from pygments.lexers import get_lexer_by_name
-        lexer = get_lexer_by_name(language)
+        # ensurenl=False: pygments otherwise appends a phantom "\n"
+        # token to every line, double-spacing the whole diff box.
+        lexer = get_lexer_by_name(language, ensurenl=False)
         for ttype, text in lex(code, lexer):
             color = _TOKEN_COLORS.get(str(ttype), "#f8f8f2")
             merged = Style.combine([base_style, Style(color=color)])
@@ -172,20 +175,40 @@ def colorize_diff(diff_text, language: Optional[str] = None, num_width: int = 3)
     return str(text)
 
 
+def shorten_diff_title(path: str, max_len: int = 60) -> str:
+    """Build a 'Diff — <path>' title that never cuts the filename off.
+
+    Long paths collapse to 'Diff — …<tail>' keeping the basename intact,
+    instead of a mid-directory slice that hides which file changed.
+    """
+    title = f"Diff — {path}"
+    if len(title) <= max_len:
+        return title
+    base = Path(path).name or path
+    leader = "Diff — …"
+    room = max_len - len(leader)
+    if len(base) > room:
+        base = base[-room:]
+    return leader + base
+
+
 def render_diff_box(
     diff_text, title: str = "Diff", max_lines: int = 50,
     width: Optional[int] = None, box_mode: bool = True,
     language: Optional[str] = None,
+    plain: bool = False,
 ) -> str:
     """Colorize a diff and wrap it in a Rich Panel."""
     return render_diff_panel(diff_text, title=title, max_lines=max_lines,
-                             width=width, box_mode=box_mode, language=language)
+                             width=width, box_mode=box_mode, language=language,
+                             plain=plain)
 
 
 def render_diff_panel(
     diff_text, title: str = "Diff", max_lines: int = 50,
     width: Optional[int] = None, box_mode: bool = True,
     language: Optional[str] = None,
+    plain: bool = False,
 ) -> str:
     """Render a diff as a Rich Panel with syntax-colored backgrounds.
 
@@ -196,9 +219,10 @@ def render_diff_panel(
         width: Terminal width.
         box_mode: If False, return plain colored text.
         language: Pygments language name (e.g. "python", "rust").
+        plain: No ANSI at all — for accessible/screen-reader output.
 
     Returns:
-        ANSI-colored diff string.
+        ANSI-colored diff string (or bare text when plain=True).
     """
     if hasattr(diff_text, 'diff'):
         diff_text = diff_text.diff
@@ -218,10 +242,14 @@ def render_diff_panel(
         if num:
             num_width = max(num_width, len(num))
 
-    text = _build_diff_text_with_dmp(lines, language=language, num_width=num_width)
+    text = _build_diff_text_with_dmp(lines, language=None if plain else language,
+                                     num_width=num_width)
 
     buf = StringIO()
-    console = Console(file=buf, width=width or 120, force_terminal=True)
+    console = Console(
+        file=buf, width=width or 120,
+        force_terminal=not plain, no_color=plain,
+    )
 
     if box_mode and title:
         console.print(Text(f"─── {title}", style=Style(color="#555555")))
