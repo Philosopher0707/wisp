@@ -110,6 +110,13 @@ async def run_task(
 
     result.stats = score_events(events)
     ok, detail = task.verify(ws)
+    if ok and task.verify_events is not None:
+        # Capability gate: outcome alone isn't enough when the task is
+        # about HOW it was done (delegation, not soloing).
+        eok, edetail = task.verify_events(events)
+        if not eok:
+            ok = False
+            detail = f"events: {edetail}"
     result.passed = ok
     result.verify_detail = detail[:200]
     return result

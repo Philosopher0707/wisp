@@ -75,7 +75,10 @@ class TestVerifiers:
             tasks_by_ids(["create-function", "nope"])
 
     def test_tasks_by_ids_none_gives_full_suite(self):
-        assert len(tasks_by_ids(None)) == 3
+        assert len(tasks_by_ids(None)) == 4
+
+    def test_subagent_delegate_resolvable_by_id(self):
+        assert tasks_by_ids(["subagent-delegate"])[0].id == "subagent-delegate"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -272,3 +275,119 @@ class TestReport:
         results = list(reversed(self._results()))
         cards = aggregate(["m2", "m1"], results)
         assert [c.model for c in cards] == ["m2", "m1"]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# subagent-delegate: outcome gate + capability (spawn) gate
+# ═══════════════════════════════════════════════════════════════════
+
+
+def test_subagent_delegate_setup_and_verify(tmp_path):
+    from wisp.benchmark.tasks import SUBAGENT_DELEGATE
+
+    SUBAGENT_DELEGATE.setup(tmp_path)
+    assert "TODO: item 7" in (tmp_path / "data" / "notes.txt").read_text()
+
+    (tmp_path / "answer.txt").write_text("7\n")
+    ok, detail = SUBAGENT_DELEGATE.verify(tmp_path)
+    assert ok, detail
+
+
+def test_subagent_delegate_wrong_count_fails(tmp_path):
+    from wisp.benchmark.tasks import SUBAGENT_DELEGATE
+
+    SUBAGENT_DELEGATE.setup(tmp_path)
+    (tmp_path / "answer.txt").write_text("6")
+    ok, detail = SUBAGENT_DELEGATE.verify(tmp_path)
+    assert not ok and "expected 7" in detail
+
+
+def _events_with_spawn() -> list[dict]:
+    return [
+        {"type": "tool_call", "name": "read_file"},
+        {"type": "tool_call", "name": "spawn", "args": {"task": "count"}},
+        {"type": "done"},
+    ]
+
+
+def test_spawn_gate_passes_when_spawn_present():
+    from wisp.benchmark.tasks import SUBAGENT_DELEGATE
+
+    ok, detail = SUBAGENT_DELEGATE.verify_events(_events_with_spawn())
+    assert ok, detail
+
+
+def test_spawn_gate_fails_solo_answer_with_tool_names():
+    from wisp.benchmark.tasks import SUBAGENT_DELEGATE
+
+    events = [{"type": "tool_call", "name": "read_file"}, {"type": "done"}]
+    ok, detail = SUBAGENT_DELEGATE.verify_events(events)
+    assert not ok
+    assert "no subagent spawn" in detail
+    assert "read_file" in detail  # diagnostic names what was used instead
+
+
+def test_runner_requires_both_gates(tmp_path):
+    """Workspace pass + missing spawn ⇒ task fails on the event gate."""
+    import asyncio
+    from pathlib import Path
+
+    import pytest
+
+    from wisp.benchmark import runner as bench_runner
+    from wisp.benchmark.tasks import SUBAGENT_DELEGATE
+
+
+    class _SoloCore:
+        # Right answer, but no spawn tool call — the exact cheat the
+        # capability gate exists to catch.
+        async def turn(self, session, prompt, approval_handler=None):
+            yield {"type": "thinking", "text": "I'll just count myself"}
+            Path(session["workspace"]).joinpath("answer.txt").write_text("7")
+            yield {"type": "done"}
+
+
+    @pytest.mark.asyncio
+    async def _run():
+        return await bench_runner.run_task(
+            task=SUBAGENT_DELEGATE,
+            model="fake-model",
+            core_factory=lambda m: _SoloCore(),
+            workdir=tmp_path,
+        )
+
+    result = asyncio.run(_run())
+    assert not result.passed, result.verify_detail
+    assert "no subagent spawn" in result.verify_detail
+
+
+def test_runner_passes_when_spawn_and_answer_present(tmp_path):
+    """Both gates green ⇒ passed."""
+    import asyncio
+    from pathlib import Path
+
+    import pytest
+
+    from wisp.benchmark import runner as bench_runner
+    from wisp.benchmark.tasks import SUBAGENT_DELEGATE
+
+
+    class _DelegatingCore:
+        async def turn(self, session, prompt, approval_handler=None):
+            ws = Path(session["workspace"])
+            yield {"type": "tool_call", "name": "spawn", "args": {}}
+            ws.joinpath("answer.txt").write_text("7")
+            yield {"type": "done"}
+
+
+    @pytest.mark.asyncio
+    async def _run():
+        return await bench_runner.run_task(
+            task=SUBAGENT_DELEGATE,
+            model="fake-model",
+            core_factory=lambda m: _DelegatingCore(),
+            workdir=tmp_path,
+        )
+
+    result = asyncio.run(_run())
+    assert result.passed, result.verify_detail

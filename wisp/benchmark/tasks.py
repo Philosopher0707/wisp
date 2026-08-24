@@ -25,6 +25,9 @@ class BenchmarkTask:
     difficulty: str = "easy"
     setup: Callable[[Path], None] = lambda ws: None
     verify: Callable[[Path], tuple[bool, str]] = lambda ws: (False, "no verifier")
+    # Optional capability gate on the turn's event stream — e.g. prove a
+    # subagent was actually spawned rather than the model soloing the task.
+    verify_events: Callable[[list[dict]], tuple[bool, str]] | None = None
 
 
 def _run_python(code: str, workspace: Path) -> tuple[bool, str]:
@@ -162,7 +165,73 @@ JSON_EDIT = BenchmarkTask(
 )
 
 
-DEFAULT_TASKS: list[BenchmarkTask] = [CREATE_FUNCTION, FIX_BUG, JSON_EDIT]
+# ── Task 4: must delegate to a subagent ─────────────────────────────
+
+
+def _setup_subagent_delegate(ws: Path) -> None:
+    lines: list[str] = []
+    todo_n = 0
+    for i in range(28):
+        if i in (2, 5, 9, 13, 17, 21, 25):
+            todo_n += 1
+            lines.append(f"TODO: item {todo_n} — revisit module {i}")
+        else:
+            lines.append(f"Line {i}: settled context, no action required.")
+    assert todo_n == 7
+    d = ws / "data"
+    d.mkdir()
+    (d / "notes.txt").write_text("\n".join(lines), encoding="utf-8")
+
+
+_SUBAGENT_DELEGATE_CHECK = """
+from pathlib import Path
+answer = Path("answer.txt")
+assert answer.exists(), "answer.txt missing"
+val = answer.read_text().strip()
+assert val == "7", f"expected 7 TODOs, got {val!r}"
+"""
+
+
+def _verify_subagent_delegate(ws: Path) -> tuple[bool, str]:
+    return _run_python(_SUBAGENT_DELEGATE_CHECK, ws)
+
+
+def _verify_spawned(events: list[dict]) -> tuple[bool, str]:
+    spawned = any(
+        e.get("type") == "tool_call" and e.get("name") == "spawn"
+        for e in events
+    )
+    if not spawned:
+        tool_names = sorted({
+            str(e.get("name")) for e in events
+            if e.get("type") == "tool_call"
+        })
+        return False, (
+            "no subagent spawn — model answered solo "
+            f"(tools used: {tool_names})"
+        )
+    return True, ""
+
+
+SUBAGENT_DELEGATE = BenchmarkTask(
+    id="subagent-delegate",
+    title=(
+        "Delegate counting TODOs in data/notes.txt to a subagent, "
+        "write the count to answer.txt"
+    ),
+    prompt=(
+        "Use a subagent (the spawn tool) to read data/notes.txt and count "
+        "how many TODO items it contains. Then write just that number to "
+        "answer.txt. The file must contain only the number."
+    ),
+    difficulty="hard",
+    setup=_setup_subagent_delegate,
+    verify=_verify_subagent_delegate,
+    verify_events=_verify_spawned,
+)
+
+
+DEFAULT_TASKS: list[BenchmarkTask] = [CREATE_FUNCTION, FIX_BUG, JSON_EDIT, SUBAGENT_DELEGATE]
 
 
 def tasks_by_ids(ids: list[str] | None) -> list[BenchmarkTask]:
