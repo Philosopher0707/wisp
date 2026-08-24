@@ -1922,3 +1922,25 @@ class TestBudgetAdmission:
         assert cfg.subagent_token_budget > 0, (
             "default must be a finite ceiling for admission to ever fire"
         )
+
+
+# ── Depth guard engagement ───────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_depth_guard_blocks_spawn_at_limit(orch):
+    """A contract at max depth is refused before any runner work happens."""
+    contract = SubagentContract(name="too-deep", task="x", _subagent_depth=2)
+    result = await orch.run(contract)
+    assert result.success is False
+    assert "DEPTH LIMIT" in result.output
+    assert "exceeds max 2" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_depth_guard_allows_below_limit(orch):
+    """Depth 1 < max 2 proceeds past the guard (runner may still fail on
+    its own merits — the assertion is about which gate fires)."""
+    contract = SubagentContract(name="ok-depth", task="x", _subagent_depth=1)
+    result = await orch.run(contract)
+    assert "DEPTH LIMIT" not in (result.output or "")

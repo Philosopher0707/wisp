@@ -5,6 +5,7 @@ All state is injected or passed as parameters.
 """
 
 import pytest
+from unittest.mock import patch
 
 
 # ── Minimal mock provider for testing ──────────────────────────────
@@ -396,3 +397,97 @@ class TestParentStreamGuard:
         contents = [e for e in events if e.get("type") == "content"]
         assert len(contents) == 1
         assert provider.calls == 1
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Role tool restriction: schema filtering + execution-side rejection
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestRoleToolRestriction:
+    """Subagents with contract.tools get exactly those tools — schemas are
+    filtered AND hallucinated calls are rejected before execution."""
+
+    @pytest.mark.asyncio
+    async def test_schemas_filtered_by_allowed_tools(self, core):
+        seen_tools = []
+
+        def make_provider():
+            class ProbeProvider:
+                def generate_stream_events(self, system_prompt, messages, tools=None, checkpoint_every=50):
+                    seen_tools.append(tools)
+                    yield {"type": "token", "text": "ok", "phase": "content"}
+                    yield {"type": "done"}
+            return ProbeProvider()
+
+        core.provider = make_provider()
+        session = {
+            "id": "s-role", "messages": [], "model": "qwen", "workspace": "/tmp",
+            "allowed_tools": ["read_file", "list_files"],
+        }
+        async for _ in core.turn(session, "hi"):
+            pass
+
+        assert seen_tools, "provider must be called"
+        names = set()
+        for t in seen_tools[0]:
+            fn = t.get("function", {}) if isinstance(t, dict) else {}
+            names.add(fn.get("name") or t.get("name"))
+        assert names == {"read_file", "list_files"}, f"got {names}"
+
+    @pytest.mark.asyncio
+    async def test_hallucinated_tool_call_rejected_without_execution(self, core):
+        def make_provider():
+            class HallucinatingProvider:
+                def generate_stream_events(self, system_prompt, messages, tools=None, checkpoint_every=50):
+                    yield {"type": "tool_call", "name": "write_file",
+                           "arguments": {"path": "/tmp/evil.txt", "content": "x"}}
+                    yield {"type": "done"}
+            return HallucinatingProvider()
+
+        core.provider = make_provider()
+        session = {
+            "id": "s-halluc", "messages": [], "model": "qwen", "workspace": "/tmp",
+            "allowed_tools": ["read_file"],
+        }
+
+        with patch("wisp.tools.registry.execute_tool",
+                   side_effect=AssertionError("disallowed tool must not execute")):
+            events = [ev async for ev in core.turn(session, "do it")]
+
+        tool_calls = [e for e in events if e.get("type") == "tool_call"]
+        assert tool_calls == [], "disallowed call must not surface as a tool_call event"
+        errors = [e for e in events if e.get("type") == "error"]
+        assert any("not allowed" in str(e.get("message", "")) for e in errors)
+
+    @pytest.mark.asyncio
+    async def test_allowed_tool_still_executes_under_restriction(self, core):
+        def make_provider():
+            class StatefulProvider:
+                def __init__(self):
+                    self.calls = 0
+                def generate_stream_events(self, system_prompt, messages, tools=None, checkpoint_every=50):
+                    self.calls += 1
+                    if self.calls == 1:
+                        yield {"type": "tool_call", "name": "read_file",
+                               "arguments": {"path": "test.py"}}
+                        yield {"type": "done"}
+                    else:
+                        yield {"type": "token", "text": "done", "phase": "content"}
+                        yield {"type": "done"}
+            return StatefulProvider()
+
+        core.provider = make_provider()
+        session = {
+            "id": "s-allow", "messages": [], "model": "qwen", "workspace": "/tmp",
+            "allowed_tools": ["read_file"],
+        }
+
+        async def fake_execute(name, args, workspace=None, **kw):
+            return '{"status": "ok", "data": "content"}'
+
+        with patch("wisp.tools.registry.execute_tool", side_effect=fake_execute):
+            events = [ev async for ev in core.turn(session, "read test.py")]
+
+        tool_calls = [e for e in events if e.get("type") == "tool_call"]
+        assert len(tool_calls) == 1 and tool_calls[0]["name"] == "read_file"

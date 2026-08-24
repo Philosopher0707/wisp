@@ -401,3 +401,63 @@ def test_shadowed_builtin_not_forced_to_approval(tmp_path):
     # ...while a genuine MCP name stays gated
     assert te._is_external_call("acme_widget_spin") is True
     assert te._needs_forced_approval("acme_widget_spin") is True
+
+
+# ── Depth inheritance: spawn/fanout stamp child contracts ────────────
+
+
+def _fake_orchestrator(results):
+    fake = MagicMock()
+    calls = {"retry": [], "parallel": []}
+
+    async def _retry(contract):
+        calls["retry"].append(contract)
+        return results[0]
+
+    async def _parallel(contracts, max_concurrent=4, **kw):
+        calls["parallel"].append(list(contracts))
+        return results
+
+    fake._run_with_retry = AsyncMock(side_effect=_retry)
+    fake.run_parallel = AsyncMock(side_effect=_parallel)
+    fake.calls = calls
+    return fake
+
+
+def test_spawn_contract_inherits_parent_depth(tmp_path):
+    """A subagent running at depth 1 must spawn children stamped depth 2 —
+    otherwise the orchestrator's recursion guard can never trip."""
+    from wisp.tool_executor import ToolExecutor
+    from wisp.multi_agent.task import SubagentResult
+
+    cfg = _mk_config(str(tmp_path), PermissionMode.FULL, auto_approve=True)
+    object.__setattr__(cfg, "_subagent_depth", 1)
+    orch = _fake_orchestrator([SubagentResult(task_id="s", success=True, output="ok")])
+    te = ToolExecutor(config=cfg, hook_manager=_make_async_hook_mgr(),
+                      subagent_orchestrator=orch)
+
+    _collect(te, "spawn", {"role": "coder", "task": "x"})
+
+    assert orch.calls["retry"], "spawn must dispatch through the orchestrator"
+    contract = orch.calls["retry"][0]
+    assert getattr(contract, "_subagent_depth", 0) == 2
+
+
+def test_fanout_contracts_inherit_incremented_depth(tmp_path):
+    from wisp.tool_executor import ToolExecutor
+    from wisp.multi_agent.task import SubagentResult
+
+    cfg = _mk_config(str(tmp_path), PermissionMode.FULL, auto_approve=True)
+    object.__setattr__(cfg, "_subagent_depth", 0)
+    orch = _fake_orchestrator([
+        SubagentResult(task_id=f"f{i}", success=True, output="ok") for i in range(2)
+    ])
+    te = ToolExecutor(config=cfg, hook_manager=_make_async_hook_mgr(),
+                      subagent_orchestrator=orch)
+
+    _collect(te, "fanout", {"tasks": [{"task": "a"}, {"task": "b"}]})
+
+    assert orch.calls["parallel"], "fanout must call run_parallel"
+    contracts = orch.calls["parallel"][0]
+    depths = [getattr(c, "_subagent_depth", 0) for c in contracts]
+    assert depths == [1, 1], f"all fanout children inherit depth+1, got {depths}"
