@@ -219,6 +219,19 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
         if _current_turn_task is not None and not _current_turn_task.done():
             _current_turn_task.cancel()
 
+    def _stop_spinner(transport) -> None:
+        """Kill an active spinner so its \\r-thread can't overwrite error output.
+
+        The success/fail paths in CLITransport already stop it; exception paths
+        here are the leak that garbled tracebacks.
+        """
+        spinner = getattr(transport, "_spinner", None)
+        if spinner is not None:
+            try:
+                spinner.stop()
+            except Exception:
+                pass
+
     def _run_turn(prompt: str) -> None:
         """Run one turn on the persistent loop."""
         async def _turn():
@@ -239,16 +252,19 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
             _show_turn_stats(transport)
         except KeyboardInterrupt:
             _cancel_tasks()
+            _stop_spinner(transport)
             transport._flush_thinking(sys.stdout)
             transport._flush_content(sys.stdout)
             _show_resume()
         except asyncio.CancelledError:
             # Task was cancelled (likely Ctrl+C or approval [c]ancel)
+            _stop_spinner(transport)
             transport._flush_thinking(sys.stdout)
             transport._flush_content(sys.stdout)
             _show_resume()
         except Exception as exc:
             import traceback
+            _stop_spinner(transport)
             transport._flush_thinking(sys.stdout)
             transport._flush_content(sys.stdout)
             sys.stderr.write(f"Error during turn: {exc}\n")
@@ -411,7 +427,7 @@ def _run_server(**kwargs) -> None:
     no need to create one here.
     """
     from wisp.server.main import main as server_main
-    host = kwargs.get("host", "0.0.0.0")
+    host = kwargs.get("host", "127.0.0.1")
     port = kwargs.get("port", 8000)
     no_auth = kwargs.get("no_auth", False)
     server_main(host=host, port=port, no_auth=no_auth)

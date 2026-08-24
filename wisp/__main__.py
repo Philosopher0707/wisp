@@ -22,8 +22,8 @@ def _setup_logging(verbose: bool = False):
     )
 
 
-def cmd_server(host="0.0.0.0", port=8000, no_auth=False):
-    """Run Wisp Cloud Server."""
+def cmd_server(host="127.0.0.1", port=8000, no_auth=False):
+    """Run Wisp Cloud Server (loopback-only unless WISP_API_KEY is set)."""
     from wisp.entry import run_mode
     run_mode("server", host=host, port=port, no_auth=no_auth)
 
@@ -997,7 +997,7 @@ def main():
             cmd_acp(rest)
 
         elif first == "server":
-            host = "0.0.0.0"
+            host = "127.0.0.1"
             port = 8000
             no_auth = False
             i = 0

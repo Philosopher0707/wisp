@@ -20,6 +20,7 @@ from wisp.tools._utils import (
     _ANSI_RE,
     check_dangerous_command,
 )
+from wisp.tools._utils_env import credential_free_env
 
 logger = logging.getLogger(__name__)
 
@@ -45,12 +46,19 @@ async def async_tool_run_bash(command: str, workspace: str, timeout: int = 60) -
     cwd = Path(workspace).resolve()
     logger.info("Running bash (timeout=%ds): %.100s", timeout_val, command)
 
+    # Deny-list scrub: LLM-generated commands must not read credentials
+    # from the environment (API keys, cloud tokens, SSH agents).
+    env, stripped_env_count = credential_free_env()
+    if stripped_env_count:
+        logger.debug("Stripped %d credential env vars from bash subprocess", stripped_env_count)
+
     start_time = time.time()
     proc = None
     try:
         proc = await asyncio.create_subprocess_shell(
             command,
             cwd=cwd,
+            env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             start_new_session=True,

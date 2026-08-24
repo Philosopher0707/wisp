@@ -71,9 +71,24 @@ class WebSocketTransport(Transport):
         Sends an approval_request event and waits for the client
         to respond with a tool_approval message (handled by
         receive_message or resolve_approval).
+
+        With no connected client there is no human to approve: deny
+        unless WISP_WS_AUTO_APPROVE is explicitly opted in.
         """
+        import os
+
         if self._current_ws is None:
-            return True  # fallback auto-approve when no active connection
+            if os.environ.get("WISP_WS_AUTO_APPROVE", "").strip().lower() == "true":
+                logger.warning(
+                    "Auto-approving tool %s with no client connected "
+                    "(WISP_WS_AUTO_APPROVE=true)", tool_call.get("name", "unknown"),
+                )
+                return True
+            logger.warning(
+                "Denying tool %s: no client connected to approve it",
+                tool_call.get("name", "unknown"),
+            )
+            return False
 
         # If already waiting, deny to prevent re-entrant approval
         if self._pending_approval is not None and not self._pending_approval.done():

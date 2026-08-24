@@ -253,12 +253,12 @@ _DEFAULT_SAFE_READ_TOOLS = frozenset({
 _DEFAULT_ASK_ALL_BLOCK = frozenset({
     "write_file", "edit_file", "edit_file_multi", "run_bash",
     "git_branch", "git_commit", "git_push", "gh_pr_create",
-    "spawn_subagent", "plan_task", "mark_step_done", "update_plan",
+    "spawn", "fanout", "plan_task", "mark_step_done", "update_plan",
 })
 
 _DEFAULT_AUTO_EDIT_BLOCK = frozenset({
     "run_bash", "git_branch", "git_commit", "git_push", "gh_pr_create",
-    "spawn_subagent",
+    "spawn", "fanout",
 })
 
 

@@ -46,13 +46,13 @@ _SAFE_READ_TOOLS = frozenset({
 _ASK_ALL_BLOCK_TOOLS = frozenset({
     "write_file", "edit_file", "edit_file_multi", "run_bash",
     "git_branch", "git_commit", "git_push", "gh_pr_create",
-    "spawn_subagent", "plan_task", "mark_step_done", "update_plan",
+    "spawn", "fanout", "plan_task", "mark_step_done", "update_plan",
 })
 
 # Tools that require approval in AUTO_EDIT (writes auto-approved, bash blocked)
 _AUTO_EDIT_BLOCK_TOOLS = frozenset({
     "run_bash", "git_branch", "git_commit", "git_push", "gh_pr_create",
-    "spawn_subagent",
+    "spawn", "fanout",
 })
 
 
@@ -82,7 +82,7 @@ class SecurityPolicy:
     written to an ImmutableAuditTrail backed by the same SQLite store.
     """
 
-    permission_mode: PermissionMode = PermissionMode.FULL
+    permission_mode: PermissionMode = PermissionMode.AUTO_EDIT
     trusted_workspaces: frozenset[Path] = field(default_factory=frozenset)
     hooks: list[Callable] = field(default_factory=list)
     _engine: PolicyEngine | None = field(default=None, repr=False)

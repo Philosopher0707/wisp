@@ -138,10 +138,29 @@ app.include_router(search_router)
 app.include_router(diagnostics_router)
 
 
-def main(host: str = "0.0.0.0", port: int = 8000, no_auth: bool = False):
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "::"}
+
+
+def main(host: str = "127.0.0.1", port: int = 8000, no_auth: bool = False):
     """Entry point to run the Wisp API server."""
+    import os
+    import sys
     import uvicorn
     from fastapi import Header
+
+    # Non-loopback binds expose /api/bash (host command execution) to the network:
+    # require an API key, and never allow --no-auth off-loopback.
+    if host not in _LOOPBACK_HOSTS:
+        has_key = bool(os.environ.get("WISP_API_KEY", "").strip())
+        if no_auth or not has_key:
+            print(
+                "error: refusing to bind Wisp server to a non-loopback address "
+                f"({host}) without authentication.\n"
+                "Set WISP_API_KEY to require an API key, or bind to 127.0.0.1 "
+                "for local-only access.",
+                file=sys.stderr,
+            )
+            raise SystemExit(2)
 
     if no_auth:
         from wisp.server.deps import _auth, verify_api_key

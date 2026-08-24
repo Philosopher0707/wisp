@@ -30,6 +30,11 @@ class SwarmRunRequest(BaseModel):
     max_retries: int = Field(default=2, ge=0, le=5)
     max_parallel: int = Field(default=3, ge=1, le=10)
     model: str | None = None
+    auto_approve: bool = Field(
+        default=False,
+        description="Let subagent tools run without per-call approval "
+        "(swarms have no interactive approval channel; opt in explicitly).",
+    )
 
 
 def _evict_stale_swarms() -> None:
@@ -54,7 +59,7 @@ async def run_swarm(req: SwarmRunRequest):
     config = WispConfig()
     if req.model:
         config = config.replace(model=req.model)
-    config = config.replace(workspace=str(WORKSPACE_ROOT), auto_approve=True)
+    config = config.replace(workspace=str(WORKSPACE_ROOT), auto_approve=req.auto_approve)
 
     try:
         from wisp.multi_agent.orchestrator import SwarmOrchestrator

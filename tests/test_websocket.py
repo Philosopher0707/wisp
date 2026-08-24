@@ -65,8 +65,17 @@ class TestWebSocketTransportApproval:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_approve_auto_approves_when_no_ws(self, transport):
-        """approve() returns True (fallback) when no active WebSocket."""
+    async def test_approve_denies_when_no_ws(self, transport, monkeypatch):
+        """No connected client means no human to approve: deny by default."""
+        monkeypatch.delenv("WISP_WS_AUTO_APPROVE", raising=False)
+        transport._current_ws = None
+        result = await transport.approve({"name": "write_file", "arguments": {}})
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_approve_auto_approves_only_with_explicit_opt_in(self, transport, monkeypatch):
+        """WISP_WS_AUTO_APPROVE=true is the explicit headless opt-in."""
+        monkeypatch.setenv("WISP_WS_AUTO_APPROVE", "true")
         transport._current_ws = None
         result = await transport.approve({"name": "write_file", "arguments": {}})
         assert result is True

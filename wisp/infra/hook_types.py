@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -254,19 +253,30 @@ class HookManager:
             matched.append(hook)
         return matched
 
+    # Hooks are self-installable scripts executed with shell semantics:
+    # they get a strict allow-list environment, never the process env.
+    _MAX_TOOL_ARGS_ENV = 65536
+
     def _build_env(self, context: dict) -> dict[str, str]:
-        """Build environment variables for hook process."""
-        env = dict(os.environ)
+        """Build environment variables for hook process (strict allow-list)."""
+        from wisp.tools._utils_env import scrub_sensitive_env
+
+        env = scrub_sensitive_env()
         env["WISP_EVENT"] = str(context.get("event", ""))
         env["WISP_TOOL_NAME"] = str(context.get("tool_name", ""))
         env["WISP_WORKSPACE"] = str(context.get("workspace", ""))
         env["WISP_SESSION_ID"] = str(context.get("session_id", ""))
-        # Serialize tool_args as JSON for structured access
+        # Serialize tool_args as JSON for structured access.
+        # Capped: full file contents here can exceed E2BIG exec limits and
+        # leak edited-file bytes to every hook invocation.
         tool_args = context.get("tool_args", {})
         if isinstance(tool_args, dict):
-            env["WISP_TOOL_ARGS"] = json.dumps(tool_args, ensure_ascii=False)
+            args_json = json.dumps(tool_args, ensure_ascii=False)
         else:
-            env["WISP_TOOL_ARGS"] = str(tool_args)
+            args_json = str(tool_args)
+        if len(args_json) > self._MAX_TOOL_ARGS_ENV:
+            args_json = args_json[: self._MAX_TOOL_ARGS_ENV] + "...[truncated]"
+        env["WISP_TOOL_ARGS"] = args_json
         # Extra context
         extra = context.get("extra", {})
         if isinstance(extra, dict):

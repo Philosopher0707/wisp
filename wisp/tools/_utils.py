@@ -214,6 +214,20 @@ def check_dangerous_command(command: str) -> Optional[str]:
     if re.search(r'\b(base64|xxd|openssl)\b.*\|\s*(bash|sh|zsh|eval)', cmd_lower):
         return "encoded payload execution"
 
+    # -- Hook-controlled paths --
+    # Writing to .wisp/hooks/ via shell would let one approved command install
+    # a persistent escalation path: hooks re-execute with the full process
+    # environment before every later tool call. Mirrors the filesystem tools'
+    # _is_hook_controlled_path guard (reads stay allowed).
+    if ".wisp/hooks" in cmd_lower or ".wisp\\hooks" in cmd_lower:
+        if re.search(
+            r'(>>?>|\btee\b|\bcp\b|\bmv\b|\brm\b|\btouch\b|\bmkdir\b|\bln\b'
+            r'|\brsync\b|\binstall\b|\btruncate\b|\bchmod\b|\bchown\b'
+            r'|\bsed\b[^\n|;&]*-[a-z]*i)',
+            cmd_lower,
+        ):
+            return "write to hook-controlled directory (.wisp/hooks)"
+
     return None
 # Path fragments that are hook-controlled and should never be written
 # to by agent tools, because hook scripts execute with the full process

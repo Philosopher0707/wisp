@@ -512,7 +512,7 @@ class WispConfig:
         object.__setattr__(self, "_context_tokens_explicit", raw_ctx is not None)
         # Permissions: full (all allowed) | ask_all (ask for writes) | auto_edit (ask for bash only) | read_only (no writes)
         object.__setattr__(self, "permission_mode",
-            PermissionMode(get_setting("permission_mode", PermissionMode.FULL))
+            PermissionMode(get_setting("permission_mode", PermissionMode.AUTO_EDIT.value))
         )
         # Plan mode: agent plans only, no tool execution
         object.__setattr__(self, "plan_mode",
