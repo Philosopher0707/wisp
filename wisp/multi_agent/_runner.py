@@ -384,8 +384,29 @@ class SubagentRunner:
                 raise asyncio.TimeoutError("contract deadline reached")
 
             async with asyncio.timeout(remaining):
+                child_start = time.monotonic()
+                last_event_at = child_start
+                first_event_seen = False
                 async for event in core.turn(session_dict, contract.task):
+                    now = time.monotonic()
                     etype = event.get("type")
+                    if not first_event_seen:
+                        first_event_seen = True
+                        # Where a dying child's budget goes: latency to
+                        # first token vs time lost mid-turn.
+                        logger.info(
+                            "Subagent %s first event (%s) after %.1fs — task=%d chars, msgs=%d",
+                            contract.name, etype, now - child_start,
+                            len(contract.task or ""),
+                            len(session_dict.get("messages", [])),
+                        )
+                    elif etype == "tool_call":
+                        logger.info(
+                            "Subagent %s tool %s at %.1fs (+%.1fs since prev)",
+                            contract.name, event.get("name", "?"),
+                            now - child_start, now - last_event_at,
+                        )
+                    last_event_at = now
                     if etype == "content":
                         # Streaming providers emit many small deltas; the
                         # report is their concatenation, not the last chunk.
