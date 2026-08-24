@@ -363,3 +363,58 @@ class WorktreeManager:
             logger.debug("Worktree prune failed (non-critical): %s", exc)
 
         logger.debug("Worktree cleanup complete: %s", worktree_path)
+
+    async def reap_orphans(self, active_paths: set[str] | None = None) -> list[str]:
+        """Sweep leftover worktrees from crashed/leaked runs.
+
+        Removes directories under the worktrees root that are no longer
+        registered with git (orphaned dirs invisible to ``git worktree
+        prune``), then prunes stale registrations. Returns removed names.
+        """
+        if not await self._check_git_repo():
+            return []
+        if not self._worktrees_root.exists():
+            return []
+
+        active = {Path(p).name for p in (active_paths or set())}
+        registered: set[str] = set()
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git", "worktree", "list", "--porcelain",
+                cwd=str(self.workspace),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+            for line in stdout.decode("utf-8", errors="replace").splitlines():
+                if line.startswith("worktree "):
+                    wt = line[len("worktree "):].strip()
+                    registered.add(Path(wt).name)
+        except Exception as exc:
+            logger.debug("Could not list worktrees for reaping: %s", exc)
+            return []
+
+        removed: list[str] = []
+        try:
+            entries = sorted(p for p in self._worktrees_root.iterdir() if p.is_dir())
+        except OSError:
+            return []
+        for entry in entries:
+            if entry.name in active or entry.name in registered:
+                continue
+            shutil.rmtree(entry, ignore_errors=True)
+            removed.append(entry.name)
+            logger.info("Reaped orphaned subagent worktree: %s", entry.name)
+
+        if removed:
+            try:
+                prune_proc = await asyncio.create_subprocess_exec(
+                    "git", "worktree", "prune",
+                    cwd=str(self.workspace),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await prune_proc.communicate()
+            except Exception as exc:
+                logger.debug("Worktree prune failed (non-critical): %s", exc)
+        return removed

@@ -185,6 +185,16 @@ class DAGScheduler:
 
         async def _run_node(node: TaskNode) -> None:
             async with semaphore:
+                # Thread upstream outputs into the node so executors/contracts
+                # can use them (a DAG that coordinates timing but not data is
+                # just a slow to-do list).
+                dep_outputs: dict[str, Any] = {}
+                for d in node.dependencies:
+                    r = all_results.get(d)
+                    if r is not None:
+                        dep_outputs[d] = getattr(r, "output", r)
+                if dep_outputs:
+                    node.metadata["_dep_results"] = dep_outputs
                 try:
                     result = await asyncio.wait_for(
                         executor(node),
@@ -198,10 +208,40 @@ class DAGScheduler:
                     logger.exception("Node %s failed", node.name)
                     all_results[node.name] = _error_result(node.name, str(exc))
 
+        # Transitive dependents of failed nodes must never run.
+        dependents: dict[str, list[str]] = {}
+        for n in dag.nodes.values():
+            for d in n.dependencies:
+                dependents.setdefault(d, []).append(n.name)
+
+        blocked: set[str] = set()
+
+        def _block_descendants(failed_name: str) -> None:
+            stack = [failed_name]
+            while stack:
+                cur = stack.pop()
+                for child in dependents.get(cur, []):
+                    if child not in blocked and child not in all_results:
+                        blocked.add(child)
+                        stack.append(child)
+
         for level_idx, level in enumerate(levels):
             logger.info("DAG level %d: %s", level_idx, level)
-            tasks = [asyncio.create_task(_run_node(dag.nodes[name])) for name in level]
+            runnable = []
+            for name in level:
+                if name in blocked:
+                    all_results[name] = _make_fallback(
+                        name, False,
+                        "[SKIPPED] an upstream dependency failed",
+                        "dependency failed",
+                    )
+                    continue
+                runnable.append(dag.nodes[name])
+            tasks = [asyncio.create_task(_run_node(node)) for node in runnable]
             await asyncio.gather(*tasks)
+            for name, result in all_results.items():
+                if not getattr(result, "success", True):
+                    _block_descendants(name)
 
         elapsed = time.monotonic() - start
         success = all(

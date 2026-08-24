@@ -308,6 +308,8 @@ class SubagentOrchestrator:
         # children logs one warning instead of one per spawn attempt.
         self._worktree_unavailable_reason: str | None = None
         self._worktree_fallback_warned: bool = False
+        # One-shot orphan sweep guard — crashed runs used to leak worktrees forever.
+        self._orphans_reaped: bool = False
         # Derive store from parent_agent if not explicitly provided
         _store = store or (getattr(parent_agent, "store", None) if parent_agent else None)
         self._runner = SubagentRunner(self.config, self.workspace, store=_store, tool_executor=tool_executor, agent_runtime=agent_runtime)
@@ -615,6 +617,16 @@ class SubagentOrchestrator:
             await self._fire_subagent_hook("subagent_fail", contract, result)
             return result
 
+        # ── One-shot orphan sweep ──────────────────────────────────────
+        # First run in this process reclaims worktrees leaked by crashed
+        # ancestors; without it the pile only ever grows (1.7 GB observed).
+        if not self._orphans_reaped:
+            self._orphans_reaped = True
+            try:
+                await self._worktree_mgr.reap_orphans()
+            except Exception:
+                logger.debug("Orphan worktree reap failed", exc_info=True)
+
         # ── Cache check ────────────────────────────────────────────────
         contract._cache_context = self._cache_namespace
         cached = self._cache.get(contract)
@@ -653,90 +665,105 @@ class SubagentOrchestrator:
 
         # ── Worktree ───────────────────────────────────────────────────
         worktree_path = await self._resolve_worktree(contract)
+        _worktree_cleaned = False
 
-        agent_workspace = str(worktree_path or self.workspace)
-
-        # ── System prompt ──────────────────────────────────────────────
-        system = contract.system_prompt or self._default_system_prompt(contract)
-
-        # ── Run with concurrency control ─────────────────────────────
-        async with self._semaphore:
-            self._active += 1
+        async def _cleanup_worktree() -> None:
+            """Idempotent cleanup — runs on success AND on any crash/cancel."""
+            nonlocal _worktree_cleaned
+            if worktree_path is None or _worktree_cleaned:
+                return
+            _worktree_cleaned = True
+            if os.environ.get("WISP_KEEP_WORKTREES", "").lower() == "true":
+                return
             try:
-                result = await self._runner.run(
-                    contract=contract,
-                    agent_workspace=agent_workspace,
-                    system_prompt=system,
-                    progress_callback=contract.progress_callback,
-                )
-            finally:
-                self._active -= 1
-
-        # ── Timeout retry: one extra round at ×1.5, bounded by the ─────
-        # parent turn's remaining clock. Slow reasoning models (nemotron
-        # ultra) regularly need just a bit more than a role's base budget.
-        if result.timed_out and contract.retry_count == 0:
-            from wisp.core.stateless import get_turn_deadline
-
-            budget = contract.timeout_seconds * 1.5
-            deadline = get_turn_deadline()
-            if deadline is not None:
-                remaining = deadline - time.monotonic()
-                budget = min(budget, remaining - 5.0)
-            if budget >= 30.0:
-                logger.info(
-                    "Subagent %s timed out after %.0fs; retrying once with %.0fs",
-                    contract.name, contract.timeout_seconds, budget,
-                )
-                retry_dict = dict(contract.__dict__)
-                retry_dict["timeout_seconds"] = budget
-                retry_dict["retry_count"] = 1
-                return await self.run(SubagentContract(**retry_dict))
-
-        # ── Schema validation ────────────────────────────────────────
-        if contract.output_schema and result.success:
-            result = await self._validate_output(result, contract)
-
-        # ── Post-run bookkeeping ─────────────────────────────────────
-        self._cache.set(contract, result)
-        self._persistence.save(contract, result)
-        self._budget.record(result.tokens_used)
-        self._telemetry.record(contract.model or self.config.model or "unknown", result)
-
-        # ── Fire complete/fail hook ──────────────────────────────────
-        hook_event = "subagent_complete" if result.success else "subagent_fail"
-        await self._fire_subagent_hook(hook_event, contract, result)
-
-        # ── Capture & apply worktree changes ────────────────────────────
-        if worktree_path:
-            try:
-                result.worktree_patch = await self._worktree_mgr.get_patch(worktree_path)
+                await self._worktree_mgr.cleanup(worktree_path)
             except Exception as exc:
-                logger.warning("Failed to capture worktree patch for %s: %s", worktree_path, exc)
+                logger.warning("Failed to clean up worktree %s: %s", worktree_path, exc)
 
-            # Git-based file detection (replaces regex heuristic when worktree available)
+        try:
+            agent_workspace = str(worktree_path or self.workspace)
+
+            # ── System prompt ──────────────────────────────────────
+            system = contract.system_prompt or self._default_system_prompt(contract)
+
+            # ── Run with concurrency control ───────────────────────
+            async with self._semaphore:
+                self._active += 1
+                try:
+                    result = await self._runner.run(
+                        contract=contract,
+                        agent_workspace=agent_workspace,
+                        system_prompt=system,
+                        progress_callback=contract.progress_callback,
+                    )
+                finally:
+                    self._active -= 1
+
+            # ── Timeout retry: one extra round at ×1.5, bounded by the ──
+            # parent turn's remaining clock. Slow reasoning models (nemotron
+            # ultra) regularly need just a bit more than a role's base budget.
+            if result.timed_out and contract.retry_count == 0:
+                from wisp.core.stateless import get_turn_deadline
+
+                budget = contract.timeout_seconds * 1.5
+                deadline = get_turn_deadline()
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    budget = min(budget, remaining - 5.0)
+                if budget >= 30.0:
+                    logger.info(
+                        "Subagent %s timed out after %.0fs; retrying once with %.0fs",
+                        contract.name, contract.timeout_seconds, budget,
+                    )
+                    retry_dict = dict(contract.__dict__)
+                    retry_dict["timeout_seconds"] = budget
+                    retry_dict["retry_count"] = 1
+                    return await self.run(SubagentContract(**retry_dict))
+
+            # ── Schema validation ────────────────────────────────
+            if contract.output_schema and result.success:
+                result = await self._validate_output(result, contract)
+
+            # ── Post-run bookkeeping ───────────────────────────────────
+            # Only successes are cached: replaying a failure/timeout as a
+            # short-circuited "complete" result defeats retries.
             if result.success:
-                try:
-                    actual_files = await self._worktree_mgr.detect_files_changed(worktree_path)
-                    if actual_files:
-                        result.files_changed = actual_files
-                except Exception as exc:
-                    logger.debug("Git file detection failed for %s: %s", worktree_path, exc)
+                self._cache.set(contract, result)
+            self._persistence.save(contract, result)
+            self._budget.record(result.tokens_used)
+            self._telemetry.record(contract.model or self.config.model or "unknown", result)
 
-            # Apply patch to parent workspace (serialized to avoid concurrent write conflicts)
-            if result.worktree_patch and result.success:
-                async with self._patch_lock:
+            # ── Fire complete/fail hook ──────────────────────────
+            hook_event = "subagent_complete" if result.success else "subagent_fail"
+            await self._fire_subagent_hook(hook_event, contract, result)
+
+            # ── Capture & apply worktree changes ────────────────────
+            if worktree_path:
+                try:
+                    result.worktree_patch = await self._worktree_mgr.get_patch(worktree_path)
+                except Exception as exc:
+                    logger.warning("Failed to capture worktree patch for %s: %s", worktree_path, exc)
+
+                # Git-based file detection (replaces regex heuristic when worktree available)
+                if result.success:
                     try:
-                        result.patch_applied = await self._worktree_mgr.apply_patch(result.worktree_patch)
+                        actual_files = await self._worktree_mgr.detect_files_changed(worktree_path)
+                        if actual_files:
+                            result.files_changed = actual_files
                     except Exception as exc:
-                        logger.warning("Failed to apply worktree patch for %s: %s", worktree_path, exc)
+                        logger.debug("Git file detection failed for %s: %s", worktree_path, exc)
 
-            if not os.environ.get("WISP_KEEP_WORKTREES", "").lower() == "true":
-                try:
-                    await self._worktree_mgr.cleanup(worktree_path)
-                except Exception as exc:
-                    logger.warning("Failed to clean up worktree %s: %s", worktree_path, exc)
-        return result
+                # Apply patch to parent workspace (serialized to avoid concurrent write conflicts)
+                if result.worktree_patch and result.success:
+                    async with self._patch_lock:
+                        try:
+                            result.patch_applied = await self._worktree_mgr.apply_patch(result.worktree_patch)
+                        except Exception as exc:
+                            logger.warning("Failed to apply worktree patch for %s: %s", worktree_path, exc)
+
+            return result
+        finally:
+            await _cleanup_worktree()
 
     async def run_parallel(
         self,
@@ -831,17 +858,28 @@ class SubagentOrchestrator:
 
         tasks = [asyncio.create_task(_guarded(c)) for c in contracts]
         completed = 0
-        for coro in asyncio.as_completed(tasks):
-            try:
-                result = await coro
-                completed += 1
-                logger.debug(
-                    "Streaming result %d/%d: %s success=%s",
-                    completed, len(contracts), result.task_id, result.success,
-                )
-                yield result
-            except Exception as exc:
-                logger.error("Subagent crashed during streaming: %s", exc)
+        try:
+            for coro in asyncio.as_completed(tasks):
+                try:
+                    result = await coro
+                    completed += 1
+                    logger.debug(
+                        "Streaming result %d/%d: %s success=%s",
+                        completed, len(contracts), result.task_id, result.success,
+                    )
+                    yield result
+                except Exception as exc:
+                    logger.error("Subagent crashed during streaming: %s", exc)
+        finally:
+            # If the consumer abandons the generator (GeneratorExit) or the
+            # loop unwinds early, cancel remaining children instead of letting
+            # them run to timeout with nobody collecting results.
+            pending = [t for t in tasks if not t.done()]
+            for t in pending:
+                t.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+                logger.warning("Cancelled %d abandoned streaming subagents", len(pending))
 
     def _adaptive_max_concurrent(self, requested: int, queue_size: int) -> int:
         """Adjust max_concurrent based on system load and token budget."""
@@ -939,6 +977,19 @@ class SubagentOrchestrator:
                     if not task.metadata:
                         task.metadata = {}
                     task.metadata["_budget"] = budget
+                # Inject upstream dependency outputs into the prompt so DAG
+                # edges carry dataflow, not just ordering.
+                dep_results = node.metadata.get("_dep_results")
+                if dep_results:
+                    summary = "\n\n".join(
+                        f"### Upstream result: {k}\n{str(v)[:2000]}"
+                        for k, v in dep_results.items()
+                    )
+                    task = (
+                        f"{task.task}\n\n"
+                        "Results from upstream dependencies (already completed — "
+                        f"use them, do not redo this work):\n\n{summary}"
+                    )
                 return await self.run(task)
 
             # If it's a callable, invoke it

@@ -1060,14 +1060,28 @@ async def test_cache_ttl_expires(orch):
 @pytest.mark.asyncio
 async def test_clear_cache(orch):
     """clear_cache() resets all state."""
+    from wisp.multi_agent.task import SubagentResult
+
     contract = SubagentContract(name="clear", task="test clear")
-    await orch.run(contract)
+    # Failures are no longer cached (they must not replay as successes),
+    # so seed a successful result directly.
+    orch._cache.set(contract, SubagentResult(
+        task_id=contract.name, success=True, output="ok",
+    ))
     assert orch.get_cache_stats()["size"] >= 1
     orch.clear_cache()
     stats = orch.get_cache_stats()
     assert stats["size"] == 0
     assert stats["hits"] == 0
     assert stats["misses"] == 0
+
+
+@pytest.mark.asyncio
+async def test_failed_results_are_not_cached(orch):
+    """A failed run must not short-circuit a later identical spawn."""
+    contract = SubagentContract(name="nocache", task="test no-cache")
+    await orch.run(contract)  # mocked runner fails in this environment
+    assert orch.get_cache_stats()["size"] == 0
 
 
 # ── Context files tests ──────────────────────────────────────────────

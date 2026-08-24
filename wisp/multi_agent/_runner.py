@@ -387,6 +387,10 @@ class SubagentRunner:
             # Instead, store it in session metadata for the context assembler.
             if system_prompt:
                 session_dict["subagent_system_prompt"] = system_prompt
+            # Role tool restrictions become enforced (not just prompt text):
+            # core filters the tool schemas AND rejects disallowed calls.
+            if contract.tools and "all" not in [t.lower() for t in contract.tools]:
+                session_dict["allowed_tools"] = list(contract.tools)
 
             # Partition context — only pass relevant history to subagent
             raw_messages = list(session_dict.get("messages", []))
@@ -559,6 +563,8 @@ class SubagentRunner:
         session_dict["messages"] = []
         if system_prompt:
             session_dict["subagent_system_prompt"] = system_prompt
+        if contract.tools and "all" not in [t.lower() for t in contract.tools]:
+            session_dict["allowed_tools"] = list(contract.tools)
 
         # Ensure session exists in runtime store
         sid = session_dict.get("id", "")
@@ -569,6 +575,8 @@ class SubagentRunner:
         if system_prompt:
             runtime_session["subagent_system_prompt"] = system_prompt
             runtime_session["workspace"] = ws
+        if "allowed_tools" in session_dict:
+            runtime_session["allowed_tools"] = session_dict["allowed_tools"]
 
         output_text = ""
         engine_iterations = 0
@@ -671,6 +679,10 @@ class SubagentRunner:
             max_context_tokens=contract.max_tokens or self.parent_config.max_context_tokens,
             max_iterations=contract.max_iterations,
         )
+        # Stamp nesting position so a subagent's own spawn/fanout calls inherit
+        # its depth instead of resetting to 0 (unbounded recursion guard).
+        object.__setattr__(child, "_subagent_depth", int(getattr(contract, "_subagent_depth", 0) or 0))
+        object.__setattr__(child, "_subagent_branch_count", int(getattr(contract, "_subagent_branch_count", 0) or 0))
         return child
 
     def _estimate_tokens(self, messages: list[dict]) -> tuple[int, int, int]:

@@ -522,7 +522,10 @@ class ToolExecutor:
         if mode == PermissionMode.READ_ONLY and func_name in _get_write_tools(self.config):
             return f"[Blocked: read_only mode - {func_name} is not allowed]"
         # MCP tools are external code — always gated in READ_ONLY mode
-        if mode == PermissionMode.READ_ONLY and func_name.startswith("mcp:"):
+        if (mode == PermissionMode.READ_ONLY
+                and (func_name.startswith("mcp:")
+                     or (func_name.startswith("mcp__") and func_name.count("__") >= 2)
+                     or self._is_mcp_tool(func_name))):
             return f"[Blocked: read_only mode - MCP tool {func_name} is not allowed]"
         return None
 
@@ -539,8 +542,12 @@ class ToolExecutor:
         MCP tools are treated as ALWAYS requiring approval because the agent
         cannot inspect their internal behavior; they are external code.
         """
-        # MCP tools = external code = always require explicit approval
-        if func_name.startswith("mcp:"):
+        # MCP tools = external code = always require explicit approval.
+        # Namespaced prefixes are gated unconditionally (no manager needed);
+        # bare names go through _is_mcp_tool so they can't slip past the gate.
+        if (func_name.startswith("mcp:")
+                or (func_name.startswith("mcp__") and func_name.count("__") >= 2)
+                or self._is_mcp_tool(func_name)):
             return True
         mode = getattr(self.config, "permission_mode", PermissionMode.AUTO_EDIT)
         if mode == PermissionMode.ASK_ALL:
@@ -699,15 +706,19 @@ class ToolExecutor:
     def _is_mcp_tool(self, name: str) -> bool:
         """Check if a tool name belongs to an MCP server.
 
-        Accepts both the canonical prefixed form ``mcp:server/tool``
-        and legacy bare names.
+        Accepts the canonical prefixed form ``mcp:server/tool``, the legacy
+        double-underscore form ``mcp__server__tool``, and bare names that
+        match a tool on some MCP server.
         """
         if not self.mcp:
             return False
-        # Fast path: canonical namespace prefix
+        # Canonical namespace prefix
         if name.startswith("mcp:"):
             return True
-        # Legacy bare-name search — must match a tool on some MCP server
+        # Legacy double-underscore form (older extension schemas)
+        if name.startswith("mcp__") and name.count("__") >= 2:
+            return True
+        # Bare-name search — must match a tool on some MCP server
         try:
             for tool in self.mcp.get_all_tools():
                 if getattr(tool, "name", None) == name:
@@ -715,6 +726,14 @@ class ToolExecutor:
         except Exception:
             pass
         return False
+
+    @staticmethod
+    def _canonical_mcp_name(name: str) -> str:
+        """Normalize legacy MCP name forms to ``mcp:server/tool``."""
+        if name.startswith("mcp__") and name.count("__") >= 2:
+            _, server, tool = name.split("__", 2)
+            return f"mcp:{server}/{tool}"
+        return name
 
     async def _call_mcp_tool(self, func_name: str, func_args: dict) -> str:
         """Call an MCP tool and truncate if needed.  Runs in a thread so stdio doesn't block the loop."""
@@ -725,7 +744,8 @@ class ToolExecutor:
                 "data": "MCP error: no MCP manager",
             }, ensure_ascii=False)
         try:
-            result = await asyncio.to_thread(self.mcp.call_tool, func_name, func_args)
+            canonical = self._canonical_mcp_name(func_name)
+            result = await asyncio.to_thread(self.mcp.call_tool, canonical, func_args)
             if isinstance(result, str) and len(result) > 8000:
                 result = result[:8000] + f"\n... [truncated {len(result)} total chars]"
             return result
@@ -811,6 +831,12 @@ class ToolExecutor:
                 max_tokens=max_tokens,
                 max_retries=int(auto_retry) * 2,
             )
+
+            # Inherit the executing agent's nesting depth — without this every
+            # spawned contract resets to 0 and the orchestrator's depth guard
+            # can never trip (unbounded recursion).
+            contract._subagent_depth = int(getattr(self.config, "_subagent_depth", 0) or 0) + 1
+            contract._subagent_branch_count = int(getattr(self.config, "_subagent_branch_count", 0) or 0) + 1
 
             queue = self._sub_event_queue
             if queue is not None:
@@ -947,6 +973,13 @@ class ToolExecutor:
                 c.progress_callback = lambda ev: queue.put_nowait(
                     orchestrator_event_to_agent_event(ev)
                 )
+
+        # Inherit the executing agent's nesting depth (see _spawn).
+        parent_depth = int(getattr(self.config, "_subagent_depth", 0) or 0)
+        parent_branch = int(getattr(self.config, "_subagent_branch_count", 0) or 0)
+        for i, c in enumerate(contracts):
+            c._subagent_depth = parent_depth + 1
+            c._subagent_branch_count = parent_branch + 1 + i
 
         try:
             results = await self.subagent_orchestrator.run_parallel(
