@@ -276,3 +276,55 @@ class TestStructuredToolResultRender:
 
         out = _preview_lines({"k": "v"})
         assert "k" in out
+
+
+# ═══════════════════════════════════════════════════════════════════
+# REPL polish: banner shows short id + tidy workspace, not raw noise
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestBannerPolish:
+    def _transport(self):
+        from wisp.transport.cli import CLITransport
+
+        t = CLITransport.__new__(CLITransport)
+        t.config = None
+        return t
+
+    def test_banner_shortens_uuid_and_tildes_home(self):
+        import io
+
+        t = self._transport()
+        out = io.StringIO()
+        t.print_banner(out, {
+            "id": "17052f74-2824-465a-a81f-1e9d6921f240",
+            "workspace": "/Users/philosopher/Documents/wisp",
+            "messages": [],
+        }, "nemotron")
+        text = out.getvalue()
+        assert "17052f74" in text, "short session id should display"
+        assert "17052f74-2824" not in text, "full UUID is noise"
+        assert "~/Documents/wisp" in text, "home should collapse to ~"
+
+    def test_banner_keeps_hint_line(self):
+        import io
+
+        t = self._transport()
+        out = io.StringIO()
+        t.print_banner(out, {"id": "abc12345", "workspace": "/tmp", "messages": []}, "m")
+        assert "/help" in out.getvalue()
+
+    def test_continuation_banner_also_tidy(self):
+        import io
+
+        t = self._transport()
+        out = io.StringIO()
+        t.print_continuation_banner(out, {
+            "id": "17052f74-2824-465a-a81f-1e9d6921f240",
+            "workspace": "/Users/philosopher/Documents/wisp",
+            "messages": [{"role": "user", "content": "hi"}],
+            "title": "",
+        }, "nemotron")
+        text = out.getvalue()
+        assert "17052f74-2824" not in text
+        assert "~/Documents/wisp" in text

@@ -21,6 +21,7 @@ import shutil
 import signal
 import sys
 import threading
+from pathlib import Path
 from typing import Any, Optional
 
 # Import readline to enable arrow-key/editing support in input().
@@ -724,6 +725,25 @@ class CLITransport(Transport):
 
     # ── Banner ──────────────────────────────────────────────────────
 
+    @staticmethod
+    def _tidy_session_info(session: dict) -> tuple[str, str]:
+        """Short session id and home-collapsed workspace for display.
+
+        The full UUID stays available via /resume; the banner only needs
+        enough to recognize a session at a glance.
+        """
+        sid = str(session.get("id", "unknown"))
+        short_id = sid.split("-")[0] if "-" in sid else sid[:8]
+        ws = str(session.get("workspace", "."))
+        home = str(Path.home())
+        if ws == home:
+            ws_display = "~"
+        elif ws.startswith(home + "/"):
+            ws_display = "~" + ws[len(home):]
+        else:
+            ws_display = ws
+        return short_id, ws_display
+
     def print_banner(
         self, stdout: Any, session: dict, model: str, skill: str | None = None
     ) -> None:
@@ -732,8 +752,7 @@ class CLITransport(Transport):
         Compact two-line header — no box panel. The REPL is interactive; a
         heavy frame on every launch is noise.
         """
-        sid = session.get("id", "unknown")
-        ws = session.get("workspace", ".")
+        short_id, ws_display = self._tidy_session_info(session)
         msg_count = len(session.get("messages", []))
 
         title = bold("🔮 Wisp")
@@ -741,7 +760,7 @@ class CLITransport(Transport):
         if skill:
             meta_bits.append(skill)
         stdout.write(f"\n  {title} {dim('· ' + ' · '.join(meta_bits))}\n")
-        info_bits = [sid, ws]
+        info_bits = [short_id, ws_display]
         if msg_count:
             info_bits.append(f"{msg_count} messages")
         stdout.write(f"  {dim(' · '.join(info_bits))}\n")
@@ -750,8 +769,7 @@ class CLITransport(Transport):
 
     def print_continuation_banner(self, stdout: Any, session: dict, model: str) -> None:
         """Print session continuation banner — compact, un-boxed."""
-        sid = session.get("id", "unknown")
-        ws = session.get("workspace", ".")
+        short_id, ws_display = self._tidy_session_info(session)
         msg_count = len(session.get("messages", []))
         title = session.get("title", "")
 
@@ -759,7 +777,7 @@ class CLITransport(Transport):
         if title:
             header = f"{header} · {title}"
         stdout.write(f"\n  {bold(header)} {dim('· ' + model)}\n")
-        info_bits = [sid, f"{msg_count} messages", ws]
+        info_bits = [short_id, f"{msg_count} messages", ws_display]
         stdout.write(f"  {dim(' · '.join(info_bits))}\n")
 
         # Find last user message
