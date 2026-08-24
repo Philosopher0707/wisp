@@ -1529,6 +1529,21 @@ class TestStreamingOutputAccumulation:
             "Policy 1: GST rolled out in 2017. Policy 2: IBC 2016."
         ), f"got {result.output!r}"
 
+    def test_tool_last_action_falls_back_to_last_nonempty_round(self, tmp_path):
+        # remember-last pattern: child narrates findings, saves via tool,
+        # stops — output must be the findings, not ''.
+        result = self._run(tmp_path, [
+            {"type": "content", "text": "Findings: GST 2017, IBC 2016."},
+            {"type": "tool_call", "name": "remember",
+             "arguments": {"key": "modi", "value": "gst ibc"}},
+            {"type": "tool_result", "result": "saved"},
+            {"type": "done"},
+        ])
+        assert result.success
+        assert result.output == "Findings: GST 2017, IBC 2016.", (
+            f"got {result.output!r}"
+        )
+
     def test_tool_call_resets_pre_action_narration(self, tmp_path):
         result = self._run(tmp_path, [
             {"type": "content", "text": "Let me search that up..."},

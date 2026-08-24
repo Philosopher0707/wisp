@@ -367,6 +367,7 @@ class SubagentRunner:
 
             output_text = ""
             engine_iterations = 0
+            last_nonempty_round = ""
 
             # Set up resource budget from contract metadata or contract fields
             from .resource_budget import ResourceBudget
@@ -389,6 +390,8 @@ class SubagentRunner:
                         # Streaming providers emit many small deltas; the
                         # report is their concatenation, not the last chunk.
                         output_text += event.get("text", "")
+                        if output_text.strip():
+                            last_nonempty_round = output_text
                     elif etype == "tool_call":
                         engine_iterations += 1
                         budget.record_tool_call()
@@ -428,6 +431,12 @@ class SubagentRunner:
                             "iterations_used": engine_iterations,
                             "messages": session_dict.get("messages", []),
                         }
+
+            # A child whose LAST action was a tool call (remember/save)
+            # never narrates afterwards — fall back to its last words
+            # instead of returning an empty report.
+            if not output_text.strip():
+                output_text = last_nonempty_round
 
             files_changed = self._extract_files_changed(output_text)
             return {
@@ -482,6 +491,7 @@ class SubagentRunner:
 
         output_text = ""
         engine_iterations = 0
+        last_nonempty_round = ""
 
         from .resource_budget import ResourceBudget
         budget = ResourceBudget()
@@ -503,6 +513,8 @@ class SubagentRunner:
                     # Streaming providers emit many small deltas; the
                     # report is their concatenation, not the last chunk.
                     output_text += event.get("text", "")
+                    if output_text.strip():
+                        last_nonempty_round = output_text
                 elif etype == "tool_call":
                     engine_iterations += 1
                     budget.record_tool_call()
@@ -542,6 +554,12 @@ class SubagentRunner:
                         "iterations_used": engine_iterations,
                         "messages": runtime_session.get("messages", []),
                     }
+
+        # A child whose LAST action was a tool call (remember/save)
+        # never narrates afterwards — fall back to its last words
+        # instead of returning an empty report.
+        if not output_text.strip():
+            output_text = last_nonempty_round
 
         files_changed = self._extract_files_changed(output_text)
         return {
