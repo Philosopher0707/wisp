@@ -38,8 +38,7 @@ jobs:
       - name: Ruff (Pyflakes gate)
         run: |
           ruff check wisp/
-          # Soft gate: surface tests/ findings without failing the build yet.
-          ruff check tests/ --exit-zero
+          ruff check tests/
 
       - name: Mypy on typed spine (hard gate)
         # Strict mypy on the fully-annotated contract seams (events.py,
