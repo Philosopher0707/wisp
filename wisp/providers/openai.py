@@ -92,7 +92,13 @@ class OpenAIProvider(Provider):
                 json=payload,
                 headers=headers,
                 stream=True,
-                timeout=120,
+                # (connect, read): read is BETWEEN BYTES, not total — a
+                # stalled endpoint must raise fast so the caller's retry
+                # gets a live attempt instead of ticking to its own
+                # timeout on a dead socket. Reasoning models stream
+                # reasoning deltas continuously, so 60s of byte-silence
+                # means the stream is dead, not thinking.
+                timeout=(10, 60),
             )
             if resp.status_code != 200:
                 body = resp.text[:500]
