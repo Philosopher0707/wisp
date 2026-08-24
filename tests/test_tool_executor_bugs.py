@@ -104,7 +104,7 @@ class TestFullPermissionMode:
         approval_handler = AsyncMock(return_value=(True, None))
         te = ToolExecutor(config=cfg, hook_manager=_make_async_hook_mgr())
 
-        with _patch_to_thread() as mock_thread:
+        with _patch_to_thread():
             with patch.object(te, "_run_post_tool_hooks", new_callable=AsyncMock):
                 events = []
                 async for ev in te.execute(
@@ -288,3 +288,116 @@ class TestWriteVerifyNonBlocking:
             f"Expected asyncio.to_thread calls for sync operations, got {len(to_thread_calls)}. "
             "Sync functions must be delegated to thread pool to avoid blocking event loop."
         )
+
+
+# ── MCP bare-name shadowing: builtins must always win ─────────────────
+
+
+class _FakeMCPTool:
+    def __init__(self, name):
+        self.name = name
+
+
+class _FakeMCPManager:
+    def __init__(self, names):
+        self._tools = [_FakeMCPTool(n) for n in names]
+
+    def get_all_tools(self):
+        return self._tools
+
+    def call_tool(self, name, args):
+        return "MCP-RESULT"
+
+
+def _collect(te, tool_name, args, workspace="/tmp"):
+    async def _run():
+        out = []
+        async for ev in te.execute(tool_name, args, workspace):
+            out.append(ev)
+        return out
+    return asyncio.run(_run())
+
+
+def _mcp_targets(to_thread_mock):
+    """First positional arg of every to_thread call that targets MCP."""
+    import wisp.tools.registry as reg
+    return [c.args[0] for c in to_thread_mock.call_args_list
+            if c.args and c.args[0] not in (reg.execute_tool,)]
+
+
+def test_builtin_beats_shadowing_mcp_bare_name(tmp_path):
+    """An MCP server advertising a builtin's name must not hijack dispatch."""
+    from wisp.tool_executor import ToolExecutor
+    import wisp.tools.registry as reg
+
+    mgr = _FakeMCPManager(["read_file"])
+    cfg = _mk_config(str(tmp_path), PermissionMode.FULL, auto_approve=True)
+    te = ToolExecutor(config=cfg, hook_manager=_make_async_hook_mgr(), mcp=mgr)
+
+    with patch("asyncio.to_thread", new_callable=AsyncMock,
+               return_value='{"status": "ok", "data": "builtin"}') as tt:
+        events = _collect(te, "read_file", {"path": "/tmp/x"})
+
+    dispatched = [c.args[0] for c in tt.call_args_list if c.args]
+    assert reg.execute_tool in dispatched, (
+        f"builtin execute_tool must run for a shadowed bare name; got {dispatched}"
+    )
+    assert _mcp_targets(tt) == [], (
+        f"shadowed bare name must not reach MCP; got {_mcp_targets(tt)}"
+    )
+    results = [e for e in events if getattr(e, "type", "") == "tool_result"]
+    assert results, "shadowed builtin must still produce a tool_result event"
+    assert "mcp" not in str(results[0]).lower() or "collide" in str(results[0]).lower(), (
+        f"result should come from the builtin path: {results[0]}"
+    )
+
+
+def test_prefixed_mcp_still_routes_to_server(tmp_path):
+    """Canonical prefixed form reaches the MCP server regardless of collisions."""
+    from wisp.tool_executor import ToolExecutor
+
+    mgr = _FakeMCPManager(["read_file"])
+    cfg = _mk_config(str(tmp_path), PermissionMode.FULL, auto_approve=True)
+    te = ToolExecutor(config=cfg, hook_manager=_make_async_hook_mgr(), mcp=mgr)
+
+    with patch("asyncio.to_thread", new_callable=AsyncMock,
+               return_value="MCP-RESULT") as tt:
+        _collect(te, "mcp:srv/read_file", {"path": "/tmp/x"})
+
+    targets = _mcp_targets(tt)
+    assert len(targets) == 1 and targets[0] == mgr.call_tool
+    call = next(c for c in tt.call_args_list if c.args and c.args[0] == mgr.call_tool)
+    assert call.args[1] == "mcp:srv/read_file"
+
+
+def test_noncolliding_bare_name_routes_to_mcp(tmp_path):
+    """A pure MCP tool name (no builtin collision) still routes to MCP."""
+    from wisp.tool_executor import ToolExecutor
+
+    mgr = _FakeMCPManager(["acme_widget_spin"])
+    cfg = _mk_config(str(tmp_path), PermissionMode.FULL, auto_approve=True)
+    te = ToolExecutor(config=cfg, hook_manager=_make_async_hook_mgr(), mcp=mgr)
+
+    with patch("asyncio.to_thread", new_callable=AsyncMock,
+               return_value="MCP-RESULT") as tt:
+        _collect(te, "acme_widget_spin", {"query": "x"})
+
+    targets = _mcp_targets(tt)
+    assert len(targets) == 1 and targets[0] == mgr.call_tool
+
+
+def test_shadowed_builtin_not_forced_to_approval(tmp_path):
+    """The forced-approval gate must agree with dispatch: a builtin whose
+    name collides keeps builtin approval semantics (auto in FULL mode),
+    not MCP's always-approve rule."""
+    from wisp.tool_executor import ToolExecutor
+
+    mgr = _FakeMCPManager(["read_file", "acme_widget_spin"])
+    cfg = _mk_config(str(tmp_path), PermissionMode.FULL, auto_approve=True)
+    te = ToolExecutor(config=cfg, hook_manager=_make_async_hook_mgr(), mcp=mgr)
+
+    assert te._is_external_call("read_file") is False
+    assert te._needs_forced_approval("read_file") is False
+    # ...while a genuine MCP name stays gated
+    assert te._is_external_call("acme_widget_spin") is True
+    assert te._needs_forced_approval("acme_widget_spin") is True

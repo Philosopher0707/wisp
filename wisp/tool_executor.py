@@ -34,12 +34,31 @@ from wisp.core.events import (
 from wisp.tools.errors import ToolError
 from wisp.tools._utils import check_dangerous_command
 from wisp.tools.registry import execute_tool
+from wisp.tools.registry import TOOL_IMPLS
 from wisp.tools.audit import AuditLog
 
 logger = logging.getLogger(__name__)
 
 # (tool_name, args, danger_reason) -> (approved, modified_args_or_none)
 ApprovalHandler = Callable[[str, dict, str], Awaitable[tuple[bool, Optional[dict]]]]
+
+_MCP_SHADOW_WARNED: set[str] = set()
+
+
+def _warn_mcp_shadowed_builtin(name: str) -> None:
+    """Warn once when an MCP server advertises a name owned by a builtin.
+
+    Bare-name MCP calls lose to builtins at dispatch; operators need to know
+    their server's tool is being shadowed instead of silently never running.
+    """
+    if name in _MCP_SHADOW_WARNED:
+        return
+    _MCP_SHADOW_WARNED.add(name)
+    logger.warning(
+        "MCP server exposes tool '%s' which collides with a builtin — the "
+        "builtin wins. Call it as mcp:<server>/%s to reach the MCP tool.",
+        name, name,
+    )
 
 
 def orchestrator_event_to_agent_event(orch_ev: Any) -> AgentEvent:
@@ -522,10 +541,7 @@ class ToolExecutor:
         if mode == PermissionMode.READ_ONLY and func_name in _get_write_tools(self.config):
             return f"[Blocked: read_only mode - {func_name} is not allowed]"
         # MCP tools are external code — always gated in READ_ONLY mode
-        if (mode == PermissionMode.READ_ONLY
-                and (func_name.startswith("mcp:")
-                     or (func_name.startswith("mcp__") and func_name.count("__") >= 2)
-                     or self._is_mcp_tool(func_name))):
+        if mode == PermissionMode.READ_ONLY and self._is_external_call(func_name):
             return f"[Blocked: read_only mode - MCP tool {func_name} is not allowed]"
         return None
 
@@ -543,11 +559,7 @@ class ToolExecutor:
         cannot inspect their internal behavior; they are external code.
         """
         # MCP tools = external code = always require explicit approval.
-        # Namespaced prefixes are gated unconditionally (no manager needed);
-        # bare names go through _is_mcp_tool so they can't slip past the gate.
-        if (func_name.startswith("mcp:")
-                or (func_name.startswith("mcp__") and func_name.count("__") >= 2)
-                or self._is_mcp_tool(func_name)):
+        if self._is_external_call(func_name):
             return True
         mode = getattr(self.config, "permission_mode", PermissionMode.AUTO_EDIT)
         if mode == PermissionMode.ASK_ALL:
@@ -570,11 +582,19 @@ class ToolExecutor:
             except Exception:
                 pass
 
+        # A colliding bare name routes to the builtin (see _is_external_call);
+        # warn once so operators know their server's tool is being shadowed.
+        if (func_name not in ("spawn", "fanout")
+                and func_name in TOOL_IMPLS and self._is_mcp_tool(func_name)):
+            _warn_mcp_shadowed_builtin(func_name)
+
         if func_name == "spawn":
             result = await self._spawn(func_args, workspace)
         elif func_name == "fanout":
             result = await self._fanout(func_args, workspace)
-        elif self._is_mcp_tool(func_name):
+        elif self._is_external_call(func_name):
+            # Builtin names always win over a bare-name MCP match: an MCP
+            # server advertising "read_file" must not replace the core tool.
             result = await self._call_mcp_tool(func_name, func_args)
         elif func_name == "run_bash":
             try:
@@ -702,6 +722,21 @@ class ToolExecutor:
                     logger.debug("Write-verify lint failed for %s", file_path, exc_info=True)
 
         return result, duration_ms
+
+    def _is_external_call(self, name: str) -> bool:
+        """True when this call reaches MCP/external code rather than a builtin.
+
+        Builtin names always win over the bare-name MCP match — dispatch and
+        both approval gates share this predicate so they can never disagree
+        about which side of the boundary a call lands on.
+        """
+        if name.startswith("mcp:"):
+            return True
+        if name.startswith("mcp__") and name.count("__") >= 2:
+            return True
+        if name in TOOL_IMPLS:
+            return False
+        return self._is_mcp_tool(name)
 
     def _is_mcp_tool(self, name: str) -> bool:
         """Check if a tool name belongs to an MCP server.
