@@ -113,7 +113,8 @@ class SubagentContract:
     workspace: Optional[str] = None
     """Working directory. None = inherit parent's workspace."""
 
-    worktree_isolated: bool = True
+    worktree_isolated: bool = False  # role gating decides actual isolation
+
     """Run in an isolated git worktree. When False the subagent shares the workspace."""
 
     auto_approve: bool = False

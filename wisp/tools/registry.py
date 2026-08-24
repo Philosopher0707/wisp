@@ -219,7 +219,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "role": {"type": "string", "description": "Agent role: coder, reviewer, tester, researcher, planner, debugger, generalist. The role determines tools, timeout, and iteration budget.", "default": "generalist"},
                     "timeout_seconds": {"type": "number", "description": "Override the role's default timeout in seconds."},
                     "max_iterations": {"type": "number", "description": "Override the role's default max iterations."},
-                    "worktree_isolated": {"type": "boolean", "description": "Run in isolated git worktree. Default false.", "default": False},
+                    "worktree_isolated": {"type": "boolean", "description": "Run in isolated git worktree. Default false; read-only roles never isolate.", "default": False},
                     "model": {"type": "string", "description": "Override the model. Default inherits from parent."},
                     "tools": {"type": "array", "items": {"type": "string"}, "description": "Explicit tool list. Overrides role defaults. Use ['all'] for full toolset."},
                     "output_format": {"type": "string", "description": "text | json | markdown | report. Default text."},

@@ -30,6 +30,9 @@ class RoleConfig:
     max_iterations: int = 10
     timeout_seconds: int = 120
     model: Optional[str] = None  # None = inherit from orchestrator
+    # Read-only roles never benefit from a worktree (nothing to isolate);
+    # write-capable roles do. The orchestrator ANDs this with the contract.
+    wants_isolation: bool = True
 
 
 ROLE_CONFIGS: dict[str, RoleConfig] = {
@@ -142,6 +145,7 @@ Rules:
         ],
         max_iterations=10,
         timeout_seconds=120,
+        wants_isolation=False,  # reads the web and files; writes nothing
     ),
     AgentRole.PLANNER: RoleConfig(
         name=AgentRole.PLANNER,
@@ -164,6 +168,7 @@ Rules:
         ],
         max_iterations=8,
         timeout_seconds=90,
+        wants_isolation=False,  # produces a plan, not file changes
     ),
     AgentRole.DEBUGGER: RoleConfig(
         name=AgentRole.DEBUGGER,

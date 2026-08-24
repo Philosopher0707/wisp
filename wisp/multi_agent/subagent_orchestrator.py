@@ -140,6 +140,7 @@ class ResultCache:
         parts = [
             contract.task,
             contract.role,
+            contract.name,  # identity: vote/patterns need independent executions
             ",".join(sorted(contract.tools)),
             str(contract.model or ""),
             str(contract.workspace or ""),
@@ -506,6 +507,17 @@ class SubagentOrchestrator:
         workspace) is memoized so later children skip the attempt entirely.
         """
         if not contract.worktree_isolated:
+            return None
+
+        # Role-aware isolation (grill Q1): read-only roles gain nothing
+        # from a worktree — there is nothing to isolate. The role's verdict
+        # wins even when the parent model explicitly asked for one.
+        role_cfg = ROLE_CONFIGS.get(contract.role)
+        if role_cfg is not None and not role_cfg.wants_isolation:
+            logger.debug(
+                "Role %s is read-only; %s skips worktree isolation",
+                contract.role, contract.name,
+            )
             return None
 
         if self._worktree_unavailable_reason is not None:

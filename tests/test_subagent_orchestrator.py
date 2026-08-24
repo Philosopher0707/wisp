@@ -137,7 +137,7 @@ def test_contract_defaults():
     assert c.output_format == "text"
     assert c.model is None
     assert c.workspace is None
-    assert c.worktree_isolated is True
+    assert c.worktree_isolated is False  # role gating decides isolation
 
 
 def test_contract_overrides():
@@ -1669,3 +1669,75 @@ class TestTimeoutRetry:
             ))
 
         assert calls == [1]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Grill Q1: role-aware isolation — read-only roles never isolate
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestRoleAwareIsolation:
+    """The role's verdict wins even over an explicit contract request."""
+
+    def _orch(self, tmp_path):
+        return SubagentOrchestrator(
+            config=_child_config({}), workspace=tmp_path
+        )
+
+    def test_researcher_skips_isolation_despite_explicit_request(
+        self, tmp_path
+    ):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from wisp.multi_agent.task import SubagentContract
+
+        o = self._orch(tmp_path)
+        spy = MagicMock()
+        spy.create = AsyncMock(side_effect=AssertionError("must not create"))
+        o._worktree_mgr = spy
+
+        contract = SubagentContract(
+            name="res", role="researcher", task="t",
+            worktree_isolated=True,  # explicit ask — still gated by role
+        )
+        path = asyncio.run(o._resolve_worktree(contract))
+        assert path is None
+        spy.create.assert_not_called()
+
+    def test_write_roles_still_isolate_when_asked(self, tmp_path):
+        import asyncio
+        from pathlib import Path
+        from unittest.mock import AsyncMock, MagicMock
+
+        from wisp.multi_agent.task import SubagentContract
+
+        o = self._orch(tmp_path)
+        sentinel = Path("/tmp/some-worktree")
+        spy = MagicMock()
+        spy.create = AsyncMock(return_value=sentinel)
+        o._worktree_mgr = spy
+
+        for role in ("coder", "tester", "reviewer", "generalist"):
+            contract = SubagentContract(
+                name=f"w-{role}", role=role, task="t",
+                worktree_isolated=True,
+            )
+            path = asyncio.run(o._resolve_worktree(contract))
+            assert path == sentinel, role
+
+    def test_planner_never_isolates(self, tmp_path):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from wisp.multi_agent.task import SubagentContract
+
+        o = self._orch(tmp_path)
+        spy = MagicMock()
+        spy.create = AsyncMock(side_effect=AssertionError("planner writes nothing"))
+        o._worktree_mgr = spy
+
+        contract = SubagentContract(
+            name="plan", role="planner", task="t", worktree_isolated=True,
+        )
+        assert asyncio.run(o._resolve_worktree(contract)) is None
