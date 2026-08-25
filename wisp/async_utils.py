@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
+from typing import Callable, Iterator
 from typing import Any, AsyncIterator, TypeVar
 
 T = TypeVar("T")
@@ -92,6 +93,53 @@ def _ensure_background_loop() -> asyncio.AbstractEventLoop:
         _loop_thread = t
 
         return fut.result()
+
+
+class NonOwningExecutor(ThreadPoolExecutor):
+    """Executor proxy for asyncio loop default-executor registration.
+
+    Subclasses ThreadPoolExecutor ONLY because asyncio's
+    set_default_executor isinstance-checks for it (bpo: base_events).
+
+
+    asyncio shuts a loop's default executor when the loop closes
+    (base_events.close -> _do_shutdown). When several loops outlive each
+    other in one process — pytest-asyncio's function-scoped loops, server
+    restarts, embedded embedding — that close killed the PROCESS-GLOBAL
+    shared pool and every later to_thread raised "cannot schedule new
+    futures after shutdown". Loops get this proxy instead: submit/map
+    delegate to the shared pool, shutdown() is a no-op because ownership
+    of the pool belongs to interpreter exit, not to any one loop.
+    """
+
+    def __init__(self, pool: "ThreadPoolExecutor"):
+        # Bypass the parent constructor: no threads of our own — every call
+        # delegates to `pool`. Parent __init__ would spin an unused pool.
+        self._pool = pool
+        self._max_workers = pool._max_workers
+
+    def submit(
+        self, fn: "Callable[..., Any]", /, *args: Any, **kwargs: Any
+    ) -> "Future[Any]":
+        return self._pool.submit(fn, *args, **kwargs)
+
+    def map(
+        self,
+        fn: "Callable[..., Any]",
+        *iterables: Any,
+        timeout: float | None = None,
+        chunksize: int = 1,
+    ) -> "Iterator[Any]":
+        return self._pool.map(fn, *iterables, timeout=timeout, chunksize=chunksize)
+
+    def shutdown(self, wait=True, *, cancel_futures=False) -> None:
+        # Deliberate no-op: see class docstring.
+        pass
+
+
+def non_owning_executor() -> NonOwningExecutor:
+    """The shared pool wrapped so loop.close() cannot kill it."""
+    return NonOwningExecutor(get_shared_executor())
 
 
 def get_background_thread() -> threading.Thread | None:

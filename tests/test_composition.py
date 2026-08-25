@@ -207,17 +207,32 @@ class TestBindLoop:
     def test_bind_loop_registers_shared_executor_as_default(self, config):
         import asyncio
         from wisp.composition import CompositionRoot
-        from wisp.async_utils import get_shared_executor
+        from wisp.async_utils import (
+            NonOwningExecutor,
+            get_shared_executor,
+        )
 
         root = CompositionRoot(config)
         loop = asyncio.new_event_loop()
         try:
             root.bind_loop(loop)
             # to_thread / run_in_executor(None) resolve through the default
-            # executor; it must be the shared configured pool.
-            assert loop._default_executor is get_shared_executor()
+            # executor; it must DELEGATE to the shared configured pool.
+            # Deliberately NOT identity: loops get a non-owning proxy so
+            # asyncio's loop-close shutdown can never kill the process-
+            # global pool for later roots (see test_shared_pool_isolation).
+            ex = loop._default_executor
+            assert isinstance(ex, NonOwningExecutor)
+            assert ex.submit(lambda: "via-shared").result() == "via-shared"
+            assert get_shared_executor().submit(
+                lambda: "pool-alive"
+            ).result() == "pool-alive"
         finally:
             loop.close()
+            # closing this loop must NOT have poisoned the shared pool
+            assert get_shared_executor().submit(
+                lambda: "still-alive"
+            ).result() == "still-alive"
 
     def test_bind_loop_survives_executor_failure(self, config):
         import asyncio

@@ -78,7 +78,8 @@ class CompositionRoot:
         except RuntimeError:
             pass
         if loop is not None:
-            loop.set_default_executor(get_shared_executor())
+            from wisp.async_utils import non_owning_executor
+            loop.set_default_executor(non_owning_executor())
 
         # Register built-in extensions
         from wisp.extensions import PluginExtension, HookExtension, MCPExtension, SkillExtension
@@ -232,8 +233,8 @@ class CompositionRoot:
         reach the shared pool through the loop's default executor.
         """
         try:
-            from wisp.async_utils import get_shared_executor
-            loop.set_default_executor(get_shared_executor())
+            from wisp.async_utils import non_owning_executor
+            loop.set_default_executor(non_owning_executor())
         except Exception:
             logger.warning("Could not register shared executor", exc_info=True)
 
