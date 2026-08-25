@@ -18,7 +18,7 @@ class _MockCore:
     def __init__(self):
         self.turns = []
 
-    async def turn(self, session: dict, prompt: str, approval_handler=None):
+    async def turn(self, session: dict, prompt: str, approval_handler=None, steering_drain=None):
         self.turns.append((session["id"], prompt))
         yield {"type": "content", "text": f"echo: {prompt}"}
         yield {"type": "done"}
@@ -375,7 +375,7 @@ class TestDelegationLiveStreaming:
         class _Core:
             config = MagicMock()
             config.delegation_threshold = 0.18
-            async def turn(self, session, prompt, approval_handler=None):
+            async def turn(self, session, prompt, approval_handler=None, steering_drain=None):
                 yield {"type": "content", "text": "answer"}
                 yield {"type": "done"}
 
@@ -432,7 +432,7 @@ class TestDelegationLiveStreaming:
         class _Core:
             config = MagicMock()
             config.delegation_threshold = 0.18
-            async def turn(self, session, prompt, approval_handler=None):
+            async def turn(self, session, prompt, approval_handler=None, steering_drain=None):
                 yield {"type": "content", "text": "direct answer"}
                 yield {"type": "done"}
 
@@ -519,7 +519,7 @@ class _ToolCore:
             "arguments": {"path": "a.py"},
         }
 
-    async def turn(self, session: dict, prompt: str, approval_handler=None):
+    async def turn(self, session: dict, prompt: str, approval_handler=None, steering_drain=None):
         yield dict(self.call_event)
         yield {
             "type": "tool_result",
@@ -591,7 +591,7 @@ class TestToolCallPersistence:
         second = dict(first, name="list_files", arguments={"dir": "."})
 
         class _TwoCallCore(_ToolCore):
-            async def turn(self, session: dict, prompt: str, approval_handler=None):
+            async def turn(self, session: dict, prompt: str, approval_handler=None, steering_drain=None):
                 yield dict(first)
                 yield {
                     "type": "tool_result",

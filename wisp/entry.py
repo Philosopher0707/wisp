@@ -483,9 +483,26 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
                 sys.stdout.flush()
                 continue
 
-        # Run one turn; anything typed while it ran is queued for replay.
-        typeahead = TypeAheadBuffer()
-        queued = _run_turn(prompt, typeahead=typeahead)
+        # Run one turn. Lines typed while it runs are steered into the live
+        # turn at tool boundaries; anything the engine never consumed (no
+        # boundary occurred) replays as a normal prompt afterwards.
+        sid = adapter.session.get("id", "")
+
+        def _steer_inbox(text: str) -> None:
+            try:
+                # Direct append: the reader thread is the only producer,
+                # list ops are atomic under the GIL, and the engine drains
+                # on the loop thread — no cross-thread scheduling needed.
+                root.runtime.inject_steering(sid, text)
+            except Exception:
+                pass  # steering is best-effort; never break capture
+
+        typeahead = TypeAheadBuffer(on_line=_steer_inbox)
+        _run_turn(prompt, typeahead=typeahead)
+        try:
+            queued = root.runtime.drain_steering(sid)
+        except Exception:
+            queued = []
         if queued:
             sys.stdout.write(
                 dim(f"{status_symbols()['info']}  {len(queued)} prompt(s) typed ahead\n")

@@ -68,6 +68,10 @@ class AgentRuntime:
     _session_access: dict[str, float] = field(default_factory=dict, repr=False)
     _max_session_locks: int = field(default=1000, repr=False)
 
+    # Mid-turn steering inbox (M3): lines typed during a turn land here
+    # and are drained by the engine at the next tool boundary.
+    _steering_inbox: dict[str, list[str]] = field(default_factory=dict, repr=False)
+
     # Configurable thresholds (can be overridden)
     max_messages: int = field(default=50, repr=False)
     max_context_tokens: int = field(default=128000, repr=False)
@@ -242,7 +246,10 @@ class AgentRuntime:
             turn_succeeded = False
 
             try:
-                async for raw_event in core.turn(session, prompt, approval_handler=approval_handler):
+                async for raw_event in core.turn(
+                    session, prompt, approval_handler=approval_handler,
+                    steering_drain=lambda: self.drain_steering(sid),
+                ):
                     # Engine already yields flat dicts — normalize only if needed
                     if isinstance(raw_event, dict) and "type" in raw_event:
                         event = dict(raw_event)
@@ -358,6 +365,27 @@ class AgentRuntime:
                     prompt_tokens=counter.count(prompt, model=model),
                     completion_tokens=counter.count("".join(assistant_content), model=model),
                 )
+
+    # ── Mid-turn steering (M3) ─────────────────────────────────────
+
+    def drain_steering(self, session_id: str) -> list[str]:
+        """Remove and return pending steering notes for *session_id*."""
+        return self._steering_inbox.pop(session_id, [])
+
+    def inject_steering(self, session_id: str, text: str) -> None:
+        """Queue a mid-course correction typed during an active turn.
+
+        Thread-safe: called from the typeahead reader thread; drained on
+        the loop thread at the next tool boundary.
+        """
+        text = str(text).strip()
+        if not text:
+            return
+        self._steering_inbox.setdefault(session_id, []).append(text)
+
+
+    def clear_steering(self, session_id: str) -> None:
+        self._steering_inbox.pop(session_id, None)
 
     async def _maybe_delegate(
         self, prompt: str, session: dict[str, Any], config: Any,

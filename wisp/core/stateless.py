@@ -31,6 +31,7 @@ from wisp.core.events import (
     done as done_event,
     system,
     provider_status as provider_status_event,
+    steering_feedback,
 )
 from wisp.core.approval_gate import ApprovalGate
 from wisp.infra.circuit_breaker import (
@@ -109,11 +110,15 @@ class WispAgentCore:
             if cb_config:
                 self._circuit_breaker = CircuitBreaker(cb_config)
 
-    async def turn(self, session: dict[str, Any], prompt: str, approval_handler: Any = None) -> AsyncIterator[dict[str, Any]]:
+    async def turn(self, session: dict[str, Any], prompt: str, approval_handler: Any = None, steering_drain: Any = None) -> AsyncIterator[dict[str, Any]]:
         """Run one turn, yielding events.
 
         Loops internally: provider → tool_calls → execute → append → provider
         until the model returns content (no tool calls) or max iterations.
+
+        *steering_drain*, when given, is called at each tool boundary; its
+        strings are mid-course corrections appended as user messages so the
+        next provider round-trip adapts (M3 of docs/repl-design.md).
 
         Has a wall-clock timeout (config turn_timeout, default 30 min) to
         prevent infinite hangs.
@@ -159,7 +164,7 @@ class WispAgentCore:
             async with _asyncio.timeout(turn_timeout):
                 async for event in self._turn_inner(
                     session, prompt, messages, system_prompt, tools,
-                    max_iterations, approval_handler,
+                    max_iterations, approval_handler, steering_drain=steering_drain,
                 ):
                     yield event
         except _asyncio.TimeoutError:
@@ -170,7 +175,7 @@ class WispAgentCore:
 
     async def _turn_inner(
         self, session: dict[str, Any], prompt: str, messages: list[dict[str, Any]], system_prompt: str, tools: list[dict[str, Any]] | None,
-        max_iterations: int, approval_handler: Any,
+        max_iterations: int, approval_handler: Any, steering_drain: Any = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Inner turn loop, separated for timeout wrapping."""
         streamed_any_content = False
@@ -423,6 +428,23 @@ class WispAgentCore:
                     "tool_call_id": tc_id,
                     "content": str(content),
                 })
+
+            # Tool boundary: surface any steering the user typed mid-turn
+            # so the next provider round-trip can change course.
+            if steering_drain is not None:
+                try:
+                    injected = list(steering_drain())
+                except Exception:
+                    injected = []
+                for note in injected:
+                    note = str(note).strip()
+                    if not note:
+                        continue
+                    messages.append({
+                        "role": "user",
+                        "content": f"[steering] {note}",
+                    })
+                    yield _flatten_event(steering_feedback(note))
 
         # Max iterations reached
         yield _flatten_event(error_event("Max iterations reached", recoverable=False))

@@ -23,7 +23,16 @@ class _StubRuntime:
         self.store = MagicMock()
         self.turn_session_ids: list[str] = []
         self.saved_sessions: list[dict] = []
+        self._steering_inbox: dict[str, list[str]] = {}
         self.store.save_session.side_effect = self._record_save
+
+    def inject_steering(self, session_id, text):
+        text = str(text).strip()
+        if text:
+            self._steering_inbox.setdefault(session_id, []).append(text)
+
+    def drain_steering(self, session_id):
+        return self._steering_inbox.pop(session_id, [])
 
     def _record_save(self, session) -> None:
         self.saved_sessions.append(session)
@@ -392,24 +401,30 @@ class TestTypedAheadReplay:
     def test_typed_ahead_prompt_replays_after_turn(self, monkeypatch, no_signal_side_effects):
         from wisp.entry import _run_repl
 
+        runtime = _StubRuntime()
+
         class FakeBuffer:
-            def __init__(self):
+            def __init__(self, on_line=None):
                 self.enabled = False
-                self._drained = False
+                self._on_line = on_line
 
             def start(self):
                 self.enabled = True
 
             def drain(self, timeout=2.0):
-                if self._drained:
-                    return [], ""
-                self._drained = True
-                return ["second prompt"], ""
+                return [], ""
 
-        shared = FakeBuffer()
-        monkeypatch.setattr("wisp.entry.TypeAheadBuffer", lambda: shared)
+        fired = []
 
-        runtime = _StubRuntime()
+        def make_buffer(on_line=None):
+            # Simulate ONE physical typing event: the line enters the inbox
+            # once, no matter how many buffers later turns construct.
+            if not fired:
+                fired.append(1)
+                on_line("second prompt")
+            return FakeBuffer(on_line=on_line)
+
+        monkeypatch.setattr("wisp.entry.TypeAheadBuffer", make_buffer)
         # Capture executed prompts via run_turn yields (echo: prefix).
         executed: list[str] = []
 
@@ -432,6 +447,9 @@ class TestTypedAheadReplay:
 
         class DisabledBuffer:
             enabled = False
+
+            def __init__(self, on_line=None):
+                pass
 
             def start(self):
                 self.enabled = False

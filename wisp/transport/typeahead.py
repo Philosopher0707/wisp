@@ -51,13 +51,16 @@ def extract_lines(buf: bytearray) -> tuple[list[str], bytearray]:
 class TypeAheadBuffer:
     """Captures stdin lines typed while a turn executes."""
 
-    def __init__(self) -> None:
+    def __init__(self, on_line=None) -> None:
         self._queue: "queue.Queue[str]" = queue.Queue()
         self._buf = bytearray()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._fd = -1
         self.enabled = False
+        # Called from the reader thread for every complete line as it
+        # arrives — used for live mid-turn steering injection.
+        self._on_line = on_line
 
     def start(self) -> None:
         if self.enabled or os.name != "posix":
@@ -97,7 +100,15 @@ class TypeAheadBuffer:
             lines, remainder = extract_lines(buf)
             buf[:] = remainder
             for line in lines:
-                self._queue.put(line)
+                # With live steering wired, the inbox owns the line and
+                # replay-dedup is the runtime's job; queue stays empty.
+                if self._on_line is None:
+                    self._queue.put(line)
+                else:
+                    try:
+                        self._on_line(line)
+                    except Exception:
+                        pass
 
     def drain(self, timeout: float = 2.0) -> tuple[list[str], str]:
         """Stop capturing; return (complete_lines, partial_unsubmitted_text)."""

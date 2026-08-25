@@ -13,7 +13,7 @@ from wisp.core.runtime import AgentRuntime
 
 
 class _MockCore:
-    async def turn(self, session: dict, prompt: str, approval_handler=None):
+    async def turn(self, session: dict, prompt: str, approval_handler=None, steering_drain=None):
         yield {"type": "content", "text": f"echo: {prompt}"}
         yield {"type": "done"}
 

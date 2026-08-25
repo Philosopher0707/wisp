@@ -34,7 +34,7 @@ class TestMultiTransportIntegration:
             multi = MultiTransport([headless, file_transport])
 
             mock_core = MagicMock()
-            async def _mock_turn(session, prompt, approval_handler=None):
+            async def _mock_turn(session, prompt, approval_handler=None, steering_drain=None):
                 yield {"type": "content", "text": "Hello"}
                 yield {"type": "tool_call", "name": "read_file", "arguments": {"path": "/tmp/test"}}
                 yield {"type": "tool_result", "name": "read_file", "result": "content", "duration_ms": 42}

@@ -459,14 +459,14 @@ def status_symbols() -> dict[str, str]:
         return {
             "ok": "[PASS]", "fail": "[FAIL]", "warn": "[WARN]",
             "info": "[NOTE]", "cancel": "[STOP]", "pause": "[PAUSED]",
-            "thinking": "[THINKING]", "exit": "[EXIT]",
+            "thinking": "[THINKING]", "exit": "[EXIT]", "steer": "[STEER]",
         }
     mode = OUTPUT_MODE
     if mode == OutputMode.ASCII:
         return {
             "ok": "[OK]", "fail": "[X]", "warn": "[!]",
             "info": "*", "cancel": "x", "pause": "||",
-            "thinking": "...", "exit": "bye",
+            "thinking": "...", "exit": "bye", "steer": "~",
         }
     if mode == OutputMode.MINIMAL:
         # Status markers carry information, so they survive minimality;
@@ -474,10 +474,10 @@ def status_symbols() -> dict[str, str]:
         return {
             "ok": "[OK]", "fail": "[X]", "warn": "[!]",
             "info": "", "cancel": "", "pause": "",
-            "thinking": "", "exit": "",
+            "thinking": "", "exit": "", "steer": "",
         }
     return {
         "ok": "✓", "fail": "✗", "warn": "⚠",
         "info": "•", "cancel": "⏹", "pause": "⏸",
-        "thinking": "🧠", "exit": "👋",
+        "thinking": "🧠", "exit": "👋", "steer": "↻",
     }
