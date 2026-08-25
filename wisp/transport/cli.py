@@ -555,6 +555,10 @@ class CLITransport(Transport):
         self._bg_queue: Any | None = None
         self._stdin: Any = None
         self._stdout: Any = None
+        # Stream discipline (docs/repl-aesthetics.md §0): stdout carries
+        # model prose + data; stderr carries ALL chrome. On a TTY both
+        # interleave as before; piped, `> file` captures clean answers.
+        self._stderr: Any = None
         self._thinking_buffer: list[str] = []
 
         self._content_buffer: list[str] = []
@@ -584,10 +588,10 @@ class CLITransport(Transport):
     # ── Transport ABC implementation ────────────────────────────────
 
     async def send(self, event: dict) -> None:
-        """Send an event to stdout."""
+        """Render one engine event onto its proper stream."""
         self._ensure_background_watch()
-        if self._stdout is not None:
-            self._render_event(self._stdout, event)
+        if self._stdout is not None or self._stderr is not None:
+            self._render_event(self._stdout, event, self._stderr)
 
     async def recv(self) -> str | None:
         """Receive a prompt from stdin.
@@ -646,16 +650,16 @@ class CLITransport(Transport):
             self._spinner.stop()
 
         # Show interactive prompt
-        print(file=sys.stdout)  # blank line before prompt
+        print(file=sys.stderr)  # blank line before prompt
         print(
             warning(
                 f"{status_symbols()['warn']}  {tool_name}({args_text})"
             ),
-            file=sys.stdout,
+            file=sys.stderr,
         )
         print(
             dim("     [y] yes  [Y] always this  [a] all on  [n] no  [N] always no  [d] all off  [c] cancel"),
-            file=sys.stdout,
+            file=sys.stderr,
         )
         sys.stdout.flush()
 
@@ -684,7 +688,7 @@ class CLITransport(Transport):
         if choice == "c":
             # Honest cancel: unwind the turn (the REPL renders it like an
             # interrupt), not a silent deny that lets the agent continue.
-            print(dim(f"{status_symbols()['cancel']}  Turn cancelled."), file=sys.stdout)
+            print(dim(f"{status_symbols()['cancel']}  Turn cancelled."), file=sys.stderr)
             raise asyncio.CancelledError(
                 f"User cancelled the turn at the approval prompt for {tool_name}"
             )
@@ -699,8 +703,8 @@ class CLITransport(Transport):
         input(), so a cancelled approval can't leave an orphaned reader
         swallowing the user's next typed line.
         """
-        sys.stdout.write(prompt_text)
-        sys.stdout.flush()
+        sys.stderr.write(prompt_text)
+        sys.stderr.flush()
         use_select = hasattr(sys.stdin, "isatty") and sys.stdin.isatty() and hasattr(select, "select")
         if not use_select:
             return input(prompt_text)
@@ -1072,10 +1076,10 @@ class CLITransport(Transport):
         self._phase = "understand"
 
     def _get_spinner(self) -> Spinner:
-        """Lazily create spinner bound to current stdout."""
+        """Lazily create spinner bound to the chrome stream."""
         if self._spinner is None:
-            stdout = self._stdout if self._stdout is not None else sys.stdout
-            self._spinner = Spinner(stdout, mode=get_output_mode())
+            stream = getattr(self, "_stderr", None) or sys.stderr
+            self._spinner = Spinner(stream, mode=get_output_mode())
         return self._spinner
 
     @staticmethod
@@ -1089,12 +1093,15 @@ class CLITransport(Transport):
 
     # ── CLI-specific methods ──────────────────────────────────────
 
-    def _render_event(self, stdout: Any, event: AgentEvent | dict) -> None:
-        """Render an event to stdout with structured formatting.
+    def _render_event(self, stdout: Any, event: AgentEvent | dict,
+                      stderr: Any = None) -> None:
+        """Render an event with structured formatting.
 
-        Uses ProgressTracker for phase detection, Spinner for live
-        tool execution feedback, and shows file change ticker.
+        Prose/data write to ``stdout``; every chrome line writes to
+        ``stderr``. Falls back to ``stdout`` when no stderr is wired so
+        existing single-stream callers and tests keep working.
         """
+        err = stderr or getattr(self, "_stderr", None) or stdout
         self.stop_wait_clock(stdout)
         # Normalize to AgentEvent
         if isinstance(event, dict):
@@ -1114,8 +1121,8 @@ class CLITransport(Transport):
             self._phase = new_phase
             bar = render_phase_bar(new_phase, {"tools_run": self._progress.progress.tools_run}, width)
             if bar:
-                stdout.write(bar + "\n")
-                stdout.flush()
+                err.write(bar + "\n")
+                err.flush()
 
         if etype == EventType.THINKING:
             if self._in_content:
@@ -1127,7 +1134,7 @@ class CLITransport(Transport):
 
         elif etype == EventType.CONTENT:
             if self._in_thinking:
-                self._flush_thinking(stdout, width)
+                self._flush_thinking(err, width)
             # Token streaming: write each delta as it arrives. The old
             # behavior buffered everything and painted one block at the
             # first boundary — users watched silence for the whole answer.
@@ -1143,7 +1150,7 @@ class CLITransport(Transport):
             stdout.flush()
 
         elif etype == EventType.TOOL_CALL:
-            self._flush_thinking(stdout, width)
+            self._flush_thinking(err, width)
             self._flush_content(stdout, width)
             name = ev.data.get("name", "")
             args = ev.data.get("arguments", {})
@@ -1152,7 +1159,7 @@ class CLITransport(Transport):
             spinner.start(label)
 
         elif etype == EventType.TOOL_RESULT:
-            self._flush_thinking(stdout, width)
+            self._flush_thinking(err, width)
             self._flush_content(stdout, width)
             name = ev.data.get("name", "")
             result = ev.data.get("result", "")
@@ -1182,42 +1189,62 @@ class CLITransport(Transport):
                     stdout.flush()
 
         elif etype == EventType.DONE:
-            self._flush_thinking(stdout, width)
+            self._flush_thinking(err, width)
             self._flush_content(stdout, width)
             # Ensure spinner is stopped on turn completion
             if self._spinner is not None:
                 self._spinner.stop()
 
         elif etype == EventType.ERROR:
-            self._flush_thinking(stdout, width)
+            self._flush_thinking(err, width)
             self._flush_content(stdout, width)
             # Stop spinner on errors so it doesn't keep spinning
             if self._spinner is not None:
                 self._spinner.stop()
             msg = ev.data.get("message", "")
-            error_prefix = "[ERROR] " if is_accessible() else f"{status_symbols()['fail']} "
-            stdout.write(
-                _box(f"{error_prefix}{msg}", title="Error", style="error", double=True, width=width)
-                + "\n"
-            )
-            stdout.flush()
+            code = ev.data.get("code")
+            if code:
+                # rustc-style structured diagnostic (aesthetics §3).
+                header = f"error[{code}]: {msg}"
+                err.write(error(header) + "\n")
+                for ctx_line in ev.data.get("context") or []:
+                    err.write(dim(f"  → {ctx_line}") + "\n")
+                hint = ev.data.get("hint")
+                if hint:
+                    err.write(dim(f"help: {hint}") + "\n")
+                err.flush()
+            else:
+                error_prefix = "[ERROR] " if is_accessible() else f"{status_symbols()['fail']} "
+                err.write(
+                    _box(f"{error_prefix}{msg}", title="Error", style="error", double=True, width=width)
+                    + "\n"
+                )
+                err.flush()
 
         elif etype == EventType.PROVIDER_STATUS:
-            self._flush_thinking(stdout, width)
+            self._flush_thinking(err, width)
             rendered = render_provider_status(ev, width)
             if rendered:
                 stdout.write(rendered + "\n")
                 stdout.flush()
 
         elif etype == EventType.SUBAGENT:
-            self._flush_thinking(stdout, width)
+            self._flush_thinking(err, width)
             rendered = render_subagent_status(ev, width)
             if rendered:
-                stdout.write(rendered + "\n")
-                stdout.flush()
+                # Permanent line: finalize the live status row above it,
+                # then let the spinner reclaim the bottom edge.
+                spinner = self._get_spinner()
+                had_row = self._spinner is not None and getattr(self._spinner, "_active", False)
+                if had_row:
+                    spinner.pause()
+                err.write(rendered + "\n")
+                err.flush()
+                if had_row:
+                    spinner.resume()
 
         elif etype == EventType.STEERING_INJECT:
-            self._flush_thinking(stdout, width)
+            self._flush_thinking(err, width)
             self._flush_content(stdout, width)
             text = str(ev.data.get("text", "")).strip()
             if text and get_output_mode() != OutputMode.MINIMAL:
@@ -1226,41 +1253,42 @@ class CLITransport(Transport):
                     line = f"  [STEER] {text}"
                 else:
                     line = f"  {sym['steer']} steering · {text}"
-                stdout.write(dim(line) + "\n")
-                stdout.flush()
+                err.write(dim(line) + "\n")
+                err.flush()
 
         elif etype == EventType.SYSTEM:
-            self._flush_thinking(stdout, width)
+            self._flush_thinking(err, width)
             self._flush_content(stdout, width)
             level = ev.data.get("level", "info")
             if level == "debug":
                 return
             msg = ev.data.get("message", "")
+            # Heartbeats are motion, not history: refresh the live status
+            # row instead of appending lines (aesthetics §2).
+            if msg.startswith("⏳") and get_output_mode() != OutputMode.MINIMAL:
+                spinner = self._get_spinner()
+                if getattr(self._spinner, "_active", False):
+                    spinner.update(msg)
+                    return
             if level == "warning":
-                stdout.write(warning(f"  ⚠ {msg}\n"))
+                err.write(warning(f"  ⚠ {msg}\n"))
             else:
-                stdout.write(info(f"  ℹ {msg}\n"))
-            stdout.flush()
+                err.write(info(f"  ℹ {msg}\n"))
+            err.flush()
 
         elif etype == EventType.APPROVAL_REQUEST:
             # Silently absorbed — handler resolves on next step
             pass
 
         elif etype == EventType.STEERING_PAUSED:
-            stdout.write(
+            err.write(
                 warning(f"  ⏸  Steering paused: {ev.data.get('reason', '')}\n")
             )
-            stdout.flush()
+            err.flush()
 
         elif etype == EventType.STEERING_RESUMED:
-            stdout.write(success("  ▶  Steering resumed\n"))
-            stdout.flush()
-
-        elif etype == EventType.STEERING_INJECT:
-            stdout.write(
-                dim(f"  💉 Steering feedback: {ev.data.get('text', '')[:80]}\n")
-            )
-            stdout.flush()
+            err.write(success("  ▶  Steering resumed\n"))
+            err.flush()
 
         else:
             # Default: silently ignore unknown event types

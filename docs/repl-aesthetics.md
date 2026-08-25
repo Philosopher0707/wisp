@@ -259,16 +259,16 @@ single-line compaction notice). Extensions:
 | Rule | State |
 |---|---|
 | Live content deltas, boundary no-dup, accessible label | ✅ shipped |
-| Heartbeat cadence (as status-row clock) | ◐ logic shipped, row-update pending |
+| Heartbeat cadence → **status-row updates** (`⏳` refreshes the live row) | ✅ shipped |
+| Status-row renderer: Spinner `pause()`/`resume()`/`update()`; permanent lines finalize the row above them | ✅ shipped |
+| stdout/stderr split (prose+data vs chrome; prompt echo, banner, stats, approval card on stderr) | ✅ shipped for CLI transport; tool result cards still ride stdout whole (headers included) as data payloads |
 | Spinner EOL clear, bounded cards, `/log`, `/thinking` | ✅ shipped |
 | NO_COLOR + non-TTY detection | ✅ shipped |
-| stdout/stderr split | ❌ new — largest item; touches transport write sites |
-| Status-row renderer (single live row, finalize-on-event) | ❌ new — extends Spinner |
-| Structured errors + code registry | ❌ new — events factory + ERROR branch |
-| Markdown answer renderer (§4 subset) | ❌ new — pure function in renderer.py |
+| Structured errors + code registry (E1101/E1102/E5101 wired; E21xx reserved) | ✅ shipped |
+| Markdown answer renderer (§4 subset) | ❌ next |
 | Git-standard diff coloring | ◐ partial |
-| Copy deck enforcement (§7 strings) | ❌ new — mechanical sweep |
-| `--json` NDJSON + exit codes | ❌ new — entry.py wiring |
+| Copy deck enforcement (§7 strings) | ◐ child-done/cancel strings match; sweep pending |
+| `--json` NDJSON + exit codes, `-q/--no-motion` flags | ❌ new — entry.py wiring |
 | Warning dedup, cadence decay, 200-line budget, minute-line | ❌ carried from v2 |
 
 Ordering suggestion: streams split + status row first (they define the

@@ -252,8 +252,31 @@ def content(text: str) -> AgentEvent:
     return _make_event(TYPE_CONTENT, {"text": text})
 
 
-def error(message: str, recoverable: bool = True) -> AgentEvent:
-    return _make_event(TYPE_ERROR, {"message": message, "recoverable": recoverable})
+# Error-code ranges (docs/repl-aesthetics.md §3): E11xx provider/stream,
+# E21xx tool execution, E31xx approval/permission, E41xx session/state,
+# E51xx child/orchestration. W-codes mark recoverable (inline warn) cases.
+CODE_TURN_TIMEOUT = "E1101"
+CODE_PROVIDER_STREAM = "E1102"
+CODE_TOOL_TIMEOUT = "E2103"
+CODE_ITERATION_BUDGET = "E5101"
+
+
+def error(
+    message: str,
+    recoverable: bool = True,
+    code: str | None = None,
+    hint: str | None = None,
+    context: list[str] | None = None,
+) -> AgentEvent:
+    """Fatal-turn error; structured fields render rustc-style when set."""
+    data: dict[str, Any] = {"message": message, "recoverable": recoverable}
+    if code:
+        data["code"] = code
+    if hint:
+        data["hint"] = hint
+    if context:
+        data["context"] = [str(c)[:120] for c in context]
+    return _make_event(TYPE_ERROR, data)
 
 
 def done(session_id: str, turns: int = 0, summary: str = "", reason: str = "natural") -> AgentEvent:

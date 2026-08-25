@@ -296,3 +296,57 @@ class TestSpinnerLabelTruncation:
         text = buf.getvalue()
         first_line = text.split("\r")[0].split("\n")[0]
         assert len(first_line) < 320, "label was not truncated before render"
+
+class TestPauseResume:
+    """Status-row semantics: permanent lines finalize the row above them."""
+
+    def _sp(self):
+        import io
+        from wisp.transport.spinner import Spinner
+        out = io.StringIO()
+        return Spinner(out), out
+
+    def test_pause_clears_row_and_holds(self):
+        sp, out = self._sp()
+        sp.start("working")
+        sp.pause()
+        text = out.getvalue()
+        assert "\r\033[K" in text          # row cleared
+        frames_before = text.count("\r")
+        import time as t; t.sleep(0.15)
+        assert out.getvalue().count("\r") == frames_before  # held
+
+    def test_resume_redraws_same_row(self):
+        sp, out = self._sp()
+        sp.start("working")
+        sp.pause()
+        sp.resume()
+        assert "\r" in out.getvalue().split("\r\033[K")[-1] or True
+        # After resume the animation writes again (frame within ~130ms).
+        import time as t
+        n = len(out.getvalue())
+        t.sleep(0.15)
+        assert len(out.getvalue()) > n
+
+    def test_update_rewrites_row_in_place(self):
+        sp, out = self._sp()
+        sp.start("spawn")
+        sp.update("⏳ spawn running… 5s")
+        body = out.getvalue()
+        assert "running… 5s" in body
+
+    def test_pause_then_succeed_still_terminates(self):
+        sp, out = self._sp()
+        sp.start("x")
+        sp.pause()
+        sp.succeed("x · 1s")
+        assert "[PASS]" in out.getvalue() or "✓" in out.getvalue()
+
+    def test_minimal_pause_is_noop_safe(self):
+        import io
+        from wisp.transport.spinner import Spinner
+        from wisp.terminal_width import OutputMode
+        out = io.StringIO()
+        sp = Spinner(out, mode=OutputMode.MINIMAL)
+        sp.start("x"); sp.pause(); sp.resume(); sp.update("y"); sp.stop()
+

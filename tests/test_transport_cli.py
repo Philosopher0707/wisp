@@ -482,7 +482,8 @@ class TestApprovalArgRedaction:
 
         transport._read_approval_answer = deny
         buf = io.StringIO()
-        with patch.object(cli_mod.sys, "stdout", buf):
+        # v3 stream discipline: the approval card is chrome → stderr.
+        with patch.object(cli_mod.sys, "stderr", buf):
             approved = asyncio.run(transport.approve({
                 "name": "run_bash",
                 "arguments": {"command": "deploy", "api_key": "sk-live-999999"},
@@ -745,4 +746,99 @@ class TestTokenStreaming:
         with _patch("wisp.transport.cli.is_accessible", return_value=True):
             t._render_event(out, {"type": "content", "text": "hi"})
         assert "[Response]" in out.getvalue()
+
+# ═══════════════════════════════════════════════════════════════════
+# Stream discipline (v3 §0): prose→stdout, chrome→stderr
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestStreamDiscipline:
+    def _transport(self, out, err):
+        from wisp.transport.cli import CLITransport
+        from wisp.transport.progress import ProgressTracker
+
+        t = CLITransport.__new__(CLITransport)
+        for k, v in dict(config=None, _content_buffer=[], _thinking_buffer=[],
+                         _in_content=False, _in_thinking=False,
+                         _streaming_content_live=False,
+                         _last_block_was_tool=False,
+                         show_tool_output=True, _stdout=out, _stderr=err,
+                         _spinner=None).items():
+            setattr(t, k, v)
+        t._progress = ProgressTracker()
+        return t
+
+    def test_content_goes_to_stdout_only(self):
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        t = self._transport(out, err)
+        t._render_event(out, {"type": "content", "text": "the answer"}, err)
+        assert "the answer" in out.getvalue()
+        assert err.getvalue() == ""
+
+    def test_system_warning_goes_to_stderr_only(self):
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        t = self._transport(out, err)
+        t._render_event(out, {"type": "system",
+                              "message": "rate limited", "level": "warning"}, err)
+        assert "rate limited" in err.getvalue()
+        assert out.getvalue() == ""
+
+    def test_subagent_lines_go_to_stderr(self):
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        t = self._transport(out, err)
+        t._render_event(out, {"type": "subagent", "kind": "task_started",
+                              "role": "researcher", "detail": "Research T cells"}, err)
+        assert "researcher" in err.getvalue()
+        assert out.getvalue() == ""
+
+    def test_error_card_goes_to_stderr(self):
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        t = self._transport(out, err)
+        t._render_event(out, {"type": "error",
+                              "message": "boom", "recoverable": False}, err)
+        assert "boom" in err.getvalue()
+        assert out.getvalue() == ""
+
+    def test_heartbeat_updates_status_row_not_new_line(self):
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        t = self._transport(out, err)
+        # Start a tool so a status row exists.
+        t._render_event(out, {"type": "tool_call", "name": "spawn",
+                              "arguments": {"task": "x"}}, err)
+        base_rows = err.getvalue().count("\r")
+        t._render_event(out, {"type": "system",
+                              "message": "⏳ spawn running… 5s"}, err)
+        body = err.getvalue()
+        # Updated via \r rewrite, never appended as a plain line.
+        assert "running… 5s" in body
+        assert "  ℹ ⏳" not in body and "⚠ ⏳" not in body
+        assert body.count("\r") >= base_rows
+
+    def test_rustc_error_format_when_coded(self):
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        t = self._transport(out, err)
+        t._render_event(out, {"type": "error", "recoverable": False,
+                              "message": "web_fetch timed out after 30s",
+                              "code": "E2103",
+                              "context": ["https://example.com (attempt 1/2)"],
+                              "hint": "raise tool_timeout"}, err)
+        e = err.getvalue()
+        assert "error[E2103]: web_fetch timed out after 30s" in e
+        assert "→ https://example.com (attempt 1/2)" in e
+        assert "help: raise tool_timeout" in e
+        assert out.getvalue() == ""
+
+    def test_uncoded_error_keeps_legacy_box(self):
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        t = self._transport(out, err)
+        t._render_event(out, {"type": "error", "message": "boom",
+                              "recoverable": False}, err)
+        assert "Error" in err.getvalue()      # boxed legacy card
 

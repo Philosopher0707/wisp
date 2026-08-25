@@ -53,6 +53,7 @@ class Spinner:
         self._stdout: TextIO = stdout or sys.stdout
         self._mode = mode
         self._active: bool = False
+        self._paused: bool = False
         self._index: int = 0
         self._current_label: str = ""
         self._thread: threading.Thread | None = None
@@ -81,11 +82,30 @@ class Spinner:
         self._start_animation()
 
     def update(self, label: str) -> None:
-        """Update label without resetting animation."""
+        """Update the row text in place (heartbeat clock, child summary)."""
         if not self._active:
             return
-        with self._lock:
-            self._current_label = label
+        self._current_label = truncate_spinner_label(
+            label,
+            unicode_ok=self._mode == OutputMode.UNICODE,
+        )
+        self._write_frame()
+
+    def pause(self) -> None:
+        """Halt animation and clear the row so permanent lines can print.
+
+        The animation thread keeps cycling but writes nothing; resume()
+        restores the row without spawning a second thread.
+        """
+        self._paused = True
+        if self._active:
+            self._write_line("\r\033[K")
+
+    def resume(self) -> None:
+        """Redraw the row and continue animation after pause()."""
+        if self._active and self._paused:
+            self._paused = False
+            self._write_frame()
 
     def succeed(self, label: str) -> None:
         """Replace spinner with success marker and stop animation."""
@@ -132,8 +152,8 @@ class Spinner:
         interval = 0.12
         while self._active:
             time.sleep(interval)
-            if not self._active:
-                break
+            if not self._active or self._paused:
+                continue
             self._index = (self._index + 1) % len(self._frames)
             self._write_frame()
 
@@ -141,7 +161,7 @@ class Spinner:
 
     def _write_frame(self) -> None:
         with self._lock:
-            if not self._active:
+            if not self._active or self._paused:
                 return
             frame = self._frames[self._index]
             label = self._current_label

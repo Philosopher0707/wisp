@@ -24,6 +24,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
 
 from wisp.core.events import (
+    CODE_TURN_TIMEOUT,
+    CODE_PROVIDER_STREAM,
+    CODE_ITERATION_BUDGET,
     AgentEvent,
     content as content_event,
     tool_result as tool_result_event,
@@ -170,6 +173,9 @@ class WispAgentCore:
         except _asyncio.TimeoutError:
             yield _flatten_event(error_event(
                 f"Turn timed out after {turn_timeout}s", recoverable=False,
+                code=CODE_TURN_TIMEOUT,
+                hint="raise `turn_timeout` in config (WISP_TURN_TIMEOUT)",
+                context=[f"budget: {turn_timeout}s"],
             ))
             yield _flatten_event(done_event(session.get("id", "")))
 
@@ -358,17 +364,26 @@ class WispAgentCore:
                     continue  # Retry this iteration
 
                 logger.exception("Provider stream failed")
+                if not is_transient:
+                    _err_ev = error_event(
+                        f"Provider stream failed: {exc}", recoverable=False,
+                        code=CODE_PROVIDER_STREAM,
+                        hint="check API key/quota and model availability; "
+                             "transient network errors retry automatically",
+                    )
+                else:
+                    _err_ev = None
                 if partial_content and not streamed_any_content:
                     # Only emit accumulated content when NOTHING was streamed
                     # live — otherwise transports render the text twice and the
                     # duplicate lands in session history permanently.
                     yield _flatten_event(content_event("".join(partial_content)))
-                yield _flatten_event(
-                    error_event(
-                        f"Stream error: {exc}",
-                        recoverable=True,
+                if _err_ev is not None:
+                    yield _flatten_event(_err_ev)
+                else:
+                    yield _flatten_event(
+                        error_event(f"Stream error: {exc}", recoverable=True)
                     )
-                )
                 return
 
             # ── Check for truncation ──
@@ -473,7 +488,12 @@ class WispAgentCore:
         except Exception:
             logger.exception("Iteration wrap-up call failed")
         if not wrapped_up:
-            yield _flatten_event(error_event("Max iterations reached", recoverable=False))
+            yield _flatten_event(error_event(
+                "Max iterations reached", recoverable=False,
+                code=CODE_ITERATION_BUDGET,
+                hint="raise `max_iterations` in config; the summary above "
+                     "covers what was gathered before the budget ended",
+            ))
         yield _flatten_event(done_event(session.get("id", "")))
 
     async def _stream_events_async(
@@ -1333,13 +1353,16 @@ class WispAgentCore:
         Observed against NVIDIA's endpoint: ~1-in-5 identical requests
         close cleanly with ZERO deltas (fast, silent, useless), and some
         hold requests with no first byte indefinitely. Both previously
-        produced a silently empty turn. Now: one transparent retry on a
-        fresh request; a second failure surfaces as a visible error
-        instead of nothing.
+        produced a silently empty turn. Now: transparent retries on fresh
+        requests (count via WISP_STREAM_ATTEMPTS, default 3 — under
+        parallel fan-out load two consecutive empties are common enough
+        that a single retry still lost turns); final failure surfaces as
+        a visible error instead of nothing.
         """
         import asyncio as _aio
 
-        for attempt in (1, 2):
+        max_attempts = max(1, int(os.environ.get("WISP_STREAM_ATTEMPTS", "3")))
+        for attempt in range(1, max_attempts + 1):
             got_meaningful = False
             stream_stats: dict[str, Any] | None = None
             stream = self._stream_events_async(
@@ -1382,7 +1405,7 @@ class WispAgentCore:
             if got_meaningful:
                 return
 
-            if attempt == 1:
+            if attempt < max_attempts:
                 if stalled:
                     reason = f"no data for {self.FIRST_TOKEN_DEADLINE_S:.0f}s"
                     detail = ""
@@ -1400,8 +1423,8 @@ class WispAgentCore:
                             f"finish={stream_stats.get('finish_reason')}]"
                         )
                 logger.warning(
-                    "Provider stream %s%s (attempt %d) — retrying once",
-                    reason, detail, attempt,
+                    "Provider stream %s%s (attempt %d/%d) — retrying",
+                    reason, detail, attempt, max_attempts,
                 )
                 # Immediate retry into a throttling endpoint reproduces the
                 # failure; a short jittered pause gives the window a chance
@@ -1411,10 +1434,11 @@ class WispAgentCore:
                 continue
 
             yield _flatten_event(error_event(
-                "Provider returned no usable response after a retry — "
-                "the model endpoint is misbehaving. Try again shortly.",
+                f"Provider returned no usable response after {max_attempts} "
+                "attempts — the model endpoint is misbehaving. Try again shortly.",
                 recoverable=True,
             ))
+            return
 
     def _normalize_event(self, event: Any) -> dict[str, Any]:
         """Normalize provider event to standard format.
