@@ -623,3 +623,57 @@ class TestWaitClockParityAndAcceptance:
         t.start_wait_clock(stdout=out)
         t.stop_wait_clock(stdout=out)
         t.stop_wait_clock(stdout=out)  # must not raise
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Bounded rendering: adversarial tool outputs must render in O(lines)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestBoundedToolRender:
+    def _transport(self, out):
+        from wisp.transport.cli import CLITransport
+        from wisp.transport.progress import ProgressTracker
+
+        t = CLITransport.__new__(CLITransport)
+        t.config = None
+        t._stdout = None
+        t._spinner = None
+        t._progress = ProgressTracker()
+        t._thinking_buffer = []
+        t._content_buffer = []
+        t._in_thinking = False
+        t._in_content = False
+        t.show_tool_output = True
+        t._turn_number = 1
+        t._last_block_was_tool = False
+        t._phase = "understand"
+        return t
+
+    def test_huge_single_line_output_stays_bounded(self):
+        import io
+        import time
+
+        out = io.StringIO()
+        t = self._transport(out)
+        huge = '{"data": "' + "x" * (5 * 1024 * 1024) + '"}'
+        ev = {"type": "tool_result", "name": "web_search", "success": True,
+              "duration_ms": 5.0, "result": huge}
+        t0 = time.perf_counter()
+        t._render_event(out, ev)
+        dt = time.perf_counter() - t0
+        assert dt < 0.25, f"rendering 5MB output took {dt*1000:.0f}ms"
+        text = out.getvalue()
+        assert "+ more lines" in text or "more lines" in text
+
+    def test_small_output_byte_identical_to_golden(self):
+        import io
+
+        out = io.StringIO()
+        t = self._transport(out)
+        ev = {"type": "tool_result", "name": "bash", "success": True,
+              "duration_ms": 3.0, "result": "alpha\nbeta\ngamma"}
+        t._render_event(out, ev)
+        text = out.getvalue()
+        assert "alpha" in text and "gamma" in text
+        assert "more lines" not in text

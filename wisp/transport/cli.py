@@ -1258,6 +1258,7 @@ class CLITransport(Transport):
                 pass
 
         # Full-output tools (non-edit): preserve multi-line formatting
+        _MAX_SHOW = 30
         if name in _FULL_OUTPUT_TOOLS and not is_edit_tool:
             output_str = result_text
             if not self.show_tool_output:
@@ -1268,9 +1269,12 @@ class CLITransport(Transport):
             label_str = f"{name} output"
             rule = _rule("-", label_str, style_fn=dim, width=width)
             inner_w = width - 4
-            wrapped = wrap_text_wide(output_str.strip(), inner_w)
+            # Cap before wrapping: only the first _MAX_SHOW lines can ever
+            # render, so a 5MB minified-JSON dump must not pay full wrap
+            # cost. The x3 margin covers worst-case wide-char blowup.
+            _WRAP_INPUT_CAP = _MAX_SHOW * max(1, inner_w) * 3
+            wrapped = wrap_text_wide(output_str.strip()[:_WRAP_INPUT_CAP], inner_w)
             # Cap floods: show first N wrapped lines, summarize the rest.
-            _MAX_SHOW = 30
             if len(wrapped) > _MAX_SHOW:
                 indented = "\n".join(dim(f"  {line}") for line in wrapped[:_MAX_SHOW])
                 indented += "\n" + dim(f"  … +{len(wrapped) - _MAX_SHOW} more lines")

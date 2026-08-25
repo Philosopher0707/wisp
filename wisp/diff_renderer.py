@@ -9,6 +9,8 @@ Uses Rich Panel + Text + pygments for styled diffs with:
 
 from __future__ import annotations
 
+import functools
+
 from io import StringIO
 from pathlib import Path
 from typing import Optional
@@ -64,15 +66,28 @@ _TOKEN_COLORS = {
 }
 
 
+@functools.lru_cache(maxsize=32)
+def _get_lexer(language: str):
+    """Cache lexers per language: a multi-hunk diff re-requests its lexer
+    for every line, and get_lexer_by_name is not free."""
+    try:
+        from pygments.lexers import get_lexer_by_name
+
+        return get_lexer_by_name(language, ensurenl=False)
+    except Exception:
+        return None
+
+
 def _pygmentize(code: str, language: str, base_style: Style) -> Text:
     """Syntax-highlight a line of code using pygments, merged with base_style."""
     result = Text()
     try:
         from pygments import lex
-        from pygments.lexers import get_lexer_by_name
         # ensurenl=False: pygments otherwise appends a phantom "\n"
         # token to every line, double-spacing the whole diff box.
-        lexer = get_lexer_by_name(language, ensurenl=False)
+        lexer = _get_lexer(language)
+        if lexer is None:
+            return result
         for ttype, text in lex(code, lexer):
             color = _TOKEN_COLORS.get(str(ttype), "#f8f8f2")
             merged = Style.combine([base_style, Style(color=color)])
