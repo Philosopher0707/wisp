@@ -12,14 +12,39 @@ from wisp.infra.store import format_session_preview, get_store
 from wisp.colors import success, error, warning, info, dim, accent
 
 
+class _SpinnerAwareHandler(logging.StreamHandler):
+    """Clear the live spinner line before emitting a record.
+
+    Without this, tool-layer warnings (e.g. 'Path not found') print raw
+    over the spinner animation and corrupt the transcript.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            from wisp.transport.spinner import ACTIVE_SPINNER
+
+            spinner = ACTIVE_SPINNER
+            if spinner is not None and getattr(spinner, "_active", False):
+                self.stream.write("\r\033[K")
+                self.stream.flush()
+        except Exception:
+            pass
+        super().emit(record)
+
+
 def _setup_logging(verbose: bool = False):
     """Configure Python logging."""
     level = logging.DEBUG if verbose else logging.WARNING
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
+    root = logging.getLogger()
+    root.setLevel(level)
+    handler = _SpinnerAwareHandler(sys.stderr)
+    handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%H:%M:%S",
+        )
     )
+    root.handlers[:] = [handler]
 
 
 def cmd_server(host="127.0.0.1", port=8000, no_auth=False):

@@ -244,7 +244,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "items": {
                             "type": "object",
                             "properties": {
-                                "task": {"type": "string", "description": "Instruction for this subagent."},
+                                "task": {"type": "string", "description": "Instruction for this subagent. Reference paths exactly as they appear in the conversation, relative to the current working directory (e.g. active/autopipe/core), never abbreviated."},
                                 "role": {"type": "string", "description": "Agent role: coder, reviewer, tester, researcher, planner, debugger, generalist.", "default": "generalist"},
                                 "timeout_seconds": {"type": "number", "description": "Override role default timeout.", "default": None},
                                 "max_iterations": {"type": "number", "description": "Override role default max iterations.", "default": None},

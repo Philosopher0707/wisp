@@ -765,6 +765,35 @@ class SubagentOrchestrator:
         finally:
             await _cleanup_worktree()
 
+    _TRANSIENT_MARKERS = ("429", "rate limit", "too many requests", "connection reset")
+
+    @staticmethod
+    def _is_transient(error: str | None) -> bool:
+        """Provider throttling/connection blips are worth a bounded retry;
+        path-not-found and budget errors are not."""
+        if not error:
+            return False
+        lowered = error.lower()
+        return any(m in lowered for m in SubagentOrchestrator._TRANSIENT_MARKERS)
+
+    async def _emit_retry(self, contract: SubagentContract, attempt: int,
+                          backoff_s: float) -> None:
+        cb = contract.progress_callback
+        if cb is None:
+            return
+        from .task import EventKind, OrchestratorEvent
+
+        event = OrchestratorEvent(
+            task_id=contract.name,
+            event_type=EventKind.TASK_RETRY,
+            payload={"role": contract.role, "retry": attempt,
+                     "backoff_seconds": backoff_s},
+        )
+        try:
+            await cb(event)
+        except Exception:
+            pass
+
     async def run_parallel(
         self,
         contracts: list[SubagentContract],
@@ -800,7 +829,24 @@ class SubagentOrchestrator:
 
         async def _guarded(contract: SubagentContract) -> SubagentResult:
             async with semaphore:
-                return await self.run(contract)
+                # Live evidence (2026-08-25): six concurrent children on a
+                # rate-limited cloud endpoint all died on 429 in <3s with
+                # zero retries — run() alone has no transient handling.
+                attempts = 2
+                for attempt in range(attempts + 1):
+                    result = await self.run(contract)
+                    if result.success or not self._is_transient(result.error):
+                        return result
+                    if attempt < attempts:
+                        backoff = min(2 ** (attempt + 1), 6)
+                        logger.warning(
+                            "Subagent %s transient failure (attempt %d/%d): %s — retrying in %ds",
+                            contract.name, attempt + 1, attempts + 1,
+                            (result.error or "")[:120], backoff,
+                        )
+                        await self._emit_retry(contract, attempt + 1, backoff)
+                        await asyncio.sleep(backoff)
+                return result
 
         tasks = [asyncio.create_task(_guarded(c)) for c in contracts]
         results = await asyncio.gather(*tasks, return_exceptions=True)

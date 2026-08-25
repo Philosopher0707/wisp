@@ -1587,6 +1587,17 @@ class ToolExecutor:
                     "metadata": {},
                 }, ensure_ascii=False)
 
+            # Ground every child in the parent's filesystem reality. Live
+            # evidence (2026-08-25): the model wrote 'autopipe/core' while
+            # the actual location was 'active/autopipe/autopipe/core'; all
+            # six children list_files'd into the void and failed fast.
+            task = (
+                f"[Workspace root: {workspace}] Paths are relative to this "
+                "root, exactly as they appear in the parent conversation. "
+                "If a path is not found, list_files from the workspace root "
+                "to locate it before proceeding.\n\n"
+            ) + task
+
             role = spec.get("role", "generalist")
             role_cfg = ROLE_CONFIGS.get(role)
             if role_cfg is None:

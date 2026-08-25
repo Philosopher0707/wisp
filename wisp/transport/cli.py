@@ -240,11 +240,52 @@ def _term_width() -> int:
         return 80
 
 
+
+def _render_fanout_digest(agg: dict) -> str:
+    """One honest line per child instead of the raw envelope."""
+    results = agg.get("results", [])
+    ok_n = sum(1 for r in results if r.get("ok"))
+    try:
+        sym = status_symbols()
+        ok_m, fail_m = sym["ok"], sym["fail"]
+    except Exception:
+        ok_m, fail_m = "OK", "X"
+    header = f"fanout: {ok_n}/{len(results)} succeeded"
+    total = agg.get("total_elapsed_seconds")
+    if isinstance(total, (int, float)):
+        header += f" · {total:.1f}s"
+    lines = [header]
+    for r in results:
+        task = str(r.get("task", ""))[:56]
+        if r.get("ok"):
+            elapsed = r.get("elapsed_seconds", "?")
+            lines.append(f"{ok_m} {task} · {elapsed}s")
+        else:
+            err = str(r.get("error") or "failed")[:72]
+            lines.append(f"{fail_m} {task} · {err}")
+    return "\n".join(lines)
+
+
 def _coerce_tool_data(value: Any) -> str:
     """Coerce a tool result value to a display string."""
     if value is None:
         return ""
     if isinstance(value, str):
+        # Fanout/spawn_parallel aggregates carry a per-child result list;
+        # a digest line per child beats a raw JSON dump (+53 lines live).
+        stripped_agg = value.strip()
+        if stripped_agg.startswith("{") and stripped_agg.endswith("}"):
+            try:
+                agg = json.loads(stripped_agg)
+            except (json.JSONDecodeError, ValueError):
+                agg = None
+            if (
+                isinstance(agg, dict)
+                and isinstance(agg.get("results"), list)
+                and agg.get("results")
+                and all(isinstance(r, dict) for r in agg["results"])
+            ):
+                return _render_fanout_digest(agg)
         # spawn/fanout wrap their result as a JSON string with a known
         # envelope shape; unwrap it so users read the summary, not keys.
         stripped = value.strip()

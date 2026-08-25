@@ -17,17 +17,32 @@ import wisp.__main__ as main_mod
 
 class TestSetupLogging:
     def test_verbose_sets_debug(self):
-        with patch("logging.basicConfig") as mock_bc:
-            main_mod._setup_logging(verbose=True)
-            assert mock_bc.called
-            kwargs = mock_bc.call_args[1]
-            assert kwargs["level"] == 10  # logging.DEBUG
+        import logging as _logging
+
+        main_mod._setup_logging(verbose=True)
+        try:
+            assert _logging.getLogger().level == _logging.DEBUG
+        finally:
+            _logging.getLogger().setLevel(_logging.WARNING)
 
     def test_non_verbose_sets_warning(self):
-        with patch("logging.basicConfig") as mock_bc:
-            main_mod._setup_logging(verbose=False)
-            kwargs = mock_bc.call_args[1]
-            assert kwargs["level"] == 30  # logging.WARNING
+        import logging as _logging
+
+        main_mod._setup_logging(verbose=False)
+        assert _logging.getLogger().level == _logging.WARNING
+
+    def test_handler_is_spinner_aware(self):
+        import logging as _logging
+
+        main_mod._setup_logging(verbose=False)
+        root = _logging.getLogger()
+        assert any(
+            isinstance(h, main_mod._SpinnerAwareHandler) for h in root.handlers
+        ), "root logger lost the spinner-aware handler"
+        root.handlers[:] = [
+            h for h in root.handlers
+            if not isinstance(h, main_mod._SpinnerAwareHandler)
+        ]
 
 
 # ── cmd_skills ───────────────────────────────────────────────────────

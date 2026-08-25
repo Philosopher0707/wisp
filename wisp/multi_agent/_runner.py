@@ -235,18 +235,24 @@ class SubagentRunner:
                     reason=f"exceeded {contract.max_output_chars} characters",
                 )
 
-            # Emit completion event
+            # Emit completion event. A child whose turn ended ok:false is
+            # a FAILED child — announcing ✓ here rendered dishonest
+            # lifecycle lines in the live fanout run (2026-08-25).
             if progress_callback:
-                await self._emit(
-                    progress_callback,
-                    contract.name,
-                    EventKind.TASK_COMPLETED,
-                    {
-                        "files_changed": subagent_result.files_changed,
-                        "elapsed": duration,
-                        "output": subagent_result.output[:200],
-                    },
-                )
+                payload: dict[str, Any] = {
+                    "role": contract.role,
+                    "elapsed": duration,
+                }
+                if subagent_result.success:
+                    payload["files_changed"] = subagent_result.files_changed
+                    payload["output"] = subagent_result.output[:200]
+                    kind = EventKind.TASK_COMPLETED
+                else:
+                    payload["error"] = (
+                        subagent_result.error or "subagent reported failure"
+                    )[:120]
+                    kind = EventKind.TASK_FAILED
+                await self._emit(progress_callback, contract.name, kind, payload)
 
             return subagent_result
 

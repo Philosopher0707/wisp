@@ -350,3 +350,48 @@ class TestPauseResume:
         sp = Spinner(out, mode=OutputMode.MINIMAL)
         sp.start("x"); sp.pause(); sp.resume(); sp.update("y"); sp.stop()
 
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Spinner-aware logging: warnings must not smear over the animation
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestSpinnerAwareLogging:
+    def test_active_spinner_line_cleared_before_log(self):
+        import io
+        import logging
+
+        from wisp.__main__ import _SpinnerAwareHandler
+        from wisp.transport import spinner as sp
+
+        buf = io.StringIO()
+        s = sp.Spinner(buf, sp.OutputMode.UNICODE)
+        s.start("fanout tasks=...")
+        assert sp.ACTIVE_SPINNER is s, "spinner did not register itself"
+
+        h = _SpinnerAwareHandler(buf)
+        rec = logging.LogRecord("wisp.tools.registry", logging.WARNING,
+                                __file__, 1, "Path not found: /x", (), None)
+        h.emit(rec)
+        text = buf.getvalue()
+        assert "\r\x1b[K" in text.split("Path not found")[0], (
+            f"log emitted without clearing spinner: {text!r}"
+        )
+        s.stop()
+
+    def test_no_spinner_clean_output(self):
+        import io
+        import logging
+
+        from wisp.__main__ import _SpinnerAwareHandler
+        from wisp.transport import spinner as sp
+
+        assert sp.ACTIVE_SPINNER is None
+        buf = io.StringIO()
+        h = _SpinnerAwareHandler(buf)
+        rec = logging.LogRecord("wisp", logging.WARNING, __file__, 1,
+                                "plain warning", (), None)
+        h.emit(rec)
+        out = buf.getvalue()
+        assert "plain warning" in out and "\x1b[K" not in out

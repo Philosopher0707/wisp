@@ -4,6 +4,7 @@ The REPL loop is driven by entry._run_repl, not CLITransport.run().
 Tests here validate component behavior in isolation.
 """
 import io
+import json
 
 import asyncio
 
@@ -917,3 +918,103 @@ class TestWarningDedup:
         t._render_event(out, dict(msg), err)
         assert err.getvalue().count("blip") == 3          # fresh turn → shown again
 
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Fanout aggregate digest + honest subagent lifecycle (live-run fixes)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestFanoutDigest:
+    def test_aggregate_envelope_renders_digest_not_raw_json(self):
+        from wisp.transport.cli import _coerce_tool_data
+
+        envelope = json.dumps({
+            "ok": False,
+            "results": [
+                {"task": "Analyze autopipe/core", "ok": True,
+                 "elapsed_seconds": 2.4, "summary": "core is layered"},
+                {"task": "Analyze autopipe/dashboard", "ok": False,
+                 "error": "Path not found: /Users/philosopher/autopipe/dashboard",
+                 "elapsed_seconds": 0.6},
+            ],
+            "total_elapsed_seconds": 15.7,
+        })
+        out = _coerce_tool_data(envelope)
+        assert "1/2 succeeded" in out
+        assert "✗" in out and "✓" in out
+        assert "Path not found" in out
+        assert '"ok"' not in out, "raw envelope keys leaked"
+
+    def test_all_success_digest(self):
+        from wisp.transport.cli import _coerce_tool_data
+
+        envelope = json.dumps({
+            "ok": True,
+            "results": [{"task": "t1", "ok": True, "elapsed_seconds": 1.0,
+                         "summary": "s"}],
+            "total_elapsed_seconds": 1.0,
+        })
+        assert "1/1 succeeded" in _coerce_tool_data(envelope)
+
+
+class TestSubagentLifecycleHonesty:
+    def test_failed_child_maps_to_task_failed_event(self):
+        from unittest.mock import MagicMock
+
+        from wisp.tool_executor import orchestrator_event_to_agent_event
+
+        ev = MagicMock()
+        ev.event_type = "task_completed"
+        # The runner must now emit task_failed for success=False children;
+        # the mapping itself just needs to keep rendering failed honestly.
+        ev.payload = {"role": "coder", "success": False,
+                      "error": "Path not found"}
+        ev.task_id = "fanout-0-coder"
+        ev.event_type = "task_failed"
+        mapped = orchestrator_event_to_agent_event(ev)
+        assert mapped.data.get("kind") == "task_failed"
+        assert mapped.data.get("role") == "coder"
+
+    def test_runner_emits_failed_for_unsuccessful_result(self):
+        """A child whose turn ended ok:false must announce ✗, not ✓."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from wisp.multi_agent._runner import SubagentRunner
+        from wisp.multi_agent.task import EventKind, SubagentContract
+
+        events = []
+
+        async def cb(orch_ev):
+            events.append(orch_ev)
+
+        runner = SubagentRunner.__new__(SubagentRunner)
+        runner._provider_cache = {}
+        runner._agent_runtime = None
+        runner._store = MagicMock()
+
+        contract = SubagentContract(name="f-0-coder", role="coder", task="t")
+
+        async def fake_run_agent(*a, **k):
+            return {"success": False, "output": "",
+                    "error": "API error 429: Too Many Requests",
+                    "messages": [], "files_changed": []}
+
+        fake_cfg = MagicMock()
+        fake_cfg.model = "m"
+        with patch.object(runner, "_build_child_config", return_value=fake_cfg), \
+             patch.object(runner, "_run_agent", new=AsyncMock(side_effect=fake_run_agent)):
+            result = asyncio.run(
+                runner.run(contract, "/tmp", "sys", progress_callback=cb)
+            )
+
+        assert result.success is False
+        kinds = [e.event_type for e in events]
+        assert EventKind.TASK_FAILED in kinds, (
+            f"runner announced {kinds} — dishonest ✓ for failed child"
+        )
+        failed = next(e for e in events if e.event_type == EventKind.TASK_FAILED)
+        assert failed.payload.get("role") == "coder", (
+            "failed event lost role — renderer would show [fanout-0-coder]"
+        )

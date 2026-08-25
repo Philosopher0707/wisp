@@ -41,6 +41,11 @@ def truncate_spinner_label(
     return _tw_truncate(label, max(10, width - 8), suffix=suffix)
 
 
+# Registry of the live spinner, consulted by the log handler so warnings
+# don't smear over the animation line (seen live in the fanout run).
+ACTIVE_SPINNER: "Spinner | None" = None
+
+
 class Spinner:
     """Inline terminal spinner for tool execution feedback.
 
@@ -73,6 +78,8 @@ class Spinner:
     def start(self, label: str) -> None:
         """Write initial spinner frame with label and start animation."""
         self._active = True
+        global ACTIVE_SPINNER
+        ACTIVE_SPINNER = self
         self._current_label = truncate_spinner_label(
             label,
             unicode_ok=self._mode == OutputMode.UNICODE,
@@ -131,6 +138,9 @@ class Spinner:
     def stop(self) -> None:
         """Clear spinner line without leaving a result."""
         self._active = False
+        global ACTIVE_SPINNER
+        if ACTIVE_SPINNER is self:
+            ACTIVE_SPINNER = None
         if self._mode == OutputMode.MINIMAL:
             self._write_line("\r\033[K\n")
             return
