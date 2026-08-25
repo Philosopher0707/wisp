@@ -978,18 +978,22 @@ class SubagentOrchestrator:
                         task.metadata = {}
                     task.metadata["_budget"] = budget
                 # Inject upstream dependency outputs into the prompt so DAG
-                # edges carry dataflow, not just ordering.
+                # edges carry dataflow, not just ordering. The contract must
+                # survive the injection — run() dereferences contract fields,
+                # and a bare string here crashes with AttributeError.
                 dep_results = node.metadata.get("_dep_results")
                 if dep_results:
                     summary = "\n\n".join(
                         f"### Upstream result: {k}\n{str(v)[:2000]}"
                         for k, v in dep_results.items()
                     )
-                    task = (
+                    augmented = (
                         f"{task.task}\n\n"
                         "Results from upstream dependencies (already completed — "
                         f"use them, do not redo this work):\n\n{summary}"
                     )
+                    from dataclasses import replace as _dc_replace
+                    task = _dc_replace(task, task=augmented)
                 return await self.run(task)
 
             # If it's a callable, invoke it

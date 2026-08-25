@@ -603,3 +603,71 @@ class TestCaptureSkillTool:
         names = {s["function"]["name"] for s in TOOL_SCHEMAS}
         for n in ("orchestrate_dag", "capture_skill"):
             assert n in names and n in TOOL_IMPLS
+
+class TestRunDagContractInjection:
+    """Regression (live E2E catch): dep-result injection must not destroy
+    the node's SubagentContract — run() dereferences contract fields and
+    a bare string crashed with AttributeError on _subagent_depth."""
+
+    def _orch(self):
+        from wisp.multi_agent.subagent_orchestrator import SubagentOrchestrator
+        from tests.test_subagent_orchestrator import _child_config
+        agent = MagicMock()
+        agent.config = _child_config({})
+        agent.config.model = "test-model"
+        agent.config.workspace = "/tmp"
+        agent.config.show_thinking = False
+        agent.config.chars_per_token = 4
+        agent.config.ollama_url = "http://localhost:11434"
+        agent.config.temperature = 0.2
+        agent.config.max_context_tokens = 128000
+        agent.config._context_tokens_explicit = True
+        agent.config.permission_mode = "auto"
+        agent.config.max_iterations = 30
+        agent.config.subagent_pool_size = 4
+        agent.config.max_subagent_depth = 2
+        agent.config.max_subagent_branching = 3
+        return SubagentOrchestrator(parent_agent=agent)
+
+    async def _run_dag(self, orch):
+        from unittest.mock import patch
+        from wisp.multi_agent.dag import TaskDAG, TaskNode
+        from wisp.multi_agent.task import SubagentContract
+
+        received: dict = {}
+
+        class RecordingCore:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def turn(self, session_dict, task):
+                received[task] = True
+                yield {"type": "content", "text": f"out::{task[:40]}"}
+                yield {"type": "done"}
+
+        dag = TaskDAG()
+        dag.add_node(TaskNode(name="up",
+                              task=SubagentContract(name="up", task="do upstream")))
+        dag.add_node(TaskNode(name="down",
+                              task=SubagentContract(name="down", task="do downstream"),
+                              dependencies=["up"]))
+        with patch("wisp.core.engine.WispAgentCore", RecordingCore):
+            result = await orch.run_dag(dag)
+        return result, received
+
+    @pytest.mark.asyncio
+    async def test_dependent_node_keeps_contract_with_injected_output(self):
+        result, _ = await self._run_dag(self._orch())
+        assert result.success is True, result.errors
+        down_result = result.node_results["down"]
+        assert down_result.success is True
+
+    @pytest.mark.asyncio
+    async def test_downstream_prompt_carries_upstream_output(self):
+        orch = self._orch()
+        result, received = await self._run_dag(orch)
+        downstream_prompts = [t for t in received if t.startswith("do downstream")]
+        assert downstream_prompts, sorted(received)
+        # The upstream node's RESULT text reached the downstream prompt.
+        assert "out::do upstream" in downstream_prompts[0]
+        assert "do downstream" in downstream_prompts[0]

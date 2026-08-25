@@ -223,7 +223,7 @@ class Provider(ABC):
 
 ### Tool System (`wisp/tools/`)
 
-~30 tools across modules:
+~40 tools across modules:
 | Module | Tools |
 |--------|-------|
 | `filesystem.py` | read_file, write_file, edit_file, edit_file_multi, list_files |
@@ -238,9 +238,16 @@ class Provider(ABC):
 | `tests.py` | run_tests |
 | `subagent.py` | spawn, fanout |
 
+**Executor-dispatched tools** (schemas in `registry.py`, handled by
+`ToolExecutor` against the orchestrator/manager — no registry impl):
+spawn_background, subagent_list/result/send/cancel,
+orchestrate_vote/map_reduce/chain/dag, capture_skill.
+
 **Registry:** `TOOL_SCHEMAS` (list) + `TOOL_IMPLS` (dict) in `registry.py`
 
 **Executor:** `ToolExecutor` handles permissions, hooks, dispatch, metadata.
+The system prompt's "## Tools available" menu is GENERATED from these live
+registries (plus extension/MCP tools) — never hand-maintained.
 
 ### Multi-Agent (`wisp/multi_agent/`)
 
@@ -261,7 +268,35 @@ result = await orch.run_vote(task="Is this vulnerable?", agents=[...], threshold
 
 # Chain
 result = await orch.run_chain([writer, reviewer], pass_context=True)
+
+# DAG — dependency graph; upstream outputs are injected into dependents
+dag = TaskDAG()
+dag.add_node(TaskNode(name="design", task=contract_a))
+dag.add_node(TaskNode(name="build", task=contract_b, dependencies=["design"]))
+result = await orch.run_dag(dag)
 ```
+
+### Background Agents (`wisp/multi_agent/background.py`)
+
+`BackgroundAgentManager` wraps orchestrator runs in asyncio tasks with a
+bounded registry (8 running / 50 finished). Non-blocking delegation for
+the parent turn:
+
+- `launch(contract)` → `{agent_id}` immediately; `send(agent_id, msg)`
+  resumes the SAME child session (`_resume_session_id`)
+- Lifecycle fan-out: subscribers (`subscribe()`) receive `agent_started`,
+  `agent_progress`, `agent_settled` events — consumed by the WebSocket
+  pusher and the per-turn operating-context drain
+- Surfaced via REPL `/agents`, REST `/api/agents/background*`, and the
+  model-facing subagent_* tools
+
+### Skill Capture (`wisp/skill_capture.py`)
+
+Records tool-call sequences, detects repeated tail workflows, renders
+Warp-compatible SKILL.md files. Re-captures merge via a `wisp_captures`
+count; differing sequences become variants; foreign skills get sibling
+slugs instead of being overwritten. Model-facing via the `capture_skill`
+tool; human-facing via `/skill suggest` and `/skill save`.
 
 **Roles** (pre-configured tool sets + timeouts):
 - `coder` — full toolset, 10 min, 30 iterations

@@ -23,7 +23,7 @@ mypy
 ```
 wisp/core/         Pure logic, zero I/O: WispAgentCore (turn loop), AgentEvent, AgentRuntime
 wisp/transport/    I/O layer: Transport ABC + CLITransport, WebSocketTransport, HeadlessTransport, TUITransport
-wisp/tools/        TOOL_SCHEMAS + TOOL_IMPLS in registry.py (~30 tools)
+wisp/tools/        TOOL_SCHEMAS + TOOL_IMPLS in registry.py (~40 tools)
 wisp/multi_agent/  Subagent orchestration: runner, orchestrator, worktree, delegation
 wisp/infra/        Security, telemetry, extensions, store
 ```

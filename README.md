@@ -40,6 +40,31 @@ Warp (github.com/warpdotdev/warp) open-sourced its client under AGPL, but its ag
 
 ## What's New
 
+### 🌊 Background Agents & Live Observability
+The agent can delegate work to the background and keep talking to you:
+- **`spawn_background`** returns an agent id immediately — the parent turn never blocks
+- **`subagent_list` / `subagent_result` / `subagent_send` / `subagent_cancel`** inspect, collect, continue (same session!), or cancel running work
+- **`/agents`** REPL command (alias `/ba`) shows status cards; `/agents <id>` opens a detail view; `/agents send <id> <msg>` continues a finished agent
+- **REST + WebSocket** surfaces (`/api/agents/background*`, `ws /ws/agent`) push lifecycle events — `agent_started`, `agent_progress`, `agent_settled` — so dashboards are live, not polled
+- **Settlement notifications**: when background work finishes between turns, the model is *told* on its next turn — no polling required
+
+### 🎼 Orchestration Patterns as Tools
+The model can compose subagents into higher-order strategies itself:
+- **`orchestrate_vote`** — N independent voters, consensus threshold, majority wins
+- **`orchestrate_map_reduce`** — parallel mappers over up to 20 items + synthesized reducer
+- **`orchestrate_chain`** — sequential specialists, each seeing the previous output (implement → review → fix)
+- **`orchestrate_dag`** — dependency graphs: independent nodes run in parallel per level, upstream outputs injected into dependents; cycles rejected before any tokens are spent
+
+### 🪝 Skill Capture (self-writing skills)
+Wisp records its own tool-call sequences, detects when a workflow repeats, and saves it as a Warp-compatible skill:
+- **`capture_skill`** tool — the agent saves a proven procedure mid-conversation
+- **`/skill suggest`** — shows detected repeated workflows; **`/skill save <name>`** writes them out
+- Re-captures *merge* (a `wisp_captures` count bumps); genuinely different step sequences become variants; foreign hand-written skills are never overwritten
+- Captured skills are immediately auto-discovered — including by future sessions
+
+### 🧭 Operating Context (the agent knows its own posture)
+Every turn's system prompt declares live state: model/provider, permission mode, workspace, session, subagent nesting depth, background-agent counts, plugin/MCP tool inventory, plus settled-work notifications. The "## Tools available" menu is generated from the live registry, so newly registered or MCP/plugin-provided tools announce themselves automatically.
+
 ### 🎉 Session Compaction
 Sessions auto-compact when they grow too long — old messages get summarized into a structured memory block, preserving recent context. Keeps conversations flowing without hitting context limits.
 
@@ -148,6 +173,9 @@ Then install the Android APK and connect to `wss://your-domain.com`.
 | `/clear` | Clear conversation |
 | `/model <name>` | Switch model |
 | `/skill <name>` | Load skill |
+| `/skill suggest` | Show detected repeated workflows |
+| `/skill save <name>` | Save the captured workflow as a skill |
+| `/agents` (`/ba`) | Background agents: list, `<id>` detail, `cancel <id>`, `send <id> <msg>` |
 | `/compact` | Compact session now |
 | `/tokens` | Show context usage |
 | `/approve` | Toggle auto-approve |
@@ -175,6 +203,16 @@ Then install the Android APK and connect to `wss://your-domain.com`.
 | `recall` | Search memory and past summaries |
 | `spawn` | Launch a subagent with a contract for scoped work |
 | `fanout` | Delegate a task to multiple subagents in parallel |
+| `spawn_background` | Launch a subagent without blocking; returns an agent id immediately |
+| `subagent_list` | List background agents and their statuses |
+| `subagent_result` | Collect a finished background agent's result |
+| `subagent_send` | Continue a finished agent's conversation (same session) |
+| `subagent_cancel` | Cancel a running background agent |
+| `orchestrate_vote` | N voters answer independently; consensus threshold decides |
+| `orchestrate_map_reduce` | Parallel mappers over items + synthesized reducer |
+| `orchestrate_chain` | Sequential specialists, each seeing the prior output |
+| `orchestrate_dag` | Dependency graph execution with dataflow between nodes |
+| `capture_skill` | Save a demonstrated workflow as a reusable skill |
 | `plan_task` | Create a structured plan with subtasks |
 | `run_tests` | Run tests for changed files or full suite |
 | `diagnose` | Diagnose errors from test output or tracebacks |
