@@ -341,7 +341,9 @@ class TestParentStreamGuard:
         events = asyncio.run(self._collect(core))
         types = [e.get("type") for e in events]
         assert "content" in types
-        assert provider.calls == 2, "empty attempt must be retried exactly once"
+        # One empty attempt then success — a single retry regardless of the
+        # new WISP_STREAM_ATTEMPTS default of 3.
+        assert provider.calls == 2
         assert not any("no usable response" in str(e.get("text", "")) for e in events)
 
     def test_always_empty_surfaces_visible_error_not_silence(self):
@@ -355,7 +357,7 @@ class TestParentStreamGuard:
         err = next(e for e in events if e.get("type") == "error")
         msg = str(err.get("message", err.get("text", "")))
         assert "no usable response" in msg.lower()
-        assert provider.calls == 2
+        assert provider.calls == 3  # WISP_STREAM_ATTEMPTS default
 
     def test_stalled_first_byte_fails_fast_into_retry(self):
         import asyncio
@@ -380,7 +382,7 @@ class TestParentStreamGuard:
         core.FIRST_TOKEN_DEADLINE_S = 0.2
         events = asyncio.run(self._collect(core))
         err = [e for e in events if e.get("type") == "error"]
-        assert provider.calls == 2, "stall must abort and retry"
+        assert provider.calls == 3  # WISP_STREAM_ATTEMPTS default, "stall must abort and retry"
         assert any(
             "no usable response" in str(e.get("message", e.get("text", "")))
             for e in err
