@@ -196,3 +196,66 @@ class TestDiffRenderingFunctionality:
             assert "app.py" in rendered
         finally:
             TW.set_output_mode(TW.OutputMode.UNICODE)
+
+
+class TestEnvelopeAndA11yPolish:
+    def test_coerce_unwraps_spawn_envelope(self):
+        from wisp.transport.cli import _coerce_tool_data
+
+        nested = __import__("json").dumps(
+            {"ok": True, "summary": "found 3 caches",
+             "files": ["a.py", "b.py"], "error": None}
+        )
+        out = _coerce_tool_data(nested)
+        assert "found 3 caches" in out
+        assert '"ok"' not in out and "null" not in out
+        assert "a.py, b.py" in out
+
+    def test_coerce_leaves_file_content_alone(self):
+        from wisp.transport.cli import _coerce_tool_data
+
+        content = '{"model": "llama3", "retries": 3}'
+        assert _coerce_tool_data(content) == content
+
+    def test_plain_diff_uses_bracket_label(self):
+        diff = '+1 hello'
+        out = render_diff_panel(diff, title="…app.py", width=80,
+                                language=None, plain=True)
+        assert "[Diff]" in out
+        assert "───" not in out
+
+    def test_coerce_caps_files_list_with_tail(self):
+        import json as _json
+
+        from wisp.transport.cli import _coerce_tool_data
+
+        nested = _json.dumps({
+            "ok": True,
+            "summary": "scanned",
+            "files": ["a.py", "b.py", "c.py", "d.py", "e.py", "f.py"],
+            "error": None,
+        })
+        out = _coerce_tool_data(nested)
+        assert "a.py, b.py, c.py, d.py" in out
+        assert "+2" in out
+        assert '"files"' not in out
+
+    def test_coerce_falls_back_without_summary(self):
+        import json as _json
+
+        from wisp.transport.cli import _coerce_tool_data
+
+        # A dict that merely looks JSON-ish must pass through untouched —
+        # unwrapping is only for the known spawn/fanout envelope.
+        other = _json.dumps({"status": "ok", "rows": 12})
+        assert _coerce_tool_data(other) == other
+
+    def test_plain_mode_emits_zero_ansi_in_body(self):
+        import re
+
+        out = render_diff_panel(
+            "-old line\n+new line", title="…app.py", width=80,
+            language="python", plain=True,
+        )
+        ansi = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\[[0-9;]*m")
+        assert not ansi.search(out), f"ANSI leaked into plain mode: {out!r}"

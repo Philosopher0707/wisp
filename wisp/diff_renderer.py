@@ -252,7 +252,10 @@ def render_diff_panel(
     )
 
     if box_mode and title:
-        console.print(Text(f"─── {title}", style=Style(color="#555555")))
+        if plain:
+            console.print(Text(f"[Diff] {title}"))
+        else:
+            console.print(Text(f"─── {title}", style=Style(color="#555555")))
 
     console.print(text)
     return buf.getvalue().rstrip("\n")
