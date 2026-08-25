@@ -17,11 +17,13 @@ warnings.filterwarnings("ignore", category=SyntaxWarning)
 import asyncio
 import logging
 import signal
+from collections import deque
 from pathlib import Path
 
 from wisp.composition import CompositionRoot
 from wisp.config import WispConfig
 from wisp.transport.cli import CLITransport, _input_line, _input_multiline, _restore_signal_handler
+from wisp.transport.typeahead import TypeAheadBuffer
 from wisp.transport.tui import TUITransport
 from wisp.transport.renderer import render_turn_stats, render_file_ticker
 from wisp.terminal_width import status_symbols
@@ -315,8 +317,8 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
             except Exception:
                 pass
 
-    def _run_turn(prompt: str) -> None:
-        """Run one turn on the persistent loop."""
+    def _run_turn(prompt: str, typeahead: "TypeAheadBuffer | None" = None) -> list[str]:
+        """Run one turn on the persistent loop; returns prompts typed ahead."""
         async def _turn():
             # Read the session through the adapter at call time: commands
             # like /new replace adapter.session mid-REPL.
@@ -324,16 +326,21 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
                 transport._render_event(sys.stdout, event)
 
         transport._reset_buffers()
+        transport.start_wait_clock(stdout=sys.stdout)
         try:
             nonlocal _current_turn_task
             coro = _turn()
             _current_turn_task = loop.create_task(coro)
+            if typeahead is not None:
+                typeahead.start()
             loop.run_until_complete(_current_turn_task)
+            transport.stop_wait_clock(stdout=sys.stdout)
             transport._flush_thinking(sys.stdout)
             transport._flush_content(sys.stdout)
             # Turn stats + file ticker + separator
             _show_turn_stats(transport)
         except KeyboardInterrupt:
+            transport.stop_wait_clock(stdout=sys.stdout)
             _cancel_tasks()
             _stop_spinner(transport)
             transport._flush_thinking(sys.stdout)
@@ -341,6 +348,7 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
             _show_resume()
         except asyncio.CancelledError:
             # Task was cancelled (likely Ctrl+C or approval [c]ancel)
+            transport.stop_wait_clock(stdout=sys.stdout)
             _stop_spinner(transport)
             transport._flush_thinking(sys.stdout)
             transport._flush_content(sys.stdout)
@@ -359,6 +367,17 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
             # The handler de-arms itself on first press (second Ctrl+C
             # force-quits); re-arm it for the next turn.
             _arm_repl_sigint()
+
+        if typeahead is None or not typeahead.enabled:
+            return []
+        lines, partial = typeahead.drain()
+        if partial:
+            try:
+                import readline
+                readline.insert_text(partial)
+            except ImportError:
+                pass
+        return lines
 
     # Install REPL-owned SIGINT handler for the session (after the closure
     # above exists — the handler reads _current_turn_task live).
@@ -383,9 +402,13 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
             sys.stdout.write(f"{dim('  Enter blank line twice to submit, Ctrl+C to clear input')}\n")
         sys.stdout.flush()
 
+    pending: deque[str] = deque()
     while True:
         try:
-            if input_mode == "multi":
+            if pending:
+                # Prompt typed while the previous turn ran — replay it.
+                line = pending.popleft()
+            elif input_mode == "multi":
                 line = _input_multiline("➜ ", "... ")
             else:
                 line = _input_line("➜ ")
@@ -445,8 +468,14 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
                 sys.stdout.flush()
                 continue
 
-        # Run one turn
-        _run_turn(prompt)
+        # Run one turn; anything typed while it ran is queued for replay.
+        typeahead = TypeAheadBuffer()
+        queued = _run_turn(prompt, typeahead=typeahead)
+        if queued:
+            sys.stdout.write(
+                dim(f"{status_symbols()['info']}  {len(queued)} prompt(s) typed ahead\n")
+            )
+            pending.extend(queued)
 
     # Restore original signal handler before cleanup
     _restore_signal_handler()

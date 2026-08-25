@@ -384,3 +384,75 @@ class TestThinkingGrammar:
         transport = CLITransport(MagicMock())
         out = self._flush(transport, ["thought one\nthought two"])
         assert "2 lines" in out, out
+
+
+class TestTypedAheadReplay:
+    """Prompts typed while a turn runs are captured and replayed."""
+
+    def test_typed_ahead_prompt_replays_after_turn(self, monkeypatch, no_signal_side_effects):
+        from wisp.entry import _run_repl
+
+        class FakeBuffer:
+            def __init__(self):
+                self.enabled = False
+                self._drained = False
+
+            def start(self):
+                self.enabled = True
+
+            def drain(self, timeout=2.0):
+                if self._drained:
+                    return [], ""
+                self._drained = True
+                return ["second prompt"], ""
+
+        shared = FakeBuffer()
+        monkeypatch.setattr("wisp.entry.TypeAheadBuffer", lambda: shared)
+
+        runtime = _StubRuntime()
+        # Capture executed prompts via run_turn yields (echo: prefix).
+        executed: list[str] = []
+
+        original_run_turn = runtime.run_turn
+
+        async def recording_run_turn(session, prompt, approval_handler=None):
+            executed.append(prompt)
+            async for ev in original_run_turn(session, prompt, approval_handler):
+                yield ev
+
+        runtime.run_turn = recording_run_turn
+
+        _feed_stdin("first prompt\n/exit\n", monkeypatch)
+        _run_repl(CLITransport(runtime, _StubConfig()), _StubRoot(runtime), _StubConfig())
+
+        assert executed == ["first prompt", "second prompt"]
+
+    def test_no_typeahead_when_buffer_disabled(self, monkeypatch, no_signal_side_effects):
+        from wisp.entry import _run_repl
+
+        class DisabledBuffer:
+            enabled = False
+
+            def start(self):
+                self.enabled = False
+
+            def drain(self, timeout=2.0):
+                return [], ""
+
+        monkeypatch.setattr("wisp.entry.TypeAheadBuffer", DisabledBuffer)
+
+        runtime = _StubRuntime()
+        executed: list[str] = []
+        original_run_turn = runtime.run_turn
+
+        async def recording_run_turn(session, prompt, approval_handler=None):
+            executed.append(prompt)
+            async for ev in original_run_turn(session, prompt, approval_handler):
+                yield ev
+
+        runtime.run_turn = recording_run_turn
+
+        _feed_stdin("only prompt\n/exit\n", monkeypatch)
+        _run_repl(CLITransport(runtime, _StubConfig()), _StubRoot(runtime), _StubConfig())
+
+        assert executed == ["only prompt"]
