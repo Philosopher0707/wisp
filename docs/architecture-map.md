@@ -158,14 +158,23 @@ everything blocked. Interactive options `y Y a n N d c` with honest cancel.
 
 ## 6. Multi-agent system
 
-**Contract** (`multi_agent/task.py`): name/role/task/tools/max_iterations/
-timeout_seconds/worktree_isolated/model/workspace/auto_approve/max_retries(0)/
-max_output_chars + runtime mutations (depth, branch_count, shared_ctx,
-resume_session_id).
+**Contract** (`task.py:51-171`): identity(name/role validated vs ROLE_CONFIGS),
+task+system_prompt(built per-role, stamped into session), tools(default ["all"]
+→ session["allowed_tools"])/allowed_skills, budgets(max_iterations 15,
+timeout_seconds 120 clamped ×1.5 on retry bounded by PARENT deadline−5s,
+max_tokens→ctx, max_output_chars 8000 → _compress_output preserving sections/
+code blocks), output_format(text|json; cache TTL 300s/60s)/output_schema(
+post-run validate_subagent_output, auto_retry_parse injects errors once),
+environment(model override, workspace→git-root-or-worktree, worktree_isolated
+ANDed with role.wants_isolation, auto_approve) + runtime stamps(_subagent_depth,
+_branch_count, retry_count, _cache_context, _shared_context, _resume_session_id).
 
-**Roles** (`roles.py:38`): coder 8t/180s/15i · reviewer 8t/120s/8i · tester
-8t/180s/12i · researcher 10t/240s/14i · planner 5t/90s/8i · debugger 8t/180s/12i ·
-generalist 1t/120s/10i.
+**Roles** (`roles.py:38`, format tools/timeouts/iterations/isolation-wanted):
+coder 8t/180s/15i/iso · reviewer 8t/120s/8i/iso · tester 8t/180s/12i/iso ·
+researcher 10t/**240s**/14i/no-iso (240 raised from live E2E) · planner
+5t/90s/8i/no-iso · debugger 8t/180s/12i/iso · generalist all/120s/10i/iso.
+Isolation-capable roles get git-worktree sandboxes when contract asks;
+researcher/planner never isolated (read-only by design).
 
 **Runner lifecycle** (`_runner.py:83`): child cfg → session create/resume →
 provider health hint (soft) → wall-clock deadline w/ per-iteration derivation →
@@ -178,10 +187,22 @@ budget ratio, load avg) + transient retry ×2 (429/rate-limit/connection markers
 backoff ≤6s, task_retry events) · `spawn_with_guards` → `_run_with_retry`
 (no timeout retries, no budget retries, exp backoff) · budget admission before
 launch · worktree isolation w/ conflict revert · aggregate_telemetry.
-Patterns: vote(N same question, tally) · map_reduce(items→parallel→reduce) ·
-chain(sequential handoff) · dag(deps→waves). Background: BackgroundAgentManager
-pub-sub (started/progress/settled), resume via `_resume_session_id`, continuation
-through `subagent_send`.
+Pattern combination rules (`_patterns.py`): **map_reduce** retries non-timeout
+mapper failures, reducer input = concatenated outputs truncated to 80% ctx.
+**vote**: identical tasks → normalize(lowercase/ws-collapse) → similarity groups
+(substring short / exact long) → largest group wins, consensus at count/total ≥0.6,
+tie broken by a dedicated subagent; success = consensus_reached. **chain**: ignores
+max_concurrent>1 (warns), passes last-3 context blocks downstream, stops on failure
+unless continue_on_error. **dag**: Kahn topological levels, level-parallel with
+semaphore, upstream outputs injected via metadata["_dep_results"], a failed node
+blocks all transitive dependents.
+
+Background agents (`background.py`): registry caps MAX_RUNNING_AGENTS=8;
+_run_entry wraps orchestrator._run_with_retry; terminal states completed/failed/
+cancelled; continuation via dataclasses.replace(contract, task=message) stamped
+with _resume_session_id — requires the session to have been persisted (runner
+with agent_runtime); pub-sub fans agent_started/progress/settled to subscriber
+queues (WebSocket push, dashboards).
 
 ## 7. Infra & surfaces
 
@@ -242,3 +263,11 @@ keypress ➜ readline/_input_line (ESC-strip, typeahead capture registered)
 8. Error-path message duplication risk: `run_turn`'s finally re-records
    assistant/tool messages (`runtime.py:249+`) even if partial iteration
    already appended them (`stateless.py:434-445`).
+9. Timeout retry skipped when parent turn has <35s left (`orchestrator.py`
+   guard) — child dies though more time would save it.
+10. Worktree isolation memoizes its FIRST failure permanently for the
+   orchestrator instance — a transient git lock disables isolation for all
+   later children.
+11. Background send() impossible for stateless-path children (no persisted
+   session); DAG has no continue-on-error; schema-fix retry reuses the
+   original timeout/iteration budget.
