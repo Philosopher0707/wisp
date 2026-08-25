@@ -842,3 +842,78 @@ class TestStreamDiscipline:
                               "recoverable": False}, err)
         assert "Error" in err.getvalue()      # boxed legacy card
 
+class TestMarkdownStreaming:
+    """Block constructs style at line completion; prose stays instant."""
+
+    def _transport(self, out, err=None):
+        from wisp.transport.cli import CLITransport
+        from wisp.transport.progress import ProgressTracker
+        t = CLITransport.__new__(CLITransport)
+        for k, v in dict(config=None, _content_buffer=[], _thinking_buffer=[],
+                         _in_content=False, _in_thinking=False,
+                         _streaming_content_live=False,
+                         _last_block_was_tool=False,
+                         show_tool_output=True, _stdout=out, _stderr=err or out,
+                         _spinner=None, _md_hold="", _md_fence_open=False,
+                         _md_fence_body=[], _warn_counts={}).items():
+            setattr(t, k, v)
+        t._progress = ProgressTracker()
+        return t
+
+    def test_prose_paints_without_delay(self):
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        t = self._transport(out, err)
+        t._render_event(out, {"type": "content", "text": "T cells "}, err)
+        assert "T cells" in out.getvalue()   # no buffering for prose
+
+    def test_heading_styles_at_newline(self):
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        t = self._transport(out, err)
+        t._render_event(out, {"type": "content", "text": "## Summary"}, err)
+        t._render_event(out, {"type": "content", "text": "\n"}, err)
+        body = out.getvalue()
+        assert "##" not in body and "Summary" in body
+
+    def test_partial_heading_held_then_styled(self):
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        t = self._transport(out, err)
+        t._render_event(out, {"type": "content", "text": "## Ti"}, err)
+        assert "##" not in out.getvalue()     # held, not painted raw
+        t._render_event(out, {"type": "content", "text": "tle\n"}, err)
+        assert "Title" in out.getvalue()
+
+    def test_done_flushes_held_text(self):
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        t = self._transport(out, err)
+        t._render_event(out, {"type": "content", "text": "- item"}, err)
+        t._render_event(out, {"type": "done", "session_id": "s"}, err)
+        assert "item" in out.getvalue()
+
+
+class TestWarningDedup:
+    def test_duplicate_warnings_collapse(self):
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        t = TestMarkdownStreaming()._transport(out, err)
+        msg = {"type": "system", "message": "rate limited", "level": "warning"}
+        t._render_event(out, dict(msg), err)              # 1st: shown
+        t._render_event(out, dict(msg), err)              # 2nd: silent
+        t._render_event(out, dict(msg), err)              # 3rd: ×3 collapse
+        body = err.getvalue()
+        assert body.count("rate limited") == 2            # shown + collapse line
+
+    def test_counts_reset_each_turn(self):
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        t = TestMarkdownStreaming()._transport(out, err)
+        msg = {"type": "system", "message": "blip", "level": "warning"}
+        for _ in range(3):
+            t._render_event(out, dict(msg), err)
+        t._render_event(out, {"type": "done", "session_id": "s"}, err)
+        t._render_event(out, dict(msg), err)
+        assert err.getvalue().count("blip") == 3          # fresh turn → shown again
+

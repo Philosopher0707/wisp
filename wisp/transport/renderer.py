@@ -600,3 +600,144 @@ def render_agent_detail(snapshot: dict, width: int = 80) -> str:
     if mode == OutputMode.MINIMAL:
         return content
     return _box(content, title=f"Agent {snapshot.get('agent_id', '?')}")
+
+# ── Markdown answers (aesthetics v3 §4) ──────────────────────────
+
+_MD_LINE_RE = None  # compiled lazily; module import cost matters at REPL boot
+
+
+def _md_is_block_line(line: str) -> bool:
+    """True when a line STARTS a markdown block construct.
+
+    Only block-leading markers delay painting (until the line completes);
+    flowing paragraphs stream raw with zero buffering.
+    """
+    s = line.lstrip()
+    if s.startswith("```"):
+        return True
+    if s.startswith("#") and len(s) > 1 and s[1] in "# ":
+        return True
+    if s.startswith("- ") or s.startswith("* "):
+        return True
+    if len(s) > 2 and s[0].isdigit() and s[1] == ".":
+        return True
+    if set(s.strip()) == {"-"} and len(s.strip()) >= 3:
+        return True  # --- horizontal rule
+    return False
+
+
+def render_markdown_block(text: str, width: int = 80,
+                          unicode_ok: bool = True) -> str:
+    """Style one completed markdown block for the terminal.
+
+    Pure function. Handles the §4 subset: ATX headings, bullets/numbered
+    lists, fenced code blocks (bordered, lang tag), inline code/bold,
+    `---` rules. Unknown constructs pass through untouched.
+    """
+    from wisp.colors import bold, dim as _dim, accent
+    out_lines: list[str] = []
+    in_fence = False
+    fence_lang = ""
+    fence_body: list[str] = []
+
+    def _flush_fence() -> None:
+        nonlocal in_fence, fence_lang, fence_body
+        inner_w = max(20, width - 4)
+        top = "╭" + "─" * (inner_w + 2) + "╮"
+        tag = f" {fence_lang} " if fence_lang else ""
+        if tag:
+            head = "╭─" + tag.ljust(inner_w + 1, "─") + "╮"
+        else:
+            head = top
+        out_lines.append(_dim(head))
+        for ln in fence_body:
+            wrapped = wrap_text(ln, inner_w) or [""]
+            for w_ln in wrapped:
+                out_lines.append(_dim("│ ") + w_ln + _dim(" │"))
+        out_lines.append(_dim("╰" + "─" * (inner_w + 2) + "╯"))
+        in_fence = False
+        fence_lang = ""
+        fence_body = []
+
+    def _style_inline(s: str) -> str:
+        # Inline code first so bold inside code spans stays literal.
+        while "`" in s:
+            pre, _, rest = s.partition("`")
+            code, tick, post = rest.partition("`")
+            if not tick:
+                s = pre + "`" + rest
+                break
+            s = f"{pre}{accent(code)}{post}"
+        while "**" in s:
+            pre, _, rest = s.partition("**")
+            b, marks, post = rest.partition("**")
+            if not marks:
+                break
+            s = f"{pre}{bold(b)}{post}"
+        return s
+
+    for raw in text.split("\n"):
+        stripped = raw.rstrip()
+        if in_fence:
+            if stripped.lstrip().startswith("```"):
+                _flush_fence()
+            else:
+                fence_body.append(raw)
+            continue
+
+        s = stripped.lstrip()
+        if s.startswith("```"):
+            in_fence = True
+            fence_lang = s[3:].strip()
+            continue
+
+        if not stripped:
+            out_lines.append("")
+            continue
+
+        # Headings: ## Title → bold line (no glyph prefix).
+        if s.startswith("#") and len(s) > 1 and s[1] in "# ":
+            level_txt = s.lstrip("#").strip()
+            if out_lines and out_lines[-1] != "":
+                out_lines.append("")
+            out_lines.append(bold(level_txt))
+            continue
+
+        # Horizontal rule.
+        if set(s) == {"-"} and len(s) >= 3:
+            out_lines.append(_dim("─" * max(10, width - 4)))
+            continue
+
+        m_bullet = s[:2] in ("- ", "* ")
+        m_num = len(s) > 2 and s[0].isdigit() and s[1] == "."
+        if m_bullet or m_num:
+            body = s[2:] if m_bullet else s[2:].lstrip()
+            marker = "• " if (m_bullet and unicode_ok) else ("* " if m_bullet else s[:2] + " ")
+            wrapped = wrap_text(body, max(20, width - 6))
+            first = True
+            for w_ln in wrapped:
+                if first:
+                    out_lines.append(marker + _style_inline(w_ln))
+                    first = False
+                else:
+                    out_lines.append("  " + _style_inline(w_ln))
+            continue
+
+        out_lines.append(_style_inline(stripped))
+
+    if in_fence and fence_body:
+        _flush_fence()  # unclosed fence: flush honestly
+    return "\n".join(out_lines)
+
+def _md_is_block_start(partial_line: str) -> bool:
+    """True when a possibly-incomplete line already commits to a block."""
+    return _md_is_block_line(partial_line)
+
+
+def _md_lang(first_fence_line: str) -> str:
+    """Extract the language tag from a ```lang fence opening."""
+    s = first_fence_line.lstrip()
+    if s.startswith("```"):
+        return s[3:].strip()
+    return ""
+

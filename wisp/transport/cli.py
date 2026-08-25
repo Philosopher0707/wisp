@@ -38,6 +38,9 @@ from .renderer import (
     render_tool_call as _render_tool_call,
     render_thinking_block as _render_thinking_block,
     render_content_block as _render_content_block,
+    render_markdown_block as _render_markdown_block,
+    _md_is_block_start,
+    _md_lang,
     _box,
     _rule,
 )
@@ -565,6 +568,14 @@ class CLITransport(Transport):
         self._in_thinking: bool = False
         self._in_content: bool = False
         self._streaming_content_live: bool = False
+        # Markdown stager: holds ONLY partial lines confirmed to start a
+        # block construct (heading/fence/list); flowing prose paints
+        # instantly, markdown snaps styled at line completion (§4).
+        self._md_hold: str = ""
+        self._md_fence_open = False
+        self._md_fence_body: list[str] = []
+        # Per-turn warning dedup (§9): unique message -> occurrence count.
+        self._warn_counts: dict[str, int] = {}
         self.show_thinking: bool = (
             getattr(config, "show_thinking", False) if config else False
         )
@@ -920,6 +931,79 @@ class CLITransport(Transport):
         self._content_buffer.append(text)
         self._in_content = True
 
+    def _md_ensure_state(self) -> None:
+        """Lazily init stager state — transports built by hand in tests."""
+        if not hasattr(self, "_md_hold"):
+            self._md_hold = ""
+            self._md_fence_open = False
+            self._md_fence_body = []
+
+    def _feed_markdown(self, stdout: Any, text: str) -> None:
+        """Stream deltas; style markdown block lines once complete.
+
+        Flowing paragraphs paint token-by-token with zero delay. Lines that
+        START a block construct are held until their newline arrives, then
+        painted styled. Fence bodies accumulate until the closing tick.
+        """
+        self._md_ensure_state()
+        buf = self._md_hold + text
+        self._md_hold = ""
+        while True:
+            nl = buf.find("\n")
+            if nl < 0:
+                break
+            line = buf[:nl]
+            buf = buf[nl + 1:]
+            self._paint_md_line(stdout, line + "\n")
+        # No newline yet: hold only confirmed block-start partials.
+        if buf and (self._md_fence_open or _md_is_block_start(buf)):
+            self._md_hold = buf
+        elif buf:
+            stdout.write(buf)
+            stdout.flush()
+
+    def _paint_md_line(self, stdout: Any, line: str) -> None:
+        """Paint one completed line through the markdown state machine."""
+        s = line.strip()
+        if self._md_fence_open:
+            if s.startswith("```"):
+                self._md_fence_body.append("")
+                block = "```" + _md_lang(self._md_fence_body[0]) + "\n" \
+                        + "\n".join(self._md_fence_body[1:-1]) + "\n```"
+                stdout.write(_render_markdown_block(block, width=_term_width())
+                             + "\n")
+                self._md_fence_open = False
+                self._md_fence_body = []
+            else:
+                self._md_fence_body.append(line.rstrip("\n"))
+            return
+        if s.startswith("```"):
+            self._md_fence_open = True
+            self._md_fence_body = [s]
+            return
+        if _md_is_block_start(line.rstrip("\n")):
+            stdout.write(_render_markdown_block(line.rstrip("\n"),
+                                                width=_term_width()) + "\n")
+        else:
+            stdout.write(line)
+        stdout.flush()
+
+    def _flush_md_hold(self, stdout: Any) -> None:
+        """Turn end / tool boundary: paint anything still held."""
+        self._md_ensure_state()
+        if self._md_hold:
+            held = self._md_hold
+            self._md_hold = ""
+            if self._md_fence_open:
+                block = "```" + _md_lang(self._md_fence_body[0] if self._md_fence_body else "") + "\n" \
+                        + "\n".join(self._md_fence_body[1:] if len(self._md_fence_body) > 1 else []) + "\n" + held
+                stdout.write(_render_markdown_block(block, width=_term_width()) + "\n")
+                self._md_fence_open = False
+                self._md_fence_body = []
+            else:
+                stdout.write(held)
+            stdout.flush()
+
     def _flush_thinking(self, stdout: Any, width: int | None = None) -> None:
         """Render accumulated thinking as a structured block."""
         if not self._thinking_buffer:
@@ -972,6 +1056,7 @@ class CLITransport(Transport):
 
     def _flush_content(self, stdout: Any, width: int | None = None) -> None:
         """Render accumulated content as a structured block."""
+        self._flush_md_hold(stdout)
         if getattr(self, "_streaming_content_live", False):
             # Deltas already went to the terminal live — just end the line.
             self._streaming_content_live = False
@@ -1146,8 +1231,7 @@ class CLITransport(Transport):
                 else:
                     stdout.write(prefix)
                 self._streaming_content_live = True
-            stdout.write(ev.text)
-            stdout.flush()
+            self._feed_markdown(stdout, ev.text)
 
         elif etype == EventType.TOOL_CALL:
             self._flush_thinking(err, width)
@@ -1190,7 +1274,10 @@ class CLITransport(Transport):
 
         elif etype == EventType.DONE:
             self._flush_thinking(err, width)
+            self._flush_md_hold(stdout)
             self._flush_content(stdout, width)
+            if getattr(self, "_warn_counts", None):
+                self._warn_counts.clear()
             # Ensure spinner is stopped on turn completion
             if self._spinner is not None:
                 self._spinner.stop()
@@ -1271,7 +1358,16 @@ class CLITransport(Transport):
                     spinner.update(msg)
                     return
             if level == "warning":
-                err.write(warning(f"  ⚠ {msg}\n"))
+                counts = getattr(self, "_warn_counts", None)
+                if counts is None:
+                    counts = self._warn_counts = {}
+                n = counts.get(msg, 0) + 1
+                self._warn_counts[msg] = n
+                if n == 1:
+                    err.write(warning(f"  ⚠ {msg}\n"))
+                elif n == 3:
+                    err.write(warning(f"  ⚠ ×{n} {msg}\n"))
+                # 2nd and 4th+ occurrences stay silent — noise budget.
             else:
                 err.write(info(f"  ℹ {msg}\n"))
             err.flush()

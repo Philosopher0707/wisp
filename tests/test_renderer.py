@@ -354,3 +354,58 @@ class TestRenderAgentDetail:
     def test_empty_snapshot_message(self):
         out = strip_ansi(render_agent_detail({}))
         assert "No such agent" in out
+
+class TestMarkdownBlock:
+    """§4 subset: headings, fences, lists, rules; plain text untouched."""
+
+    def test_plain_text_byte_identical(self):
+        from wisp.transport.renderer import render_markdown_block
+        assert render_markdown_block("just a sentence") == "just a sentence"
+
+    def test_heading_bolds_and_drops_hashes(self):
+        from wisp.transport.renderer import render_markdown_block
+        out = render_markdown_block("## Title", width=60)
+        assert "#" not in out and "Title" in out
+
+    def test_heading_bold_when_color_enabled(self, monkeypatch):
+        import wisp.colors as colors
+        from wisp.transport.renderer import render_markdown_block
+        monkeypatch.setattr(colors, "_is_disabled", lambda: False)
+        assert "\x1b[1m" in render_markdown_block("## Title", width=60)
+
+    def test_fence_gets_border_and_lang_tag(self):
+        from wisp.transport.renderer import render_markdown_block
+        out = render_markdown_block("```python\nprint(1)\n```", width=60)
+        assert "╭" in out and "python" in out and "print(1)" in out and "╰" in out
+
+    def test_unclosed_fence_flushed_honestly(self):
+        from wisp.transport.renderer import render_markdown_block
+        out = render_markdown_block("```\npartial", width=60)
+        assert "partial" in out
+
+    def test_bullets_use_bullet_char(self):
+        from wisp.transport.renderer import render_markdown_block
+        out = render_markdown_block("- alpha\n- beta", width=60)
+        assert out.count("•") == 2
+
+    def test_hr_becomes_rule(self):
+        from wisp.transport.renderer import render_markdown_block
+        assert "─" in render_markdown_block("---", width=40)
+
+    def test_inline_code_tinted(self):
+        from wisp.transport.renderer import render_markdown_block
+        out = render_markdown_block("use `run_bash` here")
+        assert "run_bash" in out
+
+    def test_inline_code_tinted_when_color_enabled(self, monkeypatch):
+        import wisp.colors as colors
+        from wisp.transport.renderer import render_markdown_block
+        monkeypatch.setattr(colors, "_is_disabled", lambda: False)
+        assert "\x1b[" in render_markdown_block("use `run_bash` here")
+
+    def test_block_start_detector(self):
+        from wisp.transport.renderer import _md_is_block_start
+        assert _md_is_block_start("## Ti")          # partial heading held
+        assert _md_is_block_start("- al")           # partial bullet held
+        assert not _md_is_block_start("T cells ")   # prose streams free
+
