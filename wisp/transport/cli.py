@@ -713,10 +713,12 @@ class CLITransport(Transport):
             dim("     [y] yes  [Y] always this  [a] all on  [n] no  [N] always no  [d] all off  [c] cancel"),
             file=sys.stderr,
         )
-        sys.stdout.flush()
+        # stdout may be the only stream a wrapper/GUI surfaces; an approval
+        # prompt invisible there reads as an infinitely "working" spinner.
+        print(warning("⏸ waiting for your approval to continue…"), flush=True)
 
         try:
-            raw = await self._read_approval_answer()
+            raw = await self._read_approval_answer_with_reminders()
         except (EOFError, OSError):
             return False
         choice = raw.strip()
@@ -776,6 +778,25 @@ class CLITransport(Transport):
             return await asyncio.to_thread(self._read_approval_line, dim("Approve? "), stop)
         finally:
             stop.set()
+
+    _APPROVAL_REMINDER_EVERY_S = 45.0
+
+    async def _read_approval_answer_with_reminders(self) -> str:
+        """Read the answer, re-announcing on stdout while it pends.
+
+        An unanswered prompt must never be indistinguishable from work in
+        progress — the original hang report was exactly that confusion.
+        """
+        while True:
+            try:
+                return await asyncio.wait_for(
+                    self._read_approval_answer(),
+                    timeout=self._APPROVAL_REMINDER_EVERY_S,
+                )
+            except asyncio.TimeoutError:
+                print(warning(
+                    "⏸ still waiting for approval — check the prompt above "
+                    "(y/n/a/d/c)"), flush=True)
 
     async def _send(self, event: dict) -> None:
         """Send compatibility shim.

@@ -936,7 +936,22 @@ def print_subcommand_help(name: str) -> bool:
     return True
 
 
+def _register_stack_dumper() -> None:
+    """WISP_DEBUG_STACKS=1: `kill -USR1 <pid>` dumps all thread stacks.
+
+    Diagnosing 'it hung' needs the stuck process's Python frames; without
+    this the only options are killing the session blind or attaching lldb.
+    """
+    import faulthandler
+    import signal
+    try:
+        faulthandler.register(signal.SIGUSR1, all_threads=True)
+    except (ValueError, OSError, AttributeError):
+        pass
+
+
 def main():
+    _register_stack_dumper()
     argv = list(sys.argv[1:])
     _setup_logging(verbose="--verbose" in argv)
 

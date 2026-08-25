@@ -167,7 +167,8 @@ class WispAgentCore:
             async with _asyncio.timeout(turn_timeout):
                 async for event in self._turn_inner(
                     session, prompt, messages, system_prompt, tools,
-                    max_iterations, approval_handler, steering_drain=steering_drain,
+                    max_iterations, self._memoize_handler(approval_handler),
+                    steering_drain=steering_drain,
                 ):
                     yield event
         except _asyncio.TimeoutError:
@@ -195,6 +196,7 @@ class WispAgentCore:
             _allowed_set = {str(a) for a in allowed_tools}
         for iteration in range(max_iterations):
             pending_tool_calls: list[dict[str, Any]] = []
+            tool_results_events_early: list[dict[str, Any]] = []
             provider_events: list[dict[str, Any]] = []
             partial_content: list[str] = []
             has_tool_calls = False
@@ -290,11 +292,19 @@ class WispAgentCore:
                                 continue  # Skip the default yield below since we already yielded
                             continue
 
-                        # Role restriction: reject before any gating
+                        # Role restriction: reject before any gating — but
+                        # keep protocol-consistent history (same replay
+                        # hazard as approval denial).
                         if _allowed_set is not None and str(normalized.get("name", "")) not in _allowed_set:
+                            normalized["_blocked"] = (
+                                f"tool '{normalized.get('name', '')}' is not "
+                                f"allowed for this agent's role")
+                            pending_tool_calls.append(normalized)
+                            tool_results_events_early.append(
+                                self._refusal_result_event(normalized))
                             yield _flatten_event(
                                 error_event(
-                                    f"Blocked: tool '{normalized.get('name', '')}' is not allowed for this agent's role",
+                                    f"Blocked: {normalized['_blocked']}",
                                     recoverable=True,
                                 )
                             )
@@ -304,6 +314,15 @@ class WispAgentCore:
                         gate = self._get_approval_gate()
                         allowed, reason = await gate.check(normalized, session, approval_handler=approval_handler)
                         if not allowed:
+                            # Register the refusal as a real tool result so
+                            # history stays protocol-consistent: the model
+                            # emitted this call and MUST see its outcome,
+                            # otherwise it deterministically replays the
+                            # identical call forever (live pty repro).
+                            normalized["_blocked"] = reason or "blocked"
+                            pending_tool_calls.append(normalized)
+                            tool_results_events_early.append(
+                                self._refusal_result_event(normalized))
                             yield _flatten_event(
                                 error_event(
                                     f"Blocked: {reason}",
@@ -317,9 +336,15 @@ class WispAgentCore:
                             try:
                                 ext_result = self.extensions.intercept(normalized)
                                 if ext_result.get("action") == "block":
+                                    normalized["_blocked"] = (
+                                        f"blocked by extension: "
+                                        f"{ext_result.get('reason', 'unknown')}")
+                                    pending_tool_calls.append(normalized)
+                                    tool_results_events_early.append(
+                                        self._refusal_result_event(normalized))
                                     yield _flatten_event(
                                         error_event(
-                                            f"Blocked: {ext_result.get('reason', 'by extension')}",
+                                            f"Blocked: {normalized['_blocked']}",
                                             recoverable=True,
                                         )
                                     )
@@ -328,6 +353,11 @@ class WispAgentCore:
                                 logger.exception(
                                     "Extension intercept failed — treating as deny: %s", e
                                 )
+                                normalized["_blocked"] = (
+                                    f"extension intercept failed: {e}")
+                                pending_tool_calls.append(normalized)
+                                tool_results_events_early.append(
+                                    self._refusal_result_event(normalized))
                                 yield _flatten_event(
                                     error_event(
                                         f"Extension intercept failed: {e}. Tool call denied.",
@@ -401,10 +431,20 @@ class WispAgentCore:
                 return
 
             # ── Execute tools and feed results back to messages ──
-            tool_results_events: list[dict[str, Any]] = []
+            tool_results_events: list[dict[str, Any]] = list(tool_results_events_early)
             has_tool_results = any(e.get("type") == "tool_result" for e in provider_events)
             if pending_tool_calls and not has_tool_results:
                 for tc in pending_tool_calls:
+                    if "_blocked" in tc:
+                        # Refusal already synthesized at the gate; yield the
+                        # live event once here. It STAYS in
+                        # tool_results_events so it reaches messages below.
+                        for early in tool_results_events_early:
+                            if early.get("tool_call_id") == tc.get("id") \
+                                    and not early.get("_yielded"):
+                                early["_yielded"] = True
+                                yield early
+                        continue
                     async for result_event in self._execute_tool(
                         tc, session, approval_handler=approval_handler
                     ):
@@ -1554,6 +1594,58 @@ class WispAgentCore:
         if self._approval_gate is None:
             self._approval_gate = ApprovalGate(self.security)
         return self._approval_gate
+
+    @staticmethod
+    def _memoize_handler(approval_handler: Any) -> Any:
+        """One interactive prompt per (tool, args) per turn.
+
+        The engine's ApprovalGate and ToolExecutor both consult the same
+        handler; without memoization every gated tool prompts twice, which
+        trains users to mash `y` — exactly how real approval prompts get
+        missed and turns look hung. Identical replays of an already-answered
+        call resolve instantly from the memo.
+        """
+        if approval_handler is None:
+            return None
+        memo: dict[tuple[str, str], bool] = {}
+
+        async def memoized(event: dict[str, Any], args: Any = None,
+                           reason: Any = None) -> bool:
+            # Dual-protocol: ApprovalGate passes one event dict;
+            # ToolExecutor's wrapper passes (name, args, reason).
+            if args is None:
+                name = event.get("name", "")
+                call_args = event.get("arguments", {})
+            else:
+                name = event
+                call_args = args
+            import json as _json
+            key = (str(name), _json.dumps(call_args, sort_keys=True, default=str))
+            if key not in memo:
+                result = await approval_handler(
+                    {"name": name, "arguments": call_args})
+                approved = result[0] if isinstance(result, tuple) else result
+                # Collapse to a plain bool: ApprovalGate.check does
+                # `if approved:` — a (False, None) tuple is truthy and
+                # would turn user denials into approvals.
+                memo[key] = bool(approved)
+            return memo[key]
+
+        return memoized
+
+    def _refusal_result_event(self, tc: dict[str, Any]) -> dict[str, Any]:
+        """Synthesize the tool-role refusal for a blocked call."""
+        from wisp.core.events import tool_result
+        reason = str(tc.get("_blocked", "blocked"))
+        ev = tool_result(
+            tc.get("name", ""),
+            f"[Blocked: {reason}]",
+            duration_ms=0,
+            tool_call_id=tc.get("id"),
+        )
+        flat = _flatten_event(ev)
+        flat["tool_call_id"] = tc.get("id", "")
+        return flat
 
     def _make_action(self, event: dict[str, Any]) -> Any:
         """Create Action from tool_call event."""
