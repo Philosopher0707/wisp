@@ -36,10 +36,24 @@ jobs:
           pip install pytest
 
       - name: Install Droid CLI
-        run: curl -fsSL https://app.factory.ai/cli | sh
+        id: droid_install
+        run: |
+          set -e
+          ok=false
+          for attempt in 1 2 3; do
+            if curl -fsSL --retry 3 --retry-delay 5 https://app.factory.ai/cli | sh; then
+              ok=true
+              break
+            fi
+            echo "installer attempt $attempt failed, backing off..."
+            rm -rf ~/.droid ~/.factory 2>/dev/null || true
+            sleep $((attempt * 10))
+          done
+          echo "available=$ok" >> "$GITHUB_OUTPUT"
 
-      - name: Run QA
+      - name: Run QA (AI reviewer)
         id: qa
+        if: steps.droid_install.outputs.available == 'true' && env.WISP_API_KEY != ''
         timeout-minutes: 15
         env:
           CI: "true"
@@ -48,6 +62,22 @@ jobs:
         run: |
           echo "Starting QA run..."
           droid exec --auto high "Run the qa skill for this project. Read the git diff, determine affected areas, and run relevant CLI tests. Write the final report to qa-results/report.md. You are running in a non-interactive CI environment. There is NO human available. Do NOT use AskUser, do NOT wait for confirmations, do NOT pause for input."
+
+      - name: Run QA (pytest fallback)
+        if: steps.droid_install.outputs.available != 'true' || env.WISP_API_KEY == ''
+        timeout-minutes: 20
+        run: |
+          mkdir -p qa-results
+          {
+            echo "## QA Report"
+            echo
+            echo "_AI reviewer unavailable (installer failed or no WISP_API_KEY) — ran the deterministic test suite instead._"
+            echo
+            echo '```'
+            python -m pytest tests -q --tb=short -p no:cacheprovider 2>&1 | tail -30
+            echo '```'
+          } > qa-results/report.md
+          python -m pytest tests -q --tb=short -p no:cacheprovider
 
       - name: Upload QA artifacts
         if: always()
