@@ -70,20 +70,31 @@ swarm · agents · bench` — each routes to a `cmd_*` handler in the same modul
 steering_drain)` (`stateless.py:116`):
 
 ```
- 1. deadline set: _turn_deadline.set(monotonic()+turn_timeout)     :134 (ContextVar)
- 2. build messages (system prompt cache keyed on context files)
- 3. delegation check (_maybe_delegate → orchestrator, bounded classify)
+ 1. wall clock: _turn_deadline.set(monotonic()+turn_timeout)       :134 (ContextVar)
+    turn_timeout default 1800s (config/env WISP_TURN_TIMEOUT)      :130
+ 2. build messages (system prompt incl. skills/repo-map/memory/rules)
+    + tool schemas filtered by session["allowed_tools"]            :150-162
+    max_iterations default 30                                      :164
+ 3. asyncio.timeout(turn_timeout) wraps _turn_inner                :167
  4. provider stream via _guarded_provider_stream                   :203→1345
- 5. iterate events: thinking/content buffer → tool_call?
- 6.   ├─ steering drain at each tool boundary                      (M3 contract)
- 7.   └─ approval_handler gate → ToolExecutor.execute
- 8. results appended as role:"tool" messages; loop to 4
- 9. done{turns, tokens} emitted; session mutated in place
+ 5. iterate events: content buffered → tool_call?
+    (provider tool_calls batches normalized to singular)           :223-290
+ 6.   ├─ steering drain at each tool boundary                      :449-461
+    │   ([steering] user msgs + steering_feedback events)
+ 7.   └─ approval gate → ToolExecutor.execute → role:"tool" msgs   :403-445
+ 8. no tool calls → done_event, return                             :399-401
+ 9. iteration budget exhausted → forced wrap-up stream or          :464-497
+    error(CODE_ITERATION_BUDGET)
+
+Auto-delegation was REMOVED (11fc949): subagents run only as explicit
+spawn/fanout tool calls; capability_matcher.should_delegate remains as
+a library helper without a core-loop consumer.
 ```
 
 **Guards**: `FIRST_TOKEN_DEADLINE_S = env WISP_FIRST_TOKEN_DEADLINE, default 90`
-(`:1339`); empty-stream retry ×`WISP_STREAM_ATTEMPTS`(3); per-turn wall clock;
-classify ≤10s; child budget clamp ×1.5 on timeout retry.
+(`:1339`); empty-stream retry ×`WISP_STREAM_ATTEMPTS`(3, jittered backoff;
+429/5xx scale 1.5×attempt); turn wall-clock 1800s; iteration budget 30 with
+forced synthesis; child budget clamp ×1.5 on timeout retry.
 
 **Event vocabulary** (`core/events.py`, flat dicts at the transport boundary):
 `thinking · tool_call · tool_result · content · error · done · system ·
@@ -92,9 +103,12 @@ provider_status · subagent` — 13 types. Consumers must accept BOTH flat
 (`name`/`text` top-level) and nested `data:{}` shapes (renderer squeezes via
 `_flatten_event`).
 
-**Session management** (`core/runtime.py`): CRUD + per-session asyncio locks +
-core cache keyed `(model, workspace)` + auto-compaction trigger via Compactor
-(LLM summary, fallback truncation).
+**Session management** (`core/runtime.py`): CRUD + per-session asyncio locks
+(LRU-evicted at 1000, `:69/:537`) + core cache keyed on **`config.fingerprint()`**
+(`:442-443`, invalidated on any config change) + auto-compaction when history
+exceeds `max_messages` (default 50, `:88`; Compactor LLM summary, fallback
+truncation) + per-session approval state + steering inbox + session_repo event
+persistence.
 
 ## 4. Transport layer
 
@@ -220,3 +234,11 @@ keypress ➜ readline/_input_line (ESC-strip, typeahead capture registered)
    line; route through `_SpinnerAwareHandler`.
 5. CSS auto-sizing: textual 8.x collapses `width:auto` containers with fr
    children — pixel-level goldens are the only guard that caught it.
+6. `tool_call` vs `tool_calls` bifurcation: providers may emit batches;
+   normalization lives inside the iteration loop (`stateless.py:223-290`) —
+   refactors there can leak batch shapes downstream.
+7. Steering has three separate event types (`steering_paused/inject/resumed`)
+   with different payloads — no unified envelope for transports.
+8. Error-path message duplication risk: `run_turn`'s finally re-records
+   assistant/tool messages (`runtime.py:249+`) even if partial iteration
+   already appended them (`stateless.py:434-445`).
