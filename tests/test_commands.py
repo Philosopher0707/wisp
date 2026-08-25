@@ -443,3 +443,39 @@ class TestRegistryIntegrity:
             @register("impostor", "tries to steal an alias", aliases=("exit",))
             def _cmd_impostor(agent, args):
                 return True
+
+
+# ═══════════════════════════════════════════════════════════════════
+# /model /sessions /tokens — session control surface (design R5)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestSessionsCommand:
+    def test_lists_saved_sessions_short_ids(self, capsys):
+        from wisp.commands import cmd_sessions
+
+        class _Store:
+            def list_sessions(self, limit=50):
+                return [
+                    {"id": "17052f74-2824-465a-a81f-1e9d6921f240",
+                     "model": "m1", "title": "cache research",
+                     "msg_count": 6, "updated_at": "2026-08-24T10:00:00"},
+                    {"id": "abcdef12-session-two",
+                     "model": "m2", "title": "",
+                     "msg_count": 0, "updated_at": "2026-08-23T09:00:00"},
+                ]
+
+        a = type("A", (), {"runtime": type("R", (), {"store": _Store()})()})()
+        cmd_sessions(a, "")
+        out = capsys.readouterr().out
+        assert "17052f74" in out and "abcdef12" in out
+        assert "17052f74-2824" not in out, "full uuid is noise"
+        assert "cache research" in out
+
+    def test_no_store_prints_hint(self, capsys):
+        from wisp.commands import cmd_sessions
+
+        a = type("A", (), {"runtime": type("R", (), {"store": None})()})()
+        cmd_sessions(a, "")
+        out = capsys.readouterr().out
+        assert "No session store" in out

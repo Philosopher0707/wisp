@@ -992,3 +992,40 @@ def cmd_init(agent, args: str):
         print(dim(f"   {len(top_dirs)} dirs, {len(top_files)} files, {index.total_symbols} symbols analyzed."))
     except Exception as e:
         print(error(f"✗ Failed to write {wisp_md.name}: {e}"))
+
+
+# ── Session control surface (REPL design R5) ─────────────────────────
+
+
+def _fmt_k(n: int) -> str:
+    if n >= 1024:
+        return f"{n / 1024:.0f}k"
+    return str(n)
+
+
+@register("sessions", "List saved sessions", aliases=("ss",), usage="/sessions")
+def cmd_sessions(agent, args: str):
+    store = getattr(getattr(agent, "runtime", None), "store", None)
+    if store is None:
+        print(warning("No session store available."))
+        return
+    try:
+        rows = store.list_sessions(limit=10)
+    except Exception as e:
+        print(error(f"✗ Could not list sessions: {e}"))
+        return
+    if not rows:
+        print(info("No saved sessions yet."))
+        return
+    print(accent("Saved sessions (newest first):"))
+    for r in rows:
+        sid = str(r.get("id", "?"))
+        short = sid.split("-")[0] if "-" in sid else sid[:8]
+        title = r.get("title") or "(untitled)"
+        model = r.get("model", "?")
+        msgs = r.get("msg_count", 0)
+        updated = str(r.get("updated_at", ""))[:16].replace("T", " ")
+        print(f"  {short} · {model} · {msgs} msgs · {title}{dim(f' · {updated}')}")
+    print(dim("Resume with: wisp repl --session <full-id>"))
+
+
