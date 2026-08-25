@@ -51,6 +51,8 @@ def extract_lines(buf: bytearray) -> tuple[list[str], bytearray]:
 class TypeAheadBuffer:
     """Captures stdin lines typed while a turn executes."""
 
+    _active: "TypeAheadBuffer | None" = None
+
     def __init__(self, on_line=None) -> None:
         self._queue: "queue.Queue[str]" = queue.Queue()
         self._buf = bytearray()
@@ -58,9 +60,40 @@ class TypeAheadBuffer:
         self._thread: threading.Thread | None = None
         self._fd = -1
         self.enabled = False
+        # Handshake making pause() deterministic: the reader parks itself
+        # when _read_gate is closed and pause() blocks until it observes
+        # that, so no os.read() can happen after pause() returns.
+        self._read_gate = threading.Event()
+        self._read_gate.set()
+        self._parked = threading.Event()
         # Called from the reader thread for every complete line as it
         # arrives — used for live mid-turn steering injection.
         self._on_line = on_line
+
+    @classmethod
+    def active_instance(cls) -> "TypeAheadBuffer | None":
+        """The buffer capturing stdin right now, if any."""
+        return cls._active
+
+    def pause(self) -> None:
+        """Stop reading fd 0; another reader (approval prompt) owns stdin.
+
+        Returns only once the reader thread has acknowledged the pause.
+        """
+        self._parked.clear()
+        self._read_gate.clear()
+        self._parked.wait(timeout=0.5)
+
+    def resume(self) -> None:
+        """Re-enable capture; bytes queued while paused are still read."""
+        self._read_gate.set()
+
+    def stop_drain_for_test(self, timeout: float = 1.0) -> None:
+        """Kill the reader thread without the queue/buffer reset of drain()."""
+        self._stop.set()
+        self._read_gate.set()
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
 
     def start(self) -> None:
         if self.enabled or os.name != "posix":
@@ -74,7 +107,10 @@ class TypeAheadBuffer:
         if self._fd < 0:
             return
         self.enabled = True
+        self._read_gate.set()
+        self._parked.clear()
         self._stop.clear()
+        TypeAheadBuffer._active = self
         self._thread = threading.Thread(
             target=self._read_loop, name="wisp-typeahead", daemon=True,
         )
@@ -84,10 +120,25 @@ class TypeAheadBuffer:
         buf = self._buf
         fd = self._fd
         while not self._stop.is_set():
+            if not self._read_gate.is_set():
+                # Someone else owns stdin (approval prompt). Park until
+                # resume; pause() waits for this ack before returning.
+                self._parked.set()
+                if self._stop.wait(_SELECT_TICK):
+                    break
+                continue
+            self._parked.clear()
             try:
                 ready, _, _ = select.select([fd], [], [], _SELECT_TICK)
             except (OSError, ValueError):
                 break
+            if not ready:
+                continue
+            if not self._read_gate.is_set():
+                # Paused mid-tick: don't os.read bytes meant for the
+                # other owner; park and let them wait in the kernel.
+                self._parked.set()
+                continue
             if not ready:
                 continue
             try:
@@ -115,6 +166,8 @@ class TypeAheadBuffer:
         if not self.enabled:
             return [], ""
         self._stop.set()
+        if TypeAheadBuffer._active is self:
+            TypeAheadBuffer._active = None
         if self._thread is not None:
             self._thread.join(timeout=timeout)
         lines = list(self._drain_queue())

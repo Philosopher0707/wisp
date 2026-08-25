@@ -55,6 +55,7 @@ from wisp.terminal_width import (
 )
 from wisp.transport.progress import ProgressTracker
 from wisp.transport.spinner import Spinner
+from wisp.transport.typeahead import TypeAheadBuffer
 from wisp.transport.renderer import render_phase_bar, render_provider_status, render_subagent_status
 
 logger = logging.getLogger(__name__)
@@ -717,10 +718,19 @@ class CLITransport(Transport):
         # prompt invisible there reads as an infinitely "working" spinner.
         print(warning("⏸ waiting for your approval to continue…"), flush=True)
 
+        # Exclusive stdin: the typeahead reader polls fd 0 while a turn
+        # runs; without pausing it, answers typed here are consumed as
+        # steering notes and this prompt spins in the reminder loop forever.
+        typeahead = TypeAheadBuffer.active_instance()
+        if typeahead is not None and typeahead.enabled:
+            typeahead.pause()
         try:
             raw = await self._read_approval_answer_with_reminders()
         except (EOFError, OSError):
             return False
+        finally:
+            if typeahead is not None and typeahead.enabled:
+                typeahead.resume()
         choice = raw.strip()
 
         if choice in ("y", "Y"):
