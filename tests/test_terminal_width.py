@@ -377,3 +377,40 @@ class TestNoRawGlyphLiterals:
         assert not offenders, (
             f"raw glyphs found — use status_symbols() instead: {offenders}"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ASCII fast path: exactness first, speed second (optimization P3)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestDisplayWidthFastPath:
+    def test_ascii_matches_slow_path(self):
+        from wisp.terminal_width import display_width
+
+        for s in ("", "hello world", "x" * 5000, "line1\nline2"):
+            assert display_width(s) == len(s)
+
+    def test_wide_chars_still_measured(self):
+        from wisp.terminal_width import display_width
+
+        assert display_width("読") == 2
+        assert display_width("a読b") == 4
+
+    def test_emoji_and_zero_width(self):
+        from wisp.terminal_width import display_width
+
+        w = display_width("🧬")
+        assert w in (1, 2)  # environment-dependent, must not crash
+
+    def test_big_ascii_string_is_fast(self):
+        import time
+
+        from wisp.terminal_width import display_width
+
+        s = "x" * 200000
+        t0 = time.perf_counter()
+        for _ in range(10):
+            display_width(s)
+        dt = (time.perf_counter() - t0) * 1000
+        assert dt < 50, f"ASCII fast path too slow: {dt:.1f}ms for 10×200KB"

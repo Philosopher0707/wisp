@@ -43,7 +43,6 @@ from wisp.tools.filesystem import (
     tool_list_files,
 )
 from wisp.tools.bash import tool_run_bash
-from wisp.tools.web import tool_web_fetch, tool_web_search
 from wisp.tools.git import (
     tool_git_status,
     tool_git_diff,
@@ -64,3 +63,13 @@ from wisp.tools.search import tool_search_symbols, tool_search_codebase
 from wisp.tools.plan import tool_plan_task, tool_mark_step_done, tool_update_plan
 from wisp.tools.diagnose import tool_diagnose
 from wisp.tools.tests import tool_run_tests
+
+
+def __getattr__(name: str):
+    # Same rationale as registry._lazy_tool: keep requests off the CLI
+    # launch path; only web-tool consumers pay for it.
+    if name in ("tool_web_fetch", "tool_web_search"):
+        from wisp.tools import web
+
+        return getattr(web, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

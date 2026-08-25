@@ -105,6 +105,11 @@ def display_width(text: str) -> int:
     """
     if not text:
         return 0
+    # ASCII implies width-1 glyphs, so len() is exact — except ESC bytes,
+    # which must be stripped first. Both checks are C-speed scans; wcwidth
+    # on 100KB cost ~6ms per call.
+    if text.isascii() and "\x1b" not in text:
+        return len(text)
     try:
         import wcwidth
         # Strip ANSI first, then calculate

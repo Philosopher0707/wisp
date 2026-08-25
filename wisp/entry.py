@@ -25,7 +25,6 @@ from wisp.composition import CompositionRoot
 from wisp.config import WispConfig
 from wisp.transport.cli import CLITransport, _input_line, _input_multiline, _restore_signal_handler
 from wisp.transport.typeahead import TypeAheadBuffer
-from wisp.transport.tui import TUITransport
 from wisp.transport.renderer import render_turn_stats, render_file_ticker
 from wisp.terminal_width import status_symbols
 from wisp.colors import dim, error
@@ -588,6 +587,9 @@ def _run_tui(root: CompositionRoot) -> None:
     Launches the Textual TUI app and wires it to TUITransport.
     """
     from wisp.tui.app import WispTUIApp
+
+    # Deferred: textual costs ~29ms of import time the CLI never uses.
+    from wisp.transport.tui import TUITransport
 
     transport = TUITransport()
     transport.start()

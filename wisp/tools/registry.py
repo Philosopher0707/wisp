@@ -20,7 +20,6 @@ from wisp.tools.filesystem import (
     tool_list_files,
 )
 from wisp.tools.bash import tool_run_bash
-from wisp.tools.web import tool_web_fetch, tool_web_search
 from wisp.tools.git import (
     tool_git_status,
     tool_git_diff,
@@ -542,6 +541,32 @@ def _tool_not_direct(**kwargs) -> str:
     })
 
 
+def _resolve_lazy(impl):
+    """Follow a lazy-tool marker to its real function (importing then)."""
+    target = getattr(impl, "_wisp_lazy_target", None)
+    if target is None:
+        return impl
+    import importlib
+
+    return getattr(importlib.import_module(target[0]), target[1])
+
+
+def _lazy_tool(module_name: str, attr: str):
+    """Defer a tool implementation's module import until execution.
+
+    Web tools are rare in local REPL sessions, and importing their module
+    pulls the requests stack (~73ms of every CLI launch). execute_tool
+    consults _resolve_lazy so signature-based argument filtering still
+    sees the real function.
+    """
+    def _call(*args, **kwargs):
+        return _resolve_lazy(_call)(*args, **kwargs)
+
+    _call.__name__ = attr
+    _call._wisp_lazy_target = (module_name, attr)
+    return _call
+
+
 TOOL_IMPLS = {
     "spawn": _tool_not_direct,
     "fanout": _tool_not_direct,
@@ -551,7 +576,7 @@ TOOL_IMPLS = {
     "edit_file_multi": tool_edit_file_multi,
     "run_bash": tool_run_bash,
     "list_files": tool_list_files,
-    "web_fetch": tool_web_fetch,
+    "web_fetch": _lazy_tool("wisp.tools.web", "tool_web_fetch"),
     "search_symbols": tool_search_symbols,
     "remember": tool_remember,
     "recall": tool_recall,
@@ -570,7 +595,7 @@ TOOL_IMPLS = {
     "lsp_references": tool_lsp_references,
     "lsp_hover": tool_lsp_hover,
     "lsp_symbols": tool_lsp_symbols,
-    "web_search": tool_web_search,
+    "web_search": _lazy_tool("wisp.tools.web", "tool_web_search"),
     "search_codebase": tool_search_codebase,
     "run_tests": tool_run_tests,
 }
@@ -687,7 +712,7 @@ def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0,
 
     # Filter args with extra kwargs support (file_lock, lsp_manager)
     import inspect
-    sig = inspect.signature(impl)
+    sig = inspect.signature(_resolve_lazy(impl))
     filtered = {k: v for k, v in args.items() if k in sig.parameters}
     if "workspace" in sig.parameters:
         filtered["workspace"] = workspace

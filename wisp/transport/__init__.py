@@ -14,7 +14,6 @@ All transports implement the Transport ABC:
 from wisp.transport.base import Transport
 from wisp.transport.cli import CLITransport
 from wisp.transport.websocket import WebSocketTransport
-from wisp.transport.tui import TUITransport
 from wisp.transport.headless import HeadlessTransport
 from wisp.transport.file import FileTransport
 from wisp.transport.multi import MultiTransport
@@ -30,3 +29,11 @@ __all__ = [
     "MultiTransport",
     "MetricsTransport",
 ]
+
+
+def __getattr__(name: str):
+    if name == "TUITransport":
+        from wisp.transport.tui import TUITransport
+
+        return TUITransport
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
