@@ -43,22 +43,15 @@ def cmd_repl(model=None, skill=None, workspace=None, session_id=None, show_think
 
 
 def cmd_tui(model=None, workspace=None, show_thinking=False, auto_approve=False):
-    """Run the experimental full-screen terminal app."""
+    """Run the full-screen terminal app with a real composition root.
 
-    config = WispConfig()
-    if model:
-        config = config.replace(model=model)
-    if workspace:
-        config = config.replace(workspace=workspace)
-    if show_thinking:
-        config = config.replace(show_thinking=True)
-    if auto_approve:
-        config = config.replace(auto_approve=True)
-
-    from wisp.tui.app import WispTUIApp
-
-    app = WispTUIApp(config=config)
-    app.run()
+    The app needs root.runtime for local turns — building the bare
+    WispTUIApp here left every prompt dead-ended at "Waiting for
+    server...", so this delegates through run_mode like cmd_repl.
+    """
+    from wisp.entry import run_mode
+    run_mode("tui", model=model, workspace=workspace,
+             show_thinking=show_thinking, auto_approve=auto_approve)
 
 
 def cmd_skills(workspace=None):

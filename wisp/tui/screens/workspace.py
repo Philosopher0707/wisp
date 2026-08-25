@@ -49,18 +49,24 @@ def route_local_event(ev: dict, chat, status) -> None:
     spinning a Textual app. Mirrors CLITransport's buffering semantics:
     content/thinking append into the open AssistantMessage.
     """
-    etype = ev.get("type", "")
-    data = ev.get("data") or {}
+    etype = str(ev.get("type", ""))
+    data = ev.get("data")
+    if not isinstance(data, dict):
+        # Flat dicts put payload at top level.
+        data = {k: v for k, v in ev.items() if k != "type"}
 
-    if etype == "token":
+    if etype == "token":  # legacy provider-phase shape
         phase = ev.get("phase", "content")
         text = ev.get("text", "")
-        if not isinstance(text, str) or not text:
-            return
-        if phase == "thinking":
-            chat.append_thinking(text)
-        else:
-            chat.append_content(text)
+        if isinstance(text, str) and text:
+            if phase == "thinking":
+                chat.append_thinking(text)
+            else:
+                chat.append_content(text)
+    elif etype == "content":
+        chat.append_content(str(data.get("text") or ""))
+    elif etype == "thinking":
+        chat.append_thinking(str(data.get("text") or ""))
     elif etype == "tool_call":
         name = data.get("name", "tool")
         status.connection_state = f"running {name}…"
@@ -247,7 +253,10 @@ class WorkspaceScreen(Screen):
     async def _run_local_turn(self, prompt: str) -> None:
         """Drive one turn through the local runtime — no server needed."""
         chat = self.query_one("#chat-pane", MessageList)
-        chat.mount(AssistantMessage())
+        msg = AssistantMessage()
+        # Await the mount: routing into chat.children[-1] before Textual
+        # commits the widget silently swallowed every token.
+        await chat.mount(msg)
         status = self.query_one("#status-bar", StatusBar)
         status.is_streaming = True
         status.connection_state = "thinking…"
@@ -269,7 +278,7 @@ class WorkspaceScreen(Screen):
             async for ev in self.runtime.run_turn(
                 session, prompt, approval_handler=self._approval.approve
             ):
-                route_local_event(ev, chat.children[-1], status)
+                route_local_event(ev, msg, status)
                 etype = ev.get("type", "")
                 data = ev.get("data") or {}
                 if etype == "subagent":
@@ -281,7 +290,7 @@ class WorkspaceScreen(Screen):
                     status.active_agents = tasks.running_count if tasks else 0
                     note(label)
                 elif etype == "error":
-                    note(f"✗ {ev.get('message', 'error')}")
+                    note(f"✗ {data.get('message') or ev.get('message', 'error')}")
                 elif etype == "system":
                     note(f"· {data.get('message', '')}")
                 elif etype == "steering_inject":
@@ -362,8 +371,11 @@ class WorkspaceScreen(Screen):
     def on_input_bar_submitted(self, event: InputBar.Submitted) -> None:
         import asyncio
         chat = self.query_one("#chat-pane", MessageList)
-        chat.mount(UserMessage(event.text))
-        chat.mount(AssistantMessage())
+
+        async def _mount_user() -> None:
+            await chat.mount(UserMessage(event.text))
+
+        asyncio.create_task(_mount_user())
 
         status = self.query_one("#status-bar", StatusBar)
 

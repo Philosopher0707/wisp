@@ -224,3 +224,38 @@ class TestApprovalModal:
         from wisp.tui.screens.approval_modal import ApprovalModal
         keys = {b[0] for b in ApprovalModal.BINDINGS}
         assert {"y", "Y", "n", "N", "a", "d", "c"} <= keys
+
+
+class TestCanonicalEventVocabulary:
+    """runtime.run_turn yields content/thinking TYPES, payload in data."""
+
+    def _widgets(self):
+        base = TestLocalEventRouting()
+        return base._widgets()
+
+    def test_content_type_routes_to_chat(self):
+        from wisp.tui.screens.workspace import route_local_event
+        chat, status = self._widgets()
+        route_local_event({"type": "content", "data": {"text": "hi"}}, chat, status)
+        assert chat.calls == [("content", "hi")]
+
+    def test_thinking_type_routes_to_thinking(self):
+        from wisp.tui.screens.workspace import route_local_event
+        chat, status = self._widgets()
+        route_local_event({"type": "thinking", "data": {"text": "hm"}}, chat, status)
+        assert chat.calls == [("thinking", "hm")]
+
+    def test_flat_dict_shape_still_works(self):
+        from wisp.tui.screens.workspace import route_local_event
+        chat, status = self._widgets()
+        route_local_event({"type": "content", "text": "flat"}, chat, status)
+        assert chat.calls == [("content", "flat")]
+
+    def test_tool_result_canonical_shape(self):
+        from wisp.tui.screens.workspace import route_local_event
+        chat, status = self._widgets()
+        route_local_event({"type": "tool_call",
+                           "data": {"name": "read_file", "arguments": {}}}, chat, status)
+        route_local_event({"type": "tool_result",
+                           "data": {"name": "read_file", "duration_ms": 7.0}}, chat, status)
+        assert any("✓ read_file · 7ms" in c[1] for c in chat.calls)
