@@ -1,0 +1,2 @@
+  🧠 Thinking: "The user wants caching strategies." (1 line — /thinking to expand)
+Here's what I found about caching.

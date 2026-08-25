@@ -1,0 +1,10 @@
+  ✓ understand  ✓ plan  ❯ execute  ○ verify
+  ✓ edit_file · 12ms
+  Edited app.py
+─── Diff — app.py
+   --- a/app.py
+   +++ b/app.py
+@@ -1,2 +1,2 @@
+   -old
+   +new
+  ℹ Applied 1 edit.

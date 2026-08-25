@@ -1,0 +1,4 @@
+
+  [SUBAGENT] Started. [researcher] Research caching strategies
+
+  [SUBAGENT] Done. [researcher] 47.8s · 2 files
