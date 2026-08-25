@@ -128,6 +128,12 @@ _DEFAULT_WRITE_TOOLS: set[str] = {
     "capture_skill",
 }
 
+# Pure, network-bound tools worth memoizing against model loops.
+_REPEAT_GUARD_TOOLS: frozenset[str] = frozenset({"web_fetch", "web_search"})
+_REPEAT_TTL_SECONDS = 600.0
+_REPEAT_NUDGE_AFTER = 1   # first repeat serves the cached copy with a warning
+_REPEAT_BLOCK_AFTER = 2   # further repeats get an instruction to synthesize
+
 # Executor-dispatched subagent tools — never shadowed by MCP bare names.
 _SUBAGENT_TOOLS: frozenset[str] = frozenset({
     "spawn", "fanout", "spawn_background",
@@ -190,8 +196,10 @@ class ToolExecutor:
         subagent_orchestrator: Any | None = None,
         audit_trail: Any | None = None,
         background_agents: Any | None = None,
+        extensions: Any | None = None,
     ):
         self.config = config
+        self.extensions = extensions
         self.hook_manager = hook_manager
         self.metrics = metrics
         self.mcp = mcp
@@ -202,11 +210,62 @@ class ToolExecutor:
         self.background_agents = background_agents
         from wisp.skill_capture import get_capture
         self.skill_capture = get_capture()
+        # key -> (monotonic_ts, cached_result_str, hit_count)
+        self._repeat_cache: dict[str, tuple[float, str, int]] = {}
         # Set per spawn/fanout execution; carries AgentEvents from the
         # orchestrator's sync progress callbacks into execute()'s stream.
         self._sub_event_queue: Optional[asyncio.Queue] = None
 
     # ── Public API ───────────────────────────────────────────────────
+
+    def _repeat_key(self, func_name: str, func_args: dict[str, Any]) -> str:
+        import json as _json
+        try:
+            return f"{func_name}:{_json.dumps(func_args, sort_keys=True, default=str)}"
+        except (TypeError, ValueError):
+            return ""
+
+    def _check_repeat_call(self, func_name: str, func_args: dict[str, Any]) -> str | None:
+        """Return a substitute result when the call duplicates recent work.
+
+        None means proceed normally. First repeat: replay the cached result
+        tagged with a nudge. Further repeats: refuse with an explicit
+        instruction to use what was already fetched.
+        """
+        if func_name not in _REPEAT_GUARD_TOOLS:
+            self._repeat_cache.pop("_last", None)  # keep dict bounded implicitly
+            return None
+        key = self._repeat_key(func_name, func_args)
+        if not key:
+            return None
+        entry = self._repeat_cache.get(key)
+        now = time.monotonic()
+        if entry is not None and now - entry[0] <= _REPEAT_TTL_SECONDS:
+            _, cached, count = entry
+            self._repeat_cache[key] = (now, cached, count + 1)
+            if count >= _REPEAT_BLOCK_AFTER:
+                return (
+                    f"[REPEAT BLOCKED] You have already made this identical "
+                    f"{func_name} call {count + 1} times. The earlier results "
+                    f"are in this conversation. Do NOT fetch again — "
+                    f"synthesize your answer from the data you already have."
+                )
+            return (
+                f"[REPEAT] Identical {func_name} call already made moments ago.\n"
+                f"Cached result:\n{cached[:4000]}\n"
+                f"(Calling it again with the same arguments will return the same "
+                f"data. If you have enough information, answer now.)"
+            )
+        # Miss or expired: record AFTER execution succeeds (see execute()).
+        self._pending_repeat_key = key
+        return None
+
+    def _record_repeat_result(self, func_name: str, result_str: str) -> None:
+        """Cache a successful guarded-tool result for the repeat guard."""
+        key = getattr(self, "_pending_repeat_key", None)
+        if key and func_name in _REPEAT_GUARD_TOOLS and result_str:
+            self._repeat_cache[key] = (time.monotonic(), result_str, 0)
+        self._pending_repeat_key = None
 
     async def execute(
         self,
@@ -224,6 +283,16 @@ class ToolExecutor:
         """
         func_name = tool_name
         func_args = dict(tool_args) if tool_args else {}
+
+        # ── Repeat-call guard for network-bound tools ──
+        # Live evidence: a looping model re-fetched one URL for minutes,
+        # burning iterations and tripping API rate limits. Identical
+        # web_fetch/web_search calls get the cached result (once, with a
+        # nudge), then an instruction to synthesize instead of re-fetching.
+        repeat_msg = self._check_repeat_call(func_name, func_args)
+        if repeat_msg is not None:
+            yield _tool_result_event(func_name, repeat_msg)
+            return
 
         # ── Pre-tool hooks ──
         hook_block_msg = await self._run_pre_tool_hooks(func_name, func_args, workspace)
@@ -290,6 +359,19 @@ class ToolExecutor:
                 return
 
         # ── Execute tool ──
+        if func_name not in TOOL_IMPLS and self.extensions is not None:
+            # Extension tools (skill__, mcp, plugins) are advertised via the
+            # host but live outside TOOL_IMPLS; builtins always win.
+            ext_result = self.extensions.call_tool(func_name, func_args, workspace)
+            if ext_result is not None:
+                yield _tool_result_event(
+                    func_name,
+                    ext_result,
+                    duration_ms=0,
+                    tool_call_id=tool_call_id,
+                )
+                return
+
         if func_name in ("spawn", "fanout"):
             # Stream subagent lifecycle events while the orchestrator runs:
             # the progress callback lands on a queue from inside the exec
@@ -348,6 +430,15 @@ class ToolExecutor:
             self.skill_capture.record(func_name, func_args)
         except Exception:
             logger.debug("skill capture record failed", exc_info=True)
+
+        # Repeat guard: remember successful guarded-tool results only.
+        result_str = result if isinstance(result, str) else json.dumps(result, default=str)
+        if not (result_str.startswith("Error") or '"status": "error"' in result_str[:200]
+                or result_str.startswith("[WEB_FETCH_FAILED]")):
+            try:
+                self._record_repeat_result(func_name, str(result))
+            except Exception:
+                logger.debug("repeat-cache record failed", exc_info=True)
 
         # ── Post-tool event hooks (best-effort, non-blocking) ──
         await self._run_post_tool_hooks(func_name, func_args, result, workspace)

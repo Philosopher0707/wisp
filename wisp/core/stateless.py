@@ -446,8 +446,33 @@ class WispAgentCore:
                     })
                     yield _flatten_event(steering_feedback(note))
 
-        # Max iterations reached
-        yield _flatten_event(error_event("Max iterations reached", recoverable=False))
+        # Max iterations reached — don't discard the turn's work. One final
+        # tool-less call asks the model to summarize what it gathered; the
+        # raw error only surfaces if even that fails. (Live evidence: 50
+        # tools / 7 minutes of research died behind this error with zero
+        # answer delivered.)
+        messages.append({
+            "role": "user",
+            "content": (
+                "[SYSTEM] Iteration budget exhausted. Do NOT call any more "
+                "tools. Summarize your findings and answer the user's request "
+                "with what you have, noting anything left incomplete."
+            ),
+        })
+        wrapped_up = False
+        try:
+            async for ev in self._stream_events_async(system_prompt, messages, None):
+                etype = ev.get("type", "")
+                if etype in ("content", "text"):
+                    text = ev.get("text") or ev.get("content") or ""
+                    yield _flatten_event(content_event(str(text)))
+                elif etype == "done":
+                    wrapped_up = True
+                    break
+        except Exception:
+            logger.exception("Iteration wrap-up call failed")
+        if not wrapped_up:
+            yield _flatten_event(error_event("Max iterations reached", recoverable=False))
         yield _flatten_event(done_event(session.get("id", "")))
 
     async def _stream_events_async(
@@ -1131,8 +1156,20 @@ class WispAgentCore:
                 yield _flatten_event(agent_event)
         else:
             # Fallback: direct execution when no ToolExecutor wired
-            from wisp.tools.registry import execute_tool
+            from wisp.tools.registry import TOOL_IMPLS as _BUILTINS, execute_tool
             start = time.time()
+            if name not in _BUILTINS and self.extensions is not None:
+                ext_result = self.extensions.call_tool(name, args, workspace)
+                if ext_result is not None:
+                    yield _flatten_event(
+                        tool_result_event(
+                            name,
+                            self._normalize_tool_result(ext_result),
+                            duration_ms=0,
+                            tool_call_id=event.get("id"),
+                        )
+                    )
+                    return
             try:
                 # Tools are blocking I/O (web requests, subprocess); run them
                 # off the loop or one slow fetch freezes every concurrent

@@ -121,6 +121,7 @@ class CompositionRoot:
             file_lock=self._file_lock,
             lsp_manager=self._lsp_manager,
             subagent_orchestrator=None,
+            extensions=self.extensions,
         )
 
         # Create Compactor for LLM-powered summarization

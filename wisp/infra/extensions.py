@@ -50,6 +50,29 @@ class ExtensionHost:
                 )
         return tools
 
+    def call_tool(self, name: str, args: dict, workspace: str) -> dict | None:
+        """Dispatch a non-builtin tool call to its owning extension.
+
+        Returns the first extension result dict, or None when no extension
+        claims the name — callers then fall through to builtin dispatch,
+        which surfaces the normal Unknown-tool error.
+        """
+        for ext in self._extensions:
+            call = getattr(ext, "call_tool", None)
+            if call is None:
+                continue
+            try:
+                result: dict[str, Any] | None = call(name, args, workspace)
+            except Exception as exc:
+                logger.warning(
+                    "Extension %s call_tool(%s) failed: %s",
+                    getattr(ext, "name", type(ext).__name__), name, exc,
+                )
+                continue
+            if result is not None:
+                return result
+        return None
+
     def intercept(self, event: dict) -> dict:
         """Run event through all extensions. First block wins.
 
