@@ -162,7 +162,9 @@ SplashScreen .app-name {
 }
 
 SplashScreen Vertical {
-    width: auto;
+    /* No width:auto here: children are width:1fr, and auto-parent with
+       fr-children is circular under textual 8.x — everything measures
+       0x0 and the whole screen renders blank. Default 1fr width works. */
     height: auto;
     align: center middle;
     content-align: center middle;

@@ -76,3 +76,34 @@ async def test_launch_mounts_and_renders():
         status = app._workspace.query_one("#status-bar")
         assert status.is_streaming is False
         print("LAUNCH SMOKE: PASS — mount, navigate, prompt, echo rendered")
+
+
+@pytest.mark.asyncio
+async def test_launch_renders_visible_pixels():
+    """The splash must actually paint, not just mount.
+
+    test_launch_mounts_and_renders asserts widget identity and text state,
+    which stayed green while a circular CSS rule (auto-width container with
+    fr-width children) collapsed every region to 0x0 — the 'blank TUI'
+    bug. This guards at the compositor level: non-whitespace cells exist.
+    """
+    from wisp.config import WispConfig
+    from wisp.tui.app import WispTUIApp
+
+    app = WispTUIApp(config=WispConfig(), transport=None, runtime=None)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        chunks: list[str] = []
+        for strip in app.screen._compositor.render_strips():
+            for seg in strip:
+                try:
+                    chunks.append(seg.text)
+                except AttributeError:
+                    pass
+        joined = "".join(chunks)
+        non_blank = sum(1 for ch in joined if not ch.isspace())
+        assert non_blank > 10, (
+            f"screen renders blank: {non_blank} non-blank cells in "
+            f"{len(joined)}; sample={joined.strip()[:80]!r}"
+        )
