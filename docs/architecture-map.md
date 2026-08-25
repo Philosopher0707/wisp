@@ -61,8 +61,15 @@ swarm · agents · bench` — each routes to a `cmd_*` handler in the same modul
 `repl/tui` land in `entry.run_mode("cli"|"tui")`; headless `--print` uses
 `run_headless(permission_mode="full")` (`__main__.py:204-210`).
 
-**run_mode modes** (`entry.py:44-68`): `server` (own root in lifespan) | `cli` |
-`tui`. Overrides applied via `config.replace(...)`.
+**run_mode modes** (`entry.py:44-68`): `server` (own root in lifespan) |
+`cli` (`_run_cli`: single-shot if prompt given, else `_run_repl`) | `tui`
+(`WispTUIApp(config, transport, runtime).run()`). Overrides applied via
+`config.replace(...)`. REPL lifecycle: root.start → CLITransport.start →
+bind_loop(loop) → get_or_create_session → banner → AgentAdapter → REPL
+SIGINT handler → input loop; shutdown restores signals → cancels turn →
+saves history+session → root.shutdown() (registry.stop + metrics export +
+LSP/MCP teardown). Headless path caches its root in module globals keyed on
+config-file mtime only — env-var changes do NOT bust it (`entry.py:612-661`).
 
 ## 3. Core engine (`core/stateless.py`, 1,4k lines)
 
@@ -74,7 +81,8 @@ steering_drain)` (`stateless.py:116`):
     turn_timeout default 1800s (config/env WISP_TURN_TIMEOUT)      :130
  2. build messages (system prompt incl. skills/repo-map/memory/rules)
     + tool schemas filtered by session["allowed_tools"]            :150-162
-    max_iterations default 30                                      :164
+    max_iterations: schema default 50 (config.py:127); stateless
+    getattr-fallback 30 applies only to attr-less test configs      :164
  3. asyncio.timeout(turn_timeout) wraps _turn_inner                :167
  4. provider stream via _guarded_provider_stream                   :203→1345
  5. iterate events: content buffered → tool_call?
@@ -206,14 +214,39 @@ queues (WebSocket push, dashboards).
 
 ## 7. Infra & surfaces
 
-**Store** (`infra/store.py`): SQLite WAL; sessions/messages/compaction_history/
-plans/runs/memory tables; `save_session` full-row rewrite (measured 0.04ms warm);
-db at `ws/.wisp/wisp.db` or `WISP_CONFIG_DIR`.
+**Store** (`infra/store.py`): SQLite WAL + busy_timeout 5000ms +
+thread-local connections under RLock; autocommit with a transaction()
+BEGIN/COMMIT/ROLLBACK wrapper. Tables: sessions · runs · events · memory ·
+background_runs · session_events · idempotency (+6 indexes). Two construction
+paths: CompositionRoot uses `config.db_path || ws/.wisp/wisp.db`; module-level
+get_store() singleton keys on the raw path string and defaults
+~/.config/wisp/wisp.db with /tmp fallback (`store.py:589-596`).
+Memory recall = substring search + LRU eviction.
 
-**Server** (FastAPI, `server/routes/`, **66 endpoints**): sessions, files(tree),
-git, hooks, plugins, MCP servers, background agents (+settlement pusher WS),
-arena leaderboard, codebase search/stats, context, diagnostics, runs. Auth via
-WISP_API_KEY unless loopback.
+**Policy engine** (`infra/policy_engine.py`): rules sorted by priority —
+first DENY wins / last explicit ALLOW wins / default-deny unmatched.
+Predicates return DENY→block, ALLOW→allow, None→defer; PolicyDecision may
+rewrite args. Mode rule priorities: full=0 · read_only=10 (safe-read
+whitelist incl. lsp_*/web_*/recall) · ask_all safe=20 block=21 · auto_edit
+block=30 · catch_all=1000. A PERMISSION_MODE typo silently lands in the
+catch-all default-deny.
+
+**Telemetry** (`infra/telemetry.py`): IN-MEMORY ONLY (lock-guarded) — turn
+latency histogram (last 1000), token totals, per-tool calls/errors/durations
+(last 100/tool); metrics() → p50/p95/p99; health degraded at error-rate ≥50%
+over ≥5 calls. Sole durability: export_metrics() → ~/.config/wisp/metrics.json
+during root shutdown — lost on crash/SIGKILL.
+
+**Server** (FastAPI, `server/routes/`, ~66 endpoints across ~25 routers):
+sessions(+fork/PATCH) · files(tree/edit/binary/rename) · runs/background ·
+models · codebase(index/symbols) · git(status/diff/commit/push) · bash ·
+prompt · jsonrpc · mcp(servers/tools) · swarm · arena · plugins · hooks ·
+review · search · diagnostics · workspace · context · complete · diff ·
+suggestions. Auth: REST X-API-Key/Bearer header; WebSocket first-frame
+{"type":"auth","api_key"} (dev-open when WISP_API_KEY unset). WS client
+msgs: prompt/tool_approval/interrupt/pause/resume/swarm_*/agents_*/ping;
+server msgs: ready/content/thinking/tool_call/tool_result/approval_request/
+tool_approved/status/error/complete/agents_*.
 
 **Slash commands** (`commands.py`, @register): help clear model provider skill
 session save tokens metrics compact approve thinking bash workspace grep ls read
@@ -227,6 +260,14 @@ CHARS_PER_TOKEN,AUTO_COMPACT,COMPACT_*,MAX_REFLECTIONS` · guards
 HIGH_CONTRAST,HISTORY_FILE,LOG_FORMAT` · ops `WORKSPACE,WORKSPACE_MUTABLE,
 TRUST_ALL_WORKSPACES,CONFIG_DIR,WS_AUTO_APPROVE,HEADLESS_AUTO_APPROVE,
 KEEP_WORKTREES,PRODUCTION_MODE,WEB_PROXY,E2E_LIVE`.
+policy/ux extras missed earlier: `PERMISSION_MODE (default auto_edit!),
+TEMPERATURE(0.2), SHOW_THINKING, SHOW_TOOL_OUTPUT, WRITE_TOOLS,
+COMPACT_THRESHOLD_TOKENS(%75), COMPACT_KEEP_RECENT(6), SKILL_DIRS,
+AUDIT_LOG, CORS_ORIGINS, ENABLE_HSTS, ACCESSIBLE,
+ALLOWED_OLLAMA_HOSTS, SUBAGENT_MODELS, THREAD_POOL_SIZE(8),
+SUBAGENT_TOKEN_BUDGET(2M)`.
+Config resolution: env > ~/.config/wisp/config.json > SETTINGS_SCHEMA
+default (`config.py:305-312`); ~35 settings total.
 
 ## 8. The dots connected — one prompt's journey
 
@@ -271,3 +312,13 @@ keypress ➜ readline/_input_line (ESC-strip, typeahead capture registered)
 11. Background send() impossible for stateless-path children (no persisted
    session); DAG has no continue-on-error; schema-fix retry reuses the
    original timeout/iteration budget.
+12. get_store() singletons keyed by raw path string — relative vs absolute
+   spellings of one db create separate pools/locks.
+13. Telemetry volatile: lost on crash since export runs only in graceful
+   shutdown.
+14. WS auth window: socket accepted before auth frame processed.
+15. Rate limiter keys on client IP only and self-disables on any SQLite error.
+16. Headless-root cache ignores env changes (mtime-only key) — stale model.
+17. Non-owning executor registered on two loops when bind_loop targets a
+   different loop than __post_init__ saw — first loop's executor leaks.
+18. Global vs per-turn SIGINT handlers race on nested Ctrl+C.
