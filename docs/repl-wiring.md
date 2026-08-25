@@ -92,7 +92,6 @@ _run_turn(prompt)
       ├─ crash recovery: last event ≠ DONE → replay messages from repo
       ├─ maybe_compact(session)          # boundary-snapped, 90s-bounded LLM
       ├─ append user message (+repo event)
-      ├─ auto-delegation probe           # interleaves child lifecycle events
       ├─ core = cached WispAgentCore     # invalidated on config fingerprint
       ├─ async for ev in core.turn(...)  # the engine (stateless.py)
       │    normalize flat dicts, collect content/tool_calls/tool_results

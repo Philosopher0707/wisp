@@ -425,8 +425,6 @@ class WispConfig:
     max_subagent_timeout: int
     max_subagent_depth: int
     max_subagent_branching: int
-    auto_delegate: bool
-    delegation_threshold: float
     write_tools: list[str]
     subagent_models: list[str]
     _subagent_depth: int
@@ -562,13 +560,6 @@ class WispConfig:
         ))
         object.__setattr__(self, "max_subagent_branching", _parse_int(
             get_setting("max_subagent_branching", "3"), 3, 1, 20
-        ))
-        # Auto-delegation: detect multi-faceted prompts and split into subagents
-        object.__setattr__(self, "auto_delegate", _parse_bool(
-            get_setting("auto_delegate", "true"), True
-        ))
-        object.__setattr__(self, "delegation_threshold", _parse_float(
-            get_setting("delegation_threshold", "0.45"), 0.45, 0.05, 0.95
         ))
         # Write-classification tools requiring approval in restricted modes
         raw_write_tools = get_setting(

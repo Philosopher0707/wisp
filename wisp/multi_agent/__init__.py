@@ -47,7 +47,6 @@ from .task import (
     SubagentContract,
     SubagentResult,
 )
-from .delegation import DelegationAnalyzer, DelegationSignal, get_delegation_analyzer
 from .context_partition import ContextPartitioner, partition_context
 from .schema_validator import (
     build_retry_prompt,
@@ -68,9 +67,6 @@ __all__ = [
     "SubagentResult",
     "EventKind",
     "OrchestratorEvent",
-    "DelegationAnalyzer",
-    "DelegationSignal",
-    "get_delegation_analyzer",
     "ContextPartitioner",
     "partition_context",
     "validate_json_schema",

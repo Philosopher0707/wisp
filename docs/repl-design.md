@@ -28,8 +28,9 @@ Annotated ground truth — what a turn must look like when everything fires:
 
 ```
 ➜ research caching strategies use subagents        ← prompt echo (tty only)
-  ℹ Auto-delegating to subagents...                ← verdict BEFORE launch
-  🧬 [researcher] Research caching strategies…     ← child starts (live)
+  (delegation happens only when the model calls a subagent tool — no
+   prompt-interception auto-delegation; that path was removed)
+  🧬 [researcher] Research caching strategies…     ← child starts (live, via spawn tool)
   ✓ [researcher] 47.8s · 2 files                   ← child ends (live)
   ⠋ read_file settings.json                        ← spinner: tool running
   ✓ read_file · 12ms                               ← fast tool: inline result
