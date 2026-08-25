@@ -151,13 +151,15 @@ class WispWSClient:
                 "model": model,
             }))
 
-    async def approve_tool(self, call_id: str, approved: bool) -> None:
-        if self._ws:
-            await self._ws.send(json.dumps({
-                "type": "tool_approval",
-                "id": call_id,
-                "approved": approved,
-            }))
+    async def approve_tool(self, call_id: str, approved: "bool | str") -> None:
+        """Send an approval; pass a y/Y/n/N/a/d/c key for full contract."""
+        import json
+        payload = {"type": "tool_approval", "id": call_id}
+        if isinstance(approved, str):
+            payload["decision"] = approved
+        else:
+            payload["approved"] = bool(approved)
+        await self._ws.send(json.dumps(payload))
 
     async def interrupt(self) -> None:
         if self._ws:

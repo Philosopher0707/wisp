@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Callable
 
+from wisp.approval_state import ApprovalSessionState, SessionPolicy
 from wisp.core.events import normalize_event
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,12 @@ class AgentRuntime:
     # Mid-turn steering inbox (M3): lines typed during a turn land here
     # and are drained by the engine at the next tool boundary.
     _steering_inbox: dict[str, list[str]] = field(default_factory=dict, repr=False)
+
+    # Per-session approval memory (y/Y/a/n/N/d/c): lives here because the
+    # session does — CLI/TUI keep their own only for same-process turns.
+    _approval_states: dict[str, ApprovalSessionState] = field(
+        default_factory=dict, repr=False
+    )
 
     # Configurable thresholds (can be overridden)
     max_messages: int = field(default=50, repr=False)
@@ -367,6 +374,43 @@ class AgentRuntime:
                 )
 
     # ── Mid-turn steering (M3) ─────────────────────────────────────
+
+    def approval_state(self, session_id: str) -> ApprovalSessionState:
+        """Session-scoped approval memory, created on first access."""
+        state = self._approval_states.get(session_id)
+        if state is None:
+            state = ApprovalSessionState()
+            self._approval_states[session_id] = state
+        return state
+
+    def apply_approval_decision(
+        self, session_id: str, tool_name: str, key: str
+    ) -> bool:
+        """Fold an approval key into session memory; return the verdict.
+
+        Same precedence as CLITransport.approve: policy short-circuits,
+        then per-tool sets. y/n answer once and mutate nothing.
+        """
+        key = str(key).strip()
+        state = self.approval_state(session_id)
+        if key == "a":
+            state.set_auto()
+        elif key == "d":
+            state.set_block()
+        elif key == "Y":
+            state.allow_tool(tool_name)
+        elif key == "N":
+            state.deny_tool(tool_name)
+
+        if state.session_policy is SessionPolicy.AUTO:
+            return True
+        if state.session_policy is SessionPolicy.BLOCK:
+            return False
+        if tool_name in state.allowed_tools:
+            return True
+        if tool_name in state.denied_tools:
+            return False
+        return key in ("y", "Y", "a")
 
     def drain_steering(self, session_id: str) -> list[str]:
         """Remove and return pending steering notes for *session_id*."""

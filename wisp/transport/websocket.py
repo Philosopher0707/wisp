@@ -18,6 +18,8 @@ import asyncio
 import logging
 from typing import Any
 
+from wisp.approval_state import SessionPolicy
+
 from .base import Transport
 
 logger = logging.getLogger(__name__)
@@ -35,6 +37,8 @@ class WebSocketTransport(Transport):
         self._counter = 0
         self._current_ws: Any = None
         self._pending_approval: asyncio.Future | None = None
+        self._pending_tool_name: str | None = None
+        self._session_id: str | None = None
 
     # ── Transport ABC implementation ────────────────────────────────
 
@@ -94,6 +98,23 @@ class WebSocketTransport(Transport):
         if self._pending_approval is not None and not self._pending_approval.done():
             return False
 
+        # Session memory short-circuits the prompt entirely — same
+        # precedence as CLITransport, applied server-side so memory
+        # belongs to the session, not whichever client is attached.
+        name = str(tool_call.get("name", "unknown"))
+        if self._session_id:
+            state = self.runtime.approval_state(self._session_id)
+            policy = state.session_policy
+            if policy is SessionPolicy.AUTO:
+                return True
+            if policy is SessionPolicy.BLOCK:
+                return False
+            if name in state.allowed_tools:
+                return True
+            if name in state.denied_tools:
+                return False
+
+        self._pending_tool_name = name
         self._pending_approval = asyncio.get_event_loop().create_future()
         try:
             await self._current_ws.send_json({
@@ -119,6 +140,21 @@ class WebSocketTransport(Transport):
         if self._pending_approval is not None and not self._pending_approval.done():
             self._pending_approval.set_result(approved)
 
+    def resolve_decision(self, key: str) -> bool:
+        """Fold a y/Y/n/N/a/d/c decision into session memory and resolve.
+
+        Returns False when nothing was pending. The verdict for this
+        call comes from runtime.apply_approval_decision; 'c' cancels by
+        resolving False (the turn unwinds at the gate).
+        """
+        if self._pending_approval is None or self._pending_approval.done():
+            return False
+        sid = self._session_id or ""
+        tool = self._pending_tool_name or "unknown"
+        approved = self.runtime.apply_approval_decision(sid, tool, key)
+        self._pending_approval.set_result(approved)
+        return True
+
     def start(self) -> None:
         """Start the transport."""
         logger.debug("WebSocketTransport started")
@@ -131,6 +167,7 @@ class WebSocketTransport(Transport):
 
     async def handle(self, ws: Any, session_id: str, model: str, workspace: str) -> None:
         """Handle a new WebSocket connection."""
+        self._session_id = session_id
         self._counter += 1
         conn_id = self._counter
 

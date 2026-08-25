@@ -264,6 +264,16 @@ class TestWSClientSend:
         assert data["approved"] is False
 
     @pytest.mark.asyncio
+    async def test_decision_key_sends_decision_field(self):
+        client = WispWSClient("http://localhost:8000")
+        ws = FakeWebSocket()
+        client._ws = ws
+
+        await client.approve_tool("call-3", "Y")
+        data = json.loads(ws.sent[0])
+        assert data["decision"] == "Y" and "approved" not in data
+
+    @pytest.mark.asyncio
     async def test_interrupt(self):
         client = WispWSClient("http://localhost:8000")
         ws = FakeWebSocket()

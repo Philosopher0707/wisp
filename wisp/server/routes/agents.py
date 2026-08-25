@@ -124,9 +124,15 @@ async def agent_websocket(websocket: WebSocket):
 
             if msg_type == "tool_approval":
                 call_id = msg.get("id")
-                approved = msg.get("approved", False)
-                if transport is not None:
-                    transport.resolve_approval(approved)
+                decision = msg.get("decision")
+                if decision is not None and transport is not None:
+                    # Full y/Y/n/N/a/d/c contract: memory folds into the
+                    # session server-side; verdict comes back from there.
+                    approved = transport.resolve_decision(decision)
+                else:
+                    approved = bool(msg.get("approved", False))
+                    if transport is not None:
+                        transport.resolve_approval(approved)
                 await websocket.send_json({"type": "tool_approved", "id": call_id, "approved": approved})
                 continue
 

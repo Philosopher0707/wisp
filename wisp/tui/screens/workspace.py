@@ -28,7 +28,7 @@ from wisp.tui.widgets.monitor.metrics import PerformanceMetrics
 from wisp.tui.widgets.status_bar import StatusBar
 from wisp.tui.widgets.title_bar import TitleBar
 from wisp.tui.data.ws_client import WispWSClient
-from wisp.approval_state import ApprovalSessionState, SessionPolicy
+from wisp.approval_state import ApprovalSessionState
 from wisp.transport.tui import ApprovalRequested, TUIApprovalController
 
 
@@ -220,31 +220,17 @@ class WorkspaceScreen(Screen):
         self.app.push_screen(ApprovalModal(tool_name, args_text), _answered)
 
     def _handle_approval_key(self, key: str) -> None:
-        """One resolver for both paths; session memory applies to each."""
-        approved = key in ("y", "Y", "a")
-
-        # Session memory first — identical semantics on either path.
-        if key == "a":
-            self.approval_state.set_auto()
-        elif key == "d":
-            self.approval_state.set_block()
-        elif key == "Y":
-            self.approval_state.allow_tool(self._pending_tool_name or "")
-        elif key == "N":
-            self.approval_state.deny_tool(self._pending_tool_name or "")
-
-        # Policy short-circuits before any prompt would have fired.
-        policy = self.approval_state.session_policy
-        if policy is SessionPolicy.AUTO:
-            approved = True
-        elif policy is SessionPolicy.BLOCK:
-            approved = False
-
+        """One resolver for both paths; each side keeps its own memory."""
         if self._ws_client and self._pending_approval_call_id:
+            # Remote session: forward the key verbatim — the SERVER folds
+            # Y/N/a/d into its per-session memory (ApprovalSessionState
+            # lives where the session lives), so every client inherits it.
             asyncio.create_task(self._ws_client.approve_tool(
-                self._pending_approval_call_id, approved))
+                self._pending_approval_call_id, key))
             self._pending_approval_call_id = None
             return
+
+        # Local session: client-side gate owns the same contract.
         if not self._resolve_local_approval(key):
             pass  # nothing pending; memory already recorded above
 
