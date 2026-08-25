@@ -1362,9 +1362,11 @@ class WispAgentCore:
         import asyncio as _aio
 
         max_attempts = max(1, int(os.environ.get("WISP_STREAM_ATTEMPTS", "3")))
+        last_transient_status: int | None = None
         for attempt in range(1, max_attempts + 1):
             got_meaningful = False
             stream_stats: dict[str, Any] | None = None
+            api_status: int | None = None
             stream = self._stream_events_async(
                 system_prompt=system_prompt,
                 messages=messages,
@@ -1393,6 +1395,13 @@ class WispAgentCore:
                     ntype = str(normalized.get("type", ""))
                     if ntype == "stream_stats":
                         stream_stats = normalized
+                    if ntype == "error":
+                        st = normalized.get("status")
+                        if isinstance(st, int) and (st == 429 or st >= 500):
+                            api_status = st
+                            continue  # transient — hold it for the retry path
+                        yield event
+                        return  # permanent API error: surface immediately
                     if ntype not in self._BOOKKEEPING_TYPES:
                         got_meaningful = True
                     yield event
@@ -1405,7 +1414,13 @@ class WispAgentCore:
             if got_meaningful:
                 return
 
+            if attempt < max_attempts and (stalled or api_status is not None or not got_meaningful) is not False:
+                pass  # fall through to shared retry handling below
+            if got_meaningful and api_status is None:
+                return
+
             if attempt < max_attempts:
+                last_transient_status = api_status or last_transient_status
                 if stalled:
                     reason = f"no data for {self.FIRST_TOKEN_DEADLINE_S:.0f}s"
                     detail = ""
@@ -1429,15 +1444,37 @@ class WispAgentCore:
                 # Immediate retry into a throttling endpoint reproduces the
                 # failure; a short jittered pause gives the window a chance
                 # to reopen without meaningfully delaying healthy streams.
-                if not stalled:
-                    await _aio.sleep(0.75 + (_aio.get_event_loop().time() * 1000 % 1.5))
+                # 429/5xx get progressively longer waits than silent-empty
+                # closes — the server explicitly told us to slow down.
+                if api_status is not None:
+                    base = 1.5 * attempt
+                elif not stalled:
+                    base = 0.75
+                else:
+                    base = 0.0
+                jitter = (_aio.get_event_loop().time() * 1000 % 1.5)
+                wait_s = base + jitter
+                if wait_s > 0:
+                    logger.info(
+                        "Provider retry backoff %.1fs (status=%s)",
+                        wait_s, api_status or "-",
+                    )
+                    await _aio.sleep(wait_s)
                 continue
 
-            yield _flatten_event(error_event(
-                f"Provider returned no usable response after {max_attempts} "
-                "attempts — the model endpoint is misbehaving. Try again shortly.",
-                recoverable=True,
-            ))
+            if last_transient_status is not None:
+                yield _flatten_event(error_event(
+                    f"Provider kept rejecting requests (HTTP {last_transient_status}) "
+                    f"after {max_attempts} attempts — rate limited or degraded. "
+                    "Try again shortly.",
+                    recoverable=True,
+                ))
+            else:
+                yield _flatten_event(error_event(
+                    f"Provider returned no usable response after {max_attempts} "
+                    "attempts — the model endpoint is misbehaving. Try again shortly.",
+                    recoverable=True,
+                ))
             return
 
     def _normalize_event(self, event: Any) -> dict[str, Any]:

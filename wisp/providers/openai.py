@@ -102,7 +102,14 @@ class OpenAIProvider(Provider):
             )
             if resp.status_code != 200:
                 body = resp.text[:500]
-                yield {"type": "error", "message": f"API error {resp.status_code}: {body}"}
+                yield {
+                    "type": "error",
+                    "message": f"API error {resp.status_code}: {body}",
+                    # Machine-readable so the guarded stream can retry
+                    # transient statuses (429/5xx) instead of surfacing
+                    # them as fatal turn errors.
+                    "status": resp.status_code,
+                }
                 return
 
             self._stream_response = {"status_code": resp.status_code}

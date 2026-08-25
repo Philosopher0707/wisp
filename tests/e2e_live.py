@@ -9,6 +9,9 @@ provider to prove our contracts survive contact with an actual model:
   3. steering: [steering] injection fires at a live tool boundary
   4. cross-session memory: remembered fact recalled in a LATER session
   5. approval gate: denied run_bash is blocked, not executed
+  6. parallel fan-out under provider throttle pressure (the NVIDIA
+     empty-stream signature) still synthesizes both results
+  7. live web_search returns real URLs (fetch-guidance path)
 
 Run:
     WISP_E2E_LIVE=1 WISP_PROVIDER=nvidia WISP_API_KEY=... \
@@ -77,10 +80,26 @@ async def _collect(runtime, session, prompt, approval_handler=None):
             t = ev.get("text", "")
             if isinstance(t, str):
                 parts.append(t)
+    # One-line census per turn: makes any later failure self-explaining
+    # (empty turn vs thinking-only vs error) without a re-run.
+    from collections import Counter
+    errs = [e.get("message") or e.get("text") or ""
+            for e in events if e.get("type") == "error"]
+    print(f"\n[census {session['id'][:18]}] "
+          f"{dict(Counter(e.get('type') for e in events))} "
+          f"text_len={len(''.join(parts))}"
+          + (f" errors={errs[:2]}" if errs else ""))
     return events, "".join(parts)
 
 
 class TestLiveModel:
+    @pytest.fixture(autouse=True)
+    def _pace_endpoint(self):
+        # Sequential turns from one key trip NVIDIA's per-key rate limit
+        # (429); a short pause between scenarios keeps the battery honest.
+        yield
+        time.sleep(3)
+
     @pytest.mark.asyncio
     async def test_01_basic_completion(self, tmp_path):
         root = _root(tmp_path)
@@ -236,5 +255,62 @@ class TestLiveModel:
                 blob = json.dumps(last_events).lower()
                 assert ("blocked" in blob or "declined" in blob
                         or "denied" in blob), "denied command executed anyway"
+        finally:
+            root.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_06_parallel_fanout_survives_throttle(self, tmp_path):
+        """The production failure shape: parallel subagent turns against a
+        provider that closes HTTP-200 streams with zero deltas under load.
+        Whatever the endpoint does, the orchestration must complete and
+        synthesize BOTH leaf results."""
+        ws = tmp_path / "ws-fan"
+        ws.mkdir()
+        (ws / "alpha.txt").write_text("ALPHA-MARK-41")
+        (ws / "beta.txt").write_text("BETA-MARK-77")
+        root = _root(ws)
+        try:
+            sess = await _new_session(root, f"e2e-fan-{time.time_ns()}", ws)
+
+            async def handler(event):
+                return True  # allow subagent internals
+
+            events, text = await asyncio.wait_for(
+                _collect(
+                    root.runtime, sess,
+                    "Use the fanout tool to launch TWO researcher subagents "
+                    "in parallel. Subagent A must read alpha.txt and report "
+                    "its exact contents. Subagent B must read beta.txt and "
+                    "report its exact contents. Then reply with a single "
+                    "line containing both markers.",
+                    approval_handler=handler,
+                ),
+                TURN_TIMEOUT * 2,
+            )
+            assert "ALPHA-MARK-41" in text, f"alpha missing from synthesis: {text[:300]}"
+            assert "BETA-MARK-77" in text, f"beta missing from synthesis: {text[:300]}"
+        finally:
+            root.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_07_live_web_search_returns_urls(self, tmp_path):
+        """web_search through the full agent loop returns real URLs — the
+        tool models should reach for BEFORE guessing fetch targets."""
+        ws = tmp_path / "ws-web"
+        ws.mkdir()
+        root = _root(ws)
+        try:
+            sess = await _new_session(root, f"e2e-web-{time.time_ns()}", ws)
+            events, text = await asyncio.wait_for(
+                _collect(
+                    root.runtime, sess,
+                    "Use the web_search tool to search for: python asyncio "
+                    "tutorial. Reply with one URL from the results.",
+                ),
+                TURN_TIMEOUT * 1.5,
+            )
+            called = _tool_names(events)
+            assert "web_search" in called, f"search never ran: {called}"
+            assert "http" in text.lower(), f"no URL surfaced: {text[:300]}"
         finally:
             root.shutdown()

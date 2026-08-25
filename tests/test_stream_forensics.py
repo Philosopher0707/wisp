@@ -99,9 +99,23 @@ class TestGuardedRetryForensics:
         types = [e.get("type") for e in events]
         assert "content" in types                     # second attempt served
         assert any(s > 0 for s in sleeps), f"expected backoff sleep, got {sleeps}"
-        warned = [r.message for r in caplog.records if "retrying once" in r.message]
+        warned = [r.message for r in caplog.records if "retrying" in r.message]
         assert warned and "sse_lines=1" in warned[0]
         assert "usable=0" in warned[0]
+
+    @pytest.mark.asyncio
+    async def test_attempts_env_extends_retries(self):
+        empty = [{"type": "stream_stats", "sse_lines": 1,
+                  "usable_deltas": 0, "empty_choice_chunks": 1,
+                  "finish_reason": "stop"}, {"type": "done"}]
+        core = self._core_with_streams([empty, empty, empty,
+                                        [{"type": "content", "text": "late"},
+                                         {"type": "done"}]])
+        import asyncio as aio
+        with patch.object(aio, "sleep", side_effect=lambda s: None), \
+             patch.dict("os.environ", {"WISP_STREAM_ATTEMPTS": "4"}):
+            events = [e async for e in core._guarded_provider_stream("s", [], None)]
+        assert any(e.get("type") == "content" for e in events)
 
     @pytest.mark.asyncio
     async def test_stats_event_not_counted_as_meaningful(self, caplog):
@@ -118,6 +132,55 @@ class TestGuardedRetryForensics:
             events = [e async for e in core._guarded_provider_stream("s", [], None)]
         assert any(e.get("type") == "content" for e in events)
         assert sleeps, "stats-only stream must trigger the retry path"
+
+
+class TestTransientStatusRetry:
+    @staticmethod
+    def _core_with_event_streams(streams):
+        core = WispAgentCore.__new__(WispAgentCore)
+        core.provider = None
+        iters = iter(streams)
+
+        async def _stream(*args, **kwargs):
+            for ev in next(iters):
+                yield ev
+
+        core._stream_events_async = _stream
+        return core
+
+    @pytest.mark.asyncio
+    async def test_429_retried_then_success(self):
+        rate = [{"type": "error", "message": "API error 429: x", "status": 429}]
+        core = self._core_with_event_streams(
+            [rate, rate, [{"type": "content", "text": "made it"},
+                          {"type": "done"}]])
+        waits = []
+        import asyncio as aio
+        with patch.object(aio, "sleep", side_effect=lambda s: waits.append(s)):
+            events = [e async for e in core._guarded_provider_stream("s", [], None)]
+        assert any(e.get("type") == "content" for e in events)
+        assert len(waits) == 2 and waits[1] > waits[0], \
+            f"429 backoff must scale: {waits}"
+
+    @pytest.mark.asyncio
+    async def test_permanent_api_error_surfaces_immediately(self):
+        fatal = [{"type": "error", "message": "API error 401: bad key", "status": 401}]
+        core = self._core_with_event_streams([fatal, fatal])
+        events = [e async for e in core._guarded_provider_stream("s", [], None)]
+        msgs = [str(e.get("message", "")) for e in events if e.get("type") == "error"]
+        assert msgs and "401" in msgs[0]
+        assert not any("no usable response" in m or "kept rejecting" in m
+                       for m in msgs), "permanent errors must not burn retries"
+
+    @pytest.mark.asyncio
+    async def test_exhausted_429_reports_rate_limit(self):
+        rate = [{"type": "error", "message": "API error 429: x", "status": 429}]
+        core = self._core_with_event_streams([rate, rate, rate])
+        import asyncio as aio
+        with patch.object(aio, "sleep", side_effect=lambda s: None):
+            events = [e async for e in core._guarded_provider_stream("s", [], None)]
+        assert any("rate limited" in str(e.get("message", ""))
+                   for e in events if e.get("type") == "error")
 
 
 class TestWebFetchHint:
