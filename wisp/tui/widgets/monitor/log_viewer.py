@@ -13,6 +13,9 @@ class LogViewer(Widget):
 
     entries = reactive[list[str]]([], recompose=True)
 
+    def append(self, line: str) -> None:
+        self.entries = [*self.entries[-49:], str(line)]
+
     def compose(self) -> ComposeResult:
         if not self.entries:
             yield Static("No log entries yet.", classes="info-text")

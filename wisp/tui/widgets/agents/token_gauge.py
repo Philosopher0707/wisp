@@ -14,6 +14,11 @@ class TokenGauge(Widget):
     tokens_used = reactive(0, recompose=True)
     token_budget = reactive(32000, recompose=True)
 
+    def set_usage(self, used: int, budget: int | None = None) -> None:
+        self.tokens_used = max(int(used), 0)
+        if budget:
+            self.token_budget = int(budget)
+
     def compose(self) -> ComposeResult:
         pct = (self.tokens_used / max(self.token_budget, 1)) * 100
         bar_len = 20

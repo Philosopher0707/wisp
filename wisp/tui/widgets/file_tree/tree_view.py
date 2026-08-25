@@ -1,4 +1,4 @@
-"""Interactive file-system tree widget."""
+"""Interactive file-system tree widget backed by Textual's DirectoryTree."""
 
 from __future__ import annotations
 
@@ -6,7 +6,17 @@ from pathlib import Path
 
 from textual.app import ComposeResult
 from textual.widget import Widget
-from textual.widgets import Static
+from textual.widgets import DirectoryTree
+
+
+class WispDirectoryTree(DirectoryTree):
+    """DirectoryTree that hides dotfiles and pyc noise."""
+
+    def filter_paths(self, paths):
+        return [
+            p for p in paths
+            if not p.name.startswith((".", "__pycache__"))
+        ]
 
 
 class FileTree(Widget):
@@ -17,5 +27,4 @@ class FileTree(Widget):
         self.root = Path(root_path).resolve() if root_path else Path.cwd()
 
     def compose(self) -> ComposeResult:
-        yield Static(f"📁 {self.root.name}", classes="pane-title")
-        yield Static(str(self.root), classes="info-text")
+        yield WispDirectoryTree(str(self.root), id="workspace-tree")

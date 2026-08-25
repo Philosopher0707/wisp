@@ -25,10 +25,22 @@ from wisp.tui.widgets.agents.task_tree import TaskTree
 from wisp.tui.widgets.agents.token_gauge import TokenGauge
 from wisp.tui.widgets.monitor.log_viewer import LogViewer
 from wisp.tui.widgets.monitor.metrics import PerformanceMetrics
+from wisp.tui.widgets.monitor.metrics import PerformanceMetrics
 from wisp.tui.widgets.status_bar import StatusBar
 from wisp.tui.widgets.title_bar import TitleBar
 from wisp.tui.data.ws_client import WispWSClient
+from wisp.approval_state import ApprovalSessionState, SessionPolicy
 from wisp.transport.tui import ApprovalRequested, TUIApprovalController
+
+
+def estimate_session_tokens(session: dict | None, system_chars: int = 0) -> int:
+    """Rough context estimate (~4 chars/token), same spirit as /tokens."""
+    if not session:
+        return 0
+    chars = system_chars + sum(
+        len(m.get("content") or "") for m in session.get("messages", [])
+    )
+    return chars // 4
 
 
 def route_local_event(ev: dict, chat, status) -> None:
@@ -108,9 +120,25 @@ class WorkspaceScreen(Screen):
         self._pending_prompt: str | None = None
         self._pending_approval_call_id: str | None = None
         self._auto_approve: bool = False
-        self._approval = TUIApprovalController()
+        self.approval_state = ApprovalSessionState()
+        self._approval = TUIApprovalController(state=self.approval_state)
         self._local_session: dict | None = None
         self._local_task: asyncio.Task | None = None
+        self._approval_modal_open = False
+        self._pending_tool_name = ""
+
+    def on_screen_resume(self) -> None:
+        self.set_interval(1.0, self._tick_clock)
+
+    def _tick_clock(self) -> None:
+        try:
+            status = self.query_one("#status-bar", StatusBar)
+            if status.is_streaming:
+                status.elapsed_s += 1
+            elif status.elapsed_s:
+                status.elapsed_s = 0
+        except Exception:
+            pass  # DOM not composed yet
 
     def compose(self) -> ComposeResult:
         yield TitleBar(id="title-bar")
@@ -125,7 +153,7 @@ class WorkspaceScreen(Screen):
                     with TabPane("Files", id="files-tab"):
                         with Horizontal():
                             with Vertical():
-                                yield FileTree(id="file-tree")
+                                yield FileTree(root_path=self.wisp_config.workspace, id="file-tree")
                             with Vertical():
                                 yield CodePreview(id="code-preview")
                     with TabPane("Agents", id="agents-tab"):
@@ -167,31 +195,59 @@ class WorkspaceScreen(Screen):
         await self._ws_client.connect()
 
     async def _on_approval_request(self, call_id: str, name: str, args: dict, reason: str) -> None:
-        if self._auto_approve:
-            if self._ws_client:
-                await self._ws_client.approve_tool(call_id, True)
-            else:
-                transport = getattr(self.app, "transport", None)
-                if transport:
-                    transport.set_approval(True)
-            return
         self._pending_approval_call_id = call_id
-        try:
-            status = self.query_one("#status-bar", StatusBar)
-            status.connection_state = f"Approve {name}? [y]es [n]o [a]ll [d]eny"
-        except Exception:
-            pass
+        self._show_approval(name, ", ".join(f"{k}={v!r}" for k, v in list(args.items())[:3]))
 
     def on_approval_requested(self, message: ApprovalRequested) -> None:
-        """Handle approval requests from local TUITransport."""
+        """Local engine approval request."""
+        self._show_approval(message.tool_name, message.args_text)
+
+    def _show_approval(self, tool_name: str, args_text: str) -> None:
+        self._pending_tool_name = tool_name
         try:
             status = self.query_one("#status-bar", StatusBar)
-            status.connection_state = (
-                f"Approve {message.tool_name}({message.args_text})? "
-                "y/Y/n/N/a/d/c"
-            )
+            status.connection_state = f"Approve {tool_name}({args_text})?"
         except Exception:
             pass
+        if self._approval_modal_open:
+            return
+        from wisp.tui.screens.approval_modal import ApprovalModal
+        self._approval_modal_open = True
+
+        def _answered(key: str | None) -> None:
+            self._approval_modal_open = False
+            self._handle_approval_key(key or "n")
+
+        self.app.push_screen(ApprovalModal(tool_name, args_text), _answered)
+
+    def _handle_approval_key(self, key: str) -> None:
+        """One resolver for both paths; session memory applies to each."""
+        approved = key in ("y", "Y", "a")
+
+        # Session memory first — identical semantics on either path.
+        if key == "a":
+            self.approval_state.set_auto()
+        elif key == "d":
+            self.approval_state.set_block()
+        elif key == "Y":
+            self.approval_state.allow_tool(self._pending_tool_name or "")
+        elif key == "N":
+            self.approval_state.deny_tool(self._pending_tool_name or "")
+
+        # Policy short-circuits before any prompt would have fired.
+        policy = self.approval_state.session_policy
+        if policy is SessionPolicy.AUTO:
+            approved = True
+        elif policy is SessionPolicy.BLOCK:
+            approved = False
+
+        if self._ws_client and self._pending_approval_call_id:
+            asyncio.create_task(self._ws_client.approve_tool(
+                self._pending_approval_call_id, approved))
+            self._pending_approval_call_id = None
+            return
+        if not self._resolve_local_approval(key):
+            pass  # nothing pending; memory already recorded above
 
     async def _ensure_local_session(self) -> dict:
         if self._local_session is None:
@@ -210,14 +266,56 @@ class WorkspaceScreen(Screen):
         status = self.query_one("#status-bar", StatusBar)
         status.is_streaming = True
         status.connection_state = "thinking…"
+        log = tasks = gauge = metrics = None
+        try:
+            log = self.query_one("#log-viewer", LogViewer)
+            tasks = self.query_one("#task-tree", TaskTree)
+            gauge = self.query_one("#token-gauge", TokenGauge)
+            metrics = self.query_one("#perf-metrics", PerformanceMetrics)
+        except Exception:
+            pass
+
+        def note(line: str) -> None:
+            if log is not None:
+                log.append(line)
+
         try:
             session = await self._ensure_local_session()
             async for ev in self.runtime.run_turn(
                 session, prompt, approval_handler=self._approval.approve
             ):
                 route_local_event(ev, chat.children[-1], status)
+                etype = ev.get("type", "")
+                data = ev.get("data") or {}
+                if etype == "subagent":
+                    key = f"{data.get('role') or data.get('name') or 'sub'}"
+                    label = f"[{key}] {data.get('detail', '')}".rstrip()
+                    done = data.get("kind") in ("task_completed", "task_failed")
+                    if tasks is not None:
+                        tasks.upsert_task(key, label, done)
+                    status.active_agents = tasks.running_count if tasks else 0
+                    note(label)
+                elif etype == "error":
+                    note(f"✗ {ev.get('message', 'error')}")
+                elif etype == "system":
+                    note(f"· {data.get('message', '')}")
+                elif etype == "steering_inject":
+                    note(f"↻ steered: {data.get('text', '')}")
+                elif etype == "tool_result" and metrics is not None:
+                    metrics.tool_calls += 1
+                elif etype == "done":
+                    if metrics is not None:
+                        metrics.tokens_total = used = estimate_session_tokens(session)
+                    else:
+                        used = estimate_session_tokens(session)
+                    if gauge is not None:
+                        budget = getattr(self.wisp_config, "max_context_tokens", None)
+                        gauge.set_usage(used, budget)
+                    status.token_count = used
+                    note(f"· turn complete ({data.get('turns', 0)} iterations)")
         except asyncio.CancelledError:
             status.connection_state = "cancelled"
+            note("✗ turn cancelled")
             raise
         except Exception as exc:
             status.connection_state = f"error: {exc}"
@@ -284,11 +382,25 @@ class WorkspaceScreen(Screen):
 
         status = self.query_one("#status-bar", StatusBar)
 
+        if (self.runtime is not None and not (
+            self._ws_client and self._ws_client._ws
+        ) and self._local_task is not None and not self._local_task.done()):
+            # Turn in flight → this line is steering, not a new prompt.
+            sid = (self._local_session or {}).get("id", "")
+            chat.append_content(f"↻ steered: {event.text}\n")
+            self.runtime.inject_steering(sid, event.text)
+            status.connection_state = f"steered: {event.text}"
+            return
+
         if self.runtime is not None and not (
             self._ws_client and self._ws_client._ws
         ):
             # Local engine: run the turn in-process.
             status.is_streaming = True
+            try:
+                self.query_one("#perf-metrics", PerformanceMetrics).message_count += 1
+            except Exception:
+                pass
             self._local_task = asyncio.create_task(
                 self._run_local_turn(event.text)
             )
@@ -326,43 +438,40 @@ class WorkspaceScreen(Screen):
         return False
 
     def action_approve_tool(self) -> None:
-        if self._flush_ws_approval(True):
-            return
-        self._resolve_local_approval("y")
+        self._handle_approval_key("y")
 
     def action_always_allow_tool(self) -> None:
-        if self._flush_ws_approval(True):
-            return
-        self._resolve_local_approval("Y")
+        self._handle_approval_key("Y")
 
     def action_deny_tool(self) -> None:
-        if self._flush_ws_approval(False):
-            return
-        self._resolve_local_approval("n")
+        self._handle_approval_key("n")
 
     def action_always_deny_tool(self) -> None:
-        if self._flush_ws_approval(False):
-            return
-        self._resolve_local_approval("N")
+        self._handle_approval_key("N")
 
     def action_approve_all(self) -> None:
         self._auto_approve = True
-        if self._flush_ws_approval(True):
-            return
-        self._resolve_local_approval("a")
+        self._handle_approval_key("a")
 
     def action_deny_all(self) -> None:
         self._auto_approve = False
-        if self._flush_ws_approval(False):
-            return
-        self._resolve_local_approval("d")
+        self._handle_approval_key("d")
 
     def action_cancel_turn(self) -> None:
         if self._local_task is not None and not self._local_task.done():
             self._local_task.cancel()
             return
+        if self._ws_client is not None and self._ws_client._ws is not None:
+            asyncio.create_task(self._ws_client.interrupt())
+            return
         status = self.query_one("#status-bar", StatusBar)
         status.connection_state = "no turn running"
+
+    def on_directory_tree_file_selected(self, event) -> None:
+        try:
+            self.query_one("#code-preview", CodePreview).show_file(str(event.path))
+        except Exception:
+            pass
 
     def on_icon_button_pressed(self, event) -> None:
         tabs = self.query_one("#tabs", TabbedContent)

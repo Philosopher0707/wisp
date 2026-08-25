@@ -13,6 +13,15 @@ class TaskTree(Widget):
 
     tasks = reactive[list[dict]]([], recompose=True)
 
+    def upsert_task(self, key: str, label: str, done: bool) -> None:
+        tasks = [t for t in self.tasks if t.get("key") != key]
+        tasks.append({"key": key, "label": label, "done": done})
+        self.tasks = tasks
+
+    @property
+    def running_count(self) -> int:
+        return sum(1 for t in self.tasks if not t.get("done"))
+
     def compose(self) -> ComposeResult:
         if not self.tasks:
             yield Static("No tasks defined.", classes="info-text")

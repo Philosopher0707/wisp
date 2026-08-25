@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 
+from wisp.approval_state import ApprovalSessionState
 from wisp.transport.tui import TUIApprovalController
 
 
@@ -156,3 +157,70 @@ class TestLocalEventRouting:
         route_local_event({"type": "steering_inject",
                            "data": {"text": "focus on auth"}}, chat, status)
         assert "focus on auth" in status.connection_state
+
+
+class TestSharedApprovalMemory:
+    def test_external_state_unifies_paths(self):
+        from wisp.approval_state import SessionPolicy
+        shared = ApprovalSessionState()
+        local = TUIApprovalController(state=shared)
+
+        async def scenario():
+            t = asyncio.ensure_future(local.approve({"name": "run_bash", "arguments": {}}))
+            await asyncio.sleep(0)
+            local.resolve("a")
+            await t
+            # A second gate sharing the same state never asks again.
+            calls = []
+            other = TUIApprovalController(
+                notify=lambda m: calls.append(m), state=shared)
+            return await other.approve({"name": "anything", "arguments": {}}), calls
+
+        allowed, asked = _run(scenario())
+        assert allowed is True and asked == []
+        assert shared.session_policy is SessionPolicy.AUTO
+
+
+class TestWiredWidgets:
+    def test_log_viewer_appends_and_caps(self):
+        from wisp.tui.widgets.monitor.log_viewer import LogViewer
+        lv = LogViewer()
+        for i in range(60):
+            lv.append(f"line-{i}")
+        assert lv.entries[0] == "line-10" and len(lv.entries) == 50
+
+    def test_token_gauge_set_usage(self):
+        from wisp.tui.widgets.agents.token_gauge import TokenGauge
+        g = TokenGauge()
+        g.set_usage(1234, 8000)
+        assert g.tokens_used == 1234 and g.token_budget == 8000
+        g.set_usage(-5)
+        assert g.tokens_used == 0
+
+    def test_task_tree_upsert_and_running(self):
+        from wisp.tui.widgets.agents.task_tree import TaskTree
+        t = TaskTree()
+        t.upsert_task("researcher", "[researcher] digging", False)
+        t.upsert_task("coder", "[coder] editing", False)
+        assert t.running_count == 2
+        t.upsert_task("coder", "[coder] editing", True)
+        assert t.running_count == 1
+        assert len(t.tasks) == 2
+
+    def test_estimate_session_tokens_mirrors_slash_command(self):
+        from wisp.tui.screens.workspace import estimate_session_tokens
+        session = {"messages": [{"content": "x" * 400}, {"content": None}]}
+        assert estimate_session_tokens(session) == 100
+        assert estimate_session_tokens(None) == 0
+
+
+class TestApprovalModal:
+    def test_modal_carries_prompt_context(self):
+        from wisp.tui.screens.approval_modal import ApprovalModal
+        m = ApprovalModal("run_bash", "command='rm -rf /'")
+        assert m.tool_name == "run_bash" and "rm -rf" in m.args_text
+
+    def test_modal_bindings_cover_full_contract(self):
+        from wisp.tui.screens.approval_modal import ApprovalModal
+        keys = {b[0] for b in ApprovalModal.BINDINGS}
+        assert {"y", "Y", "n", "N", "a", "d", "c"} <= keys

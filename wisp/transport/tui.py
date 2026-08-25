@@ -41,8 +41,9 @@ class TUIApprovalController:
     thread; ``approve`` runs inside the turn.
     """
 
-    def __init__(self, notify=None) -> None:
-        self.state = ApprovalSessionState()
+    def __init__(self, notify=None, state: ApprovalSessionState | None = None) -> None:
+        # External state lets WS and local paths share one session memory.
+        self.state = state or ApprovalSessionState()
         self._notify = notify  # callable(ApprovalRequested) or None
         self._event = asyncio.Event()
         self._result: str | None = None
