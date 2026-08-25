@@ -67,6 +67,22 @@ def _warn_mcp_shadowed_builtin(name: str) -> None:
     )
 
 
+def _strip_workspace_preamble(text: str) -> str:
+    """Drop the '[Workspace root: …]' grounding block added at spawn time.
+
+    The preamble is one paragraph terminated by the first blank line;
+    everything before it is boilerplate that would otherwise eat the
+    started-line detail budget.
+    """
+    if text.startswith("[Workspace root:"):
+        sep = text.find("\n\n")
+        if sep != -1:
+            return text[sep + 2:]
+        if "]" in text:
+            return text.split("]", 1)[1]
+    return text
+
+
 def orchestrator_event_to_agent_event(orch_ev: Any) -> AgentEvent:
     """Convert an OrchestratorEvent to a canonical subagent AgentEvent.
 
@@ -82,7 +98,9 @@ def orchestrator_event_to_agent_event(orch_ev: Any) -> AgentEvent:
     role = str(p.get("role", ""))
 
     if kind == "task_started":
-        detail = str(p.get("description", ""))[:80]
+        raw = _strip_workspace_preamble(str(p.get("description", "")))
+        body = " ".join(raw.split())
+        detail = body[:100] + ("…" if len(body) > 100 else "")
     elif kind == "task_completed":
         try:
             detail = f"{float(p.get('elapsed', 0)):.1f}s"

@@ -262,6 +262,27 @@ _DEFAULT_AUTO_EDIT_BLOCK = frozenset({
 })
 
 
+def filter_allowed_for_mode(mode: str, tool_names) -> list[str]:
+    """Tool names this permission mode can actually execute.
+
+    Subagent children inherit the parent's mode and have no approval
+    handler of their own; advertising a blocked tool only burns a child
+    turn producing a guaranteed '[Blocked: ...]' result. FULL allows
+    everything; READ_ONLY reduces to the safe-read set; ASK_ALL and
+    AUTO_EDIT drop their deny-listed tools.
+    """
+    requested = [t for t in tool_names if t]
+    m = (mode or "").strip().lower()
+    if m == "full":
+        return requested
+    if m == "read_only":
+        return [t for t in requested if t in _DEFAULT_SAFE_READ_TOOLS]
+    blocked = (
+        _DEFAULT_ASK_ALL_BLOCK if m == "ask_all" else _DEFAULT_AUTO_EDIT_BLOCK
+    )
+    return [t for t in requested if t not in blocked]
+
+
 # ── Rule predicate factories ──────────────────────────────────────────
 
 def _make_mode_rule(mode_name: str, allow_all: bool) -> RulePredicate:

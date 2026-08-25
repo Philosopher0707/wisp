@@ -133,3 +133,92 @@ class TestChildGrounding:
         )
         desc = json.dumps(fanout)
         assert "path" in desc.lower()
+
+
+class TestChildToolFiltering:
+    """Children must not be advertised tools their mode will hard-block."""
+
+    def test_auto_edit_drops_bash_git_spawn(self):
+        from wisp.infra.policy_engine import filter_allowed_for_mode
+
+        allowed = filter_allowed_for_mode(
+            "auto_edit",
+            ["read_file", "write_file", "run_bash", "git_commit",
+             "spawn", "fanout", "web_search"],
+        )
+        assert "run_bash" not in allowed
+        assert "git_commit" not in allowed
+        assert "spawn" not in allowed
+        assert "fanout" not in allowed
+        assert "read_file" in allowed
+        assert "web_search" in allowed
+
+    def test_full_mode_keeps_everything(self):
+        from wisp.infra.policy_engine import filter_allowed_for_mode
+
+        tools = ["read_file", "run_bash", "fanout"]
+        assert filter_allowed_for_mode("full", tools) == tools
+
+    def test_read_only_reduces_to_safe_reads(self):
+        from wisp.infra.policy_engine import filter_allowed_for_mode
+
+        allowed = filter_allowed_for_mode(
+            "read_only", ["read_file", "write_file", "run_bash", "recall"],
+        )
+        assert allowed == ["read_file", "recall"]
+
+    def test_effective_child_tools_all_expands_and_filters(self):
+        from wisp.multi_agent._runner import _effective_child_tools
+
+        tools = _effective_child_tools(None, "auto_edit")
+        assert tools, "all-tools path must expand to schema names"
+        assert "run_bash" not in tools
+        assert "read_file" in tools
+        assert "web_search" in tools
+
+    def test_effective_child_tools_explicit_list_still_filtered(self):
+        from wisp.multi_agent._runner import _effective_child_tools
+
+        tools = _effective_child_tools(["read_file", "run_bash"], "auto_edit")
+        assert tools == ["read_file"]
+
+
+class TestStartedLineDetail:
+    """task_started lines must show task intent, not preamble boilerplate."""
+
+    def _started_detail(self, description: str) -> str:
+        from wisp.multi_agent.task import OrchestratorEvent
+        from wisp.tool_executor import orchestrator_event_to_agent_event
+
+        ev = orchestrator_event_to_agent_event(
+            OrchestratorEvent(
+                event_type="task_started",
+                task_id="child-0",
+                payload={"role": "researcher", "description": description},
+            )
+        )
+        return str(ev.data.get("detail", ""))
+
+    def test_grounding_preamble_stripped_not_truncated_mid_sentence(self):
+        grounded = (
+            "[Workspace root: /Users/philosopher] Paths are relative to this "
+            "root, exactly as they appear in the parent conversation. If a "
+            "path is not found, list_files from the workspace root to locate "
+            "it before proceeding.\n\nResearch Vespa ranking phases"
+        )
+        detail = self._started_detail(grounded)
+        assert "[Workspace root" not in detail
+        assert "Paths are relative" not in detail
+        assert detail.startswith("Research Vespa ranking phases")
+
+    def test_long_task_gets_ellipsis_not_hard_cut(self):
+        detail = self._started_detail("word " * 60)
+        assert len(detail) <= 101
+        assert detail.endswith("…")
+
+    def test_short_task_verbatim(self):
+        assert self._started_detail("Tiny task") == "Tiny task"
+
+    def test_whitespace_collapsed(self):
+        detail = self._started_detail("a\n\n  b\tc")
+        assert detail == "a b c"

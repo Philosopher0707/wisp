@@ -19,6 +19,28 @@ from wisp.infra.store import UnifiedStore
 
 from .task import EventKind, OrchestratorEvent, SubagentContract, SubagentResult
 
+
+def _effective_child_tools(
+    contract_tools: list[str] | None, permission_mode: str
+) -> list[str]:
+    """Advertise only tools the child's inherited mode can execute.
+
+    Children run under the parent's permission mode with no approval
+    handler; a blocked tool in their schema just buys a wasted turn on a
+    guaranteed '[Blocked: ...]' result (live fanout evidence, 2026-08-25).
+    """
+    from wisp.infra.policy_engine import filter_allowed_for_mode
+
+    if contract_tools and "all" not in [t.lower() for t in contract_tools]:
+        requested: list[str] = list(contract_tools)
+    else:
+        from wisp.tools.registry import TOOL_SCHEMAS
+
+        requested = [
+            s.get("function", {}).get("name", "") for s in TOOL_SCHEMAS
+        ]
+    return filter_allowed_for_mode(permission_mode, requested)
+
 logger = logging.getLogger(__name__)
 
 
@@ -415,8 +437,10 @@ class SubagentRunner:
                 session_dict["subagent_system_prompt"] = system_prompt
             # Role tool restrictions become enforced (not just prompt text):
             # core filters the tool schemas AND rejects disallowed calls.
-            if contract.tools and "all" not in [t.lower() for t in contract.tools]:
-                session_dict["allowed_tools"] = list(contract.tools)
+            session_dict["allowed_tools"] = _effective_child_tools(
+                contract.tools,
+                str(getattr(config, "permission_mode", "auto_edit") or "auto_edit"),
+            )
 
             # Partition context — only pass relevant history to subagent
             raw_messages = list(session_dict.get("messages", []))
@@ -592,8 +616,10 @@ class SubagentRunner:
             session_dict["messages"] = []
         if system_prompt:
             session_dict["subagent_system_prompt"] = system_prompt
-        if contract.tools and "all" not in [t.lower() for t in contract.tools]:
-            session_dict["allowed_tools"] = list(contract.tools)
+        session_dict["allowed_tools"] = _effective_child_tools(
+            contract.tools,
+            str(getattr(config, "permission_mode", "auto_edit") or "auto_edit"),
+        )
 
         # Ensure session exists in runtime store
         sid = session_dict.get("id", "")
