@@ -463,9 +463,10 @@ class WispAgentCore:
         try:
             async for ev in self._stream_events_async(system_prompt, messages, None):
                 etype = ev.get("type", "")
-                if etype in ("content", "text"):
+                if etype in ("content", "text", "token"):
                     text = ev.get("text") or ev.get("content") or ""
-                    yield _flatten_event(content_event(str(text)))
+                    if text:
+                        yield _flatten_event(content_event(str(text)))
                 elif etype == "done":
                     wrapped_up = True
                     break

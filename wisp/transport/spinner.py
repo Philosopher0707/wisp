@@ -94,7 +94,10 @@ class Spinner:
             self._write_line("\r\033[K\n")
             return
         icon = _success_icon(self._mode)
-        self._write_line(f"\r{icon} {label}\n")
+        # Clear to EOL: the result line is usually SHORTER than the running
+        # label (name+args), and leftover characters otherwise stay visible —
+        # seen live as '✓ web_fetch 403ms=500' (tail of '...limit=500').
+        self._write_line(f"\r{icon} {label}\033[K\n")
 
     def fail(self, label: str) -> None:
         """Replace spinner with failure marker and stop animation."""
@@ -103,7 +106,7 @@ class Spinner:
             self._write_line("\r\033[K\n")
             return
         icon = _fail_icon(self._mode)
-        self._write_line(f"\r{icon} {label}\n")
+        self._write_line(f"\r{icon} {label}\033[K\n")
 
     def stop(self) -> None:
         """Clear spinner line without leaving a result."""

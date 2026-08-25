@@ -461,3 +461,75 @@ def test_fanout_contracts_inherit_incremented_depth(tmp_path):
     contracts = orch.calls["parallel"][0]
     depths = [getattr(c, "_subagent_depth", 0) for c in contracts]
     assert depths == [1, 1], f"all fanout children inherit depth+1, got {depths}"
+
+class TestRepeatCallGuard:
+    """Identical web_fetch/web_search calls: serve cache once, then block.
+
+    Live evidence: a looping model re-fetched one URL for minutes,
+    burning iterations and tripping API rate limits."""
+
+    def _mk(self, tmp_path):
+        from wisp.config import WispConfig
+        from wisp.tool_executor import ToolExecutor
+        return ToolExecutor(
+            config=WispConfig().replace(workspace=str(tmp_path), auto_approve=True),
+            hook_manager=MagicMock(),
+        )
+
+    def _seed(self, te, args, count=0):
+        import time as _t
+        key = te._repeat_key("web_fetch", args)
+        te._repeat_cache[key] = (_t.monotonic(), "CACHED_BODY", count)
+        return key
+
+    @pytest.mark.asyncio
+    async def test_first_repeat_serves_cached_copy_with_nudge(self, tmp_path):
+        te = self._mk(tmp_path)
+        args = {"url": "https://x.example/a.html"}
+        self._seed(te, args)
+        events = []
+        async for ev in te.execute("web_fetch", args, str(tmp_path)):
+            events.append(ev)
+        assert len(events) == 1  # short-circuited before hooks/dispatch
+        raw = events[0].data.get("result", "")
+        text = raw if isinstance(raw, str) else json.dumps(raw)
+        assert "[REPEAT]" in text and "CACHED_BODY" in text
+
+    @pytest.mark.asyncio
+    async def test_third_identical_call_blocked_with_instruction(self, tmp_path):
+        te = self._mk(tmp_path)
+        args = {"url": "https://x.example/b.html"}
+        self._seed(te, args, count=2)  # two prior identical calls
+        events = []
+        async for ev in te.execute("web_fetch", args, str(tmp_path)):
+            events.append(ev)
+        raw = events[0].data.get("result", "")
+        text = raw if isinstance(raw, str) else json.dumps(raw)
+        assert "[REPEAT BLOCKED]" in text
+        assert "synthesize" in text.lower()
+
+    def test_different_args_not_guarded(self, tmp_path):
+        te = self._mk(tmp_path)
+        assert te._check_repeat_call(
+            "web_fetch", {"url": "https://x.example/c.html"}) is None
+
+    def test_success_recorded_for_guarded_tools_only(self, tmp_path):
+        te = self._mk(tmp_path)
+        args = {"url": "https://x.example/d.html"}
+        assert te._check_repeat_call("web_fetch", args) is None
+        te._record_repeat_result("web_fetch", "PAGE_BODY")
+        key = te._repeat_key("web_fetch", args)
+        assert key in te._repeat_cache
+        # Non-guarded tools never cached even if recorded.
+        assert te._check_repeat_call("run_bash", {"command": "ls"}) is None
+        te._record_repeat_result("run_bash", "out")
+        assert not any(k.startswith("run_bash:") for k in te._repeat_cache)
+
+    def test_expired_entries_refetch(self, tmp_path):
+        import time as _t
+        te = self._mk(tmp_path)
+        args = {"url": "https://x.example/e.html"}
+        key = te._repeat_key("web_fetch", args)
+        te._repeat_cache[key] = (_t.monotonic() - 10_000.0, "STALE", 0)
+        assert te._check_repeat_call("web_fetch", args) is None
+

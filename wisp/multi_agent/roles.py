@@ -144,8 +144,11 @@ Rules:
             "remember",
             "recall",
         ],
-        max_iterations=10,
-        timeout_seconds=120,
+        max_iterations=14,
+        # Live E2E evidence: genuine multi-source web research (with 429/403
+        # retries against rate-limiting APIs) needs more than one 120s window;
+        # children died mid-gathering and the x1.5 retry still fell short.
+        timeout_seconds=240,
         wants_isolation=False,  # reads the web and files; writes nothing
     ),
     AgentRole.PLANNER: RoleConfig(

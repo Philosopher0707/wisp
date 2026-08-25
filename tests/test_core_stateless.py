@@ -491,3 +491,72 @@ class TestRoleToolRestriction:
 
         tool_calls = [e for e in events if e.get("type") == "tool_call"]
         assert len(tool_calls) == 1 and tool_calls[0]["name"] == "read_file"
+
+class TestMaxIterationsWrapUp:
+    """Exhausting the iteration budget must synthesize an answer from the
+    gathered context instead of dying with a bare 'Max iterations reached'
+    error that throws away minutes of tool work (live-evidenced)."""
+
+    @pytest.mark.asyncio
+    async def test_final_summary_replaces_error(self):
+        from wisp.core.engine import WispAgentCore
+
+        class AlwaysToolProvider:
+            def __init__(self):
+                self.calls = []
+
+            def generate_stream_events(self, system_prompt, messages=None, tools=None, checkpoint_every=50):
+                self.calls.append((messages, tools))
+                if tools is None:
+                    # The wrap-up call: no tools allowed — summarize.
+                    yield {"type": "token", "text": "SUMMARY_MARKER findings so far", "phase": "content"}
+                    yield {"type": "done"}
+                else:
+                    yield {"type": "tool_call", "name": "read_file", "arguments": {"path": "x.py"}}
+                    yield {"type": "done"}
+
+        provider = AlwaysToolProvider()
+        from wisp.config import WispConfig
+        core = WispAgentCore(
+            provider=provider,
+            config=WispConfig().replace(max_iterations=2),
+        )
+
+        session = {"id": "s-wrap", "messages": [], "model": "m", "workspace": "/tmp"}
+        events = []
+        async for event in core.turn(session, "loop forever"):
+            events.append(event)
+
+        texts = [e for e in events if e.get("type") == "content"]
+        joined = "\n".join(e.get("text", "") for e in texts)
+        assert "SUMMARY_MARKER" in joined
+        errors = [e for e in events if e.get("type") == "error"]
+        assert not errors, errors
+        assert any(e.get("type") == "done" for e in events)
+
+    @pytest.mark.asyncio
+    async def test_wrapup_failure_falls_back_to_error(self):
+        from wisp.core.engine import WispAgentCore
+
+        class BrokenWrapupProvider:
+            def generate_stream_events(self, system_prompt, messages=None, tools=None, checkpoint_every=50):
+                if tools is None:
+                    raise RuntimeError("provider died")
+                yield {"type": "tool_call", "name": "read_file", "arguments": {"path": "x.py"}}
+                yield {"type": "done"}
+
+        from wisp.config import WispConfig
+        core = WispAgentCore(
+            provider=BrokenWrapupProvider(),
+            config=WispConfig().replace(max_iterations=1),
+        )
+
+        session = {"id": "s-wrap2", "messages": [], "model": "m", "workspace": "/tmp"}
+        events = []
+        async for event in core.turn(session, "loop"):
+            events.append(event)
+
+        assert any(e.get("type") == "error" and "Max iterations" in str(e.get("message", ""))
+                   for e in events), events[-5:]
+        assert any(e.get("type") == "done" for e in events)
+
