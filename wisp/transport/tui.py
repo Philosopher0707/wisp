@@ -1,13 +1,9 @@
 """TUI transport for Wisp.
 
 Implements Transport ABC for the Textual-based terminal UI.
-Wraps WispTUIApp and bridges it to the agent runtime.
-
-Design:
-  - send(event): posts events to the TUI's message queue
-  - recv(): returns user input from the TUI's input widget
-  - approve(tool_call): shows a modal dialog for approval
-  - start()/stop(): manages the Textual app lifecycle
+Bridges the local AgentRuntime to the Textual app with the same
+approval contract as the CLI: y/Y/a/n/N/d/c, session-scoped tool
+memory, and honest cancel (c unwinds the turn).
 """
 
 from __future__ import annotations
@@ -18,9 +14,14 @@ from typing import Any
 
 from textual.message import Message
 
+from wisp.approval_state import ApprovalSessionState, SessionPolicy
+from wisp.infra.security import redact_sensitive_tool_args
+
 from .base import Transport
 
 logger = logging.getLogger(__name__)
+
+_APPROVAL_KEYS = {"y", "Y", "a", "n", "N", "d", "c"}
 
 
 class ApprovalRequested(Message):
@@ -30,6 +31,82 @@ class ApprovalRequested(Message):
         self.tool_name = tool_name
         self.args_text = args_text
         super().__init__()
+
+
+class TUIApprovalController:
+    """Approval gate matching CLITransport semantics, TUI-keyed.
+
+    Session memory lives in ApprovalSessionState so y/Y/a/n/N behave
+    identically across CLI and TUI. ``resolve`` is called from the UI
+    thread; ``approve`` runs inside the turn.
+    """
+
+    def __init__(self, notify=None) -> None:
+        self.state = ApprovalSessionState()
+        self._notify = notify  # callable(ApprovalRequested) or None
+        self._event = asyncio.Event()
+        self._result: str | None = None
+
+    def _preview(self, tool_call: dict) -> tuple[str, str]:
+        name = str(tool_call.get("name", "unknown"))
+        args = redact_sensitive_tool_args(tool_call.get("arguments", {}) or {})
+        args_text = ", ".join(f"{k}={v!r}" for k, v in list(args.items())[:3])
+        if len(args) > 3:
+            args_text += ", ..."
+        return name, args_text
+
+    async def approve(self, tool_call: dict) -> bool:
+        name, _ = self._preview(tool_call)
+        # Session memory first — same precedence as CLITransport.approve:
+        # policy short-circuits before per-tool sets; should_ask's BLOCK
+        # branch intentionally never reaches the prompt path.
+        if self.state.session_policy is SessionPolicy.AUTO:
+            return True
+        if self.state.session_policy is SessionPolicy.BLOCK:
+            return False
+        if name in self.state.allowed_tools:
+            return True
+        if name in self.state.denied_tools:
+            return False
+
+        _, args_text = self._preview(tool_call)
+        self._result = None
+        self._event.clear()
+        if self._notify is not None:
+            try:
+                self._notify(ApprovalRequested(name, args_text))
+            except Exception:
+                logger.warning("approval notify failed", exc_info=True)
+        await self._event.wait()
+        key = self._result or "n"
+        if key == "y":
+            return True
+        if key == "Y":
+            self.state.allow_tool(name)
+            return True
+        if key == "a":
+            self.state.set_auto()
+            return True
+        if key == "N":
+            self.state.deny_tool(name)
+            return False
+        if key == "d":
+            self.state.set_block()
+            return False
+        if key == "c":
+            raise asyncio.CancelledError(
+                f"User cancelled the turn at the approval prompt for {name}"
+            )
+        return False  # unknown key denies once, like the CLI
+
+    def resolve(self, key: str) -> bool:
+        """Deliver a key press; returns False if no approval was pending."""
+        key = str(key).strip()
+        if key not in _APPROVAL_KEYS:
+            return False
+        self._result = key
+        self._event.set()
+        return True
 
 
 class TUITransport(Transport):

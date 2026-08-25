@@ -49,11 +49,13 @@ class WispTUIApp(App):
         config: WispConfig | None = None,
         server_url: str = "http://localhost:8000",
         transport: Any | None = None,
+        runtime: Any | None = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.wisp_config = config or WispConfig()
         self.server_url = server_url
+        self.runtime = runtime
         self.current_session_id: str | None = None
         self.transport = transport
         # Screen instances (set in on_mount)
@@ -69,7 +71,8 @@ class WispTUIApp(App):
         self._splash = SplashScreen(server_url=self.server_url)
         self._session_picker = SessionPickerScreen(server_url=self.server_url)
         self._workspace = WorkspaceScreen(
-            server_url=self.server_url, session_id=None, config=self.wisp_config
+            server_url=self.server_url, session_id=None, config=self.wisp_config,
+            runtime=self.runtime,
         )
 
         self.install_screen(self._splash, name=SPLASH)
