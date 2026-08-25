@@ -367,6 +367,7 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
             _show_resume()
         except Exception as exc:
             import traceback
+            transport.stop_wait_clock(stdout=sys.stdout)
             _stop_spinner(transport)
             transport._flush_thinking(sys.stdout)
             transport._flush_content(sys.stdout)
@@ -376,6 +377,8 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
             sys.stdout.flush()
         finally:
             _current_turn_task = None
+            # Idempotent backstop: no exit path may leave the ticker live.
+            transport.stop_wait_clock(stdout=sys.stdout)
             # The handler de-arms itself on first press (second Ctrl+C
             # force-quits); re-arm it for the next turn.
             _arm_repl_sigint()

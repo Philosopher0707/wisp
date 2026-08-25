@@ -242,6 +242,30 @@ def _coerce_tool_data(value: Any) -> str:
     if value is None:
         return ""
     if isinstance(value, str):
+        # spawn/fanout wrap their result as a JSON string with a known
+        # envelope shape; unwrap it so users read the summary, not keys.
+        stripped = value.strip()
+        if stripped.startswith("{") and stripped.endswith("}"):
+            try:
+                inner = json.loads(stripped)
+            except (json.JSONDecodeError, ValueError):
+                return value
+            if (
+                isinstance(inner, dict)
+                and "summary" in inner
+                and set(inner) <= {"ok", "summary", "files", "error"}
+            ):
+                parts = [str(inner.get("summary") or "")]
+                files = inner.get("files") or []
+                if files:
+                    shown = ", ".join(str(f) for f in files[:4])
+                    more = f" +{len(files) - 4}" if len(files) > 4 else ""
+                    parts.append(f"Files: {shown}{more}")
+                err = inner.get("error")
+                if err:
+                    parts.append(f"error: {err}")
+                text = "\n".join(p for p in parts if p)
+                return text or value
         return value
     if isinstance(value, (dict, list)):
         try:
@@ -892,19 +916,31 @@ class CLITransport(Transport):
 
         The dead-air rule: between Enter and the first provider event the
         terminal must show that time is passing. Tty-only — piped output
-        stays clean for scripting.
+        stays clean for scripting. Minimal mode keeps only outcome lines,
+        so the ticker is suppressed there too.
         """
         out = stdout or self._stdout or sys.stdout
         if not hasattr(out, "isatty") or not out.isatty():
             return
+        if get_output_mode() == OutputMode.MINIMAL:
+            return
         self._wait_started = time.monotonic()
         self._wait_stop = threading.Event()
+
+        def _label(elapsed: float) -> str:
+            # Mode parity (design principle 5): unicode glyphs only in the
+            # unicode mode; accessible spells the state out.
+            if is_accessible():
+                return f"[waiting] {elapsed:.1f}s"
+            if get_output_mode() == OutputMode.UNICODE:
+                return f"… waiting · {elapsed:.1f}s"
+            return f"... waiting - {elapsed:.1f}s"
 
         def _tick() -> None:
             while not self._wait_stop.wait(0.25):
                 elapsed = time.monotonic() - self._wait_started
                 try:
-                    out.write(f"\r  {dim(f'… waiting · {elapsed:.1f}s')}")
+                    out.write(f"\r  {dim(_label(elapsed))}")
                     out.flush()
                 except Exception:
                     break

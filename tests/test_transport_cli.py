@@ -561,3 +561,65 @@ class TestWaitClock:
         t._render_event(out, {"type": "content", "text": "answer"})
         t.stop_wait_clock(out)
         assert stopped, "first event must stop the wait clock"
+
+
+class TestWaitClockParityAndAcceptance:
+    """Design-doc gates for the latency contract (§4, principle 5)."""
+
+    def _transport(self):
+        t = CLITransport.__new__(CLITransport)
+        t.config = None
+        return t
+
+    def test_ascii_mode_prints_ascii_ticker(self):
+        import time as _time
+        from wisp.terminal_width import set_output_mode
+
+        old = set_output_mode("ascii")
+        try:
+            out = _FakeTty()
+            t = self._transport()
+            t.start_wait_clock(stdout=out)
+            _time.sleep(0.35)
+            t.stop_wait_clock(stdout=out)
+            text = out.getvalue()
+            assert "... waiting - " in text, text
+            assert "…" not in text and "·" not in text
+        finally:
+            set_output_mode(old)
+
+    def test_minimal_mode_suppresses_ticker_entirely(self):
+        from wisp.terminal_width import set_output_mode
+
+        old = set_output_mode("minimal")
+        try:
+            out = _FakeTty()
+            t = self._transport()
+            t.start_wait_clock(stdout=out)
+            assert getattr(t, "_wait_stop", None) is None, (
+                "minimal keeps only outcome lines — no ticker"
+            )
+        finally:
+            set_output_mode(old)
+
+    def test_accessible_mode_spells_waiting(self):
+        import time as _time
+        from wisp.terminal_width import set_output_mode
+
+        old = set_output_mode("accessible")
+        try:
+            out = _FakeTty()
+            t = self._transport()
+            t.start_wait_clock(stdout=out)
+            _time.sleep(0.3)
+            t.stop_wait_clock(stdout=out)
+            assert "[waiting]" in out.getvalue()
+        finally:
+            set_output_mode(old)
+
+    def test_stop_is_idempotent(self):
+        out = _FakeTty()
+        t = self._transport()
+        t.start_wait_clock(stdout=out)
+        t.stop_wait_clock(stdout=out)
+        t.stop_wait_clock(stdout=out)  # must not raise

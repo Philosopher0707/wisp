@@ -456,3 +456,85 @@ class TestTypedAheadReplay:
         _run_repl(CLITransport(runtime, _StubConfig()), _StubRoot(runtime), _StubConfig())
 
         assert executed == ["only prompt"]
+
+
+class TestLatencyContractAcceptance:
+    """Design §4: a fake slow provider must render state inside each window."""
+
+    def test_slow_turn_shows_ticker_then_clean_output(self, monkeypatch, no_signal_side_effects):
+        import asyncio
+
+        from wisp.entry import _run_repl
+
+        runtime = _StubRuntime()
+
+        async def slow_run_turn(session, prompt, approval_handler=None):
+            await asyncio.sleep(0.6)  # inside the dead-air window
+            yield {"type": "content", "text": "done"}
+
+        runtime.run_turn = slow_run_turn
+
+        # Capture stdout in an object that claims to be a tty so the wait
+        # clock activates; prompts come from the fed stdin script.
+        captured = _FakeTtyCapture()
+        monkeypatch.setattr("sys.stdout", captured)
+        _feed_stdin("hello\n/exit\n", monkeypatch)
+
+        _run_repl(CLITransport(runtime, _StubConfig()), _StubRoot(runtime), _StubConfig())
+
+        out = captured.getvalue()
+        assert "waiting" in out, f"dead-air rule violated: {out!r}"
+        assert "done" in out, f"content lost: {out!r}"
+        # Ticker must be erased before real output renders.
+        tail = out[out.index("done"):]
+        assert "waiting" not in tail, f"ticker leaked past first event: {tail!r}"
+
+    def test_failing_turn_stops_ticker(self, monkeypatch, no_signal_side_effects):
+        """The generic error path must not leave the ticker running."""
+        import asyncio
+
+        from wisp.entry import _run_repl
+
+        runtime = _StubRuntime()
+
+        async def failing_run_turn(session, prompt, approval_handler=None):
+            await asyncio.sleep(0.05)
+            raise RuntimeError("provider exploded")
+            yield  # pragma: no cover — makes this an async generator
+
+        runtime.run_turn = failing_run_turn
+
+        captured = _FakeTtyCapture()
+        real_stderr = __import__("sys").stderr
+        monkeypatch.setattr("sys.stdout", captured)
+        monkeypatch.setattr("sys.stderr", __import__("io").StringIO())  # silence traceback
+        _feed_stdin("boom\n/exit\n", monkeypatch)
+
+        _run_repl(CLITransport(runtime, _StubConfig()), _StubRoot(runtime), _StubConfig())
+        del real_stderr
+
+        out = captured.getvalue()
+        assert "Error:" in out
+        # No tick may land after the error surfaced.
+        tail = out[out.index("Error:"):]
+        assert "waiting" not in tail, f"ticker ran past error: {tail!r}"
+
+
+class _FakeTtyCapture:
+    """Minimal tty-claiming capture target for stdout patching."""
+
+    def __init__(self):
+        import io
+        self._buf = io.StringIO()
+
+    def write(self, text):
+        return self._buf.write(text)
+
+    def flush(self):
+        pass
+
+    def isatty(self):
+        return True
+
+    def getvalue(self):
+        return self._buf.getvalue()
