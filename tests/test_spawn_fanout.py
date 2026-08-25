@@ -1,5 +1,6 @@
 """Tests for spawn and fanout tools — role-driven subagent execution."""
 
+import asyncio
 import json
 from pathlib import Path
 import pytest
@@ -671,3 +672,62 @@ class TestRunDagContractInjection:
         # The upstream node's RESULT text reached the downstream prompt.
         assert "out::do upstream" in downstream_prompts[0]
         assert "do downstream" in downstream_prompts[0]
+
+class TestStreamingHeartbeat:
+    """Blocking subagent tools must show a heartbeat while children run.
+
+    Live evidence: a 240s researcher emits only task_started/task_completed,
+    so the terminal sat silent for minutes and users read it as a hang."""
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_fires_during_slow_spawn(self, tmp_path, monkeypatch):
+        import time as _t
+        import wisp.tool_executor as te_mod
+
+        class SlowOrch:
+            async def _run_with_retry(self, contract):
+                await asyncio.sleep(0.8)
+                return SubagentResult(task_id=contract.name, success=True,
+                                      output="done", session_id="s")
+
+        monkeypatch.setattr(te_mod, "_HEARTBEAT_FIRST_S", 0.3)
+        monkeypatch.setattr(te_mod, "_HEARTBEAT_EVERY_S", 0.3)
+        te = _mk_te(tmp_path, SlowOrch())
+        events = []
+        async for ev in te.execute("spawn", {"task": "research"}, str(tmp_path)):
+            events.append(ev)
+        kinds = [getattr(e.type, "value", e.get("type") if isinstance(e, dict) else "?")
+                 for e in events]
+        assert "system" in kinds, kinds
+        heartbeats = [e for e in events
+                      if (getattr(e, "data", None) or {}).get("message", "").startswith("⏳")
+                      or (isinstance(e, dict) and str(e.get("message", "")).startswith("⏳"))]
+        assert heartbeats, "no heartbeat emitted"
+        # Heartbeats precede the final tool_result.
+        last = events[-1]
+        assert str(getattr(last.type, "value", last)).endswith("tool_result") or \
+               (isinstance(last, dict) and last.get("type") == "tool_result")
+
+    @pytest.mark.asyncio
+    async def test_orchestrate_vote_streams_too(self, tmp_path, monkeypatch):
+        import wisp.tool_executor as te_mod
+
+        class SlowVoteOrch:
+            async def run_vote(self, *args, **kwargs):
+                await asyncio.sleep(0.5)
+                return SubagentResult(task_id="vote", success=True,
+                                      output="consensus reached", session_id="s")
+
+        monkeypatch.setattr(te_mod, "_HEARTBEAT_FIRST_S", 0.2)
+        te = _mk_te(tmp_path, SlowVoteOrch())
+        events = []
+        async for ev in te.execute("orchestrate_vote",
+                                   {"task": "pick one",
+                                    "variants": [{"answer": "a"}, {"answer": "b"}]},
+                                   str(tmp_path)):
+            events.append(ev)
+        assert any(isinstance(e, dict) and str(e.get("message", "")).startswith("⏳")
+                   for e in events) or any(
+            getattr(e.type, "value", "") == "system" for e in events), \
+            [getattr(e.type, "value", type(e)) for e in events]
+

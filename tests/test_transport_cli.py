@@ -677,3 +677,72 @@ class TestBoundedToolRender:
         text = out.getvalue()
         assert "alpha" in text and "gamma" in text
         assert "more lines" not in text
+
+# ═══════════════════════════════════════════════════════════════════
+# Token streaming: content deltas paint live, not one block at done
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestTokenStreaming:
+    def _transport(self, out):
+        from wisp.transport.cli import CLITransport
+        from wisp.transport.progress import ProgressTracker
+
+        t = CLITransport.__new__(CLITransport)
+        for k, v in dict(config=None, _content_buffer=[], _thinking_buffer=[],
+                         _in_content=False, _in_thinking=False,
+                         _streaming_content_live=False,
+                         _last_block_was_tool=False, _stdout=out,
+                         show_tool_output=True).items():
+            setattr(t, k, v)
+        t._progress = ProgressTracker()
+        t._spinner = None
+        return t
+
+    def test_deltas_write_immediately_per_event(self):
+        import io
+
+        out = io.StringIO()
+        t = self._transport(out)
+        ev = {"type": "content", "text": "T cells "}
+        t._render_event(out, ev)
+        first = out.getvalue()
+        assert "T cells" in first          # visible after ONE delta
+        ev2 = {"type": "content", "text": "coordinate immunity"}
+        t._render_event(out, ev2)
+        assert "coordinate immunity" in out.getvalue()
+
+    def test_boundary_flush_does_not_duplicate_streamed_text(self):
+        import io
+
+        out = io.StringIO()
+        t = self._transport(out)
+        t._render_event(out, {"type": "content", "text": "streamed answer"})
+        before = out.getvalue()
+        t._render_event(out, {"type": "tool_result", "name": "web_fetch",
+                              "result": "{}"})
+        after = out.getvalue()
+        assert after.count("streamed answer") == 1  # no re-render at boundary
+        assert len(after) > len(before)              # but the turn continued
+
+    def test_error_recovery_path_still_renders_block(self):
+        # Non-streamed leftovers (error-recovery accumulation) must still
+        # render via the block renderer at flush time.
+        import io
+
+        out = io.StringIO()
+        t = self._transport(out)
+        t._buffer_content("recovered text")
+        t._flush_content(out, width=80)
+        assert "recovered text" in out.getvalue()
+
+    def test_accessible_mode_labels_stream(self):
+        import io
+        from unittest.mock import patch as _patch
+
+        out = io.StringIO()
+        t = self._transport(out)
+        with _patch("wisp.transport.cli.is_accessible", return_value=True):
+            t._render_event(out, {"type": "content", "text": "hi"})
+        assert "[Response]" in out.getvalue()
+

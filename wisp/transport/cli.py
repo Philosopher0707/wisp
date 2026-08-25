@@ -540,9 +540,19 @@ class AgentAdapter:
 class CLITransport(Transport):
     """CLI transport layer with structured output matching legacy CLI."""
 
-    def __init__(self, runtime: Any, config: Any | None = None):
+    def __init__(
+        self,
+        runtime: Any,
+        config: Any | None = None,
+        background_agents: Any | None = None,
+    ):
         self.runtime = runtime
         self.config = config
+        # Lifecycle fan-out for spawn_background agents; the server transport
+        # pushes these over WS — the CLI prints settlement notices instead.
+        self.background_agents = background_agents
+        self._bg_task: asyncio.Task | None = None
+        self._bg_queue: Any | None = None
         self._stdin: Any = None
         self._stdout: Any = None
         self._thinking_buffer: list[str] = []
@@ -550,6 +560,7 @@ class CLITransport(Transport):
         self._content_buffer: list[str] = []
         self._in_thinking: bool = False
         self._in_content: bool = False
+        self._streaming_content_live: bool = False
         self.show_thinking: bool = (
             getattr(config, "show_thinking", False) if config else False
         )
@@ -574,6 +585,7 @@ class CLITransport(Transport):
 
     async def send(self, event: dict) -> None:
         """Send an event to stdout."""
+        self._ensure_background_watch()
         if self._stdout is not None:
             self._render_event(self._stdout, event)
 
@@ -721,7 +733,71 @@ class CLITransport(Transport):
 
     def stop(self) -> None:
         """Stop the transport."""
+        if self._bg_task is not None:
+            self._bg_task.cancel()
+            self._bg_task = None
+        if self._bg_queue is not None and self.background_agents is not None:
+            try:
+                self.background_agents.unsubscribe(self._bg_queue)
+            except Exception:
+                pass
+            self._bg_queue = None
         logger.debug("CLITransport stopped")
+
+    def _ensure_background_watch(self) -> None:
+        """Start the settlement watcher once we're inside a running loop."""
+        if (
+            self.background_agents is None
+            or self._bg_task is not None
+            or self._stdout is None
+        ):
+            return
+        try:
+            self._bg_task = asyncio.get_running_loop().create_task(
+                self._watch_background()
+            )
+        except RuntimeError:
+            pass
+
+    async def _watch_background(self) -> None:
+        """Print spawn_background lifecycle notices between turn output.
+
+        Mirrors the WebSocket settlement pusher (server/routes/agents.py):
+        same subscription, terminal transport instead of a socket.
+        """
+        self._bg_queue = self.background_agents.subscribe()
+        try:
+            while True:
+                event = await self._bg_queue.get()
+                etype = event.get("type", "")
+                if etype == "agent_settled":
+                    who = event.get("label") or event.get("agent_id", "?")
+                    mark = status_symbols()["ok" if event.get("ok") else "fail"]
+                    parts = [f"[bg] {mark} {who} settled"]
+                    elapsed = event.get("elapsed_seconds")
+                    if elapsed is not None:
+                        parts.append(f"in {elapsed}s")
+                    # A failure's error matters more than partial output.
+                    summary = event.get("error") or event.get("summary") or ""
+                    if summary:
+                        parts.append(f"\u2014 {summary[:160]}")
+                    parts.append(
+                        f'fetch: subagent_result {{"agent_id": "{event.get("agent_id", "")}"}}'
+                    )
+                    out = self._stdout or sys.stdout
+                    out.write("\n" + dim(" ".join(str(x) for x in parts)) + "\n")
+                    out.flush()
+                elif etype == "agent_started":
+                    who = event.get("label") or event.get("agent_id", "?")
+                    out = self._stdout or sys.stdout
+                    out.write("\n" + dim(f"[bg] started {who} (continues across turns)") + "\n")
+                    out.flush()
+                # agent_progress intentionally unrendered: per-turn noise;
+                # subagent_list remains the polling surface.
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.debug("Background watcher stopped", exc_info=True)
 
     # ── Backward compatibility with old WispAgentCore ───────────────
 
@@ -892,6 +968,13 @@ class CLITransport(Transport):
 
     def _flush_content(self, stdout: Any, width: int | None = None) -> None:
         """Render accumulated content as a structured block."""
+        if getattr(self, "_streaming_content_live", False):
+            # Deltas already went to the terminal live — just end the line.
+            self._streaming_content_live = False
+            self._in_content = False
+            stdout.write("\n")
+            stdout.flush()
+            return
         if not self._content_buffer:
             return
         full = "".join(self._content_buffer)
@@ -1045,9 +1128,19 @@ class CLITransport(Transport):
         elif etype == EventType.CONTENT:
             if self._in_thinking:
                 self._flush_thinking(stdout, width)
-            if not self._in_content:
-                self._in_content = True
-            self._buffer_content(ev.text)
+            # Token streaming: write each delta as it arrives. The old
+            # behavior buffered everything and painted one block at the
+            # first boundary — users watched silence for the whole answer.
+            if not getattr(self, "_streaming_content_live", False):
+                prefix = "\n" if self._last_block_was_tool else ""
+                self._last_block_was_tool = False
+                if is_accessible():
+                    stdout.write(prefix + "[Response]\n")
+                else:
+                    stdout.write(prefix)
+                self._streaming_content_live = True
+            stdout.write(ev.text)
+            stdout.flush()
 
         elif etype == EventType.TOOL_CALL:
             self._flush_thinking(stdout, width)

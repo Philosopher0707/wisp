@@ -31,6 +31,7 @@ from wisp.core.events import (
     tool_result as _tool_result_event,
     approval_request as _approval_request_event,
     subagent as _subagent_event,
+    system as system_event,
 )
 from wisp.tools.errors import ToolError
 from wisp.tools._utils import check_dangerous_command
@@ -39,6 +40,10 @@ from wisp.tools.registry import TOOL_IMPLS
 from wisp.tools.audit import AuditLog
 
 logger = logging.getLogger(__name__)
+
+# Heartbeat cadence while blocking subagent tools run (patchable in tests).
+_HEARTBEAT_FIRST_S = 5.0
+_HEARTBEAT_EVERY_S = 20.0
 
 # (tool_name, args, danger_reason) -> (approved, modified_args_or_none)
 ApprovalHandler = Callable[[str, dict, str], Awaitable[tuple[bool, Optional[dict]]]]
@@ -372,21 +377,35 @@ class ToolExecutor:
                 )
                 return
 
-        if func_name in ("spawn", "fanout"):
+        if func_name in ("spawn", "fanout", "orchestrate_vote",
+                         "orchestrate_map_reduce", "orchestrate_chain",
+                         "orchestrate_dag"):
             # Stream subagent lifecycle events while the orchestrator runs:
             # the progress callback lands on a queue from inside the exec
-            # task, and this generator interleaves it with waiting.
+            # task, and this generator interleaves it with waiting. A
+            # wall-clock heartbeat fills the gaps — real researchers emit
+            # nothing between started/completed for minutes at a time,
+            # which users read as a hang.
             queue: asyncio.Queue = asyncio.Queue()
             self._sub_event_queue = queue
             exec_task = asyncio.create_task(
                 self._execute_tool(func_name, func_args, workspace)
             )
+            started = time.monotonic()
+            next_heartbeat = started + _HEARTBEAT_FIRST_S
             try:
                 while not exec_task.done():
                     try:
-                        yield await asyncio.wait_for(queue.get(), timeout=0.1)
+                        item = await asyncio.wait_for(queue.get(), timeout=0.1)
                     except asyncio.TimeoutError:
+                        now = time.monotonic()
+                        if now >= next_heartbeat:
+                            next_heartbeat = now + _HEARTBEAT_EVERY_S
+                            yield system_event(
+                                f"⏳ {func_name} running… {int(now - started)}s"
+                            )
                         continue
+                    yield item
                 while not queue.empty():
                     yield queue.get_nowait()
                 result, duration_ms = exec_task.result()
