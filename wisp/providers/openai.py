@@ -229,6 +229,10 @@ class OpenAIProvider(Provider):
             logger.exception("OpenAI provider stream failed")
             yield {"type": "error", "message": str(exc)}
 
+    def _auth_headers(self) -> dict[str, str]:
+        """Authorization header(s) for API calls; subclass hook."""
+        return {"Authorization": f"Bearer {self.api_key}"}
+
     def check_health(self) -> bool:
         """Base-contract health gate: reachable + configured model usable."""
         info = self.health_check()
@@ -250,7 +254,7 @@ class OpenAIProvider(Provider):
         try:
             resp = requests.get(
                 f"{self.api_base}/models",
-                headers={"Authorization": f"Bearer {self.api_key}"},
+                headers=self._auth_headers(),
                 timeout=10,
             )
             if resp.status_code != 200:
@@ -266,7 +270,7 @@ class OpenAIProvider(Provider):
         try:
             resp = requests.get(
                 f"{self.api_base}/models",
-                headers={"Authorization": f"Bearer {self.api_key}"},
+                headers=self._auth_headers(),
                 timeout=10,
             )
             if resp.status_code != 200:

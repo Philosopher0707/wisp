@@ -27,7 +27,7 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
     "provider": {
         "type": str,
         "default": "ollama",
-        "description": "Model provider backend: ollama, openai, nvidia",
+        "description": "Model provider backend: ollama, openai, nvidia, openrouter, mock",
         "env_var": "WISP_PROVIDER",
     },
     "ollama_url": {

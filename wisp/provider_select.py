@@ -32,6 +32,11 @@ KNOWN_PROVIDERS: "dict[str, dict[str, Any]]" = {
         "requires_key": True,
         "default_base": "https://integrate.api.nvidia.com/v1",
     },
+    "openrouter": {
+        "label": "OpenRouter (one key, many upstream models)",
+        "requires_key": True,
+        "default_base": "https://openrouter.ai/api/v1",
+    },
     "mock": {
         "label": "Mock (offline testing)",
         "requires_key": False,
@@ -115,10 +120,16 @@ def missing_key(provider_name: str) -> str | None:
     # Provider-specific fallbacks mirror what each provider class reads.
     if provider_name == "openai" and os.environ.get("OPENAI_API_KEY"):
         return None
-    return (
-        f"No API key for '{provider_name}'. Export WISP_API_KEY "
-        f"(or OPENAI_API_KEY) first."
-    )
+    if provider_name == "openrouter" and (
+            os.environ.get("OPENROUTER_API_KEY") or os.environ.get("WISP_API_KEY")):
+        return None
+    hints = {
+        "openrouter": "Export OPENROUTER_API_KEY (or WISP_API_KEY) first.",
+        "openai": "Export WISP_API_KEY (or OPENAI_API_KEY) first.",
+    }
+    hint = hints.get(provider_name,
+                     f"Export WISP_API_KEY for '{provider_name}' first.")
+    return f"No API key for '{provider_name}'. {hint}"
 
 
 def apply_switch(runtime: Any, session: "dict[str, Any]", config: Any,

@@ -8,9 +8,10 @@ from .base import BaseProvider
 from .ollama import OllamaProvider
 from .openai import OpenAIProvider
 from .nvidia import NVIDIAProvider
+from .openrouter import OpenRouterProvider
 from .mock import MockProvider
 
-__all__ = ["BaseProvider", "OllamaProvider", "OpenAIProvider", "NVIDIAProvider", "MockProvider", "get_provider"]
+__all__ = ["BaseProvider", "OllamaProvider", "OpenAIProvider", "NVIDIAProvider", "OpenRouterProvider", "MockProvider", "get_provider"]
 
 
 def get_provider(config: WispConfig) -> BaseProvider:
@@ -24,6 +25,8 @@ def get_provider(config: WispConfig) -> BaseProvider:
         return OpenAIProvider(config)
     if provider_name == "nvidia":
         return NVIDIAProvider(config)
+    if provider_name == "openrouter":
+        return OpenRouterProvider(config)
     if provider_name == "mock":
         return MockProvider()
     raise ValueError(f"Unsupported provider: {provider_name}")

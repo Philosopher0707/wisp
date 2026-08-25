@@ -8,6 +8,8 @@ Usage:
 
 from __future__ import annotations
 
+import os
+
 import logging
 from typing import Any, Type
 
@@ -15,6 +17,7 @@ from .protocol import Provider
 from .ollama import OllamaProvider
 from .openai import OpenAIProvider
 from .nvidia import NVIDIAProvider
+from .openrouter import OpenRouterProvider
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +35,7 @@ class ProviderFactory:
         self.register("ollama", OllamaProvider)
         self.register("openai", OpenAIProvider)
         self.register("nvidia", NVIDIAProvider)
+        self.register("openrouter", OpenRouterProvider)
 
     def register(self, name: str, provider_class: Type[Provider]) -> None:
         """Register a provider class under a name."""
@@ -106,13 +110,14 @@ class ProviderFactory:
                 api_key=getattr(config, "api_key", "") or "",
             )
 
-        if name == "nvidia":
+        if name == "openrouter":
             return self.create(
-                "nvidia",
+                "openrouter",
                 config=config,
                 base_url=getattr(config, "api_base", "") or "",
-                model=getattr(config, "model", "nemotron-3-ultra"),
-                api_key=getattr(config, "api_key", "") or "",
+                model=getattr(config, "model", "openrouter/auto"),
+                api_key=getattr(config, "api_key", "")
+                or os.environ.get("OPENROUTER_API_KEY", ""),
             )
 
         if name == "nvidia":
@@ -124,6 +129,16 @@ class ProviderFactory:
                 api_key=getattr(config, "api_key", "") or "",
             )
 
+        if name == "openrouter":
+            return self.create(
+                "openrouter",
+                config=config,
+                base_url=getattr(config, "api_base", "") or "",
+                model=getattr(config, "model", "openrouter/auto"),
+                api_key=getattr(config, "api_key", "")
+                or os.environ.get("OPENROUTER_API_KEY", ""),
+            )
+
         if name == "nvidia":
             return self.create(
                 "nvidia",
@@ -131,6 +146,35 @@ class ProviderFactory:
                 base_url=getattr(config, "api_base", "") or "",
                 model=getattr(config, "model", "nemotron-3-ultra"),
                 api_key=getattr(config, "api_key", "") or "",
+            )
+
+        if name == "openrouter":
+            return self.create(
+                "openrouter",
+                config=config,
+                base_url=getattr(config, "api_base", "") or "",
+                model=getattr(config, "model", "openrouter/auto"),
+                api_key=getattr(config, "api_key", "")
+                or os.environ.get("OPENROUTER_API_KEY", ""),
+            )
+
+        if name == "nvidia":
+            return self.create(
+                "nvidia",
+                config=config,
+                base_url=getattr(config, "api_base", "") or "",
+                model=getattr(config, "model", "nemotron-3-ultra"),
+                api_key=getattr(config, "api_key", "") or "",
+            )
+
+        if name == "openrouter":
+            return self.create(
+                "openrouter",
+                config=config,
+                base_url=getattr(config, "api_base", "") or "",
+                model=getattr(config, "model", "openrouter/auto"),
+                api_key=getattr(config, "api_key", "")
+                or os.environ.get("OPENROUTER_API_KEY", ""),
             )
 
         return self.create(name, config=config)
