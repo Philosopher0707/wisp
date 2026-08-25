@@ -167,6 +167,12 @@ class CompositionRoot:
         self.runtime.orchestrator = self.subagent_orchestrator
         self.tool_executor.subagent_orchestrator = self.subagent_orchestrator
 
+        # Background agents share the orchestrator's execution path; the
+        # manager only tracks lifecycle and continuation between turns.
+        from wisp.multi_agent.background import BackgroundAgentManager
+        self.background_agents = BackgroundAgentManager(self.subagent_orchestrator)
+        self.tool_executor.background_agents = self.background_agents
+
         # Register services for lifecycle management
         self._registry = ServiceRegistry()
         self._registry.register(self.store)
@@ -256,15 +262,13 @@ class CompositionRoot:
             self._mcp_manager.shutdown()
         except Exception:
             pass
-        try:
-            from wisp.async_utils import shutdown_background_loop, get_shared_executor
-            shutdown_background_loop(timeout=5.0)
-            executor = get_shared_executor()
-            # Wait for in-flight work to finish (up to 5s) so Python's
-            # atexit doesn't hang trying to join daemon threads.
-            executor.shutdown(wait=True, cancel_futures=True)
-        except Exception:
-            pass
+        # NOTE: deliberately NOT shutting down the process-global shared
+        # executor or background loop here. They are singletons shared by
+        # every root in the process (tests, server restarts, embedded use);
+        # killing them here poisoned all later roots with "cannot schedule
+        # new futures after shutdown". asyncio's atexit hooks join the
+        # loop's daemon threads at interpreter exit, which is the correct
+        # owner for this lifecycle.
 
     def health(self) -> list:
         """Check health of all services."""

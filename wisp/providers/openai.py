@@ -203,6 +203,21 @@ class OpenAIProvider(Provider):
             logger.exception("OpenAI provider stream failed")
             yield {"type": "error", "message": str(exc)}
 
+    def check_health(self) -> bool:
+        """Base-contract health gate: reachable + configured model usable."""
+        info = self.health_check()
+        if info.get("status") != "healthy":
+            return False
+        # Reachable is necessary but not sufficient: the configured model
+        # must actually exist on this endpoint.
+        try:
+            models = {m.get("id") or m.get("name") for m in self.list_models()}
+            if models and self.model and self.model not in models:
+                return False
+        except Exception:
+            pass  # model listing optional; reachability already proven
+        return True
+
     def health_check(self) -> dict[str, Any]:
         """Check provider health by attempting to list models."""
         import requests
