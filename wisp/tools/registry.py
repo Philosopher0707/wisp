@@ -263,6 +263,198 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "spawn_background",
+            "description": "Spawn a specialist subagent that runs in the BACKGROUND and returns an agent id immediately — you keep working while it runs. Poll progress with subagent_list or subagent_result, continue its conversation with subagent_send, or stop it with subagent_cancel. Use this instead of spawn when the task is slow and you have other work to do first. Role picks tools, system prompt, timeout, and iteration budget automatically.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "Specific instruction for the subagent. Be precise about what to produce and which files to touch."},
+                    "role": {"type": "string", "description": "Agent role: coder, reviewer, tester, researcher, planner, debugger, generalist.", "default": "generalist"},
+                    "label": {"type": "string", "description": "Short human-readable name shown in subagent_list."},
+                    "timeout_seconds": {"type": "number", "description": "Override the role's default timeout in seconds."},
+                    "max_iterations": {"type": "number", "description": "Override the role's default max iterations."},
+                    "worktree_isolated": {"type": "boolean", "description": "Run in isolated git worktree. Default false.", "default": False},
+                    "model": {"type": "string", "description": "Override the model. Default inherits from parent."},
+                    "tools": {"type": "array", "items": {"type": "string"}, "description": "Explicit tool list. Overrides role defaults. Use ['all'] for full toolset."},
+                },
+                "required": ["task"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "subagent_list",
+            "description": "List background subagents with id, label, status (running/completed/failed/cancelled), and result summary when finished.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "include_finished": {"type": "boolean", "description": "Include finished agents. Default true.", "default": True},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "subagent_result",
+            "description": "Get the current state and result of one background subagent by id. Set wait_seconds to block until it finishes (or the wait expires).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {"type": "string", "description": "The background agent id returned by spawn_background."},
+                    "wait_seconds": {"type": "number", "description": "Seconds to wait for completion before returning current status. Default 0.", "default": 0},
+                },
+                "required": ["agent_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "subagent_send",
+            "description": "Continue a FINISHED background subagent's conversation: it sees its full prior work plus your new message and runs again under the same agent id. Fails if the agent is still running.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {"type": "string", "description": "The background agent id to continue."},
+                    "message": {"type": "string", "description": "Follow-up instruction. The agent keeps its prior conversation context."},
+                },
+                "required": ["agent_id", "message"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "subagent_cancel",
+            "description": "Cancel a RUNNING background subagent. Its partial output is discarded; the entry stays listed as cancelled.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {"type": "string", "description": "The background agent id to cancel."},
+                },
+                "required": ["agent_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "orchestrate_vote",
+            "description": "Ask N independent subagents the SAME question in parallel and take the majority answer by consensus threshold. Use when correctness matters more than speed — e.g. security judgments, ambiguous decisions. Blocks until all votes are in.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "The question every voter answers independently."},
+                    "voters": {"type": "number", "description": "Number of independent voter subagents (2-6). Default 3.", "default": 3},
+                    "role": {"type": "string", "description": "Agent role for all voters.", "default": "generalist"},
+                    "consensus_threshold": {"type": "number", "description": "Fraction of agreeing voters required (0-1). Default 0.6.", "default": 0.6},
+                },
+                "required": ["task"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "orchestrate_map_reduce",
+            "description": "Fan a task out over a list of items (map phase, parallel subagents), then synthesize all mapper outputs into one answer (reduce phase). Use when many independent units need the same treatment — files to review, modules to document, configs to audit.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "Instruction applied to EACH item."},
+                    "items": {"type": "array", "items": {"type": "string"}, "description": "The work units — file paths, names, or short texts."},
+                    "role": {"type": "string", "description": "Agent role for mappers and reducer.", "default": "generalist"},
+                    "max_concurrent": {"type": "number", "description": "Max parallel mappers. Default 4.", "default": 4},
+                },
+                "required": ["task", "items"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "orchestrate_chain",
+            "description": "Run specialist subagents SEQUENTIALLY, each seeing the previous step's output (pipeline). Use when one task's output is the next task's input — e.g. implement → review → fix findings.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "steps": {
+                        "type": "array",
+                        "description": "Ordered pipeline steps.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "task": {"type": "string", "description": "Instruction for this step."},
+                                "role": {"type": "string", "description": "Specialist role for this step.", "default": "generalist"},
+                            },
+                            "required": ["task"],
+                        },
+                    },
+                    "pass_context": {"type": "boolean", "description": "Feed each step the prior step's output. Default true.", "default": True},
+                },
+                "required": ["steps"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "orchestrate_dag",
+            "description": "Execute a dependency graph of subagents: independent nodes run in parallel, dependents start only after their dependencies finish, and upstream outputs are injected into downstream prompts. Use when a plan has real ordering constraints — e.g. scaffold (no deps) → implement+docs in parallel after it → tests after both.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "nodes": {
+                        "type": "array",
+                        "description": "DAG nodes. 'depends_on' names must reference other nodes; cycles are rejected.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string", "description": "Unique node id."},
+                                "task": {"type": "string", "description": "Instruction for this node's subagent."},
+                                "role": {"type": "string", "description": "Agent role for this node.", "default": "generalist"},
+                                "depends_on": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "Names of nodes that must finish first.",
+                                    "default": [],
+                                },
+                            },
+                            "required": ["name", "task"],
+                        },
+                    },
+                    "max_parallelism": {"type": "number", "description": "Max nodes running at once per level. Default 4.", "default": 4},
+                },
+                "required": ["nodes"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "capture_skill",
+            "description": "Save a recently demonstrated workflow as a reusable skill (SKILL.md). Call this right after completing a multi-step procedure you just performed, so it can be replayed later. Uses your most recent tool sequence unless explicit steps are provided.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Short kebab-case skill name, e.g. 'add-endpoint-with-tests'."},
+                    "description": {"type": "string", "description": "One sentence: what this workflow accomplishes and when to use it."},
+                    "steps": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional explicit step descriptions. Omit to capture your actual recent tool calls.",
+                    },
+                },
+                "required": ["name", "description"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "git_status",
             "description": "Show git status for the workspace: current branch, uncommitted files (staged, modified, untracked, deleted, conflicted), and recent commits. Returns empty string if not a git repository.",
             "parameters": {
@@ -570,6 +762,16 @@ def _lazy_tool(module_name: str, attr: str):
 TOOL_IMPLS = {
     "spawn": _tool_not_direct,
     "fanout": _tool_not_direct,
+    "spawn_background": _tool_not_direct,
+    "subagent_list": _tool_not_direct,
+    "subagent_result": _tool_not_direct,
+    "subagent_send": _tool_not_direct,
+    "subagent_cancel": _tool_not_direct,
+    "orchestrate_vote": _tool_not_direct,
+    "orchestrate_map_reduce": _tool_not_direct,
+    "orchestrate_chain": _tool_not_direct,
+    "orchestrate_dag": _tool_not_direct,
+    "capture_skill": _tool_not_direct,
     "read_file": tool_read_file,
     "write_file": tool_write_file,
     "edit_file": tool_edit_file,

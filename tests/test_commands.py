@@ -479,3 +479,162 @@ class TestSessionsCommand:
         cmd_sessions(a, "")
         out = capsys.readouterr().out
         assert "No session store" in out
+
+
+# ── /agents command ──────────────────────────────────────────────────
+
+class TestAgentsCommand:
+    """`/agents` surfaces the background-agent registry."""
+
+    def _agent_with_manager(self, mgr):
+        from types import SimpleNamespace
+        agent = MockAgent()
+        agent.runtime = SimpleNamespace(
+            orchestrator=SimpleNamespace(background_agents=mgr)
+        )
+        return agent
+
+    def test_no_manager_warns(self, agent, capsys):
+        dispatch("/agents", agent)
+        out = capsys.readouterr().out
+        assert "not available" in out.lower()
+
+    def test_list_empty(self, capsys):
+        from wisp.multi_agent.background import BackgroundAgentManager
+        from tests.test_background_agents import FakeOrchestrator
+        agent = self._agent_with_manager(BackgroundAgentManager(FakeOrchestrator()))
+        dispatch("/agents", agent)
+        out = capsys.readouterr().out
+        assert "No background agents" in out
+
+    def test_detail_unknown_id(self, capsys):
+        from wisp.multi_agent.background import BackgroundAgentManager
+        from tests.test_background_agents import FakeOrchestrator
+        agent = self._agent_with_manager(BackgroundAgentManager(FakeOrchestrator()))
+        dispatch("/agents bg-nope", agent)
+        out = capsys.readouterr().out
+        assert "No such agent" in out
+
+    @pytest.mark.asyncio
+    async def test_detail_known_running_agent(self, capsys):
+        from wisp.multi_agent.background import BackgroundAgentManager
+        from tests.test_background_agents import FakeOrchestrator
+        from wisp.multi_agent.task import SubagentContract
+
+        mgr = BackgroundAgentManager(FakeOrchestrator(delay=5.0))
+        launch = await mgr.launch(SubagentContract(name="bg-x", task="t"))
+        agent = self._agent_with_manager(mgr)
+
+        import threading
+        result: dict = {}
+
+        def run():
+            try:
+                dispatch(f"/agents {launch['agent_id']}", agent)
+            except Exception as e:
+                result["error"] = str(e)
+
+        th = threading.Thread(target=run, daemon=True)
+        th.start()
+        th.join(timeout=10)
+        mgr.cancel(launch["agent_id"])
+        out = capsys.readouterr().out if not result.get("error") else result["error"]
+        assert launch["agent_id"] in out
+
+    def test_cancel_via_command(self, capsys):
+        from wisp.multi_agent.background import BackgroundAgentEntry, BackgroundAgentManager
+        from tests.test_background_agents import FakeOrchestrator
+        from wisp.multi_agent.task import SubagentContract
+
+        mgr = BackgroundAgentManager(FakeOrchestrator())
+        # Finished entry → cancel refuses (nothing to cancel).
+        entry = BackgroundAgentEntry(id="bg-cancel-me", label="x", contract=SubagentContract(task="t"))
+        entry.status = "completed"
+        mgr._entries[entry.id] = entry
+        agent = self._agent_with_manager(mgr)
+        dispatch("/agents cancel bg-cancel-me", agent)
+        out = capsys.readouterr().out
+        assert "already" in out or "cancel failed" in out
+
+    def test_send_reports_error_for_missing_session(self, capsys):
+        from wisp.multi_agent.background import BackgroundAgentEntry, BackgroundAgentManager
+        from tests.test_background_agents import FakeOrchestrator
+        from wisp.multi_agent.task import SubagentContract
+
+        orch = FakeOrchestrator()
+        mgr = BackgroundAgentManager(orch)
+        entry = BackgroundAgentEntry(id="bg-s1", label="s", contract=SubagentContract(task="t"))
+        entry.status = "completed"
+        mgr._entries[entry.id] = entry  # no last_session_id
+        agent = self._agent_with_manager(mgr)
+        dispatch("/agents send bg-s1 continue please", agent)
+        out = capsys.readouterr().out
+        assert "session" in out.lower()
+
+    def test_registry_has_aliases(self):
+        from wisp.commands import lookup
+        assert lookup("agents") is not None
+        assert lookup("ba") is not None
+
+class TestSkillCaptureCommands:
+    @pytest.fixture(autouse=True)
+    def _fresh_capture(self):
+        from wisp.skill_capture import reset_capture
+        reset_capture()
+        yield
+        reset_capture()
+
+    def test_suggest_empty_history(self, agent, capsys):
+        from wisp.commands import dispatch as execute_command
+        execute_command("/skill suggest", agent)
+        out = capsys.readouterr().out
+        assert "No repeated workflow" in out
+
+    def test_suggest_shows_repeated_workflow(self, agent, capsys, tmp_path):
+        from wisp.skill_capture import get_capture
+        from wisp.commands import dispatch as execute_command
+        cap = get_capture()
+        for _ in range(2):
+            cap.record("list_files")
+            cap.record("run_tests")
+        agent.config = MockConfig()
+        agent.config.workspace = str(tmp_path)
+        execute_command("/skill suggest", agent)
+        out = capsys.readouterr().out
+        assert "Repeated workflow" in out
+        assert "run_tests" in out
+
+    def test_save_writes_skill_file(self, agent, capsys, tmp_path):
+        from wisp.skill_capture import get_capture
+        from wisp.commands import dispatch as execute_command
+        cap = get_capture()
+        cap.record("read_file", {"path": "a.py"})
+        agent.config = MockConfig()
+        agent.config.workspace = str(tmp_path)
+        execute_command("/skill save my-flow Does the flow", agent)
+        out = capsys.readouterr().out
+        assert "Skill saved" in out
+        skill_file = tmp_path / ".agents" / "skills" / "my-flow" / "SKILL.md"
+        assert skill_file.exists()
+        assert "Does the flow" in skill_file.read_text(encoding="utf-8")
+
+    def test_save_without_history_errors(self, agent, capsys, tmp_path):
+        from wisp.commands import dispatch as execute_command
+        agent.config = MockConfig()
+        agent.config.workspace = str(tmp_path)
+        execute_command("/skill save nothing", agent)
+        assert "no recorded steps" in capsys.readouterr().out.lower()
+
+    def test_save_twice_reports_merged(self, agent, capsys, tmp_path):
+        from wisp.skill_capture import get_capture
+        from wisp.commands import dispatch as execute_command
+        cap = get_capture()
+        cap.record("list_files")
+        agent.config = MockConfig()
+        agent.config.workspace = str(tmp_path)
+        execute_command("/skill save flow d", agent)
+        execute_command("/skill save flow d", agent)
+        out = capsys.readouterr().out
+        assert out.count("Skill saved") == 1
+        assert "Skill merged" in out
+

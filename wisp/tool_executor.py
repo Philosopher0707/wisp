@@ -20,6 +20,7 @@ import json
 import logging
 import time
 import traceback
+from dataclasses import replace as dc_replace
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
@@ -118,7 +119,22 @@ _DEFAULT_WRITE_TOOLS: set[str] = {
     "update_plan",
     "spawn",
     "fanout",
+    "spawn_background",
+    "subagent_send",
+    "orchestrate_vote",
+    "orchestrate_map_reduce",
+    "orchestrate_chain",
+    "orchestrate_dag",
+    "capture_skill",
 }
+
+# Executor-dispatched subagent tools — never shadowed by MCP bare names.
+_SUBAGENT_TOOLS: frozenset[str] = frozenset({
+    "spawn", "fanout", "spawn_background",
+    "subagent_list", "subagent_result", "subagent_send", "subagent_cancel",
+    "orchestrate_vote", "orchestrate_map_reduce", "orchestrate_chain",
+    "orchestrate_dag",
+})
 
 
 def _get_write_tools(config: Any = None) -> set[str]:
@@ -173,6 +189,7 @@ class ToolExecutor:
         lsp_manager: Any | None = None,
         subagent_orchestrator: Any | None = None,
         audit_trail: Any | None = None,
+        background_agents: Any | None = None,
     ):
         self.config = config
         self.hook_manager = hook_manager
@@ -182,6 +199,9 @@ class ToolExecutor:
         self.lsp_manager = lsp_manager
         self.subagent_orchestrator = subagent_orchestrator
         self.audit_trail = audit_trail
+        self.background_agents = background_agents
+        from wisp.skill_capture import get_capture
+        self.skill_capture = get_capture()
         # Set per spawn/fanout execution; carries AgentEvents from the
         # orchestrator's sync progress callbacks into execute()'s stream.
         self._sub_event_queue: Optional[asyncio.Queue] = None
@@ -322,6 +342,12 @@ class ToolExecutor:
 
         # ── Post-tool metrics ──
         self._record_metrics(func_name, duration_ms, result)
+
+        # Skill capture: feed the workflow recorder (best-effort).
+        try:
+            self.skill_capture.record(func_name, func_args)
+        except Exception:
+            logger.debug("skill capture record failed", exc_info=True)
 
         # ── Post-tool event hooks (best-effort, non-blocking) ──
         await self._run_post_tool_hooks(func_name, func_args, result, workspace)
@@ -584,7 +610,8 @@ class ToolExecutor:
 
         # A colliding bare name routes to the builtin (see _is_external_call);
         # warn once so operators know their server's tool is being shadowed.
-        if (func_name not in ("spawn", "fanout")
+        # Subagent tools are dispatched here regardless of TOOL_IMPLS.
+        if (func_name not in _SUBAGENT_TOOLS
                 and func_name in TOOL_IMPLS and self._is_mcp_tool(func_name)):
             _warn_mcp_shadowed_builtin(func_name)
 
@@ -592,6 +619,26 @@ class ToolExecutor:
             result = await self._spawn(func_args, workspace)
         elif func_name == "fanout":
             result = await self._fanout(func_args, workspace)
+        elif func_name == "spawn_background":
+            result = await self._spawn_background(func_args, workspace)
+        elif func_name == "subagent_list":
+            result = await self._subagent_list(func_args)
+        elif func_name == "subagent_result":
+            result = await self._subagent_result(func_args)
+        elif func_name == "subagent_send":
+            result = await self._subagent_send(func_args)
+        elif func_name == "subagent_cancel":
+            result = await self._subagent_cancel(func_args)
+        elif func_name == "orchestrate_vote":
+            result = await self._orchestrate_vote(func_args, workspace)
+        elif func_name == "orchestrate_map_reduce":
+            result = await self._orchestrate_map_reduce(func_args, workspace)
+        elif func_name == "orchestrate_chain":
+            result = await self._orchestrate_chain(func_args, workspace)
+        elif func_name == "orchestrate_dag":
+            result = await self._orchestrate_dag(func_args, workspace)
+        elif func_name == "capture_skill":
+            result = await self._capture_skill(func_args, workspace)
         elif self._is_external_call(func_name):
             # Builtin names always win over a bare-name MCP match: an MCP
             # server advertising "read_file" must not replace the core tool.
@@ -917,6 +964,463 @@ class ToolExecutor:
                 },
                 "metadata": {"traceback": tb},
             }, ensure_ascii=False)
+
+    # ── Background subagent tools ─────────────────────────────────────
+
+    def _get_background_manager(self) -> Any | None:
+        """Resolve the background manager, creating one lazily when only an
+        orchestrator was wired (direct ToolExecutor users, tests)."""
+        if self.background_agents is None:
+            if self.subagent_orchestrator is None:
+                return None
+            from wisp.multi_agent.background import BackgroundAgentManager
+            self.background_agents = BackgroundAgentManager(self.subagent_orchestrator)
+        return self.background_agents
+
+    def _build_contract(self, func_args: dict, workspace: str, name: str) -> tuple[Any | None, str]:
+        """Shared spawn/spawn_background contract builder.
+
+        Returns (contract, error). Exactly one of the two is non-empty.
+        """
+        role = func_args.get("role", "generalist")
+        try:
+            from wisp.multi_agent.roles import ROLE_CONFIGS
+            role_cfg = ROLE_CONFIGS.get(role)
+        except Exception:
+            role_cfg = None
+
+        if role_cfg is None:
+            valid = ["coder", "reviewer", "tester", "researcher", "planner", "debugger", "generalist"]
+            return None, f"Unknown role '{role}'. Valid roles: {', '.join(valid)}"
+
+        timeout = func_args.get("timeout_seconds") or role_cfg.timeout_seconds
+        max_iter = func_args.get("max_iterations") or role_cfg.max_iterations
+
+        from wisp.multi_agent.task import SubagentContract
+        contract = SubagentContract(
+            name=name,
+            role=role,
+            task=func_args.get("task", ""),
+            tools=func_args.get("tools") or role_cfg.allowed_tools,
+            max_iterations=int(max_iter),
+            timeout_seconds=float(timeout),
+            worktree_isolated=func_args.get("worktree_isolated", False),
+            model=func_args.get("model") or role_cfg.model,
+            workspace=workspace,
+            auto_approve=func_args.get("auto_approve", False),
+            output_format=func_args.get("output_format", "text"),
+            output_schema=func_args.get("output_schema"),
+            max_tokens=func_args.get("max_tokens"),
+            max_retries=int(func_args.get("auto_retry", True)) * 2,
+        )
+        # Inherit the executing agent's nesting depth — without this every
+        # spawned contract resets to 0 and the orchestrator's depth guard
+        # can never trip (unbounded recursion).
+        contract._subagent_depth = int(getattr(self.config, "_subagent_depth", 0) or 0) + 1
+        contract._subagent_branch_count = int(getattr(self.config, "_subagent_branch_count", 0) or 0) + 1
+        return contract, ""
+
+    def _tool_error(self, tool: str, message: str) -> str:
+        return json.dumps({
+            "status": "error",
+            "tool": tool,
+            "data": message,
+            "metadata": {},
+        }, ensure_ascii=False)
+
+    async def _spawn_background(self, func_args: dict, workspace: str) -> str:
+        """Execute spawn_background — launch a subagent without blocking.
+
+        Returns an agent id immediately; results are collected later via
+        subagent_result / subagent_list.
+        """
+        manager = self._get_background_manager()
+        if manager is None:
+            return self._tool_error(
+                "spawn_background",
+                "Subagent orchestrator not available — wire it via CompositionRoot",
+            )
+
+        task = func_args.get("task", func_args.get("prompt", ""))
+        if not task:
+            return self._tool_error("spawn_background", "spawn_background requires a 'task' argument")
+
+        contract, err = self._build_contract(func_args, workspace, name="spawn-background")
+        if err:
+            return self._tool_error("spawn_background", err)
+        contract.task = task
+
+        launched = await manager.launch(contract, label=func_args.get("label", ""))
+        if not launched.get("ok"):
+            return json.dumps({
+                "status": "error",
+                "tool": "spawn_background",
+                "data": launched.get("error", "launch failed"),
+                "metadata": {},
+            }, ensure_ascii=False)
+
+        return json.dumps({
+            "status": "ok",
+            "tool": "spawn_background",
+            "data": {
+                "agent_id": launched["agent_id"],
+                "label": launched["label"],
+                "status": launched["status"],
+                "note": "Running in background. Poll with subagent_list / subagent_result; "
+                        "continue with subagent_send; stop with subagent_cancel.",
+            },
+            "metadata": {
+                "agent_id": launched["agent_id"],
+                "role": contract.role,
+            },
+        }, ensure_ascii=False)
+
+    async def _subagent_list(self, func_args: dict) -> str:
+        manager = self._get_background_manager()
+        if manager is None:
+            return self._tool_error("subagent_list", "Background agents not available")
+        entries = manager.list(include_finished=bool(func_args.get("include_finished", True)))
+        return json.dumps({
+            "status": "ok",
+            "tool": "subagent_list",
+            "data": {"agents": entries, "count": len(entries)},
+            "metadata": {},
+        }, ensure_ascii=False)
+
+    async def _subagent_result(self, func_args: dict) -> str:
+        manager = self._get_background_manager()
+        if manager is None:
+            return self._tool_error("subagent_result", "Background agents not available")
+        agent_id = func_args.get("agent_id", "")
+        if not agent_id:
+            return self._tool_error("subagent_result", "subagent_result requires an 'agent_id' argument")
+        snapshot = await manager.result(agent_id, wait_seconds=float(func_args.get("wait_seconds", 0) or 0))
+        if not snapshot.get("ok"):
+            return self._tool_error("subagent_result", snapshot.get("error", "unknown"))
+        return json.dumps({
+            "status": "ok",
+            "tool": "subagent_result",
+            "data": snapshot,
+            "metadata": {"agent_id": agent_id, "status": snapshot.get("status")},
+        }, ensure_ascii=False)
+
+    async def _subagent_send(self, func_args: dict) -> str:
+        manager = self._get_background_manager()
+        if manager is None:
+            return self._tool_error("subagent_send", "Background agents not available")
+        agent_id = func_args.get("agent_id", "")
+        message = func_args.get("message", "")
+        if not agent_id or not message:
+            return self._tool_error("subagent_send", "subagent_send requires 'agent_id' and 'message'")
+        outcome = await manager.send(agent_id, message)
+        if not outcome.get("ok"):
+            return self._tool_error("subagent_send", outcome.get("error", "send failed"))
+        return json.dumps({
+            "status": "ok",
+            "tool": "subagent_send",
+            "data": {
+                "agent_id": outcome["agent_id"],
+                "status": outcome["status"],
+                "note": "Continuation running. Collect with subagent_result.",
+            },
+            "metadata": {"agent_id": agent_id},
+        }, ensure_ascii=False)
+
+    async def _subagent_cancel(self, func_args: dict) -> str:
+        manager = self._get_background_manager()
+        if manager is None:
+            return self._tool_error("subagent_cancel", "Background agents not available")
+        agent_id = func_args.get("agent_id", "")
+        if not agent_id:
+            return self._tool_error("subagent_cancel", "subagent_cancel requires an 'agent_id' argument")
+        outcome = manager.cancel(agent_id)
+        if not outcome.get("ok"):
+            return self._tool_error("subagent_cancel", outcome.get("error", "cancel failed"))
+        return json.dumps({
+            "status": "ok",
+            "tool": "subagent_cancel",
+            "data": outcome,
+            "metadata": {"agent_id": agent_id},
+        }, ensure_ascii=False)
+
+    # ── Orchestration patterns (blocking, result returned this turn) ──
+
+    def _pattern_result(self, tool: str, pattern: str, result: Any) -> str:
+        """Shared JSON envelope for vote/map-reduce/chain outcomes."""
+        ok = bool(getattr(result, "success", False)) if result is not None else False
+        output = (getattr(result, "output", "") or "")[:2000] if result is not None else ""
+        return json.dumps({
+            "status": "ok" if ok else "error",
+            "tool": tool,
+            "data": {
+                "ok": ok,
+                "pattern": pattern,
+                "summary": output,
+                "files": list(getattr(result, "files_changed", []) or []) if result is not None else [],
+                "error": getattr(result, "error", None) if result is not None else "no result",
+                "elapsed_seconds": round(getattr(result, "elapsed_seconds", 0.0) or 0.0, 1),
+            },
+            "metadata": {
+                "pattern": pattern,
+                "task_id": getattr(result, "task_id", "") if result is not None else "",
+            },
+        }, ensure_ascii=False)
+
+    async def _orchestrate_vote(self, func_args: dict, workspace: str) -> str:
+        """Execute orchestrate_vote — N independent voters, majority wins."""
+        orch = self.subagent_orchestrator
+        if orch is None:
+            return self._tool_error("orchestrate_vote",
+                                    "Subagent orchestrator not available — wire it via CompositionRoot")
+        task = func_args.get("task", "")
+        if not task:
+            return self._tool_error("orchestrate_vote", "orchestrate_vote requires a 'task' argument")
+
+        try:
+            n_voters = max(2, min(6, int(func_args.get("voters", 3) or 3)))
+        except (TypeError, ValueError):
+            n_voters = 3
+        try:
+            threshold = float(func_args.get("consensus_threshold", 0.6) or 0.6)
+        except (TypeError, ValueError):
+            threshold = 0.6
+        threshold = min(1.0, max(0.1, threshold))
+
+        base, err = self._build_contract({"task": task, **{
+            k: func_args[k] for k in ("role", "timeout_seconds", "model") if k in func_args
+        }}, workspace, name="vote-voter")
+        if err:
+            return self._tool_error("orchestrate_vote", err)
+
+        voters = [
+            dc_replace(base, name=f"vote-{i}")
+            for i in range(n_voters)
+        ]
+        result = await orch.run_vote(
+            task=task, agents=voters,
+            consensus_threshold=threshold,
+        )
+        return self._pattern_result("orchestrate_vote", "vote", result)
+
+    async def _orchestrate_map_reduce(self, func_args: dict, workspace: str) -> str:
+        """Execute orchestrate_map_reduce — parallel mappers + synthesis."""
+        orch = self.subagent_orchestrator
+        if orch is None:
+            return self._tool_error("orchestrate_map_reduce",
+                                    "Subagent orchestrator not available — wire it via CompositionRoot")
+        task = func_args.get("task", "")
+        items = func_args.get("items") or []
+        if not task:
+            return self._tool_error("orchestrate_map_reduce", "orchestrate_map_reduce requires a 'task' argument")
+        if not isinstance(items, list) or not items:
+            return self._tool_error("orchestrate_map_reduce",
+                                    "orchestrate_map_reduce requires a non-empty 'items' array")
+        items = [str(i) for i in items[:20]]
+
+        role = func_args.get("role", "generalist")
+        try:
+            max_concurrent = max(1, min(8, int(func_args.get("max_concurrent", 4) or 4)))
+        except (TypeError, ValueError):
+            max_concurrent = 4
+
+        template, err = self._build_contract({"task": task, "role": role}, workspace, name="map")
+        if err:
+            return self._tool_error("orchestrate_map_reduce", err)
+
+        from wisp.multi_agent.task import SubagentContract
+
+        def mapper(item: str) -> SubagentContract:
+            return dc_replace(template, task=f"{task}\n\nItem:\n{item}")
+
+        reducer_task = (
+            f"Synthesize the following per-item findings into one coherent answer. "
+            f"Overall goal: {task}"
+        )
+        result = await orch.run_map_reduce(
+            task=task, items=items, mapper=mapper,
+            reducer=reducer_task, max_concurrent=max_concurrent,
+        )
+        return self._pattern_result("orchestrate_map_reduce", "map_reduce", result)
+
+    async def _orchestrate_chain(self, func_args: dict, workspace: str) -> str:
+        """Execute orchestrate_chain — sequential pipeline with context passing."""
+        orch = self.subagent_orchestrator
+        if orch is None:
+            return self._tool_error("orchestrate_chain",
+                                    "Subagent orchestrator not available — wire it via CompositionRoot")
+        steps = func_args.get("steps") or []
+        if not isinstance(steps, list) or len(steps) < 2:
+            return self._tool_error("orchestrate_chain",
+                                    "orchestrate_chain requires a 'steps' array with at least 2 steps")
+
+        contracts = []
+        for i, step in enumerate(steps[:6]):
+            if not isinstance(step, dict) or not step.get("task"):
+                return self._tool_error("orchestrate_chain", f"step {i} requires a 'task'")
+            contract, err = self._build_contract(
+                {"task": step["task"], "role": step.get("role", "generalist")},
+                workspace, name=f"chain-{i}",
+            )
+            if err:
+                return self._tool_error("orchestrate_chain", err)
+            contracts.append(contract)
+
+        pass_context = bool(func_args.get("pass_context", True))
+        result = await orch.run_chain(contracts, pass_context=pass_context)
+        return self._pattern_result("orchestrate_chain", "chain", result)
+
+    async def _orchestrate_dag(self, func_args: dict, workspace: str) -> str:
+        """Execute orchestrate_dag — dependency-ordered parallel subagents.
+
+        Independent nodes run in parallel per level; upstream outputs are
+        injected into dependents by the scheduler (dataflow edges, not
+        just ordering).
+        """
+        orch = self.subagent_orchestrator
+        if orch is None:
+            return self._tool_error("orchestrate_dag",
+                                    "Subagent orchestrator not available — wire it via CompositionRoot")
+        nodes_spec = func_args.get("nodes") or []
+        if not isinstance(nodes_spec, list) or not nodes_spec:
+            return self._tool_error("orchestrate_dag",
+                                    "orchestrate_dag requires a non-empty 'nodes' array")
+
+        from wisp.multi_agent.dag import TaskDAG, TaskNode
+
+        dag = TaskDAG()
+        seen_names: set[str] = set()
+        for i, spec in enumerate(nodes_spec):
+            if not isinstance(spec, dict) or not spec.get("name") or not spec.get("task"):
+                return self._tool_error(
+                    "orchestrate_dag", f"node {i} requires 'name' and 'task'")
+            name = str(spec["name"])
+            if name in seen_names:
+                return self._tool_error("orchestrate_dag", f"duplicate node name '{name}'")
+            seen_names.add(name)
+
+        for spec in nodes_spec:
+            name = str(spec["name"])
+            contract, err = self._build_contract(
+                {"task": spec["task"], "role": spec.get("role", "generalist")},
+                workspace, name=name,
+            )
+            if err:
+                return self._tool_error("orchestrate_dag", err)
+            deps = spec.get("depends_on") or []
+            unknown = [d for d in deps if d not in seen_names]
+            if unknown:
+                return self._tool_error(
+                    "orchestrate_dag",
+                    f"node '{name}' depends on unknown node(s): {', '.join(unknown)}")
+            dag.add_node(TaskNode(name=name, task=contract, dependencies=list(deps)))
+
+        cycle_errors = dag.validate()
+        if cycle_errors:
+            return self._tool_error("orchestrate_dag",
+                                    f"invalid DAG: {'; '.join(cycle_errors[:3])}")
+
+        try:
+            max_par = max(1, min(8, int(func_args.get("max_parallelism", 4) or 4)))
+        except (TypeError, ValueError):
+            max_par = 4
+
+        dag_result = await orch.run_dag(dag, max_parallelism=max_par)
+        ok = bool(getattr(dag_result, "success", False))
+        node_results = getattr(dag_result, "node_results", {}) or {}
+        level_order = getattr(dag_result, "level_order", []) or []
+        ordered_names = [n for level in level_order for n in level] or list(node_results)
+        summary_lines = []
+        for node_name in ordered_names:
+            r = node_results.get(node_name)
+            out = (getattr(r, "output", "") or "").strip() if r is not None else ""
+            status = "ok" if (r is not None and getattr(r, "success", False)) else "FAILED"
+            snippet = out[:160].replace("\n", " ")
+            summary_lines.append(f"[{status}] {node_name}: {snippet}" if snippet
+                                 else f"[{status}] {node_name}")
+        all_files = sorted({f for r in node_results.values()
+                            for f in (getattr(r, "files_changed", []) or [])})
+        return json.dumps({
+            "status": "ok" if ok else "error",
+            "tool": "orchestrate_dag",
+            "data": {
+                "ok": ok,
+                "pattern": "dag",
+                "summary": "\n".join(summary_lines)[:2000],
+                "files": all_files,
+                "error": "; ".join(getattr(dag_result, "errors", [])[:3]) or None,
+                "elapsed_seconds": round(getattr(dag_result, "total_elapsed", 0.0) or 0.0, 1),
+                "level_order": level_order,
+            },
+            "metadata": {
+                "pattern": "dag",
+                "nodes": len(node_results),
+            },
+        }, ensure_ascii=False)
+
+    async def _capture_skill(self, func_args: dict, workspace: str) -> str:
+        """Execute capture_skill — persist a demonstrated workflow as SKILL.md.
+
+        Prefers an explicit step list; falls back to the recorder's repeated
+        tail sequence, then to the raw recent history.
+        """
+        name = str(func_args.get("name", "") or "").strip()
+        description = str(func_args.get("description", "") or "").strip()
+        if not name:
+            return self._tool_error("capture_skill", "capture_skill requires a 'name' argument")
+        if not description:
+            return self._tool_error("capture_skill", "capture_skill requires a 'description' argument")
+
+        from wisp.skill_capture import CapturedStep, get_capture
+        capture = self.skill_capture or get_capture()
+
+        explicit = func_args.get("steps") or []
+        try:
+            if isinstance(explicit, list) and explicit:
+                steps = [CapturedStep(tool=str(s)[:120]) for s in explicit]
+            else:
+                suggestion = capture.suggest()
+                if suggestion is not None:
+                    steps = suggestion.steps
+                    description = (
+                        f"{description} "
+                        f"(observed {suggestion.occurrences}x in this session)"
+                    )
+                elif len(capture) > 0:
+                    steps = capture.recent(8)
+                else:
+                    return self._tool_error(
+                        "capture_skill",
+                        "No tool history recorded yet — pass explicit 'steps' "
+                        "or run the workflow first.",
+                    )
+
+            path, merged = capture.render_skill(name, description, workspace, steps=steps)
+        except ValueError as e:
+            return self._tool_error("capture_skill", str(e))
+        except OSError as e:
+            logger.error("capture_skill write failed: %s", e, exc_info=True)
+            return self._tool_error("capture_skill", f"could not write skill file: {e}")
+
+        if merged:
+            note = ("Merged into the existing skill of this name (capture count "
+                    "bumped; a new step sequence is kept as a variant).")
+        else:
+            note = ("Skill saved. Reload it any time with /skill "
+                    f"{path.parent.name} — it is also auto-discovered.")
+
+        return json.dumps({
+            "status": "ok",
+            "tool": "capture_skill",
+            "data": {
+                "ok": True,
+                "skill_name": path.parent.name,
+                "path": str(path),
+                "step_count": len(steps),
+                "merged": merged,
+                "note": note,
+            },
+            "metadata": {"skill_path": str(path)},
+        }, ensure_ascii=False)
 
     async def _fanout(self, func_args: dict, workspace: str) -> str:
         """Execute fanout tool — parallel role-driven subagents.

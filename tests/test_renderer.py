@@ -231,3 +231,126 @@ class TestContextMeter:
                  "elapsed": 1.0, "ctx_tokens": 140000, "ctx_limit": 131072}
         line = render_turn_stats(stats)
         assert "(107%)" in line
+
+
+# ── Background agents ─────────────────────────────────────────────────
+
+from wisp.transport.renderer import render_agent_detail, render_background_agents
+
+
+def _agent_entry(**overrides):
+    entry = {
+        "agent_id": "bg-abc123",
+        "label": "researcher-1",
+        "role": "researcher",
+        "task": "Survey the auth module and report findings",
+        "status": "running",
+        "turns": 1,
+        "elapsed_seconds": 12.4,
+    }
+    entry.update(overrides)
+    return entry
+
+
+class TestRenderBackgroundAgents:
+    def test_empty_registry_unicode(self):
+        out = render_background_agents([])
+        assert "No background agents" in out
+
+    def test_empty_registry_minimal(self):
+        set_output_mode(OutputMode.MINIMAL)
+        out = render_background_agents([])
+        assert "spawn_background" in out
+
+    def test_lists_agent_with_fields(self):
+        out = strip_ansi(render_background_agents([_agent_entry()]))
+        assert "bg-abc123" in out
+        assert "researcher" in out
+        assert "12s" in out
+        assert "auth module" in out
+
+    def test_running_sorts_first(self):
+        entries = [
+            _agent_entry(agent_id="bg-done", status="completed", elapsed_seconds=50.0),
+            _agent_entry(agent_id="bg-run"),
+        ]
+        out = strip_ansi(render_background_agents(entries))
+        assert out.index("bg-run") < out.index("bg-done")
+
+    def test_status_marks_unicode(self):
+        out = strip_ansi(render_background_agents([
+            _agent_entry(status="completed"),
+            _agent_entry(agent_id="bg-f", status="failed"),
+            _agent_entry(agent_id="bg-c", status="cancelled"),
+            _agent_entry(agent_id="bg-r"),
+        ]))
+        assert "✓" in out and "✗" in out and "⏹" in out and "●" in out
+
+    def test_ascii_mode_marks(self):
+        set_output_mode(OutputMode.ASCII)
+        out = strip_ansi(render_background_agents([
+            _agent_entry(status="completed"),
+            _agent_entry(agent_id="bg-r"),
+        ]))
+        assert "+" in out and "o" in out
+
+    def test_accessible_mode_spells_words(self):
+        set_output_mode(OutputMode.ACCESSIBLE)
+        out = strip_ansi(render_background_agents([_agent_entry()]))
+        assert "[RUNNING]" in out
+        assert "task:" in out
+
+    def test_accessible_mode_shows_result_summary(self):
+        set_output_mode(OutputMode.ACCESSIBLE)
+        entry = _agent_entry(status="completed", result={
+            "ok": True, "summary": "Found 3 issues", "files": [], "error": None,
+        })
+        out = strip_ansi(render_background_agents([entry]))
+        assert "summary: Found 3 issues" in out
+
+    def test_minimal_mode_is_terse_lines(self):
+        set_output_mode(OutputMode.MINIMAL)
+        out = strip_ansi(render_background_agents([_agent_entry(), _agent_entry(status="completed")]))
+        assert "running bg-abc123 12s t1" in out
+        assert "completed bg-abc123 12s t1" in out
+
+    def test_long_task_truncated(self):
+        entry = _agent_entry(task="x" * 500)
+        out = strip_ansi(render_background_agents([entry], width=80))
+        assert "..." in out
+        for line in out.splitlines():
+            assert display_width(line) <= 120
+
+    def test_turn_count_shown_when_continued(self):
+        out = strip_ansi(render_background_agents([_agent_entry(turns=2)]))
+        assert "turn 2" in out
+
+    def test_failed_line_present_for_error_result(self):
+        set_output_mode(OutputMode.ACCESSIBLE)
+        entry = _agent_entry(status="failed", result={"ok": False, "error": "boom"})
+        out = strip_ansi(render_background_agents([entry]))
+        assert "error: boom" in out
+
+
+class TestRenderAgentDetail:
+    def test_detail_box_contains_fields(self):
+        snap = _agent_entry()
+        out = strip_ansi(render_agent_detail(snap))
+        assert "bg-abc123" in out and "researcher-1" in out and "running" in out
+
+    def test_detail_shows_files_and_summary(self):
+        snap = _agent_entry(status="completed", result={
+            "ok": True, "summary": "All good", "files": ["a.py"], "error": None,
+            "session_id": "sess-1",
+        })
+        out = strip_ansi(render_agent_detail(snap))
+        assert "a.py" in out and "All good" in out
+
+    def test_minimal_detail_no_box(self):
+        set_output_mode(OutputMode.MINIMAL)
+        out = strip_ansi(render_agent_detail(_agent_entry()))
+        assert "╔" not in out and "id:" in out
+
+    def test_empty_snapshot_message(self):
+        out = strip_ansi(render_agent_detail({}))
+        assert "No such agent" in out

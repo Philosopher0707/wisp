@@ -35,6 +35,7 @@ from wisp.server.routes.plugins import router as plugins_router
 from wisp.server.routes.hooks import router as hooks_router
 from wisp.server.routes.mcp import router as mcp_router
 from wisp.server.routes.agents import router as agents_router
+from wisp.server.routes.background import router as background_agents_router
 from wisp.server.routes.search import router as search_router
 from wisp.server.routes.diagnostics import router as diagnostics_router
 
@@ -138,6 +139,7 @@ app.include_router(plugins_router)
 app.include_router(hooks_router)
 app.include_router(mcp_router)
 app.include_router(agents_router)
+app.include_router(background_agents_router)
 app.include_router(search_router)
 app.include_router(diagnostics_router)
 

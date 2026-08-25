@@ -1,6 +1,7 @@
 """Tests for spawn and fanout tools — role-driven subagent execution."""
 
 import json
+from pathlib import Path
 import pytest
 from unittest.mock import MagicMock, AsyncMock
 
@@ -305,3 +306,300 @@ class TestSpawnLegacy:
         data = json.loads(result)
         assert data["data"]["ok"] is True
         assert data["data"]["summary"] == "legacy works"
+
+
+# ── Orchestration patterns ────────────────────────────────────────────
+
+
+
+class _PatternOrchestrator:
+    """Records pattern calls and returns a canned SubagentResult."""
+
+    def __init__(self, success=True, output="consensus reached"):
+        self.success = success
+        self.output = output
+        self.calls = {}
+
+    async def _run_with_retry(self, contract):
+        return SubagentResult(task_id=contract.name, success=self.success,
+                              output=self.output, session_id="sess-p")
+
+    async def run_vote(self, task, agents, consensus_threshold=0.6, max_concurrent=4):
+        self.calls["vote"] = {"task": task, "agents": agents, "threshold": consensus_threshold}
+        return SubagentResult(task_id="vote", success=self.success, output=self.output)
+
+    async def run_map_reduce(self, task, items, mapper, reducer, max_concurrent=4, retry_failed=True):
+        mapped = [mapper(i) for i in items]
+        self.calls["map_reduce"] = {"task": task, "items": items, "mapped": mapped,
+                                    "reducer": reducer}
+        return SubagentResult(task_id="map-reduce", success=self.success, output=self.output)
+
+    async def run_chain(self, contracts, pass_context=True, max_concurrent=1, continue_on_error=False):
+        self.calls["chain"] = {"contracts": contracts, "pass_context": pass_context}
+        return SubagentResult(task_id="chain", success=self.success, output=self.output)
+
+
+def _mk_pattern_te(tmp_path, orch=None):
+    cfg = WispConfig()
+    cfg = cfg.replace(workspace=str(tmp_path), auto_approve=True)
+    return ToolExecutor(config=cfg, hook_manager=MagicMock(),
+                        subagent_orchestrator=orch or _PatternOrchestrator())
+
+
+class TestOrchestrateVote:
+    @pytest.mark.asyncio
+    async def test_builds_n_voters_and_passes_threshold(self, tmp_path):
+        orch = _PatternOrchestrator()
+        te = _mk_pattern_te(tmp_path, orch)
+        data = json.loads(await te._orchestrate_vote(
+            {"task": "is this code safe?", "voters": 4, "consensus_threshold": 0.75},
+            str(tmp_path)))
+        assert data["status"] == "ok"
+        call = orch.calls["vote"]
+        assert len(call["agents"]) == 4
+        assert call["threshold"] == 0.75
+        assert call["agents"][0].name == "vote-0"
+
+    @pytest.mark.asyncio
+    async def test_clamps_voters_to_range(self, tmp_path):
+        orch = _PatternOrchestrator()
+        te = _mk_pattern_te(tmp_path, orch)
+        await te._orchestrate_vote({"task": "x", "voters": 99}, str(tmp_path))
+        assert len(orch.calls["vote"]["agents"]) == 6
+
+    @pytest.mark.asyncio
+    async def test_requires_task(self, tmp_path):
+        te = _mk_pattern_te(tmp_path)
+        data = json.loads(await te._orchestrate_vote({}, str(tmp_path)))
+        assert data["status"] == "error"
+        assert "requires a 'task'" in data["data"]
+
+    @pytest.mark.asyncio
+    async def test_no_orchestrator(self, tmp_path):
+        cfg = WispConfig()
+        cfg = cfg.replace(workspace=str(tmp_path))
+        te = ToolExecutor(config=cfg)
+        data = json.loads(await te._orchestrate_vote({"task": "x"}, str(tmp_path)))
+        assert data["status"] == "error"
+
+
+class TestOrchestrateMapReduce:
+    @pytest.mark.asyncio
+    async def test_mapper_embeds_item(self, tmp_path):
+        orch = _PatternOrchestrator()
+        te = _mk_pattern_te(tmp_path, orch)
+        data = json.loads(await te._orchestrate_map_reduce(
+            {"task": "review file", "items": ["a.py", "b.py"]}, str(tmp_path)))
+        assert data["status"] == "ok"
+        call = orch.calls["map_reduce"]
+        assert call["mapped"][0].task.count("a.py") >= 1
+        assert "Synthesize" in call["reducer"]
+
+    @pytest.mark.asyncio
+    async def test_rejects_empty_items(self, tmp_path):
+        te = _mk_pattern_te(tmp_path)
+        data = json.loads(await te._orchestrate_map_reduce({"task": "x", "items": []}, str(tmp_path)))
+        assert data["status"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_caps_items_at_twenty(self, tmp_path):
+        orch = _PatternOrchestrator()
+        te = _mk_pattern_te(tmp_path, orch)
+        await te._orchestrate_map_reduce({"task": "x", "items": [f"f{i}.py" for i in range(30)]},
+                                         str(tmp_path))
+        assert len(orch.calls["map_reduce"]["items"]) == 20
+
+
+class TestOrchestrateChain:
+    @pytest.mark.asyncio
+    async def test_builds_sequential_contracts(self, tmp_path):
+        orch = _PatternOrchestrator()
+        te = _mk_pattern_te(tmp_path, orch)
+        data = json.loads(await te._orchestrate_chain({
+            "steps": [
+                {"task": "implement", "role": "coder"},
+                {"task": "review", "role": "reviewer"},
+                {"task": "fix findings", "role": "coder"},
+            ],
+        }, str(tmp_path)))
+        assert data["status"] == "ok"
+        call = orch.calls["chain"]
+        assert [c.name for c in call["contracts"]] == ["chain-0", "chain-1", "chain-2"]
+        assert call["pass_context"] is True
+
+    @pytest.mark.asyncio
+    async def test_requires_two_steps(self, tmp_path):
+        te = _mk_pattern_te(tmp_path)
+        data = json.loads(await te._orchestrate_chain({"steps": [{"task": "only"}]}, str(tmp_path)))
+        assert data["status"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_step_missing_task(self, tmp_path):
+        te = _mk_pattern_te(tmp_path)
+        data = json.loads(await te._orchestrate_chain(
+            {"steps": [{"task": "a"}, {"role": "coder"}]}, str(tmp_path)))
+        assert data["status"] == "error"
+        assert "step 1" in data["data"]
+
+    @pytest.mark.asyncio
+    async def test_registry_declares_all_three(self):
+        from wisp.tools.registry import TOOL_SCHEMAS, TOOL_IMPLS
+        names = {s["function"]["name"] for s in TOOL_SCHEMAS}
+        for n in ("orchestrate_vote", "orchestrate_map_reduce", "orchestrate_chain"):
+            assert n in names and n in TOOL_IMPLS
+
+class TestOrchestrateDag:
+    @pytest.mark.asyncio
+    async def test_builds_dag_and_runs(self, tmp_path):
+        orch = _PatternOrchestrator()
+
+        async def fake_run_dag(dag, max_parallelism=4, timeout_per_node=300.0):
+            orch.calls["dag"] = {"dag": dag, "max_parallelism": max_parallelism}
+            from wisp.multi_agent.dag import DAGResult
+            return DAGResult(
+                node_results={
+                    "scaffold": SubagentResult(task_id="scaffold", success=True, output="made dirs"),
+                    "impl": SubagentResult(task_id="impl", success=True, output="wrote code"),
+                },
+                level_order=[["scaffold"], ["impl"]],
+                total_elapsed=1.23,
+                success=True,
+            )
+
+        orch.run_dag = fake_run_dag
+        te = _mk_pattern_te(tmp_path, orch)
+        data = json.loads(await te._orchestrate_dag({
+            "nodes": [
+                {"name": "scaffold", "task": "scaffold project"},
+                {"name": "impl", "task": "implement features", "depends_on": ["scaffold"]},
+            ],
+            "max_parallelism": 3,
+        }, str(tmp_path)))
+        assert data["status"] == "ok"
+        dag = orch.calls["dag"]["dag"]
+        assert set(dag.nodes) == {"scaffold", "impl"}
+        assert dag.nodes["impl"].dependencies == ["scaffold"]
+        assert isinstance(dag.nodes["impl"].task.task, str)  # contracts built
+        assert orch.calls["dag"]["max_parallelism"] == 3
+        assert data["data"]["ok"] is True
+        assert data["data"]["level_order"] == [["scaffold"], ["impl"]]
+
+    @pytest.mark.asyncio
+    async def test_rejects_unknown_dependency(self, tmp_path):
+        te = _mk_pattern_te(tmp_path)
+        data = json.loads(await te._orchestrate_dag({
+            "nodes": [{"name": "a", "task": "x", "depends_on": ["ghost"]}],
+        }, str(tmp_path)))
+        assert data["status"] == "error"
+        assert "ghost" in data["data"]
+
+    @pytest.mark.asyncio
+    async def test_rejects_cycles(self, tmp_path):
+        te = _mk_pattern_te(tmp_path)
+        data = json.loads(await te._orchestrate_dag({
+            "nodes": [
+                {"name": "a", "task": "x", "depends_on": ["b"]},
+                {"name": "b", "task": "y", "depends_on": ["a"]},
+            ],
+        }, str(tmp_path)))
+        assert data["status"] == "error"
+        assert "invalid DAG" in data["data"]
+
+    @pytest.mark.asyncio
+    async def test_rejects_duplicate_names(self, tmp_path):
+        te = _mk_pattern_te(tmp_path)
+        data = json.loads(await te._orchestrate_dag({
+            "nodes": [{"name": "a", "task": "x"}, {"name": "a", "task": "y"}],
+        }, str(tmp_path)))
+        assert data["status"] == "error"
+        assert "duplicate" in data["data"].lower()
+
+    @pytest.mark.asyncio
+    async def test_requires_nodes(self, tmp_path):
+        te = _mk_pattern_te(tmp_path)
+        for bad in ({}, {"nodes": []}, {"nodes": [{"task": "no name"}]}):
+            data = json.loads(await te._orchestrate_dag(bad, str(tmp_path)))
+            assert data["status"] == "error", bad
+
+
+class TestCaptureSkillTool:
+    @pytest.fixture(autouse=True)
+    def _fresh_capture(self):
+        from wisp.skill_capture import reset_capture
+        reset_capture()
+        yield
+        reset_capture()
+
+    @pytest.mark.asyncio
+    async def test_explicit_steps_write_skill_file(self, tmp_path):
+        te = _mk_pattern_te(tmp_path)
+        data = json.loads(await te._capture_skill({
+            "name": "Add Endpoint",
+            "description": "Add an HTTP endpoint with tests",
+            "steps": ["open routes.py", "add handler", "write tests"],
+        }, str(tmp_path)))
+        assert data["status"] == "ok"
+        path = Path(data["data"]["path"])
+        assert path.exists()
+        assert path.parent.name == "add-endpoint"
+        body = path.read_text(encoding="utf-8")
+        assert "1. open routes.py" in body
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_recorded_history(self, tmp_path):
+        te = _mk_pattern_te(tmp_path)
+        te.skill_capture.record("list_files")
+        te.skill_capture.record("run_tests")
+        data = json.loads(await te._capture_skill(
+            {"name": "check", "description": "sanity check"}, str(tmp_path)))
+        assert data["status"] == "ok"
+        body = Path(data["data"]["path"]).read_text(encoding="utf-8")
+        assert "list_files" in body and "run_tests" in body
+
+    @pytest.mark.asyncio
+    async def test_no_history_and_no_steps_errors(self, tmp_path):
+        te = _mk_pattern_te(tmp_path)
+        data = json.loads(await te._capture_skill(
+            {"name": "empty", "description": "d"}, str(tmp_path)))
+        assert data["status"] == "error"
+        assert "history" in data["data"]
+
+    @pytest.mark.asyncio
+    async def test_name_and_description_required(self, tmp_path):
+        te = _mk_pattern_te(tmp_path)
+        data = json.loads(await te._capture_skill({"name": "x"}, str(tmp_path)))
+        assert data["status"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_recapture_merges_into_existing_skill(self, tmp_path):
+        te = _mk_pattern_te(tmp_path)
+        first = json.loads(await te._capture_skill({
+            "name": "flow", "description": "d",
+            "steps": ["step one", "step two"],
+        }, str(tmp_path)))
+        second = json.loads(await te._capture_skill({
+            "name": "flow", "description": "d",
+            "steps": ["step one", "step two"],
+        }, str(tmp_path)))
+        assert first["data"]["merged"] is False
+        assert second["data"]["merged"] is True
+        assert "Merged" in second["data"]["note"]
+
+    @pytest.mark.asyncio
+    async def test_foreign_skill_gets_sibling_not_overwrite(self, tmp_path):
+        foreign_dir = Path(tmp_path) / ".agents" / "skills" / "taken"
+        foreign_dir.mkdir(parents=True)
+        (foreign_dir / "SKILL.md").write_text(
+            "---\nname: taken\ndescription: human\n---\nmanual steps")
+        te = _mk_pattern_te(tmp_path)
+        data = json.loads(await te._capture_skill(
+            {"name": "taken", "description": "d", "steps": ["s"]}, str(tmp_path)))
+        assert data["status"] == "ok"
+        assert data["data"]["skill_name"] == "taken-2"
+        assert "human" in (foreign_dir / "SKILL.md").read_text(encoding="utf-8")
+
+    def test_registry_declares_dag_and_capture(self):
+        from wisp.tools.registry import TOOL_SCHEMAS, TOOL_IMPLS
+        names = {s["function"]["name"] for s in TOOL_SCHEMAS}
+        for n in ("orchestrate_dag", "capture_skill"):
+            assert n in names and n in TOOL_IMPLS

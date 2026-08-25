@@ -57,6 +57,7 @@ from .schema_validator import (
     validate_subagent_output,
 )
 from .shared_context import SharedContext, Finding
+from .background import BackgroundAgentEntry, BackgroundAgentManager
 
 __all__ = [
     "AgentRole",
@@ -79,4 +80,6 @@ __all__ = [
     "SchemaValidationError",
     "SharedContext",
     "Finding",
+    "BackgroundAgentEntry",
+    "BackgroundAgentManager",
 ]

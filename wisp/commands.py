@@ -226,11 +226,53 @@ def cmd_model(agent, args: str):
     print(success(f"✓ Model set to: {_display_name(new_model)} {dim('(cloud)')}"))
 
 
-@register("skill", "Load or list skills", aliases=("s",), usage="/skill [name]")
+@register("skill", "Load or list skills (suggest/save capture workflows)",
+          aliases=("s",), usage="/skill [name | suggest | save <name>]")
 def cmd_skill(agent, args: str):
     from wisp.skills import discover_skills, find_skill
 
     ws = agent.config.workspace or "."
+
+    # ── Capture subcommands ─────────────────────────────────────────
+    parts = args.split(maxsplit=2)
+    sub = parts[0] if parts else ""
+    if sub == "suggest":
+        from wisp.skill_capture import get_capture
+        capture = get_capture()
+        suggestion = capture.suggest()
+        if suggestion is None:
+            print(dim("No repeated workflow detected yet. Run a procedure "
+                      "twice, then check again."))
+            return
+        print(accent(f"Repeated workflow detected ({suggestion.occurrences}x):"))
+        for i, step in enumerate(suggestion.steps, 1):
+            print(f"  {i}. {step.describe()}")
+        print(dim("Save it: /skill save <name>"))
+        return
+
+    if sub == "save":
+        if len(parts) < 2:
+            print(info("Usage: /skill save <name> [description]"))
+            return
+        from wisp.skill_capture import get_capture
+        capture = get_capture()
+        name = parts[1].strip()
+        description = parts[2].strip() if len(parts) > 2 else f"Captured {name} workflow"
+        try:
+            path, merged = capture.render_skill(name, description, ws)
+        except ValueError as e:
+            print(error(str(e)))
+            return
+        except OSError as e:
+            print(error(f"Could not write skill file: {e}"))
+            return
+        if merged:
+            print(success(f"✓ Skill merged: {path}"))
+        else:
+            print(success(f"✓ Skill saved: {path}"))
+        print(dim(f"Load it with /skill {path.parent.name}"))
+        return
+
     if not args or not args.strip():
         skills = discover_skills(ws)
         if not skills:
@@ -598,6 +640,62 @@ def cmd_spawn(agent, args: str):
     print(f"\n{status} Subagent done ({result.elapsed_seconds:.1f}s, {result.iterations_used} iterations)")
     print("─" * 40)
     print(result.output)
+
+
+# ── Background agents ─────────────────────────────────────────────────
+
+def _get_background_manager(agent):
+    """Resolve the composition-wired BackgroundAgentManager, or None."""
+    orch = getattr(getattr(agent, "runtime", None), "orchestrator", None)
+    return getattr(orch, "background_agents", None)
+
+
+@register("agents", "Show background subagents (list, detail, cancel, send)",
+          aliases=("ba",), usage="/agents [id | cancel <id> | send <id> <msg>]")
+def cmd_agents(agent, args: str):
+    from wisp.transport.renderer import render_agent_detail, render_background_agents
+    from wisp.async_utils import run_sync_coro
+
+    mgr = _get_background_manager(agent)
+    if mgr is None:
+        print(warning("Background agents not available (no composition root)."))
+        return
+
+    parts = args.split(maxsplit=2)
+    sub = parts[0] if parts else ""
+
+    if sub in ("cancel", "stop") and len(parts) >= 2:
+        out = mgr.cancel(parts[1])
+        if out.get("ok"):
+            print(warning(f"⏹ Cancelled {parts[1]}"))
+        else:
+            print(error(out.get("error", "cancel failed")))
+        return
+
+    if sub == "send" and len(parts) >= 3:
+        agent_id, message = parts[1], parts[2]
+        out = run_sync_coro(mgr.send(agent_id, message))
+        if out.get("ok"):
+            print(accent(f"🧬 Continuation running on {agent_id} — poll with /agents {agent_id}"))
+        else:
+            print(error(out.get("error", "send failed")))
+        return
+
+    if not sub:
+        entries = mgr.list(include_finished=True)
+        print(render_background_agents([e for e in entries]))
+        return
+
+    # `/agents <id>` — detail view for one agent.
+    entry = mgr.get(sub)
+    if entry is None:
+        print(error(f"No such agent: {sub}"))
+        return
+    snapshot = mgr.snapshot(entry)
+    if snapshot["status"] == "running":
+        # Brief settle window so a just-finished agent shows its result.
+        snapshot = run_sync_coro(mgr.result(sub, wait_seconds=0.5))
+    print(render_agent_detail(snapshot))
 
 
 def _swarm_progress(event) -> None:

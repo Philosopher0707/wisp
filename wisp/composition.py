@@ -172,6 +172,8 @@ class CompositionRoot:
         from wisp.multi_agent.background import BackgroundAgentManager
         self.background_agents = BackgroundAgentManager(self.subagent_orchestrator)
         self.tool_executor.background_agents = self.background_agents
+        # Reachable from slash commands via runtime.orchestrator.
+        self.subagent_orchestrator.background_agents = self.background_agents
 
         # Register services for lifecycle management
         self._registry = ServiceRegistry()

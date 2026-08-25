@@ -120,34 +120,54 @@ class SubagentRunner:
             except Exception as exc:
                 logger.debug("Provider health check error for %s: %s", contract.name, exc)
 
-        # Create session dict
+        # Create session dict — fresh, or resumed from a prior stored session
+        # when this contract continues an earlier conversation (background
+        # agent follow-ups). A resume keeps the same session id and history.
         import uuid
         from datetime import datetime, timezone
-        session_id = f"sess-{uuid.uuid4().hex[:12]}"
-        now = datetime.now(timezone.utc).isoformat()
-        if self._agent_runtime is not None:
-            session = {
-                "id": session_id,
-                "model": child_cfg.model,
-                "workspace": agent_workspace,
-                "messages": [],
-                "compaction_history": [],
-                "created_at": now,
-                "updated_at": now,
-                "title": f"[sub] {contract.name}",
-            }
+        resume_id = str(getattr(contract, "_resume_session_id", "") or "")
+        if resume_id:
+            loaded = self._store.load_session(resume_id)
+            if not isinstance(loaded, dict) or "messages" not in loaded:
+                logger.warning(
+                    "Subagent %s: cannot resume missing session %s",
+                    contract.name, resume_id,
+                )
+                return SubagentResult(
+                    task_id=contract.name,
+                    success=False,
+                    output=f"[RESUME FAILED] Stored session '{resume_id}' not found.",
+                    error=f"session {resume_id} not found",
+                    elapsed_seconds=0.0,
+                )
+            session = loaded
+            session.setdefault("title", f"[sub] {contract.name}")
         else:
-            session = {
-                "id": session_id,
-                "model": child_cfg.model,
-                "workspace": agent_workspace,
-                "messages": [{"role": "user", "content": contract.task}],
-                "compaction_history": [],
-                "created_at": now,
-                "updated_at": now,
-                "title": f"[sub] {contract.name}",
-            }
-        self._store.create_session(session_id, child_cfg.model, agent_workspace, title=f"[sub] {contract.name}")
+            session_id = f"sess-{uuid.uuid4().hex[:12]}"
+            now = datetime.now(timezone.utc).isoformat()
+            if self._agent_runtime is not None:
+                session = {
+                    "id": session_id,
+                    "model": child_cfg.model,
+                    "workspace": agent_workspace,
+                    "messages": [],
+                    "compaction_history": [],
+                    "created_at": now,
+                    "updated_at": now,
+                    "title": f"[sub] {contract.name}",
+                }
+            else:
+                session = {
+                    "id": session_id,
+                    "model": child_cfg.model,
+                    "workspace": agent_workspace,
+                    "messages": [{"role": "user", "content": contract.task}],
+                    "compaction_history": [],
+                    "created_at": now,
+                    "updated_at": now,
+                    "title": f"[sub] {contract.name}",
+                }
+            self._store.create_session(session_id, child_cfg.model, agent_workspace, title=f"[sub] {contract.name}")
 
         # Emit start event
         if progress_callback:
@@ -560,7 +580,10 @@ class SubagentRunner:
         session_dict = dict(session)
         # Don't inject system prompt into messages — core.turn() builds its own.
         # Instead, pass it via session metadata for the context assembler.
-        session_dict["messages"] = []
+        # A resumed conversation keeps its stored history; a fresh run starts
+        # empty (get_or_create_session would otherwise replay the old thread).
+        if not getattr(contract, "_resume_session_id", None):
+            session_dict["messages"] = []
         if system_prompt:
             session_dict["subagent_system_prompt"] = system_prompt
         if contract.tools and "all" not in [t.lower() for t in contract.tools]:

@@ -60,36 +60,7 @@ You have access to tools that let you read, write, and edit files, run bash comm
 9. For git workflow: check status -> branch -> commit -> push -> create PR. Always verify each step.
 
 ## Tools available
-- read_file: Read file contents (supports offset/limit for large files)
-- write_file: Create or overwrite a file
-- edit_file: Targeted text replacement (surgical edits, with fuzzy fallback)
-- edit_file_multi: Make multiple precise edits in a single file in one call
-- run_bash: Execute shell commands
-- list_files: Explore directory structure
-- web_fetch: Fetch content from URLs (web pages, APIs, documentation)
-- web_search: Search the web for current information, docs, error messages
-- search_symbols: Search code for functions, classes, structs by name (regex-based)
-- search_codebase: Semantic search over the codebase using vector similarity
-- remember: Store a fact in cross-session memory
-- recall: Search cross-session memory and past summaries for relevant facts
-- fanout: Delegate a task to multiple subagents in parallel
-- spawn: Launch a subagent with a contract for scoped work
-- git_status: Show git status (branch, uncommitted files, recent commits)
-- git_diff: Show git diff for files or entire workspace
-- git_branch: List/create/switch git branches
-- git_commit: Stage files and commit with a message
-- git_push: Push current branch to remote
-- gh_pr_create: Create a GitHub pull request (requires gh CLI)
-- lsp_diagnostics: Run language server diagnostics on a file
-- lsp_definition: Go to definition of a symbol
-- lsp_references: Find all references to a symbol
-- lsp_hover: Get type info and docstring for a symbol
-- lsp_symbols: List all symbols in a file as an outline tree
-- diagnose: Diagnose errors from test output, tracebacks, or command failures
-- run_tests: Run tests for changed files or the full test suite
-- plan_task: Create a structured plan with subtasks and dependencies
-- mark_step_done: Mark a plan task as completed
-- update_plan: Update a plan task's status
+(generated at runtime from the live tool registry — see the '## Tools available' block appended to this prompt)
 """
 
 # Approximate characters per token for rough-cut estimation (~4 chars / token).

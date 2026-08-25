@@ -141,7 +141,7 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
     "write_tools": {
         "type": list,
         "default": ["write_file", "edit_file", "run_bash", "git_commit", "git_push",
-                     "gh_pr_create", "spawn_subagent"],
+                     "gh_pr_create", "spawn", "fanout", "spawn_background"],
         "description": "Tools that require approval in restricted permission modes",
         "env_var": "WISP_WRITE_TOOLS",
     },
@@ -574,7 +574,7 @@ class WispConfig:
         raw_write_tools = get_setting(
             "write_tools",
             ["write_file", "edit_file", "run_bash", "git_commit", "git_push",
-             "gh_pr_create", "spawn_subagent"],
+             "gh_pr_create", "spawn", "fanout", "spawn_background"],
         )
         if isinstance(raw_write_tools, str):
             object.__setattr__(self, "write_tools",
@@ -585,7 +585,8 @@ class WispConfig:
         else:
             object.__setattr__(self, "write_tools",
                 ["write_file", "edit_file", "run_bash", "git_commit",
-                 "gh_pr_create", "git_push", "spawn_subagent"]
+                 "gh_pr_create", "git_push", "spawn", "fanout",
+                 "spawn_background"]
             )
         # Subagent model fallback priority (tried in order for local subagent execution)
         raw_subagent_models = get_setting(

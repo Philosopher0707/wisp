@@ -453,3 +453,150 @@ def render_subagent_status(event: AgentEvent, width: int = 80) -> Optional[str]:
         return error(f"\n  {cross} {body}")
 
     return None
+
+
+# ── Background agents ────────────────────────────────────────────
+
+_AGENT_STATUS_ORDER = {"running": 0, "completed": 1, "failed": 2, "cancelled": 3}
+
+
+def _agent_status_mark(status: str) -> tuple[str, str]:
+    """(display mark, accessible word) for a background-agent status."""
+    marks = {
+        "running": ("●", "o", "RUNNING"),
+        "completed": ("✓", "+", "DONE"),
+        "failed": ("✗", "x", "FAILED"),
+        "cancelled": ("⏹", "[]", "CANCELLED"),
+    }
+    uni, ascii_, word = marks.get(status, ("·", "-", status.upper()))
+    mode = get_output_mode()
+    if mode == OutputMode.ACCESSIBLE:
+        return f"[{word}]", word
+    return (uni if mode == OutputMode.UNICODE else ascii_), word
+
+
+def _truncate(text: str, width: int) -> str:
+    if width <= 0 or display_width(text) <= width:
+        return text
+    out = ""
+    for ch in text:
+        if display_width(out) + display_width(ch) > max(0, width - 3):
+            return out + "..."
+        out += ch
+    return out
+
+
+def render_background_agents(entries: list[dict], width: int = 80) -> str:
+    """Render the background-agent registry table.
+
+    Pure function over snapshot dicts (BackgroundAgentManager.snapshot()).
+    Running agents sort first. All four output modes handled.
+    """
+    if not entries:
+        mode = get_output_mode()
+        hint = "Launch one with spawn_background."
+        if mode == OutputMode.MINIMAL:
+            return f"No background agents. {hint}"
+        return dim(f"No background agents. {hint}")
+
+    mode = get_output_mode()
+    ordered = sorted(entries, key=lambda e: (
+        _AGENT_STATUS_ORDER.get(e.get("status", ""), 9),
+        -(e.get("elapsed_seconds", 0.0) or 0.0),
+    ))
+
+    lines: list[str] = []
+    for e in ordered:
+        mark, _word = _agent_status_mark(e.get("status", ""))
+        agent_id = e.get("agent_id", "?")
+        label = e.get("label", "")
+        role = e.get("role", "generalist")
+        turns = e.get("turns", 0)
+        elapsed = e.get("elapsed_seconds", 0.0) or 0.0
+        elapsed_str = (
+            f"{elapsed:.0f}s" if elapsed < 60
+            else f"{int(elapsed // 60)}m{int(elapsed % 60):02d}s"
+        )
+        task = str(e.get("task", "")).replace("\n", " ")
+
+        if mode == OutputMode.MINIMAL:
+            lines.append(f"{e.get('status', '?')} {agent_id} {elapsed_str} t{turns}")
+            continue
+
+        head = f"{mark} {agent_id} {label} ({role}) {elapsed_str}"
+        if turns > 1:
+            head += f" turn {turns}"
+
+        if mode == OutputMode.ACCESSIBLE:
+            lines.append(f"  [{_accessible_status(e.get('status', ''))}] {agent_id} {label} "
+                         f"(role: {role}, elapsed: {elapsed_str}, turns: {turns})")
+            if task:
+                lines.append(f"    task: {_truncate(task, max(20, width - 10))}")
+            result = e.get("result")
+            if isinstance(result, dict):
+                if result.get("error"):
+                    lines.append(f"    error: {_truncate(str(result['error']), max(20, width - 12))}")
+                elif result.get("summary"):
+                    lines.append(f"    summary: {_truncate(str(result['summary']), max(20, width - 14))}")
+            continue
+
+        # unicode / ascii: one line, task snippet fills remaining width
+        meta_w = display_width(head) + 6
+        snippet = _truncate(task, max(10, width - meta_w))
+        line = f"{head}  -  {snippet}" if snippet else head
+
+        status = e.get("status", "")
+        if status == "completed":
+            lines.append(success(line))
+        elif status == "failed":
+            lines.append(error(line))
+        elif status == "cancelled":
+            lines.append(warning(line))
+        else:
+            lines.append(accent(line))
+
+    header = f"{len(ordered)} background agent(s)"
+    return dim(header) + "\n" + "\n".join(lines)
+
+
+def _accessible_status(status: str) -> str:
+    return {
+        "running": "RUNNING",
+        "completed": "DONE",
+        "failed": "FAILED",
+        "cancelled": "CANCELLED",
+    }.get(status, status.upper())
+
+
+def render_agent_detail(snapshot: dict, width: int = 80) -> str:
+    """Render one background agent's full snapshot (fields + latest result)."""
+    mode = get_output_mode()
+    if not snapshot:
+        return error("No such agent.")
+
+    mark, _ = _agent_status_mark(snapshot.get("status", ""))
+    task_line = str(snapshot.get("task", "")).replace("\n", " ")
+    content = "\n".join([
+        f"id:     {snapshot.get('agent_id', '?')}",
+        f"label:  {snapshot.get('label', '')}",
+        f"role:   {snapshot.get('role', 'generalist')}",
+        f"status: {snapshot.get('status', '?')} {mark}".rstrip() if mode != OutputMode.MINIMAL
+        else f"status: {snapshot.get('status', '?')}",
+        f"turns:  {snapshot.get('turns', 0)}",
+        f"task:   {_truncate(task_line, max(20, width - 10))}",
+    ])
+
+    result = snapshot.get("result")
+    if isinstance(result, dict):
+        if result.get("error"):
+            content += f"\nerror:  {_truncate(str(result['error']), max(20, width - 10))}"
+        if result.get("files"):
+            content += f"\nfiles:  {', '.join(result['files'])}"
+        summary = (result.get("summary") or "").strip()
+        if summary:
+            wrapped = wrap_text(summary, max(24, width - 8), indent="  ")
+            content += "\n\n" + "\n".join(wrapped)
+
+    if mode == OutputMode.MINIMAL:
+        return content
+    return _box(content, title=f"Agent {snapshot.get('agent_id', '?')}")

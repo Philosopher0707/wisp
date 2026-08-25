@@ -3,6 +3,7 @@
 Handles WebSocket agent connections using WebSocketTransport + AgentRuntime.
 """
 
+import asyncio
 import json
 import logging
 
@@ -18,6 +19,30 @@ router = APIRouter()
 
 MAX_WS_TEXT_SIZE = 256_000      # 256 KiB max for text/control messages
 MAX_WS_IMAGE_SIZE = 10_000_000  # 10 MB max for image uploads
+
+MAX_WS_TEXT_SIZE = 256_000      # 256 KiB max for text/control messages
+MAX_WS_IMAGE_SIZE = 10_000_000  # 10 MB max for image uploads
+
+
+async def agent_settlement_pusher(background_agents, websocket) -> None:
+    """Push agent_settled frames to one client as background agents finish.
+
+    Subscribes to the manager's fan-out queue; runs as a side task next
+    to the receive loop. Cancelled on disconnect (finally in the handler).
+    """
+    import asyncio
+    queue = background_agents.subscribe()
+    try:
+        while True:
+            event = await queue.get()
+            await websocket.send_json(event)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.debug("Settlement pusher stopped for client", exc_info=True)
+    finally:
+        background_agents.unsubscribe(queue)
+
 
 @router.websocket("/ws/agent")
 async def agent_websocket(websocket: WebSocket):
@@ -41,6 +66,14 @@ async def agent_websocket(websocket: WebSocket):
 
     session_id = None
     model = None
+
+    # Live settlement push: clients hear about finished background agents
+    # without polling agents_list.
+    pusher_task = None
+    background_agents = getattr(root, "background_agents", None) if root is not None else None
+    if background_agents is not None:
+        pusher_task = asyncio.create_task(
+            agent_settlement_pusher(background_agents, websocket))
 
     try:
         while True:
@@ -164,11 +197,56 @@ async def agent_websocket(websocket: WebSocket):
                 await websocket.send_json({"type": "status", "message": "Swarm stopped", "level": "info"})
                 continue
 
+            # ── Background agents ─────────────────────────────────────
+            if msg_type in ("agents_list", "agents_get", "agents_cancel", "agents_send"):
+                bg = getattr(root, "background_agents", None) if root is not None else None
+                if bg is None:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Background agents not available",
+                    })
+                    continue
+
+                if msg_type == "agents_list":
+                    entries = bg.list(include_finished=bool(msg.get("include_finished", True)))
+                    await websocket.send_json({
+                        "type": "agents_list",
+                        "agents": entries,
+                        "count": len(entries),
+                    })
+                elif msg_type == "agents_get":
+                    agent_id = msg.get("agent_id", "")
+                    entry = bg.get(agent_id)
+                    if entry is None:
+                        await websocket.send_json({"type": "error", "message": f"Unknown agent: {agent_id}"})
+                    else:
+                        snap = await bg.result(agent_id, wait_seconds=float(msg.get("wait_seconds", 0) or 0))
+                        await websocket.send_json({"type": "agents_snapshot", **snap})
+                elif msg_type == "agents_cancel":
+                    outcome = bg.cancel(msg.get("agent_id", ""))
+                    if not outcome.get("ok"):
+                        await websocket.send_json({"type": "error", "message": outcome.get("error", "cancel failed")})
+                    else:
+                        await websocket.send_json({"type": "agents_cancelled", **outcome})
+                else:  # agents_send
+                    outcome = await bg.send(msg.get("agent_id", ""), msg.get("message", ""))
+                    if not outcome.get("ok"):
+                        await websocket.send_json({"type": "error", "message": outcome.get("error", "send failed")})
+                    else:
+                        await websocket.send_json({"type": "agents_continuation", **outcome})
+                continue
+
             await websocket.send_json({"type": "error", "message": f"Unknown type: {msg_type}"})
 
     except Exception as e:
         logger.error("WebSocket error for %s: %s", client_id, e)
     finally:
+        if pusher_task is not None:
+            pusher_task.cancel()
+            try:
+                await pusher_task
+            except (asyncio.CancelledError, Exception):
+                pass
         if transport is not None:
             transport.stop()
         try:

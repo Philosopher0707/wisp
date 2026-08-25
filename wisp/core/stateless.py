@@ -686,7 +686,79 @@ class WispAgentCore:
             count = len(session["compaction_history"])
             static_prompt += f"\n[Session compacted {count} times.]\n"
 
+        # Operating context is per-turn (mode changes, agent counts,
+        # fresh notifications) — deliberately OUTSIDE the static cache.
+        operating = self._build_operating_context(session, query=query)
+        if operating:
+            static_prompt += "\n\n" + operating
+
         return static_prompt
+
+    def _build_operating_context(self, session: dict[str, Any], query: str | None = None) -> str:
+        """Declare this agent's own operating posture for the current turn.
+
+        Mirrors what a hosted agent harness announces: sandbox/approval
+        policy, identity, workspace, and live background-agent state.
+        Returns empty string when there is nothing non-default to say
+        (e.g. stripped-down test configs) so prompts stay lean.
+        """
+        lines: list[str] = []
+
+        cfg = self.config
+        if cfg is not None:
+            model = getattr(cfg, "model", "") or "unknown"
+            provider = getattr(cfg, "provider", "") or ""
+            identity = f"- model: {model}"
+            if provider:
+                identity += f" (provider: {provider})"
+            lines.append(identity)
+
+            mode = getattr(cfg, "permission_mode", "")
+            mode_name = getattr(mode, "value", None) or str(mode)
+            if mode_name and mode_name != "full":
+                auto = bool(getattr(cfg, "auto_approve", False))
+                approval = "auto-approved" if auto else "user approves write actions"
+                lines.append(f"- permission mode: {mode_name} ({approval})")
+
+            depth = int(getattr(cfg, "_subagent_depth", 0) or 0)
+            if depth > 0:
+                lines.append(f"- you are a subagent (nesting depth {depth}); "
+                             f"do not spawn children unless explicitly asked")
+
+        ws = session.get("workspace", "")
+        if ws:
+            lines.append(f"- workspace: {ws}")
+        sid = session.get("id", "")
+        if sid:
+            lines.append(f"- session: {sid}")
+
+        # Live background-agent state + settled-work notifications.
+        manager = getattr(self.tool_executor, "background_agents", None)
+        if manager is not None:
+            counts = manager.counts()
+            active = counts.get("running", 0)
+            finished = sum(counts.get(k, 0) for k in ("completed", "failed", "cancelled"))
+            if active or finished:
+                lines.append(f"- background agents: {active} running, {finished} finished "
+                             f"(inspect with subagent_list)")
+            notifications = manager.drain_notifications()
+            if notifications:
+                lines.append("- background agents finished since your last turn:")
+                lines.extend(f"  {n}" for n in notifications)
+
+        # Plugin / MCP surface: how many tools beyond built-ins are live.
+        if self.extensions is not None:
+            try:
+                from wisp.tools.registry import TOOL_SCHEMAS as _BUILTIN_SCHEMAS
+                ext_n = len(self._get_tool_schemas()) - len(_BUILTIN_SCHEMAS)
+                if ext_n > 0:
+                    lines.append(f"- external tools: {ext_n} provided by plugins/MCP servers")
+            except Exception:
+                pass  # inventory is advisory — never break prompt building
+
+        if not lines:
+            return ""
+        return "## Operating context\n" + "\n".join(lines)
 
     def invalidate_caches(self) -> None:
         """Invalidate all caches — call when workspace context changes."""
@@ -951,41 +1023,53 @@ class WispAgentCore:
         return ""
 
     def _build_tools_block(self) -> str:
-        """Build a human-readable tools description for the system prompt."""
+        """Generate the prompt's tool menu from live registries.
+
+        Single source of truth: TOOL_SCHEMAS plus whatever extensions
+        (MCP servers, plugins) expose at runtime. A newly registered tool
+        is announced automatically; renaming one cannot leave a phantom
+        name behind (the previous hardcoded dict drifted exactly this
+        way — it advertised 'spawn_subagent', which never existed).
+        """
+        entries: list[tuple[str, str]] = []
+        seen: set[str] = set()
+
+        def _describe(fn: dict[str, Any]) -> tuple[str, str]:
+            name = str(fn.get("name", "") or "")
+            desc = str(fn.get("description", "") or "").strip()
+            first = desc.split(". ")[0].rstrip(".").strip()
+            if len(first) > 140:
+                first = first[:137] + "..."
+            return name, first
+
+        from wisp.tools.registry import TOOL_SCHEMAS
+
+        for schema in TOOL_SCHEMAS:
+            fn = schema.get("function", {}) if isinstance(schema, dict) else {}
+            name, first = _describe(fn)
+            if name and name not in seen:
+                seen.add(name)
+                entries.append((name, first))
+
+        ext_count = 0
+        if self.extensions is not None:
+            try:
+                for schema in self.extensions.tools() or []:
+                    fn = schema.get("function", {}) if isinstance(schema, dict) else {}
+                    name, first = _describe(fn)
+                    if name and name not in seen:
+                        seen.add(name)
+                        entries.append((name, first))
+                        ext_count += 1
+            except Exception as e:
+                logger.warning("Failed to list extension tools: %s", e)
+
         lines = ["## Tools available"]
-        descriptions = {
-            "read_file": "Read file contents (supports offset/limit for large files)",
-            "write_file": "Create or overwrite a file",
-            "edit_file": "Targeted text replacement (surgical edits, with fuzzy fallback)",
-            "edit_file_multi": "Make multiple precise edits in a single file in one call",
-            "run_bash": "Execute shell commands",
-            "list_files": "Explore directory structure",
-            "web_fetch": "Fetch content from URLs (web pages, APIs, documentation)",
-            "web_search": "Search the web for current information, docs, error messages",
-            "search_symbols": "Search code for functions, classes, structs by name (regex-based)",
-            "search_codebase": "Semantic search over the codebase using vector similarity",
-            "remember": "Store a fact in cross-session memory",
-            "recall": "Search cross-session memory and past summaries for relevant facts",
-            "spawn_subagent": "Delegate a scoped task to a child agent",
-            "git_status": "Show git status (branch, uncommitted files, recent commits)",
-            "git_diff": "Show git diff for files or entire workspace",
-            "git_branch": "List/create/switch git branches",
-            "git_commit": "Stage files and commit with a message",
-            "git_push": "Push current branch to remote",
-            "gh_pr_create": "Create a GitHub pull request (requires gh CLI)",
-            "lsp_diagnostics": "Run language server diagnostics on a file",
-            "lsp_definition": "Go to definition of a symbol",
-            "lsp_references": "Find all references to a symbol",
-            "lsp_hover": "Get type info and docstring for a symbol",
-            "lsp_symbols": "List all symbols in a file as an outline tree",
-            "diagnose": "Diagnose errors from test output, tracebacks, or command failures",
-            "run_tests": "Run tests for changed files or the full test suite",
-            "plan_task": "Create a structured plan with subtasks and dependencies",
-            "mark_step_done": "Mark a plan task as completed",
-            "update_plan": "Update a plan task's status",
-        }
-        for name, desc in descriptions.items():
-            lines.append(f"- {name}: {desc}")
+        lines.extend(f"- {n}: {d}" for n, d in entries)
+        if ext_count:
+            lines.append(
+                f"({ext_count} additional tool(s) provided by plugins/MCP servers)"
+            )
         return "\n".join(lines)
 
     def _get_tool_schemas(self) -> list[dict[str, Any]]:
