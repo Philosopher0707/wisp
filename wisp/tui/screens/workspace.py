@@ -25,7 +25,6 @@ from wisp.tui.widgets.agents.task_tree import TaskTree
 from wisp.tui.widgets.agents.token_gauge import TokenGauge
 from wisp.tui.widgets.monitor.log_viewer import LogViewer
 from wisp.tui.widgets.monitor.metrics import PerformanceMetrics
-from wisp.tui.widgets.monitor.metrics import PerformanceMetrics
 from wisp.tui.widgets.status_bar import StatusBar
 from wisp.tui.widgets.title_bar import TitleBar
 from wisp.tui.data.ws_client import WispWSClient
