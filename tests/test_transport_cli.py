@@ -3,6 +3,7 @@
 The REPL loop is driven by entry._run_repl, not CLITransport.run().
 Tests here validate component behavior in isolation.
 """
+import io
 
 import asyncio
 
@@ -490,3 +491,73 @@ class TestApprovalArgRedaction:
         out = buf.getvalue()
         assert "999999" not in out, f"secret leaked: {out!r}"
         assert "api_key" in out
+
+
+# ═══════════════════════════════════════════════════════════════════
+# REPL latency contract: no silent window between Enter and first event
+# ═══════════════════════════════════════════════════════════════════
+
+
+class _FakeTty(io.StringIO):
+    def isatty(self):
+        return True
+
+
+class TestWaitClock:
+    def _transport(self):
+        from wisp.transport.cli import CLITransport
+
+        t = CLITransport.__new__(CLITransport)
+        t.config = None
+        t._stdout = None
+        return t
+
+    def test_ticker_renders_elapsed_and_stops_cleanly(self):
+        import time as _time
+
+        out = _FakeTty()
+        t = self._transport()
+        t.start_wait_clock(stdout=out)
+        assert getattr(t, "_wait_stop", None) is not None, "clock must run on tty"
+        _time.sleep(0.6)  # let at least two ticks land
+        t.stop_wait_clock(stdout=out)
+        text = out.getvalue()
+        assert "waiting" in text and "s" in text, f"no elapsed rendered: {text!r}"
+        # After stop, one more tick must not append.
+        before = len(text)
+        import time as _t2
+        _t2.sleep(0.4)
+        assert len(out.getvalue()) == before, "ticker kept running after stop"
+
+    def test_non_tty_stays_silent(self):
+        out = io.StringIO()  # not a tty
+        t = self._transport()
+        t.start_wait_clock(stdout=out)
+        assert getattr(t, "_wait_stop", None) is None, "piped output must not tick"
+        t.stop_wait_clock(stdout=out)
+        assert out.getvalue() == ""
+
+    def test_first_event_stops_clock_before_rendering(self):
+
+        out = _FakeTty()
+        t = self._transport()
+        t._stdout = out
+        t._progress = __import__(
+            "wisp.transport.progress", fromlist=["ProgressTracker"]
+        ).ProgressTracker()
+        t._spinner = None
+        t._thinking_buffer = []
+        t._content_buffer = []
+        t._in_thinking = False
+        t._in_content = False
+        t.show_tool_output = True
+        t._turn_number = 1
+        t._last_block_was_tool = False
+        t._phase = "understand"
+        t.start_wait_clock(stdout=out)
+        stopped = []
+        real_stop = t.stop_wait_clock
+        t.stop_wait_clock = lambda *a, **k: (stopped.append(1), real_stop(*a, **k))
+        t._render_event(out, {"type": "content", "text": "answer"})
+        t.stop_wait_clock(out)
+        assert stopped, "first event must stop the wait clock"

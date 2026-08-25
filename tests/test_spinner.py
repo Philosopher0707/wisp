@@ -249,3 +249,51 @@ class TestClosedStreamTolerance:
         stream.close()
         sp._write_line("\r\033[K\n")  # must not raise
         assert sp._active is False
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Spinner labels must never overflow the terminal width (R2)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestSpinnerLabelTruncation:
+    def test_long_label_truncated_with_ellipsis(self):
+        import io
+
+        from wisp.transport.spinner import truncate_spinner_label
+
+        label = "run_bash " + "x" * 200
+        out = truncate_spinner_label(label, width=80)
+        assert len(out) <= 80 - 8 + 1  # margin for frame+space+ellipsis
+        assert out.endswith("…")
+
+    def test_wide_chars_respected(self):
+        from wisp.transport.spinner import truncate_spinner_label
+
+        # CJK chars are double-width: naive len() would overflow.
+        label = "読" * 60
+        out = truncate_spinner_label(label, width=40)
+        assert out.endswith("…")
+        from wisp.terminal_width import display_width
+        assert display_width(out.rstrip("…")) <= 40 - 8, (
+            f"wide chars overflowed: width={display_width(out)}"
+        )
+
+    def test_short_label_untouched(self):
+        from wisp.transport.spinner import truncate_spinner_label
+
+        assert truncate_spinner_label("read_file a.py", width=80) == "read_file a.py"
+
+    def test_spinner_start_truncates(self):
+        import io
+
+        from wisp.transport.spinner import Spinner
+        import wisp.terminal_width as TW
+
+        buf = io.StringIO()
+        s = Spinner(buf, mode=TW.OutputMode.UNICODE)
+        s.start("run_bash " + "y" * 300)
+        s.stop()
+        text = buf.getvalue()
+        first_line = text.split("\r")[0].split("\n")[0]
+        assert len(first_line) < 320, "label was not truncated before render"

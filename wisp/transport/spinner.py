@@ -21,6 +21,26 @@ _ASCII_FRAMES = ["|", "/", "-", "\\"]
 _ACCESSIBLE_FRAMES = ["[busy]"]
 
 
+
+def truncate_spinner_label(
+    label: str, width: int | None = None, unicode_ok: bool = True
+) -> str:
+    """Clip a spinner label to the terminal width, wide-char aware.
+
+    The frame + space + result suffix need room too; an overflowing
+    label wraps and destroys the single-line \r redraw.
+    """
+    if width is None:
+        try:
+            import shutil
+            width = shutil.get_terminal_size().columns
+        except Exception:
+            width = 80
+    from wisp.terminal_width import truncate as _tw_truncate
+    suffix = "\u2026" if unicode_ok else "..."
+    return _tw_truncate(label, max(10, width - 8), suffix=suffix)
+
+
 class Spinner:
     """Inline terminal spinner for tool execution feedback.
 
@@ -52,7 +72,10 @@ class Spinner:
     def start(self, label: str) -> None:
         """Write initial spinner frame with label and start animation."""
         self._active = True
-        self._current_label = label
+        self._current_label = truncate_spinner_label(
+            label,
+            unicode_ok=self._mode == OutputMode.UNICODE,
+        )
         self._index = 0
         self._write_frame()
         self._start_animation()

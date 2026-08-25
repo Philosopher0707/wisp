@@ -21,6 +21,7 @@ import shutil
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -884,6 +885,49 @@ class CLITransport(Transport):
             stdout.write(prefix + rendered + "\n")
         stdout.flush()
 
+    # ── Wait clock (latency contract) ──────────────────────────────
+
+    def start_wait_clock(self, stdout: Any | None = None) -> None:
+        """Render growing elapsed time while nothing else has rendered.
+
+        The dead-air rule: between Enter and the first provider event the
+        terminal must show that time is passing. Tty-only — piped output
+        stays clean for scripting.
+        """
+        out = stdout or self._stdout or sys.stdout
+        if not hasattr(out, "isatty") or not out.isatty():
+            return
+        self._wait_started = time.monotonic()
+        self._wait_stop = threading.Event()
+
+        def _tick() -> None:
+            while not self._wait_stop.wait(0.25):
+                elapsed = time.monotonic() - self._wait_started
+                try:
+                    out.write(f"\r  {dim(f'… waiting · {elapsed:.1f}s')}")
+                    out.flush()
+                except Exception:
+                    break
+
+        self._wait_thread = threading.Thread(target=_tick, daemon=True)
+        self._wait_thread.start()
+
+    def stop_wait_clock(self, stdout: Any | None = None) -> None:
+        stop = getattr(self, "_wait_stop", None)
+        if stop is None:
+            return
+        stop.set()
+        thread = getattr(self, "_wait_thread", None)
+        if thread is not None:
+            thread.join(timeout=1.0)
+        self._wait_stop = None
+        self._wait_thread = None
+        out = stdout or self._stdout or sys.stdout
+        if hasattr(out, "isatty") and out.isatty():
+            # Erase the ticker line so real output starts clean.
+            out.write("\r\033[K")
+            out.flush()
+
     def _reset_buffers(self) -> None:
         """Reset all buffers for a new turn."""
         self._thinking_buffer = []
@@ -921,6 +965,7 @@ class CLITransport(Transport):
         Uses ProgressTracker for phase detection, Spinner for live
         tool execution feedback, and shows file change ticker.
         """
+        self.stop_wait_clock(stdout)
         # Normalize to AgentEvent
         if isinstance(event, dict):
             ev_data = event.get("data", {})
