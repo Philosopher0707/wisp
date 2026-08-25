@@ -127,12 +127,19 @@ labeled as estimate, never presented as billing truth.
 
 ## 9. Milestones
 
-- **M1 — Latency contract**: R1, R2, plus the classify-wait indicator.
-  Tests: fake slow providers assert a state render occurs inside each window.
-- **M2 — Meters & commands**: R3, R4, R5. Tests per command + meter math.
-- **M3 — Steering**: R6 end-to-end through runtime injection points.
-  Tests: inject at tool boundary, pause/resume rendering.
-- **M4 — Parity sweep**: R7 + full four-mode golden transcripts snapshot.
+All four milestones shipped (this session, gated by pytest+mypy+ruff):
+
+- ~~**M1 — Latency contract**~~ ✅ wait clock + spinner truncation +
+  classify indicator; acceptance tests drive a slow provider through the
+  real REPL loop and assert a state render inside each window.
+- ~~**M2 — Meters & commands**~~ ✅ context meter in stats; envelope
+  unwrap for spawn results; /model /sessions /tokens surface verified.
+- ~~**M3 — Steering**~~ ✅ type-ahead lines inject at tool boundaries via
+  runtime inbox → engine drain; either steered or replayed, never both;
+  rendered per mode with the ↻/~ /[STEER] glyphs.
+- ~~**M4 — Parity sweep**~~ ✅ four-mode golden transcript snapshots under
+  tests/goldens/transcripts/ are now the executable spec — visual changes
+  fail CI with a byte diff; regenerate deliberately with UPDATE_GOLDENS=1.
 
 Each milestone ships gated (pytest+mypy+ruff) as themed commits; golden
 transcript fixtures become the regression harness for future UI work.
