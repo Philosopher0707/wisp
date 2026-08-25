@@ -1,5 +1,7 @@
 """Tests for Wisp slash commands."""
 
+import os
+
 import pytest
 from wisp.commands import (
     register,
@@ -638,3 +640,26 @@ class TestSkillCaptureCommands:
         assert out.count("Skill saved") == 1
         assert "Skill merged" in out
 
+
+
+# ── /grep workspace containment (parity with /read) ──────────────────
+
+
+def test_cmd_grep_rejects_path_outside_workspace(agent, capsys, tmp_path):
+    """Absolute paths outside the workspace must be refused like /read."""
+    outside = tmp_path / "secret.txt"
+    outside.write_text("ExitREPL needle\n")
+    agent.config.workspace = str(tmp_path / "ws")
+    os.makedirs(agent.config.workspace, exist_ok=True)
+    commands_module.cmd_grep(agent, f"needle {outside}")
+    out = capsys.readouterr().out
+    assert "outside workspace" in out or "Access denied" in out
+
+
+def test_cmd_grep_searches_inside_workspace(agent, capsys, tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir(parents=True)
+    (ws / "code.py").write_text("NEEDLE = 1\n")
+    agent.config.workspace = str(ws)
+    commands_module.cmd_grep(agent, "NEEDLE code.py")
+    assert "NEEDLE" in capsys.readouterr().out

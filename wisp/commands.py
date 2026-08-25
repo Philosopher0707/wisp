@@ -679,7 +679,14 @@ def cmd_grep(agent, args: str):
             pattern = args
             target = "."
     ws = agent.config.workspace or "."
-    target_path = Path(ws) / target
+    try:
+        from wisp.tools._utils import _resolve_path
+        target_path = _resolve_path(target, ws)
+    except Exception as e:
+        # Same containment policy as /read — absolute or traversal paths
+        # must not let /grep search outside the workspace.
+        print(error(f"✗ {e}"))
+        return
     if not target_path.exists():
         print(error(f"✗ Path not found: {target_path}"))
         return
