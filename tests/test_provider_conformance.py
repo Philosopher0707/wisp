@@ -169,7 +169,13 @@ def provider(request, monkeypatch):
 # ═══════════════════════════════════════════════════════════════════
 
 TERMINAL_TYPES = {"done", "error"}
-KNOWN_TYPES = {"content", "tool_call", "tool_calls", "thinking"} | TERMINAL_TYPES
+# stream_stats: internal bookkeeping (per-stream counters for empty-close
+# forensics); the engine's guarded stream consumes it and never surfaces it
+# as meaningful output.
+KNOWN_TYPES = (
+    {"content", "tool_call", "tool_calls", "thinking", "stream_stats"}
+    | TERMINAL_TYPES
+)
 
 
 def _check_terminal_discipline(provider_name: str, types_seen: list[str]) -> None:

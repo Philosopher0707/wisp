@@ -1320,7 +1320,7 @@ class WispAgentCore:
 
     # Provider bookkeeping events that don't count as real output when
     # deciding whether a stream came back empty.
-    _BOOKKEEPING_TYPES = {"done", "stream_complete", "checkpoint", "usage"}
+    _BOOKKEEPING_TYPES = {"done", "stream_complete", "checkpoint", "usage", "stream_stats"}
 
     async def _guarded_provider_stream(
         self,
@@ -1341,6 +1341,7 @@ class WispAgentCore:
 
         for attempt in (1, 2):
             got_meaningful = False
+            stream_stats: dict[str, Any] | None = None
             stream = self._stream_events_async(
                 system_prompt=system_prompt,
                 messages=messages,
@@ -1366,7 +1367,10 @@ class WispAgentCore:
                         except StopAsyncIteration:
                             break
                     normalized = self._normalize_event(event)
-                    if str(normalized.get("type", "")) not in self._BOOKKEEPING_TYPES:
+                    ntype = str(normalized.get("type", ""))
+                    if ntype == "stream_stats":
+                        stream_stats = normalized
+                    if ntype not in self._BOOKKEEPING_TYPES:
                         got_meaningful = True
                     yield event
             finally:
@@ -1379,14 +1383,31 @@ class WispAgentCore:
                 return
 
             if attempt == 1:
-                reason = (
-                    f"no data for {self.FIRST_TOKEN_DEADLINE_S:.0f}s" if stalled
-                    else "closed without any content"
-                )
+                if stalled:
+                    reason = f"no data for {self.FIRST_TOKEN_DEADLINE_S:.0f}s"
+                    detail = ""
+                else:
+                    reason = "closed without any content"
+                    # HTTP-200-with-zero-deltas under parallel load is the
+                    # throttle signature; the counters separate "server sent
+                    # literally nothing" from "sent chunks we couldn't use".
+                    detail = ""
+                    if stream_stats:
+                        detail = (
+                            f" [sse_lines={stream_stats.get('sse_lines')} "
+                            f"usable={stream_stats.get('usable_deltas')} "
+                            f"empty_choice_chunks={stream_stats.get('empty_choice_chunks')} "
+                            f"finish={stream_stats.get('finish_reason')}]"
+                        )
                 logger.warning(
-                    "Provider stream %s (attempt %d) — retrying once",
-                    reason, attempt,
+                    "Provider stream %s%s (attempt %d) — retrying once",
+                    reason, detail, attempt,
                 )
+                # Immediate retry into a throttling endpoint reproduces the
+                # failure; a short jittered pause gives the window a chance
+                # to reopen without meaningfully delaying healthy streams.
+                if not stalled:
+                    await _aio.sleep(0.75 + (_aio.get_event_loop().time() * 1000 % 1.5))
                 continue
 
             yield _flatten_event(error_event(

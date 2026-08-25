@@ -433,7 +433,7 @@ def tool_web_fetch(url: str, workspace: str = ".", max_chars: int = 10000) -> st
     except requests.exceptions.HTTPError as e:
         status = e.response.status_code
         if status == 404:
-            raise ToolError(f"[WEB_FETCH_FAILED] HTTP 404: {url} does not exist. The page may have moved or been deleted. Do NOT retry the same URL. Try searching for the content instead.")
+            raise ToolError(f"[WEB_FETCH_FAILED] HTTP 404: {url} does not exist. The page may have moved or been deleted. Do NOT retry the same URL. Use web_search to find a valid URL for this content first.")
         elif status == 403:
             if proxy_enabled:
                 return _fetch_via_reader_proxy(url, max_chars,

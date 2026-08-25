@@ -107,7 +107,14 @@ class OpenAIProvider(Provider):
 
             self._stream_response = {"status_code": resp.status_code}
 
-            # Accumulate tool call deltas across chunks
+            # Accumulate tool call deltas across chunks. Counters ride a
+            # terminal stream_stats event so callers can distinguish
+            # "server sent nothing" (throttle) from "sent unusable chunks"
+            # without shared mutable provider state (subagents run parallel
+            # turns on ONE provider instance).
+            sse_lines = 0
+            usable_deltas = 0
+            empty_choice_chunks = 0
             tool_call_accum: dict[int, dict] = {}
             tool_calls_yielded = False
             done_reason = "stop"
@@ -118,6 +125,7 @@ class OpenAIProvider(Provider):
                 line_str = line.decode("utf-8", errors="replace") if isinstance(line, bytes) else line
                 if not line_str.startswith("data: "):
                     continue
+                sse_lines += 1
                 data_str = line_str[6:]
                 if data_str.strip() == "[DONE]":
                     break
@@ -128,6 +136,7 @@ class OpenAIProvider(Provider):
 
                 choices = chunk.get("choices", [])
                 if not choices:
+                    empty_choice_chunks += 1
                     continue
                 choice = choices[0]
                 delta = choice.get("delta", {})
@@ -136,16 +145,19 @@ class OpenAIProvider(Provider):
                 # Content delta
                 content = delta.get("content")
                 if content:
+                    usable_deltas += 1
                     yield {"type": "content", "text": content}
 
                 # Reasoning/thinking delta (for o1/o3-style models)
                 reasoning = delta.get("reasoning_content") or delta.get("reasoning")
                 if reasoning:
+                    usable_deltas += 1
                     yield {"type": "thinking", "text": reasoning}
 
                 # Tool call deltas — accumulate by index
                 tc_deltas = delta.get("tool_calls")
                 if tc_deltas:
+                    usable_deltas += 1
                     for tc_delta in tc_deltas:
                         idx = tc_delta.get("index", 0)
                         if idx not in tool_call_accum:
@@ -193,6 +205,13 @@ class OpenAIProvider(Provider):
                         elif calls:
                             yield {"type": "tool_calls", "calls": calls}
 
+            yield {
+                "type": "stream_stats",
+                "sse_lines": sse_lines,
+                "usable_deltas": usable_deltas,
+                "empty_choice_chunks": empty_choice_chunks,
+                "finish_reason": done_reason,
+            }
             yield {"type": "done", "done_reason": done_reason}
 
         except requests.exceptions.ConnectionError as exc:
