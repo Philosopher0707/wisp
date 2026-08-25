@@ -926,6 +926,10 @@ class CLITransport(Transport):
             return
         self._wait_started = time.monotonic()
         self._wait_stop = threading.Event()
+        # Serializes ticks against shutdown: without it a tick already
+        # past its sleep check can land after stop_wait_clock returns,
+        # printing 'waiting' below real output.
+        self._wait_lock = threading.Lock()
 
         def _label(elapsed: float) -> str:
             # Mode parity (design principle 5): unicode glyphs only in the
@@ -938,12 +942,15 @@ class CLITransport(Transport):
 
         def _tick() -> None:
             while not self._wait_stop.wait(0.25):
-                elapsed = time.monotonic() - self._wait_started
-                try:
-                    out.write(f"\r  {dim(_label(elapsed))}")
-                    out.flush()
-                except Exception:
-                    break
+                with self._wait_lock:
+                    if self._wait_stop.is_set():
+                        break
+                    elapsed = time.monotonic() - self._wait_started
+                    try:
+                        out.write(f"\r  {dim(_label(elapsed))}")
+                        out.flush()
+                    except Exception:
+                        break
 
         self._wait_thread = threading.Thread(target=_tick, daemon=True)
         self._wait_thread.start()
@@ -956,6 +963,10 @@ class CLITransport(Transport):
         thread = getattr(self, "_wait_thread", None)
         if thread is not None:
             thread.join(timeout=1.0)
+        lock = getattr(self, "_wait_lock", None)
+        if lock is not None:
+            with lock:
+                pass  # any in-flight tick has fully landed
         self._wait_stop = None
         self._wait_thread = None
         out = stdout or self._stdout or sys.stdout
@@ -1110,6 +1121,19 @@ class CLITransport(Transport):
             rendered = render_subagent_status(ev, width)
             if rendered:
                 stdout.write(rendered + "\n")
+                stdout.flush()
+
+        elif etype == EventType.STEERING_INJECT:
+            self._flush_thinking(stdout, width)
+            self._flush_content(stdout, width)
+            text = str(ev.data.get("text", "")).strip()
+            if text and get_output_mode() != OutputMode.MINIMAL:
+                sym = status_symbols()
+                if is_accessible():
+                    line = f"  [STEER] {text}"
+                else:
+                    line = f"  {sym['steer']} steering · {text}"
+                stdout.write(dim(line) + "\n")
                 stdout.flush()
 
         elif etype == EventType.SYSTEM:
