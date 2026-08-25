@@ -651,7 +651,7 @@ class TestDelegationWaitIndicator:
     def test_slow_classify_emits_analyzing_event(self, runtime):
         import asyncio
         import time as _time
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import MagicMock, patch
 
         signal = MagicMock()
         signal.should_delegate = False

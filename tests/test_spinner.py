@@ -258,7 +258,6 @@ class TestClosedStreamTolerance:
 
 class TestSpinnerLabelTruncation:
     def test_long_label_truncated_with_ellipsis(self):
-        import io
 
         from wisp.transport.spinner import truncate_spinner_label
 
