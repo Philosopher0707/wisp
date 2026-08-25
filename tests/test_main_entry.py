@@ -3,6 +3,7 @@
 Tests that __main__.py delegates to wisp.entry.run_mode.
 """
 
+import pytest
 from unittest.mock import patch
 
 
@@ -67,3 +68,30 @@ class TestMainDelegatesToEntry:
             with patch.object(sys, "argv", ["wisp", "--help"]):
                 main()
             mock_run_mode.assert_not_called()
+
+
+class TestSubcommandHelp:
+    """Every subcommand answers --help without side effects."""
+
+    @pytest.mark.parametrize("sub", [
+        "run", "repl", "tui", "skills", "config", "check", "models",
+        "session", "memory", "mcp", "git", "plan", "progress", "diagnose",
+        "locks", "changes", "acp", "server", "compact", "swarm", "agents",
+        "bench",
+    ])
+    def test_help_covers_every_subcommand(self, sub, capsys):
+        from wisp.__main__ import print_subcommand_help
+        assert print_subcommand_help(sub) is True, sub
+        out = capsys.readouterr().out
+        assert "Usage" in out, sub
+
+    def test_unknown_subcommand_returns_false(self, capsys):
+        from wisp.__main__ import print_subcommand_help
+        assert print_subcommand_help("definitely-not-a-command") is False
+
+    def test_main_routes_dash_h_to_subcommand(self, monkeypatch, capsys):
+        import wisp.__main__ as m
+        monkeypatch.setattr("sys.argv", ["wisp", "compact", "--help"])
+        m.main()  # must not run the compact handler or error on missing args
+        out = capsys.readouterr().out
+        assert "Usage: wisp compact" in out

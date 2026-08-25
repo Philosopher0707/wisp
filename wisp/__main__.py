@@ -825,6 +825,99 @@ def print_help():
     print(_SHORT_HELP)
 
 
+_SUBCOMMAND_HELP: dict[str, str] = {
+    "run": (
+        "Usage: wisp run \"<prompt>\" [flags]\n"
+        "\n"
+        "Run a single prompt and exit.\n"
+        "\n"
+        "Flags:\n"
+        "  -m, --model <model>       Override provider model\n"
+        "  -s, --skill <name>        Activate a skill for this run\n"
+        "  -w, --workspace <dir>     Workspace directory\n"
+        "  -S, --session <id>        Continue an existing session\n"
+        "  -y, --auto-approve        Auto-approve tool calls\n"
+        "  -T, --show-thinking       Show model thinking output\n"
+        "      --print <prompt>      Machine-friendly single shot\n"
+        "      --output-format json  Structured output for --print"
+    ),
+    "repl": (
+        "Usage: wisp repl [flags]\n"
+        "\n"
+        "Start the interactive REPL (default when no prompt is given).\n"
+        "\n"
+        "Flags:\n"
+        "  -m, --model <model>     Override provider model\n"
+        "  -s, --skill <name>      Activate a skill\n"
+        "  -w, --workspace <dir>   Workspace directory\n"
+        "  -S, --session <id>      Continue an existing session\n"
+        "  -y, --auto-approve      Auto-approve tool calls\n"
+        "  -T, --show-thinking     Show thinking output\n"
+        "\n"
+        "Inside the REPL, /help lists slash commands."
+    ),
+    "tui": (
+        "Usage: wisp tui [flags]\n"
+        "\n"
+        "Launch the Textual TUI frontend.\n"
+        "\n"
+        "Flags: -m model, -w workspace, -y auto-approve, -T show-thinking"
+    ),
+    "skills": 'Usage: wisp skills\n\nList all discovered skills.',
+    "config": 'Usage: wisp config [key] [value]\n\nView or set configuration values. With no arguments, dumps effective config.',
+    "check": 'Usage: wisp check\n\nVerify the provider is reachable and the configured model is usable.',
+    "models": 'Usage: wisp models\n\nList models available on the Ollama endpoint.',
+    "session": (
+        "Usage: wisp session <list|show|delete|trim|compact> [args]\n"
+        "\n"
+        "  list              List all sessions\n"
+        "  show <id>         Show session details\n"
+        "  delete <id>       Delete a session\n"
+        "  trim <id> [n]     Trim to last N exchanges\n"
+        "  compact <id> [n]  Compact old messages, keep last N"
+    ),
+    "memory": (
+        "Usage: wisp memory <add|remove|list|clear> [args]\n"
+        "\n"
+        "Manage cross-session memory (learned preferences, project facts)."
+    ),
+    "mcp": 'Usage: wisp mcp <list|add|remove|...>\n\nManage MCP server configurations.',
+    "git": 'Usage: wisp git\n\nShow git context for the workspace (branch, status, recent commits).',
+    "plan": 'Usage: wisp plan <list|show|...>\n\nManage structured plans.',
+    "progress": 'Usage: wisp progress\n\nShow current plan progress.',
+    "diagnose": 'Usage: wisp diagnose <file|->\n\nDiagnose an error from a file or stdin.',
+    "locks": 'Usage: wisp locks\n\nShow active file locks in the workspace.',
+    "changes": 'Usage: wisp changes\n\nShow changes made in this session.',
+    "acp": 'Usage: wisp acp\n\nRun Wisp as an ACP external agent (Zed editor integration).',
+    "server": (
+        "Usage: wisp server [--host H] [--port P] [--no-auth]\n"
+        "\n"
+        "Start the Wisp API server. Loopback-only unless WISP_API_KEY is set."
+    ),
+    "compact": 'Usage: wisp compact <session-id> [keep-n]\n\nCompact a stored session, keeping the last keep-n exchanges (default 6).',
+    "swarm": 'Usage: wisp swarm "<goal>" [--roles r1,r2] [-m model] [-w dir] [--max-parallel N]\n\nRun a multi-agent swarm to accomplish a goal.',
+    "agents": 'Usage: wisp agents [list|status]\n\nList agent roles or show running swarm agent status.',
+    "bench": 'Usage: wisp bench -m model1,model2 [...]\n\nBenchmark models on deterministic tasks.',
+}
+
+
+_SUBCOMMAND_NAMES = frozenset({
+    "run", "repl", "tui", "skills", "config", "check", "models",
+    "session", "memory", "mcp", "git", "plan", "progress", "diagnose",
+    "locks", "changes", "acp", "server", "compact", "swarm", "agents",
+    "bench",
+})
+
+
+def print_subcommand_help(name: str) -> bool:
+    """Print help for one subcommand; False if unknown."""
+    text = _SUBCOMMAND_HELP.get(name)
+    if text is None:
+        return False
+    print(text)
+    return True
+
+
 def main():
     argv = list(sys.argv[1:])
     _setup_logging(verbose="--verbose" in argv)
@@ -834,12 +927,13 @@ def main():
         print(f"wisp {__version__}")
         return
 
-    # Handle --help
-    if not argv or "-h" in argv or "--help" in argv:
+    # Handle --help for bare invocation; a subcommand's own --help is
+    # handled inside its dispatch branch.
+    if not argv or (("-h" in argv or "--help" in argv) and argv[0] not in _SUBCOMMAND_NAMES):
         print_help()
         return
 
-    _SUBCOMMANDS = {"run", "repl", "tui", "skills", "config", "check", "models", "session", "memory", "mcp", "git", "plan", "progress", "diagnose", "locks", "changes", "acp", "server", "compact", "swarm", "agents", "bench"}
+    _SUBCOMMANDS = _SUBCOMMAND_NAMES
     first = argv[0]
 
     # Global flags
@@ -894,6 +988,9 @@ def main():
         return result
 
     if first in _SUBCOMMANDS:
+        if "-h" in argv[1:] or "--help" in argv[1:]:
+            print_subcommand_help(first)
+            return
         rest = extract_global_flags(argv[1:])
 
         if first == "run":
