@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Callable
 
+from wisp.agent_memory import SessionSummary
 from wisp.approval_state import ApprovalSessionState, SessionPolicy
 from wisp.core.events import normalize_event
 
@@ -78,6 +79,10 @@ class AgentRuntime:
     _approval_states: dict[str, ApprovalSessionState] = field(
         default_factory=dict, repr=False
     )
+
+    # Files each session has touched, folded into its memory summary.
+    _touched_files: dict[str, set[str]] = field(default_factory=dict, repr=False)
+    _turn_counts: dict[str, int] = field(default_factory=dict, repr=False)
 
     # Configurable thresholds (can be overridden)
     max_messages: int = field(default=50, repr=False)
@@ -273,10 +278,12 @@ class AgentRuntime:
                         assistant_content.append(event.get("text", ""))
                     elif etype == "tool_call":
                         tool_calls.append(event)
+                        self._note_touched_file(sid, event.get("data") or {})
                     elif etype == "tool_result":
                         tool_results.append(event)
 
                 turn_succeeded = True
+                self._record_session_memory(sid, session, prompt)
 
             except Exception as exc:
                 logger.exception("Turn failed for session %s", sid)
@@ -374,6 +381,55 @@ class AgentRuntime:
                 )
 
     # ── Mid-turn steering (M3) ─────────────────────────────────────
+
+    _FILE_ARG_KEYS = ("path", "file_path", "notebook", "file")
+
+    def _note_touched_file(self, sid: str, data: dict[str, Any]) -> None:
+        name = str(data.get("name", ""))
+        if name not in (
+            "read_file", "write_file", "edit_file", "create_file",
+            "apply_patch", "read_notebook", "overwrite_notebook",
+        ):
+            return
+        for key in self._FILE_ARG_KEYS:
+            val = (data.get("arguments") or {}).get(key)
+            if isinstance(val, str) and val:
+                self._touched_files.setdefault(sid, set()).add(val)
+                return
+
+    def _record_session_memory(
+        self, sid: str, session: dict[str, Any], prompt: str
+    ) -> None:
+        """Fold this turn into the session's cross-memory summary.
+
+        Best-effort: memory must never break a turn.
+        """
+        try:
+            self._turn_counts[sid] = self._turn_counts.get(sid, 0) + 1
+            from wisp.agent_memory import get_agent_memory
+            from datetime import datetime, timezone
+
+            mem = get_agent_memory()
+            existing = {
+                s.session_id: s for s in mem.load_all()
+            }
+            prev = existing.get(sid)
+            files = sorted(self._touched_files.get(sid, set()))[:10]
+            if prev is not None:
+                merged_files = sorted(set(prev.files_touched) | set(files))[:10]
+            else:
+                merged_files = files
+            turns = self._turn_counts[sid]
+            summary = SessionSummary(
+                session_id=sid,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                workspace=str(session.get("workspace", "")),
+                summary=f"{turns} turn(s); latest request: {prompt[:160]}",
+                files_touched=merged_files,
+            )
+            mem.upsert(summary)
+        except Exception:
+            logger.debug("session-memory recording failed", exc_info=True)
 
     def approval_state(self, session_id: str) -> ApprovalSessionState:
         """Session-scoped approval memory, created on first access."""

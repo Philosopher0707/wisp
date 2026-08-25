@@ -599,6 +599,20 @@ class WispAgentCore:
                 context_mt = max(context_mt, candidate.stat().st_mtime)
             except OSError:
                 pass
+        # Memory changes must invalidate too: a fact remembered in this
+        # process (or a summary upserted by the last turn) otherwise stays
+        # invisible until restart, because nothing else bumps context_mt.
+        try:
+            from wisp.memory import _get_memory_file
+            context_mt = max(context_mt, _get_memory_file().stat().st_mtime)
+        except OSError:
+            pass
+        try:
+            from wisp.agent_memory import SESSIONS_FILE
+            context_mt = max(context_mt, SESSIONS_FILE.stat().st_mtime)
+        except OSError:
+            pass
+
         # Subagent prompts ride in role_extra; they MUST be part of the cache
         # key or a subagent's task prompt poisons the parent/siblings (all
         # cores sharing one workspace share this dict).
@@ -709,12 +723,23 @@ class WispAgentCore:
             return ""
 
     def _build_memory_block(self, workspace: str) -> str:
-        """Build memory block from agent memory."""
+        """Cross-session memory: remembered facts + recent summaries."""
         try:
             from wisp.agent_memory import get_agent_memory
+            from wisp.memory import list_all_facts
 
-            memory = get_agent_memory()
-            return memory.format_for_prompt([])
+            facts = list_all_facts()
+            mem = get_agent_memory()
+            try:
+                all_summaries = mem.load_all()
+            except Exception:
+                all_summaries = []
+            # Same-workspace summaries are most relevant; fill remaining
+            # slots with the newest others (recall searches globally too).
+            same_ws = [x for x in all_summaries if x.workspace == workspace]
+            others = [x for x in all_summaries if x.workspace != workspace]
+            summaries = (same_ws + others)[:3]
+            return format_cross_session_block(facts, summaries)
         except Exception as e:
             logger.debug("Failed to build memory block: %s", e)
             return ""
@@ -1341,3 +1366,37 @@ class WispAgentCore:
         from wisp.infra.security import Context
 
         return Context(workspace=Path(session.get("workspace", ".")))
+def format_cross_session_block(
+    facts: list[Any], summaries: list[Any]
+) -> str:
+    """Render remembered facts + past-session summaries for the prompt.
+
+    Pure function so the injection contract is testable without disk.
+    """
+    lines: list[str] = []
+    fact_items: list[str] = []
+    for fact in facts or []:
+        content = fact.get("content") if isinstance(fact, dict) else str(fact)
+        if content and content.strip():
+            fact_items.append(content.strip())
+    if fact_items:
+        important = [f for f in facts or [] if isinstance(f, dict) and f.get("important")]
+        important_contents = {
+            (f.get("content") or "").strip() for f in important
+        }
+        ordered = (
+            [f for f in fact_items if f in important_contents]
+            + [f for f in fact_items if f not in important_contents]
+        )[:15]
+        lines.append("## Cross-Session Memory")
+        lines.append(
+            "Facts the user asked you to remember across conversations:")
+        lines.extend(f"- {f}" for f in ordered)
+
+    if summaries:
+        if lines:
+            lines.append("")
+        from wisp.agent_memory import get_agent_memory
+
+        lines.append(get_agent_memory().format_for_prompt(list(summaries)))
+    return "\n".join(lines)

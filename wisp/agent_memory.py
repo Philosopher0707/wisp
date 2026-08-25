@@ -12,7 +12,7 @@ import os
 from typing import Optional
 
 from wisp.config import WISP_CONFIG_DIR
-from wisp.summarizer import SessionSummary
+from wisp.summarizer import SessionSummary as SessionSummary
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,28 @@ class AgentMemory:
             self._rotate()
         except OSError as e:
             logger.error("Failed to save session summary: %s", e)
+
+    def upsert(self, summary: SessionSummary) -> None:
+        """Insert or replace the summary for this session id.
+
+        Sessions evolve turn by turn; save()-once semantics would freeze
+        the first turn's view forever.
+        """
+        self._ensure_loaded()
+        self._summaries = [
+            s for s in self._summaries if s.session_id != summary.session_id
+        ]
+        self._summaries.append(summary)
+        self._seen_ids.add(summary.session_id)
+        try:
+            tmp = SESSIONS_FILE.with_suffix(".jsonl.tmp")
+            with tmp.open("w", encoding="utf-8") as f:
+                for s in self._summaries:
+                    f.write(json.dumps(s.to_dict(), ensure_ascii=False) + "\n")
+            tmp.replace(SESSIONS_FILE)
+            self._rotate()
+        except OSError as e:
+            logger.error("Failed to upsert session summary: %s", e)
 
     def _has_session(self, session_id: str) -> bool:
         """Check if a session_id already exists in the store."""
