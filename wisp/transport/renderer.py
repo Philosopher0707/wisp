@@ -319,6 +319,7 @@ def render_phase_bar(phase: str, stats: dict, width: int = 80) -> str:
 
 def render_turn_stats(stats: dict, width: int = 80) -> str:
     """Render a one-line turn summary: turn number, tools, files, elapsed."""
+    mode = get_output_mode()
     turn = stats.get("turn_number", 0)
     tools_run = stats.get("tools_run", 0)
     succeeded = stats.get("tools_succeeded", 0)
@@ -343,6 +344,16 @@ def render_turn_stats(stats: dict, width: int = 80) -> str:
             mins = int(elapsed / 60)
             secs = int(elapsed % 60)
             parts.append(f"{mins}m {secs}s")
+
+    # Context meter: estimate only — labeled as such by position, never
+    # presented as billing truth. Hidden without a limit to compare against.
+    ctx_tokens = stats.get("ctx_tokens")
+    ctx_limit = stats.get("ctx_limit")
+    if ctx_tokens and ctx_limit and mode != OutputMode.MINIMAL:
+        pct = round(100.0 * ctx_tokens / max(1, ctx_limit))
+        k = ctx_tokens / 1024.0
+        ctx_str = f"{k:.0f}k" if k >= 1 else f"{ctx_tokens}"
+        parts.append(f"ctx {ctx_str} ({pct}%)")
 
     return dim("  " + " · ".join(parts))
 

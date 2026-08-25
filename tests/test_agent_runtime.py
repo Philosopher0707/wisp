@@ -643,3 +643,52 @@ class TestToolCallPersistence:
         assert isinstance(tc["function"]["arguments"], str)
         assert json.loads(tc["function"]["arguments"]) == {"path": "a.py"}
         assert tc["id"] == "call_old"
+
+
+class TestDelegationWaitIndicator:
+    """Slow delegation analysis must render something within ~1s."""
+
+    def test_slow_classify_emits_analyzing_event(self, runtime):
+        import asyncio
+        import time as _time
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        signal = MagicMock()
+        signal.should_delegate = False
+
+        async def slow_analyze(prompt, llm_classify):
+            await asyncio.sleep(1.6)  # past the 1s indicator threshold
+            return signal
+
+        analyzer = MagicMock()
+        analyzer.analyze_with_llm = slow_analyze
+        runtime.orchestrator = None  # gate: orchestrator must exist; use dummy
+        runtime.orchestrator = MagicMock()
+
+        class _Core:
+            config = MagicMock()
+            config.delegation_threshold = 0.45
+
+        with patch.object(runtime, "_get_core", return_value=_Core()), \
+             patch(
+                 "wisp.multi_agent.delegation.get_delegation_analyzer",
+                 return_value=analyzer,
+             ):
+            events = []
+            t0 = _time.monotonic()
+
+            async def _drive():
+                async for ev in runtime.run_turn(
+                    {"id": "s", "messages": []},
+                    "research something thoroughly please",
+                ):
+                    events.append(ev)
+
+            asyncio.run(_drive())
+            elapsed = _time.monotonic() - t0
+
+        sys_msgs = [e for e in events if e.get("type") == "system"]
+        assert any(
+            "Analyzing" in str(e.get("message", "")) for e in sys_msgs
+        ), f"no analyzing indicator: {sys_msgs}"
+        assert elapsed < 5

@@ -412,7 +412,26 @@ class AgentRuntime:
                     )
                     return ""
 
-            signal = await analyzer.analyze_with_llm(prompt, _llm_classify)
+            # Dead-air rule: analysis can take seconds on a slow endpoint;
+            # after 1s tell the user it's thinking, not hung.
+            if progress_queue is not None:
+                async def _analyze_indicator() -> None:
+                    await asyncio.sleep(1.0)
+                    progress_queue.put_nowait({
+                        "type": "system",
+                        "message": "Analyzing whether to delegate...",
+                        "timestamp": time.time(),
+                    })
+
+                indicator_task = asyncio.create_task(_analyze_indicator())
+            else:
+                indicator_task = None
+
+            try:
+                signal = await analyzer.analyze_with_llm(prompt, _llm_classify)
+            finally:
+                if indicator_task is not None:
+                    indicator_task.cancel()
 
             if not signal.should_delegate or signal.confidence < threshold:
                 return None

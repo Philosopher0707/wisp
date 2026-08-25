@@ -183,3 +183,51 @@ class TestBoxPadding:
     def test_ascii_content_unchanged_by_display_width_padding(self):
         body = strip_ansi(_box("hello world", width=24).splitlines()[1])
         assert body == "│ hello world" + " " * 9 + " │"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Context meter in turn stats (estimate, clearly bounded)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestContextMeter:
+    def test_stats_include_context_when_provided(self):
+        from wisp.transport.renderer import render_turn_stats
+
+        stats = {
+            "turn_number": 1, "tools_run": 2,
+            "files_changed": [], "elapsed": 3.0,
+            "ctx_tokens": 18432, "ctx_limit": 131072,
+        }
+        line = render_turn_stats(stats)
+        assert "ctx 18k (14%)" in line, line
+
+    def test_context_hidden_in_minimal_mode(self):
+        import wisp.terminal_width as TW
+        from wisp.transport.renderer import render_turn_stats
+
+        TW.set_output_mode(TW.OutputMode.MINIMAL)
+        try:
+            stats = {
+                "turn_number": 1, "tools_run": 0,
+                "files_changed": [], "elapsed": 0.0,
+                "ctx_tokens": 5000, "ctx_limit": 100000,
+            }
+            assert "ctx" not in render_turn_stats(stats)
+        finally:
+            TW.set_output_mode(TW.OutputMode.UNICODE)
+
+    def test_no_limit_no_meter(self):
+        from wisp.transport.renderer import render_turn_stats
+
+        stats = {"turn_number": 1, "tools_run": 0, "files_changed": [],
+                 "elapsed": 0.0, "ctx_tokens": 900}
+        assert "ctx" not in render_turn_stats(stats)
+
+    def test_over_limit_shows_warning_pct(self):
+        from wisp.transport.renderer import render_turn_stats
+
+        stats = {"turn_number": 9, "tools_run": 0, "files_changed": [],
+                 "elapsed": 1.0, "ctx_tokens": 140000, "ctx_limit": 131072}
+        line = render_turn_stats(stats)
+        assert "(107%)" in line

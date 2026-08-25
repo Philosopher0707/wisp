@@ -19,6 +19,7 @@ import logging
 import signal
 from collections import deque
 from pathlib import Path
+from typing import Any
 
 from wisp.composition import CompositionRoot
 from wisp.config import WispConfig
@@ -160,10 +161,21 @@ def _save_command_history() -> bool:
         return False
 
 
-def _show_turn_stats(transport: CLITransport) -> None:
+def _show_turn_stats(transport: CLITransport, adapter: Any | None = None) -> None:
     """Render turn stats, file ticker, and separator after a turn."""
     import sys
     stats = transport._progress.on_done()
+    # Context meter input: estimate from the live session against the
+    # configured window. Missing either side simply hides the meter.
+    try:
+        if adapter is not None and getattr(adapter, "session", None):
+            est = adapter._estimate_tokens(adapter.session.get("messages", []))
+            limit = getattr(transport.config, "max_context_tokens", 0)
+            if est and limit:
+                stats["ctx_tokens"] = est
+                stats["ctx_limit"] = limit
+    except Exception:
+        pass  # meter is optional chrome; never break the stats line
     width = _term_width()
     stats_line = render_turn_stats(stats, width)
     if stats_line:
@@ -338,7 +350,7 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
             transport._flush_thinking(sys.stdout)
             transport._flush_content(sys.stdout)
             # Turn stats + file ticker + separator
-            _show_turn_stats(transport)
+            _show_turn_stats(transport, adapter)
         except KeyboardInterrupt:
             transport.stop_wait_clock(stdout=sys.stdout)
             _cancel_tasks()
@@ -533,7 +545,7 @@ async def _run_single_prompt(transport: CLITransport, root: CompositionRoot, pro
 
     transport._flush_thinking(sys.stdout)
     transport._flush_content(sys.stdout)
-    _show_turn_stats(transport)
+    _show_turn_stats(transport, adapter)
     sys.stdout.flush()
 
 
