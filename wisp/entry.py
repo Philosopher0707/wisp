@@ -92,7 +92,11 @@ def _run_cli(root: CompositionRoot, prompt: str | None = None, **kwargs) -> None
     """
 
     config = root.config
-    transport = CLITransport(root.runtime, config)
+    transport = CLITransport(
+        root.runtime,
+        config,
+        background_agents=getattr(root, "background_agents", None),
+    )
     transport.start()
 
     loop = asyncio.new_event_loop()

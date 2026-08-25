@@ -551,7 +551,7 @@ class CLITransport(Transport):
         # Lifecycle fan-out for spawn_background agents; the server transport
         # pushes these over WS — the CLI prints settlement notices instead.
         self.background_agents = background_agents
-        self._bg_task: asyncio.Task | None = None
+        self._bg_task: asyncio.Task[None] | None = None
         self._bg_queue: Any | None = None
         self._stdin: Any = None
         self._stdout: Any = None
