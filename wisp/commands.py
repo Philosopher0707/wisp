@@ -126,104 +126,262 @@ def cmd_clear(agent, args: str):
     print(success(f"✓ Cleared {count} messages."))
 
 
-@register("model", "Switch or list Ollama models", aliases=("m", "models"), usage="/model [name|number]")
+@register("model", "List/switch models for the active provider",
+          aliases=("m", "models"), usage="/model [<provider> <model>|<provider>/<model>|<num>|<name>]")
 def cmd_model(agent, args: str):
-    # Fetch available models from Ollama
-    models: list[dict] = []
-    if hasattr(agent, "client") and agent.client:
+    from wisp.provider_select import (
+        KNOWN_PROVIDERS, apply_switch, build_provider, missing_key,
+        parse_target, persist, probe,
+    )
+
+    provider = getattr(agent.config, "provider", None) or "ollama"
+    target = parse_target(args)
+
+    # ── Explicit provider component ────────────────────────────────
+    if target["provider"] is not None and args.strip():
+        new_provider = target["provider"]
+        if new_provider not in KNOWN_PROVIDERS:
+            print(error(f"✗ Unknown provider: {new_provider}. "
+                        f"Known: {', '.join(KNOWN_PROVIDERS)}"))
+            return
+        key_err = missing_key(new_provider)
+        if key_err:
+            print(error(f"✗ {key_err}"))
+            return
+
+    # ── No args: show current + this provider's models ─────────────
+    if not args.strip():
+        models = []
+        if getattr(agent, "client", None):
+            try:
+                models = [m.get("name", "") for m in (agent.client.list_models() or [])
+                          if m.get("name")]
+            except Exception as e:
+                logger.warning("Failed to list models: %s", e)
+
+        cloud = dim("(cloud)") if provider == "ollama" else ""
+        print(f"Provider: {accent(provider)}   Current model: "
+              f"{accent(agent.config.model)} {cloud}")
+        if not models:
+            print(dim(f"  (Could not list models for '{provider}')"))
+            others = ", ".join(KNOWN_PROVIDERS)
+            print(dim(f"  Switch with /provider <name>. Known providers: {others}"))
+            return
+        print(info(f"\nAvailable models ({len(models)}):"))
+        for i, name in enumerate(models, 1):
+            display = name.removesuffix(":cloud")
+            marker = accent("→") if name == agent.config.model else " "
+            suffix = dim("(cloud)") if provider == "ollama" else ""
+            print(f"  {marker} {i:2}. {display} {suffix}")
+        print(dim("\nType /model <number|name> to switch, /provider <name> "
+                  "to change provider."))
+        return
+
+    # ── Provider switch with optional model ─────────────────────────
+    if target["provider"] is not None:
+        new_provider = target["provider"]
+        new_model = target["model"]
+        if new_provider != provider:
+            probe_ok, detail = True, ""
+            try:
+                cand = build_provider(new_provider, model=new_model
+                                      or agent.config.model)
+                probe_ok, detail = probe(cand)
+            except Exception as exc:
+                probe_ok, detail = False, str(exc)[:160]
+            if not probe_ok:
+                print(warning(f"⚠ Provider '{new_provider}' health check "
+                              f"failed: {detail}"))
+                print(dim("  Switching anyway — use /provider to come back."))
+        else:
+            new_model = new_model  # same provider, maybe model only
+
+        if new_model:
+            _apply_model_switch(agent, new_provider, new_model,
+                                persist_choice=True, switch_provider=True)
+            return
+        # Provider only: apply, then list its models for a follow-up pick.
+        agent.config = apply_switch(
+            getattr(agent, "runtime", None), agent.session,
+            agent.config, provider=new_provider, model=None)
+        if getattr(agent, "_system_prompt_cache", None) is not None:
+            agent._system_prompt_cache.clear()
+        persist({"provider": new_provider})
+        print(success(f"✓ Provider set to: {new_provider}"))
         try:
-            models = agent.client.list_models()
+            cand = build_provider(new_provider, model=agent.config.model)
+            listing = [m.get("name", "") for m in (cand.list_models() or [])
+                       if m.get("name")]
+            if listing:
+                print(info(f"Available models ({len(listing)}):"))
+                for i, name in enumerate(listing, 1):
+                    print(f"   {i:2}. {name}")
+                print(dim("Pick with /model <number|name>."))
+        except Exception as exc:
+            logger.debug("Model listing for %s failed: %s", new_provider, exc)
+        return
+
+    # ── Model-only switch within the active provider ────────────────
+    arg = target["model"]
+    models = []
+    if getattr(agent, "client", None):
+        try:
+            models = [m.get("name", "") for m in (agent.client.list_models() or [])
+                      if m.get("name")]
         except Exception as e:
             logger.warning("Failed to list models: %s", e)
 
-    model_names = [m.get("name", "") for m in models if m.get("name")]
+    display_map = {n.removesuffix(":cloud"): n for n in models}
+    new_model: str | None = None
 
-    # Helper: strip :cloud suffix for display (all are cloud models)
-    def _display_name(name: str) -> str:
-        return name.removesuffix(":cloud")
-
-    # Build display name -> full name map for resolution
-    display_map = {_display_name(n): n for n in model_names}
-
-    if not args:
-        # Show current model + numbered list
-        print(f"Current model: {accent(_display_name(agent.config.model))} {dim('(cloud)')}")
-        if not model_names:
-            print(dim("  (Could not fetch model list from Ollama)"))
-            return
-        print(info(f"\nAvailable models ({len(model_names)}):"))
-        for i, name in enumerate(model_names, 1):
-            display = _display_name(name)
-            marker = accent("→") if name == agent.config.model else " "
-            print(f"  {marker} {i:2}. {display} {dim('(cloud)')}")
-        print(dim("\nType /model <number> or /model <name> to switch."))
-        return
-
-    arg = args.strip()
-
-    # Try numeric selection first
     if arg.isdigit():
         idx = int(arg) - 1
-        if 0 <= idx < len(model_names):
-            new_model = model_names[idx]
+        if 0 <= idx < len(models):
+            new_model = models[idx]
         else:
             print(error(f"✗ Invalid model number: {arg}. Use /model to see the list."))
             return
     else:
-        # Name-based selection
-        # 1. Exact match on full name
-        exact = [n for n in model_names if n == arg]
-        if exact:
-            new_model = exact[0]
-        # 2. Exact match on display name (without :cloud)
+        if arg in models:
+            new_model = arg
         elif arg in display_map:
             new_model = display_map[arg]
             print(dim(f"  (resolved to {new_model})"))
-        # 3. Prefix match on full name
         else:
-            prefixes = [n for n in model_names if n.startswith(arg)]
+            prefixes = [n for n in models if n.startswith(arg)]
+            disp_prefixes = [n for n in models
+                             if n.removesuffix(":cloud").startswith(arg)]
             if len(prefixes) == 1:
                 new_model = prefixes[0]
                 print(dim(f"  (resolved to {new_model})"))
             elif len(prefixes) > 1:
                 print(warning(f"⚠ Ambiguous prefix '{arg}'. Matches:"))
-                for p in prefixes:
-                    print(f"    - {_display_name(p)} {dim('(cloud)')}")
+                for pfx in prefixes:
+                    print(f"    - {pfx}")
+                return
+            elif len(disp_prefixes) == 1:
+                new_model = disp_prefixes[0]
+                print(dim(f"  (resolved to {new_model})"))
+            elif len(disp_prefixes) > 1:
+                print(warning(f"⚠ Ambiguous prefix '{arg}'. Matches:"))
+                for pfx in disp_prefixes:
+                    print(f"    - {pfx}")
                 return
             else:
-                # 4. Prefix match on display name
-                disp_prefixes = [n for n in model_names if _display_name(n).startswith(arg)]
-                if len(disp_prefixes) == 1:
-                    new_model = disp_prefixes[0]
-                    print(dim(f"  (resolved to {new_model})"))
-                elif len(disp_prefixes) > 1:
-                    print(warning(f"⚠ Ambiguous prefix '{arg}'. Matches:"))
-                    for p in disp_prefixes:
-                        print(f"    - {_display_name(p)} {dim('(cloud)')}")
-                    return
-                else:
-                    print(warning(f"⚠ Model '{arg}' not found in Ollama. It may need to be pulled."))
-                    return
+                print(warning(f"⚠ Model '{arg}' not found for provider "
+                              f"'{provider}'. Use /model to see the list."))
+                return
 
-    # Apply the switch
-    agent.config = agent.config.replace(model=new_model)
-    if hasattr(agent, "client") and agent.client:
-        agent.client.model = new_model
-        # Re-detect context window for the new model
-        if not agent.config._context_tokens_explicit:
+    _apply_model_switch(agent, provider, new_model, persist_choice=True)
+
+
+def _apply_model_switch(agent, provider: str, new_model: str,
+                        persist_choice: bool = True,
+                        switch_provider: bool = False) -> None:
+    """Commit a model switch within `provider`; shared by all paths."""
+    from wisp.provider_select import apply_switch, missing_key, persist
+
+    key_err = missing_key(provider)
+    if key_err:
+        print(error(f"✗ {key_err}"))
+        return
+
+    old_cfg = agent.config
+    agent.config = apply_switch(
+        getattr(agent, "runtime", None), agent.session,
+        old_cfg,
+        provider=provider if switch_provider else None,
+        model=new_model)
+
+    client = getattr(agent, "client", None)
+    if client is not None:
+        client.model = new_model
+        if provider == "ollama" and not getattr(
+                agent.config, "_context_tokens_explicit", False):
             try:
-                detected = agent.client.get_context_length()
+                detected = client.get_context_length()
                 if detected != agent.config.max_context_tokens:
                     logger.info(
                         "Auto-detected context window for %s: %d tokens",
                         new_model, detected,
                     )
-                    agent.config = agent.config.replace(max_context_tokens=detected)
+                    agent.config = agent.config.replace(
+                        max_context_tokens=detected)
             except Exception:
                 pass
-    if hasattr(agent, "_system_prompt_cache"):
+    if getattr(agent, "_system_prompt_cache", None) is not None:
         agent._system_prompt_cache.clear()
-    print(success(f"✓ Model set to: {_display_name(new_model)} {dim('(cloud)')}"))
+
+    if persist_choice:
+        update = {"model": new_model}
+        if switch_provider and provider:
+            update["provider"] = provider
+        persist(update)
+
+    display = new_model.removesuffix(":cloud")
+    cloud = dim("(cloud)") if provider == "ollama" else ""
+    print(success(f"✓ Model set to: {display} {cloud}".rstrip()))
+
+
+@register("provider", "Switch LLM provider (openai/nvidia/ollama/mock)",
+          aliases=("prov",), usage="/provider [name]")
+def cmd_provider(agent, args: str):
+    from wisp.provider_select import (
+        KNOWN_PROVIDERS, apply_switch, build_provider, current_key_status,
+        missing_key, persist, probe,
+    )
+
+    current = getattr(agent.config, "provider", None) or "ollama"
+
+    if not args.strip():
+        print(f"Current provider: {accent(current)}   "
+              f"Model: {accent(agent.config.model)}")
+        print(info("\nAvailable providers:"))
+        for name, meta in KNOWN_PROVIDERS.items():
+            marker = accent("→") if name == current else " "
+            key = current_key_status(name) if meta["requires_key"] else dim("-")
+            key_req = dim("(needs WISP_API_KEY)") if meta["requires_key"] else ""
+            print(f"  {marker} {name:<8} {meta['label']}  [{key}] {key_req}")
+        print(dim("\nSwitch with /provider <name>; then /model <number|name>."))
+        return
+
+    name = args.strip().split()[0].lstrip("@")
+    if name not in KNOWN_PROVIDERS:
+        print(error(f"✗ Unknown provider: {name}. "
+                    f"Known: {', '.join(KNOWN_PROVIDERS)}"))
+        return
+    if name == current:
+        print(dim(f"Already on {name}. Use /model to pick a model."))
+        return
+    key_err = missing_key(name)
+    if key_err:
+        print(error(f"✗ {key_err}"))
+        return
+
+    agent.config = apply_switch(
+        getattr(agent, "runtime", None), agent.session,
+        agent.config, provider=name, model=None)
+    if getattr(agent, "_system_prompt_cache", None) is not None:
+        agent._system_prompt_cache.clear()
+    persist({"provider": name})
+    print(success(f"✓ Provider set to: {name}"))
+
+    # Best-effort: show what this provider can serve right now.
+    try:
+        from wisp.provider_select import build_provider
+        cand = build_provider(name, model=agent.config.model)
+        ok, detail = probe(cand)
+        if not ok:
+            print(warning(f"⚠ Health check failed: {detail}"))
+        listing = [m.get("name", "") for m in (cand.list_models() or [])
+                   if m.get("name")]
+        if listing:
+            print(info(f"Available models ({len(listing)}):"))
+            for i, mname in enumerate(listing, 1):
+                print(f"   {i:2}. {mname}")
+            print(dim("Pick with /model <number|name>."))
+    except Exception as exc:
+        logger.debug("Post-switch listing failed: %s", exc)
 
 
 @register("skill", "Load or list skills (suggest/save capture workflows)",

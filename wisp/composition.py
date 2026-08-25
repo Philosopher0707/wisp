@@ -146,6 +146,7 @@ class CompositionRoot:
             compactor=self.compactor,
             orchestrator=None,
             session_repo=session_repo,
+            config=self.config,
         )
 
         # Create subagent orchestrator with tool_executor wired at construction time
@@ -184,13 +185,19 @@ class CompositionRoot:
         self._registry.register(self.telemetry)
 
     def _create_core(self) -> WispAgentCore:
-        """Factory for creating stateless core instances."""
+        """Factory for creating stateless core instances.
+
+        Reads the RUNTIME's live config when present so /provider and /model
+        switches (which mutate runtime.config) take effect on the next turn;
+        root.config is only the bootstrap value.
+        """
         from wisp.providers.factory import ProviderFactory
 
-        provider_name = getattr(self.config, "provider", None)
+        cfg = getattr(getattr(self, "runtime", None), "config", None) or self.config
+        provider_name = getattr(cfg, "provider", None)
         if provider_name:
             factory = ProviderFactory()
-            provider = factory.from_config(self.config)
+            provider = factory.from_config(cfg)
         else:
             logger.warning(
                 "No LLM provider configured. Set WISP_PROVIDER or provider in config. "
@@ -199,7 +206,7 @@ class CompositionRoot:
             provider = _NullProvider()
 
         return WispAgentCore(
-            config=self.config,
+            config=cfg,
             provider=provider,
             security=self.security,
             extensions=self.extensions,
