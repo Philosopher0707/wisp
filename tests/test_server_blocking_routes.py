@@ -8,6 +8,7 @@ tests drive the real routes against a real tmp repo.
 
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -65,24 +66,33 @@ def test_git_commit_picks_up_new_file(client):
     assert "add b" in log.stdout
 
 
-def test_models_503_when_both_lookups_fail(monkeypatch):
+def test_models_route_degrades_gracefully_when_provider_unreachable(monkeypatch):
+    """Provider-aware catalog: one dead provider yields an empty listing,
+    never a route-level 503 — the other providers still answer."""
     ws_server._auth.disable()
-    import wisp.server.routes.models as models_mod
 
-    def _boom(*a, **k):
-        raise subprocess.TimeoutExpired(cmd="ollama", timeout=10)
-
-    class _DeadHTTP:
-        def get(self, *a, **k):
-            raise ConnectionError("no ollama")
-
-    monkeypatch.setattr(models_mod.subprocess, "run", _boom)
-    monkeypatch.setattr(models_mod.requests, "get", _DeadHTTP().get)
+    monkeypatch.setattr("wisp.provider_catalog._authed_get",
+                        lambda *a, **k: (_ for _ in ()).throw(ConnectionError("down")))
 
     from wisp.server import app
-    tc = TestClient(app)
-    r = tc.get("/api/models")
-    assert r.status_code == 503
+    # Route needs a root on app state; a null-provider root is enough to
+    # prove the CATALOG degrades gracefully (not the 503-uninitialized path).
+    fake_root = SimpleNamespace(config=SimpleNamespace(provider="ollama",
+                                                       model="x"),
+                                runtime=None)
+    if not hasattr(app.state, "root"):
+        app.state.root = None
+    original_root = getattr(app.state, "root", None)
+    app.state.root = fake_root
+    try:
+        tc = TestClient(app)
+        r = tc.get("/api/models")
+    finally:
+        app.state.root = original_root
+    assert r.status_code == 200
+    body = r.json()
+    assert isinstance(body["models"], list)
+    assert {p["name"] for p in body["providers"]} >= {"ollama"}
 
 
 def test_review_diff_empty_repo_returns_no_changes(client):

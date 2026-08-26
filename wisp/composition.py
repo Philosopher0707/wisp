@@ -190,10 +190,31 @@ class CompositionRoot:
         Reads the RUNTIME's live config when present so /provider and /model
         switches (which mutate runtime.config) take effect on the next turn;
         root.config is only the bootstrap value.
+
+        Before building, the selection contract resolves + validates the
+        effective (provider, model): an unset model picks the first model
+        the provider actually serves; an unknown one warns with real
+        alternatives instead of failing mid-turn with a provider 404.
         """
         from wisp.providers.factory import ProviderFactory
+        from wisp.provider_catalog import resolve_selection
 
         cfg = getattr(getattr(self, "runtime", None), "config", None) or self.config
+        resolution = resolve_selection(cfg)
+        if resolution.status == "model_unset":
+            logger.info(
+                "No model configured — serving '%s' (%s). Alternatives: %s",
+                resolution.suggested, resolution.provider,
+                ", ".join(resolution.alternatives[:5]),
+            )
+            cfg = cfg.replace(model=resolution.suggested)
+        elif resolution.status == "unknown_model":
+            alts = ", ".join(resolution.alternatives[:5]) or "(none listed)"
+            logger.warning(
+                "%s Serving '%s' anyway. Did you mean: %s? "
+                "Switch with /model <provider> <model>.",
+                resolution.detail, resolution.model, alts,
+            )
         provider_name = getattr(cfg, "provider", None)
         if provider_name:
             factory = ProviderFactory()

@@ -115,6 +115,13 @@ class AgentRuntime:
         if isinstance(loaded, dict) and "messages" in loaded:
             session: dict[str, Any] = loaded
             _stringify_tool_call_arguments(session["messages"])
+            # Latest selection wins: a resumed session must serve with the
+            # CURRENTLY chosen model, not the one baked in when it was
+            # created — otherwise /model switches silently never reach old
+            # sessions and users see the stale default "come online".
+            if model and session.get("model") != model:
+                session["model"] = model
+                self.store.save_session(session)
             return session
 
         now = datetime.now(timezone.utc).isoformat()

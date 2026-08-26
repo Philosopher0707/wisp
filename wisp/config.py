@@ -17,7 +17,11 @@ from wisp.infra.security import PermissionMode
 logger = logging.getLogger(__name__)
 
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
-DEFAULT_MODEL = "kimi-k2.6:cloud"
+# No hardcoded model id: a baked-in name rots the moment the daemon or
+# gateway drops it, and then the agent comes online pointing at a model
+# that does not exist. Empty means "unset" — provider_catalog resolves it
+# to the first model the active provider actually serves.
+DEFAULT_MODEL = ""
 DEFAULT_MAX_CONTEXT_TOKENS = 256000
 WISP_CONFIG_DIR = Path.home() / ".config" / "wisp"
 
@@ -51,7 +55,7 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
     "model": {
         "type": str,
         "default": DEFAULT_MODEL,
-        "description": "Default Ollama model",
+        "description": "Model id (empty = first model the provider serves)",
         "env_var": "WISP_MODEL",
     },
     "temperature": {

@@ -89,7 +89,10 @@ class ProviderFactory:
                 "ollama",
                 config=config,
                 base_url=base_url,
-                model=getattr(config, "model", "qwen2.5-coder"),
+                # No model-id fallback here: an empty model is legal and
+                # provider_catalog resolves it to a real served model.
+                # Hardcoding one is how stale defaults were born.
+                model=getattr(config, "model", "") or "",
             )
 
         if name == "openai":
