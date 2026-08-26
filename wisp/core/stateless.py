@@ -36,6 +36,7 @@ from wisp.core.events import (
     provider_status as provider_status_event,
     steering_feedback,
 )
+from wisp.core.provider_stream import guarded_provider_stream
 from wisp.core.approval_gate import ApprovalGate
 from wisp.infra.circuit_breaker import (
     CircuitBreaker,
@@ -1403,150 +1404,24 @@ class WispAgentCore:
     ) -> AsyncIterator[dict[str, Any]]:
         """Wrap one provider round-trip with stall + empty-stream recovery.
 
-        Observed against NVIDIA's endpoint: ~1-in-5 identical requests
-        close cleanly with ZERO deltas (fast, silent, useless), and some
-        hold requests with no first byte indefinitely. Both previously
-        produced a silently empty turn. Now: transparent retries on fresh
-        requests (count via WISP_STREAM_ATTEMPTS, default 3 — under
-        parallel fan-out load two consecutive empties are common enough
-        that a single retry still lost turns); final failure surfaces as
-        a visible error instead of nothing.
+        Thin delegate: the guard lives in wisp.core.provider_stream with
+        everything injected (stream opener, normalizer, deadlines), so it
+        is testable without a core and this class stays the single place
+        env-tuned knobs are read.
         """
-        import asyncio as _aio
-
-        max_attempts = max(1, int(os.environ.get("WISP_STREAM_ATTEMPTS", "3")))
-        last_transient_status: int | None = None
-        for attempt in range(1, max_attempts + 1):
-            got_meaningful = False
-            stream_stats: dict[str, Any] | None = None
-            api_status: int | None = None
-            stream = self._stream_events_async(
+        async for event in guarded_provider_stream(
+            lambda: self._stream_events_async(
                 system_prompt=system_prompt,
                 messages=messages,
                 tools=tools,
-            )
-            stalled = False
-            try:
-                while True:
-                    if not got_meaningful:
-                        try:
-                            event = await _aio.wait_for(
-                                stream.__anext__(),
-                                timeout=self.FIRST_TOKEN_DEADLINE_S,
-                            )
-                        except StopAsyncIteration:
-                            break  # clean end, no meaningful events
-                        except _aio.TimeoutError:
-                            stalled = True
-                            break
-                    else:
-                        try:
-                            event = await _aio.wait_for(
-                                stream.__anext__(),
-                                timeout=self.CHUNK_DEADLINE_S,
-                            )
-                        except StopAsyncIteration:
-                            break
-                        except _aio.TimeoutError:
-                            stalled = True
-                            break
-                    normalized = self._normalize_event(event)
-                    ntype = str(normalized.get("type", ""))
-                    if ntype == "stream_stats":
-                        stream_stats = normalized
-                    if ntype == "error":
-                        st = normalized.get("status")
-                        if isinstance(st, int) and (st == 429 or st >= 500):
-                            api_status = st
-                            continue  # transient — hold it for the retry path
-                        yield event
-                        return  # permanent API error: surface immediately
-                    if ntype not in self._BOOKKEEPING_TYPES:
-                        got_meaningful = True
-                    yield event
-            finally:
-                if stalled or not got_meaningful:
-                    aclose = getattr(stream, "aclose", None)
-                    if aclose is not None:
-                        await aclose()
-
-            if got_meaningful:
-                if stalled:
-                    # Mid-stream death after partial output: retrying would
-                    # duplicate what the consumer already saw, so surface
-                    # the truncation and end cleanly instead of hanging.
-                    yield _flatten_event(provider_status_event(
-                        "chunk_stall",
-                        detail=(
-                            f"provider sent no data for "
-                            f"{self.CHUNK_DEADLINE_S:.0f}s mid-stream — "
-                            "output may be truncated"
-                        ),
-                    ))
-                return
-
-            if attempt < max_attempts and (stalled or api_status is not None or not got_meaningful) is not False:
-                pass  # fall through to shared retry handling below
-            if got_meaningful and api_status is None:
-                return
-
-            if attempt < max_attempts:
-                last_transient_status = api_status or last_transient_status
-                if stalled:
-                    reason = f"no data for {self.FIRST_TOKEN_DEADLINE_S:.0f}s"
-                    detail = ""
-                else:
-                    reason = "closed without any content"
-                    # HTTP-200-with-zero-deltas under parallel load is the
-                    # throttle signature; the counters separate "server sent
-                    # literally nothing" from "sent chunks we couldn't use".
-                    detail = ""
-                    if stream_stats:
-                        detail = (
-                            f" [sse_lines={stream_stats.get('sse_lines')} "
-                            f"usable={stream_stats.get('usable_deltas')} "
-                            f"empty_choice_chunks={stream_stats.get('empty_choice_chunks')} "
-                            f"finish={stream_stats.get('finish_reason')}]"
-                        )
-                logger.warning(
-                    "Provider stream %s%s (attempt %d/%d) — retrying",
-                    reason, detail, attempt, max_attempts,
-                )
-                # Immediate retry into a throttling endpoint reproduces the
-                # failure; a short jittered pause gives the window a chance
-                # to reopen without meaningfully delaying healthy streams.
-                # 429/5xx get progressively longer waits than silent-empty
-                # closes — the server explicitly told us to slow down.
-                if api_status is not None:
-                    base = 1.5 * attempt
-                elif not stalled:
-                    base = 0.75
-                else:
-                    base = 0.0
-                jitter = (_aio.get_event_loop().time() * 1000 % 1.5)
-                wait_s = base + jitter
-                if wait_s > 0:
-                    logger.info(
-                        "Provider retry backoff %.1fs (status=%s)",
-                        wait_s, api_status or "-",
-                    )
-                    await _aio.sleep(wait_s)
-                continue
-
-            if last_transient_status is not None:
-                yield _flatten_event(error_event(
-                    f"Provider kept rejecting requests (HTTP {last_transient_status}) "
-                    f"after {max_attempts} attempts — rate limited or degraded. "
-                    "Try again shortly.",
-                    recoverable=True,
-                ))
-            else:
-                yield _flatten_event(error_event(
-                    f"Provider returned no usable response after {max_attempts} "
-                    "attempts — the model endpoint is misbehaving. Try again shortly.",
-                    recoverable=True,
-                ))
-            return
+            ),
+            self._normalize_event,
+            self._BOOKKEEPING_TYPES,
+            first_token_deadline_s=self.FIRST_TOKEN_DEADLINE_S,
+            chunk_deadline_s=self.CHUNK_DEADLINE_S,
+            max_attempts=max(1, int(os.environ.get("WISP_STREAM_ATTEMPTS", "3"))),
+        ):
+            yield event
 
     def _normalize_event(self, event: Any) -> dict[str, Any]:
         """Normalize provider event to standard format.
