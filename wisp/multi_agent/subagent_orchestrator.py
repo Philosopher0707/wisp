@@ -19,6 +19,7 @@ import logging
 import os
 import time
 from pathlib import Path
+from collections.abc import Coroutine
 from typing import Any, AsyncIterator, Optional
 
 from wisp.config import WispConfig
@@ -323,6 +324,36 @@ class SubagentOrchestrator:
         self._active = 0
         self._semaphore = asyncio.Semaphore(self._pool_size)
         self._patch_lock = asyncio.Lock()  # Serialize patch application to avoid conflicts
+
+        # Live child tasks: strong references so results/exceptions are
+        # always retrieved (asyncio only warns "exception was never
+        # retrieved" for tasks nobody holds), and so an interrupted turn can
+        # reap every child deterministically instead of leaking runners that
+        # keep streaming into a dying REPL.
+        self._live_tasks: set[asyncio.Task[Any]] = set()
+
+    def _spawn_tracked(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
+        task = asyncio.ensure_future(coro)
+        self._live_tasks.add(task)
+        task.add_done_callback(self._on_live_task_done)
+        return task
+
+    def _on_live_task_done(self, task: asyncio.Task[Any]) -> None:
+        self._live_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Subagent task crashed: %s: %s", type(exc).__name__, exc)
+
+    async def cancel_live_tasks(self, timeout: float = 3.0) -> int:
+        """Cancel and reap every live child; returns how many were running."""
+        live = [t for t in self._live_tasks if not t.done()]
+        for t in live:
+            t.cancel()
+        if live:
+            await asyncio.gather(*live, return_exceptions=True)
+        return len(live)
 
     # ── Workspace resolution ────────────────────────────────────────────
 
@@ -848,8 +879,17 @@ class SubagentOrchestrator:
                         await asyncio.sleep(backoff)
                 return result
 
-        tasks = [asyncio.create_task(_guarded(c)) for c in contracts]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        tasks = [self._spawn_tracked(_guarded(c)) for c in contracts]
+        try:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+        except asyncio.CancelledError:
+            # Caller (the turn task) was interrupted: reap every child here
+            # so none outlive the turn streaming into teardown.
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
 
         resolved: list[SubagentResult] = []
         for i, result in enumerate(results):
@@ -902,7 +942,7 @@ class SubagentOrchestrator:
             async with semaphore:
                 return await self.run(contract)
 
-        tasks = [asyncio.create_task(_guarded(c)) for c in contracts]
+        tasks = [self._spawn_tracked(_guarded(c)) for c in contracts]
         completed = 0
         try:
             for coro in asyncio.as_completed(tasks):

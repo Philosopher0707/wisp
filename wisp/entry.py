@@ -515,19 +515,54 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
     # Restore original signal handler before cleanup
     _restore_signal_handler()
 
-    # Clean up: cancel any in-progress turn and shut down services
-    saved = False
+    # Teardown is uninterruptible: a Ctrl+C landing mid-cleanup used to kill
+    # the save, leave asyncio tasks half-reaped, and spray "Task exception
+    # was never retrieved" tracebacks after the goodbye message. The exit
+    # path itself is bounded now (<3.5s), so briefly ignoring SIGINT trades
+    # nothing — force-quit still works at any point before teardown starts.
+    _previous_sigint = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, lambda *_a: None)
     try:
-        _cancel_tasks()
-        loop.run_until_complete(asyncio.sleep(0.05))  # Let cancellation settle
+        saved = False
+        try:
+            _cancel_tasks()
+            assert loop is not None  # bound above: own loop or caller's
+            loop.run_until_complete(_drain_pending_tasks(loop, timeout=3.0))
+        finally:
+            _save_command_history()
+            saved = _force_save()
+            if own_loop:
+                loop.close()
     finally:
-        _save_command_history()
-        saved = _force_save()
-        if own_loop:
-            loop.close()
+        signal.signal(signal.SIGINT, _previous_sigint)
     if not saved:
         sys.stdout.write(f"\n{status_symbols()['warn']}  Could not save session.\n")
         sys.stdout.flush()
+
+
+async def _drain_pending_tasks(loop: asyncio.AbstractEventLoop, timeout: float = 3.0) -> None:
+    """Cancel every task still parked on *loop* and wait for them to finish.
+
+    Orphaned subagent runners and provider bridges used to survive turn
+    cancellation and keep executing during shutdown spins; reaping them here
+    guarantees the process exits with zero pending tasks.
+    """
+    current = asyncio.current_task()
+    pending = [
+        t for t in asyncio.all_tasks(loop)
+        if t is not current and not t.done()
+    ]
+    if not pending:
+        return
+    for task in pending:
+        task.cancel()
+    done, _still = await asyncio.wait(pending, timeout=timeout)
+    for task in done:
+        if not task.cancelled() and task.exception() is not None:
+            logger.debug(
+                "Teardown reaped task error: %s: %s",
+                type(task.exception()).__name__, task.exception(),
+            )
 
 
 async def _run_single_prompt(transport: CLITransport, root: CompositionRoot, prompt: str, config: WispConfig, **kwargs) -> None:

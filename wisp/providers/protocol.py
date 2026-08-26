@@ -107,7 +107,20 @@ class Provider(ABC):
                         queue.get_nowait()
                     except Exception:
                         break
-                thread.join(timeout=5.0)
+                # Never join the producer thread here: a blocking join runs
+                # on the event-loop thread, so every cancelled stream froze
+                # the whole REPL for up to 5s — and a Ctrl+C landing inside
+                # that join corrupted task teardown. Poll cooperatively for
+                # a short grace window (well-behaved producers check the
+                # cancel flag between chunks and exit immediately); a
+                # producer stuck mid-read stays daemon-backed and dies with
+                # the process instead of stalling teardown.
+                deadline = loop.time() + 1.0
+                try:
+                    while thread.is_alive() and loop.time() < deadline:
+                        await asyncio.sleep(0.02)
+                except RuntimeError:
+                    pass  # loop closed mid-poll during interpreter teardown
 
         return _bridge()
 
