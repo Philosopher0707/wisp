@@ -18,6 +18,18 @@ router = APIRouter()
 _mcp_manager = None
 
 
+def set_mcp_manager(manager) -> None:
+    """Bind the live composition-root manager.
+
+    The root's manager is what tool_executor dispatches through; without
+    this binding, route CRUD mutated a SECOND manager — added servers
+    connected in the wrong instance (tools never appeared until restart)
+    and after a workspace switch the two read different config files.
+    """
+    global _mcp_manager
+    _mcp_manager = manager
+
+
 def _get_mcp_manager():
     global _mcp_manager
     if _mcp_manager is None:

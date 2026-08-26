@@ -66,6 +66,10 @@ async def lifespan(app: FastAPI):
     # Lifespan runs inside the serving loop — bind the shared pool now.
     root.bind_loop(asyncio.get_running_loop())
     app.state.root = root
+    # Route CRUD must mutate the SAME manager tool_executor dispatches
+    # through (L5) — not a private module-global twin.
+    from wisp.server.routes import mcp as mcp_routes
+    mcp_routes.set_mcp_manager(root._mcp_manager)
     yield
     logger.info("Wisp API Server shutting down...")
     root.shutdown()
