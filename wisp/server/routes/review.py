@@ -48,14 +48,18 @@ def _validate_git_ref(ref: str, field_name: str) -> str:
     return ref
 
 
-def _git_ref_exists(ref: str, cwd: str) -> bool:
+async def _run_git(args: list[str], timeout: int = 30) -> subprocess.CompletedProcess:
+    """Run git off the event loop — blocking here froze every WS connection."""
+    return await asyncio.to_thread(
+        subprocess.run, args, capture_output=True, text=True, timeout=timeout,
+    )
+
+
+async def _git_ref_exists(ref: str, cwd: str) -> bool:
     """Verify a ref resolves to an actual object in the git repo."""
     try:
-        proc = subprocess.run(
-            ["git", "rev-parse", "--verify", "--quiet", ref],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
+        proc = await _run_git(
+            ["git", "-C", cwd, "rev-parse", "--verify", "--quiet", ref],
             timeout=5,
         )
         return proc.returncode == 0
@@ -150,17 +154,11 @@ async def review_pr(req: PRReviewRequest, request: Request):
 
     # Verify refs exist before running diff
     for ref in (base, head):
-        if not _git_ref_exists(ref, str(WORKSPACE_ROOT)):
+        if not await _git_ref_exists(ref, str(WORKSPACE_ROOT)):
             raise HTTPException(status_code=400, detail=f"Git ref '{ref}' not found")
 
     try:
-        proc = subprocess.run(
-            ["git", "diff", "--", f"{base}...{head}"],
-            cwd=str(WORKSPACE_ROOT),
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
+        proc = await _run_git(["git", "-C", str(WORKSPACE_ROOT), "diff", "--", f"{base}...{head}"])
         if proc.returncode != 0:
             raise HTTPException(status_code=500, detail=f"git diff failed: {proc.stderr}")
         diff_text = proc.stdout
@@ -243,30 +241,18 @@ async def review_diff(req: DiffReviewRequest, request: Request):
 
     try:
         if req.target == "uncommitted":
-            proc = subprocess.run(
-                ["git", "diff", "--"],
-                cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=30,
-            )
+            proc = await _run_git(["git", "-C", str(WORKSPACE_ROOT), "diff", "--"])
             diff_text = proc.stdout
         elif req.target == "staged":
-            proc = subprocess.run(
-                ["git", "diff", "--staged"],
-                cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=30,
-            )
+            proc = await _run_git(["git", "-C", str(WORKSPACE_ROOT), "diff", "--staged"])
             diff_text = proc.stdout
         elif req.target:
-            if not _git_ref_exists(target_desc, str(WORKSPACE_ROOT)):
+            if not await _git_ref_exists(target_desc, str(WORKSPACE_ROOT)):
                 raise HTTPException(status_code=400, detail=f"Git ref '{target_desc}' not found")
-            proc = subprocess.run(
-                ["git", "diff", "--", f"{target_desc}^!"],
-                cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=30,
-            )
+            proc = await _run_git(["git", "-C", str(WORKSPACE_ROOT), "diff", "--", f"{target_desc}^!"])
             diff_text = proc.stdout
             if not diff_text.strip():
-                proc = subprocess.run(
-                    ["git", "show", "--", target_desc],
-                    cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=30,
-                )
+                proc = await _run_git(["git", "-C", str(WORKSPACE_ROOT), "show", "--", target_desc])
                 diff_text = proc.stdout
 
         if not diff_text.strip():
@@ -330,10 +316,7 @@ async def review_best_of_n(req: BestOfNRequest, request: Request):
         raise HTTPException(status_code=400, detail="No git repository in workspace")
 
     try:
-        proc = subprocess.run(
-            ["git", "diff"],
-            cwd=str(WORKSPACE_ROOT), capture_output=True, text=True, timeout=30,
-        )
+        proc = await _run_git(["git", "-C", str(WORKSPACE_ROOT), "diff"])
         diff_text = proc.stdout
         if not diff_text.strip():
             return {"diff": "", "reviews": [], "message": "No changes to review."}

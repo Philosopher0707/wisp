@@ -3,8 +3,11 @@
 Handles model listing.
 """
 
+import asyncio
 import logging
 import subprocess
+
+from typing import Any
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException
@@ -16,11 +19,17 @@ router = APIRouter()
 
 
 @router.get("/api/models", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
-async def list_models():
+async def list_models() -> dict[str, Any]:
     """List available Ollama models (local + cloud)."""
+    # Both lookups block (subprocess + requests); run them off the event
+    # loop so a slow Ollama can't freeze every other connection.
     try:
-        result = subprocess.run(
-            ["ollama", "list"], capture_output=True, text=True, timeout=10
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["ollama", "list"],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if result.returncode == 0:
             lines = result.stdout.strip().split("\n")
@@ -31,7 +40,9 @@ async def list_models():
         pass
 
     try:
-        resp = requests.get("http://localhost:11434/api/tags", timeout=5)
+        resp = await asyncio.to_thread(
+            requests.get, "http://localhost:11434/api/tags", timeout=5,
+        )
         resp.raise_for_status()
         data = resp.json()
         models = [m.get("name", "") for m in data.get("models", [])]
