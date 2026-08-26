@@ -610,7 +610,14 @@ class WispAgentCore:
                         queue.get_nowait()
                     except Exception:
                         break
-                thread.join(timeout=5.0)
+                # Cooperative bounded wait — never thread.join() on the
+                # loop thread (see providers/protocol.py for the incident).
+                deadline = loop.time() + 1.0
+                try:
+                    while thread.is_alive() and loop.time() < deadline:
+                        await asyncio.sleep(0.02)
+                except RuntimeError:
+                    pass  # loop closed mid-poll during interpreter teardown
 
         # Use circuit breaker if configured
         if self._circuit_breaker is not None:

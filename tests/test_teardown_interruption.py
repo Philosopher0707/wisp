@@ -182,3 +182,39 @@ def test_full_incident_choreography_no_unretrieved_exceptions():
         f"{len(retrieved_errors)} unretrieved task exceptions — "
         "orchestrator must hold strong refs and retrieve child results"
     )
+
+
+def test_no_blocking_thread_join_inside_async_stream_finallys():
+    """Structural pin: the bridge join must exist in exactly ONE form.
+
+    The 2026-08-26 crash was fixed in providers/protocol.py but lived on
+    as byte-identical copies in ollama.py and core/stateless.py — three
+    implementations of one pattern, only one of which got the fix. This
+    test fails if any blocking thread.join reappears in an async stream
+    bridge, so copies can never silently diverge from the fixed default.
+    """
+    import re
+    from pathlib import Path
+
+    roots = [Path("wisp/providers"), Path("wisp/core")]
+    offenders = []
+    for root in roots:
+        for py in root.rglob("*.py"):
+            text = py.read_text(encoding="utf-8")
+            # Comments may name the banned call; only real code counts.
+            code_only = re.sub(r"^\s*#.*$", "", text, flags=re.M)
+            if "thread.join(" not in code_only:
+                continue
+            # Flag any thread.join inside these bridge files; the only
+            # sanctioned home for producer-thread joins is none — bridges
+            # poll cooperatively instead.
+            offenders.append(f"{py}:{text.count('thread.join(')}")
+    assert not offenders, (
+        "blocking thread.join() found in stream-bridge code "
+        f"{offenders} — use the cooperative bounded wait from "
+        "providers/protocol.py instead"
+    )
+    # And the canonical fixed implementation must still exist:
+    protocol = Path("wisp/providers/protocol.py").read_text(encoding="utf-8")
+    assert "while thread.is_alive()" in protocol, \
+        "canonical cooperative bridge wait was removed"
