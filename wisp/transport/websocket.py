@@ -206,17 +206,36 @@ class WebSocketTransport(Transport):
         msg_type = message.get("type")
         if msg_type == "user":
             prompt = message.get("text", "")
-            try:
-                async for event in self.runtime.run_turn(session, prompt, approval_handler=self.approve):
-                    await ws.send_json(event)
-            except Exception as exc:
-                logger.exception("Error during turn")
-                await ws.send_json({"type": "error", "message": str(exc)})
+            await self.stream_turn(ws, session, prompt)
         elif msg_type == "tool_approval":
             approved = message.get("approved", False)
             self.resolve_approval(approved)
         else:
             await ws.send_json({"type": "error", "message": f"Unknown message type: {msg_type}"})
+
+    def session_for(self, ws: Any) -> dict[str, Any] | None:
+        """Session attached to *ws*, or None when unhandled."""
+        conn_id = getattr(ws, "_wisp_conn_id", None)
+        conn = self._connections.get(conn_id) if conn_id is not None else None
+        return conn["session"] if conn else None
+
+    async def stream_turn(self, ws: Any, session: dict[str, Any], prompt: str) -> None:
+        """Run one turn for *ws*, streaming events as they arrive.
+
+        Split out of receive_message so callers can run it as its OWN task:
+        a connection that executes turns inline cannot read approval or
+        interrupt frames while a turn runs — the approval future's only
+        resolvers live on the reader loop, so interactive approval
+        deadlocked until timeout and auto-denied.
+        """
+        try:
+            async for event in self.runtime.run_turn(
+                session, prompt, approval_handler=self.approve,
+            ):
+                await ws.send_json(event)
+        except Exception as exc:
+            logger.exception("Error during turn")
+            await ws.send_json({"type": "error", "message": str(exc)})
 
     async def disconnect(self, ws: Any) -> None:
         """Handle WebSocket disconnection."""

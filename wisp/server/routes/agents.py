@@ -6,6 +6,7 @@ Handles WebSocket agent connections using WebSocketTransport + AgentRuntime.
 import asyncio
 import json
 import logging
+from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -20,11 +21,30 @@ router = APIRouter()
 MAX_WS_TEXT_SIZE = 256_000      # 256 KiB max for text/control messages
 MAX_WS_IMAGE_SIZE = 10_000_000  # 10 MB max for image uploads
 
-MAX_WS_TEXT_SIZE = 256_000      # 256 KiB max for text/control messages
-MAX_WS_IMAGE_SIZE = 10_000_000  # 10 MB max for image uploads
+
+async def _turn_task_body(
+    transport: WebSocketTransport,
+    ws: Any,
+    session: dict[str, Any],
+    prompt: str,
+) -> None:
+    """Run one turn as its own task; translate outcomes into frames.
+
+    The connection's reader loop must stay free while this runs — approval
+    and interrupt frames are only readable there.
+    """
+    import contextlib
+    try:
+        await transport.stream_turn(ws, session, prompt)
+    except asyncio.CancelledError:
+        with contextlib.suppress(Exception):
+            await ws.send_json({"type": "status", "message": "Turn interrupted"})
+        raise
+    finally:
+        pass
 
 
-async def agent_settlement_pusher(background_agents, websocket) -> None:
+async def agent_settlement_pusher(background_agents: Any, websocket: Any) -> None:
     """Push agent_settled frames to one client as background agents finish.
 
     Subscribes to the manager's fan-out queue; runs as a side task next
@@ -66,6 +86,7 @@ async def agent_websocket(websocket: WebSocket):
 
     session_id = None
     model = None
+    turn_task: asyncio.Task[None] | None = None
 
     # Live settlement push: clients hear about finished background agents
     # without polling agents_list.
@@ -147,8 +168,25 @@ async def agent_websocket(websocket: WebSocket):
                             workspace=root.config.workspace,
                         )
 
-                    # Route through transport
-                    await transport.receive_message(websocket, {"type": "user", "text": prompt})
+                    # Turns run as their OWN task so the reader loop keeps
+                    # consuming control frames (approval/interrupt/ping).
+                    if turn_task is not None and not turn_task.done():
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": "A turn is already running — send interrupt first",
+                        })
+                        continue
+
+                    session = transport.session_for(websocket)
+                    if session is None:
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": "Session not initialized",
+                        })
+                        continue
+                    turn_task = asyncio.create_task(
+                        _turn_task_body(transport, websocket, session, prompt)
+                    )
                 else:
                     # Fallback echo when no runtime available
                     await websocket.send_json({"type": "content", "text": f"Echo: {prompt}"})
@@ -170,7 +208,15 @@ async def agent_websocket(websocket: WebSocket):
                 continue
 
             if msg_type == "interrupt":
-                await websocket.send_json({"type": "status", "message": "Interrupted"})
+                if turn_task is not None and not turn_task.done():
+                    turn_task.cancel()
+                    await websocket.send_json({
+                        "type": "status", "message": "Interrupting turn",
+                    })
+                else:
+                    await websocket.send_json({
+                        "type": "status", "message": "No active turn",
+                    })
                 continue
 
             if msg_type == "pause":
@@ -241,6 +287,12 @@ async def agent_websocket(websocket: WebSocket):
     except Exception as e:
         logger.error("WebSocket error for %s: %s", client_id, e)
     finally:
+        if turn_task is not None and not turn_task.done():
+            turn_task.cancel()
+            try:
+                await turn_task
+            except (asyncio.CancelledError, Exception):
+                pass
         if pusher_task is not None:
             pusher_task.cancel()
             try:
