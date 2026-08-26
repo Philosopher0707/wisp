@@ -16,7 +16,10 @@ class _SpinnerAwareHandler(logging.StreamHandler):
     """Clear the live spinner line before emitting a record.
 
     Without this, tool-layer warnings (e.g. 'Path not found') print raw
-    over the spinner animation and corrupt the transcript.
+    over the spinner animation and corrupt the transcript. While a spinner
+    is active, records are also compacted to a bare one-liner — full
+    '02:35:20 [WARNING] wisp.tools.registry:' prefixes read as breakage
+    mid-turn (live fanout feedback, 2026-08-25).
     """
 
     def emit(self, record: logging.LogRecord) -> None:
@@ -24,9 +27,21 @@ class _SpinnerAwareHandler(logging.StreamHandler):
             from wisp.transport.spinner import ACTIVE_SPINNER
 
             spinner = ACTIVE_SPINNER
-            if spinner is not None and getattr(spinner, "_active", False):
+            live = spinner is not None and getattr(spinner, "_active", False)
+            if live:
                 self.stream.write("\r\033[K")
                 self.stream.flush()
+                saved_fmt = self.formatter
+                compact = logging.Formatter(
+                    f"  {logging.getLevelName(record.levelno)[0]}· "
+                    f"{record.getMessage()}"
+                )
+                self.setFormatter(compact)
+                try:
+                    super().emit(record)
+                finally:
+                    self.setFormatter(saved_fmt)
+                return
         except Exception:
             pass
         super().emit(record)

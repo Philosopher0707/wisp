@@ -161,6 +161,7 @@ _REPEAT_BLOCK_AFTER = 2   # further repeats get an instruction to synthesize
 _SUBAGENT_TOOLS: frozenset[str] = frozenset({
     "spawn", "fanout", "spawn_background",
     "subagent_list", "subagent_result", "subagent_send", "subagent_cancel",
+    "subagent_wait",
     "orchestrate_vote", "orchestrate_map_reduce", "orchestrate_chain",
     "orchestrate_dag",
 })
@@ -757,6 +758,8 @@ class ToolExecutor:
             result = await self._subagent_send(func_args)
         elif func_name == "subagent_cancel":
             result = await self._subagent_cancel(func_args)
+        elif func_name == "subagent_wait":
+            result = await self._subagent_wait(func_args)
         elif func_name == "orchestrate_vote":
             result = await self._orchestrate_vote(func_args, workspace)
         elif func_name == "orchestrate_map_reduce":
@@ -1201,6 +1204,110 @@ class ToolExecutor:
                 "agent_id": launched["agent_id"],
                 "role": contract.role,
             },
+        }, ensure_ascii=False)
+
+    async def _subagent_wait(self, func_args: dict) -> str:
+        """Execute subagent_wait — block until background agents settle.
+
+        The parent calls this when it actually needs results (synthesis
+        point). Polls manager state; no output between settles, so the
+        CLI stays quiet while it waits.
+        """
+        manager = self._get_background_manager()
+        if manager is None:
+            return self._tool_error(
+                "subagent_wait",
+                "Subagent orchestrator not available — wire it via CompositionRoot",
+            )
+
+        ids = [str(i) for i in (func_args.get("agent_ids") or [])]
+        terminal = ("completed", "failed", "cancelled")
+        if not ids:
+            ids = [
+                e.id for e in manager.list_entries()
+                if e.status not in terminal
+            ]
+        if not ids:
+            # Nothing running: report whatever has already settled so the
+            # caller still gets a picture instead of an empty shrug.
+            ids = [e.id for e in manager.list_entries()]
+        if not ids:
+            return json.dumps({
+                "status": "ok",
+                "tool": "subagent_wait",
+                "data": {
+                    "settled": [],
+                    "still_running": [],
+                    "note": "No background agents tracked; nothing to wait on.",
+                },
+                "metadata": {},
+            }, ensure_ascii=False)
+
+        try:
+            timeout = float(func_args.get("timeout_seconds", 600))
+        except (TypeError, ValueError):
+            timeout = 600.0
+        timeout = min(max(timeout, 1.0), 3600.0)
+        deadline = time.monotonic() + timeout
+
+        while True:
+            entries = [manager.get(i) for i in ids if manager.get(i) is not None]
+            pending = [
+                e for e in entries
+                if e.status not in ("completed", "failed", "cancelled")
+            ]
+            if not pending or time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(0.25)
+
+        settled = []
+        still_running = []
+        for i in ids:
+            e = manager.get(i)
+            if e is None:
+                settled.append({
+                    "agent_id": i, "label": i, "role": "",
+                    "ok": False, "elapsed_seconds": 0.0,
+                    "error": "unknown agent id",
+                })
+                continue
+            rec: dict[str, Any] = {
+                "agent_id": e.id,
+                "label": e.label,
+                "role": getattr(e.contract, "role", ""),
+                "elapsed_seconds": round(e.elapsed(), 1),
+            }
+            if e.status == "completed":
+                rec["ok"] = True
+            elif e.status == "failed":
+                rec["ok"] = False
+                rec["error"] = (e.error or "subagent reported failure")[:200]
+            elif e.status == "cancelled":
+                rec["ok"] = False
+                rec["error"] = "cancelled"
+            else:
+                still_running.append({"agent_id": e.id, "label": e.label})
+                continue
+            settled.append(rec)
+
+        ok_n = sum(1 for s in settled if s.get("ok"))
+        note = f"{ok_n}/{len(settled)} settled"
+        if still_running:
+            note += (
+                f"; {len(still_running)} still running after {timeout:.0f}s — "
+                "call subagent_wait again or subagent_result individually"
+            )
+        else:
+            note += ". Fetch full outputs with subagent_result."
+        return json.dumps({
+            "status": "ok",
+            "tool": "subagent_wait",
+            "data": {
+                "settled": settled,
+                "still_running": still_running,
+                "note": note,
+            },
+            "metadata": {"agent_ids": ids},
         }, ensure_ascii=False)
 
     async def _subagent_list(self, func_args: dict) -> str:
@@ -1658,6 +1765,55 @@ class ToolExecutor:
         for i, c in enumerate(contracts):
             c._subagent_depth = parent_depth + 1
             c._subagent_branch_count = parent_branch + 1 + i
+
+        # Non-blocking default (harness-style): launch via the background
+        # manager and return immediately so the parent turn stays free.
+        # The queue-based progress_callback is only drained by the blocking
+        # generator below — strip it on the background path or it leaks.
+        manager = self._get_background_manager()
+        if manager is not None and func_args.get("mode", "background") != "blocking":
+            for c in contracts:
+                c.progress_callback = None
+            launched: list[dict[str, Any]] = []
+            failures: list[str] = []
+            for i, c in enumerate(contracts):
+                res = await manager.launch(
+                    c, label=func_args.get("label") or f"fanout-{i}-{c.role}"
+                )
+                if res.get("ok"):
+                    launched.append({
+                        "agent_id": res["agent_id"],
+                        "label": res["label"],
+                        "role": c.role,
+                    })
+                else:
+                    failures.append(f"{c.name}: {res.get('error', 'launch failed')}")
+            if launched:
+                ids = [a["agent_id"] for a in launched]
+                note = (
+                    f"{len(launched)} subagent(s) running in background. "
+                    "Keep working — settle lines will appear. Call "
+                    f'subagent_wait {{"agent_ids": {json.dumps(ids)}}} to '
+                    "block until they finish, or subagent_result for one."
+                )
+                if failures:
+                    note += f" Launch failures: {'; '.join(failures)}"
+                return json.dumps({
+                    "status": "ok",
+                    "tool": "fanout",
+                    "data": {
+                        "mode": "background",
+                        "agents": launched,
+                        "note": note,
+                    },
+                    "metadata": {"agent_ids": ids},
+                }, ensure_ascii=False)
+            return json.dumps({
+                "status": "error",
+                "tool": "fanout",
+                "data": "; ".join(failures) or "no subagents launched",
+                "metadata": {},
+            }, ensure_ascii=False)
 
         try:
             results = await self.subagent_orchestrator.run_parallel(

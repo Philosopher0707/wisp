@@ -244,7 +244,8 @@ class TestExecutorStreaming:
                 return [SimpleNamespace(**_fake_result()) for _ in contracts]
 
         executor = ToolExecutor(config=WispConfig(), subagent_orchestrator=_ParallelOrch())
-        args = {"tasks": [{"task": "a", "role": "coder"}, {"task": "b", "role": "tester"}]}
+        args = {"tasks": [{"task": "a", "role": "coder"}, {"task": "b", "role": "tester"}],
+                "mode": "blocking"}
         stream = await self._collect(executor, "fanout", args)
 
         assert captured and all(cb is not None for cb in captured[0]), (

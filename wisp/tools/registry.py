@@ -234,7 +234,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "fanout",
-            "description": "Spawn multiple specialist subagents in parallel. Each gets a role-driven configuration. All run concurrently and results are collected. Use when a task naturally splits into independent work units — e.g., research + implement + test in parallel.",
+            "description": "Launch multiple specialist subagents in parallel, NON-BLOCKING: returns agent ids immediately and you keep working while they run. Settle lines appear as each finishes; call subagent_wait with the returned agent_ids when you need the results (synthesis point). Use when a task splits into independent work units. Pass mode:'blocking' only if you must have all results before doing anything else.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -255,6 +255,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         },
                     },
                     "max_concurrent": {"type": "number", "description": "Max subagents running at once. Default 4.", "default": 4},
+                    "mode": {"type": "string", "enum": ["background", "blocking"], "description": "background (default): return immediately, collect later via subagent_wait. blocking: wait for all results now.", "default": "background"},
                 },
                 "required": ["tasks"],
             },
@@ -307,6 +308,20 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "wait_seconds": {"type": "number", "description": "Seconds to wait for completion before returning current status. Default 0.", "default": 0},
                 },
                 "required": ["agent_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "subagent_wait",
+            "description": "Block until one or more background subagents finish (default: all still running). Returns a compact digest — ok/failed, elapsed, errors. Call this at your synthesis point after launching work with fanout/spawn_background; between launch and wait, keep doing useful work.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_ids": {"type": "array", "items": {"type": "string"}, "description": "Agent ids to wait for. Omit to wait for ALL running agents."},
+                    "timeout_seconds": {"type": "number", "description": "Max seconds to block. Default 600; agents still running at expiry are listed in still_running.", "default": 600},
+                },
             },
         },
     },
@@ -767,6 +782,7 @@ TOOL_IMPLS = {
     "subagent_result": _tool_not_direct,
     "subagent_send": _tool_not_direct,
     "subagent_cancel": _tool_not_direct,
+    "subagent_wait": _tool_not_direct,
     "orchestrate_vote": _tool_not_direct,
     "orchestrate_map_reduce": _tool_not_direct,
     "orchestrate_chain": _tool_not_direct,

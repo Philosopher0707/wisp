@@ -111,7 +111,8 @@ class TestChildGrounding:
 
         ex = ToolExecutor(_child_config(), subagent_orchestrator=FakeOrch())
         await ex._fanout(
-            {"tasks": [{"task": "Analyze autopipe/core", "role": "coder"}]},
+            {"tasks": [{"task": "Analyze autopipe/core", "role": "coder"}],
+             "mode": "blocking"},
             str(tmp_path),
         )
         assert captured, "run_parallel never called"

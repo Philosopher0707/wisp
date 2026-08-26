@@ -455,7 +455,8 @@ def test_fanout_contracts_inherit_incremented_depth(tmp_path):
     te = ToolExecutor(config=cfg, hook_manager=_make_async_hook_mgr(),
                       subagent_orchestrator=orch)
 
-    _collect(te, "fanout", {"tasks": [{"task": "a"}, {"task": "b"}]})
+    _collect(te, "fanout", {"tasks": [{"task": "a"}, {"task": "b"}],
+                        "mode": "blocking"})
 
     assert orch.calls["parallel"], "fanout must call run_parallel"
     contracts = orch.calls["parallel"][0]

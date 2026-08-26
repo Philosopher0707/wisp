@@ -237,6 +237,7 @@ class TestFanoutTool:
                 {"task": "do B", "role": "tester"},
             ],
             "max_concurrent": 2,
+            "mode": "blocking",
         }, str(tmp_path))
 
         data = json.loads(result)
@@ -260,6 +261,7 @@ class TestFanoutTool:
         te = _mk_te(tmp_path, orch)
         result = await te._fanout({
             "tasks": [{"task": "do A"}, {"task": "do B"}],
+            "mode": "blocking",
         }, str(tmp_path))
 
         data = json.loads(result)
@@ -284,6 +286,7 @@ class TestFanoutTool:
                 {"task": "write feature", "role": "coder",
                  "timeout_seconds": 300, "max_iterations": 20},
             ],
+            "mode": "blocking",
         }, str(tmp_path))
 
         contracts = orch.run_parallel.call_args[0][0]
