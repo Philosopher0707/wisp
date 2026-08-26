@@ -19,7 +19,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Callable
+from typing import Any, AsyncIterator, Callable, ClassVar
 
 from wisp.agent_memory import SessionSummary
 from wisp.approval_state import ApprovalSessionState, SessionPolicy
@@ -60,9 +60,13 @@ class AgentRuntime:
 
     config: Any = None
 
-    # Cached core instance — avoids rebuilding system prompt caches every turn
-    _core_cache: Any = field(default=None, repr=False)
-    _core_fingerprint: str | None = field(default=None, repr=False)
+    # Cores scoped per (session_id, config fingerprint) — one shared core
+    # meant one shared CircuitBreaker, so a session's failing model opened
+    # the circuit for EVERY other session for the whole recovery window.
+    # Cores are cheap value objects; the (None, fp) slot serves
+    # session-less introspection like get_core_provider().
+    MAX_SESSION_CORES: ClassVar[int] = 32
+    _session_cores: dict[Any, Any] = field(default_factory=dict, repr=False)
     _core_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     # Per-session locks — prevents concurrent turns on same session
@@ -193,8 +197,8 @@ class AgentRuntime:
                 except Exception:
                     pass
 
-            # Get cached core (warm-start, thread-safe)
-            core = self._get_core()
+            # Session-scoped core (own circuit breaker), warm per session
+            core = self._get_core(sid)
 
             assistant_content: list[str] = []
             tool_calls: list[dict[str, Any]] = []
@@ -431,20 +435,26 @@ class AgentRuntime:
     def clear_steering(self, session_id: str) -> None:
         self._steering_inbox.pop(session_id, None)
 
-    def _get_core(self) -> Any:
-        """Get cached core instance, creating if needed.
+    def _get_core(self, session_id: str | None = None) -> Any:
+        """Get the core for *session_id*, creating if needed.
 
-        Thread-safe: uses _core_lock to prevent race conditions.
-        Invalidates cache when config fingerprint changes.
+        Thread-safe: uses _core_lock. Keyed by (session_id, config
+        fingerprint); passing None shares one introspection slot.
         """
         with self._core_lock:
             current_fp = None
             if self.config is not None and hasattr(self.config, "fingerprint"):
                 current_fp = self.config.fingerprint()
-            if self._core_cache is None or self._core_fingerprint != current_fp:
-                self._core_cache = self.core_factory()
-                self._core_fingerprint = current_fp
-            return self._core_cache
+            key = (session_id, current_fp)
+            core = self._session_cores.get(key)
+            if core is None:
+                core = self.core_factory()
+                self._session_cores[key] = core
+                # Long-lived servers accumulate dead sessions; FIFO keeps
+                # the map bounded without needing lifecycle hooks.
+                while len(self._session_cores) > self.MAX_SESSION_CORES:
+                    self._session_cores.pop(next(iter(self._session_cores)))
+            return core
 
     def get_core_provider(self) -> Any:
         """Return the provider from the cached core, if available."""
@@ -452,12 +462,12 @@ class AgentRuntime:
         return getattr(core, "provider", None)
 
     def invalidate_core_cache(self) -> None:
-        """Invalidate cached core — call when config/workspace changes.
+        """Invalidate cached cores — call when config/workspace changes.
 
         Thread-safe: uses _core_lock.
         """
         with self._core_lock:
-            self._core_cache = None
+            self._session_cores.clear()
 
     async def maybe_compact(self, session: dict[str, Any], max_messages: int | None = None, force: bool = False) -> dict[str, Any] | None:
         """Compact session if it exceeds max_messages.

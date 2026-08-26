@@ -6,6 +6,7 @@ WispAgentCore (stateless) owns the turn loop.
 """
 
 import json
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -386,3 +387,136 @@ class TestToolCallPersistence:
         assert tc["id"] == "call_old"
 
 
+
+
+class TestSessionScopedCores:
+    """One shared core meant one shared CircuitBreaker: session A's failing
+    provider opened the circuit for every other session for the whole
+    recovery window. Cores must be per-session."""
+
+    def _mk(self, factory):
+        from wisp.core.runtime import AgentRuntime
+        from wisp.infra.security import SecurityPolicy, PermissionMode
+        from wisp.infra.extensions import ExtensionHost
+        from wisp.infra.telemetry import Telemetry
+
+        store = MagicMock()
+        store.load_session.return_value = None
+        return AgentRuntime(
+            store=store,
+            security=SecurityPolicy(permission_mode=PermissionMode.FULL),
+            extensions=ExtensionHost(),
+            telemetry=Telemetry(),
+            core_factory=factory,
+        )
+
+    @pytest.mark.asyncio
+    async def test_distinct_sessions_get_distinct_cores(self):
+        calls = []
+
+        def factory():
+            core = MagicMock()
+            core.side_effect = None
+            calls.append(core)
+            return core
+
+        rt = self._mk(factory)
+        a = rt._get_core("sess-a")
+        b = rt._get_core("sess-b")
+        assert a is not b, "sessions shared one core (one shared breaker)"
+        again = rt._get_core("sess-a")
+        assert again is a, "same session should reuse its warm core"
+        # introspection slot stays separate from any session
+        assert rt.get_core_provider.__self__ is rt
+
+    @pytest.mark.asyncio
+    async def test_breaker_failure_in_one_session_does_not_lock_others(self):
+        """Real cores: A's provider fails past the breaker threshold; B's
+        turn still executes through its own closed breaker."""
+        from wisp.config import WispConfig
+        from wisp.core.engine import WispAgentCore
+        from wisp.infra.extensions import ExtensionHost
+        from wisp.infra.security import PermissionMode, SecurityPolicy
+
+        class _OutageProvider:
+            # One global failure (call #1), then healthy — models an outage
+            # window that session A walks into and B misses.
+            total_calls = 0
+
+            def generate_stream_events(self, system_prompt, messages,
+                                       tools=None, checkpoint_every=50):
+                type(self).total_calls += 1
+                if type(self).total_calls == 1:
+                    raise RuntimeError("outage")
+                yield {"type": "content", "text": "ok"}
+                yield {"type": "done"}
+
+        config = WispConfig().replace(
+            circuit_breaker_failure_threshold=1,
+            circuit_breaker_success_threshold=1,
+            circuit_breaker_recovery_timeout=60.0,
+        )
+
+        def factory():
+            return WispAgentCore(
+                config=config,
+                provider=_OutageProvider(),
+                security=SecurityPolicy(permission_mode=PermissionMode.FULL),
+                extensions=ExtensionHost(),
+            )
+
+        rt = self._mk(factory)
+
+        async def collect(session_id):
+            session = {"id": session_id, "messages": [], "workspace": "/tmp"}
+            events = []
+            async for ev in rt.run_turn(session, "hi"):
+                events.append(ev)
+            return [e.get("type") for e in events]
+
+        # Session A: first call raises → breaker records failure.
+        # Threshold=1 means A's circuit is now OPEN for 60s.
+        types_a = await collect("brk-a")
+        assert "error" in types_a, f"A should surface the failure: {types_a}"
+
+        # Session B shares nothing: its own core/breaker is fresh-closed,
+        # and its first provider call succeeds anyway.
+        core_a = rt._get_core("brk-a")
+        core_b = rt._get_core("brk-b")
+        assert core_a is not core_b
+        assert core_a._circuit_breaker is not core_b._circuit_breaker
+
+        from wisp.infra.circuit_breaker import CircuitState
+        assert core_a._circuit_breaker.state == CircuitState.OPEN, (
+            "A's breaker should be open after its failure"
+        )
+        assert core_b._circuit_breaker.state == CircuitState.CLOSED
+
+        types_b = await collect("brk-b")
+        assert "content" in types_b, (
+            f"session B was locked out by A's failures: {types_b}"
+        )
+        assert "error" not in types_b, types_b
+
+    @pytest.mark.asyncio
+    async def test_fingerprint_change_invalidates_all_session_slots(self):
+        from wisp.config import WispConfig
+
+        made = []
+        rt = self._mk(lambda: made.append(1) or MagicMock())
+        cfg = WispConfig()
+        rt.config = cfg.replace(model="m1")
+        c1a = rt._get_core("s1")
+        rt._get_core("s2")
+        rt.config = cfg.replace(model="m2")
+        c2a = rt._get_core("s1")
+        assert c2a is not c1a, "fingerprint change must rebuild session core"
+        assert len(rt._session_cores) == 3  # s1@m1, s2@m1, s1@m2
+
+    @pytest.mark.asyncio
+    async def test_core_map_stays_bounded(self):
+        rt = self._mk(MagicMock)
+        rt.MAX_SESSION_CORES = 4
+        for i in range(10):
+            rt._get_core(f"burst-{i}")
+        assert len(rt._session_cores) <= 4
