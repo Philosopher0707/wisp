@@ -72,7 +72,8 @@ def _executor_with(manager: _FakeManager) -> ToolExecutor:
                                "_subagent_branch_count": 0})()
     ex.subagent_orchestrator = object()  # truthy; unused on bg path
     ex.background_agents = manager
-    ex._sub_event_queue = None
+    # The stream queue is per-execution state in wisp.tools.context
+    # (ContextVar), not an executor attribute — nothing to reset here.
     ex._get_background_manager = lambda: manager  # type: ignore[method-assign]
     return ex
 

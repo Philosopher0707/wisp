@@ -186,14 +186,14 @@ def _show_turn_stats(transport: CLITransport, adapter: Any | None = None) -> Non
     width = _term_width()
     stats_line = render_turn_stats(stats, width)
     if stats_line:
-        sys.stdout.write(stats_line + "\n")
+        sys.stderr.write(stats_line + "\n")
     files = stats.get("files_changed", [])
     if files:
         ticker = render_file_ticker(files, width)
         if ticker:
-            sys.stdout.write(ticker + "\n")
-    sys.stdout.write("\n" + dim("─" * width) + "\n\n")
-    sys.stdout.flush()
+            sys.stderr.write(ticker + "\n")
+    sys.stderr.write("\n" + dim("─" * width) + "\n\n")
+    sys.stderr.flush()
 
 
 def make_repl_sigint_handler(transport, get_current_task, restore_default):
@@ -265,7 +265,7 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
     if is_continuation:
         transport.print_continuation_banner(sys.stdout, session, config.model)
     else:
-        transport.print_banner(sys.stdout, session, config.model, skill=skill)
+        transport.print_banner(sys.stderr, session, config.model, skill=skill)
 
     # Warn if no provider is configured — turns will produce no output
     provider_name = getattr(config, "provider", None)

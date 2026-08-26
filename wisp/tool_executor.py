@@ -36,6 +36,7 @@ from wisp.core.events import (
 )
 from wisp.tools.errors import ToolError
 from wisp.tools._utils import check_dangerous_command
+from wisp.tools import context as exec_ctx
 from wisp.tools.registry import execute_tool
 from wisp.tools.orchestration import OrchestrationDeps
 from wisp.tools.subagent_tools import SubagentDeps
@@ -284,6 +285,35 @@ _SPECIAL_TOOL_ROUTES: dict[str, Any] = {
 }
 
 
+def _exec_depth(config: Any) -> int:
+    """Nesting depth of the agent currently executing a tool call.
+
+    The engine publishes the executing agent's depth via exec_ctx.agent_depth
+    at turn start (wisp/core/stateless.py) — authoritative when set, because
+    the shared executor's own config is the ROOT's and always reads 0 (which
+    would flatten every descendant's depth to 1 and disarm the unbounded-
+    recursion guard). Direct executor users that never run a turn carry the
+    identity on the config instead (test fixtures, ACP) and fall back to
+    that.
+    """
+    depth = exec_ctx.agent_depth.get()
+    if depth is not None:
+        return int(depth)
+    return int(getattr(config, "_subagent_depth", 0) or 0)
+
+
+def _exec_branch(config: Any) -> int:
+    """Sibling branch index of the agent currently executing a tool call.
+
+    Same resolution order as _exec_depth(): engine context first, the
+    executor's own config as fallback for direct users.
+    """
+    branch = exec_ctx.agent_branch.get()
+    if branch is not None:
+        return int(branch)
+    return int(getattr(config, "_subagent_branch_count", 0) or 0)
+
+
 class ToolExecutor:
 
     """Execute a single tool call with all guards, hooks, and metrics.
@@ -330,11 +360,12 @@ class ToolExecutor:
         self.background_agents = background_agents
         from wisp.skill_capture import get_capture
         self.skill_capture = get_capture()
-        # key -> (monotonic_ts, cached_result_str, hit_count)
+        # key -> (monotonic_ts, cached_result_str, hit_count).
+        # Shared across tasks on purpose: a repeat is a repeat no matter
+        # which agent made it. The PENDING key, however, is per-execution
+        # state and lives in exec_ctx.repeat_key (concurrent calls must not
+        # steal each other's pending identity).
         self._repeat_cache: dict[str, tuple[float, str, int]] = {}
-        # Set per spawn/fanout execution; carries AgentEvents from the
-        # orchestrator's sync progress callbacks into execute()'s stream.
-        self._sub_event_queue: Optional[asyncio.Queue] = None
 
     # ── Public API ───────────────────────────────────────────────────
 
@@ -377,15 +408,18 @@ class ToolExecutor:
                 f"data. If you have enough information, answer now.)"
             )
         # Miss or expired: record AFTER execution succeeds (see execute()).
-        self._pending_repeat_key = key
+        # The pending key is per-execution state — a ContextVar, not an
+        # instance field — so two concurrent guarded calls (parent web_fetch
+        # while a child web_fetches) don't swap identities mid-flight.
+        exec_ctx.repeat_key.set(key)
         return None
 
     def _record_repeat_result(self, func_name: str, result_str: str) -> None:
         """Cache a successful guarded-tool result for the repeat guard."""
-        key = getattr(self, "_pending_repeat_key", None)
+        key = exec_ctx.repeat_key.get()
         if key and func_name in _REPEAT_GUARD_TOOLS and result_str:
             self._repeat_cache[key] = (time.monotonic(), result_str, 0)
-        self._pending_repeat_key = None
+        exec_ctx.repeat_key.set(None)
 
     async def _run_blocking(self, fn, *args, **kwargs):
         """Run *fn* on the dedicated bounded tool pool (test seam: mock this
@@ -508,8 +542,17 @@ class ToolExecutor:
             # wall-clock heartbeat fills the gaps — real researchers emit
             # nothing between started/completed for minutes at a time,
             # which users read as a hang.
+            #
+            # The queue is published via a ContextVar, not an instance field:
+            # the executor is shared by the root core and every subagent core,
+            # so execute() runs concurrently for different agents. An
+            # instance slot lets a sibling call clobber this one's channel
+            # (child A's events stream into child B's render loop). ContextVar
+            # is task-local (siblings isolated) yet inherited by the
+            # create_task below and by nested spawns in this task chain
+            # (nested lifecycle events still reach the outermost render loop).
             queue: asyncio.Queue = asyncio.Queue()
-            self._sub_event_queue = queue
+            queue_token = exec_ctx.sub_event_queue.set(queue)
             exec_task = asyncio.create_task(
                 self._execute_tool(func_name, func_args, workspace)
             )
@@ -532,7 +575,7 @@ class ToolExecutor:
                     yield queue.get_nowait()
                 result, duration_ms = exec_task.result()
             finally:
-                self._sub_event_queue = None
+                exec_ctx.sub_event_queue.reset(queue_token)
                 if not exec_task.done():
                     exec_task.cancel()
         else:
@@ -567,8 +610,13 @@ class ToolExecutor:
         self._record_metrics(func_name, duration_ms, result)
 
         # Skill capture: feed the workflow recorder (best-effort).
+        # Gated to the top-level agent: SkillCapture records the USER's
+        # workflow, and a subagent's internal tool calls are the mechanism,
+        # not the workflow — a 4-child fanout would otherwise bury the real
+        # steps in researcher chatter and produce a meaningless /skill suggest.
         try:
-            self.skill_capture.record(func_name, func_args)
+            if _exec_depth(self.config) == 0:
+                self.skill_capture.record(func_name, func_args)
         except Exception:
             logger.debug("skill capture record failed", exc_info=True)
 
@@ -1133,13 +1181,15 @@ class ToolExecutor:
                 max_retries=int(auto_retry) * 2,
             )
 
-            # Inherit the executing agent's nesting depth — without this every
+            # Inherit the EXECUTING agent's nesting depth — without this every
             # spawned contract resets to 0 and the orchestrator's depth guard
-            # can never trip (unbounded recursion).
-            contract._subagent_depth = int(getattr(self.config, "_subagent_depth", 0) or 0) + 1
-            contract._subagent_branch_count = int(getattr(self.config, "_subagent_branch_count", 0) or 0) + 1
+            # can never trip (unbounded recursion). Read via the per-execution
+            # context, not self.config: the shared executor's config is the
+            # root's, so a depth-1 child's own spawn would otherwise see 0.
+            contract._subagent_depth = _exec_depth(self.config) + 1
+            contract._subagent_branch_count = _exec_branch(self.config) + 1
 
-            queue = self._sub_event_queue
+            queue = exec_ctx.sub_event_queue.get()
             if queue is not None:
                 contract.progress_callback = lambda ev: queue.put_nowait(
                     orchestrator_event_to_agent_event(ev)
@@ -1232,11 +1282,9 @@ class ToolExecutor:
             max_tokens=func_args.get("max_tokens"),
             max_retries=int(func_args.get("auto_retry", True)) * 2,
         )
-        # Inherit the executing agent's nesting depth — without this every
-        # spawned contract resets to 0 and the orchestrator's depth guard
-        # can never trip (unbounded recursion).
-        contract._subagent_depth = int(getattr(self.config, "_subagent_depth", 0) or 0) + 1
-        contract._subagent_branch_count = int(getattr(self.config, "_subagent_branch_count", 0) or 0) + 1
+        # Inherit the EXECUTING agent's nesting depth (see _spawn).
+        contract._subagent_depth = _exec_depth(self.config) + 1
+        contract._subagent_branch_count = _exec_branch(self.config) + 1
         return contract, ""
 
     def _tool_error(self, tool: str, message: str) -> str:
@@ -1517,7 +1565,7 @@ class ToolExecutor:
                 auto_approve=spec.get("auto_approve", False),
             ))
 
-        queue = self._sub_event_queue
+        queue = exec_ctx.sub_event_queue.get()
         if queue is not None:
             for c in contracts:
                 c.progress_callback = lambda ev: queue.put_nowait(
@@ -1525,8 +1573,8 @@ class ToolExecutor:
                 )
 
         # Inherit the executing agent's nesting depth (see _spawn).
-        parent_depth = int(getattr(self.config, "_subagent_depth", 0) or 0)
-        parent_branch = int(getattr(self.config, "_subagent_branch_count", 0) or 0)
+        parent_depth = _exec_depth(self.config)
+        parent_branch = _exec_branch(self.config)
         for i, c in enumerate(contracts):
             c._subagent_depth = parent_depth + 1
             c._subagent_branch_count = parent_branch + 1 + i

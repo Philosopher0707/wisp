@@ -684,7 +684,6 @@ class TestStreamingHeartbeat:
 
     @pytest.mark.asyncio
     async def test_heartbeat_fires_during_slow_spawn(self, tmp_path, monkeypatch):
-        import time as _t
         import wisp.tool_executor as te_mod
 
         class SlowOrch:

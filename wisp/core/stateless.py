@@ -128,11 +128,25 @@ class WispAgentCore:
         prevent infinite hangs.
         """
         import asyncio as _asyncio
+        from wisp.tools import context as _exec_ctx
         turn_timeout = getattr(self.config, "turn_timeout", 1800) if self.config else 1800
         # Publish the absolute deadline so nested consumers (subagent
         # orchestrator retries) can budget themselves against the same clock.
         # Overwritten by every turn; only read while a turn is live.
         _turn_deadline.set(time.monotonic() + turn_timeout)
+        # Publish the EXECUTING agent's nesting identity for the duration of
+        # this turn. The shared ToolExecutor's own config is the root's, so
+        # without this a child's spawn/fanout would stamp depth from 0. The
+        # engine's config is the executing agent's (root or child), so it is
+        # the correct source. Overwritten by every turn, like the deadline.
+        _exec_ctx.agent_depth.set(
+            int(getattr(self.config, "_subagent_depth", 0) or 0)
+            if self.config is not None else 0
+        )
+        _exec_ctx.agent_branch.set(
+            int(getattr(self.config, "_subagent_branch_count", 0) or 0)
+            if self.config is not None else 0
+        )
         # Build messages list
         messages = list(session.get("messages", []))
         # Avoid duplicating the user message if runtime already added it
