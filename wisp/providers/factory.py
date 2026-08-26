@@ -99,7 +99,7 @@ class ProviderFactory:
             return self.create(
                 "openai",
                 config=config,
-                base_url=getattr(config, "api_base", "") or "",
+                base_url=getattr(config, "api_base", "") or "https://api.openai.com/v1",
                 model=getattr(config, "model", "gpt-4o"),
                 api_key=getattr(config, "api_key", "") or "",
             )
@@ -108,7 +108,7 @@ class ProviderFactory:
             return self.create(
                 "nvidia",
                 config=config,
-                base_url=getattr(config, "api_base", "") or "",
+                base_url=getattr(config, "api_base", "") or "https://integrate.api.nvidia.com/v1",
                 model=getattr(config, "model", "nemotron-3-ultra"),
                 api_key=getattr(config, "api_key", "") or "",
             )
@@ -117,7 +117,7 @@ class ProviderFactory:
             return self.create(
                 "openrouter",
                 config=config,
-                base_url=getattr(config, "api_base", "") or "",
+                base_url=getattr(config, "api_base", "") or "https://openrouter.ai/api/v1",
                 model=getattr(config, "model", "openrouter/auto"),
                 api_key=getattr(config, "api_key", "")
                 or os.environ.get("OPENROUTER_API_KEY", ""),

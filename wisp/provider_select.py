@@ -158,6 +158,18 @@ def apply_switch(runtime: Any, session: "dict[str, Any]", config: Any,
     new_cfg = config
     if provider is not None:
         new_cfg = _replace(new_cfg, provider=provider)
+        # Reset api_base to the new provider's default — otherwise a switch
+        # from openrouter (https://openrouter.ai/api/v1) to nvidia would
+        # keep the old base and still hit openrouter's credit gate with
+        # max_tokens 16384 → 402 "can only afford 5403".
+        try:
+            default_base = KNOWN_PROVIDERS.get(provider, {}).get("default_base", "")
+            if default_base:
+                new_cfg = _replace(new_cfg, api_base=default_base)
+            else:
+                new_cfg = _replace(new_cfg, api_base="")
+        except Exception:
+            pass
     if model is not None:
         new_cfg = _replace(new_cfg, model=model)
 
@@ -177,6 +189,12 @@ def apply_switch(runtime: Any, session: "dict[str, Any]", config: Any,
                 kwargs: dict[str, Any] = {}
                 if provider is not None:
                     kwargs["provider"] = provider
+                    # Keep api_base in sync with provider — see above.
+                    try:
+                        default_base = KNOWN_PROVIDERS.get(provider, {}).get("default_base", "")
+                        kwargs["api_base"] = default_base or ""
+                    except Exception:
+                        pass
                 if model is not None:
                     kwargs["model"] = model
                 runtime.config = _replace(rt_cfg, **kwargs)

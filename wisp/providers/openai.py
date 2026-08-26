@@ -39,8 +39,16 @@ class OpenAIProvider(Provider):
     def __init__(self, config=None, base_url: str = "", model: str = "", api_key: str = ""):
         if config is not None:
             self.api_key = getattr(config, "api_key", "") or os.environ.get("OPENAI_API_KEY", "")
+            # Provider-specific default base when config.api_base is empty
+            cfg_base = getattr(config, "api_base", "") or ""
+            if not cfg_base:
+                prov = str(getattr(config, "provider", "") or "").lower()
+                if prov == "openrouter":
+                    cfg_base = "https://openrouter.ai/api/v1"
+                elif prov == "nvidia":
+                    cfg_base = "https://integrate.api.nvidia.com/v1"
             self.api_base = (
-                getattr(config, "api_base", "")
+                cfg_base
                 or os.environ.get("WISP_API_BASE", "")
                 or os.environ.get("OPENAI_API_BASE", "")
                 or _DEFAULT_API_BASE
@@ -367,9 +375,13 @@ class OpenAIProvider(Provider):
             # Cloud gateways (OpenRouter, NVIDIA) reject huge max_tokens with
             # 402 "can only afford N" — cap to a generous but credit-safe
             # value. Local Ollama ignores this field anyway.
+            # OpenRouter's remaining-credit check is dynamic (e.g. 5403), so
+            # use a conservative 4096 for openrouter to stay under the
+            # typical free-tier balance; nvidia can use 16384.
             max_tok = int(self.max_tokens)
-            if max_tok > 16384 and self.api_base in (
-                "https://openrouter.ai/api/v1",
+            if self.api_base == "https://openrouter.ai/api/v1" and max_tok > 4096:
+                max_tok = 4096
+            elif max_tok > 16384 and self.api_base in (
                 "https://integrate.api.nvidia.com/v1",
             ):
                 max_tok = 16384
