@@ -38,6 +38,8 @@ from wisp.tools.errors import ToolError
 from wisp.tools._utils import check_dangerous_command
 from wisp.tools.registry import execute_tool
 from wisp.tools.orchestration import OrchestrationDeps
+from wisp.tools.subagent_tools import SubagentDeps
+from wisp.tools import subagent_tools as _sub
 from wisp.tools import orchestration as _orch
 from wisp.tools.registry import TOOL_IMPLS
 from wisp.tools.registry import _build_tool_metadata
@@ -205,7 +207,85 @@ def _get_modified_args(hook_results: list) -> Optional[dict]:
     return None
 
 
+# Named-tool dispatch table (slice 4 of the monolith extraction): every
+# adapter has the uniform signature (executor, func_args, workspace) so
+# _execute_tool is a dict lookup instead of a 14-branch elif ladder.
+def _route_spawn(ex: Any, fa: dict[str, Any], ws: str) -> Any:
+    return ex._spawn(fa, ws)
+
+
+def _route_fanout(ex: Any, fa: dict[str, Any], ws: str) -> Any:
+    return ex._fanout(fa, ws)
+
+
+def _route_spawn_background(ex: Any, fa: dict[str, Any], ws: str) -> Any:
+    return ex._spawn_background(fa, ws)
+
+
+def _route_sub_list(ex: Any, fa: dict[str, Any], ws: str) -> Any:
+    return ex._subagent_list(fa)
+
+
+def _route_sub_result(ex: Any, fa: dict[str, Any], ws: str) -> Any:
+    return ex._subagent_result(fa)
+
+
+def _route_sub_send(ex: Any, fa: dict[str, Any], ws: str) -> Any:
+    return ex._subagent_send(fa)
+
+
+def _route_sub_cancel(ex: Any, fa: dict[str, Any], ws: str) -> Any:
+    return ex._subagent_cancel(fa)
+
+
+def _route_sub_wait(ex: Any, fa: dict[str, Any], ws: str) -> Any:
+    return ex._subagent_wait(fa)
+
+
+def _route_orch_vote(ex: Any, fa: dict[str, Any], ws: str) -> Any:
+    return ex._orchestrate_vote(fa, ws)
+
+
+def _route_orch_map_reduce(ex: Any, fa: dict[str, Any], ws: str) -> Any:
+    return ex._orchestrate_map_reduce(fa, ws)
+
+
+def _route_orch_chain(ex: Any, fa: dict[str, Any], ws: str) -> Any:
+    return ex._orchestrate_chain(fa, ws)
+
+
+def _route_orch_dag(ex: Any, fa: dict[str, Any], ws: str) -> Any:
+    return ex._orchestrate_dag(fa, ws)
+
+
+def _route_capture_skill(ex: Any, fa: dict[str, Any], ws: str) -> Any:
+    return ex._capture_skill(fa, ws)
+
+
+def _route_run_bash(ex: Any, fa: dict[str, Any], ws: str) -> Any:
+    return ex._run_bash_tool(fa, ws)
+
+
+_SPECIAL_TOOL_ROUTES: dict[str, Any] = {
+    "spawn": _route_spawn,
+    "fanout": _route_fanout,
+    "spawn_background": _route_spawn_background,
+    "subagent_list": _route_sub_list,
+    "subagent_result": _route_sub_result,
+    "subagent_send": _route_sub_send,
+    "subagent_cancel": _route_sub_cancel,
+    "subagent_wait": _route_sub_wait,
+    "orchestrate_vote": _route_orch_vote,
+    "orchestrate_map_reduce": _route_orch_map_reduce,
+    "orchestrate_chain": _route_orch_chain,
+    "orchestrate_dag": _route_orch_dag,
+    "capture_skill": _route_capture_skill,
+    "run_bash": _route_run_bash,
+}
+
+
 class ToolExecutor:
+
     """Execute a single tool call with all guards, hooks, and metrics.
 
     This class is stateless with respect to the conversation — it only
@@ -746,6 +826,54 @@ class ToolExecutor:
             return func_name in ("run_bash", "git_branch", "git_commit", "git_push", "gh_pr_create")
         return False
 
+    async def _run_bash_tool(self, func_args: dict, workspace: str) -> str:
+        func_name = "run_bash"
+        try:
+            from wisp.tools.bash import async_tool_run_bash
+            raw_result = await async_tool_run_bash(
+                command=func_args.get("command", ""),
+                workspace=workspace,
+                timeout=int(func_args.get("timeout", 60)),
+            )
+            metadata = _build_tool_metadata(func_name, func_args, raw_result)
+            structured = {
+                "status": "ok",
+                "tool": func_name,
+                "data": raw_result,
+                "metadata": metadata,
+            }
+            result = json.dumps(structured, ensure_ascii=False)
+        except ToolError as e:
+            tb = traceback.format_exc()
+            logger.error(
+                "Tool %s raised ToolError: %s", func_name, str(e)
+            )
+            structured = {
+                "status": "error",
+                "tool": func_name,
+                "data": f"ToolError: {e}",
+                "traceback": tb,
+                "metadata": _build_tool_metadata(func_name, func_args, ""),
+            }
+            result = json.dumps(structured, ensure_ascii=False)
+        except Exception as e:
+            tb = traceback.format_exc()
+            logger.error(
+                "Tool %s raised unexpected exception: %s\n%s",
+                func_name,
+                str(e),
+                tb,
+            )
+            structured = {
+                "status": "error",
+                "tool": func_name,
+                "data": f"Unexpected error: {e}",
+                "traceback": tb,
+                "metadata": _build_tool_metadata(func_name, func_args, ""),
+            }
+            result = json.dumps(structured, ensure_ascii=False)
+        return result
+
     async def _execute_tool(
         self, func_name: str, func_args: dict, workspace: str
     ) -> tuple[str | dict, float]:
@@ -767,81 +895,15 @@ class ToolExecutor:
                 and func_name in TOOL_IMPLS and self._is_mcp_tool(func_name)):
             _warn_mcp_shadowed_builtin(func_name)
 
-        if func_name == "spawn":
-            result = await self._spawn(func_args, workspace)
-        elif func_name == "fanout":
-            result = await self._fanout(func_args, workspace)
-        elif func_name == "spawn_background":
-            result = await self._spawn_background(func_args, workspace)
-        elif func_name == "subagent_list":
-            result = await self._subagent_list(func_args)
-        elif func_name == "subagent_result":
-            result = await self._subagent_result(func_args)
-        elif func_name == "subagent_send":
-            result = await self._subagent_send(func_args)
-        elif func_name == "subagent_cancel":
-            result = await self._subagent_cancel(func_args)
-        elif func_name == "subagent_wait":
-            result = await self._subagent_wait(func_args)
-        elif func_name == "orchestrate_vote":
-            result = await self._orchestrate_vote(func_args, workspace)
-        elif func_name == "orchestrate_map_reduce":
-            result = await self._orchestrate_map_reduce(func_args, workspace)
-        elif func_name == "orchestrate_chain":
-            result = await self._orchestrate_chain(func_args, workspace)
-        elif func_name == "orchestrate_dag":
-            result = await self._orchestrate_dag(func_args, workspace)
-        elif func_name == "capture_skill":
-            result = await self._capture_skill(func_args, workspace)
+        special = _SPECIAL_TOOL_ROUTES.get(func_name)
+        if special is not None:
+            result = await special(self, func_args, workspace)
         elif self._is_external_call(func_name):
             # Builtin names always win over a bare-name MCP match: an MCP
             # server advertising "read_file" must not replace the core tool.
             result = await self._call_mcp_tool(func_name, func_args)
         elif func_name == "run_bash":
-            try:
-                from wisp.tools.bash import async_tool_run_bash
-                raw_result = await async_tool_run_bash(
-                    command=func_args.get("command", ""),
-                    workspace=workspace,
-                    timeout=int(func_args.get("timeout", 60)),
-                )
-                metadata = _build_tool_metadata(func_name, func_args, raw_result)
-                structured = {
-                    "status": "ok",
-                    "tool": func_name,
-                    "data": raw_result,
-                    "metadata": metadata,
-                }
-                result = json.dumps(structured, ensure_ascii=False)
-            except ToolError as e:
-                tb = traceback.format_exc()
-                logger.error(
-                    "Tool %s raised ToolError: %s", func_name, str(e)
-                )
-                structured = {
-                    "status": "error",
-                    "tool": func_name,
-                    "data": f"ToolError: {e}",
-                    "traceback": tb,
-                    "metadata": _build_tool_metadata(func_name, func_args, ""),
-                }
-                result = json.dumps(structured, ensure_ascii=False)
-            except Exception as e:
-                tb = traceback.format_exc()
-                logger.error(
-                    "Tool %s raised unexpected exception: %s\n%s",
-                    func_name,
-                    str(e),
-                    tb,
-                )
-                structured = {
-                    "status": "error",
-                    "tool": func_name,
-                    "data": f"Unexpected error: {e}",
-                    "traceback": tb,
-                    "metadata": _build_tool_metadata(func_name, func_args, ""),
-                }
-                result = json.dumps(structured, ensure_ascii=False)
+            result = await self._run_bash_tool(func_args, workspace)
         else:
             # Per-tool timeout to prevent hanging the agent on stuck tools
             tool_timeout = getattr(self.config, "tool_timeout", 300) if self.config else 300
@@ -1232,196 +1294,26 @@ class ToolExecutor:
             },
         }, ensure_ascii=False)
 
+    def _sub_deps(self) -> SubagentDeps:
+        return SubagentDeps(
+            resolve_manager=self._get_background_manager,
+            tool_error=self._tool_error,
+        )
+
     async def _subagent_wait(self, func_args: dict) -> str:
-        """Execute subagent_wait — block until background agents settle.
-
-        The parent calls this when it actually needs results (synthesis
-        point). Polls manager state; no output between settles, so the
-        CLI stays quiet while it waits.
-        """
-        manager = self._get_background_manager()
-        if manager is None:
-            return self._tool_error(
-                "subagent_wait",
-                "Subagent orchestrator not available — wire it via CompositionRoot",
-            )
-
-        ids = [str(i) for i in (func_args.get("agent_ids") or [])]
-        terminal = ("completed", "failed", "cancelled")
-        if not ids:
-            ids = [
-                e.id for e in manager.list_entries()
-                if e.status not in terminal
-            ]
-        if not ids:
-            # Nothing running: report whatever has already settled so the
-            # caller still gets a picture instead of an empty shrug.
-            ids = [e.id for e in manager.list_entries()]
-        if not ids:
-            return json.dumps({
-                "status": "ok",
-                "tool": "subagent_wait",
-                "data": {
-                    "settled": [],
-                    "still_running": [],
-                    "note": "No background agents tracked; nothing to wait on.",
-                },
-                "metadata": {},
-            }, ensure_ascii=False)
-
-        try:
-            timeout = float(func_args.get("timeout_seconds", 600))
-        except (TypeError, ValueError):
-            timeout = 600.0
-        # Never out-wait the parent turn: the engine's wall-clock would
-        # unwind the whole turn mid-poll. Clamp to remaining budget.
-        try:
-            from wisp.core.stateless import get_turn_deadline
-
-            deadline_abs = get_turn_deadline()
-            if deadline_abs is not None:
-                remaining = deadline_abs - time.monotonic() - 5.0
-                timeout = min(timeout, max(remaining, 1.0))
-        except Exception:
-            pass
-        timeout = min(max(timeout, 1.0), 3600.0)
-        deadline = time.monotonic() + timeout
-
-        while True:
-            entries = [manager.get(i) for i in ids if manager.get(i) is not None]
-            pending = [
-                e for e in entries
-                if e.status not in ("completed", "failed", "cancelled")
-            ]
-            if not pending or time.monotonic() >= deadline:
-                break
-            await asyncio.sleep(0.25)
-
-        settled = []
-        still_running = []
-        for i in ids:
-            e = manager.get(i)
-            if e is None:
-                settled.append({
-                    "agent_id": i, "label": i, "role": "",
-                    "ok": False, "elapsed_seconds": 0.0,
-                    "error": "unknown agent id",
-                })
-                continue
-            rec: dict[str, Any] = {
-                "agent_id": e.id,
-                "label": e.label,
-                "role": getattr(e.contract, "role", ""),
-                "elapsed_seconds": round(e.elapsed(), 1),
-            }
-            if e.status == "completed":
-                rec["ok"] = True
-                # Carry a summary so the parent can synthesize without an
-                # extra subagent_result round-trip per child.
-                summary = ""
-                if e.history:
-                    summary = str(e.history[-1].get("summary", ""))
-                if not summary and e.result is not None:
-                    summary = str(getattr(e.result, "output", "") or "")
-                rec["summary"] = summary[:240]
-            elif e.status == "failed":
-                rec["ok"] = False
-                rec["error"] = (e.error or "subagent reported failure")[:200]
-            elif e.status == "cancelled":
-                rec["ok"] = False
-                rec["error"] = "cancelled"
-            else:
-                still_running.append({"agent_id": e.id, "label": e.label})
-                continue
-            settled.append(rec)
-
-        ok_n = sum(1 for s in settled if s.get("ok"))
-        note = f"{ok_n}/{len(settled)} settled"
-        if still_running:
-            note += (
-                f"; {len(still_running)} still running after {timeout:.0f}s — "
-                "call subagent_wait again or subagent_result individually"
-            )
-        else:
-            note += ". Fetch full outputs with subagent_result."
-        return json.dumps({
-            "status": "ok",
-            "tool": "subagent_wait",
-            "data": {
-                "settled": settled,
-                "still_running": still_running,
-                "note": note,
-            },
-            "metadata": {"agent_ids": ids},
-        }, ensure_ascii=False)
+        return await _sub.wait(self._sub_deps(), func_args)
 
     async def _subagent_list(self, func_args: dict) -> str:
-        manager = self._get_background_manager()
-        if manager is None:
-            return self._tool_error("subagent_list", "Background agents not available")
-        entries = manager.list(include_finished=bool(func_args.get("include_finished", True)))
-        return json.dumps({
-            "status": "ok",
-            "tool": "subagent_list",
-            "data": {"agents": entries, "count": len(entries)},
-            "metadata": {},
-        }, ensure_ascii=False)
+        return await _sub.list_agents(self._sub_deps(), func_args)
 
     async def _subagent_result(self, func_args: dict) -> str:
-        manager = self._get_background_manager()
-        if manager is None:
-            return self._tool_error("subagent_result", "Background agents not available")
-        agent_id = func_args.get("agent_id", "")
-        if not agent_id:
-            return self._tool_error("subagent_result", "subagent_result requires an 'agent_id' argument")
-        snapshot = await manager.result(agent_id, wait_seconds=float(func_args.get("wait_seconds", 0) or 0))
-        if not snapshot.get("ok"):
-            return self._tool_error("subagent_result", snapshot.get("error", "unknown"))
-        return json.dumps({
-            "status": "ok",
-            "tool": "subagent_result",
-            "data": snapshot,
-            "metadata": {"agent_id": agent_id, "status": snapshot.get("status")},
-        }, ensure_ascii=False)
+        return await _sub.result(self._sub_deps(), func_args)
 
     async def _subagent_send(self, func_args: dict) -> str:
-        manager = self._get_background_manager()
-        if manager is None:
-            return self._tool_error("subagent_send", "Background agents not available")
-        agent_id = func_args.get("agent_id", "")
-        message = func_args.get("message", "")
-        if not agent_id or not message:
-            return self._tool_error("subagent_send", "subagent_send requires 'agent_id' and 'message'")
-        outcome = await manager.send(agent_id, message)
-        if not outcome.get("ok"):
-            return self._tool_error("subagent_send", outcome.get("error", "send failed"))
-        return json.dumps({
-            "status": "ok",
-            "tool": "subagent_send",
-            "data": {
-                "agent_id": outcome["agent_id"],
-                "status": outcome["status"],
-                "note": "Continuation running. Collect with subagent_result.",
-            },
-            "metadata": {"agent_id": agent_id},
-        }, ensure_ascii=False)
+        return await _sub.send(self._sub_deps(), func_args)
 
     async def _subagent_cancel(self, func_args: dict) -> str:
-        manager = self._get_background_manager()
-        if manager is None:
-            return self._tool_error("subagent_cancel", "Background agents not available")
-        agent_id = func_args.get("agent_id", "")
-        if not agent_id:
-            return self._tool_error("subagent_cancel", "subagent_cancel requires an 'agent_id' argument")
-        outcome = manager.cancel(agent_id)
-        if not outcome.get("ok"):
-            return self._tool_error("subagent_cancel", outcome.get("error", "cancel failed"))
-        return json.dumps({
-            "status": "ok",
-            "tool": "subagent_cancel",
-            "data": outcome,
-            "metadata": {"agent_id": agent_id},
-        }, ensure_ascii=False)
+        return await _sub.cancel(self._sub_deps(), func_args)
 
     # ── Orchestration patterns (blocking, result returned this turn) ──
 
