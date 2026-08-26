@@ -207,14 +207,14 @@ def cmd_model(agent, args: str):
             _apply_model_switch(agent, new_provider, new_model,
                                 persist_choice=True, switch_provider=True)
             return
-        # Provider only: apply, then list its models for a follow-up pick.
+        # Provider only: unset model so next turn picks first live for new provider
         agent.config = apply_switch(
             getattr(agent, "runtime", None), agent.session,
-            agent.config, provider=new_provider, model=None)
+            agent.config, provider=new_provider, model="")
         if getattr(agent, "_system_prompt_cache", None) is not None:
             agent._system_prompt_cache.clear()
-        persist({"provider": new_provider})
-        print(success(f"✓ Provider set to: {new_provider}"))
+        persist({"provider": new_provider, "model": ""})
+        print(success(f"✓ Provider set to: {new_provider} — pick a model with /model"))
         try:
             from wisp.provider_catalog import list_models as catalog_list_models
 
@@ -401,13 +401,18 @@ def cmd_provider(agent, args: str):
         print(error(f"✗ {key_err}"))
         return
 
+    # Provider switch without an explicit model → unset the model so
+    # the next turn's resolve_selection picks the first live model for the
+    # new provider (local-first). Passing model="" is the "unset" sentinel,
+    # not None (which would mean "keep old model" and then 404 on nvidia
+    # with qwen2.5-coder).
     agent.config = apply_switch(
         getattr(agent, "runtime", None), agent.session,
-        agent.config, provider=name, model=None)
+        agent.config, provider=name, model="")
     if getattr(agent, "_system_prompt_cache", None) is not None:
         agent._system_prompt_cache.clear()
-    persist({"provider": name})
-    print(success(f"✓ Provider set to: {name}"))
+    persist({"provider": name, "model": ""})
+    print(success(f"✓ Provider set to: {name} — pick a model with /model"))
 
     # Best-effort: show what this provider can serve right now (single source).
     try:

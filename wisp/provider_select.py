@@ -153,13 +153,15 @@ def apply_switch(runtime: Any, session: "dict[str, Any]", config: Any,
             setattr(clone, k, v)
         return clone
 
+    # `model=""` is a valid "unset" sentinel (means "pick first live"),
+    # so check `is not None` instead of truthiness.
     new_cfg = config
-    if provider:
+    if provider is not None:
         new_cfg = _replace(new_cfg, provider=provider)
-    if model:
+    if model is not None:
         new_cfg = _replace(new_cfg, model=model)
 
-    if model and hasattr(session, "__setitem__"):
+    if model is not None and hasattr(session, "__setitem__"):
         try:
             session["model"] = model
         except Exception:  # frozen/session-like objects
@@ -168,13 +170,16 @@ def apply_switch(runtime: Any, session: "dict[str, Any]", config: Any,
     # The runtime's own config is what core_factory reads when rebuilding
     # the cached core — updating only the adapter's copy would make the
     # next turn silently revert to the old provider/model.
-    if provider or model:
+    if provider is not None or model is not None:
         rt_cfg = getattr(runtime, "config", None)
-        if rt_cfg is not None and hasattr(rt_cfg, "replace"):
+        if rt_cfg is not None:
             try:
-                runtime.config = _replace(rt_cfg,
-                                          **({"provider": provider} if provider else {}),
-                                          **({"model": model} if model else {}))
+                kwargs: dict[str, Any] = {}
+                if provider is not None:
+                    kwargs["provider"] = provider
+                if model is not None:
+                    kwargs["model"] = model
+                runtime.config = _replace(rt_cfg, **kwargs)
             except Exception:
                 logger.warning("Could not update runtime config", exc_info=True)
 
