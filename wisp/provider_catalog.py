@@ -17,8 +17,97 @@ a REAL model, never a rotted constant.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any
+
+logger = logging.getLogger(__name__)
+
+# ── Model-listing TTL cache ──────────────────────────────────────────
+# /model listings hit the network on every call; a short TTL keeps the
+# repeated REPL interaction snappy while staying fresh enough to catch
+# newly pulled/deprecated models. Cache key includes provider + endpoint
+# base + a fingerprint of the auth key so switching providers or keys
+# never serves a stale cross-provider listing.
+MODELS_CACHE_TTL_S = 300.0
+
+_MODELS_CACHE: "dict[tuple[str, str, str], tuple[float, list[str]]]" = {}
+
+
+def _cache_fingerprint(cfg: Any) -> str:
+    from wisp.provider_select import resolve_key
+
+    return hash(str(getattr(cfg, "api_key", "") or "") + resolve_key(str(getattr(cfg, "provider", "")))).__str__()[:12]
+
+
+def clear_models_cache(provider_name: str | None = None) -> None:
+    """Drop cached listings (all, or one provider). Never raises."""
+    if provider_name is None:
+        _MODELS_CACHE.clear()
+        return
+    name = (provider_name or "").strip().lower()
+    for k in [k for k in _MODELS_CACHE if k[0] == name]:
+        _MODELS_CACHE.pop(k, None)
+
+
+def list_models(provider_name: str, cfg: Any = None,
+                force: bool = False) -> list[str]:
+    """Models a provider can actually serve right now. [] = unknown.
+
+    Live listings where the provider offers one; curated static lists
+    only where it does not. A provider that cannot be reached yields []
+    — callers treat that as "cannot verify", never as "model invalid".
+
+    Results are cached for MODELS_CACHE_TTL_S keyed by provider + base +
+    key fingerprint; pass force=True for an explicit refresh.
+    """
+    name = (provider_name or "").strip().lower()
+    base_part = ""
+    if name == "ollama":
+        base_part = _ollama_base(cfg)
+    elif name == "openai":
+        base_part = str(getattr(cfg, "api_base", "") or "https://api.openai.com/v1")
+    cache_key = (name, base_part, _cache_fingerprint(cfg))
+    if not force:
+        cached = _MODELS_CACHE.get(cache_key)
+        if cached and (time.monotonic() - cached[0]) < MODELS_CACHE_TTL_S:
+            return cached[1]
+
+    models = _list_models_impl(name, cfg)
+    if models:
+        _MODELS_CACHE[cache_key] = (time.monotonic(), models)
+    return models
+
+
+def _list_models_impl(name: str, cfg: Any) -> list[str]:
+    """Live/static listing fetch — no caching here."""
+    if name == "mock":
+        return ["mock-model"]
+    if name == "ollama":
+        base = _ollama_base(cfg)
+        models = _authed_get(f"{base}/api/tags", cfg)
+        # Cloud models route through the same daemon listing already.
+        return sorted(models)
+    if name == "openrouter":
+        return sorted(_authed_get("https://openrouter.ai/api/v1/models", cfg))
+    if name == "openai":
+        base = str(getattr(cfg, "api_base", "") or "https://api.openai.com/v1")
+        return sorted(_authed_get(f"{base.rstrip('/')}/models", cfg))
+    if name == "nvidia":
+        live = _authed_get("https://integrate.api.nvidia.com/v1/models", cfg)
+        if live:
+            return sorted(live)
+        # API unreachable or unauthenticated (no key) — fall back to the
+        # provider's known catalog so unknown_model can still be detected
+        # instead of returning "ok, could not be verified" and then 404ing
+        # at chat time. This is the same list NVIDIAProvider advertises.
+        try:
+            from wisp.providers.nvidia import NVIDIAProvider
+
+            return sorted(NVIDIAProvider._MODEL_CONTEXT.keys())
+        except Exception:
+            return []
+    return []
 
 logger = logging.getLogger(__name__)
 
@@ -77,43 +166,6 @@ def _authed_get(url: str, cfg: Any, timeout: float = 5.0) -> list[str]:
         if mid:
             out.append(mid)
     return out
-
-
-def list_models(provider_name: str, cfg: Any = None) -> list[str]:
-    """Models a provider can actually serve right now. [] = unknown.
-
-    Live listings where the provider offers one; curated static lists
-    only where it does not. A provider that cannot be reached yields []
-    — callers treat that as "cannot verify", never as "model invalid".
-    """
-    name = (provider_name or "").strip().lower()
-    if name == "mock":
-        return ["mock-model"]
-    if name == "ollama":
-        base = _ollama_base(cfg)
-        models = _authed_get(f"{base}/api/tags", cfg)
-        # Cloud models route through the same daemon listing already.
-        return sorted(models)
-    if name == "openrouter":
-        return sorted(_authed_get("https://openrouter.ai/api/v1/models", cfg))
-    if name == "openai":
-        base = str(getattr(cfg, "api_base", "") or "https://api.openai.com/v1")
-        return sorted(_authed_get(f"{base.rstrip('/')}/models", cfg))
-    if name == "nvidia":
-        live = _authed_get("https://integrate.api.nvidia.com/v1/models", cfg)
-        if live:
-            return sorted(live)
-        # API unreachable or unauthenticated (no key) — fall back to the
-        # provider's known catalog so unknown_model can still be detected
-        # instead of returning "ok, could not be verified" and then 404ing
-        # at chat time. This is the same list NVIDIAProvider advertises.
-        try:
-            from wisp.providers.nvidia import NVIDIAProvider
-
-            return sorted(NVIDIAProvider._MODEL_CONTEXT.keys())
-        except Exception:
-            return []
-    return []
 
 
 @dataclass(frozen=True)
@@ -193,16 +245,11 @@ def resolve_selection(cfg: Any) -> Resolution:
     spec = KNOWN_PROVIDERS.get(provider, {})
     if spec.get("requires_key"):
         key = str(getattr(cfg, "api_key", "") or "").strip()
-        # Also check env fallbacks that the providers themselves check
         if not key:
-            import os
+            # Single source for env fallbacks: provider_select.resolve_key
+            from wisp.provider_select import resolve_key
 
-            if provider == "openai":
-                key = os.environ.get("OPENAI_API_KEY", "") or os.environ.get("WISP_API_KEY", "")
-            elif provider == "nvidia":
-                key = os.environ.get("NVIDIA_API_KEY", "") or os.environ.get("WISP_API_KEY", "")
-            elif provider == "openrouter":
-                key = os.environ.get("OPENROUTER_API_KEY", "") or os.environ.get("WISP_API_KEY", "")
+            key = resolve_key(provider)
         if not key:
             # No key — treat as unreachable so the caller can warn or
             # fallback, rather than letting the chat call 401 and then

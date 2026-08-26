@@ -429,20 +429,12 @@ def cmd_provider(agent, args: str):
             except Exception as exc:
                 print(warning(f"⚠ Could not verify key: {exc}"))
                 print(dim("  Saving anyway — will verify on next turn."))
-            # Persist to config and .env (so `taki baar baar change na karna pade`)
-            from wisp.provider_select import persist as _persist
+            # Persist via the per-provider key vault: each provider keeps
+            # its own slot (env var + .env + config) so switching providers
+            # never requires re-pasting another provider's key.
+            from wisp.provider_select import store_key as _store_key
 
-            # Also set it in the process env so the next turn in this REPL uses it without restart
-            import os
-
-            os.environ["WISP_API_KEY"] = raw
-            if name == "openai":
-                os.environ["OPENAI_API_KEY"] = raw
-            elif name == "openrouter":
-                os.environ["OPENROUTER_API_KEY"] = raw
-            elif name == "nvidia":
-                os.environ["NVIDIA_API_KEY"] = raw
-            _persist({"api_key": raw})
+            _store_key(name, raw)
             # Continue to provider switch — now missing_key will pass
         except (KeyboardInterrupt, EOFError):
             print(dim("\n  Cancelled — provider not switched."))

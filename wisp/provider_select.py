@@ -111,24 +111,75 @@ def probe(provider: Any) -> tuple[bool, str]:
         return False, str(exc)[:200]
 
 
+# ── Key vault: one resolver per provider ─────────────────────────────
+# Every key lookup goes through resolve_key(); every key store through
+# store_key(). Per-provider env vars win over the shared WISP_API_KEY so
+# switching openai ↔ openrouter never clobbers the other key (the old
+# single-slot behavior forced re-pasting keys on every switch).
+
+KEY_ENV_VARS: "dict[str, list[str]]" = {
+    "openai": ["OPENAI_API_KEY", "WISP_API_KEY"],
+    "nvidia": ["NVIDIA_API_KEY", "WISP_API_KEY"],
+    "openrouter": ["OPENROUTER_API_KEY", "WISP_API_KEY"],
+}
+
+_KEY_HINTS: "dict[str, str]" = {
+    "openrouter": "Export OPENROUTER_API_KEY (or WISP_API_KEY) first.",
+    "openai": "Export OPENAI_API_KEY (or WISP_API_KEY) first.",
+    "nvidia": "Export NVIDIA_API_KEY (nvapi-… from build.nvidia.com, or WISP_API_KEY).",
+}
+
+
+def resolve_key(provider_name: str) -> str:
+    """The API key for a provider — per-provider env var, else shared.
+
+    Empty string = no key available anywhere. This is the ONE place that
+    knows which env vars back which provider; callers must not re-derive it.
+    """
+    for env_var in KEY_ENV_VARS.get((provider_name or "").strip().lower(), ["WISP_API_KEY"]):
+        val = os.environ.get(env_var, "").strip()
+        if val:
+            return val
+    return ""
+
+
+def store_key(provider_name: str, key: str) -> None:
+    """Persist a key so this provider keeps its own slot permanently.
+
+    Sets the per-provider env var AND the shared WISP_API_KEY in the
+    process environment (so the very next turn works without restart),
+    then persists both to config.json + .env files via persist().
+    """
+    name = (provider_name or "").strip().lower()
+    primary = KEY_ENV_VARS.get(name, [None])[0]
+    os.environ["WISP_API_KEY"] = key
+    if primary and primary != "WISP_API_KEY":
+        os.environ[primary] = key
+    update: dict[str, str] = {"api_key": key}
+    if primary:
+        update[f"key_{name}"] = key  # per-provider slot in persisted config
+    try:
+        persist(update)
+    except Exception:
+        logger.debug("Could not persist key for %s", name, exc_info=True)
+    # A new key can unlock a different live listing — don't serve a
+    # listing fetched under the old (or empty) key.
+    try:
+        from wisp.provider_catalog import clear_models_cache
+
+        clear_models_cache(name)
+    except Exception:
+        pass
+
+
 def missing_key(provider_name: str) -> str | None:
     """Human message when a key-requiring provider has no key available."""
     if not KNOWN_PROVIDERS.get(provider_name, {}).get("requires_key"):
         return None
-    if os.environ.get("WISP_API_KEY"):
+    if resolve_key(provider_name):
         return None
-    # Provider-specific fallbacks mirror what each provider class reads.
-    if provider_name == "openai" and os.environ.get("OPENAI_API_KEY"):
-        return None
-    if provider_name == "openrouter" and (
-            os.environ.get("OPENROUTER_API_KEY") or os.environ.get("WISP_API_KEY")):
-        return None
-    hints = {
-        "openrouter": "Export OPENROUTER_API_KEY (or WISP_API_KEY) first.",
-        "openai": "Export WISP_API_KEY (or OPENAI_API_KEY) first.",
-    }
-    hint = hints.get(provider_name,
-                     f"Export WISP_API_KEY for '{provider_name}' first.")
+    hint = _KEY_HINTS.get(
+        provider_name, f"Export WISP_API_KEY for '{provider_name}' first.")
     return f"No API key for '{provider_name}'. {hint}"
 
 
@@ -207,6 +258,17 @@ def apply_switch(runtime: Any, session: "dict[str, Any]", config: Any,
     else:
         logger.debug("Runtime lacks invalidate_core_cache; switch applies "
                      "to config only")
+    # Cached model listings are keyed by provider+base+key fingerprint;
+    # a switch may change all three, so drop stale entries eagerly.
+    try:
+        from wisp.provider_catalog import clear_models_cache
+
+        if provider is not None:
+            clear_models_cache(provider)
+        elif model is not None:
+            clear_models_cache()
+    except Exception:
+        pass
     return new_cfg
 
 
@@ -246,6 +308,11 @@ def _persist_env(update: dict[str, str]) -> None:
         "api_key": "WISP_API_KEY",
         "api_base": "WISP_API_BASE",
         "ollama_url": "WISP_OLLAMA_URL",
+        # Per-provider key slots (written by store_key) map to the
+        # provider-specific env vars the providers themselves read.
+        "key_openai": "OPENAI_API_KEY",
+        "key_nvidia": "NVIDIA_API_KEY",
+        "key_openrouter": "OPENROUTER_API_KEY",
     }
     # Filter to only env-mapped keys
     env_update: dict[str, str] = {}
@@ -259,9 +326,20 @@ def _persist_env(update: dict[str, str]) -> None:
     if not env_update:
         return
     # Workspace .env (project-local, so `taki baar baar change na karna pade`)
+    # Prefer the explicit workspace from the update (when /provider was called
+    # from a REPL with a non-default workspace), then WISP_WORKSPACE env,
+    # then the persisted config's workspace, then cwd.
     try:
-        from wisp.config import get_setting
-        ws = get_setting("workspace", "") or os.getcwd()
+        ws = update.get("workspace") or os.environ.get("WISP_WORKSPACE") or ""
+        if not ws:
+            try:
+                from wisp.config import get_setting
+
+                ws = get_setting("workspace", "") or ""
+            except Exception:
+                ws = ""
+        if not ws:
+            ws = os.getcwd()
         ws_env = pathlib.Path(ws).resolve() / ".env"
         _upsert_env_file(ws_env, env_update)
     except Exception:
