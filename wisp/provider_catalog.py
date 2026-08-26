@@ -238,13 +238,21 @@ def resolve_selection(cfg: Any) -> Resolution:
 
     available = list_models(provider, cfg)
     if not available:
-        # Cannot verify — say so honestly instead of guessing. The turn
-        # may still work (gateways with huge catalogs we choose not to
-        # paginate); this is a notice, not a refusal.
+        # For ollama, local models may not be in the daemon yet — lenient.
+        # For cloud, an empty listing with a key present means the catalog
+        # is hidden or the gateway is down; treat as unverifiable but don't
+        # silently serve a bad id — surface as unreachable so the caller can
+        # warn instead of 404ing mid-turn with 0 tools.
+        if provider == "ollama":
+            return Resolution(
+                provider=provider, model=model, status="ok",
+                detail="Model could not be verified against a live listing "
+                       "(provider unreachable or catalog hidden).",
+            )
         return Resolution(
-            provider=provider, model=model, status="ok",
-            detail="Model could not be verified against a live listing "
-                   "(provider unreachable or catalog hidden).",
+            provider=provider, model=model, status="unreachable",
+            detail=f"Provider '{provider}' is not reachable — could not list models to verify '{model}'.",
+            alternatives=[],
         )
     if model in available:
         return Resolution(provider=provider, model=model, status="ok")

@@ -364,7 +364,16 @@ class OpenAIProvider(Provider):
         }
 
         if self.max_tokens and isinstance(self.max_tokens, int) and self.max_tokens > 0:
-            payload["max_tokens"] = self.max_tokens
+            # Cloud gateways (OpenRouter, NVIDIA) reject huge max_tokens with
+            # 402 "can only afford N" — cap to a generous but credit-safe
+            # value. Local Ollama ignores this field anyway.
+            max_tok = int(self.max_tokens)
+            if max_tok > 16384 and self.api_base in (
+                "https://openrouter.ai/api/v1",
+                "https://integrate.api.nvidia.com/v1",
+            ):
+                max_tok = 16384
+            payload["max_tokens"] = max_tok
 
         if tools:
             payload["tools"] = self._convert_tools(tools)

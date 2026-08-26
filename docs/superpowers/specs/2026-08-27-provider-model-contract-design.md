@@ -62,10 +62,10 @@ def list_models(provider: str, cfg) -> list[str]: ...
 def resolve_selection(cfg) -> Resolution: ...
 ```
 
-- `list_models("nvidia", cfg)` → `sorted(_authed_get(...))` if non-empty, else `sorted(NVIDIAProvider._MODEL_CONTEXT.keys())` (fallback so `unknown_model` can be detected even with no key).
-- `resolve_selection` checks `KNOWN_PROVIDERS[provider].requires_key` and no `api_key` (cfg + `NVIDIA_API_KEY`/`OPENROUTER_API_KEY`/`OPENAI_API_KEY`/`WISP_API_KEY` env) → `unreachable` with `detail="Provider 'nvidia' requires an API key…"`.
-- `provider == "ollama"` with `available==[]` → `ok` with `detail="could not be verified"` (lenient).
-- `model not in available` → `unknown_model` with `suggested=available[0]` and `alternatives=_closest(model, available)`.
+- `list_models("nvidia", cfg)` → `sorted(_authed_get(...))` if non-empty, else `sorted(NVIDIAProvider._MODEL_CONTEXT.keys())` (fallback so `unknown_model` can be detected even with no key; live list is ~80 models including `nvidia/*`, static list is 10 `nvidia/*` only).
+- `resolve_selection` checks `KNOWN_PROVIDERS[provider].requires_key` and no `api_key` (cfg + `NVIDIA_API_KEY`/`OPENROUTER_API_KEY`/`OPENAI_API_KEY`/`WISP_API_KEY` env) → `unreachable` before any `list_models` call.
+- `provider == "ollama"` with `available==[]` → `ok` with `detail="could not be verified"` (lenient for local). `nvidia/openai/openrouter` with `available==[]` and `model` set → `unreachable` (`Provider 'x' is not reachable — could not list models to verify 'y'`), not `ok`.
+- `model not in available` → `unknown_model` with `suggested=available[0]` and `alternatives=_closest(model, available)`; for cloud, slash commands hard-fail, `composition` auto-corrects (see 5.2).
 
 ### 5.2 `wisp/composition.py:_create_core`
 
@@ -105,14 +105,14 @@ elif resolution.status == "unreachable":
 - `/model <provider> <model>` or `<provider>/<model>` or `<num>` or `<name>` → `parse_target`, `list_models(target_provider)`, hard fail if `target_model not in live` for `nvidia/openai/openrouter` with `Unknown model 'X' for 'nvidia'. Did you mean: … Available: …`, else `apply_switch` + `persist`. For `ollama`, warn but allow.
 - All paths use the same `provider_catalog` live list as `composition`; no direct `agent.client.list_models` without catalog.
 
-### 5.5 Streaming & Tool-Use `wisp/providers/openai.py` + `wisp/core/stateless.py` + `wisp/tools/filesystem.py`
+### 5.5 Streaming & Tool-Use `wisp/providers/openai.py` + `wisp/core/stateless.py` + `wisp/tools/filesystem.py` + `wisp/context_assembler.py`
 
-- `OpenAIProvider.generate_stream_events` accumulates `tool_calls` deltas by `index` and yields on `finish_reason=="tool_calls" or bool(tool_call_accum)` (handles `stop`).
-- `OpenAIProvider._build_payload` caps `max_tokens` for cloud to avoid `402` (openrouter credit) — if `max_tokens > 16384` and `api_base` is openrouter/nvidia, cap to `16384`.
-- `WispAgentCore._guarded_provider_stream` — `FIRST_TOKEN_DEADLINE_S=90`, `CHUNK_DEADLINE_S=90`, `WISP_STREAM_ATTEMPTS=3`.
-- `WispAgentCore._validate_tool_args("write_file", args)` — salvages `{"_raw": "…"}` (truncated JSON) and defaults `path` to `./output.md` (markdown) / `./output.txt` when `content` present but `path` missing; mutates `args` in place so `ToolExecutor` sees it.
-- `tool_write_file` — same defaulting for direct callers (tests/ACP, `ToolExecutor` bypassing `stateless` validation).
-- `ContextAssembler.DEFAULT_SYSTEM` — adds guideline 3: `"When the user says 'write this … to a file' without a path, ALWAYS call write_file with ./output.md/.txt and the FULL content."`
+- `OpenAIProvider.generate_stream_events` accumulates `tool_calls` deltas by `index` and yields on `finish_reason=="tool_calls" or bool(tool_call_accum)` (handles `stop` from `NVIDIA NIM`).
+- `OpenAIProvider._build_payload` caps `max_tokens` for cloud to avoid `402` — if `max_tokens > 16384` and `api_base in ("https://openrouter.ai/api/v1", "https://integrate.api.nvidia.com/v1")`, cap to `16384`.
+- `WispAgentCore._guarded_provider_stream` — `FIRST_TOKEN_DEADLINE_S=90`, `CHUNK_DEADLINE_S=90`, `WISP_STREAM_ATTEMPTS=3` (env-tunable, `provider_stream.guarded_provider_stream` is the injected testable seam).
+- `WispAgentCore._validate_tool_args("write_file", args)` + `WispAgentCore._turn_inner` batch path — salvages `{"_raw": "…"}` and defaults `path` to `./output.md` (markdown) / `./output.txt`; mutates `args` in place. Both `tool_call` and `tool_calls` batch paths are covered.
+- `tool_write_file(path="", workspace="", content="", **kwargs)` — same defaulting for direct `ToolExecutor` callers (tests/ACP) when `stateless` is bypassed.
+- `wisp/context_assembler.py:47 DEFAULT_SYSTEM` and `ContextAssembler.__init__.default_system` (now `= DEFAULT_SYSTEM`, no drift) — guideline 3.
 
 ## 6. Data Flow
 
@@ -133,11 +133,12 @@ Direct: WISP_PROVIDER=nvidia WISP_MODEL=qwen2.5-coder (no slash command) → com
 
 ## 8. Testing
 
-- `tests/test_provider_selection_contract.py` — existing 12, update `test_factory_no_hardcoded_model_fallback` + add `test_nvidia_unknown_autocorrects`, `test_nvidia_no_key_unreachable`, `test_openai_tool_call_on_stop`.
-- `tests/test_tool_executor_shared_state.py` — already covers C1-C4; add `test_write_file_defaults_path`.
-- `tests/test_provider_integration.py` — update `test_create_core_uses_factory_when_provider_set` to expect new mock handling (already fixed for MagicMock).
-- `tests/test_integration_e2e.py` — should still pass (was fixed for _TestConfig).
-- Manual REPL: `/provider nvidia` → list, `/model nvidia/qwen2.5-coder` → error, `/model nvidia/nemotron-3-ultra-550b-a55b` → success, then `"write all this in a file"` → `✓ Wrote … bytes to ./output.md`.
+- `tests/test_provider_selection_contract.py` — 12 existing + `test_nvidia_unknown_autocorrects` (qwen on nvidia → auto-correct), `test_nvidia_no_key_unreachable` (no WISP_API_KEY → unreachable), `test_openai_tool_call_on_stop` (finish_reason stop with tool_call_accum → yields tool_call), `test_ollama_lenient_unverified` (available==[] → ok).
+- `tests/test_tool_executor_shared_state.py` — C1-C4 + `test_write_file_defaults_path` (content without path → ./output.md) and `test_write_file_raw_salvage`.
+- `tests/test_provider_integration.py` — `test_create_core_uses_factory_when_provider_set` now expects `_replace_cfg` handling for MagicMock (no auto-correct for ollama mock).
+- `tests/test_integration_e2e.py` — `_TestConfig` now handled via `_replace_cfg`.
+- `wisp/context_assembler.py` — `ContextAssembler.__init__.default_system` now aliases `DEFAULT_SYSTEM` (no drift).
+- Manual REPL: `/provider nvidia` → list 80, `/model nvidia/qwen2.5-coder` → hard error `Unknown model … Did you mean: deepseek-ai/deepseek-coder-6.7b-instruct? Available: …`, `/model nvidia/nemotron-3-ultra-550b-a55b` → `✓ Model set`, then `"write all this in a file"` → `✓ Wrote … bytes to ./output.md`.
 
 ## 9. Alternatives Considered
 
@@ -145,7 +146,7 @@ Direct: WISP_PROVIDER=nvidia WISP_MODEL=qwen2.5-coder (no slash command) → com
 - Allow any model for all providers — rejected (silent 404s).
 - Per-tool `max_tokens` — rejected (adds complexity; cap in provider is simpler).
 
-## 10. Open Questions
+## 10. Decisions
 
-- Should `/provider` without `/model` auto-pick `suggested` (local-first) or leave `model_unset` for the next turn to pick? Current: leave unset, next turn picks (matches `e564a7b` contract).
+- `/provider` without `/model` leaves `model_unset` (does **not** auto-pick). Next turn's `composition._create_core` picks `suggested` (local-first) via `resolve_selection: model_unset` and logs `No model configured — serving 'X'`. This matches `e564a7b` and avoids `persist()` on a transient `suggested` that would revert on restart; `persist` only happens on an explicit `/model` pick or on `unknown_model` auto-correct. Listing 80 models then showing an empty prompt is intentional — it forces an explicit pick for `model_unset`.
 

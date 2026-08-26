@@ -261,6 +261,19 @@ class CompositionRoot:
                     "Switch with /model <provider> <model>.",
                     resolution.detail, resolution.model, alts,
                 )
+        elif resolution.status == "unreachable":
+            # No API key or provider down — surface as a clear error at
+            # turn time instead of letting the provider 401/404 with 0 tools.
+            # _NullProvider yields an error event that the transport renders
+            # as an error card, not silent thinking.
+            logger.error("Provider '%s' unreachable: %s", resolution.provider, resolution.detail)
+            return WispAgentCore(
+                config=cfg,
+                provider=_NullProvider(detail=resolution.detail),
+                security=self.security,
+                extensions=self.extensions,
+                tool_executor=self.tool_executor,
+            )
         provider_name = getattr(cfg, "provider", None)
         if provider_name:
             factory = ProviderFactory()
@@ -373,8 +386,12 @@ class CompositionRoot:
 class _NullProvider:
     """Placeholder provider that yields an error event when no provider is configured."""
 
+    def __init__(self, detail: str | None = None):
+        self.detail = detail
+
     def generate_stream_events(self, **kwargs):
+        msg = self.detail or "No LLM provider configured. Set WISP_PROVIDER or add 'provider' to config."
         return iter([{
             "type": "error",
-            "text": "No LLM provider configured. Set WISP_PROVIDER or add 'provider' to config.",
+            "text": msg,
         }])

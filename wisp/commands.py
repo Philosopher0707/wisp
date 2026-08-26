@@ -150,14 +150,21 @@ def cmd_model(agent, args: str):
             return
 
     # ── No args: show current + this provider's models ─────────────
+    # Single source: provider_catalog.list_models (live + nvidia static fallback)
     if not args.strip():
         models = []
-        if getattr(agent, "client", None):
-            try:
-                models = [m.get("name", "") for m in (agent.client.list_models() or [])
-                          if m.get("name")]
-            except Exception as e:
-                logger.warning("Failed to list models: %s", e)
+        try:
+            from wisp.provider_catalog import list_models as catalog_list_models
+
+            models = catalog_list_models(provider, agent.config)
+        except Exception as e:
+            logger.warning("Failed to list models via catalog: %s", e)
+            if getattr(agent, "client", None):
+                try:
+                    models = [m.get("name", "") for m in (agent.client.list_models() or [])
+                              if m.get("name")]
+                except Exception as e2:
+                    logger.warning("Failed to list models via client: %s", e2)
 
         cloud = dim("(cloud)") if provider == "ollama" else ""
         print(f"Provider: {accent(provider)}   Current model: "
@@ -209,9 +216,16 @@ def cmd_model(agent, args: str):
         persist({"provider": new_provider})
         print(success(f"✓ Provider set to: {new_provider}"))
         try:
-            cand = build_provider(new_provider, model=agent.config.model)
-            listing = [m.get("name", "") for m in (cand.list_models() or [])
-                       if m.get("name")]
+            from wisp.provider_catalog import list_models as catalog_list_models
+
+            listing = catalog_list_models(new_provider, agent.config)
+            if not listing and getattr(agent, "client", None):
+                # Fallback to client only if catalog is empty (should not happen for nvidia due to static fallback)
+                try:
+                    listing = [m.get("name", "") for m in (agent.client.list_models() or [])
+                               if m.get("name")]
+                except Exception:
+                    pass
             if listing:
                 print(info(f"Available models ({len(listing)}):"))
                 for i, name in enumerate(listing, 1):
@@ -222,9 +236,38 @@ def cmd_model(agent, args: str):
         return
 
     # ── Model-only switch within the active provider ────────────────
+    # Strict for cloud: must be in the live catalog; lenient for ollama.
     arg = target["model"]
     models = []
-    if getattr(agent, "client", None):
+    try:
+        from wisp.provider_catalog import list_models as catalog_list_models
+        from wisp.provider_catalog import resolve_selection as catalog_resolve
+
+        models = catalog_list_models(provider, agent.config)
+        # For cloud, enforce strict unknown_model check before any apply
+        if provider in ("nvidia", "openai", "openrouter") and arg and not arg.isdigit():
+            # Re-use catalog's closest logic for the error message
+            if models and arg not in models and arg.removesuffix(":cloud") not in {m.removesuffix(":cloud") for m in models}:
+                # Check if it's an ambiguous prefix or truly unknown
+                prefixes = [m for m in models if m.startswith(arg)] + [m for m in models if m.removesuffix(":cloud").startswith(arg)]
+                if not prefixes:
+                    # Use catalog's resolve to get suggested/alternatives
+                    tmp_cfg = agent.config.replace(model=arg) if hasattr(agent.config, "replace") else agent.config
+                    # Temporarily set model to arg for resolution (don't mutate real config)
+                    import copy
+                    tmp = copy.copy(agent.config)
+                    try:
+                        object.__setattr__(tmp, "model", arg)
+                    except Exception:
+                        tmp.model = arg
+                    res = catalog_resolve(tmp)
+                    if res.status == "unknown_model":
+                        print(error(f"✗ Unknown model '{arg}' for '{provider}'. Did you mean: {', '.join(res.alternatives[:3]) or res.suggested or '(none)'}"))
+                        print(dim(f"  Available ({len(models)}): {', '.join(models[:8])}{' …' if len(models) > 8 else ''}"))
+                        return
+    except Exception as e:
+        logger.debug("Catalog pre-check failed: %s", e)
+    if not models and getattr(agent, "client", None):
         try:
             models = [m.get("name", "") for m in (agent.client.list_models() or [])
                       if m.get("name")]
@@ -366,20 +409,30 @@ def cmd_provider(agent, args: str):
     persist({"provider": name})
     print(success(f"✓ Provider set to: {name}"))
 
-    # Best-effort: show what this provider can serve right now.
+    # Best-effort: show what this provider can serve right now (single source).
     try:
-        from wisp.provider_select import build_provider
+        from wisp.provider_catalog import list_models as catalog_list_models
+        from wisp.provider_select import build_provider, probe
+
         cand = build_provider(name, model=agent.config.model)
         ok, detail = probe(cand)
         if not ok:
             print(warning(f"⚠ Health check failed: {detail}"))
-        listing = [m.get("name", "") for m in (cand.list_models() or [])
-                   if m.get("name")]
+        listing = catalog_list_models(name, agent.config)
+        if not listing:
+            # Fallback to client only if catalog is empty (should not happen for nvidia due to static fallback)
+            try:
+                listing = [m.get("name", "") for m in (cand.list_models() or []) if m.get("name")]
+            except Exception:
+                pass
         if listing:
             print(info(f"Available models ({len(listing)}):"))
             for i, mname in enumerate(listing, 1):
-                print(f"   {i:2}. {mname}")
+                marker = accent("→") if mname == agent.config.model else " "
+                print(f"  {marker} {i:2}. {mname}")
             print(dim("Pick with /model <number|name>."))
+        else:
+            print(dim(f"  (Could not list models for '{name}' — provider may be unreachable)"))
     except Exception as exc:
         logger.debug("Post-switch listing failed: %s", exc)
 
