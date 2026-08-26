@@ -121,9 +121,11 @@ class TestInputValidation:
             await runtime.get_or_create_session(None, "model", "/tmp")
 
     @pytest.mark.asyncio
-    async def test_empty_model_rejected(self, runtime):
+    async def test_nonstring_model_rejected(self, runtime):
+        # Empty string is now a legal UNSET model (catalog resolves it);
+        # only non-strings are garbage at this boundary.
         with pytest.raises(ValueError, match="Invalid model"):
-            await runtime.get_or_create_session("sid", "", "/tmp")
+            await runtime.get_or_create_session("sid", None, "/tmp")  # type: ignore[arg-type]
 
     @pytest.mark.asyncio
     async def test_empty_workspace_rejected(self, runtime):

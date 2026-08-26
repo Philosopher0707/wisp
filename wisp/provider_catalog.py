@@ -178,13 +178,20 @@ def resolve_selection(cfg: Any) -> Resolution:
 
     if not model:
         available = list_models(provider, cfg)
-        pick = available[0] if available else ""
+        # Prefer a locally-runnable model when the provider separates
+        # them (:cloud ids proxy to remote inference that may need a
+        # subscription — auto-picking one just trades a clear state for
+        # a 403 on every turn).
+        local = [m for m in available if not m.endswith(":cloud")]
+        pool = local or available
+        pick = pool[0] if pool else ""
         if pick:
             return Resolution(
                 provider=provider, model=pick, status="model_unset",
-                detail="No model configured — first served model picked.",
+                detail="No model configured — first locally-served "
+                       "model picked.",
                 suggested=pick,
-                alternatives=available[:8],
+                alternatives=pool[:8],
             )
         return Resolution(
             provider=provider, model="", status="unreachable",

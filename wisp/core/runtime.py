@@ -105,8 +105,10 @@ class AgentRuntime:
         # Input validation
         if not session_id or not isinstance(session_id, str):
             raise ValueError(f"Invalid session_id: {session_id!r}")
-        if not model or not isinstance(model, str):
+        if not isinstance(model, str):
             raise ValueError(f"Invalid model: {model!r}")
+        # Empty model = unset — legal; provider_catalog resolves it to a
+        # served model when the core builds. Only non-strings are garbage.
         if not workspace or not isinstance(workspace, str):
             raise ValueError(f"Invalid workspace: {workspace!r}")
 

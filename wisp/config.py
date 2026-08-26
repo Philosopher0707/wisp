@@ -781,9 +781,11 @@ class WispConfig:
         if not self.provider:
             errors.append("provider: cannot be empty")
 
-        # Model
-        if not self.model:
-            errors.append("model: cannot be empty")
+        # Model: EMPTY IS LEGAL here — the selection contract
+        # (provider_catalog.resolve_selection) fills it from the live
+        # listing at core-build time. Rejecting empty would force every
+        # entrypoint to hardcode a model id, which is exactly how stale
+        # defaults were born.
 
         return errors
 

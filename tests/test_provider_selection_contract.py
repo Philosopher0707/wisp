@@ -96,6 +96,19 @@ def test_resolve_unset_model_picks_first_served():
     assert r.suggested == "zeta"
 
 
+def test_resolve_unset_prefers_locally_runnable_models():
+    """Auto-pick must not select :cloud ids that may need a paid plan —
+    that trades a clear 'unset' state for a 403 on every turn."""
+    from wisp.provider_catalog import resolve_selection
+
+    cfg = SimpleNamespace(provider="ollama", model="", ollama_url="http://x")
+    with patch("wisp.provider_catalog.list_models",
+               return_value=["deepseek-v4-flash:cloud", "llama3.2:3b"]):
+        r = resolve_selection(cfg)
+    assert r.suggested == "llama3.2:3b"
+    assert ":cloud" not in r.suggested
+
+
 def test_resolve_unknown_model_offers_close_alternatives():
     from wisp.provider_catalog import resolve_selection
 

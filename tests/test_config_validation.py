@@ -118,13 +118,14 @@ class TestConfigValidation:
         errors = config.validate()
         assert any("provider" in e.lower() for e in errors)
 
-    def test_model_empty(self):
-        """Empty model should fail."""
+    def test_model_empty_is_resolvable_unset(self):
+        """Empty model is a legal UNSET state: the selection contract
+        (provider_catalog.resolve_selection) fills it from the live
+        listing at core-build time. Rejecting it here would force every
+        entrypoint to hardcode a model id — the stale-default trap."""
         from wisp.config import WispConfig
-        config = WispConfig()
-        config = config.replace(model="")
-        errors = config.validate()
-        assert any("model" in e.lower() for e in errors)
+        config = WispConfig().replace(model="")
+        assert config.validate() == []
 
     def test_multiple_errors(self):
         """Multiple invalid values should all be reported."""
