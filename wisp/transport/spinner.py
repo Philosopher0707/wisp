@@ -36,6 +36,10 @@ def truncate_spinner_label(
             width = shutil.get_terminal_size().columns
         except Exception:
             width = 80
+    # Newlines break the single-line \r redraw: every frame would paint
+    # fresh rows and the label appears to repeat (live evidence: heredoc
+    # run_bash commands). Collapse before width-clipping.
+    label = " ".join(str(label).split())
     from wisp.terminal_width import truncate as _tw_truncate
     suffix = "\u2026" if unicode_ok else "..."
     return _tw_truncate(label, max(10, width - 8), suffix=suffix)

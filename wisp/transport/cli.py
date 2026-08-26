@@ -195,7 +195,12 @@ def _args_preview(args: dict) -> str:
     if "path" in args:
         return str(args["path"])
     if "command" in args:
-        return str(args["command"])
+        # Multi-line commands (heredocs) must not leak newlines into the
+        # spinner's single-line redraw zone.
+        collapsed = " ".join(str(args["command"]).split())
+        if len(collapsed) > 60:
+            return collapsed[:57] + "..."
+        return collapsed
     if "content" in args:
         content = str(args["content"])
         if len(content) > 40:

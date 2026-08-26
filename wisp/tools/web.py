@@ -66,21 +66,36 @@ def _assert_public_url(url: str) -> "str | None":
             f"The domain does not exist or cannot be reached. "
             f"Try a different URL or search for the content instead."
         )
-    public_ip: str | None = None
+    # Translation prefixes (RFC 6052 / well-known NAT64): the address
+    # embeds a real IPv4 — judge THAT, not the synthetic v6 form. CPython
+    # marks 64:ff9b::/96 reserved, so naively trusting is_reserved blocks
+    # legitimate sites on NAT64 networks (live evidence: arxiv.org).
+    _nat64_wkp = ipaddress.IPv6Network("64:ff9b::/96")
+    _nat6052 = ipaddress.IPv6Network("64:ff9b:1::/48")
+
+    def _judge(ip: "ipaddress.IPv4Address | ipaddress.IPv6Address") -> bool:
+        """True when this address may be dialed."""
+        if isinstance(ip, ipaddress.IPv6Address) and (
+                ip in _nat64_wkp or ip in _nat6052):
+            v4_int = int(ip) & 0xFFFFFFFF
+            ip = ipaddress.ip_address(v4_int)
+        return not (ip.is_private or ip.is_loopback or ip.is_link_local
+                    or ip.is_reserved or ip.is_multicast
+                    or ip.is_unspecified)
+
+    # Block only when NO resolved address is dialable — dual answers
+    # where one record is unusable must not kill an otherwise-public host.
     for info in infos:
         try:
             ip = ipaddress.ip_address(info[4][0])
         except ValueError:
             continue
-        if (ip.is_private or ip.is_loopback or ip.is_link_local
-                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
-            raise ToolError(
-                f"[WEB_FETCH_BLOCKED] {host} resolves to a non-public "
-                f"address ({ip}); fetching internal network resources is disabled."
-            )
-        if public_ip is None:
-            public_ip = str(ip)
-    return public_ip
+        if _judge(ip):
+            return str(ip)
+    raise ToolError(
+        f"[WEB_FETCH_BLOCKED] {host} resolves to no usable public "
+        f"address; fetching internal network resources is disabled."
+    )
 
 
 # Serializes pinned fetches: the getaddrinfo override below is process-global,
