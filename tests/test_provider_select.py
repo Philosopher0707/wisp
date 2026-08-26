@@ -231,42 +231,54 @@ class TestProviderCommand:
 
 
 class TestModelCommandProviderAware:
-    def test_show_uses_current_provider_models(self, capsys, no_persist):
+    def test_show_uses_current_provider_models(self, capsys, no_persist, monkeypatch):
         from wisp import commands as C
+        monkeypatch.setattr("wisp.provider_catalog.list_models",
+                            lambda p, c: ["test-model", "qwen2.5-coder"])
         C.cmd_model(CmdAgent(provider="ollama"), "")
         out = capsys.readouterr().out
         assert "qwen2.5-coder" in out
         assert "ollama" in out.lower()
 
-    def test_provider_qualified_switch(self, no_persist):
+    def test_provider_qualified_switch(self, no_persist, monkeypatch):
         from wisp import commands as C
+        monkeypatch.setattr("wisp.provider_catalog.list_models",
+                            lambda p, c: ["mock-xl", "other"] if p == "mock" else ["test-model", "qwen2.5-coder"])
         agent = CmdAgent(provider="ollama")
         C.cmd_model(agent, "mock mock-xl")
         assert agent.config.provider == "mock"
         assert agent.config.model == "mock-xl"
         assert agent.session["model"] == "mock-xl"
 
-    def test_number_selection_within_provider(self, no_persist):
+    def test_number_selection_within_provider(self, no_persist, monkeypatch):
         from wisp import commands as C
+        monkeypatch.setattr("wisp.provider_catalog.list_models",
+                            lambda p, c: ["test-model", "qwen2.5-coder"])
         agent = CmdAgent(provider="ollama",
                          models=("test-model", "qwen2.5-coder"))
         C.cmd_model(agent, "2")
         assert agent.config.model == "qwen2.5-coder"
 
-    def test_legacy_client_model_still_updated(self, no_persist):
+    def test_legacy_client_model_still_updated(self, no_persist, monkeypatch):
         from wisp import commands as C
+        monkeypatch.setattr("wisp.provider_catalog.list_models",
+                            lambda p, c: ["test-model", "qwen2.5-coder"])
         agent = CmdAgent()
         C.cmd_model(agent, "qwen2.5-coder")
         assert agent.client.model == "qwen2.5-coder"
 
-    def test_switch_persists_choice(self, no_persist):
+    def test_switch_persists_choice(self, no_persist, monkeypatch):
         from wisp import commands as C
+        monkeypatch.setattr("wisp.provider_catalog.list_models",
+                            lambda p, c: ["test-model", "qwen2.5-coder"])
         agent = CmdAgent()
         C.cmd_model(agent, "qwen2.5-coder")
         assert any(u.get("model") == "qwen2.5-coder" for u in no_persist)
 
-    def test_runtime_cache_invalidated(self, no_persist):
+    def test_runtime_cache_invalidated(self, no_persist, monkeypatch):
         from wisp import commands as C
+        monkeypatch.setattr("wisp.provider_catalog.list_models",
+                            lambda p, c: ["test-model", "qwen2.5-coder"])
         agent = CmdAgent()
         C.cmd_model(agent, "qwen2.5-coder")
         assert agent.runtime.invalidations == 1

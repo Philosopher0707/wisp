@@ -148,7 +148,9 @@ def test_cmd_clear(agent):
     assert len(agent.messages) == 0
 
 
-def test_cmd_model_show(agent, capsys):
+def test_cmd_model_show(agent, capsys, monkeypatch):
+    monkeypatch.setattr("wisp.provider_catalog.list_models",
+                        lambda p, c: ["test-model", "qwen2.5-coder", "deepseek-v4-flash"])
     commands_module.cmd_model(agent, "")
     captured = capsys.readouterr()
     assert "test-model" in captured.out
@@ -157,26 +159,34 @@ def test_cmd_model_show(agent, capsys):
     assert "(cloud)" in captured.out
 
 
-def test_cmd_model_switch(agent):
+def test_cmd_model_switch(agent, monkeypatch):
+    monkeypatch.setattr("wisp.provider_catalog.list_models",
+                        lambda p, c: ["test-model", "qwen2.5-coder", "deepseek-v4-flash"])
     commands_module.cmd_model(agent, "qwen2.5-coder")
     assert agent.config.model == "qwen2.5-coder"
     assert agent.client.model == "qwen2.5-coder"
 
 
-def test_cmd_model_switch_by_number(agent):
+def test_cmd_model_switch_by_number(agent, monkeypatch):
+    monkeypatch.setattr("wisp.provider_catalog.list_models",
+                        lambda p, c: ["test-model", "qwen2.5-coder", "deepseek-v4-flash"])
     commands_module.cmd_model(agent, "2")
     assert agent.config.model == "qwen2.5-coder"
 
 
-def test_cmd_model_switch_by_prefix(agent, capsys):
+def test_cmd_model_switch_by_prefix(agent, capsys, monkeypatch):
+    monkeypatch.setattr("wisp.provider_catalog.list_models",
+                        lambda p, c: ["test-model", "qwen2.5-coder", "deepseek-v4-flash"])
     commands_module.cmd_model(agent, "deep")
     captured = capsys.readouterr()
     assert "resolved to deepseek-v4-flash" in captured.out
     assert agent.config.model == "deepseek-v4-flash"
 
 
-def test_cmd_model_switch_by_display_name(agent):
+def test_cmd_model_switch_by_display_name(agent, monkeypatch):
     """Switching by name without :cloud suffix should resolve."""
+    monkeypatch.setattr("wisp.provider_catalog.list_models",
+                        lambda p, c: ["test-model", "qwen2.5-coder", "deepseek-v4-flash"])
     commands_module.cmd_model(agent, "qwen2.5-coder")
     assert agent.config.model == "qwen2.5-coder"
 
@@ -187,18 +197,13 @@ def test_cmd_model_invalid_number(agent, capsys):
     assert "Invalid model number" in captured.out
 
 
-def test_cmd_model_ambiguous_prefix(agent, capsys):
+def test_cmd_model_ambiguous_prefix(agent, capsys, monkeypatch):
     """Prefix that matches multiple models should warn."""
-    # Patch list_models to return ambiguous set
-    original = agent.client.list_models
-    agent.client.list_models = lambda: [
-        {"name": "test-model"},
-        {"name": "test-v2"},
-    ]
+    monkeypatch.setattr("wisp.provider_catalog.list_models",
+                        lambda p, c: ["test-model", "test-v2"])
     commands_module.cmd_model(agent, "test")
     captured = capsys.readouterr()
     assert "Ambiguous" in captured.out
-    agent.client.list_models = original
 
 
 def test_cmd_approve_toggle(agent):
@@ -290,8 +295,10 @@ def test_dispatch_clear(agent):
 # ── Edge cases ─────────────────────────────────────────────────────
 
 
-def test_dispatch_with_args(agent, capsys):
+def test_dispatch_with_args(agent, capsys, monkeypatch):
     """/model with an argument should switch model."""
+    monkeypatch.setattr("wisp.provider_catalog.list_models",
+                        lambda p, c: ["test-model", "qwen2.5-coder", "deepseek-v4-flash"])
     assert dispatch("/model qwen2.5-coder", agent) is True
     assert agent.config.model == "qwen2.5-coder"
 

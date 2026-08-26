@@ -122,10 +122,10 @@ def test_resolve_unknown_model_offers_close_alternatives():
 
 
 def test_resolve_unreachable_listing_is_notice_not_lie():
-    """Model kept, but the client is told it could NOT be verified."""
+    """Ollama (local) is lenient: model kept with 'could not be verified'."""
     from wisp.provider_catalog import resolve_selection
 
-    cfg = SimpleNamespace(provider="nvidia", model="some/model", api_key="k")
+    cfg = SimpleNamespace(provider="ollama", model="some/model", ollama_url="http://x")
     with patch("wisp.provider_catalog.list_models", return_value=[]):
         r = resolve_selection(cfg)
     assert r.status == "ok"

@@ -1508,8 +1508,6 @@ class WispAgentCore:
         # retry (which often stalls on large 18k payloads), default the
         # path and salvage _raw payloads produced by truncated streaming.
         if name == "write_file" and isinstance(args, dict):
-            # Provider streamed `{"_raw": "..."}` when JSON was truncated or
-            # the model emitted only `content` without `path`.
             if "_raw" in args and len(args) == 1:
                 raw = args.get("_raw", "")
                 import json as _json
@@ -1526,7 +1524,6 @@ class WispAgentCore:
                     if isinstance(raw, str) and raw.strip():
                         args.clear()
                         args["content"] = raw
-                # _raw handling falls through to path defaulting below
             if "content" in args and "path" not in args:
                 content = str(args.get("content", ""))
                 default_path = "./output.md" if content.lstrip().startswith("#") or "##" in content[:500] else "./output.txt"
@@ -1537,7 +1534,6 @@ class WispAgentCore:
             jsonschema.validate(instance=args, schema=schema)
             return None
         except Exception as exc:
-            # For write_file, if we defaulted the path above, re-validate
             if name == "write_file" and isinstance(args, dict) and "path" in args:
                 try:
                     import jsonschema as _js2
