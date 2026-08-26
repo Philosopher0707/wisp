@@ -111,8 +111,11 @@ class HeadlessTransport(Transport):
 
         return {
             "ok": len(errors) == 0,
-            "content": "\n".join(content_parts),
-            "thinking": "\n".join(thinking_parts) if thinking_parts else "",
+            # Deltas concatenate with NO separator: some providers stream
+            # per-character chunks, and "\n".join exploded them into one
+            # char per line (live stealth/ox-alpha E2E, 2026-08-26).
+            "content": "".join(content_parts),
+            "thinking": "".join(thinking_parts),
             "tool_calls": tool_calls,
             "errors": errors,
             "iterations": iterations,

@@ -64,7 +64,7 @@ class TestHeadlessTransport:
             {"type": "done", "turns": 1},
         ]
         result = transport.collect_result()
-        assert result["content"] == "Hello\n world"
+        assert result["content"] == "Hello world"
         assert result["iterations"] == 1
 
     def test_collect_result_tool_calls(self):
@@ -102,3 +102,20 @@ class TestHeadlessTransport:
         ]
         result = transport.collect_result()
         assert result["thinking"] == "Let me think..."
+
+
+def test_per_character_deltas_concatenate_without_newlines():
+    """stealth/ox-alpha streams one char per delta; joining with '\n'
+    exploded headless content into one char per line (live E2E)."""
+    import asyncio
+
+    transport = HeadlessTransport()
+
+    async def drive():
+        for ch in "E2E-OK-42":
+            await transport.send({"type": "content", "text": ch})
+        await transport.send({"type": "done", "turns": 1})
+
+    asyncio.run(drive())
+    result = transport.collect_result()
+    assert result["content"] == "E2E-OK-42"
