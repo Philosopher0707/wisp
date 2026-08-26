@@ -279,6 +279,13 @@ class CompositionRoot:
             self._mcp_manager.shutdown()
         except Exception:
             pass
+        # The tool pool is root-LOCAL (not a process-global singleton), so
+        # this root owns its lifecycle. wait=False: orphaned timed-out tool
+        # threads can't be joined anyway, and healthy workers finish fast.
+        try:
+            self.tool_executor._tool_pool.shutdown(wait=False)
+        except Exception:
+            pass
         # NOTE: deliberately NOT shutting down the process-global shared
         # executor or background loop here. They are singletons shared by
         # every root in the process (tests, server restarts, embedded use);

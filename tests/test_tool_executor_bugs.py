@@ -6,6 +6,7 @@ Bug 4: _run_write_verify calls sync tool_run_tests, blocking the event loop.
 """
 
 import asyncio
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -30,10 +31,13 @@ def _make_async_hook_mgr():
 
 
 def _patch_to_thread():
-    """Patch asyncio.to_thread so real tool execution is skipped but
-    _execute_tool's real code path (hooks, write_verify) runs."""
-    return patch("asyncio.to_thread", new_callable=AsyncMock,
-                 return_value='{"status": "ok"}'.replace("'", '"'))
+    """Skip REAL tool execution but keep the dispatch path (hooks, write
+    verify, MCP routing) fully live — mocks the dedicated-pool seam."""
+    from wisp.tool_executor import ToolExecutor
+    return patch.object(
+        ToolExecutor, "_run_blocking", new_callable=AsyncMock,
+        return_value='{"status": "ok"}',
+    )
 
 
 # ── Bug 2: FULL permission mode ────────────────────────────────────────
@@ -334,8 +338,9 @@ def test_builtin_beats_shadowing_mcp_bare_name(tmp_path):
     cfg = _mk_config(str(tmp_path), PermissionMode.FULL, auto_approve=True)
     te = ToolExecutor(config=cfg, hook_manager=_make_async_hook_mgr(), mcp=mgr)
 
-    with patch("asyncio.to_thread", new_callable=AsyncMock,
-               return_value='{"status": "ok", "data": "builtin"}') as tt:
+    from wisp.tool_executor import ToolExecutor as _TE
+    with patch.object(_TE, "_run_blocking", new_callable=AsyncMock,
+                      return_value='{"status": "ok", "data": "builtin"}') as tt:
         events = _collect(te, "read_file", {"path": "/tmp/x"})
 
     dispatched = [c.args[0] for c in tt.call_args_list if c.args]

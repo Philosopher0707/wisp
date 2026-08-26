@@ -16,6 +16,8 @@ Yields AgentEvent instances for tool_result and approval_request.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import functools
 import json
 import logging
 import time
@@ -37,6 +39,7 @@ from wisp.tools.errors import ToolError
 from wisp.tools._utils import check_dangerous_command
 from wisp.tools.registry import execute_tool
 from wisp.tools.registry import TOOL_IMPLS
+from wisp.tools.registry import _build_tool_metadata
 from wisp.tools.audit import AuditLog
 
 logger = logging.getLogger(__name__)
@@ -224,6 +227,18 @@ class ToolExecutor:
     ):
         self.config = config
         self.extensions = extensions
+
+        # Tools run on a DEDICATED bounded pool, not the interpreter's
+        # shared default executor: a timed-out tool cannot be killed (no
+        # thread kill in Python), so its thread lives on. If those orphans
+        # landed in the default pool they would eventually starve every
+        # other to_thread user server-wide. Bounded here, the blast radius
+        # is "tools queue behind orphans" — visible, not fatal.
+        self._tool_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=int(getattr(config, "tool_pool_size", 8) or 8),
+            thread_name_prefix="wisp-tool",
+        )
+        self.leaked_tool_threads = 0
         self.hook_manager = hook_manager
         self.metrics = metrics
         self.mcp = mcp
@@ -290,6 +305,13 @@ class ToolExecutor:
         if key and func_name in _REPEAT_GUARD_TOOLS and result_str:
             self._repeat_cache[key] = (time.monotonic(), result_str, 0)
         self._pending_repeat_key = None
+
+    async def _run_blocking(self, fn, *args, **kwargs):
+        """Run *fn* on the dedicated bounded tool pool (test seam: mock this
+        to skip real execution while keeping the dispatch path real)."""
+        return await asyncio.get_running_loop().run_in_executor(
+            self._tool_pool, functools.partial(fn, *args, **kwargs),
+        )
 
     async def execute(
         self,
@@ -777,7 +799,6 @@ class ToolExecutor:
         elif func_name == "run_bash":
             try:
                 from wisp.tools.bash import async_tool_run_bash
-                from wisp.tools.registry import _build_tool_metadata
                 raw_result = await async_tool_run_bash(
                     command=func_args.get("command", ""),
                     workspace=workspace,
@@ -792,7 +813,6 @@ class ToolExecutor:
                 }
                 result = json.dumps(structured, ensure_ascii=False)
             except ToolError as e:
-                from wisp.tools.registry import _build_tool_metadata
                 tb = traceback.format_exc()
                 logger.error(
                     "Tool %s raised ToolError: %s", func_name, str(e)
@@ -806,7 +826,6 @@ class ToolExecutor:
                 }
                 result = json.dumps(structured, ensure_ascii=False)
             except Exception as e:
-                from wisp.tools.registry import _build_tool_metadata
                 tb = traceback.format_exc()
                 logger.error(
                     "Tool %s raised unexpected exception: %s\n%s",
@@ -827,7 +846,7 @@ class ToolExecutor:
             tool_timeout = getattr(self.config, "tool_timeout", 300) if self.config else 300
             try:
                 async with asyncio.timeout(tool_timeout):
-                    result = await asyncio.to_thread(
+                    result = await self._run_blocking(
                         execute_tool,
                         func_name,
                         func_args,
@@ -837,7 +856,15 @@ class ToolExecutor:
                         lsp_manager=self.lsp_manager,
                     )
             except asyncio.TimeoutError:
-                logger.error("Tool %s timed out after %ds", func_name, tool_timeout)
+                # The worker thread keeps running — unkillable by design.
+                # Track it so starvation is observable before it bites.
+                self.leaked_tool_threads += 1
+                logger.warning(
+                    "Tool %s timed out after %ds — worker thread leaked "
+                    "(%d total; pool size %d)",
+                    func_name, tool_timeout,
+                    self.leaked_tool_threads, self._tool_pool._max_workers,
+                )
                 structured = {
                     "status": "error",
                     "tool": func_name,
@@ -847,7 +874,6 @@ class ToolExecutor:
                 result = json.dumps(structured, ensure_ascii=False)
             except ToolError as e:
                 tb = traceback.format_exc()
-                from wisp.tools.registry import _build_tool_metadata
                 logger.error("Tool %s raised ToolError: %s", func_name, str(e))
                 structured = {
                     "status": "error",
@@ -859,7 +885,6 @@ class ToolExecutor:
                 result = json.dumps(structured, ensure_ascii=False)
             except Exception as e:
                 tb = traceback.format_exc()
-                from wisp.tools.registry import _build_tool_metadata
                 logger.error(
                     "Tool %s raised unexpected exception: %s\n%s",
                     func_name,
