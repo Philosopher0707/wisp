@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+
+from wisp.tui.task_owner import OwnedTasks
+
+logger = logging.getLogger(__name__)
 from typing import Any
 
 from textual.app import ComposeResult
@@ -116,6 +121,7 @@ class WorkspaceScreen(Screen):
         **kwargs,
     ):
         super().__init__(**kwargs)
+        self._owned = OwnedTasks()
         self.server_url = server_url
         self.session_id = session_id
         self.wisp_config = config or WispConfig()
@@ -188,6 +194,13 @@ class WorkspaceScreen(Screen):
             pass  # DOM not composed yet (install_screen phase)
         self._ws_task = asyncio.create_task(self._start_ws())
 
+    def on_unmount(self) -> None:
+        owned = getattr(self, "_owned", None)
+        if owned is not None:
+            n = owned.cancel_all()
+            if n:
+                logger.info("Cancelled %d TUI task(s) on unmount", n)
+
     async def _start_ws(self) -> None:
         self._ws_client = WispWSClient(self.server_url)
         self._ws_client.on_token = self._on_token
@@ -231,8 +244,11 @@ class WorkspaceScreen(Screen):
             # Remote session: forward the key verbatim — the SERVER folds
             # Y/N/a/d into its per-session memory (ApprovalSessionState
             # lives where the session lives), so every client inherits it.
-            asyncio.create_task(self._ws_client.approve_tool(
-                self._pending_approval_call_id, key))
+            self._owned.spawn(
+                self._ws_client.approve_tool(
+                    self._pending_approval_call_id, key),
+                name="approval-forward",
+            )
             self._pending_approval_call_id = None
             return
 
@@ -363,9 +379,10 @@ class WorkspaceScreen(Screen):
             pending = self._pending_prompt
             self._pending_prompt = None
             if self._ws_client and self._ws_client._ws:
-                import asyncio
-                asyncio.create_task(
-                    self._ws_client.send_prompt(pending, session_id=self.session_id)
+                self._owned.spawn(
+                    self._ws_client.send_prompt(
+                        pending, session_id=self.session_id),
+                    name="prompt-flush",
                 )
 
     def on_input_bar_submitted(self, event: InputBar.Submitted) -> None:
@@ -375,7 +392,7 @@ class WorkspaceScreen(Screen):
         async def _mount_user() -> None:
             await chat.mount(UserMessage(event.text))
 
-        asyncio.create_task(_mount_user())
+        self._owned.spawn(_mount_user(), name="mount-user")
 
         status = self.query_one("#status-bar", StatusBar)
 
@@ -411,8 +428,10 @@ class WorkspaceScreen(Screen):
             return
 
         status.is_streaming = True
-        asyncio.create_task(
-            self._ws_client.send_prompt(event.text, session_id=self.session_id)
+        self._owned.spawn(
+            self._ws_client.send_prompt(
+                event.text, session_id=self.session_id),
+            name="send-prompt",
         )
 
     def _resolve_local_approval(self, key: str) -> bool:
@@ -427,8 +446,10 @@ class WorkspaceScreen(Screen):
 
     def _flush_ws_approval(self, approved: bool) -> bool:
         if self._ws_client and self._pending_approval_call_id:
-            asyncio.create_task(
-                self._ws_client.approve_tool(self._pending_approval_call_id, approved)
+            self._owned.spawn(
+                self._ws_client.approve_tool(
+                    self._pending_approval_call_id, approved),
+                name="approval-flush",
             )
             self._pending_approval_call_id = None
             return True
@@ -459,7 +480,8 @@ class WorkspaceScreen(Screen):
             self._local_task.cancel()
             return
         if self._ws_client is not None and self._ws_client._ws is not None:
-            asyncio.create_task(self._ws_client.interrupt())
+            self._owned.spawn(
+                self._ws_client.interrupt(), name="interrupt")
             return
         status = self.query_one("#status-bar", StatusBar)
         status.connection_state = "no turn running"
