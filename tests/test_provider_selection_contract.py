@@ -132,6 +132,78 @@ def test_resolve_unreachable_listing_is_notice_not_lie():
     assert "not be verified" in r.detail
 
 
+def test_resolve_nvidia_unreachable_when_list_empty():
+    """Cloud with key but empty listing is unreachable, not 'ok'."""
+    from wisp.provider_catalog import resolve_selection
+
+    cfg = SimpleNamespace(provider="nvidia", model="some/model", api_key="k")
+    with patch("wisp.provider_catalog.list_models", return_value=[]):
+        r = resolve_selection(cfg)
+    assert r.status == "unreachable"
+    assert "not reachable" in r.detail
+
+
+def test_resolve_nvidia_no_key_is_unreachable():
+    """Cloud without key is unreachable at selection time, not 404 mid-turn."""
+    from wisp.provider_catalog import resolve_selection
+
+    cfg = SimpleNamespace(provider="nvidia", model="some/model", api_key="")
+    r = resolve_selection(cfg)
+    assert r.status == "unreachable"
+    assert "requires an API key" in r.detail
+
+
+def test_nvidia_unknown_autocorrects_in_composition(monkeypatch, tmp_path):
+    """_create_core auto-corrects qwen on nvidia to a live nvidia model."""
+    from wisp.composition import CompositionRoot
+
+    root = CompositionRoot.__new__(CompositionRoot)
+    root.config = _cfg(provider="nvidia", model="qwen2.5-coder", api_key="k")
+    root.runtime = SimpleNamespace(config=root.config)
+    monkeypatch.setattr("wisp.provider_catalog.list_models",
+                        lambda p, c: ["nvidia/llama-3.1-nemotron-70b-instruct", "nvidia/nemotron-3-ultra-550b-a55b"] if p == "nvidia" else [])
+    built = {}
+    monkeypatch.setattr("wisp.providers.factory.ProviderFactory.from_config",
+                        lambda self, c: built.setdefault("cfg", c))
+    monkeypatch.setattr("wisp.composition.WispAgentCore", lambda **kw: built.setdefault("core_kw", kw))
+    root.security = None
+    root.extensions = None
+    root.tool_executor = None
+    root._create_core()
+    assert built["cfg"].model == "nvidia/llama-3.1-nemotron-70b-instruct"
+
+
+def test_openai_tool_call_on_stop():
+    """Provider must yield tool_call even when finish_reason is stop."""
+    from wisp.providers.openai import OpenAIProvider
+
+    prov = OpenAIProvider.__new__(OpenAIProvider)
+    prov.api_key = "k"
+    prov.api_base = "https://example.com/v1"
+    prov.model = "test-model"
+    prov.temperature = 0.2
+    prov.max_tokens = None
+    sse = [
+        b'data: {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call_1", "function": {"name": "write_file", "arguments": ""}}]}, "finish_reason": null}]}',
+        b'data: {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{\\"path\\": \\"./output.md\\", \\"content\\": \\"hi\\"}"}}]}, "finish_reason": null}]}',
+        b'data: {"choices": [{"delta": {}, "finish_reason": "stop"}]}',
+        b'data: [DONE]',
+    ]
+
+    class FakeResp:
+        status_code = 200
+        def iter_lines(self):
+            for l in sse:
+                yield l
+        @property
+        def text(self):
+            return ""
+
+    with patch("requests.post", return_value=FakeResp()):
+        events = list(prov.generate_stream_events("sys", [{"role": "user", "content": "hi"}], tools=[{"type": "function", "function": {"name": "write_file"}}]))
+    assert any(e.get("type") == "tool_call" and e.get("name") == "write_file" for e in events)
+
+
 def test_core_factory_applies_catalog_suggestion(monkeypatch, tmp_path):
     """The composition seam resolves unset models BEFORE building cores."""
     from wisp.composition import CompositionRoot
