@@ -1385,6 +1385,12 @@ class WispAgentCore:
     # silence past this deadline means the request is dead.
     FIRST_TOKEN_DEADLINE_S = float(os.environ.get("WISP_FIRST_TOKEN_DEADLINE", "90"))
 
+    # Silence between two chunks of an already-started stream. Healthy
+    # providers emit deltas continuously; a gap this long means the
+    # connection died mid-response. Without it, one stalled read held the
+    # per-session lock until the 30-minute turn watchdog fired.
+    CHUNK_DEADLINE_S = float(os.environ.get("WISP_CHUNK_DEADLINE", "90"))
+
     # Provider bookkeeping events that don't count as real output when
     # deciding whether a stream came back empty.
     _BOOKKEEPING_TYPES = {"done", "stream_complete", "checkpoint", "usage", "stream_stats"}
@@ -1435,8 +1441,14 @@ class WispAgentCore:
                             break
                     else:
                         try:
-                            event = await stream.__anext__()
+                            event = await _aio.wait_for(
+                                stream.__anext__(),
+                                timeout=self.CHUNK_DEADLINE_S,
+                            )
                         except StopAsyncIteration:
+                            break
+                        except _aio.TimeoutError:
+                            stalled = True
                             break
                     normalized = self._normalize_event(event)
                     ntype = str(normalized.get("type", ""))
@@ -1459,6 +1471,18 @@ class WispAgentCore:
                         await aclose()
 
             if got_meaningful:
+                if stalled:
+                    # Mid-stream death after partial output: retrying would
+                    # duplicate what the consumer already saw, so surface
+                    # the truncation and end cleanly instead of hanging.
+                    yield _flatten_event(provider_status_event(
+                        "chunk_stall",
+                        detail=(
+                            f"provider sent no data for "
+                            f"{self.CHUNK_DEADLINE_S:.0f}s mid-stream — "
+                            "output may be truncated"
+                        ),
+                    ))
                 return
 
             if attempt < max_attempts and (stalled or api_status is not None or not got_meaningful) is not False:
