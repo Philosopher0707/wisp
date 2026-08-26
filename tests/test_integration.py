@@ -200,6 +200,10 @@ class TestIntegrationWebFetch:
         result = parse_tool_result(raw)
         if result["status"] == "error" and "DNS resolution failed" in result["data"]:
             pytest.skip("Network/DNS unavailable in this environment")
+        # Environments whose DNS answers with NAT64 (64:ff9b::/32) trip the
+        # SSRF non-public guard — correct behavior, untestable here.
+        if result["status"] == "error" and "WEB_FETCH_BLOCKED" in result["data"]:
+            pytest.skip("SSRF guard blocks this environment's DNS answer")
         assert result["status"] == "ok"
         assert "httpbin" in result["data"].lower() or "200" in result["data"]
         assert result["metadata"]["url"] == "https://httpbin.org/get"
