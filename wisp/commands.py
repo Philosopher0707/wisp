@@ -398,8 +398,58 @@ def cmd_provider(agent, args: str):
         return
     key_err = missing_key(name)
     if key_err:
-        print(error(f"✗ {key_err}"))
-        return
+        print(warning(f"⚠ {key_err}"))
+        # Prompt for the key securely, verify it, and persist to .env + config
+        # so the user doesn't have to re-enter it via REPL every time.
+        try:
+            import getpass
+
+            # Ask for the key appropriate to the provider
+            key_env = {
+                "openai": "WISP_API_KEY (or OPENAI_API_KEY)",
+                "openrouter": "WISP_API_KEY (or OPENROUTER_API_KEY)",
+                "nvidia": "WISP_API_KEY (nvapi-… from https://build.nvidia.com)",
+            }.get(name, "WISP_API_KEY")
+            raw = getpass.getpass(f"Enter API key for '{name}' ({key_env}): ").strip()
+            if not raw:
+                print(error("✗ No key entered — provider not switched."))
+                return
+            # Verify the key by building a provider and probing
+            try:
+                from wisp.provider_select import build_provider, probe
+
+                cand = build_provider(name, api_key=raw)
+                ok, detail = probe(cand)
+                # For nvidia/openrouter, also try a live model listing with the new key
+                if ok:
+                    print(success(f"✓ API key verified for '{name}' — {detail or 'health check passed'}"))
+                else:
+                    print(warning(f"⚠ Key entered but health check failed: {detail}"))
+                    print(dim("  Saving anyway — you can update via /provider or set WISP_API_KEY in .env"))
+            except Exception as exc:
+                print(warning(f"⚠ Could not verify key: {exc}"))
+                print(dim("  Saving anyway — will verify on next turn."))
+            # Persist to config and .env (so `taki baar baar change na karna pade`)
+            from wisp.provider_select import persist as _persist
+
+            # Also set it in the process env so the next turn in this REPL uses it without restart
+            import os
+
+            os.environ["WISP_API_KEY"] = raw
+            if name == "openai":
+                os.environ["OPENAI_API_KEY"] = raw
+            elif name == "openrouter":
+                os.environ["OPENROUTER_API_KEY"] = raw
+            elif name == "nvidia":
+                os.environ["NVIDIA_API_KEY"] = raw
+            _persist({"api_key": raw})
+            # Continue to provider switch — now missing_key will pass
+        except (KeyboardInterrupt, EOFError):
+            print(dim("\n  Cancelled — provider not switched."))
+            return
+        except Exception as exc:
+            print(error(f"✗ Could not read API key: {exc}"))
+            return
 
     # Provider switch without an explicit model → unset the model so
     # the next turn's resolve_selection picks the first live model for the

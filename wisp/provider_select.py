@@ -211,16 +211,104 @@ def apply_switch(runtime: Any, session: "dict[str, Any]", config: Any,
 
 
 def persist(update: dict[str, str]) -> bool:
-    """Merge keys into ~/.config/wisp/config.json. Best-effort."""
+    """Merge keys into ~/.config/wisp/config.json and .env. Best-effort."""
+    ok = True
     try:
         from wisp.config import load_config, save_config
         merged = load_config()
         merged.update(update)
         save_config(merged)
-        return True
     except Exception as exc:
         logger.warning("Could not persist provider choice: %s", exc)
-        return False
+        ok = False
+    # Also persist to .env in the workspace and home so `WISP_API_KEY`
+    # survives restarts without re-entering via /provider. The .env file
+    # is gitignored via .gitignore already.
+    try:
+        _persist_env(update)
+    except Exception as exc:
+        logger.debug("Could not persist .env: %s", exc)
+    return ok
+
+
+def _persist_env(update: dict[str, str]) -> None:
+    """Write provider/model/api_key/api_base to .env files.
+
+    Writes to both the workspace's .env and ~/.config/wisp/.env for
+    durability. Only writes keys that are in `update` and non-empty.
+    """
+    import pathlib
+
+    # Map config keys to env vars
+    env_map = {
+        "provider": "WISP_PROVIDER",
+        "model": "WISP_MODEL",
+        "api_key": "WISP_API_KEY",
+        "api_base": "WISP_API_BASE",
+        "ollama_url": "WISP_OLLAMA_URL",
+    }
+    # Filter to only env-mapped keys
+    env_update: dict[str, str] = {}
+    for k, v in update.items():
+        ev = env_map.get(k)
+        if ev and isinstance(v, str) and v:
+            env_update[ev] = v
+        elif ev and k == "api_key" and v:
+            # api_key may be empty string to clear; still write if explicitly in update
+            env_update[ev] = v
+    if not env_update:
+        return
+    # Workspace .env (project-local, so `taki baar baar change na karna pade`)
+    try:
+        from wisp.config import get_setting
+        ws = get_setting("workspace", "") or os.getcwd()
+        ws_env = pathlib.Path(ws).resolve() / ".env"
+        _upsert_env_file(ws_env, env_update)
+    except Exception:
+        pass
+    # Global fallback
+    try:
+        global_env = pathlib.Path.home() / ".config" / "wisp" / ".env"
+        _upsert_env_file(global_env, env_update)
+    except Exception:
+        pass
+
+
+def _upsert_env_file(path: "pathlib.Path", update: dict[str, str]) -> None:
+    """Create or update a .env file with KEY=VALUE lines."""
+    import pathlib
+
+    path = pathlib.Path(path)
+    existing: dict[str, str] = {}
+    lines: list[str] = []
+    if path.exists():
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or "=" not in stripped:
+                    lines.append(line)
+                    continue
+                k, v = stripped.split("=", 1)
+                existing[k.strip()] = v.strip()
+                lines.append(line)
+        except Exception:
+            lines = []
+    # Upsert
+    for k, v in update.items():
+        if k in existing:
+            # Replace existing line
+            for i, line in enumerate(lines):
+                if line.strip().startswith(f"{k}="):
+                    lines[i] = f"{k}={v}"
+                    break
+        else:
+            lines.append(f"{k}={v}")
+    # Ensure parent exists
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except Exception:
+        pass
 
 
 def current_key_status(provider_name: str) -> str:
