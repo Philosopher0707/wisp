@@ -1247,6 +1247,17 @@ class ToolExecutor:
             timeout = float(func_args.get("timeout_seconds", 600))
         except (TypeError, ValueError):
             timeout = 600.0
+        # Never out-wait the parent turn: the engine's wall-clock would
+        # unwind the whole turn mid-poll. Clamp to remaining budget.
+        try:
+            from wisp.core.stateless import get_turn_deadline
+
+            deadline_abs = get_turn_deadline()
+            if deadline_abs is not None:
+                remaining = deadline_abs - time.monotonic() - 5.0
+                timeout = min(timeout, max(remaining, 1.0))
+        except Exception:
+            pass
         timeout = min(max(timeout, 1.0), 3600.0)
         deadline = time.monotonic() + timeout
 
@@ -1279,6 +1290,14 @@ class ToolExecutor:
             }
             if e.status == "completed":
                 rec["ok"] = True
+                # Carry a summary so the parent can synthesize without an
+                # extra subagent_result round-trip per child.
+                summary = ""
+                if e.history:
+                    summary = str(e.history[-1].get("summary", ""))
+                if not summary and e.result is not None:
+                    summary = str(getattr(e.result, "output", "") or "")
+                rec["summary"] = summary[:240]
             elif e.status == "failed":
                 rec["ok"] = False
                 rec["error"] = (e.error or "subagent reported failure")[:200]

@@ -142,11 +142,12 @@ render path must handle all four (goldens enforce it).
 
 ## 5. Tools & execution pipeline
 
-**Inventory: 40 tools** (`tools/registry.py`, OpenAI wire format
+**Inventory: 41 tools** (`tools/registry.py`, OpenAI wire format
 `{"type":"function","function":{name,description,parameters}}`):
 read/write/edit_file(_multi) · run_bash · web_fetch/search (lazy requests) ·
 list_files · search_symbols/codebase · remember/recall (cross-session memory) ·
-spawn/fanout/spawn_background/subagent_{list,result,send,cancel} ·
+spawn/fanout (fanout non-blocking by default → background manager)/
+spawn_background/subagent_{list,result,send,cancel,wait} ·
 orchestrate_{vote,map_reduce,chain,dag} · capture_skill · git_status/diff/branch/
 commit/push · gh_pr_create · lsp_{diagnostics,definition,references,hover,symbols} ·
 diagnose · plan_task/mark_step_done/update_plan · run_tests.

@@ -9,7 +9,7 @@ turn; waiting is an explicit, single synthesis point.
 |---|---|---|
 | `fanout {tasks[], max_concurrent?, mode?}` | **No** (default `mode:"background"`) | `{mode:"background", agents:[{agent_id,label,role}], note}` immediately |
 | `spawn_background {task, role?, label?…}` | No | `{agent_id, label, status}` |
-| `subagent_wait {agent_ids?, timeout_seconds?=600}` | Yes (bounded 1–3600s) | digest: `{settled:[{agent_id,label,role,ok,elapsed_seconds,error?}], still_running:[…], note}` |
+| `subagent_wait {agent_ids?, timeout_seconds?=600}` | Yes (bounded 1–3600s) | digest: `{settled:[{agent_id,label,role,ok,elapsed_seconds,summary?≤240,error?}], still_running:[…], note}` — success summaries ride along so synthesis needs no extra round-trips; wait is clamped to the parent turn's remaining wall-clock (never out-waits the engine deadline) |
 | `subagent_result {agent_id, wait_seconds?=0}` | Optional | full state + output |
 | `subagent_list` | No | all entries w/ status |
 | `subagent_send {agent_id, message}` | No | re-runs a FINISHED agent in-place |

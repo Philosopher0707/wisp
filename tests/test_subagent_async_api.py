@@ -51,6 +51,8 @@ class _FakeManager:
         v.contract = e["contract"]
         v.status = e["status"]
         v.error = e["error"]
+        v.history = []
+        v.result = None
         v.elapsed = lambda: 1.5  # type: ignore[method-assign]
         return v
 
@@ -199,3 +201,116 @@ class TestApiSurface:
 
         assert "Subagent protocol" in DEFAULT_SYSTEM
         assert "subagent_wait" in DEFAULT_SYSTEM
+
+
+class TestLaunchRendering:
+    """The background-launch envelope must render as a roster, not JSON."""
+
+    def test_coerce_renders_outer_envelope_roster(self):
+        from wisp.transport.cli import _coerce_tool_data
+
+        envelope = json.dumps({
+            "status": "ok", "tool": "fanout",
+            "data": {
+                "mode": "background",
+                "agents": [
+                    {"agent_id": "bg-a1", "label": "fanout-0-researcher",
+                     "role": "researcher"},
+                    {"agent_id": "bg-a2", "label": "fanout-1-researcher",
+                     "role": "researcher"},
+                    {"agent_id": "bg-a3", "label": "fanout-2-coder",
+                     "role": "coder"},
+                ],
+                "note": "3 subagent(s) running in background. Call subagent_wait.",
+            },
+            "metadata": {},
+        })
+        out = _coerce_tool_data(envelope)
+        assert "launched 3 background agent(s)" in out
+        assert "2× researcher" in out
+        assert "bg-a1" not in out, "raw ids leaked into display"
+        assert '"mode"' not in out, "raw envelope keys leaked"
+
+    def test_coerce_renders_bare_inner_shape(self):
+        from wisp.transport.cli import _coerce_tool_data
+
+        inner = json.dumps({
+            "mode": "background",
+            "agents": [{"agent_id": "b", "label": "L", "role": "coder"}],
+            "note": "",
+        })
+        out = _coerce_tool_data(inner)
+        assert "launched 1 background agent(s)" in out
+
+    def test_non_background_envelopes_untouched(self):
+        from wisp.transport.cli import _coerce_tool_data
+
+        agg = json.dumps({"results": [{"ok": True, "task": "t"}]})
+        out = _coerce_tool_data(agg)
+        assert "launched" not in out
+
+
+class TestWaitDigestSummaries:
+    @pytest.mark.asyncio
+    async def test_settled_success_carries_summary(self):
+        manager = _FakeManager()
+        ex = _executor_with(manager)
+        launched = json.loads(await ex._fanout(_two_task_args(), "/ws"))
+        ids = launched["metadata"]["agent_ids"]
+
+        # Give the fake entry a settled history + result output.
+        class _Result:
+            output = "Vespa uses two-phase ranking: matching then ranking."
+        manager.settle(ids[0], ok=True)
+        manager.settle(ids[1], ok=False, error="HTTP 429")
+
+        # Monkeypatch get() to return the enriched view.
+        original_get = manager.get
+
+        def enriched(agent_id):
+            v = original_get(agent_id)
+            if agent_id == ids[0] and v is not None:
+                v.history = [{"summary": "two-phase ranking; tensors inline"}]
+                v.result = _Result()
+            return v
+
+        manager.get = enriched  # type: ignore[method-assign]
+        out = json.loads(await ex._subagent_wait({"agent_ids": ids}))
+        settled = {s["agent_id"]: s for s in out["data"]["settled"]}
+        assert "two-phase ranking" in settled[ids[0]]["summary"]
+        assert len(settled[ids[0]]["summary"]) <= 240
+
+
+class TestWaitDeadlineClamp:
+    @pytest.mark.asyncio
+    async def test_wait_clamps_to_turn_deadline(self):
+        import time as _time
+        from wisp.core.stateless import _turn_deadline
+
+        manager = _FakeManager()
+        ex = _executor_with(manager)
+        launched = json.loads(await ex._fanout(
+            {"tasks": [{"task": "slow", "role": "researcher"}]}, "/ws"))
+        ids = launched["metadata"]["agent_ids"]
+
+        token = _turn_deadline.set(_time.monotonic() + 3.0)
+        try:
+            t0 = _time.monotonic()
+            out = json.loads(await ex._subagent_wait(
+                {"agent_ids": ids, "timeout_seconds": 600}))
+            took = _time.monotonic() - t0
+            assert took < 5.0, "wait must clamp to remaining turn budget"
+            assert out["data"]["still_running"]
+        finally:
+            _turn_deadline.reset(token)
+
+
+class TestWatcherDedup:
+    def test_fanout_started_lines_suppressed_in_watcher_source(self):
+        import inspect
+        from wisp.transport import cli as cli_mod
+
+        src = inspect.getsource(cli_mod.CLITransport._watch_background)
+        assert 'startswith("fanout-")' in src, (
+            "watcher must skip batch-fanout started lines"
+        )

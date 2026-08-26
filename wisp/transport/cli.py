@@ -267,6 +267,37 @@ def _render_fanout_digest(agg: dict) -> str:
     return "\n".join(lines)
 
 
+def _render_background_launch(agg: dict) -> str:
+    """One line per launched agent + the wait hint, instead of raw JSON.
+
+    The non-blocking fanout envelope is {mode:'background',agents:[…],
+    note} — the user should read 'who is running', not ids.
+    """
+    agents = agg.get("agents") or []
+    if not isinstance(agents, list) or not agents:
+        return ""
+    try:
+        sym = status_symbols()
+        run_m = sym.get("run", "·")
+    except Exception:
+        run_m = "·"
+    roles: dict[str, int] = {}
+    for a in agents:
+        if isinstance(a, dict):
+            roles[str(a.get("role", "?"))] = roles.get(str(a.get("role", "?")), 0) + 1
+    roster = ", ".join(f"{n}× {role}" if n > 1 else role for role, n in roles.items())
+    lines = [f"launched {len(agents)} background agent(s): {roster}"]
+    for a in agents:
+        if not isinstance(a, dict):
+            continue
+        label = str(a.get("label", ""))[:48]
+        lines.append(f"  {run_m} {label}")
+    note = str(agg.get("note", "")).strip()
+    if note:
+        lines.append(dim(note[:200]))
+    return "\n".join(lines)
+
+
 def _coerce_tool_data(value: Any) -> str:
     """Coerce a tool result value to a display string."""
     if value is None:
@@ -280,6 +311,19 @@ def _coerce_tool_data(value: Any) -> str:
                 agg = json.loads(stripped_agg)
             except (json.JSONDecodeError, ValueError):
                 agg = None
+            if isinstance(agg, dict):
+                candidate = (
+                    agg.get("data")
+                    if isinstance(agg.get("data"), dict)
+                    else agg
+                )
+                if (
+                    candidate.get("mode") == "background"
+                    and isinstance(candidate.get("agents"), list)
+                ):
+                    rendered = _render_background_launch(candidate)
+                    if rendered:
+                        return rendered
             if (
                 isinstance(agg, dict)
                 and isinstance(agg.get("results"), list)
@@ -876,6 +920,11 @@ class CLITransport(Transport):
                     out.flush()
                 elif etype == "agent_started":
                     who = event.get("label") or event.get("agent_id", "?")
+                    # Batch fanout launches are announced once by the
+                    # tool-result render; per-agent started lines would
+                    # only duplicate that roster.
+                    if str(who).startswith("fanout-"):
+                        continue
                     out = self._stdout or sys.stdout
                     out.write("\n" + dim(f"[bg] started {who} (continues across turns)") + "\n")
                     out.flush()
