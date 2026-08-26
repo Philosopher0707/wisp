@@ -346,6 +346,26 @@ class BackgroundAgentManager:
         entry.error = "cancelled by caller"
         return {"ok": True, "agent_id": agent_id, "status": STATUS_CANCELLED}
 
+    def shutdown_pending(self) -> int:
+        """Cancel every live handle; returns how many were running.
+
+        Sync on purpose: CompositionRoot.shutdown() is sync and may run from
+        a lifespan or an interpreter-exit path. Reaping happens wherever the
+        owning loop is being drained — this only *requests* cancellation so
+        no background agent can outlive the process that spawned it.
+        """
+        live = 0
+        for entry in self._entries.values():
+            if entry.status != STATUS_RUNNING:
+                continue
+            handle = getattr(entry, "handle", None)
+            if handle is not None and not handle.done():
+                handle.cancel()
+                live += 1
+            entry.status = STATUS_CANCELLED
+            entry.error = entry.error or "shutdown"
+        return live
+
     def prune(self) -> int:
         """Drop oldest finished entries beyond the retention cap."""
         finished = sorted(

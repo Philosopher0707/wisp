@@ -65,7 +65,7 @@ class CompositionRoot:
 
         # Configure shared thread pool (before any async work starts)
         import asyncio
-        from wisp.async_utils import get_shared_executor, set_shared_executor_size
+        from wisp.async_utils import set_shared_executor_size
         pool_size = getattr(self.config, "thread_pool_size", None) or 8
         try:
             set_shared_executor_size(pool_size)
@@ -257,6 +257,12 @@ class CompositionRoot:
 
     def shutdown(self) -> None:
         """Shutdown all services gracefully with timeouts."""
+        # Cancel detached agent work BEFORE closing the store underneath it.
+        import contextlib
+        with contextlib.suppress(Exception):
+            self.background_agents.shutdown_pending()
+        with contextlib.suppress(Exception):
+            self.subagent_orchestrator.request_cancel_live()
         self.stop()
         try:
             from wisp.infra.telemetry import export_metrics

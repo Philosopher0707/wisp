@@ -965,8 +965,29 @@ def _register_stack_dumper() -> None:
         pass
 
 
+def _convert_sigterm_to_interrupt() -> None:
+    """SIGTERM (kill, docker stop, process managers) exits like Ctrl+C.
+
+    Without this, a terminated CLI skips session save, MCP/LSP teardown and
+    store close entirely — the graceful machinery exists but is unreachable.
+    KeyboardInterrupt reuses the exact path users already exercise daily.
+    """
+    import signal as _signal
+    if not hasattr(_signal, "SIGTERM"):
+        return  # Windows
+
+    def _raise_interrupt(signum, frame):
+        raise KeyboardInterrupt
+
+    try:
+        _signal.signal(_signal.SIGTERM, _raise_interrupt)
+    except (ValueError, OSError):
+        pass  # non-main thread or restricted environment
+
+
 def main():
     _register_stack_dumper()
+    _convert_sigterm_to_interrupt()
     argv = list(sys.argv[1:])
     _setup_logging(verbose="--verbose" in argv)
 

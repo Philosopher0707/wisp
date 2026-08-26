@@ -110,8 +110,12 @@ def _run_cli(root: CompositionRoot, prompt: str | None = None, **kwargs) -> None
             # REPL mode: reuse the same persistent loop for all turns
             _run_repl(transport, root, config, loop=loop, **kwargs)
     finally:
+        # Single-shot turns can spawn detached work exactly like REPL turns;
+        # without this drain they die mid-flight at loop.close().
+        assert loop is not None  # bound above: own persistent loop
         try:
-            loop.run_until_complete(asyncio.sleep(0))
+            from wisp.async_utils import drain_pending_tasks
+            loop.run_until_complete(drain_pending_tasks(loop, timeout=3.0))
         except Exception:
             pass
         loop.close()
@@ -541,28 +545,9 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
 
 
 async def _drain_pending_tasks(loop: asyncio.AbstractEventLoop, timeout: float = 3.0) -> None:
-    """Cancel every task still parked on *loop* and wait for them to finish.
-
-    Orphaned subagent runners and provider bridges used to survive turn
-    cancellation and keep executing during shutdown spins; reaping them here
-    guarantees the process exits with zero pending tasks.
-    """
-    current = asyncio.current_task()
-    pending = [
-        t for t in asyncio.all_tasks(loop)
-        if t is not current and not t.done()
-    ]
-    if not pending:
-        return
-    for task in pending:
-        task.cancel()
-    done, _still = await asyncio.wait(pending, timeout=timeout)
-    for task in done:
-        if not task.cancelled() and task.exception() is not None:
-            logger.debug(
-                "Teardown reaped task error: %s: %s",
-                type(task.exception()).__name__, task.exception(),
-            )
+    """REPL teardown drain — canonical impl in async_utils (shared with server/single-shot)."""
+    from wisp.async_utils import drain_pending_tasks
+    await drain_pending_tasks(loop, timeout=timeout)
 
 
 async def _run_single_prompt(transport: CLITransport, root: CompositionRoot, prompt: str, config: WispConfig, **kwargs) -> None:

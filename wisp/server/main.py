@@ -69,6 +69,10 @@ async def lifespan(app: FastAPI):
     yield
     logger.info("Wisp API Server shutting down...")
     root.shutdown()
+    # root.shutdown() requested cancellation of detached agent work; reap it
+    # here on the serving loop so nothing dies as destroyed-pending noise.
+    from wisp.async_utils import drain_pending_tasks
+    await drain_pending_tasks(asyncio.get_running_loop(), timeout=3.0)
 
 
 app = FastAPI(title="Wisp API", version="0.1.0", lifespan=lifespan)

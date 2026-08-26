@@ -350,3 +350,31 @@ async def _consume(agen: AsyncIterator[T]) -> list[T]:
     async for item in agen:
         result.append(item)
     return result
+
+
+async def drain_pending_tasks(loop: asyncio.AbstractEventLoop, timeout: float = 3.0) -> None:
+    """Cancel every task still parked on *loop* and wait, bounded, for exit.
+
+    Detached work (subagent children, background agents, provider bridges)
+    must never outlive the scope that owns its loop — stragglers either
+    corrupt state by writing during teardown or die as "Task was destroyed
+    but it is pending" noise. Cancel-then-await gives cleanup code a real
+    chance to run without letting a stuck task stall shutdown forever.
+    """
+    current = asyncio.current_task()
+    pending = [
+        t for t in asyncio.all_tasks(loop)
+        if t is not current and not t.done()
+    ]
+    if not pending:
+        return
+    for task in pending:
+        task.cancel()
+    done, _still = await asyncio.wait(pending, timeout=timeout)
+    for task in done:
+        if not task.cancelled() and task.exception() is not None:
+            import logging
+            logging.getLogger(__name__).debug(
+                "Teardown reaped task error: %s: %s",
+                type(task.exception()).__name__, task.exception(),
+            )

@@ -346,6 +346,17 @@ class SubagentOrchestrator:
         if exc is not None:
             logger.error("Subagent task crashed: %s: %s", type(exc).__name__, exc)
 
+    def request_cancel_live(self) -> int:
+        """Cancel tracked children without awaiting (sync-safe teardown).
+
+        Reaping belongs to whichever loop owns the tasks — pair this with a
+        bounded drain (async_utils.drain_pending_tasks) when possible.
+        """
+        live = [t for t in self._live_tasks if not t.done()]
+        for t in live:
+            t.cancel()
+        return len(live)
+
     async def cancel_live_tasks(self, timeout: float = 3.0) -> int:
         """Cancel and reap every live child; returns how many were running."""
         live = [t for t in self._live_tasks if not t.done()]
