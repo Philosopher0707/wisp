@@ -146,6 +146,14 @@ class BackgroundRunner:
 
             run.status = "done" if result.get("ok", False) else "failed"
 
+        except asyncio.CancelledError:
+            # CancelledError is BaseException — without this branch the
+            # finally below re-persisted status="running" from the stale
+            # in-memory copy, resurrecting the row cancel() had just
+            # closed. Ghost rows came from cancellation itself.
+            run.status = "cancelled"
+            run.error = "Cancelled by user"
+            raise
         except Exception as e:
             logger.error("Background run %s failed: %s", run_id, e)
             run.error = str(e)
@@ -203,9 +211,45 @@ different worker (caller should poll status instead)."""
 # Module-level singleton (per-process, but store is SQLite-backed)
 _runner: Optional[BackgroundRunner] = None
 
+# Captured at import ≈ process start. Rows marked "running" BEFORE this
+# moment belong to a dead process — nothing will ever update them again.
+_PROCESS_START = time.time()
+
+
+def reap_orphaned_runs(store) -> int:
+    """Close out 'running' rows left by a previous process.
+
+    Without this, every crash/restart permanently polluted the runs list
+    with ghost rows claiming to be live. Runs started after this process
+    booted are untouched (they may legitimately still be running).
+    """
+    try:
+        rows = store.bg_list()
+    except Exception:
+        logger.warning("Orphan sweep skipped: store unavailable", exc_info=True)
+        return 0
+    reaped = 0
+    for row in rows:
+        if row.get("status") != "running":
+            continue
+        started = row.get("started_at") or 0
+        if started and started >= _PROCESS_START:
+            continue  # this process owns it (or a newer one does)
+        store.bg_update(
+            row["run_id"],
+            status="failed",
+            error="Process restarted while run was in flight",
+            finished_at=time.time(),
+        )
+        reaped += 1
+    if reaped:
+        logger.info("Reaped %d orphaned background run(s)", reaped)
+    return reaped
+
 
 def get_runner(workspace: str = ".") -> BackgroundRunner:
     global _runner
     if _runner is None:
         _runner = BackgroundRunner(workspace)
+        reap_orphaned_runs(_runner._store)
     return _runner
