@@ -69,11 +69,27 @@ def tool_read_file(path: str, workspace: str, offset: int = 0, limit: int = 1_00
     return result
 
 
-def tool_write_file(path: str, workspace: str, content: str, file_lock=None) -> dict:
+def tool_write_file(path: str = "", workspace: str = "", content: str = "", file_lock=None, **kwargs) -> dict:
     """Write content to a file (creates or overwrites).
 
     Returns a structured dict with diff metadata for CLI rendering.
+    When `path` is empty (model omitted it for "write this to a file"),
+    default to ./output.md for markdown or ./output.txt otherwise.
     """
+    # Salvage `_raw` shape from truncated streaming (openai.py) — the
+    # provider emits `{"_raw": "<truncated JSON>"}` when arguments JSON
+    # fails to parse. Treat it as content if content is missing.
+    if not content and "_raw" in kwargs and kwargs["_raw"]:
+        content = str(kwargs["_raw"])
+    if isinstance(content, dict) and "_raw" in content and not content.get("content"):
+        # Some callers pass `{"_raw": "..."}` as the content dict itself
+        content = str(content["_raw"])
+    # Handle swapped args: model sometimes puts 18k content in `path`
+    if not content and isinstance(path, str) and len(path) > 500:
+        content, path = path, ""
+    if not path and content:
+        c = str(content)
+        path = "./output.md" if c.lstrip().startswith("#") or "##" in c[:500] else "./output.txt"
     _validate_string(path, "path")
     _validate_string(content, "content", _MAX_WRITE_SIZE, allow_empty=True)
     full_path = _resolve_path(path, workspace)

@@ -100,8 +100,19 @@ def list_models(provider_name: str, cfg: Any = None) -> list[str]:
         base = str(getattr(cfg, "api_base", "") or "https://api.openai.com/v1")
         return sorted(_authed_get(f"{base.rstrip('/')}/models", cfg))
     if name == "nvidia":
-        return sorted(_authed_get(
-            "https://integrate.api.nvidia.com/v1/models", cfg))
+        live = _authed_get("https://integrate.api.nvidia.com/v1/models", cfg)
+        if live:
+            return sorted(live)
+        # API unreachable or unauthenticated (no key) — fall back to the
+        # provider's known catalog so unknown_model can still be detected
+        # instead of returning "ok, could not be verified" and then 404ing
+        # at chat time. This is the same list NVIDIAProvider advertises.
+        try:
+            from wisp.providers.nvidia import NVIDIAProvider
+
+            return sorted(NVIDIAProvider._MODEL_CONTEXT.keys())
+        except Exception:
+            return []
     return []
 
 
@@ -175,6 +186,32 @@ def resolve_selection(cfg: Any) -> Resolution:
             detail=f"Unknown provider '{provider}'.",
             alternatives=sorted(KNOWN_PROVIDERS.keys()),
         )
+
+    # Cloud providers that require a key: surface a clear error at selection
+    # time instead of a cryptic 401 mid-turn. The check is here (not in the
+    # provider) so the composition layer can decide to auto-correct or warn.
+    spec = KNOWN_PROVIDERS.get(provider, {})
+    if spec.get("requires_key"):
+        key = str(getattr(cfg, "api_key", "") or "").strip()
+        # Also check env fallbacks that the providers themselves check
+        if not key:
+            import os
+
+            if provider == "openai":
+                key = os.environ.get("OPENAI_API_KEY", "") or os.environ.get("WISP_API_KEY", "")
+            elif provider == "nvidia":
+                key = os.environ.get("NVIDIA_API_KEY", "") or os.environ.get("WISP_API_KEY", "")
+            elif provider == "openrouter":
+                key = os.environ.get("OPENROUTER_API_KEY", "") or os.environ.get("WISP_API_KEY", "")
+        if not key:
+            # No key — treat as unreachable so the caller can warn or
+            # fallback, rather than letting the chat call 401 and then
+            # yield 0 tools with no explanation.
+            return Resolution(
+                provider=provider, model=model, status="unreachable",
+                detail=f"Provider '{provider}' requires an API key (WISP_API_KEY / {provider.upper()}_API_KEY) but none is set.",
+                alternatives=[],
+            )
 
     if not model:
         available = list_models(provider, cfg)

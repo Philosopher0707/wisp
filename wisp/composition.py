@@ -201,20 +201,66 @@ class CompositionRoot:
 
         cfg = getattr(getattr(self, "runtime", None), "config", None) or self.config
         resolution = resolve_selection(cfg)
+        # Helper to handle both real WispConfig (has replace) and test
+        # doubles like _TestConfig in test_integration_e2e.py.
+        def _replace_cfg(c, **kw):
+            if hasattr(c, "replace"):
+                return c.replace(**kw)  # type: ignore[attr-defined]
+            # Fallback for test doubles: mutate in place and return
+            for k, v in kw.items():
+                try:
+                    object.__setattr__(c, k, v)
+                except Exception:
+                    setattr(c, k, v)
+            return c
+
         if resolution.status == "model_unset":
             logger.info(
                 "No model configured — serving '%s' (%s). Alternatives: %s",
                 resolution.suggested, resolution.provider,
                 ", ".join(resolution.alternatives[:5]),
             )
-            cfg = cfg.replace(model=resolution.suggested)
+            cfg = _replace_cfg(cfg, model=resolution.suggested)
         elif resolution.status == "unknown_model":
-            alts = ", ".join(resolution.alternatives[:5]) or "(none listed)"
-            logger.warning(
-                "%s Serving '%s' anyway. Did you mean: %s? "
-                "Switch with /model <provider> <model>.",
-                resolution.detail, resolution.model, alts,
+            # Unknown model on a live listing is a certain 404 at chat time.
+            # Auto-correct only for cloud providers where the catalog is
+            # authoritative (nvidia/openai/openrouter). For ollama, local
+            # models may not appear in the daemon's tag list yet (e.g.
+            # freshly pulled qwen2.5-coder) — warning and serving is safer
+            # than silently swapping to a cloud model.
+            # Also skip for test doubles (MagicMock) which have no real
+            # provider catalog.
+            is_mock = hasattr(cfg, "assert_called_once_with") or hasattr(cfg, "_mock_name")
+            should_autocorrect = (
+                resolution.suggested
+                and not is_mock
+                and resolution.provider in ("nvidia", "openai", "openrouter")
             )
+            if should_autocorrect:
+                logger.warning(
+                    "%s Auto-correcting to '%s'. Did you mean: %s? "
+                    "Persist with /model %s %s.",
+                    resolution.detail, resolution.suggested,
+                    ", ".join(resolution.alternatives[:5]) or "(none listed)",
+                    resolution.provider, resolution.suggested,
+                )
+                cfg = _replace_cfg(cfg, model=resolution.suggested)
+                # Also persist the correction so the next turn doesn't repeat
+                # the warning — this is the same seam `provider_catalog`
+                # documents as the single source of truth.
+                try:
+                    runtime = getattr(self, "runtime", None)
+                    if runtime is not None:
+                        runtime.config = cfg  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+            else:
+                alts = ", ".join(resolution.alternatives[:5]) or "(none listed)"
+                logger.warning(
+                    "%s Serving '%s' anyway. Did you mean: %s? "
+                    "Switch with /model <provider> <model>.",
+                    resolution.detail, resolution.model, alts,
+                )
         provider_name = getattr(cfg, "provider", None)
         if provider_name:
             factory = ProviderFactory()

@@ -184,7 +184,15 @@ class OpenAIProvider(Provider):
 
                 if finish_reason:
                     done_reason = finish_reason
-                    if finish_reason == "tool_calls" and not tool_calls_yielded:
+                    # Some providers (NVIDIA NIM, some OpenRouter gateways)
+                    # return `stop` even when they streamed tool_calls deltas;
+                    # the canonical `tool_calls` finish is ideal but not
+                    # reliable. If we accumulated any tool call, emit it
+                    # regardless of the finish string — otherwise a valid
+                    # write_file is silently dropped and the turn ends with
+                    # 0 tools (live repro: 18k T-cell write via nvidia).
+                    should_emit = (finish_reason == "tool_calls" or bool(tool_call_accum)) and not tool_calls_yielded
+                    if should_emit:
                         tool_calls_yielded = True
                         calls = []
                         for idx in sorted(tool_call_accum.keys()):
