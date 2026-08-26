@@ -563,6 +563,7 @@ async def _run_single_prompt(transport: CLITransport, root: CompositionRoot, pro
     )
 
     # ── Slash commands in single-shot mode ──────────────────
+    adapter = None  # bound for every path — stats rendering reads it below
     if prompt.startswith("/"):
         from wisp.commands import dispatch
         from wisp.transport.cli import AgentAdapter

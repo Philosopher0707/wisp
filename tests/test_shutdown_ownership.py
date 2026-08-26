@@ -137,3 +137,47 @@ def test_sigterm_converts_to_keyboard_interrupt():
     handler = signal.getsignal(signal.SIGTERM)
     with pytest.raises(KeyboardInterrupt):
         handler(signal.SIGTERM, None)
+
+
+def test_single_shot_plain_prompt_survives_stats_rendering():
+    """Live-fire 2026-08-26: `wisp run "..."` crashed UnboundLocalError on
+    adapter — bound only in the slash-command branch — AFTER streaming the
+    whole answer. Plain prompts must complete cleanly end-to-end."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from wisp.config import WispConfig
+    from wisp.entry import _run_single_prompt
+
+    class _FakeRuntime:
+        async def get_or_create_session(self, session_id, model, workspace):
+            return {"id": session_id, "messages": []}
+
+        async def run_turn(self, session, prompt, approval_handler=None):
+            yield {"type": "content", "text": "ok"}
+
+    class _FakeProgress:
+        def on_done(self):
+            return {"files_changed": []}
+
+    class _FakeTransport:
+        stdout = None
+        _progress = _FakeProgress()
+
+        def _reset_buffers(self):
+            pass
+
+        def _render_event(self, out, event):
+            pass
+
+        def _flush_thinking(self, out):
+            pass
+
+        def _flush_content(self, out):
+            pass
+
+    root = SimpleNamespace(runtime=_FakeRuntime())
+    transport = _FakeTransport()
+    # Must not raise (pre-fix: UnboundLocalError: adapter) and must render.
+    asyncio.run(_run_single_prompt(
+        transport, root, "plain prompt", WispConfig()))

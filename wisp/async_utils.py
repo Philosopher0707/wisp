@@ -378,3 +378,10 @@ async def drain_pending_tasks(loop: asyncio.AbstractEventLoop, timeout: float = 
                 "Teardown reaped task error: %s: %s",
                 type(task.exception()).__name__, task.exception(),
             )
+    # Unclosed async generators (provider bridges!) are not tasks — their
+    # finally-blocks only run when the loop finalizes them. Without this,
+    # a turn killed mid-stream leaves the bridge thread's shutdown to
+    # garbage-collection timing and emits destroyed-pending warnings.
+    import contextlib
+    with contextlib.suppress(RuntimeError):
+        await loop.shutdown_asyncgens()
