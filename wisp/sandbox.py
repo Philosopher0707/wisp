@@ -112,7 +112,9 @@ class DockerSandbox(SandboxProvider):
             raise RuntimeError("Docker container start timed out")
 
     async def run(self, command: str, cwd: str = "", timeout: int = 60) -> tuple[int, str, str]:
-        self._ensure_container()
+        # Container setup blocks for up to ~40s (rm -f + run -d); on the
+        # event loop that froze every connection during cold start.
+        await asyncio.to_thread(self._ensure_container)
         workdir = os.path.join("/workspace", cwd) if cwd else "/workspace"
         exec_cmd = [
             "docker", "exec", "-w", workdir, self.container_name,

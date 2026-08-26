@@ -39,5 +39,6 @@ async def sandbox_status():
     sandbox = get_sandbox(str(WORKSPACE_ROOT))
     return {
         "type": sandbox.name,
-        "available": sandbox.is_available(),
+        # docker info blocks up to 10s — keep it off the loop
+        "available": await asyncio.to_thread(sandbox.is_available),
     }
