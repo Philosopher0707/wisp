@@ -130,6 +130,19 @@ _KEY_HINTS: "dict[str, str]" = {
 }
 
 
+def is_strict_provider(provider_name: str) -> bool:
+    """True when a provider MUST be live-verified before serving.
+
+    Single source for the strict-for-cloud rule: any provider that requires
+    a key is strict. Composition auto-correct, slash-command hard errors,
+    and catalog leniency all read THIS — the old per-module hardcoded lists
+    ('nvidia','openai','openrouter') drifted the moment a new keyed provider
+    was added.
+    """
+    return bool(KNOWN_PROVIDERS.get(
+        (provider_name or "").strip().lower(), {}).get("requires_key", False))
+
+
 def resolve_key(provider_name: str) -> str:
     """The API key for a provider — per-provider env var, else shared.
 

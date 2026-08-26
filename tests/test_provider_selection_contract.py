@@ -278,6 +278,85 @@ async def test_resumed_session_honors_new_model(tmp_path):
     assert len(calls) == 1  # no redundant writes when already current
 
 
+# ── One construction path: factory covers KNOWN_PROVIDERS ──────────────
+
+def _ns(**kw):
+    base = {"provider": "ollama", "model": "", "api_key": "",
+            "ollama_url": "http://x", "api_base": ""}
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_factory_builds_every_selectable_provider():
+    """Every provider /provider offers must actually construct — `mock` was
+    selectable once while the factory crashed 'Unknown provider: mock' on
+    the first turn."""
+    from wisp.provider_catalog import list_providers
+    from wisp.providers.factory import ProviderFactory
+
+    factory = ProviderFactory()
+    for info in list_providers():
+        assert info.name in factory.list_providers(), (
+            f"provider '{info.name}' is selectable but not buildable")
+
+
+def test_factory_builds_mock_end_to_end():
+    from wisp.providers import MockProvider
+    from wisp.providers.factory import ProviderFactory
+
+    p = ProviderFactory().from_config(_ns(provider="mock"))
+    assert isinstance(p, MockProvider)
+
+
+def test_get_provider_delegates_to_factory():
+    """/provider's probe path (get_provider) and the turn-time core builder
+    (factory.from_config) must agree — drift here let selection succeed and
+    the actual turn fail."""
+    from wisp.providers import MockProvider, get_provider
+
+    assert isinstance(get_provider(_ns(provider="mock")), MockProvider)
+
+
+def test_factory_passes_empty_model_through_no_fallback():
+    """No stale hardcoded model ids: empty model in → empty model out; the
+    catalog resolves it to a real served model."""
+    from wisp.providers.factory import ProviderFactory
+
+    p = ProviderFactory().from_config(_ns(provider="openai", model=""))
+    assert getattr(p, "model", "") == ""
+
+    import inspect
+    from wisp.providers import factory as fm
+
+    src = inspect.getsource(fm)
+    for rotten in ("gpt-4o", "nemotron-3-ultra", "openrouter/auto",
+                   "qwen2.5-coder"):
+        assert rotten not in src, f"factory hardcodes stale default {rotten}"
+
+
+def test_factory_uses_key_vault(monkeypatch):
+    """Factory must resolve keys via provider_select.resolve_key — its own
+    inline env fallbacks were a second key-resolution implementation."""
+    monkeypatch.setenv("NVIDIA_API_KEY", "nv-vault")
+    monkeypatch.delenv("WISP_API_KEY", raising=False)
+
+    from wisp.providers.factory import ProviderFactory
+
+    p = ProviderFactory().from_config(
+        _ns(provider="nvidia", api_key="", model=""))
+    assert getattr(p, "api_key", None) == "nv-vault"
+
+
+def test_is_strict_provider_single_source():
+    """/provider slash command, composition auto-correct, and catalog
+    leniency all derive strictness from requires_key via is_strict_provider
+    — no more per-module hardcoded ('nvidia','openai','openrouter')."""
+    from wisp.provider_select import KNOWN_PROVIDERS, is_strict_provider
+
+    for name, spec in KNOWN_PROVIDERS.items():
+        assert is_strict_provider(name) == bool(spec.get("requires_key"))
+
+
 # ── GUI select route shares the REPL seam ───────────────────────────────
 
 @pytest.mark.asyncio

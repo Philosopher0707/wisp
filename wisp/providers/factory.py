@@ -31,11 +31,21 @@ class ProviderFactory:
         self._register_builtins()
 
     def _register_builtins(self) -> None:
-        """Register built-in providers."""
+        """Register built-in providers.
+
+        MUST cover every entry in provider_select.KNOWN_PROVIDERS — the
+        selection contract (/provider, catalog, server routes) only offers
+        providers this factory can actually build. `mock` was missing here
+        once and /provider mock succeeded while the first turn crashed with
+        'Unknown provider: mock'.
+        """
+        from .mock import MockProvider
+
         self.register("ollama", OllamaProvider)
         self.register("openai", OpenAIProvider)
         self.register("nvidia", NVIDIAProvider)
         self.register("openrouter", OpenRouterProvider)
+        self.register("mock", MockProvider)
 
     def register(self, name: str, provider_class: Type[Provider]) -> None:
         """Register a provider class under a name."""
@@ -75,6 +85,12 @@ class ProviderFactory:
           - provider: str (provider name)
           - ollama_url: str (for ollama provider)
           - model: str
+
+        Table-driven, no hardcoded model-id fallbacks anywhere — an empty
+        model is legal and provider_catalog resolves it to a real served
+        model. The API key comes from the provider_select vault
+        (per-provider env var first, shared WISP_API_KEY fallback) — it is
+        never re-derived here.
         """
         name = getattr(config, "provider", "ollama")
         if not isinstance(name, str):
@@ -89,98 +105,40 @@ class ProviderFactory:
                 "ollama",
                 config=config,
                 base_url=base_url,
-                # No model-id fallback here: an empty model is legal and
-                # provider_catalog resolves it to a real served model.
-                # Hardcoding one is how stale defaults were born.
                 model=getattr(config, "model", "") or "",
             )
 
-        if name == "openai":
-            return self.create(
-                "openai",
-                config=config,
-                base_url=getattr(config, "api_base", "") or "https://api.openai.com/v1",
-                model=getattr(config, "model", "gpt-4o"),
-                api_key=getattr(config, "api_key", "") or "",
-            )
+        if name == "mock":
+            return self.create("mock")
 
-        if name == "nvidia":
-            return self.create(
-                "nvidia",
-                config=config,
-                base_url=getattr(config, "api_base", "") or "https://integrate.api.nvidia.com/v1",
-                model=getattr(config, "model", "nemotron-3-ultra"),
-                api_key=getattr(config, "api_key", "") or "",
-            )
+        # OpenAI-compatible providers share one construction shape; the
+        # per-provider endpoint default lives in KNOWN_PROVIDERS — the same
+        # table /provider and apply_switch already read — so there is ONE
+        # source for "how to reach provider X".
+        from wisp.provider_select import KNOWN_PROVIDERS, resolve_key
 
-        if name == "openrouter":
-            return self.create(
-                "openrouter",
-                config=config,
-                base_url=getattr(config, "api_base", "") or "https://openrouter.ai/api/v1",
-                model=getattr(config, "model", "openrouter/auto"),
-                api_key=getattr(config, "api_key", "")
-                or os.environ.get("OPENROUTER_API_KEY", ""),
-            )
+        spec = KNOWN_PROVIDERS.get(name, {})
+        resolved_key = getattr(config, "api_key", "") or resolve_key(name)
+        # Providers read keys from the CONFIG object when one is passed and
+        # ignore the api_key kwarg (nvidia/openai init order), so hand them
+        # a shallow copy carrying the vault-resolved key. Never mutate the
+        # caller's runtime config.
+        import copy
 
-        if name == "nvidia":
-            return self.create(
-                "nvidia",
-                config=config,
-                base_url=getattr(config, "api_base", "") or "",
-                model=getattr(config, "model", "nemotron-3-ultra"),
-                api_key=getattr(config, "api_key", "") or "",
-            )
-
-        if name == "openrouter":
-            return self.create(
-                "openrouter",
-                config=config,
-                base_url=getattr(config, "api_base", "") or "",
-                model=getattr(config, "model", "openrouter/auto"),
-                api_key=getattr(config, "api_key", "")
-                or os.environ.get("OPENROUTER_API_KEY", ""),
-            )
-
-        if name == "nvidia":
-            return self.create(
-                "nvidia",
-                config=config,
-                base_url=getattr(config, "api_base", "") or "",
-                model=getattr(config, "model", "nemotron-3-ultra"),
-                api_key=getattr(config, "api_key", "") or "",
-            )
-
-        if name == "openrouter":
-            return self.create(
-                "openrouter",
-                config=config,
-                base_url=getattr(config, "api_base", "") or "",
-                model=getattr(config, "model", "openrouter/auto"),
-                api_key=getattr(config, "api_key", "")
-                or os.environ.get("OPENROUTER_API_KEY", ""),
-            )
-
-        if name == "nvidia":
-            return self.create(
-                "nvidia",
-                config=config,
-                base_url=getattr(config, "api_base", "") or "",
-                model=getattr(config, "model", "nemotron-3-ultra"),
-                api_key=getattr(config, "api_key", "") or "",
-            )
-
-        if name == "openrouter":
-            return self.create(
-                "openrouter",
-                config=config,
-                base_url=getattr(config, "api_base", "") or "",
-                model=getattr(config, "model", "openrouter/auto"),
-                api_key=getattr(config, "api_key", "")
-                or os.environ.get("OPENROUTER_API_KEY", ""),
-            )
-
-        return self.create(name, config=config)
+        local = copy.copy(config)
+        try:
+            object.__setattr__(local, "api_key", resolved_key)
+            if hasattr(config, "__dict__"):
+                local.__dict__["api_key"] = resolved_key
+        except Exception:
+            pass
+        return self.create(
+            name,
+            config=local,
+            base_url=getattr(local, "api_base", "") or spec.get("default_base", ""),
+            model=getattr(local, "model", "") or "",
+            api_key=resolved_key,
+        )
 
     def _validate_ollama_url(self, url: str) -> str:
         """Validate Ollama URL to prevent SSRF.

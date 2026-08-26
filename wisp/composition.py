@@ -231,10 +231,12 @@ class CompositionRoot:
             # Also skip for test doubles (MagicMock) which have no real
             # provider catalog.
             is_mock = hasattr(cfg, "assert_called_once_with") or hasattr(cfg, "_mock_name")
+            from wisp.provider_select import is_strict_provider
+
             should_autocorrect = (
                 resolution.suggested
                 and not is_mock
-                and resolution.provider in ("nvidia", "openai", "openrouter")
+                and is_strict_provider(resolution.provider)
             )
             if should_autocorrect:
                 logger.warning(

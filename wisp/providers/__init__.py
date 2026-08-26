@@ -15,18 +15,13 @@ __all__ = ["BaseProvider", "OllamaProvider", "OpenAIProvider", "NVIDIAProvider",
 
 
 def get_provider(config: WispConfig) -> BaseProvider:
-    """Build the configured model provider."""
-    provider_name = getattr(config, "provider", "ollama")
-    if not isinstance(provider_name, str) or not provider_name:
-        provider_name = "ollama"
-    if provider_name == "ollama":
-        return OllamaProvider(config)
-    if provider_name == "openai":
-        return OpenAIProvider(config)
-    if provider_name == "nvidia":
-        return NVIDIAProvider(config)
-    if provider_name == "openrouter":
-        return OpenRouterProvider(config)
-    if provider_name == "mock":
-        return MockProvider()
-    raise ValueError(f"Unsupported provider: {provider_name}")
+    """Build the configured model provider.
+
+    Single construction path: delegates to ProviderFactory.from_config so
+    this function and the composition core NEVER diverge on which providers
+    exist or how they are built (drift here once meant /provider mock
+    succeeded via this path while the turn-time factory crashed).
+    """
+    from .factory import ProviderFactory
+
+    return ProviderFactory().from_config(config)

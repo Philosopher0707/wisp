@@ -244,8 +244,11 @@ def cmd_model(agent, args: str):
         from wisp.provider_catalog import resolve_selection as catalog_resolve
 
         models = catalog_list_models(provider, agent.config)
-        # For cloud, enforce strict unknown_model check before any apply
-        if provider in ("nvidia", "openai", "openrouter") and arg and not arg.isdigit():
+        # Strict providers (key-required) must be in the live catalog;
+        # lenient ones (ollama, mock) may be unverifiable.
+        from wisp.provider_select import is_strict_provider
+
+        if is_strict_provider(provider) and arg and not arg.isdigit():
             # Re-use catalog's closest logic for the error message
             if models and arg not in models and arg.removesuffix(":cloud") not in {m.removesuffix(":cloud") for m in models}:
                 # Check if it's an ambiguous prefix or truly unknown

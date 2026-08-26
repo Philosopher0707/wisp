@@ -635,8 +635,14 @@ _headless_root_key: str | None = None
 
 
 def _make_headless_key(config: WispConfig) -> str:
-    """Cache key for headless root based on config."""
-    return f"{config.model}:{config.workspace}:{config.permission_mode}"
+    """Cache key for headless root.
+
+    Uses WispConfig.fingerprint() — the SAME fields the runtime core cache
+    keys on (provider, model, api_base, temperature, …). The old hand-rolled
+    model:workspace:permission_mode key missed provider/api_base switches,
+    so a cached root could serve turns through a stale provider.
+    """
+    return config.fingerprint()
 
 
 async def run_headless(prompt: str, model: str | None = None,

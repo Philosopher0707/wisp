@@ -54,7 +54,7 @@ class TestParseTarget:
 
 class TestBuildProvider:
     def test_unknown_raises(self):
-        with pytest.raises(ValueError, match="Unsupported provider"):
+        with pytest.raises(ValueError, match="Unknown provider"):
             build_provider("warpdrive", model="x")
 
     @pytest.mark.parametrize("name,cls", [

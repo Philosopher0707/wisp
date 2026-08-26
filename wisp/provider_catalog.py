@@ -285,12 +285,13 @@ def resolve_selection(cfg: Any) -> Resolution:
 
     available = list_models(provider, cfg)
     if not available:
-        # For ollama, local models may not be in the daemon yet — lenient.
-        # For cloud, an empty listing with a key present means the catalog
-        # is hidden or the gateway is down; treat as unverifiable but don't
-        # silently serve a bad id — surface as unreachable so the caller can
-        # warn instead of 404ing mid-turn with 0 tools.
-        if provider == "ollama":
+        # Lenient for non-keyed local providers: their models may not be
+        # listed yet. Strict (key-required) providers with an empty listing
+        # and a key present mean the catalog is hidden or down — surface as
+        # unreachable so the caller can warn instead of 404ing mid-turn.
+        from wisp.provider_select import is_strict_provider
+
+        if not is_strict_provider(provider):
             return Resolution(
                 provider=provider, model=model, status="ok",
                 detail="Model could not be verified against a live listing "
