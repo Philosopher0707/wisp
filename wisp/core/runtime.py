@@ -13,6 +13,7 @@ Design:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import threading
 import time
@@ -26,6 +27,85 @@ from wisp.approval_state import ApprovalSessionState, SessionPolicy
 from wisp.core.events import normalize_event
 
 logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
+
+
+def _serialize_tool_exchanges(
+    session: dict[str, Any],
+    exchanges: list[dict[str, list]],
+    field_reader,
+) -> None:
+    """Append protocol-consistent assistant/tool messages for one turn.
+
+    Per provider boundary: ONE assistant message holding every tool_calls
+    block, IMMEDIATELY followed by that boundary's role:"tool" replies.
+
+    Pairing is POSITIONAL inside a boundary (calls[i] <-> replies[i]):
+    streamed tool_call events may carry no stable id while tool_result
+    events get one independently, so identity comes from the call event,
+    falling back to its paired reply's id, falling back to a fresh id
+    shared by both sides. Missing replies (turn interrupted mid-execute)
+    get an honest placeholder; reply-only groups (gate-refused calls that
+    never streamed a call event) synthesize their block.
+    """
+    for ex in exchanges:
+        calls, replies = ex["calls"], ex["replies"]
+        total = max(len(calls), len(replies))
+        if total == 0:
+            continue
+        blocks: list[dict[str, Any]] = []
+        reply_msgs: list[dict[str, Any]] = []
+        for i in range(total):
+            c = calls[i] if i < len(calls) else None
+            rp = replies[i] if i < len(replies) else None
+
+            name = ""
+            if c is not None:
+                name = field_reader(c, "name") or ""
+                args = field_reader(c, "arguments") or {}
+                if not isinstance(args, str):
+                    args = json.dumps(args)
+            else:
+                name = field_reader(rp, "name") if rp is not None else ""
+                args = "{}"
+
+            reply_id = None
+            if rp is not None:
+                reply_id = rp.get("tool_call_id") or field_reader(rp, "id")
+            call_id = None
+            if c is not None:
+                call_id = field_reader(c, "id")
+            shared_id = call_id or reply_id or f"call_{uuid.uuid4().hex[:8]}"
+
+            blocks.append({
+                "id": shared_id,
+                "type": "function",
+                "function": {"name": name, "arguments": args},
+            })
+
+            if rp is not None:
+                result = field_reader(rp, "result")
+                if result is None:
+                    result = rp.get("data", "")
+                content = (json.dumps(result) if isinstance(result, dict)
+                           else str(result))
+            else:
+                content = "[no result recorded before turn ended]"
+            reply_msgs.append({
+                "role": "tool",
+                "tool_call_id": shared_id,
+                "content": content,
+            })
+
+        session["messages"].append({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": blocks,
+        })
+        session["messages"].extend(reply_msgs)
+
+
+
 
 
 def _stringify_tool_call_arguments(messages: list[dict[str, Any]]) -> None:
@@ -212,6 +292,11 @@ class AgentRuntime:
             assistant_content: list[str] = []
             tool_calls: list[dict[str, Any]] = []
             tool_results: list[dict[str, Any]] = []
+            # Arrival-ordered view of the same events: needed to group
+            # calls into provider-boundary exchanges when persisting
+            # (see finally block — one assistant message with ALL of an
+            # iteration's tool_calls blocks, then exactly ITS replies).
+            tool_sequence: list[tuple[str, dict[str, Any]]] = []
             turn_succeeded = False
 
             try:
@@ -235,9 +320,11 @@ class AgentRuntime:
                         assistant_content.append(event.get("text", ""))
                     elif etype == "tool_call":
                         tool_calls.append(event)
+                        tool_sequence.append(("call", event))
                         self._note_touched_file(sid, event.get("data") or {})
                     elif etype == "tool_result":
                         tool_results.append(event)
+                        tool_sequence.append(("reply", event))
 
                 turn_succeeded = True
                 self._record_session_memory(sid, session, prompt)
@@ -261,46 +348,53 @@ class AgentRuntime:
 
             finally:
                 # Always record what happened in the session
-                if tool_calls or tool_results:
+                if tool_sequence:
                     import json
 
-                    # Providers require assistant tool_calls arguments as a
-                    # JSON string; ids must survive persist/reload so each
-                    # result matches its call.
-                    pending_call_ids: list[str] = []
-                    for tc in tool_calls:
-                        args = tc.get("arguments", {})
-                        if not isinstance(args, str):
-                            args = json.dumps(args)
-                        call_id = tc.get("id") or f"call_{uuid.uuid4().hex[:8]}"
-                        pending_call_ids.append(call_id)
-                        session["messages"].append({
-                            "role": "assistant",
-                            "content": "",
-                            "tool_calls": [{
-                                "id": call_id,
-                                "type": "function",
-                                "function": {
-                                    "name": tc.get("name", ""),
-                                    "arguments": args,
-                                },
-                            }],
-                        })
+                    # ── Group into provider-boundary exchanges ──────────
+                    # REGRESSION GUARD (2026-08-27): this block used to emit
+                    # ONE assistant message PER tool call — every assistant
+                    # first, then every role:"tool" reply. With N>1 parallel
+                    # calls in one provider iteration, the first tool reply
+                    # answered the second-to-last assistant message, which
+                    # OpenAI-compatible endpoints reject with HTTP 400.
+                    # The protocol requires: ONE assistant message carrying
+                    # ALL of an iteration's tool_calls blocks, IMMEDIATELY
+                    # followed by its own replies.
+                    #
+                    # Event arrival order encodes the boundaries:
+                    #   callA callB  replyA replyB  callC  replyC ...
+                    # An exchange closes once its replies catch up to its
+                    # calls; max(...,1) also closes reply-only groups left
+                    # by gate-refused calls (they stream no call event).
+                    exchanges: list[dict[str, list]] = []
+                    cur: dict[str, list] = {"calls": [], "replies": []}
 
-                    for tr in tool_results:
-                        result = tr.get("result", "")
-                        if isinstance(result, dict):
-                            content = json.dumps(result)
+                    def _close_exchange() -> None:
+                        if cur["calls"] or cur["replies"]:
+                            # Store copies — resetting `cur` below must not
+                            # reach back into already-recorded exchanges.
+                            exchanges.append({"calls": list(cur["calls"]),
+                                              "replies": list(cur["replies"])})
+                        cur["calls"], cur["replies"] = [], []
+
+                    for kind, ev in tool_sequence:
+                        if kind == "call":
+                            cur["calls"].append(ev)
                         else:
-                            content = str(result)
-                        call_id = tr.get("tool_call_id") or (
-                            pending_call_ids.pop(0) if pending_call_ids else ""
-                        )
-                        session["messages"].append({
-                            "role": "tool",
-                            "tool_call_id": call_id,
-                            "content": content,
-                        })
+                            cur["replies"].append(ev)
+                            if len(cur["replies"]) >= max(len(cur["calls"]), 1):
+                                _close_exchange()
+                    _close_exchange()
+
+                    def _field(ev: dict[str, Any], key: str) -> Any:
+                        """Read an event field across flat and data-nested shapes."""
+                        if key in ev:
+                            return ev[key]
+                        d = ev.get("data")
+                        return d.get(key) if isinstance(d, dict) else None
+
+                    _serialize_tool_exchanges(session, exchanges, _field)
 
                 if assistant_content:
                     session["messages"].append({
