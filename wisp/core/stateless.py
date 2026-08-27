@@ -1066,14 +1066,25 @@ class WispAgentCore:
             if entry in ("node_modules", "venv", ".venv", "__pycache__", "target",
                          "dist", "build", ".git", ".wisp", "tests", "test"):
                 continue
-            if entry_path.is_dir():
+            try:
+                is_dir = entry_path.is_dir()
+            except (OSError, PermissionError):
+                continue
+            if is_dir:
                 # Check if it's a package (has __init__.py) or has source files
                 pkg_init = entry_path / "__init__.py"
-                has_src = (
-                    any(entry_path.glob("*.py")) or any(entry_path.glob("*.ts"))
-                    or any(entry_path.glob("*.rs")) or any(entry_path.glob("*.go"))
-                )
-                if pkg_init.exists():
+                try:
+                    has_src = (
+                        any(entry_path.glob("*.py")) or any(entry_path.glob("*.ts"))
+                        or any(entry_path.glob("*.rs")) or any(entry_path.glob("*.go"))
+                    )
+                except (OSError, PermissionError):
+                    has_src = False
+                try:
+                    pkg_exists = pkg_init.exists()
+                except (OSError, PermissionError):
+                    pkg_exists = False
+                if pkg_exists:
                     # Python package — peek at docstring
                     desc = ""
                     try:
