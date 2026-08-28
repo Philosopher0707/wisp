@@ -263,8 +263,11 @@ class AgentRuntime:
             except Exception:
                 pass  # table might not exist
 
-        # Track events for session persistence
-        emitted_events: list[dict[str, Any]] = []
+        # Events are NOT accumulated into a turn-wide list — transports
+        # consume them live and the grouped serializer in the finally block
+        # tracks only the tool-call subset it needs. Holding every streamed
+        # event used to cost ~1.5MB + 30ms of dead retention per long
+        # streaming turn.
         seq_num = 0
         if self.session_repo is not None:
             try:
@@ -313,7 +316,6 @@ class AgentRuntime:
                         event["type"] = canonical["type"]
                         event["timestamp"] = canonical.get("timestamp", 0.0)
                     yield event
-                    emitted_events.append(dict(event))
 
                     etype = event.get("type")
                     if etype == "content":
@@ -327,7 +329,6 @@ class AgentRuntime:
                         tool_sequence.append(("reply", event))
 
                 turn_succeeded = True
-                self._record_session_memory(sid, session, prompt)
 
             except Exception as exc:
                 logger.exception("Turn failed for session %s", sid)
@@ -337,7 +338,6 @@ class AgentRuntime:
                     "recoverable": True,
                 }
                 yield error_event
-                emitted_events.append(error_event)
                 seq_num += 1
                 if self.session_repo is not None:
                     try:
@@ -402,21 +402,15 @@ class AgentRuntime:
                         "content": "".join(assistant_content),
                     })
 
-                # Persist DONE event to session event log
+                # Persist the turn OFF the event loop: saving the full session
+                # blob, writing the DONE event, and folding turn memory are all
+                # blocking SQLite/JSONL writes. Running them on the loop stalls
+                # every concurrent transport/subagent turn.
                 seq_num += 1
-                if self.session_repo is not None and turn_succeeded:
-                    try:
-                        from wisp.core.session import SessionEvent
-                        self.session_repo.append_event(
-                            sid,
-                            SessionEvent.done(seq_num, self.telemetry.turns_total),
-                        )
-                    except Exception:
-                        pass
-
-                # Update timestamp and save
-                session["updated_at"] = datetime.now(timezone.utc).isoformat()
-                self.store.save_session(session)
+                await asyncio.to_thread(
+                    self._persist_turn_state,
+                    session, sid, prompt, turn_succeeded, seq_num,
+                )
 
                 # Cache result for idempotency (1h TTL)
                 # Record telemetry
@@ -434,6 +428,37 @@ class AgentRuntime:
     # ── Mid-turn steering (M3) ─────────────────────────────────────
 
     _FILE_ARG_KEYS = ("path", "file_path", "notebook", "file")
+
+    def _persist_turn_state(
+        self,
+        session: dict[str, Any],
+        sid: str,
+        prompt: str,
+        turn_succeeded: bool,
+        seq_num: int,
+    ) -> None:
+        """Run on a worker thread at turn end: DONE event + memory fold +
+        full session save. Groups the blocking SQLite/JSONL writes that
+        used to run inline on the asyncio loop."""
+        # Persist DONE event to session event log
+        if self.session_repo is not None and turn_succeeded:
+            try:
+                from wisp.core.session import SessionEvent
+                self.session_repo.append_event(
+                    sid,
+                    SessionEvent.done(seq_num, self.telemetry.turns_total),
+                )
+            except Exception:
+                pass
+
+        self._record_session_memory(sid, session, prompt)
+
+        # Update timestamp and save
+        session["updated_at"] = datetime.now(timezone.utc).isoformat()
+        try:
+            self.store.save_session(session)
+        except Exception:
+            logger.exception("Failed to save session %s", sid)
 
     def _note_touched_file(self, sid: str, data: dict[str, Any]) -> None:
         name = str(data.get("name", ""))

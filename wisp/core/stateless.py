@@ -73,6 +73,26 @@ logger = logging.getLogger(__name__)
 _ASSEMBLER: ContextAssembler | None = None
 _SYSTEM_PROMPT_CACHE: dict[tuple[str, float, str], str] = {}
 
+# TTL-memoized expensive, near-static context builders. The full system
+# prompt cache key (above) includes the agent-memory file's mtime, which
+# changes EVERY turn — forcing git (subprocess), lint (os.walk) and module
+# (glob) scans to rebuild each turn even though they only depend on the
+# workspace's *structure*. These per-workspace builders are memoized with
+# a short TTL so the expensive I/O happens at most once per period while
+# staying near-fresh. (memory_block is cheap — in-memory cache — and must
+# stay live, so it is deliberately NOT memoized.)
+_CONTEXT_TTL: dict[str, tuple[float, object]] = {}
+
+
+def _ttl_get(kind: str, key: str, builder, ttl: float):
+    now = time.monotonic()
+    ent = _CONTEXT_TTL.get(kind)
+    if ent is not None and ent[1] == key and now - ent[0] < ttl:
+        return ent[2]
+    value = builder()
+    _CONTEXT_TTL[kind] = (now, key, value)
+    return value
+
 
 def _flatten_event(ev: AgentEvent | dict[str, Any]) -> dict[str, Any]:
     """Convert canonical AgentEvent to flat dict for backward compatibility."""
@@ -925,14 +945,20 @@ class WispAgentCore:
             return ""
 
     def _build_git_context(self, workspace: str) -> str:
-        """Build git context string."""
-        try:
-            from wisp.git_context import format_git_context
+        """Build git context string.
 
-            return format_git_context(workspace)
-        except Exception as e:
-            logger.debug("Failed to build git context: %s", e)
-            return ""
+        TTL-memoized (2s): spawning `git` a few times a second is wasteful
+        and the state is advisory context, not a hard invariant.
+        """
+        def _build() -> str:
+            try:
+                from wisp.git_context import format_git_context
+
+                return format_git_context(workspace)
+            except Exception as e:
+                logger.debug("Failed to build git context: %s", e)
+                return ""
+        return _ttl_get("git_ctx", str(workspace), _build, 2.0)
 
     def _build_repo_map(self, workspace: str) -> str:
         """Build repo map for the workspace."""
@@ -961,69 +987,75 @@ class WispAgentCore:
         Tells the model what verification tools are available so it can
         write code that passes checks on the first attempt — no need to
         call lsp_diagnostics just to discover what's configured.
+
+        TTL-memoized (10s): the detected extension set / installed linters
+        change rarely mid-session; the os.walk to derive them should not
+        run on every single turn.
         """
-        ws_path = Path(workspace).resolve()
-        lines: list[str] = []
-        detected: set[str] = set()
+        def _build() -> str:
+            ws_path = Path(workspace).resolve()
+            lines: list[str] = []
+            detected: set[str] = set()
 
-        # Detect file extensions in the project
-        ext_to_linter = {
-            ".py": "py_compile / ruff / mypy",
-            ".ts": "tsc --noEmit",
-            ".tsx": "tsc --noEmit",
-            ".js": "eslint",
-            ".jsx": "eslint",
-            ".rs": "cargo check / cargo clippy",
-            ".go": "go vet",
-        }
-        fast_ext_to_check = {
-            ".py": "ruff",
-            ".ts": "tsc",
-            ".tsx": "tsc",
-            ".js": "eslint",
-            ".jsx": "eslint",
-            ".rs": "cargo",
-            ".go": "go",
-        }
+            # Detect file extensions in the project
+            ext_to_linter = {
+                ".py": "py_compile / ruff / mypy",
+                ".ts": "tsc --noEmit",
+                ".tsx": "tsc --noEmit",
+                ".js": "eslint",
+                ".jsx": "eslint",
+                ".rs": "cargo check / cargo clippy",
+                ".go": "go vet",
+            }
+            fast_ext_to_check = {
+                ".py": "ruff",
+                ".ts": "tsc",
+                ".tsx": "tsc",
+                ".js": "eslint",
+                ".jsx": "eslint",
+                ".rs": "cargo",
+                ".go": "go",
+            }
 
-        try:
-            for root, dirs, _files in os.walk(ws_path):
-                # Skip hidden and venv directories
-                dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
-                    "node_modules", "venv", ".venv", "__pycache__", "target", "dist", "build",
-                )]
-                for f in _files:
-                    ext = Path(f).suffix.lower()
-                    if ext in ext_to_linter and ext not in detected:
-                        detected.add(ext)
-                if len(detected) >= len(ext_to_linter):
-                    break
-                # Limit depth for performance
-                if root.count(os.sep) - ws_path.as_posix().count(os.sep) > 3:
-                    dirs[:] = []
-        except Exception:
-            pass
+            try:
+                for root, dirs, _files in os.walk(ws_path):
+                    # Skip hidden and venv directories
+                    dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
+                        "node_modules", "venv", ".venv", "__pycache__", "target", "dist", "build",
+                    )]
+                    for f in _files:
+                        ext = Path(f).suffix.lower()
+                        if ext in ext_to_linter and ext not in detected:
+                            detected.add(ext)
+                    if len(detected) >= len(ext_to_linter):
+                        break
+                    # Limit depth for performance
+                    if root.count(os.sep) - ws_path.as_posix().count(os.sep) > 3:
+                        dirs[:] = []
+            except Exception:
+                pass
 
-        if not detected:
-            return ""
+            if not detected:
+                return ""
 
-        lines.append("## Available Code Checks")
-        lines.append("After writing or editing a file, these checks are auto-run. Write code that passes them:")
-        for ext in sorted(detected):
-            linter = ext_to_linter.get(ext, "unknown")
-            lines.append(f"- **{ext}** files: `{linter}`")
+            lines.append("## Available Code Checks")
+            lines.append("After writing or editing a file, these checks are auto-run. Write code that passes them:")
+            for ext in sorted(detected):
+                linter = ext_to_linter.get(ext, "unknown")
+                lines.append(f"- **{ext}** files: `{linter}`")
 
-        # Check which linter binaries are actually available
-        available = []
-        import shutil
-        for ext in sorted(detected):
-            binary = fast_ext_to_check.get(ext)
-            if binary and shutil.which(binary):
-                available.append(f"`{binary}`")
-        if available:
-            lines.append(f"\nInstalled: {', '.join(available)}")
+            # Check which linter binaries are actually available
+            available = []
+            import shutil
+            for ext in sorted(detected):
+                binary = fast_ext_to_check.get(ext)
+                if binary and shutil.which(binary):
+                    available.append(f"`{binary}`")
+            if available:
+                lines.append(f"\nInstalled: {', '.join(available)}")
 
-        return "\n".join(lines)
+            return "\n".join(lines)
+        return _ttl_get("lint_ctx", str(workspace), _build, 10.0)
 
     def _build_module_summary(self, workspace: str) -> str:
         """Build a concise module structure overview for the workspace.
@@ -1031,46 +1063,56 @@ class WispAgentCore:
         Scans top-level directories, identifies packages and key modules,
         so the model has a mental map before the first turn — no need to
         run list_files just to understand the project layout.
+
+        TTL-memoized (30s): project layout is structural and changes rarely
+        mid-session. Per-entry ops are guarded so a single unreadable
+        directory (e.g. an unwritable /tmp subdir in CI) cannot crash the
+        entire turn with PermissionError.
         """
-        ws_path = Path(workspace).resolve()
-        lines: list[str] = []
-        packages: list[tuple[str, str]] = []  # (name, description)
+        def _build() -> str:
+            ws_path = Path(workspace).resolve()
+            lines: list[str] = []
+            packages: list[tuple[str, str]] = []  # (name, description)
 
-        # Known project type markers
-        markers = {
-            "pyproject.toml": "Python project",
-            "setup.py": "Python project",
-            "setup.cfg": "Python project",
-            "package.json": "Node/TS project",
-            "Cargo.toml": "Rust project",
-            "go.mod": "Go project",
-            "Makefile": "C/C++ project",
-            "CMakeLists.txt": "C/C++ project",
-        }
-        project_types: list[str] = []
-        for marker, label in markers.items():
-            if (ws_path / marker).exists():
-                project_types.append(label)
+            # Known project type markers
+            markers = {
+                "pyproject.toml": "Python project",
+                "setup.py": "Python project",
+                "setup.cfg": "Python project",
+                "package.json": "Node/TS project",
+                "Cargo.toml": "Rust project",
+                "go.mod": "Go project",
+                "Makefile": "C/C++ project",
+                "CMakeLists.txt": "C/C++ project",
+            }
+            project_types: list[str] = []
+            for marker, label in markers.items():
+                try:
+                    if (ws_path / marker).exists():
+                        project_types.append(label)
+                except OSError:
+                    pass
 
-        try:
-            entries = sorted(os.listdir(ws_path))
-        except OSError:
-            return ""
-
-        # Identify top-level source directories
-        src_dirs: list[str] = []
-        for entry in entries:
-            entry_path = ws_path / entry
-            if entry.startswith("."):
-                continue
-            if entry in ("node_modules", "venv", ".venv", "__pycache__", "target",
-                         "dist", "build", ".git", ".wisp", "tests", "test"):
-                continue
             try:
-                is_dir = entry_path.is_dir()
-            except (OSError, PermissionError):
-                continue
-            if is_dir:
+                entries = sorted(os.listdir(ws_path))
+            except OSError:
+                return ""
+
+            # Identify top-level source directories
+            src_dirs: list[str] = []
+            for entry in entries:
+                entry_path = ws_path / entry
+                if entry.startswith("."):
+                    continue
+                if entry in ("node_modules", "venv", ".venv", "__pycache__", "target",
+                             "dist", "build", ".git", ".wisp", "tests", "test"):
+                    continue
+                try:
+                    is_dir = entry_path.is_dir()
+                except OSError:
+                    continue
+                if not is_dir:
+                    continue
                 # Check if it's a package (has __init__.py) or has source files
                 pkg_init = entry_path / "__init__.py"
                 try:
@@ -1078,13 +1120,10 @@ class WispAgentCore:
                         any(entry_path.glob("*.py")) or any(entry_path.glob("*.ts"))
                         or any(entry_path.glob("*.rs")) or any(entry_path.glob("*.go"))
                     )
-                except (OSError, PermissionError):
-                    has_src = False
-                try:
-                    pkg_exists = pkg_init.exists()
-                except (OSError, PermissionError):
-                    pkg_exists = False
-                if pkg_exists:
+                    pkg_has_init = pkg_init.exists()
+                except OSError:
+                    continue
+                if pkg_has_init:
                     # Python package — peek at docstring
                     desc = ""
                     try:
@@ -1098,33 +1137,37 @@ class WispAgentCore:
                 elif has_src:
                     src_dirs.append(entry)
 
-        config_files = [e for e in entries if not (ws_path / e).is_dir()
-                        and e in markers and not markers[e].startswith("Python")]
+            try:
+                config_files = [e for e in entries if not (ws_path / e).is_dir()
+                                and e in markers and not markers[e].startswith("Python")]
+            except OSError:
+                config_files = []
 
-        if not packages and not src_dirs and not project_types and not config_files:
-            return ""
+            if not packages and not src_dirs and not project_types and not config_files:
+                return ""
 
-        lines.append("## Project Structure")
-        if project_types:
-            lines.append("Type: " + ", ".join(project_types))
+            lines.append("## Project Structure")
+            if project_types:
+                lines.append("Type: " + ", ".join(project_types))
 
-        if packages:
-            lines.append("\nKey packages:")
-            for name, desc in packages:
-                if desc:
-                    lines.append(f"- **{name}/** — {desc}")
-                else:
-                    lines.append(f"- **{name}/**")
+            if packages:
+                lines.append("\nKey packages:")
+                for name, desc in packages:
+                    if desc:
+                        lines.append(f"- **{name}/** — {desc}")
+                    else:
+                        lines.append(f"- **{name}/**")
 
-        # List other notable top-level items
-        other_dirs = [e for e in src_dirs if e not in [p[0] for p in packages]]
-        if other_dirs:
-            lines.append("\nOther source directories: " + ", ".join(f"`{d}/`" for d in other_dirs))
+            # List other notable top-level items
+            other_dirs = [e for e in src_dirs if e not in [p[0] for p in packages]]
+            if other_dirs:
+                lines.append("\nOther source directories: " + ", ".join(f"`{d}/`" for d in other_dirs))
 
-        if config_files:
-            lines.append("Config: " + ", ".join(f"`{f}`" for f in config_files))
+            if config_files:
+                lines.append("Config: " + ", ".join(f"`{f}`" for f in config_files))
 
-        return "\n".join(lines)
+            return "\n".join(lines)
+        return _ttl_get("module_summary", str(workspace), _build, 30.0)
 
     def _get_relevant_files(self, workspace: str, query: str) -> str:
         """Get files relevant to the query from repo map."""

@@ -68,6 +68,11 @@ class UnifiedStore:
         )
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
+        # WAL + NORMAL: commits don't fsync per-statement (Linux win).
+        # Durability against process crash is preserved; only an OS/power
+        # crash may lose the last commits. Measured neutral-to-positive on
+        # macOS, significantly faster commit throughput on ext4.
+        conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA busy_timeout=5000")
         return conn
@@ -151,6 +156,8 @@ class UnifiedStore:
                 CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id);
                 CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(session_id);
                 CREATE INDEX IF NOT EXISTS idx_memory_created ON memory(created_at);
+                CREATE INDEX IF NOT EXISTS idx_sessions_updated
+                    ON sessions(updated_at DESC);
 
                 CREATE TABLE IF NOT EXISTS background_runs (
                     id TEXT PRIMARY KEY,
@@ -194,6 +201,21 @@ class UnifiedStore:
                 conn.execute("SELECT title FROM sessions LIMIT 1")
             except sqlite3.OperationalError:
                 conn.execute("ALTER TABLE sessions ADD COLUMN title TEXT NOT NULL DEFAULT ''")
+
+            # Schema migration (perf): cached message count so list_sessions
+            # never has to fetch+parse the messages blobs just to render a
+            # count column.
+            try:
+                conn.execute("SELECT msg_count FROM sessions LIMIT 1")
+            except sqlite3.OperationalError:
+                conn.execute("ALTER TABLE sessions ADD COLUMN msg_count INTEGER")
+            try:
+                conn.execute(
+                    "UPDATE sessions SET msg_count = json_array_length(messages) "
+                    "WHERE msg_count IS NULL"
+                )
+            except sqlite3.OperationalError:
+                pass  # JSON1 unavailable — Python-side self-heal covers it
 
             # Schema migration: add background_runs table if missing (older dbs)
             try:
@@ -270,18 +292,20 @@ class UnifiedStore:
                 "compaction_history": json.dumps(session.get("compaction_history", [])),
                 "created_at": session.get("created_at", ""),
                 "updated_at": session.get("updated_at", ""),
+                "msg_count": len(session.get("messages", [])),
             }
             self._get_conn().execute(
                 """
-                INSERT INTO sessions (id, model, workspace, title, messages, compaction_history, created_at, updated_at)
-                VALUES (:id, :model, :workspace, :title, :messages, :compaction_history, :created_at, :updated_at)
+                INSERT INTO sessions (id, model, workspace, title, messages, compaction_history, created_at, updated_at, msg_count)
+                VALUES (:id, :model, :workspace, :title, :messages, :compaction_history, :created_at, :updated_at, :msg_count)
                 ON CONFLICT(id) DO UPDATE SET
                     model=excluded.model,
                     workspace=excluded.workspace,
                     title=excluded.title,
                     messages=excluded.messages,
                     compaction_history=excluded.compaction_history,
-                    updated_at=excluded.updated_at
+                    updated_at=excluded.updated_at,
+                    msg_count=excluded.msg_count
                 """,
                 data,
             )
@@ -304,22 +328,39 @@ class UnifiedStore:
         }
 
     def list_sessions(self, limit: int = 50) -> list[dict]:
+        # PERF: never fetch the messages blobs here — msg_count column
+        # answers the only question callers ask. Rows written before the
+        # msg_count migration (NULL) are healed lazily below.
         rows = self._get_conn().execute(
-            "SELECT * FROM sessions ORDER BY updated_at DESC LIMIT ?",
+            "SELECT id, model, workspace, title, created_at, updated_at, msg_count "
+            "FROM sessions ORDER BY updated_at DESC LIMIT ?",
             (limit,),
         ).fetchall()
-        return [
-            {
+        out: list[dict] = []
+        for r in rows:
+            count = r["msg_count"]
+            if count is None:
+                row = self._get_conn().execute(
+                    "SELECT messages FROM sessions WHERE id = ?", (r["id"],)
+                ).fetchone()
+                try:
+                    count = len(json.loads(row["messages"])) if row else 0
+                except (json.JSONDecodeError, TypeError):
+                    count = 0
+                self._get_conn().execute(
+                    "UPDATE sessions SET msg_count = ? WHERE id = ?",
+                    (count, r["id"]),
+                )
+            out.append({
                 "id": r["id"],
                 "model": r["model"],
                 "workspace": r["workspace"],
                 "title": r["title"],
                 "created_at": r["created_at"],
                 "updated_at": r["updated_at"],
-                "msg_count": len(json.loads(r["messages"])) if r["messages"] else 0,
-            }
-            for r in rows
-        ]
+                "msg_count": count,
+            })
+        return out
 
     def delete_session(self, session_id: str) -> None:
         self._get_conn().execute("DELETE FROM sessions WHERE id = ?", (session_id,))
@@ -333,11 +374,14 @@ class UnifiedStore:
         return None
 
     def update_run_status(self, run_id: str, status: str) -> None:
-        """Update a run's status."""
-        run = self.load_run(run_id)
-        if run is not None:
-            run["status"] = status
-            self.save_run(run)
+        """Update a run's status.
+
+        PERF: direct UPDATE — the old load→save round-trip re-read AND
+        re-inserted every inline event row on each status transition.
+        """
+        self._get_conn().execute(
+            "UPDATE runs SET status = ? WHERE id = ?", (status, run_id)
+        )
 
     # ── Run CRUD ────────────────────────────────────────────────────
 
@@ -377,12 +421,21 @@ class UnifiedStore:
             """,
             data,
         )
-        # Inline events: delete old, insert new
-        self._get_conn().execute("DELETE FROM events WHERE run_id = ?", (run["id"],))
-        for ev in run.get("events", []):
+        # Inline events: delete old, insert new — one transaction, batched
+        # INSERTs instead of N separate autocommit commits.
+        events = run.get("events", [])
+        if not events:
+            return
+        with self.transaction():
             self._get_conn().execute(
+                "DELETE FROM events WHERE run_id = ?", (run["id"],)
+            )
+            self._get_conn().executemany(
                 "INSERT INTO events (run_id, type, data) VALUES (?, ?, ?)",
-                (run["id"], ev.get("type", ""), json.dumps(ev)),
+                [
+                    (run["id"], ev.get("type", ""), json.dumps(ev))
+                    for ev in events
+                ],
             )
 
     def load_run(self, run_id: str) -> Optional[dict]:
