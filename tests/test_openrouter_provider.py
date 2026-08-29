@@ -11,7 +11,9 @@ from unittest.mock import MagicMock, patch
 
 
 class TestRegistration:
-    def test_get_provider_builds_openrouter(self):
+    def test_get_provider_builds_openrouter(self, isolated_wisp_env):
+        """WISP_API_BASE from the machine env would otherwise override the
+        openrouter default api_base; isolate for a hermetic assertion."""
         from wisp.config import WispConfig
         from wisp.providers import get_provider
         from wisp.providers.openrouter import OpenRouterProvider

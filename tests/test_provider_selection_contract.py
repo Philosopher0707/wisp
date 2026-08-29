@@ -143,8 +143,11 @@ def test_resolve_nvidia_unreachable_when_list_empty():
     assert "not reachable" in r.detail
 
 
-def test_resolve_nvidia_no_key_is_unreachable():
-    """Cloud without key is unreachable at selection time, not 404 mid-turn."""
+def test_resolve_nvidia_no_key_is_unreachable(isolated_wisp_env):
+    """Cloud without key is unreachable at selection time, not 404 mid-turn.
+
+    Isolated: WISP_API_KEY from the machine env would otherwise satisfy
+    the key requirement and flip the verdict to reachable."""
     from wisp.provider_catalog import resolve_selection
 
     cfg = SimpleNamespace(provider="nvidia", model="some/model", api_key="")

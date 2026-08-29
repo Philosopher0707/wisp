@@ -8,6 +8,7 @@ import hashlib
 import os
 import json
 import logging
+import tempfile
 from pathlib import Path
 from typing import Any, Optional
 from dataclasses import dataclass
@@ -119,6 +120,18 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         "default": False,
         "description": "Minimal rendering mode — no boxes, flat output",
         "env_var": "WISP_COMPACT_MODE",
+    },
+    "verification_loop": {
+        "type": bool,
+        "default": True,
+        "description": "Require exit-0 verification (tests/linter) after code edits before a turn may complete",
+        "env_var": "WISP_VERIFICATION_LOOP",
+    },
+    "env_context": {
+        "type": bool,
+        "default": True,
+        "description": "Inject live environment facts (cwd, OS, git, package managers) into the system prompt",
+        "env_var": "WISP_ENV_CONTEXT",
     },
     "log_format": {
         "type": str,
@@ -316,6 +329,28 @@ def get_setting(key: str, default: Any = None) -> Any:
     return config.get(key, default)
 
 
+def safe_getcwd() -> str:
+    """``os.getcwd()`` that never raises.
+
+    ``getcwd()`` fails with ``PermissionError`` when the process's working
+    directory was deleted out from under it, or when macOS revokes disk
+    access (TCC) to the launch directory — a hard crash at startup that
+    must never happen. Falls back to ``$HOME``, then the temp dir.
+    """
+    try:
+        return os.getcwd()
+    except OSError:
+        logging.getLogger(__name__).warning(
+            "os.getcwd() failed (deleted cwd or revoked disk access) — "
+            "falling back to $HOME", exc_info=True,
+        )
+    home = os.environ.get("HOME") or ""
+    if home and Path(home).is_dir():
+        return home
+    return tempfile.gettempdir()
+
+
+
 # ── Resolved config ──────────────────────────────────────────────────
 
 
@@ -396,6 +431,10 @@ class WispConfig:
     show_thinking: bool
     show_tool_output: bool
     compact_mode: bool
+    verification_loop: bool
+
+    # ── Prompt architecture ───────────────────────────────────────
+    env_context: bool
 
     # ── Turn loop limits ──────────────────────────────────────────
     max_iterations: int
@@ -464,7 +503,12 @@ class WispConfig:
             object.__setattr__(self, "skill_dirs",
                 [".agents/skills", ".warp/skills", ".claude/skills"]
             )
-        object.__setattr__(self, "workspace", get_setting("workspace", os.getcwd()))
+        # Lazy default: get_setting's default arg must NOT call os.getcwd()
+        # eagerly — when the env/config pins a workspace we must never touch
+        # the filesystem, and getcwd() itself can raise PermissionError.
+        ws_setting = get_setting("workspace")
+        object.__setattr__(self, "workspace",
+            ws_setting if ws_setting else safe_getcwd())
         # Auto-approve tool calls (default FALSE — require explicit opt-in).
         # When false, every mutating tool call triggers an approval_request
         # event and the transport layer must confirm before execution.
@@ -482,6 +526,16 @@ class WispConfig:
         # Minimal rendering mode — no boxes, flat output, good for pipes/narrow terminals
         object.__setattr__(self, "compact_mode",
             _parse_bool(get_setting("compact_mode", "false"), False)
+        )
+        # Verification loop: a turn that edited code must see an exit-0
+        # verification command (tests/linter) before it may complete.
+        object.__setattr__(self, "verification_loop",
+            _parse_bool(get_setting("verification_loop", "true"), True)
+        )
+        # Inject a '## Environment' block (cwd, OS, shell, git state, package
+        # managers, suggested verification commands) into the system prompt
+        object.__setattr__(self, "env_context",
+            _parse_bool(get_setting("env_context", "true"), True)
         )
         # Max agent loop iterations per user turn
         object.__setattr__(self, "max_iterations",
@@ -630,7 +684,7 @@ class WispConfig:
         Returns concatenated content for injection into system prompt.
         Caches result -- re-reads if workspace changes or file mtimes change.
         """
-        workspace = self.workspace or os.getcwd()
+        workspace = self.workspace or safe_getcwd()
         ws_path = Path(workspace).resolve()
 
         # Check if cache is valid

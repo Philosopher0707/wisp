@@ -352,7 +352,11 @@ def _persist_env(update: dict[str, str]) -> None:
             except Exception:
                 ws = ""
         if not ws:
-            ws = os.getcwd()
+            try:
+                from wisp.config import safe_getcwd
+                ws = safe_getcwd()
+            except Exception:
+                ws = ""
         ws_env = pathlib.Path(ws).resolve() / ".env"
         _upsert_env_file(ws_env, env_update)
     except Exception:

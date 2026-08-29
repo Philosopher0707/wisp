@@ -215,10 +215,12 @@ def cmd_print(prompt, model=None, session_id=None, output_format="json", quiet=F
             import asyncio
             from wisp.entry import run_headless
 
+            from wisp.config import safe_getcwd
+
             result = asyncio.run(run_headless(
                 prompt=prompt,
                 model=model,
-                workspace=os.getcwd(),
+                workspace=safe_getcwd(),
                 session_id=session_id,
                 permission_mode="full",
             ))

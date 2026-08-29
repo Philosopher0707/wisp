@@ -1,6 +1,8 @@
 """Tests for config.py — defaults, env var override, config file loading."""
 
-from wisp.config import WispConfig, get_setting, load_config, save_config
+from pathlib import Path
+
+from wisp.config import WispConfig, get_setting, load_config, save_config, safe_getcwd
 
 
 class TestGetSetting:
@@ -24,7 +26,7 @@ class TestGetSetting:
 
 class TestWispConfig:
 
-    def test_defaults_are_sane(self):
+    def test_defaults_are_sane(self, isolated_wisp_env):
         cfg = WispConfig()
         assert cfg.ollama_url == "http://localhost:11434"
         assert cfg.provider == "ollama"
@@ -76,6 +78,40 @@ class TestConfigFile:
         save_config({"model": "saved-model"})
         loaded = load_config()
         assert loaded["model"] == "saved-model"
+
+class TestWorkspaceResilience:
+    """Regression: os.getcwd() can raise PermissionError (deleted cwd or
+    macOS revoking disk access). WispConfig() must never crash on startup —
+    fall back to home, and never even *call* getcwd when a workspace is
+    explicitly configured (the default used to be evaluated eagerly)."""
+
+    @staticmethod
+    def _boom():
+        raise PermissionError(1, "Operation not permitted")
+
+    def test_safe_getcwd_falls_back_on_permission_error(self, monkeypatch):
+        import os
+        monkeypatch.setattr(os, "getcwd", self._boom)
+        result = safe_getcwd()
+        assert result
+        assert Path(result).is_absolute()
+
+    def test_safe_getcwd_returns_cwd_when_healthy(self, monkeypatch):
+        import os
+        assert safe_getcwd() == os.getcwd()
+
+    def test_config_constructs_when_getcwd_fails(self, monkeypatch):
+        import os
+        monkeypatch.setattr(os, "getcwd", self._boom)
+        cfg = WispConfig()
+        assert Path(cfg.workspace).is_absolute()
+
+    def test_configured_workspace_avoids_getcwd(self, monkeypatch):
+        import os
+        monkeypatch.setenv("WISP_WORKSPACE", "/tmp/fixed-ws")
+        monkeypatch.setattr(os, "getcwd", self._boom)  # must never be called
+        cfg = WispConfig()
+        assert cfg.workspace == "/tmp/fixed-ws"
 
 
 class TestPermissionMode:

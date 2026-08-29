@@ -235,6 +235,14 @@ class _BlockingExtension:
         return {"action": "allow"}
 
 
+# NOTE: the verification loop (edit → require exit-0 verification before
+# done, bounded nudges) is covered exhaustively in
+# tests/test_verification_loop.py against the final in-turn tracking
+# design. An earlier draft gated it via a stateful
+# `_should_prompt_verification()`/`tool_history` API; that violated the
+# stateless-core rule and was replaced — those tests were removed.
+
+
 class TestModuleLocation:
     """WispAgentCore lives in wisp.core.stateless to break circular imports."""
 

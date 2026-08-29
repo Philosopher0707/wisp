@@ -229,6 +229,18 @@ class WispAgentCore:
             str(a).lower() for a in allowed_tools
         }:
             _allowed_set = {str(a) for a in allowed_tools}
+        # Verification-loop state (persists across iterations of this turn):
+        # - verification_enabled: config gate
+        # - verify_ok_after_edit: None = no run_bash since the last edit;
+        #   True/False = exit status of the latest run_bash (a bash run
+        #   BEFORE the last edit is stale and reads as None)
+        # - verification_nudges: bounded self-correction reminders issued
+        verification_enabled = True
+        if self.config is not None:
+            verification_enabled = getattr(self.config, "verification_loop", True) is True
+        verify_ok_after_edit: bool | None = None
+        wrote_code = False
+        verification_nudges = 0
         for iteration in range(max_iterations):
             pending_tool_calls: list[dict[str, Any]] = []
             tool_results_events_early: list[dict[str, Any]] = []
@@ -462,6 +474,40 @@ class WispAgentCore:
 
             # ── If no tool calls, the model produced final content ──
             if not has_tool_calls:
+                # Verification loop: a turn that changed code but ended with a
+                # failing (or never-run) verification command is NOT complete.
+                # Nudge the model to verify with exit-0 evidence and give it
+                # another provider round; bounded so it can always finish.
+                _MAX_VERIFICATION_NUDGES = 2
+                needs_verification = (
+                    verification_enabled
+                    and wrote_code
+                    and verification_nudges < _MAX_VERIFICATION_NUDGES
+                    and verify_ok_after_edit is not True
+                )
+                if needs_verification:
+                    verification_nudges += 1
+                    if verify_ok_after_edit is False:
+                        reason = (
+                            "the most recent verification command FAILED "
+                            "(non-zero exit status)"
+                        )
+                    else:
+                        reason = (
+                            "no verification command (tests/linter) has been "
+                            "run since your code changes"
+                        )
+                    nudge = (
+                        f"[SYSTEM] Verification loop: you changed code this turn, "
+                        f"but {reason}. A task is not complete until a "
+                        f"verification command exits 0. Call run_bash with the "
+                        f"project's test/lint command, fix any failures, and "
+                        f"only then summarize. If you genuinely cannot verify, "
+                        f"say the work is UNVERIFIED instead of claiming success."
+                    )
+                    messages.append({"role": "user", "content": nudge})
+                    yield _flatten_event(system(nudge, level="warning"))
+                    continue
                 yield _flatten_event(done_event(session.get("id", "")))
                 return
 
@@ -485,6 +531,23 @@ class WispAgentCore:
                     ):
                         tool_results_events.append(result_event)
                         yield result_event
+                        # Verification-loop tracking: watch bash exit status
+                        # and code-mutating tools so the done-path guard can
+                        # demand exit-0 evidence before the turn completes.
+                        # verify_ok_after_edit tracks ORDERING: any edit
+                        # invalidates prior verification, so a bash run
+                        # before the last code change never counts.
+                        if result_event.get("type") == "tool_result":
+                            t_name = str(result_event.get("name", ""))
+                            t_res = result_event.get("result", "")
+                            t_text = t_res if isinstance(t_res, str) else str(t_res)
+                            if t_name == "run_bash":
+                                verify_ok_after_edit = (
+                                    not t_text.startswith("[exit code:")
+                                )
+                            elif t_name in ("write_file", "edit_file"):
+                                wrote_code = True
+                                verify_ok_after_edit = None  # stale now
 
             # Append assistant + tool messages to continue the conversation
             assistant_msg: dict[str, Any] = {"role": "assistant", "content": "".join(partial_content)}
@@ -705,7 +768,17 @@ class WispAgentCore:
 
     def _build_system_prompt(self, session: dict[str, Any], query: str | None = None) -> str:
         """Build rich system prompt from session context."""
-        from wisp.context_assembler import ContextAssembler, PromptContext
+        from wisp.context_assembler import (
+            ContextAssembler,
+            DEFAULT_BASE_SYSTEM,
+            PromptContext,
+        )
+
+        # Verification-loop rules are prompt-level; gate them on config so
+        # they can be turned off without touching the engine guard.
+        verification_enabled = True
+        if self.config is not None:
+            verification_enabled = getattr(self.config, "verification_loop", True) is True
 
         ws = session.get("workspace", ".")
         ws_path = Path(ws).resolve()
@@ -781,7 +854,10 @@ class WispAgentCore:
 
             ctx = PromptContext.from_legacy(
                 workspace=ws,
-                default_system=assembler.default_system,
+                default_system=(
+                    assembler.default_system if verification_enabled
+                    else DEFAULT_BASE_SYSTEM
+                ),
                 role_extra=role_extra or None,
                 skills_block=skills_block or None,
                 project_context=project_ctx or None,
@@ -820,7 +896,31 @@ class WispAgentCore:
         if operating:
             static_prompt += "\n\n" + operating
 
+        # Environment grounding is per-turn too: cwd, git branch and the
+        # commit hash move under the session (commits, /workspace switches).
+        env_block = self._build_environment_block(ws)
+        if env_block:
+            static_prompt += "\n\n" + env_block
+
         return static_prompt
+
+    def _build_environment_block(self, workspace: str) -> str:
+        """Live environment facts for the system prompt ('## Environment').
+
+        Best-effort and cheap (a couple of git subprocess calls + stat);
+        returns '' when disabled or when collection yields nothing usable.
+        """
+        if self.config is not None:
+            if getattr(self.config, "env_context", True) is not True:
+                return ""
+        try:
+            from wisp.environment import collect_environment, format_environment_block
+            snap = collect_environment(workspace)
+            if snap.cwd:
+                return format_environment_block(snap)
+        except Exception:
+            logger.debug("Environment block collection failed", exc_info=True)
+        return ""
 
     def _build_operating_context(self, session: dict[str, Any], query: str | None = None) -> str:
         """Declare this agent's own operating posture for the current turn.
@@ -856,6 +956,20 @@ class WispAgentCore:
         ws = session.get("workspace", "")
         if ws:
             lines.append(f"- workspace: {ws}")
+
+        # Dynamic environment grounding: cwd, OS, shell, git branch + commit
+        # hash, package managers, suggested verification commands. Computed
+        # per turn (not cached) so the commit hash never goes stale.
+        # Skipped when the session has no workspace — the block grounds the
+        # model in a *project* environment; bare sessions stay lean.
+        env_block = ""
+        if ws:
+            try:
+                from wisp.environment import collect_environment, format_environment_block
+                env_block = format_environment_block(collect_environment(ws))
+            except Exception:
+                logger.debug("Environment collection failed — continuing without it", exc_info=True)
+
         sid = session.get("id", "")
         if sid:
             lines.append(f"- session: {sid}")
@@ -884,9 +998,14 @@ class WispAgentCore:
             except Exception:
                 pass  # inventory is advisory — never break prompt building
 
-        if not lines:
+        if not lines and not env_block:
             return ""
-        return "## Operating context\n" + "\n".join(lines)
+        parts: list[str] = []
+        if env_block:
+            parts.append(env_block)
+        if lines:
+            parts.append("## Operating context\n" + "\n".join(lines))
+        return "\n\n".join(parts)
 
     def invalidate_caches(self) -> None:
         """Invalidate all caches — call when workspace context changes."""

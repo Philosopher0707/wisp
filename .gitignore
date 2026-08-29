@@ -85,3 +85,6 @@ data/*.db
 *.db
 .wisp/
 workspace/
+
+# Editor planning artifacts
+.opencode/

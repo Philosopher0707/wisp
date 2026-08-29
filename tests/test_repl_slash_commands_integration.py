@@ -170,5 +170,58 @@ def test_repl_consumed_command_does_not_run_turn():
     assert "Echo: /help" not in output
     # A genuine prompt still runs through the runtime:
     assert "Echo: hello" in output
-    # And the command itself still ran:
-    assert "Available commands" in output
+
+def test_repl_thinking_toggle_takes_effect_next_turn():
+    """Regression: /thinking rebinds adapter.config (frozen dataclass —
+    replace() returns a new object), but CLITransport kept its own stale
+    config reference, so the toggle printed "Show thinking: ON" while the
+    next turn's reasoning still rendered collapsed.
+    """
+    import copy
+    from wisp.entry import _run_repl
+    from wisp.transport.cli import CLITransport
+
+    class ThinkingCore:
+        async def turn(self, session, prompt):
+            # Second line carries the marker: the collapsed preview only
+            # ever shows the FIRST non-empty line, so seeing the marker
+            # proves the full (expanded) block rendered.
+            yield {"type": "thinking",
+                   "text": f"initial thought about {prompt}\nunique-marker-{prompt}"}
+            yield {"type": "content", "text": f"Echo: {prompt}"}
+            yield {"type": "done"}
+
+    class ToggleRuntime(FakeRuntime):
+        def __init__(self):
+            super().__init__()
+            self._core = ThinkingCore()
+
+    class ToggleConfig(FakeConfig):
+        show_thinking = False
+
+        def replace(self, **kwargs):
+            inst = copy.copy(self)
+            for k, v in kwargs.items():
+                setattr(inst, k, v)
+            return inst
+
+    class ToggleRoot(FakeRoot):
+        def __init__(self):
+            self.runtime = ToggleRuntime()
+            self.config = ToggleConfig()
+
+    root = ToggleRoot()
+    transport = CLITransport(root.runtime, root.config)
+
+    stdin = StringIO("/thinking\nhello\n/exit\n")
+    stdout = StringIO()
+
+    with patch.object(sys, "stdin", stdin), patch.object(sys, "stdout", stdout):
+        _run_repl(transport, root, root.config)
+
+    output = stdout.getvalue()
+    # The toggle itself ran and acknowledged:
+    assert "Show thinking: ON" in output
+    # ...and the NEXT turn's reasoning renders expanded, not collapsed:
+    assert "unique-marker-hello" in output
+

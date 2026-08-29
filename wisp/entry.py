@@ -262,6 +262,10 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
     # Up-arrow recall of prompts from previous sessions
     _load_command_history()
 
+    # Tab-completion for slash commands / providers / models (no-op off-tty).
+    from wisp.repl.completion import install_readline_completion
+    install_readline_completion()
+
     if is_continuation:
         transport.print_continuation_banner(sys.stdout, session, config.model)
     else:
@@ -477,6 +481,11 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
             from wisp.exceptions import ExitREPL
             try:
                 result = dispatch(prompt, adapter)
+                # Commands rebind adapter.config (frozen dataclass —
+                # replace() returns a new object). Re-share it with the
+                # transport so rendering flags like show_thinking stay
+                # live for subsequent turns.
+                transport.config = adapter.config
                 if isinstance(result, str) and result:
                     # Command returned a prompt to run (e.g. /continue)
                     _run_turn(result)
@@ -570,6 +579,9 @@ async def _run_single_prompt(transport: CLITransport, root: CompositionRoot, pro
         adapter = AgentAdapter(root.runtime, config, session)
         try:
             result = dispatch(prompt, adapter)
+            # Keep the transport's rendering flags in sync with any config
+            # change the command made (same seam as _run_repl).
+            transport.config = adapter.config
         except Exception as exc:
             import logging
             logging.getLogger(__name__).exception("Slash command failed")

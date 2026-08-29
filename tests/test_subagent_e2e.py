@@ -136,9 +136,14 @@ class _UnreachableProvider:
 # ── Fixtures ─────────────────────────────────────────────────────
 
 @pytest.fixture
-def config(tmp_path):
+def config(tmp_path, isolated_wisp_env):
+    """Hermetic config: pinned to the ollama/mock-model pair the runner's
+    provider cache is seeded with. Without pinning provider, WISP_PROVIDER
+    from the machine env leaks in, the cache key misses, and the subagent
+    hits a real API endpoint."""
     cfg = WispConfig()
-    return cfg.replace(workspace=str(tmp_path), model="mock-model", auto_approve=True)
+    return cfg.replace(workspace=str(tmp_path), provider="ollama",
+                       model="mock-model", auto_approve=True)
 
 
 @pytest.fixture
@@ -302,10 +307,11 @@ class TestSubagentEndToEnd:
             assert isinstance(c._shared_context, SharedContext)
 
     @pytest.mark.asyncio
-    async def test_timeout_produces_diagnostic_message(self, tmp_path):
+    async def test_timeout_produces_diagnostic_message(self, tmp_path, isolated_wisp_env):
         """Timeout error includes diagnostic info."""
         cfg = WispConfig()
-        cfg = cfg.replace(workspace=str(tmp_path), model="mock-model", auto_approve=True)
+        cfg = cfg.replace(workspace=str(tmp_path), provider="ollama",
+                          model="mock-model", auto_approve=True)
         class _HangingProvider:
             def __init__(self):
                 self._stream_response = None

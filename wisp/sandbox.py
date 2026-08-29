@@ -236,7 +236,11 @@ def get_sandbox(workspace: str | None = None) -> SandboxProvider:
     directory.
     """
     global _app_sandbox
-    ws = workspace or os.getcwd()
+    if workspace:
+        ws = workspace
+    else:
+        from wisp.config import safe_getcwd
+        ws = safe_getcwd()
     ws_abs = os.path.abspath(ws)
 
     if _app_sandbox is not None:

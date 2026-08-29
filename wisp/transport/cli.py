@@ -667,9 +667,8 @@ class CLITransport(Transport):
         self._md_fence_body: list[str] = []
         # Per-turn warning dedup (§9): unique message -> occurrence count.
         self._warn_counts: dict[str, int] = {}
-        self.show_thinking: bool = (
-            getattr(config, "show_thinking", False) if config else False
-        )
+        # NOTE: no show_thinking snapshot here — _flush_thinking reads
+        # self.config live so command toggles (/thinking) take effect.
         self._last_block_was_tool = False
         self.show_tool_output: bool = True
         # Session-level per-tool approval memory
