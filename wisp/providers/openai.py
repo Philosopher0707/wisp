@@ -33,6 +33,39 @@ logger = logging.getLogger(__name__)
 _DEFAULT_API_BASE = "https://api.openai.com/v1"
 
 
+def _translate_nvidia_404(body: str, requested_model: str) -> str:
+    """Turn NVIDIA NIM's misleading "Function X not found" into a clear message.
+
+    NVIDIA's gateway returns 404 with body shape
+    ``{"status":404,"title":"Not Found","detail":"Function '<uuid>':
+    Not found for account '<acct>'"}`` when the requested model is not
+    entitled for the calling account. The literal string "Function" makes
+    users think a tool wiring or function-calling is broken. Translate
+    the detail into a sentence that names the model and the cause.
+
+    Returns the translated body string, or "" if the body is not the
+    expected shape (caller falls back to the raw body).
+    """
+    import json as _json
+    import re as _re
+
+    try:
+        parsed = _json.loads(body)
+    except (ValueError, TypeError):
+        return ""
+    detail = str(parsed.get("detail", ""))
+    m = _re.match(r"^Function '([^']+)':\s*Not found for account '([^']+)'", detail)
+    if not m:
+        return ""
+    model_id = requested_model or m.group(1)
+    return (
+        f"{parsed.get('title', 'Not Found')}: model '{model_id}' is not "
+        f"entitled for this NVIDIA account (account id {m.group(2)}). "
+        f"Run /provider nvidia to pick a model your account has access to, "
+        f"or check https://build.nvidia.com for the entitled list."
+    )
+
+
 class OpenAIProvider(Provider):
     """OpenAI-compatible provider using the Chat Completions API."""
 
@@ -116,6 +149,17 @@ class OpenAIProvider(Provider):
                 hint = ""
                 if resp.status_code == 401:
                     hint = " — check WISP_API_KEY / provider API key. Run /provider <name> and enter the key when prompted; it will be verified and saved to ~/.config/wisp/config.json and ./.env"
+                # NVIDIA NIM gateway returns 404 with body
+                #   {"status":404,"title":"Not Found",
+                #    "detail":"Function '<uuid>': Not found for account '<id>'"}
+                # where "Function" is actually the model id, and the cause is
+                # that the model is not entitled for this account. Without
+                # this translation the user sees "Function '...': Not found"
+                # and misdiagnoses it as a tool/wiring bug.
+                if resp.status_code == 404 and "integrate.api.nvidia.com" in self.api_base:
+                    translated = _translate_nvidia_404(body, self.model)
+                    if translated:
+                        body = translated
                 yield {
                     "type": "error",
                     "message": f"API error {resp.status_code}: {body}{hint}",

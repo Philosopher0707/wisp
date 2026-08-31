@@ -279,3 +279,37 @@ class TestOpenAIProviderClose:
         provider._stream_response = {"status_code": 200}
         provider.close()
         assert provider._stream_response is None
+
+
+class TestTranslateNvidia404:
+    """NVIDIA NIM returns 404 with a body that says 'Function X not found
+    for account Y' where 'Function' is actually the model id. The user
+    sees this as a tool-wiring bug. _translate_nvidia_404 turns it into
+    a sentence that names the model and the cause.
+    """
+
+    def test_translates_function_not_found(self):
+        from wisp.providers.openai import _translate_nvidia_404
+
+        body = json.dumps({
+            "status": 404,
+            "title": "Not Found",
+            "detail": "Function 'e503b15c-62b0-4d69-b532-a88f0bfa2656': "
+                      "Not found for account 'UB2bF75AqoljAlBpqlJ5A66d-UcdIATF02RlMUygTLY'",
+        })
+        out = _translate_nvidia_404(body, "deepseek-ai/deepseek-coder-6.7b-instruct")
+        assert "deepseek-ai/deepseek-coder-6.7b-instruct" in out
+        assert "not entitled" in out
+        assert "Function" not in out  # the misleading word is gone
+        assert "/provider" in out  # actionable next step
+
+    def test_passthrough_on_unrelated_404(self):
+        from wisp.providers.openai import _translate_nvidia_404
+
+        body = json.dumps({"status": 404, "title": "Not Found", "detail": "Other reason"})
+        assert _translate_nvidia_404(body, "x") == ""
+
+    def test_passthrough_on_non_json(self):
+        from wisp.providers.openai import _translate_nvidia_404
+
+        assert _translate_nvidia_404("not json", "x") == ""
