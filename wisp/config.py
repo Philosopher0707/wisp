@@ -231,6 +231,28 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Seconds before attempting recovery after circuit opens",
         "env_var": "WISP_CB_RECOVERY_TIMEOUT",
     },
+    "graph_max_iterations": {
+        "type": int,
+        "default": 5,
+        "min": 1,
+        "max": 200,
+        "description": "Max iterations for the agentic graph outer loop (spec default 5, reconciled with turn loop 50)",
+        "env_var": "WISP_GRAPH_MAX_ITERATIONS",
+    },
+    "graph_sandbox_timeout": {
+        "type": float,
+        "default": 120.0,
+        "min": 1.0,
+        "max": 3600.0,
+        "description": "Per-command timeout for the graph sandbox_executor node",
+        "env_var": "WISP_GRAPH_SANDBOX_TIMEOUT",
+    },
+    "graph_oscillation_guard": {
+        "type": bool,
+        "default": True,
+        "description": "Enable graph-level infinite-loop / oscillation detection",
+        "env_var": "WISP_GRAPH_OSCILLATION_GUARD",
+    },
 }
 
 
@@ -443,6 +465,11 @@ class WispConfig:
     tool_timeout: int
     max_context_tokens: int
     _context_tokens_explicit: bool
+
+    # ── Agentic graph loop (outer) ────────────────────────────────
+    graph_max_iterations: int
+    graph_sandbox_timeout: float
+    graph_oscillation_guard: bool
     chars_per_token: int
 
     # ── Modes & permissions ───────────────────────────────────────
@@ -673,6 +700,16 @@ class WispConfig:
         # Subagent depth/branch tracking for propagation
         object.__setattr__(self, "_subagent_depth", 0)
         object.__setattr__(self, "_subagent_branch_count", 0)
+        # Agentic graph loop (outer) — reconciles spec default 5 with turn loop 50
+        object.__setattr__(self, "graph_max_iterations",
+            _parse_int(get_setting("graph_max_iterations", "5"), 5, 1, 200)
+        )
+        object.__setattr__(self, "graph_sandbox_timeout",
+            _parse_float(get_setting("graph_sandbox_timeout", "120"), 120, 1.0, 3600.0)
+        )
+        object.__setattr__(self, "graph_oscillation_guard",
+            _parse_bool(get_setting("graph_oscillation_guard", "true"), True)
+        )
 
     def load_context_files(self) -> str:
         """Load and concatenate context files from workspace root.
@@ -823,6 +860,12 @@ class WispConfig:
             errors.append(
                 f"circuit_breaker_recovery_timeout: {self.circuit_breaker_recovery_timeout} is out of range [1.0, 300.0]"
             )
+
+        # Graph loop
+        if not (1 <= self.graph_max_iterations <= 200):
+            errors.append(f"graph_max_iterations: {self.graph_max_iterations} is out of range [1, 200]")
+        if not (1.0 <= self.graph_sandbox_timeout <= 3600.0):
+            errors.append(f"graph_sandbox_timeout: {self.graph_sandbox_timeout} is out of range [1.0, 3600.0]")
 
         # Permission mode
         valid_modes = {m.value for m in PermissionMode}
