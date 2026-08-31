@@ -43,6 +43,20 @@ class CompositionRoot:
         if self.config is None:
             raise TypeError("config is required")
 
+        # Stream hygiene: isolate provider diagnostics to .agent/runtime.log
+        # so user stdout stays clean (rich tables + badges). Idempotent.
+        try:
+            from agent.logger import install as _install_agent_logger  # type: ignore
+            _install_agent_logger()
+        except Exception:
+            pass
+        # Disk sink for run_bash: full logs → .agent/logs/ before UI truncation
+        try:
+            from agent.tools.runner import install_sink as _install_sink  # type: ignore
+            _install_sink()
+        except Exception:
+            pass
+
         # Structured logging (before any services log)
         log_format = getattr(self.config, "log_format", None) or "text"
         if log_format == "json":
