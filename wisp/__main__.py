@@ -1,5 +1,53 @@
 """CLI entry point for Wisp — the local Ollama-powered coding agent."""
 
+import os
+
+# ── Early cwd recovery (before any import that calls getcwd) ──────────
+# Fixes macOS case-insensitive `~/documents` vs `~/Documents` TCC mismatch
+# where `os.getcwd()` raises PermissionError and Python's import system
+# itself fails before wisp.config.safe_getcwd is reached.
+try:
+    os.getcwd()
+except OSError:
+    _pwd = os.environ.get("PWD", "")
+    _fixed = None
+    if _pwd:
+        # Canonicalize lowercase `documents` to `Documents`
+        if "/documents/" in _pwd:
+            cand = _pwd.replace("/documents/", "/Documents/")
+            try:
+                import pathlib
+
+                if pathlib.Path(cand).is_dir():
+                    _fixed = cand
+            except Exception:
+                _fixed = cand
+        elif _pwd.endswith("/documents"):
+            cand = _pwd[:-10] + "/Documents"
+            try:
+                import pathlib
+
+                if pathlib.Path(cand).is_dir():
+                    _fixed = cand
+            except Exception:
+                _fixed = cand
+        if _fixed is None and _pwd:
+            _fixed = _pwd
+    if _fixed:
+        try:
+            os.chdir(_fixed)
+            os.getcwd()  # verify
+        except OSError:
+            try:
+                os.chdir(os.environ.get("HOME", "/tmp"))
+            except Exception:
+                pass
+    else:
+        try:
+            os.chdir(os.environ.get("HOME", "/tmp"))
+        except Exception:
+            pass
+
 import json
 import logging
 import os

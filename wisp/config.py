@@ -372,6 +372,36 @@ def safe_getcwd() -> str:
             "os.getcwd() failed (deleted cwd or revoked disk access) — "
             "falling back to $HOME", exc_info=True,
         )
+    # Try PWD env var (shell's logical path) — handles lowercase
+    # `~/documents/edac` → canonical `~/Documents/edac` TCC mismatch on
+    # case-insensitive APFS. Resolve via realpath if possible.
+    pwd_env = os.environ.get("PWD", "")
+    if pwd_env:
+        try:
+            p = Path(pwd_env)
+            if p.exists():
+                try:
+                    return str(p.resolve())
+                except OSError:
+                    pass
+            # Heuristic: APFS case-insensitive but TCC is case-sensitive —
+            # retry with canonical `Documents`
+            if "/documents/" in pwd_env:
+                cand = pwd_env.replace("/documents/", "/Documents/")
+                if Path(cand).is_dir():
+                    try:
+                        return str(Path(cand).resolve())
+                    except OSError:
+                        return cand
+                # Also handle `/documents` at end (e.g. `~/documents`)
+                if pwd_env.endswith("/documents"):
+                    cand2 = pwd_env[:-10] + "/Documents"
+                    if Path(cand2).is_dir():
+                        return cand2
+            if pwd_env and Path(pwd_env).is_dir():
+                return pwd_env
+        except Exception:
+            pass
     home = os.environ.get("HOME") or ""
     if home and Path(home).is_dir():
         return home
