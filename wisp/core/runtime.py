@@ -279,6 +279,20 @@ class AgentRuntime:
             # Auto-compact before turn to prevent context overflow
             await self.maybe_compact(session)
 
+            # ── Autonomous mode: hydrate graph state + synthesize approval handler
+            # so safe coding turns run fully autonomously (Cursor/Aider-like) while
+            # dangerous commands still hit the hard block.
+            graph_state = None
+            if self.config is not None and bool(getattr(self.config, "autonomous", False)):
+                try:
+                    from wisp.core.graph_state import GraphState as _GraphState
+                    graph_state = _GraphState.from_session(session, self.config)
+                    session["graph_state"] = graph_state.to_dict()
+                except Exception as e:
+                    logger.debug("graph_state hydration failed — continuing without it: %s", e, exc_info=True)
+                if approval_handler is None:
+                    approval_handler = self._autonomous_approval_handler()
+
             # Add user message
             session["messages"].append({"role": "user", "content": prompt})
             seq_num += 1
@@ -562,6 +576,34 @@ class AgentRuntime:
 
     def clear_steering(self, session_id: str) -> None:
         self._steering_inbox.pop(session_id, None)
+
+    def _autonomous_approval_handler(self) -> Any:
+        """Synthetic handler for autonomous mode — auto-approves safe tools.
+
+        Dangerous commands (`check_dangerous_command`) are still denied and
+        surface as `NEEDS_HUMAN_REVIEW` in the graph layer, so the agent
+        remains safe even in fully autonomous mode.
+        """
+        from wisp.tools._utils import check_dangerous_command
+
+        async def handler(event: dict[str, Any]) -> bool:
+            try:
+                name = str(event.get("name", "") or "")
+                args = event.get("arguments", {}) or {}
+                # Hard block dangerous bash regardless of autonomy
+                if name == "run_bash":
+                    cmd = str(args.get("command", "") or "")
+                    danger = check_dangerous_command(cmd)
+                    if danger:
+                        logger.warning("Autonomous gate blocked dangerous command: %s (%s)", cmd[:80], danger)
+                        return False
+                # In autonomous mode, all non-dangerous tools auto-approve
+                return True
+            except Exception as e:
+                logger.warning("Autonomous handler failed — denying: %s", e, exc_info=True)
+                return False
+
+        return handler
 
     def _get_core(self, session_id: str | None = None) -> Any:
         """Get the core for *session_id*, creating if needed.

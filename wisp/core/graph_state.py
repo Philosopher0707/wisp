@@ -198,6 +198,55 @@ class GraphState:
         return cls(workspace=workspace, session_id=session_id, max_iterations=mi)
 
     @classmethod
+    def from_session(
+        cls,
+        session: dict[str, Any],
+        config: Any | None = None,
+        *,
+        max_iterations: int | None = None,
+    ) -> GraphState:
+        """Hydrate a GraphState from a live `AgentRuntime` session dict.
+
+        Pulls `id/workspace/messages` and reconciles `max_iterations` from
+        `config.graph_max_iterations` (autonomous) or `config.max_iterations`.
+        Never raises — falls back to `initial()` on malformed session.
+        """
+        try:
+            if not isinstance(session, dict):
+                logger.warning("GraphState.from_session expected dict, got %s", type(session).__name__)
+                return cls.initial()
+            sid = str(session.get("id", "") or "")
+            ws = str(session.get("workspace", "") or "")
+            msgs = list(session.get("messages", []) or [])
+            # Hydrate code_files from session messages: any write_file/edit_file tool_result
+            # already carries diff metadata but not contents — best-effort via ChangeTracker sync
+            # is done by caller; here we just seed from explicit session["graph_state"] if present.
+            if isinstance(session.get("graph_state"), dict):
+                # Round-trip through from_dict so caps/validation apply
+                base = cls.from_dict(session["graph_state"])
+                base.session_id = sid or base.session_id
+                base.workspace = ws or base.workspace
+                # Messages from live session win (more recent than persisted snapshot)
+                base.messages = msgs
+                return base
+            # Fresh state seeded from session + config
+            mi = max_iterations
+            if mi is None and config is not None:
+                try:
+                    mi = int(getattr(config, "graph_max_iterations", None) or getattr(config, "max_iterations", 5))
+                except Exception:
+                    mi = 5
+            if mi is None:
+                mi = 5
+            return cls.initial(workspace=ws, session_id=sid, max_iterations=mi)
+        except Exception as e:
+            logger.warning("GraphState.from_session failed — falling back to initial: %s", e, exc_info=True)
+            try:
+                return cls.initial(workspace=str(session.get("workspace", "")) if isinstance(session, dict) else "", session_id=str(session.get("id", "")) if isinstance(session, dict) else "")
+            except Exception:
+                return cls.initial()
+
+    @classmethod
     def from_dict(cls, data: dict[str, Any]) -> GraphState:
         """Backwards-compatible loader — missing keys yield safe defaults."""
         if not isinstance(data, dict):

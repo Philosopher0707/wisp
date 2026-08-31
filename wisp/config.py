@@ -253,6 +253,12 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Enable graph-level infinite-loop / oscillation detection",
         "env_var": "WISP_GRAPH_OSCILLATION_GUARD",
     },
+    "autonomous": {
+        "type": bool,
+        "default": False,
+        "description": "Fully autonomous coding agent — auto-approves safe writes/bash, drives GraphRunner without human prompts (Cursor/Aider mode). Dangerous commands still blocked.",
+        "env_var": "WISP_AUTONOMOUS",
+    },
 }
 
 
@@ -470,6 +476,7 @@ class WispConfig:
     graph_max_iterations: int
     graph_sandbox_timeout: float
     graph_oscillation_guard: bool
+    autonomous: bool
     chars_per_token: int
 
     # ── Modes & permissions ───────────────────────────────────────
@@ -709,6 +716,9 @@ class WispConfig:
         )
         object.__setattr__(self, "graph_oscillation_guard",
             _parse_bool(get_setting("graph_oscillation_guard", "true"), True)
+        )
+        object.__setattr__(self, "autonomous",
+            _parse_bool(get_setting("autonomous", "false"), False)
         )
 
     def load_context_files(self) -> str:
