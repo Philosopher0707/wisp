@@ -55,3 +55,4 @@ from wisp.repl.commands.session_cmds import (  # noqa: F401
     cmd_sessions,
 )
 from wisp.repl.commands.skills import cmd_skill  # noqa: F401
+from wisp.repl.commands.doctor import cmd_doctor  # noqa: F401

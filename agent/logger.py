@@ -129,10 +129,21 @@ def install(level: int = logging.WARNING) -> Path:
         Path to the runtime log file.
     """
     global _installed, _handlers
-    if _installed:
-        return get_log_path()
-
     current_path = get_log_path()
+    if _installed:
+        # Idempotent unless LOG_PATH was monkey-patched (tests do this)
+        try:
+            if _handlers:
+                existing = getattr(_handlers[0], "baseFilename", None)
+                if existing and Path(existing).resolve() == current_path.resolve():
+                    return current_path
+            else:
+                return current_path
+        except Exception:
+            return current_path
+        # LOG_PATH changed — reinstall for new location
+        uninstall()
+        current_path = get_log_path()
     file_handler = _ensure_file_handler(current_path)
 
     file_logger = logging.getLogger(_FILE_LOGGER_NAME)

@@ -266,10 +266,47 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
     from wisp.repl.completion import install_readline_completion
     install_readline_completion()
 
+    # ── Pre-flight verification (non-blocking, 100 ms budget) ────────
+    # Isolated from main REPL loop: failures degrade to warning banner,
+    # never abort startup. Stored for /doctor.
+    preflight_report = None
+    preflight_banner = ""
+    try:
+        from wisp.core.doctor import run_preflight_sync, format_banner
+
+        preflight_report = run_preflight_sync(workspace=config.workspace, config=config, timeout_s=0.1)
+        preflight_banner = format_banner(preflight_report)
+        try:
+            import wisp.core.doctor as _doctor_mod
+
+            _doctor_mod._LAST_REPORT = preflight_report  # type: ignore[attr-defined]
+        except Exception:
+            pass
+    except Exception as e:
+        logger.debug("pre-flight failed: %s", e, exc_info=True)
+
     if is_continuation:
         transport.print_continuation_banner(sys.stdout, session, config.model)
     else:
         transport.print_banner(sys.stderr, session, config.model, skill=skill)
+
+    # Pre-flight banner line (one-liner, color-coded)
+    if preflight_banner:
+        try:
+            from wisp.colors import success as _success, warning as _warning
+
+            if preflight_report is not None and getattr(preflight_report, "healthy", False):
+                sys.stderr.write(f"  {_success(preflight_banner)}\n")
+            else:
+                sys.stderr.write(f"  {_warning(preflight_banner)}\n")
+            sys.stderr.flush()
+        except Exception:
+            # Fallback plain
+            try:
+                sys.stderr.write(f"  {preflight_banner}\n")
+                sys.stderr.flush()
+            except Exception:
+                pass
 
     # Fallback DB banner: TCC can force UnifiedStore to /tmp/wisp_fallback.db
     # without any error at CompositionRoot construction — surface it here so
