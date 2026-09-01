@@ -6,10 +6,10 @@ Goals from §1:
   * truncated JSON badges (… +35 more) → [✓ Read 4 files · 18 KB]
 
 Design:
-  * Dedicated sink .agent/runtime.log via WatchedFileHandler (5MB x3).
-  * Installs a logging.Filter on handlers for wisp.core.provider_stream
-    and wisp.tools.registry that reroutes WARNING+ to file and suppresses
-    propagation to the Rich console.
+  * Dedicated sink .agent/runtime.log via RotatingFileHandler (5 MB × 3)
+    with WatchedFileHandler fallback for logrotate-aware deployments.
+  * Installs a logging.Filter on noisy loggers that reroutes WARNING+ to
+    file and suppresses propagation to the Rich console.
   * Console stdout sees only structured events (tool_call/result, content,
     rich tables from synthesizer.py) — no interleaved "Provider stream…"
     lines.
@@ -22,164 +22,234 @@ from __future__ import annotations
 import logging
 import logging.handlers
 import re
-import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Final
 
-__all__ = ["install", "uninstall", "truncate_payload", "LOG_PATH", "BadgeFilter"]
+__all__ = ["install", "uninstall", "truncate_payload", "LOG_PATH", "BadgeFilter", "get_log_path"]
 
-LOG_PATH = Path(".agent/runtime.log")
-# Match the ugly truncation the user saw: keys often numbered, covers both
-# payload kinds: "… +35 more", "… +28 more", "... +23 more"
-_TRUNC_RE = re.compile(r"\s*…\s*\+\d+\s*more\s*|\s*\.\.\.\s*\+\d+\s*more\s*")
-# SSE / provider diagnostics that belong in file only
-_PROVIDER_SILENCE = re.compile(
-    r"(Provider stream|SSE|reconnect|empty_choice_chunks|usable=0|ssek? lines=|stream_stats)",
+LOG_PATH: Final[Path] = Path(".agent/runtime.log")
+_FILE_LOGGER_NAME: Final[str] = "agent.runtime"
+
+# Match truncation sentinels the model/tool layer emits:
+# "… +35 more", "… +28 more", "... +23 more" (unicode ellipsis vs three dots)
+_TRUNC_RE: Final[re.Pattern[str]] = re.compile(
+    r"\s*…\s*\+\d+\s*more\s*|\s*\.\.\.\s*\+\d+\s*more\s*"
+)
+
+# SSE / provider diagnostics that belong in file only — never on stdout.
+_PROVIDER_SILENCE: Final[re.Pattern[str]] = re.compile(
+    r"(Provider stream|SSE|reconnect|empty_choice_chunks|usable=0|ssek? lines=|stream_stats|chunk_stall|backoff)",
     re.I,
 )
-_TOOL_MISS_RE = re.compile(r"Tool .*read_file failed|File not found:", re.I)
 
-# Dedicated logger that always goes to file
-FILE_LOGGER_NAME = "agent.runtime"
+# Tool miss / 404 warnings — also file-only.
+_TOOL_MISS_RE: Final[re.Pattern[str]] = re.compile(
+    r"Tool .*read_file failed|File not found:|Path not found:|Cannot list|no matches for",
+    re.I,
+)
 
-_installed = False
+# Loggers whose WARNING+ output is considered engine chrome.
+_NOISY_LOGGERS: Final[tuple[str, ...]] = (
+    "wisp.core.provider_stream",
+    "wisp.tools.registry",
+    "wisp.tools.filesystem",
+    "wisp.tools.bash",
+    "wisp.multi_agent",
+    "wisp.core.stateless",
+    "wisp.infra.circuit_breaker",
+    "wisp.composition",
+)
+
+_installed: bool = False
 _handlers: list[logging.Handler] = []
-_console_patched = False
-_orig_stderr_write = None
 
 
 class BadgeFilter(logging.Filter):
-    """Copies selected warnings to file sink and mutes their console propagation."""
+    """Copy selected warnings to file sink and mute console propagation.
+
+    The filter inspects each LogRecord's rendered message. Messages matching
+    provider-noise or tool-miss patterns are forwarded verbatim to the
+    dedicated file logger (``agent.runtime``) and then suppressed (``False``)
+    so the original handler/console never sees them. All other records pass
+    through unchanged.
+    """
 
     def filter(self, record: logging.LogRecord) -> bool:  # type: ignore[override]
-        msg = record.getMessage()
-        # Route these verbatim to file; suppress console echo
+        try:
+            msg: str = record.getMessage()
+        except Exception:
+            return True
         if _PROVIDER_SILENCE.search(msg) or _TOOL_MISS_RE.search(msg):
-            # Ensure file logger sees it
-            logging.getLogger(FILE_LOGGER_NAME).handle(record)
-            return False  # suppress original handler propagation
+            try:
+                logging.getLogger(_FILE_LOGGER_NAME).handle(record)
+            except Exception:
+                pass
+            return False
         return True
 
 
-def _ensure_file_handler() -> logging.Handler:
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+def _ensure_file_handler(log_path: Path = LOG_PATH) -> logging.Handler:
+    """Create (and ensure directory for) the rotating file handler."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    # Prefer size-bounded rotation; fall back to plain file if unavailable.
     try:
-        h: logging.Handler = logging.handlers.RotatingFileHandler(
-            LOG_PATH, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+        handler: logging.Handler = logging.handlers.RotatingFileHandler(
+            str(log_path),
+            maxBytes=5 * 1024 * 1024,
+            backupCount=3,
+            encoding="utf-8",
         )
     except Exception:
-        h = logging.FileHandler(LOG_PATH, encoding="utf-8")
-    h.setLevel(logging.DEBUG)
-    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
-    h.setFormatter(fmt)
-    return h
+        try:
+            handler = logging.handlers.WatchedFileHandler(str(log_path), encoding="utf-8")  # type: ignore[attr-defined]
+        except Exception:
+            handler = logging.FileHandler(str(log_path), encoding="utf-8")
+    handler.setLevel(logging.DEBUG)
+    handler.setFormatter(formatter)
+    return handler
+
+
+def get_log_path() -> Path:
+    """Return the current runtime log path (honors monkey-patched LOG_PATH)."""
+    # LOG_PATH is module-level Final but tests monkey-patch it; read dynamically.
+    import agent.logger as _self  # type: ignore
+
+    return Path(getattr(_self, "LOG_PATH", LOG_PATH))
 
 
 def install(level: int = logging.WARNING) -> Path:
-    """Install interceptor. Idempotent. Returns log path."""
-    global _installed, _handlers, _console_patched, _orig_stderr_write
+    """Install the interceptor. Idempotent. Returns the log path.
+
+    Args:
+        level: Minimum level for the root sink. WARNING (default) captures
+            engine retries and tool 404s without flooding DEBUG.
+
+    Returns:
+        Path to the runtime log file.
+    """
+    global _installed, _handlers
     if _installed:
-        return LOG_PATH
+        return get_log_path()
 
-    file_h = _ensure_file_handler()
-    file_logger = logging.getLogger(FILE_LOGGER_NAME)
+    current_path = get_log_path()
+    file_handler = _ensure_file_handler(current_path)
+
+    file_logger = logging.getLogger(_FILE_LOGGER_NAME)
     file_logger.setLevel(logging.DEBUG)
-    file_logger.addHandler(file_h)
+    # Avoid duplicate handlers if install called after manual patching.
+    if file_handler not in file_logger.handlers:
+        file_logger.addHandler(file_handler)
     file_logger.propagate = False
-    _handlers.append(file_h)
+    _handlers.append(file_handler)
 
-    # Attach BadgeFilter to offending loggers' existing handlers, and add
-    # file sink for anything that still emits.
-    for name in ("wisp.core.provider_stream", "wisp.tools.registry", "wisp.multi_agent", "wisp.core.stateless"):
+    # Attach filter + file sink to every noisy logger.
+    for name in _NOISY_LOGGERS:
         lg = logging.getLogger(name)
-        lg.addFilter(BadgeFilter())
-        # Ensure warnings also land in file even when filtered
-        lg.addHandler(file_h)
-        # Keep propagation off to avoid duplicate console via root
-        # (but only for these noisy loggers; root stays for user events)
-        # We leave propagate True for now to preserve other handlers,
-        # filter already mutes the noisy messages.
-    # Capture root warnings that slipped through (e.g., direct warnings.warn)
-    # via a dedicated handler that only handles already-filtered levels
+        # Avoid double-adding the same filter.
+        if not any(isinstance(f, BadgeFilter) for f in lg.filters):
+            lg.addFilter(BadgeFilter())
+        if file_handler not in lg.handlers:
+            lg.addHandler(file_handler)
+
+    # Root catch-all for stray warnings (e.g., warnings.warn -> logging).
     root = logging.getLogger()
-    if level <= logging.WARNING:
-        # Don't double-add if already present
-        if file_h not in root.handlers:
-            root.addHandler(file_h)
+    if level <= logging.WARNING and file_handler not in root.handlers:
+        root.addHandler(file_handler)
 
     _installed = True
-    return LOG_PATH
+    return current_path
 
 
 def uninstall() -> None:
+    """Remove the interceptor and close file handlers. Idempotent."""
     global _installed, _handlers
     if not _installed:
         return
-    for h in _handlers:
+    for handler in list(_handlers):
         try:
-            logging.getLogger(FILE_LOGGER_NAME).removeHandler(h)
-            logging.getLogger().removeHandler(h)
-            for name in ("wisp.core.provider_stream", "wisp.tools.registry", "wisp.multi_agent", "wisp.core.stateless"):
-                try:
-                    logging.getLogger(name).removeHandler(h)
-                except Exception:
-                    pass
-            h.close()
+            logging.getLogger(_FILE_LOGGER_NAME).removeHandler(handler)
+        except Exception:
+            pass
+        try:
+            logging.getLogger().removeHandler(handler)
+        except Exception:
+            pass
+        for name in _NOISY_LOGGERS:
+            try:
+                logging.getLogger(name).removeHandler(handler)
+            except Exception:
+                pass
+        try:
+            handler.close()
         except Exception:
             pass
     _handlers.clear()
-    # Remove BadgeFilter instances
-    for name in ("wisp.core.provider_stream", "wisp.tools.registry", "wisp.multi_agent", "wisp.core.stateless"):
+
+    for name in _NOISY_LOGGERS:
         lg = logging.getLogger(name)
-        for f in list(lg.filters):
-            if isinstance(f, BadgeFilter):
-                lg.removeFilter(f)
+        for filt in list(lg.filters):
+            if isinstance(filt, BadgeFilter):
+                lg.removeFilter(filt)
+
     _installed = False
 
 
 def truncate_payload(payload: Any, max_chars: int = 4000) -> Any:
-    """Replace ugly truncated JSON/text with concise execution badges.
+    """Replace ugly truncated payloads with concise badges.
 
-    Used before CLITransport renders tool_result so primary display never
-    shows “… +35 more”. Returns either original payload (if clean) or a
-    badge string/dict.
+    Used before ``CLITransport._render_event`` so the primary display never
+    shows ``… +35 more``. Returns the original payload when clean, or a
+    badge string/dict when truncated.
 
     Examples:
-      truncated JSON -> "[✓ Read 4 files · 18 KB]"
-      truncated list -> "[✓ Listed 12 entries · truncated]"
+        >>> truncate_payload("x" * 100 + " … +35 more")
+        '[✓ Output truncated · 112 chars — see .agent/runtime.log]'
+        >>> truncate_payload({"data": "y" * 5000 + " … +28 more"})
+        {'data': '[✓ Output truncated · 5013 chars — see .agent/runtime.log]'}
+
+    Args:
+        payload: Tool result payload (str, dict with ``data``, or any).
+        max_chars: Hard ceiling; payloads longer than this with truncation
+            markers are also badged.
+
+    Returns:
+        Badged payload of same shape when truncated, otherwise original.
     """
     try:
         if isinstance(payload, dict):
-            # Already-structured tool result with data field — keep dict wrapper
             data = payload.get("data", None)
             if isinstance(data, str) and _TRUNC_RE.search(data):
-                size_kb = len(data) // 1024
-                files = data.count(".rs") + data.count(".py") + data.count(".ts")
-                badge = "[✓ Read {} files · {} KB]".format(files, max(1, size_kb)) if files else "[✓ Output truncated · {} KB — see .agent/runtime.log]".format(max(1, size_kb))
-                out = dict(payload)
+                size_kb = max(1, len(data) // 1024)
+                files = data.count(".rs") + data.count(".py") + data.count(".ts") + data.count(".go")
+                if files:
+                    badge = f"[✓ Read {files} files · {size_kb} KB]"
+                else:
+                    badge = f"[✓ Output truncated · {size_kb} KB — see .agent/runtime.log]"
+                out: dict[str, Any] = dict(payload)
                 out["data"] = badge
                 return out
-            # Generic dict without 'data' key but truncated string inside (e.g. direct payload)
-            # Only replace if the whole dict is essentially the truncated string is handled above
             return payload
+
         if isinstance(payload, str):
             if _TRUNC_RE.search(payload):
                 size_kb = len(payload) // 1024
                 files = payload.count(".rs") + payload.count(".py")
                 if files:
-                    return "[✓ Read {} files · {} KB]".format(files, max(1, size_kb))
-                # Generic badge
-                return "[✓ Output truncated · {} chars — see .agent/runtime.log]".format(len(payload))
-            if len(payload) > max_chars and "… +".lower() in payload.lower():
+                    return f"[✓ Read {files} files · {max(1, size_kb)} KB]"
+                return f"[✓ Output truncated · {len(payload)} chars — see .agent/runtime.log]"
+            lowered = payload.lower()
+            if len(payload) > max_chars and ("… +" in lowered or "... +" in lowered):
                 return payload[: max_chars // 2] + "\n[✓ Truncated — see .agent/runtime.log]"
         return payload
     except Exception:
         return payload
 
 
-# Convenience: allow `python -m agent.logger` to demo
 if __name__ == "__main__":
     p = install()
-    logging.getLogger("wisp.core.provider_stream").warning("Provider stream closed without any content [sse_lines=2 …]")
+    logging.getLogger("wisp.core.provider_stream").warning(
+        "Provider stream closed without any content [sse_lines=2 usable=0 empty_choice_chunks=1 finish=stop] (attempt 1/3) — retrying"
+    )
     logging.getLogger("wisp.tools.registry").warning("Tool read_file failed: File not found: src/system/mod.rs")
     print(f"Logged to {p}, console should be clean")
