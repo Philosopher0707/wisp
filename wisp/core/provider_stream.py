@@ -24,7 +24,22 @@ from wisp.core.events import (
     provider_status as provider_status_event,
 )
 
+try:
+    from wisp.core.transport import is_transient_error as _is_transport_transient
+    from wisp.core.transport import is_transient_status as _is_transient_status
+except ImportError:
+    _is_transport_transient = None  # type: ignore[assignment]
+    _is_transient_status = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
+
+
+class _TransientOpenError(Exception):
+    """Internal sentinel for transient errors during open_stream()."""
+
+    def __init__(self, cause: BaseException):
+        super().__init__(str(cause))
+        self.__cause__ = cause
 
 
 def _flatten_event(ev: Any) -> dict[str, Any]:
@@ -56,55 +71,107 @@ async def guarded_provider_stream(
     """
     bookkeeping = set(bookkeeping_types)
     last_transient_status: int | None = None
+    last_transient_error: BaseException | None = None
     for attempt in range(1, max_attempts + 1):
         got_meaningful = False
         stream_stats: dict[str, Any] | None = None
         api_status: int | None = None
-        stream = open_stream()
+        transient_error: BaseException | None = None
+        stream = None
         stalled = False
         try:
-            while True:
-                if not got_meaningful:
-                    try:
-                        event = await asyncio.wait_for(
-                            stream.__anext__(),
-                            timeout=first_token_deadline_s,
-                        )
-                    except StopAsyncIteration:
-                        break  # clean end, no meaningful events
-                    except asyncio.TimeoutError:
-                        stalled = True
-                        break
-                else:
-                    try:
-                        event = await asyncio.wait_for(
-                            stream.__anext__(),
-                            timeout=chunk_deadline_s,
-                        )
-                    except StopAsyncIteration:
-                        break
-                    except asyncio.TimeoutError:
-                        stalled = True
-                        break
-                normalized = normalize_event(event)
-                ntype = str(normalized.get("type", ""))
-                if ntype == "stream_stats":
-                    stream_stats = normalized
-                if ntype == "error":
-                    st = normalized.get("status")
-                    if isinstance(st, int) and (st == 429 or st >= 500):
-                        api_status = st
-                        continue  # transient — hold it for the retry path
+            try:
+                stream = open_stream()
+            except BaseException as exc:
+                # open_stream itself can raise transient socket errors (e.g., WriteTimeout during
+                # large payload flush, ConnectionResetError)
+                if _is_transport_transient is not None and _is_transport_transient(exc):
+                    transient_error = exc
+                    last_transient_error = exc
+                    # Treat as stalled/empty for retry path
+                    stalled = False
+                    # Fall through to retry handling below
+                    raise _TransientOpenError(exc)  # internal sentinel to trigger retry
+                raise
+            try:
+                while True:
+                    if not got_meaningful:
+                        try:
+                            event = await asyncio.wait_for(
+                                stream.__anext__(),
+                                timeout=first_token_deadline_s,
+                            )
+                        except StopAsyncIteration:
+                            break  # clean end, no meaningful events
+                        except asyncio.TimeoutError:
+                            stalled = True
+                            break
+                        except BaseException as exc:
+                            if _is_transport_transient is not None and _is_transport_transient(exc):
+                                transient_error = exc
+                                last_transient_error = exc
+                                break
+                            raise
+                    else:
+                        try:
+                            event = await asyncio.wait_for(
+                                stream.__anext__(),
+                                timeout=chunk_deadline_s,
+                            )
+                        except StopAsyncIteration:
+                            break
+                        except asyncio.TimeoutError:
+                            stalled = True
+                            break
+                        except BaseException as exc:
+                            if _is_transport_transient is not None and _is_transport_transient(exc):
+                                transient_error = exc
+                                last_transient_error = exc
+                                break
+                            raise
+                    normalized = normalize_event(event)
+                    ntype = str(normalized.get("type", ""))
+                    if ntype == "stream_stats":
+                        stream_stats = normalized
+                    if ntype == "error":
+                        st = normalized.get("status")
+                        # Use hardened is_transient_status if available
+                        _is_trans = False
+                        if _is_transient_status is not None:
+                            _is_trans = _is_transient_status(st)
+                        else:
+                            _is_trans = isinstance(st, int) and (st == 429 or st >= 500)
+                        if _is_trans:
+                            api_status = st if isinstance(st, int) else 500
+                            continue  # transient — hold it for the retry path
+                        yield event
+                        return  # permanent API error: surface immediately
+                    if ntype not in bookkeeping:
+                        got_meaningful = True
                     yield event
-                    return  # permanent API error: surface immediately
-                if ntype not in bookkeeping:
-                    got_meaningful = True
-                yield event
-        finally:
-            if stalled or not got_meaningful:
-                aclose = getattr(stream, "aclose", None)
-                if aclose is not None:
-                    await aclose()
+            finally:
+                if stalled or not got_meaningful or transient_error is not None:
+                    if stream is not None:
+                        aclose = getattr(stream, "aclose", None)
+                        if aclose is not None:
+                            try:
+                                await aclose()
+                            except Exception:
+                                pass
+        except _TransientOpenError:
+            # Already captured transient_error, proceed to retry handling
+            pass
+        except BaseException as exc:
+            # Check if this is a transient error that should be retried
+            # This catches exceptions that escaped the inner loop (e.g., from
+            # normalize_event or unexpected stream errors)
+            if _is_transport_transient is not None and _is_transport_transient(exc):
+                transient_error = exc
+                last_transient_error = exc
+                # Fall through to retry logic
+            else:
+                # Not transient — re-raise to outer handler (stateless will handle)
+                raise
 
         if got_meaningful:
             if stalled:
@@ -121,14 +188,27 @@ async def guarded_provider_stream(
                 ))
             return
 
-        if attempt < max_attempts and (stalled or api_status is not None or not got_meaningful) is not False:
+        # Include transient socket errors in retry decision
+        if transient_error is not None:
+            # Transient socket/write errors are always retryable (unless got_meaningful)
+            if got_meaningful:
+                # Mid-stream transient after partial output — treat as chunk stall,
+                # not retry, to avoid duplication (same as stalled handling above)
+                pass
+            else:
+                # No meaningful content yet — retry
+                pass
+        if attempt < max_attempts and (stalled or api_status is not None or transient_error is not None or not got_meaningful) is not False:
             pass  # fall through to shared retry handling below
-        if got_meaningful and api_status is None:
+        if got_meaningful and api_status is None and transient_error is None:
             return
 
         if attempt < max_attempts:
             last_transient_status = api_status or last_transient_status
-            if stalled:
+            if transient_error is not None:
+                reason = f"transient {type(transient_error).__name__}: {str(transient_error)[:120]}"
+                detail = ""
+            elif stalled:
                 reason = f"no data for {first_token_deadline_s:.0f}s"
                 detail = ""
             else:
@@ -151,9 +231,12 @@ async def guarded_provider_stream(
             # Immediate retry into a throttling endpoint reproduces the
             # failure; a short jittered pause gives the window a chance
             # to reopen without meaningfully delaying healthy streams.
-            # 429/5xx get progressively longer waits than silent-empty
-            # closes — the server explicitly told us to slow down.
-            if api_status is not None:
+            # 429/5xx and socket write timeouts get progressively longer
+            # waits — the server explicitly told us to slow down or the
+            # socket needs time to recover.
+            if transient_error is not None:
+                base = 1.0 * attempt
+            elif api_status is not None:
                 base = 1.5 * attempt
             elif not stalled:
                 base = 0.75
@@ -174,6 +257,12 @@ async def guarded_provider_stream(
                 f"Provider kept rejecting requests (HTTP {last_transient_status}) "
                 f"after {max_attempts} attempts — rate limited or degraded. "
                 "Try again shortly.",
+                recoverable=True,
+            ))
+        elif last_transient_error is not None:
+            yield _flatten_event(error_event(
+                f"Provider failed with transient socket error ({type(last_transient_error).__name__}: {str(last_transient_error)[:120]}) "
+                f"after {max_attempts} attempts — connection unstable. Try again shortly.",
                 recoverable=True,
             ))
         else:

@@ -120,7 +120,41 @@ class OpenAIProvider(Provider):
         """
         import requests
 
-        payload = self._build_payload(system_prompt, messages, tools, stream=True)
+        # ── Build payload with pruning guard
+        # Large historical tool results (30+ calls) would otherwise stall
+        # the socket write (60s timeout) — prune before serialization.
+        # Primary pruning happens in stateless.py, but this is a safety net
+        # for direct provider calls.
+        _pruned_messages = messages
+        try:
+            from wisp.core.context_pruner import prune_messages as _prune
+
+            # Quick size estimate — only prune if over 150KB (well below 200KB ceiling)
+            # to avoid overhead for small turns
+            _est = len(json.dumps(messages).encode("utf-8", errors="ignore"))
+            if _est > 150000:
+                _pruned_messages = _prune(messages)
+                logger.debug("Pre-pruned messages from %d to %d bytes", _est, len(json.dumps(_pruned_messages).encode("utf-8", errors="ignore")))
+        except Exception:
+            _pruned_messages = messages
+
+        payload = self._build_payload(system_prompt, _pruned_messages, tools, stream=True)
+
+        # Defensive re-check: if payload still >200KB, prune again and rebuild
+        try:
+            from wisp.core.context_pruner import prune_messages as _prune2
+
+            _payload_str = json.dumps(payload)
+            if len(_payload_str.encode("utf-8", errors="ignore")) > 200000:
+                _pruned2 = _prune2(messages)
+                payload = self._build_payload(system_prompt, _pruned2, tools, stream=True)
+                logger.debug(
+                    "Pruned payload from %d to %d bytes before dispatch",
+                    len(_payload_str),
+                    len(json.dumps(payload).encode("utf-8", errors="ignore")),
+                )
+        except Exception:
+            pass
 
         headers = {
             "Content-Type": "application/json",
@@ -128,19 +162,39 @@ class OpenAIProvider(Provider):
         }
 
         try:
-            resp = requests.post(
-                f"{self.api_base}/chat/completions",
-                json=payload,
-                headers=headers,
-                stream=True,
-                # (connect, read): read is BETWEEN BYTES, not total — a
-                # stalled endpoint must raise fast so the caller's retry
-                # gets a live attempt instead of ticking to its own
-                # timeout on a dead socket. Reasoning models stream
-                # reasoning deltas continuously, so 60s of byte-silence
-                # means the stream is dead, not thinking.
-                timeout=(10, 60),
-            )
+            # Hardened transport: granular timeouts (connect 15, write 60, read 120, pool 30)
+            # with TCP keepalive and retry for write timeouts / RemoteProtocolError.
+            # Use `requests` module directly (not a Session) so tests that patch
+            # `requests.post` continue to work; hardened_post will handle pooling
+            # and retry internally and delegate to the patched function.
+            try:
+                from wisp.core.transport import hardened_post, HARDENED_TIMEOUT
+
+                resp = hardened_post(
+                    requests,
+                    f"{self.api_base}/chat/completions",
+                    json=payload,
+                    headers=headers,
+                    stream=True,
+                    timeout=HARDENED_TIMEOUT,
+                    max_attempts=3,
+                )
+            except ImportError:
+                # Fallback to raw requests with hardened timeout tuple
+                resp = requests.post(
+                    f"{self.api_base}/chat/completions",
+                    json=payload,
+                    headers=headers,
+                    stream=True,
+                    # (connect, read): read is BETWEEN BYTES, not total — a
+                    # stalled endpoint must raise fast so the caller's retry
+                    # gets a live attempt instead of ticking to its own
+                    # timeout on a dead socket. Reasoning models stream
+                    # reasoning deltas continuously, so 60s of byte-silence
+                    # means the stream is dead, not thinking.
+                    # Write timeout is folded into read for requests (60s)
+                    timeout=(15, 120),
+                )
             if resp.status_code != 200:
                 body = resp.text[:500]
                 # Make 401 actionable: tell the user how to fix it via /provider
@@ -288,10 +342,19 @@ class OpenAIProvider(Provider):
             yield {"type": "done", "done_reason": done_reason}
 
         except requests.exceptions.ConnectionError as exc:
-            yield {"type": "error", "message": f"Connection error: {exc}"}
+            yield {"type": "error", "message": f"Connection error: {exc}", "status": 500}
         except requests.exceptions.Timeout as exc:
-            yield {"type": "error", "message": f"Request timed out: {exc}"}
-        except Exception as exc:
+            yield {"type": "error", "message": f"Request timed out: {exc}", "status": 500}
+        except BaseException as exc:
+            # Check for httpcore.WriteTimeout, RemoteProtocolError, etc.
+            try:
+                from wisp.core.transport import is_transient_error
+
+                if is_transient_error(exc):
+                    yield {"type": "error", "message": f"Transient {type(exc).__name__}: {exc}", "status": 500}
+                    return
+            except ImportError:
+                pass
             logger.exception("OpenAI provider stream failed")
             yield {"type": "error", "message": str(exc)}
 
@@ -317,12 +380,28 @@ class OpenAIProvider(Provider):
     def health_check(self) -> dict[str, Any]:
         """Check provider health by attempting to list models."""
         import requests
+
+        # Use hardened timeouts for health check as well (connect 15, read 120)
         try:
-            resp = requests.get(
-                f"{self.api_base}/models",
-                headers=self._auth_headers(),
-                timeout=10,
-            )
+            try:
+                from wisp.core.transport import HARDENED_TIMEOUT, hardened_get
+
+                resp = hardened_get(
+                    requests,
+                    f"{self.api_base}/models",
+                    headers=self._auth_headers(),
+                    timeout=HARDENED_TIMEOUT,
+                    max_attempts=3,
+                )
+            except ImportError:
+                resp = requests.get(
+                    f"{self.api_base}/models",
+                    headers=self._auth_headers(),
+                    timeout=10,
+                )
+        except Exception as exc:
+            return {"status": "unhealthy", "error": str(exc)}
+        try:
             if resp.status_code != 200:
                 return {"status": "unhealthy", "error": f"HTTP {resp.status_code}"}
             data = resp.json()
@@ -333,12 +412,27 @@ class OpenAIProvider(Provider):
     def list_models(self) -> list[dict[str, Any]]:
         """List available models from the API."""
         import requests
+
         try:
-            resp = requests.get(
-                f"{self.api_base}/models",
-                headers=self._auth_headers(),
-                timeout=10,
-            )
+            try:
+                from wisp.core.transport import HARDENED_TIMEOUT, hardened_get
+
+                resp = hardened_get(
+                    requests,
+                    f"{self.api_base}/models",
+                    headers=self._auth_headers(),
+                    timeout=HARDENED_TIMEOUT,
+                    max_attempts=3,
+                )
+            except ImportError:
+                resp = requests.get(
+                    f"{self.api_base}/models",
+                    headers=self._auth_headers(),
+                    timeout=10,
+                )
+        except Exception:
+            return []
+        try:
             if resp.status_code != 200:
                 return []
             data = resp.json()

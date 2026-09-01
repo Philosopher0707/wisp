@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
 
+from wisp.core.context_pruner import PrunerConfig, prune_messages
 from wisp.core.events import (
     CODE_TURN_TIMEOUT,
     CODE_PROVIDER_STREAM,
@@ -248,10 +249,22 @@ class WispAgentCore:
             partial_content: list[str] = []
             has_tool_calls = False
 
+            # ── Pre-flight pruning: condense historical tool payloads
+            # Prevents unbounded bloat (30+ tool calls) that stalls
+            # the HTTP write (60s timeout) and blows context window.
+            # Keep last 3 tool results full, condense older read_file/
+            # list_files to status/diff, enforce 8KB/200KB ceilings.
+            _pruned_for_provider: list[dict[str, Any]] | None = None
+            try:
+                _pruned_for_provider = prune_messages(messages)
+            except Exception:
+                logger.debug("Context pruning failed — sending raw messages", exc_info=True)
+                _pruned_for_provider = None
+
             try:
                 async for event in self._guarded_provider_stream(
                     system_prompt=system_prompt,
-                    messages=messages,
+                    messages=_pruned_for_provider if _pruned_for_provider is not None else messages,
                     tools=tools if tools else None,
                 ):
                     # Normalize event
@@ -433,13 +446,24 @@ class WispAgentCore:
                     yield normalized
 
             except Exception as exc:
-                # Retry transient errors (connection, timeout, 5xx) up to 2 times.
-                # "timed out" matches requests' ReadTimeout wording; "timeout"
-                # alone misses it.
+                # Retry transient errors (connection, timeout, 5xx, write timeout,
+                # RemoteProtocolError) up to 2 times. Use hardened is_transient_error
+                # for socket-level errors (httpcore.WriteTimeout etc.) plus
+                # string fallback for wrapped errors.
+                try:
+                    from wisp.core.transport import is_transient_error as _is_transient
+
+                    is_transient = _is_transient(exc)
+                except ImportError:
+                    _is_transient = lambda e: False  # type: ignore
+
+                # Fallback string check for cases where is_transient misses
+                # (e.g., wrapped errors without proper type)
                 exc_str = str(exc).lower()
-                is_transient = any(
-                    s in exc_str for s in ("connection", "timeout", "timed out", "reset", "502", "503", "504", "refused", "broken pipe")
-                )
+                if not is_transient:
+                    is_transient = any(
+                        s in exc_str for s in ("connection", "timeout", "timed out", "reset", "502", "503", "504", "refused", "broken pipe", "writetimeout", "readtimeout", "remoteprotocol", "write operation timed out")
+                    )
                 if is_transient and iteration < 2:
                     import asyncio as _aio
                     backoff = 2 ** iteration  # 1s, 2s
@@ -626,7 +650,13 @@ class WispAgentCore:
         })
         wrapped_up = False
         try:
-            async for ev in self._stream_events_async(system_prompt, messages, None):
+            # Prune before final wrap-up as well — same payload bloat risk
+            _wrap_messages: list[dict[str, Any]] | None = None
+            try:
+                _wrap_messages = prune_messages(messages)
+            except Exception:
+                _wrap_messages = None
+            async for ev in self._stream_events_async(system_prompt, _wrap_messages if _wrap_messages is not None else messages, None):
                 etype = ev.get("type", "")
                 if etype in ("content", "text", "token"):
                     text = ev.get("text") or ev.get("content") or ""
@@ -663,6 +693,14 @@ class WispAgentCore:
         if self.provider is None:
             raise RuntimeError("WispAgentCore has no provider configured")
         provider = self.provider
+
+        # ── Safety-net pruning: ensure large payloads never reach transport
+        # Even if caller forgot to prune, we prune here to enforce write
+        # timeout budget (60s) and prevent payload stalling.
+        try:
+            messages = prune_messages(messages)
+        except Exception:
+            logger.debug("Pruning in _stream_events_async failed", exc_info=True)
 
         # Define the streaming callable for circuit breaker
         async def _call_provider() -> AsyncIterator[dict[str, Any]]:

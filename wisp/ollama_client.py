@@ -14,7 +14,7 @@ import json
 import logging
 import threading
 import time
-from typing import Optional, Iterator
+from typing import Any, Optional, Iterator
 
 import requests
 
@@ -92,7 +92,15 @@ class OllamaClient:
         self.model = config.model
         self.temperature = config.temperature
         self.max_tokens = config.max_tokens
-        self._session = session or requests.Session()
+        if session is not None:
+            self._session = session
+        else:
+            try:
+                from wisp.core.transport import get_hardened_session
+
+                self._session = get_hardened_session()
+            except ImportError:
+                self._session = requests.Session()
         # SECURITY: stream_response is stored in a ContextVar (not a
         # mutable instance attribute) so that concurrent turns cannot
         # overwrite or leak each other's response data.
@@ -115,7 +123,14 @@ class OllamaClient:
     def check_health(self) -> bool:
         """Verify Ollama is running and the model is available."""
         try:
-            resp = self._session.get(f"{self.base_url}/api/tags", timeout=5)
+            # Hardened: explicit connect/read timeouts (write not needed for GET)
+            try:
+                from wisp.core.transport import HARDENED_TIMEOUT
+
+                _timeout = (HARDENED_TIMEOUT.connect, HARDENED_TIMEOUT.read)
+            except ImportError:
+                _timeout = 5
+            resp = self._session.get(f"{self.base_url}/api/tags", timeout=_timeout)
             resp.raise_for_status()
             data = resp.json()
             models = data.get("models", [])
@@ -144,7 +159,13 @@ class OllamaClient:
     def list_models(self) -> list[dict]:
         """List all available models from Ollama."""
         try:
-            resp = self._session.get(f"{self.base_url}/api/tags", timeout=5)
+            try:
+                from wisp.core.transport import HARDENED_TIMEOUT
+
+                _timeout = (HARDENED_TIMEOUT.connect, HARDENED_TIMEOUT.read)
+            except ImportError:
+                _timeout = 5
+            resp = self._session.get(f"{self.base_url}/api/tags", timeout=_timeout)
             resp.raise_for_status()
             return resp.json().get("models", [])
         except requests.exceptions.RequestException as e:
@@ -184,11 +205,23 @@ class OllamaClient:
             logger.warning("Could not auto-detect context length: %s", e)
         return 128000  # conservative default
 
-    def _post_with_retry(self, endpoint: str, payload: dict, timeout: int = 600):
+    def _post_with_retry(self, endpoint: str, payload: dict, timeout: Any = 600):
         """Make a POST request with exponential backoff retry.
 
-        Retries on transient failures (5xx errors, connection errors).
+        Retries on transient failures (5xx, connection errors, write timeouts,
+        RemoteProtocolError) with hardened timeouts.
         """
+        # Resolve timeout to hardened tuple if int passed
+        try:
+            from wisp.core.transport import HARDENED_TIMEOUT, is_transient_error
+
+            if isinstance(timeout, int):
+                # For non-streaming POST, use (connect, read) where read is generous
+                # Write is folded into read for requests
+                timeout = (HARDENED_TIMEOUT.connect, HARDENED_TIMEOUT.read)
+        except ImportError:
+            is_transient_error = lambda e: False  # type: ignore
+
         url = f"{self.base_url}/api/{endpoint}"
         max_retries = 3
         base_delay = 1  # seconds
@@ -199,28 +232,53 @@ class OllamaClient:
                 resp.raise_for_status()
                 return resp
             except requests.exceptions.HTTPError as e:
-                if e.response.status_code >= 500:
-                    # Server error - retry
+                status = getattr(e.response, "status_code", None)
+                try:
+                    from wisp.core.transport import is_transient_status
+
+                    if is_transient_status(status) and attempt < max_retries - 1:
+                        delay = base_delay * (2 ** attempt) + __import__("random").uniform(0, 0.5)
+                        logger.warning("Server error %d, retrying in %.2fs...", status, delay)
+                        _async_sleep_if_in_loop(delay)
+                        continue
+                except ImportError:
+                    pass
+                if status is not None and status >= 500:
                     if attempt < max_retries - 1:
                         delay = base_delay * (2 ** attempt)
-                        logger.warning("Server error %d, retrying in %ds...", e.response.status_code, delay)
+                        logger.warning("Server error %d, retrying in %ds...", status, delay)
                         _async_sleep_if_in_loop(delay)
                         continue
                 raise OllamaError(f"Ollama HTTP error: {e}")
-            except requests.exceptions.ConnectionError:
-                if attempt < max_retries - 1:
-                    delay = base_delay * (2 ** attempt)
-                    logger.warning("Connection error, retrying in %ds...", delay)
-                    _async_sleep_if_in_loop(delay)
-                    continue
-                raise OllamaError(f"Cannot connect to Ollama at {self.base_url}. Is Ollama running?")
-            except requests.exceptions.Timeout:
-                if attempt < max_retries - 1:
-                    delay = base_delay * (2 ** attempt)
-                    logger.warning("Request timed out, retrying in %ds...", delay)
-                    _async_sleep_if_in_loop(delay)
-                    continue
-                raise OllamaError(f"Ollama request timed out after {timeout}s")
+            except BaseException as e:
+                # Unified transient check: covers TimeoutError, ConnectionResetError,
+                # httpcore.WriteTimeout, RemoteProtocolError, etc.
+                try:
+                    from wisp.core.transport import is_transient_error as _is_trans
+
+                    if _is_trans(e) and attempt < max_retries - 1:
+                        delay = base_delay * (2 ** attempt) + __import__("random").uniform(0, 0.5)
+                        logger.warning("Transient %s, retrying in %.2fs: %s", type(e).__name__, delay, e)
+                        _async_sleep_if_in_loop(delay)
+                        continue
+                except ImportError:
+                    pass
+                # Fallback for requests-specific
+                if isinstance(e, requests.exceptions.ConnectionError):
+                    if attempt < max_retries - 1:
+                        delay = base_delay * (2 ** attempt)
+                        logger.warning("Connection error, retrying in %ds...", delay)
+                        _async_sleep_if_in_loop(delay)
+                        continue
+                    raise OllamaError(f"Cannot connect to Ollama at {self.base_url}. Is Ollama running?")
+                if isinstance(e, requests.exceptions.Timeout):
+                    if attempt < max_retries - 1:
+                        delay = base_delay * (2 ** attempt)
+                        logger.warning("Request timed out, retrying in %ds...", delay)
+                        _async_sleep_if_in_loop(delay)
+                        continue
+                    raise OllamaError(f"Ollama request timed out after {timeout}s")
+                raise
 
     def generate(self, system_prompt: str, messages: list[dict], tools: Optional[list] = None) -> dict:
         """Generate a response (non-streaming) with optional tool-calling.
@@ -235,6 +293,19 @@ class OllamaClient:
             options["num_predict"] = self.max_tokens
 
         ollama_messages = to_ollama_messages(messages)
+        # Prune historical tool results to prevent write timeout on large payloads
+        try:
+            from wisp.core.context_pruner import prune_messages
+
+            # Estimate payload size and prune if needed
+            import json as _json
+
+            _est = len(_json.dumps(ollama_messages).encode("utf-8", errors="ignore"))
+            if _est > 150000:
+                ollama_messages = prune_messages(ollama_messages)  # type: ignore[arg-type]
+                logger.debug("Pruned Ollama messages from %d to %d bytes", _est, len(_json.dumps(ollama_messages).encode("utf-8", errors="ignore")))
+        except Exception:
+            pass
 
         payload = {
             "model": self.model,
@@ -292,6 +363,18 @@ class OllamaClient:
             options["num_predict"] = self.max_tokens
 
         ollama_messages = to_ollama_messages(messages)
+        # Prune for write timeout budget (same as non-stream)
+        try:
+            from wisp.core.context_pruner import prune_messages
+
+            import json as _json2
+
+            _est2 = len(_json2.dumps(ollama_messages).encode("utf-8", errors="ignore"))
+            if _est2 > 150000:
+                ollama_messages = prune_messages(ollama_messages)  # type: ignore[arg-type]
+                logger.debug("Pruned stream Ollama messages from %d to %d bytes", _est2, len(_json2.dumps(ollama_messages).encode("utf-8", errors="ignore")))
+        except Exception:
+            pass
 
         payload = {
             "model": self.model,
@@ -541,17 +624,34 @@ class OllamaClient:
                 # Stream error - stop yielding
                 break
 
-    def _post_stream(self, endpoint: str, payload: dict, timeout: int = 600):
+    def _post_stream(self, endpoint: str, payload: dict, timeout: Any = 600):
         """Stream a response from Ollama using unified NDJSON/SSE parser.
 
         Auto-detects format (NDJSON vs text/event-stream) and yields
         parsed JSON dicts for each event.
 
         Retries with exponential backoff on transient failures (connection errors,
-        timeouts, 5xx server errors) before any data arrives.
-        Errors mid-stream are raised immediately (cannot safely retry).
+        timeouts, write timeouts, RemoteProtocolError, 5xx) before any data
+        arrives. Errors mid-stream are raised immediately (cannot safely retry).
         Handles KeyboardInterrupt gracefully for clean Ctrl+C handling.
+
+        Uses hardened timeouts: connect 15s, write 60s (large payloads),
+        read 120s (between bytes), pool 30s, with TCP keepalive.
         """
+        # Resolve timeout to hardened tuple
+        try:
+            from wisp.core.transport import HARDENED_TIMEOUT
+
+            if isinstance(timeout, int):
+                # Map int timeout to hardened read, keep write budget
+                # For streaming, read is between bytes (120s), write is 60s for payload flush
+                timeout = (HARDENED_TIMEOUT.connect, max(HARDENED_TIMEOUT.write, HARDENED_TIMEOUT.read))
+            elif timeout is None:
+                timeout = (HARDENED_TIMEOUT.connect, HARDENED_TIMEOUT.read)
+        except ImportError:
+            if timeout is None:
+                timeout = 600
+
         url = f"{self.base_url}/api/{endpoint}"
         max_retries = 3
         base_delay = 1
@@ -605,4 +705,29 @@ class OllamaClient:
                     continue
                 raise OllamaError(f"Ollama streaming request timed out after {timeout}s.")
             except requests.exceptions.RequestException as e:
+                # Check if this wrapped exception is actually transient (e.g., WriteTimeout wrapped)
+                try:
+                    from wisp.core.transport import is_transient_error
+
+                    if is_transient_error(e) and attempt < max_retries - 1 and not events_yielded:
+                        delay = base_delay * (2 ** attempt) + __import__("random").uniform(0, 0.5)
+                        logger.warning("Transient %s, retrying in %.2fs: %s", type(e).__name__, delay, e)
+                        _async_sleep_if_in_loop(delay)
+                        continue
+                except ImportError:
+                    pass
                 raise OllamaError(f"Ollama streaming error: {e}")
+            except BaseException as e:
+                # Catch-all for httpcore.WriteTimeout, RemoteProtocolError, etc.
+                # These are not subclasses of requests.exceptions.RequestException
+                try:
+                    from wisp.core.transport import is_transient_error
+
+                    if is_transient_error(e) and attempt < max_retries - 1 and not events_yielded:
+                        delay = base_delay * (2 ** attempt) + __import__("random").uniform(0, 0.5)
+                        logger.warning("Transient %s, retrying in %.2fs: %s", type(e).__name__, delay, e)
+                        _async_sleep_if_in_loop(delay)
+                        continue
+                except ImportError:
+                    pass
+                raise
