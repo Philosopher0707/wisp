@@ -89,6 +89,15 @@ You are NOT done when the code is merely written — you are done when it is VER
 4. Never report success without a passing verification run in this conversation. Summaries must state which command verified the work and its result.
 """
 
+VERIFICATION_LOOP_RULES_NO_BASH = """
+## Verification loop (self-correction)
+You are NOT done when the code is merely written — you are done when it is VERIFIED:
+1. After every code change, run verification with the available tools: `run_tests` or `lsp_diagnostics` (or `list_files`/`read_file` checks) — see `## Environment` and `## Tools available`.
+2. A verification counts only when it reports 0 errors and exit status 0. A non-zero result means the task is NOT complete.
+3. If verification fails: read the failure output, fix the cause, and re-run. Repeat until it passes or you can prove the failure predates your change.
+4. Never report success without a passing verification in this conversation. Summaries must state which check verified the work.
+"""
+
 DEFAULT_SYSTEM = DEFAULT_BASE_SYSTEM + VERIFICATION_LOOP_RULES
 
 

@@ -59,23 +59,41 @@ def _get_background_manager(agent):
     return getattr(orch, "background_agents", None)
 
 
-@register("spawn", "Spawn a subagent for a scoped task", aliases=("sub", "delegate"), usage="/spawn <task description>")
+@register("spawn", "Spawn a subagent for a scoped task", aliases=("sub", "delegate"), usage="/spawn [role] <task description>")
 def cmd_spawn(agent, args: str):
     if not args:
-        print(info("Usage: /spawn <task description>"))
-        print(dim("Example: /spawn research the best Python HTTP client library"))
+        print(info("Usage: /spawn [role] <task description>"))
+        print(dim("Roles: coder, reviewer, tester, researcher, planner, debugger, generalist (default)"))
+        print(dim("Example: /spawn researcher research the best Python HTTP client library"))
+        print(dim("Example: /spawn to explore this dir  (defaults to generalist)"))
         return
     from wisp.multi_agent import SubagentContract
     from wisp.async_utils import run_sync_coro
+    # Parse optional leading role: "/spawn researcher <task>" -> role=researcher
+    # so the vague "/spawn to explore this dir" stays generalist but an
+    # explicit "/spawn coder fix foo.py" gets the right toolset without
+    # requiring the tool-based spawn.
+    _valid_roles = {"coder", "reviewer", "tester", "researcher", "planner", "debugger", "generalist"}
+    role = "generalist"
+    task = args
+    _first, _, _rest = args.partition(" ")
+    if _first.lower() in _valid_roles and _rest.strip():
+        role = _first.lower()
+        task = _rest.strip()
+    elif _first.lower() in _valid_roles and not _rest.strip():
+        print(error(f"Role '{_first}' requires a task description"))
+        print(dim("Usage: /spawn [role] <task description>"))
+        return
     contract = SubagentContract(
         name="spawn",
-        task=args,
+        task=task,
+        role=role,
         timeout_seconds=120,
         max_iterations=15,
         progress_callback=_print_subagent_progress,
     )
     orch = _get_orchestrator(agent)
-    print(accent(f"🧬 Spawning subagent: {args[:60]}..."))
+    print(accent(f"🧬 Spawning subagent [{role}]: {task[:60]}..."))
     result = run_sync_coro(orch.run(contract))
     status = success("✓") if result.success else error("✗")
     if result.timed_out:

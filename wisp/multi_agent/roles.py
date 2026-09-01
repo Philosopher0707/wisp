@@ -206,7 +206,7 @@ Rules:
 Your job is to assist with a wide variety of tasks.
 
 Rules:
-- You have access to all tools.
+- You have access to the tools listed in "Tools available" below — use only those, don't hallucinate others (run_bash etc. may be absent in restricted permission modes; use list_files/read_file for exploring).
 - Focus on the assigned task and work efficiently.
 - When done, provide a clear summary of what you did.
 - If you edit files, list the changed paths.

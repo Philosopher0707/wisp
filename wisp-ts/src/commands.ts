@@ -280,12 +280,22 @@ register("skill", "Load or list skills", (agent, args) => {
 
 register("spawn", "Spawn a subagent for a scoped task", (agent, args) => {
   if (!args) {
-    process.stdout.write(info("Usage: /spawn <task description>") + "\n");
+    process.stdout.write(info("Usage: /spawn [role] <task description>") + "\n");
     return;
   }
-  const contract = new SubagentContract({ name: "spawn", task: args, timeoutSeconds: 120, maxIterations: 15 });
+  const validRoles = new Set(["coder","reviewer","tester","researcher","planner","debugger","generalist"]);
+  let role = "generalist";
+  let task = args;
+  const firstSpace = args.indexOf(" ");
+  const first = firstSpace === -1 ? args : args.slice(0, firstSpace);
+  const rest = firstSpace === -1 ? "" : args.slice(firstSpace+1).trim();
+  if (validRoles.has(first.toLowerCase()) && rest) {
+    role = first.toLowerCase();
+    task = rest;
+  }
+  const contract = new SubagentContract({ name: "spawn", task, role, timeoutSeconds: 120, maxIterations: 15 });
   const orch = new SubagentOrchestrator(agent.config, agent.config.workspace || ".");
-  process.stdout.write(accent(`Spawning subagent: ${args.slice(0, 60)}...`) + "\n");
+  process.stdout.write(accent(`Spawning subagent [${role}]: ${task.slice(0, 60)}...`) + "\n");
   orch.run(contract).then((result) => {
     const status = result.success ? success("✓") : error("✗");
     process.stdout.write(`${status} Subagent done (${result.elapsedSeconds.toFixed(1)}s, ${result.iterationsUsed} iterations)\n`);

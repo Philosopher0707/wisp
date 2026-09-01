@@ -271,6 +271,19 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
     else:
         transport.print_banner(sys.stderr, session, config.model, skill=skill)
 
+    # Fallback DB banner: TCC can force UnifiedStore to /tmp/wisp_fallback.db
+    # without any error at CompositionRoot construction — surface it here so
+    # the operator knows history is in tmp and should /workspace to a real dir.
+    try:
+        _store_path = str(getattr(getattr(root, "store", None), "db_path", "") or "")
+        if "wisp_fallback.db" in _store_path:
+            sys.stderr.write(
+                dim(f"  Workspace blocked by TCC; using fallback DB {_store_path} — run /workspace ~/Documents/wisp\n")
+            )
+            sys.stderr.flush()
+    except Exception:
+        pass
+
     # Warn if no provider is configured — turns will produce no output
     provider_name = getattr(config, "provider", None)
     if not provider_name:

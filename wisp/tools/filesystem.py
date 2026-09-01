@@ -340,6 +340,8 @@ def tool_edit_file_multi(path: str, workspace: str, edits: list[dict], file_lock
 
 def tool_list_files(path: str = ".", workspace: str = ".", pattern: str = "*") -> str:
     """List files and directories, optionally matching a pattern."""
+    import os as _os
+
     _validate_string(path, "path")
     _validate_string(pattern, "pattern", 200)
     full_path = _resolve_path(path, workspace)
@@ -347,6 +349,28 @@ def tool_list_files(path: str = ".", workspace: str = ".", pattern: str = "*") -
         raise ToolError(f"Path not found: {path}")
     if not full_path.is_dir():
         return f"(not a directory) {path}"
+
+    # ── macOS TCC probe ── ~/Documents/Desktop/Downloads require Full Disk
+    # Access; glob() silently returns [] while os.scandir raises PermissionError.
+    # Fail fast with an actionable message instead of the misleading
+    # "(no matches for '*' in .)" line.
+    try:
+        with _os.scandir(full_path):
+            pass
+    except PermissionError as e:
+        raise ToolError(
+            f"Cannot list {path}: permission denied ({e}). "
+            f"macOS blocks access to ~/Documents/Desktop/Downloads without Full Disk Access. "
+            f"Switch workspace to the project directory (e.g. /workspace {Path(workspace).resolve()}) "
+            f"and retry."
+        )
+    except OSError as e:
+        if getattr(e, "errno", None) == 1:  # Operation not permitted (TCC)
+            raise ToolError(
+                f"Cannot list {path}: operation not permitted ({e}). "
+                f"macOS blocks access to ~/Documents/Desktop/Downloads without Full Disk Access. "
+                f"Switch workspace to the project directory and retry."
+            )
 
     # Prevent glob traversal with '..' or absolute patterns
     if pattern.startswith("/") or ".." in Path(pattern).parts:
@@ -358,6 +382,30 @@ def tool_list_files(path: str = ".", workspace: str = ".", pattern: str = "*") -
         raise ToolError(f"Invalid glob pattern '{pattern}': {e}")
 
     if not entries:
+        # Glob "*" excludes dotfiles, so an empty result can mean "only hidden
+        # files" or "pattern didn't match" rather than "empty directory".
+        # Probe with os.listdir to distinguish and to surface TCC blocks that
+        # glob swallowed.
+        try:
+            raw = _os.listdir(full_path)
+            visible = [n for n in raw if not n.startswith(".")]
+            if visible:
+                return f"(no matches for '{pattern}' in {path} — {len(visible)} visible entries exist but pattern didn't match)"
+            if raw:
+                return f"(no matches for '{pattern}' in {path} — only hidden files present; try pattern \".*\" )"
+        except PermissionError as e:
+            raise ToolError(
+                f"Cannot list {path}: permission denied ({e}). "
+                f"macOS blocks access to ~/Documents/Desktop/Downloads without Full Disk Access. "
+                f"Switch workspace to the project directory and retry."
+            )
+        except OSError as e:
+            if getattr(e, "errno", None) == 1:
+                raise ToolError(
+                    f"Cannot list {path}: operation not permitted ({e}). "
+                    f"macOS blocks access to ~/Documents/Desktop/Downloads without Full Disk Access. "
+                    f"Switch workspace to the project directory and retry."
+                )
         return f"(no matches for '{pattern}' in {path})"
 
     result = []

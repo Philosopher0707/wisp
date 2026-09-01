@@ -288,9 +288,15 @@ class WispAgentCore:
                                     tc_event = dict(single)
                                     # Role restriction: reject before any gating
                                     if _allowed_set is not None and str(single.get("name", "")) not in _allowed_set:
+                                        _blocked_name = str(single.get("name", ""))
+                                        _hint = ""
+                                        if _blocked_name == "run_bash":
+                                            _hint = " — run_bash is blocked in auto_edit mode; use list_files/read_file instead, or switch to full mode"
+                                        elif _blocked_name in ("spawn", "fanout"):
+                                            _hint = " — subagent spawning is blocked in auto_edit; switch to full mode"
                                         yield _flatten_event(
                                             error_event(
-                                                f"Blocked: tool '{single.get('name', '')}' is not allowed for this agent's role",
+                                                f"Blocked: tool '{_blocked_name}' is not allowed for this agent's role{_hint}",
                                                 recoverable=True,
                                             )
                                         )
@@ -343,9 +349,15 @@ class WispAgentCore:
                         # keep protocol-consistent history (same replay
                         # hazard as approval denial).
                         if _allowed_set is not None and str(normalized.get("name", "")) not in _allowed_set:
+                            _blocked_name2 = str(normalized.get("name", ""))
+                            _hint2 = ""
+                            if _blocked_name2 == "run_bash":
+                                _hint2 = " — run_bash is blocked in auto_edit mode; use list_files/read_file instead, or switch to full mode"
+                            elif _blocked_name2 in ("spawn", "fanout"):
+                                _hint2 = " — subagent spawning is blocked in auto_edit; switch to full mode"
                             normalized["_blocked"] = (
-                                f"tool '{normalized.get('name', '')}' is not "
-                                f"allowed for this agent's role")
+                                f"tool '{_blocked_name2}' is not "
+                                f"allowed for this agent's role{_hint2}")
                             pending_tool_calls.append(normalized)
                             tool_results_events_early.append(
                                 self._refusal_result_event(normalized))
@@ -819,7 +831,18 @@ class WispAgentCore:
         # cores sharing one workspace share this dict).
         subagent_prompt = str(session.get("subagent_system_prompt", "") or "")
         prompt_variant = hashlib.sha256(subagent_prompt.encode("utf-8")).hexdigest()[:16] if subagent_prompt else ""
-        cache_key = (ws, context_mt, prompt_variant)
+        # Role-restricted toolsets MUST also be part of the key — a generalist
+        # (33 tools under auto_edit) and a reviewer (10 tools) share the same
+        # workspace/mtime but must not reuse each other's tools block, or the
+        # prompt advertises run_bash that the schema hides and the model
+        # hallucinates it anyway (-> "Blocked: not allowed for this role").
+        allowed = session.get("allowed_tools")
+        allowed_set: set[str] | None = None
+        allowed_hash = ""
+        if isinstance(allowed, (list, tuple, set)) and "all" not in {str(a).lower() for a in allowed}:
+            allowed_set = {str(a) for a in allowed}
+            allowed_hash = hashlib.sha256(",".join(sorted(allowed_set)).encode()).hexdigest()[:8]
+        cache_key = (ws, context_mt, prompt_variant, allowed_hash)  # type: ignore[assignment]
         static_prompt = _SYSTEM_PROMPT_CACHE.get(cache_key)
 
         if static_prompt is None:
@@ -852,12 +875,24 @@ class WispAgentCore:
             if subagent_prompt:
                 role_extra = (role_extra + "\n\n" + subagent_prompt).strip() if role_extra else subagent_prompt
 
+            # Verification loop prose mentions run_bash unconditionally; for
+            # role-restricted subagents without run_bash (auto_edit generalist)
+            # that prose is a hallucination seed — switch to the no-bash
+            # variant that mentions run_tests/lsp_diagnostics instead.
+            if not verification_enabled:
+                _default_system = DEFAULT_BASE_SYSTEM
+            elif allowed_set is not None and "run_bash" not in allowed_set:
+                from wisp.context_assembler import VERIFICATION_LOOP_RULES_NO_BASH as _NO_BASH
+
+                # Can't reuse assembler.default_system (it already has the
+                # run_bash variant); rebuild from base + alt rules.
+                _default_system = DEFAULT_BASE_SYSTEM + _NO_BASH
+            else:
+                _default_system = assembler.default_system
+
             ctx = PromptContext.from_legacy(
                 workspace=ws,
-                default_system=(
-                    assembler.default_system if verification_enabled
-                    else DEFAULT_BASE_SYSTEM
-                ),
+                default_system=_default_system,
                 role_extra=role_extra or None,
                 skills_block=skills_block or None,
                 project_context=project_ctx or None,
@@ -867,7 +902,7 @@ class WispAgentCore:
             )
             static_prompt = assembler.build(ctx)
 
-            tools_block = self._build_tools_block()
+            tools_block = self._build_tools_block(allowed_set)
             if tools_block:
                 static_prompt += "\n\n" + tools_block
 
@@ -1303,7 +1338,7 @@ class WispAgentCore:
             logger.debug("Failed to get relevant files: %s", e)
         return ""
 
-    def _build_tools_block(self) -> str:
+    def _build_tools_block(self, allowed_set: set[str] | None = None) -> str:
         """Generate the prompt's tool menu from live registries.
 
         Single source of truth: TOOL_SCHEMAS plus whatever extensions
@@ -1311,6 +1346,11 @@ class WispAgentCore:
         is announced automatically; renaming one cannot leave a phantom
         name behind (the previous hardcoded dict drifted exactly this
         way — it advertised 'spawn_subagent', which never existed).
+
+        When *allowed_set* is given (role-restricted subagents), only those
+        tools are advertised — otherwise the prompt lists tools the model
+        cannot call, which it hallucinates anyway and then hits the
+        "Blocked: not allowed for this role" gate (live /spawn repro).
         """
         entries: list[tuple[str, str]] = []
         seen: set[str] = set()
@@ -1328,9 +1368,12 @@ class WispAgentCore:
         for schema in TOOL_SCHEMAS:
             fn = schema.get("function", {}) if isinstance(schema, dict) else {}
             name, first = _describe(fn)
-            if name and name not in seen:
-                seen.add(name)
-                entries.append((name, first))
+            if not name or name in seen:
+                continue
+            if allowed_set is not None and name not in allowed_set:
+                continue
+            seen.add(name)
+            entries.append((name, first))
 
         ext_count = 0
         if self.extensions is not None:
@@ -1338,10 +1381,13 @@ class WispAgentCore:
                 for schema in self.extensions.tools() or []:
                     fn = schema.get("function", {}) if isinstance(schema, dict) else {}
                     name, first = _describe(fn)
-                    if name and name not in seen:
-                        seen.add(name)
-                        entries.append((name, first))
-                        ext_count += 1
+                    if not name or name in seen:
+                        continue
+                    if allowed_set is not None and name not in allowed_set:
+                        continue
+                    seen.add(name)
+                    entries.append((name, first))
+                    ext_count += 1
             except Exception as e:
                 logger.warning("Failed to list extension tools: %s", e)
 
