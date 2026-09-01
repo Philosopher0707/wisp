@@ -713,22 +713,24 @@ class CLITransport(Transport):
         return prompt
 
     async def approve(self, tool_call: dict) -> bool:
-        """Interactive approval with session-level per-tool memory.
+        """Interactive approval with session-level per-tool memory and structured diff preview.
 
         Prompts the user with choices:
-          y = yes (once)  Y = yes (always this tool this session)
-          a = approve ALL tools this session
-          n = no (once)   N = no (always deny this tool)
+          y = yes (once)         Y = yes (always this tool this session)
+          v = view diff (edits)  a = approve ALL tools this session
+          n = no (once)          N = no (always deny this tool)
           d = deny ALL tools this session
           c = cancel turn
         """
+        from wisp.cli.approval import (
+            parse_tool_approval,
+            render_approval_badge,
+            render_approval_options,
+            render_diff_view,
+        )
+
         tool_name = tool_call.get("name", "unknown")
-        args_text = ""
         args_map = redact_sensitive_tool_args(tool_call.get("arguments", {}))
-        if args_map:
-            args_text = ", ".join(f"{k}={v!r}" for k, v in list(args_map.items())[:3])
-            if len(args_map) > 3:
-                args_text += ", ..."
 
         # Autonomous mode: safe tools auto-approve without prompt (Cursor-like)
         # Dangerous commands still denied via check_dangerous_command in the
@@ -765,18 +767,13 @@ class CLITransport(Transport):
         if self._spinner is not None:
             self._spinner.stop()
 
+        # Parse tool approval info with sanitized parameters & diff stats
+        approval_info = parse_tool_approval(tool_call)
+
         # Show interactive prompt
         print(file=sys.stderr)  # blank line before prompt
-        print(
-            warning(
-                f"{status_symbols()['warn']}  {tool_name}({args_text})"
-            ),
-            file=sys.stderr,
-        )
-        print(
-            dim("     [y] yes  [Y] always this  [a] all on  [n] no  [N] always no  [d] all off  [c] cancel"),
-            file=sys.stderr,
-        )
+        print(render_approval_badge(approval_info), file=sys.stderr)
+        print(render_approval_options(approval_info.is_file_edit), file=sys.stderr)
         # stdout may be the only stream a wrapper/GUI surfaces; an approval
         # prompt invisible there reads as an infinitely "working" spinner.
         print(warning("⏸ waiting for your approval to continue…"), flush=True)
@@ -788,39 +785,51 @@ class CLITransport(Transport):
         if typeahead is not None and typeahead.enabled:
             typeahead.pause()
         try:
-            raw = await self._read_approval_answer_with_reminders()
-        except (EOFError, OSError):
-            return False
+            while True:
+                try:
+                    raw = await self._read_approval_answer_with_reminders(is_file_edit=approval_info.is_file_edit)
+                except (EOFError, OSError):
+                    return False
+                choice = raw.strip()
+
+                # Expandable diff toggle
+                if approval_info.is_file_edit and choice in ("v", "V", "view", "diff"):
+                    diff_output = render_diff_view(approval_info)
+                    print(file=sys.stderr)
+                    print(diff_output, file=sys.stderr)
+                    print(file=sys.stderr)
+                    print(render_approval_badge(approval_info), file=sys.stderr)
+                    print(render_approval_options(approval_info.is_file_edit), file=sys.stderr)
+                    continue
+
+                if choice in ("y", "Y"):
+                    if choice == "Y":
+                        self._approval_state.allow_tool(tool_name)
+                    self._get_spinner().start(f"{tool_name} {_args_preview(args_map)}")
+                    return True
+                if choice == "a":
+                    self._approval_state.set_auto()
+                    self._get_spinner().start(f"{tool_name} {_args_preview(args_map)}")
+                    return True
+                if choice in ("n", "N"):
+                    if choice == "N":
+                        self._approval_state.deny_tool(tool_name)
+                    return False
+                if choice == "d":
+                    self._approval_state.set_block()
+                    return False
+                if choice == "c":
+                    # Honest cancel: unwind the turn (the REPL renders it like an
+                    # interrupt), not a silent deny that lets the agent continue.
+                    print(dim(f"{status_symbols()['cancel']}  Turn cancelled."), file=sys.stderr)
+                    raise asyncio.CancelledError(
+                        f"User cancelled the turn at the approval prompt for {tool_name}"
+                    )
+                # Any other key = deny
+                return False
         finally:
             if typeahead is not None and typeahead.enabled:
                 typeahead.resume()
-        choice = raw.strip()
-
-        if choice in ("y", "Y"):
-            if choice == "Y":
-                self._approval_state.allow_tool(tool_name)
-            self._get_spinner().start(f"{tool_name} {_args_preview(args_map)}")
-            return True
-        if choice == "a":
-            self._approval_state.set_auto()
-            self._get_spinner().start(f"{tool_name} {_args_preview(args_map)}")
-            return True
-        if choice in ("n", "N"):
-            if choice == "N":
-                self._approval_state.deny_tool(tool_name)
-            return False
-        if choice == "d":
-            self._approval_state.set_block()
-            return False
-        if choice == "c":
-            # Honest cancel: unwind the turn (the REPL renders it like an
-            # interrupt), not a silent deny that lets the agent continue.
-            print(dim(f"{status_symbols()['cancel']}  Turn cancelled."), file=sys.stderr)
-            raise asyncio.CancelledError(
-                f"User cancelled the turn at the approval prompt for {tool_name}"
-            )
-        # Any other key = deny
-        return False
 
     @staticmethod
     def _read_approval_line(prompt_text: str, stop: threading.Event) -> str:
@@ -854,12 +863,13 @@ class CLITransport(Transport):
 
     _APPROVAL_REMINDER_EVERY_S = 45.0
 
-    async def _read_approval_answer_with_reminders(self) -> str:
+    async def _read_approval_answer_with_reminders(self, is_file_edit: bool = False) -> str:
         """Read the answer, re-announcing on stdout while it pends.
 
         An unanswered prompt must never be indistinguishable from work in
         progress — the original hang report was exactly that confusion.
         """
+        hint = "(y/n/v/a/d/c)" if is_file_edit else "(y/n/a/d/c)"
         while True:
             try:
                 return await asyncio.wait_for(
@@ -868,8 +878,9 @@ class CLITransport(Transport):
                 )
             except asyncio.TimeoutError:
                 print(warning(
-                    "⏸ still waiting for approval — check the prompt above "
-                    "(y/n/a/d/c)"), flush=True)
+                    f"⏸ still waiting for approval — check the prompt above "
+                    f"{hint}"), flush=True)
+
 
     async def _send(self, event: dict) -> None:
         """Send compatibility shim.

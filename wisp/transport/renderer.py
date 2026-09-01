@@ -46,15 +46,22 @@ def format_arg_value(key: str, value) -> str:
         if len(s) > 60:
             s = s[:57] + "..."
         return s
-    if key in ("content", "text", "old", "new"):
+    if key in ("content", "text", "old", "new", "old_text", "new_text", "patch"):
         if isinstance(value, str):
+            lines = len(value.splitlines())
+            if lines > 1:
+                return f"({lines} lines, {len(value)} chars)"
             return f"({len(value)} chars)"
         return str(value)[:60]
+    if key in ("edits",):
+        if isinstance(value, list):
+            return f"({len(value)} edit blocks)"
+        return str(value)[:40]
     if key in ("arguments", "args"):
         if isinstance(value, dict):
             return f"({len(value)} keys)"
         return str(value)[:40]
-    s = str(value)
+    s = " ".join(str(value).split())
     if len(s) > 80:
         s = s[:77] + "..."
     return s
