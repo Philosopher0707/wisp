@@ -247,8 +247,18 @@ async def _check_stream_hygiene() -> CheckResult:
                 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
             except Exception:
                 pass
-            # Check filters installed
-            noisy = ["wisp.core.provider_stream", "wisp.tools.registry", "wisp.multi_agent", "wisp.core.stateless"]
+            # Check filters installed — must match agent.logger._NOISY_LOGGERS
+            noisy = [
+                "wisp.core.provider_stream",
+                "wisp.tools.registry",
+                "wisp.tools.filesystem",
+                "wisp.tools.bash",
+                "wisp.multi_agent",
+                "wisp.core.stateless",
+                "wisp.core.runtime",
+                "wisp.infra.circuit_breaker",
+                "wisp.composition",
+            ]
             has_filter = 0
             has_file_handler = 0
             for n in noisy:
@@ -291,17 +301,20 @@ async def _check_stream_hygiene() -> CheckResult:
         except Exception as e:
             return CheckResult(name, commit, CheckStatus.WARN, f"logger check: {e}", (time.monotonic() - t0) * 1000, details)
 
-        # 2. Buffered renderer + collapsible log state — ultra-light file probe (<5 ms)
+        # 2. Buffered renderer + collapsible log state — importlib-based (<5 ms), workspace-independent
         try:
-            # Avoid heavy rich imports on first pre-flight; just verify files exist and contain key symbols
-            _sr_path = Path("agent/ui/stream_renderer.py")
-            _fmt_path = Path("agent/ui/formatter.py")
-            if not _sr_path.exists():
-                return CheckResult(name, commit, CheckStatus.WARN, "agent/ui/stream_renderer.py not found", (time.monotonic() - t0) * 1000, details)
-            if not _fmt_path.exists():
-                return CheckResult(name, commit, CheckStatus.WARN, "agent/ui/formatter.py not found", (time.monotonic() - t0) * 1000, details)
+            import importlib.util as _ilu
+
+            # Use find_spec (import-system) not filesystem Path, so check works even when cwd is not wisp root (e.g. ~/Documents/feroz)
+            if _ilu.find_spec("agent.ui.stream_renderer") is None:
+                return CheckResult(name, commit, CheckStatus.WARN, "agent.ui.stream_renderer not found", (time.monotonic() - t0) * 1000, details)
+            if _ilu.find_spec("agent.ui.formatter") is None:
+                return CheckResult(name, commit, CheckStatus.WARN, "agent.ui.formatter not found", (time.monotonic() - t0) * 1000, details)
+            # Verify key symbols via spec origin (fast file read, not heavy import)
             try:
-                _sr_text = _sr_path.read_text(encoding="utf-8", errors="ignore")
+                _sr_spec = _ilu.find_spec("agent.ui.stream_renderer")
+                _sr_path = Path(_sr_spec.origin) if _sr_spec and _sr_spec.origin else Path("agent/ui/stream_renderer.py")
+                _sr_text = _sr_path.read_text(encoding="utf-8", errors="ignore") if _sr_path.exists() else ""
                 if "class StreamRenderer" not in _sr_text or "should_flush_token" not in _sr_text:
                     return CheckResult(name, commit, CheckStatus.WARN, "StreamRenderer missing key symbols", (time.monotonic() - t0) * 1000, details)
                 if "Live" not in _sr_text:
@@ -316,9 +329,11 @@ async def _check_stream_hygiene() -> CheckResult:
                 details["runner_log_dir"] = str(_runner_dir)
             except Exception as e:
                 details["runner_log_dir_error"] = str(e)
-            # DisplayPayload collapse — lightweight via file check, not import
+            # DisplayPayload collapse — via find_spec, not import
             try:
-                _fmt_text = _fmt_path.read_text(encoding="utf-8", errors="ignore")
+                _fmt_spec = _ilu.find_spec("agent.ui.formatter")
+                _fmt_path = Path(_fmt_spec.origin) if _fmt_spec and _fmt_spec.origin else Path("agent/ui/formatter.py")
+                _fmt_text = _fmt_path.read_text(encoding="utf-8", errors="ignore") if _fmt_path.exists() else ""
                 if "def collapse" not in _fmt_text:
                     return CheckResult(name, commit, CheckStatus.WARN, "collapse not found in formatter", (time.monotonic() - t0) * 1000, details)
                 details["collapse_truncated"] = True  # assume ok if file contains collapse
@@ -382,14 +397,31 @@ async def _check_tool_cache() -> CheckResult:
                 details["ignore_venv"] = False
             else:
                 details["ignore_venv"] = True
-            # Batch read functional probe — read self
+            # Batch read functional probe — workspace-independent temp file in .agent
             try:
                 from agent.tools.batch_reader import read_files_batch  # type: ignore
+                import tempfile as _tf
 
-                probe = read_files_batch(["wisp/core/doctor.py"], include_ignored=True, max_lines_per_file=3)
-                details["batch_read_ok"] = "FILE:" in probe
-                if "FILE:" not in probe:
-                    return CheckResult(name, commit, CheckStatus.WARN, "read_files_batch probe failed", (time.monotonic() - t0) * 1000, details)
+                ws_probe = _Path(".").resolve()
+                probe_dir = ws_probe / ".agent" / "doctor_probe"
+                probe_dir.mkdir(parents=True, exist_ok=True)
+                probe_file = probe_dir / "probe.py"
+                probe_file.write_text("x=1\n", encoding="utf-8")
+                try:
+                    rel = str(probe_file.relative_to(ws_probe))
+                    probe = read_files_batch([rel], workspace=str(ws_probe), include_ignored=True, max_lines_per_file=3)
+                    details["batch_read_ok"] = "FILE:" in probe
+                    if "FILE:" not in probe:
+                        return CheckResult(name, commit, CheckStatus.WARN, "read_files_batch probe failed", (time.monotonic() - t0) * 1000, details)
+                finally:
+                    try:
+                        probe_file.unlink()
+                        try:
+                            probe_dir.rmdir()
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
             except Exception as e:
                 details["batch_read_error"] = str(e)
                 return CheckResult(name, commit, CheckStatus.WARN, f"batch read: {e}", (time.monotonic() - t0) * 1000, details)
@@ -529,34 +561,47 @@ async def _check_autonomous_policy() -> CheckResult:
             if not cfg.autonomous:
                 return CheckResult(name, commit, CheckStatus.WARN, "autonomous flag not settable", (time.monotonic() - t0) * 1000, details)
 
-            # Instantiate a minimal runtime double to get handler
-            # We can directly test the handler logic without full runtime
+            # Instantiate a minimal runtime double to get handler — suppress the
+            # expected WARNING (Autonomous gate blocked ...) so pre-flight
+            # itself doesn't pollute stdout via logging.
             try:
-                # Create a dummy runtime with config
-                runtime = AgentRuntime.__new__(AgentRuntime)  # type: ignore
-                runtime.config = cfg  # type: ignore[attr-defined]
-                handler = runtime._autonomous_approval_handler()  # type: ignore[attr-defined]
-                # Handler is async: call it
-                safe_ev = {"name": "read_file", "arguments": {"path": "a.txt"}}
-                danger_ev = {"name": "run_bash", "arguments": {"command": "sudo rm -rf /"}}
-                safe_res = await handler(safe_ev)
-                danger_res = await handler(danger_ev)
-                details["auto_safe"] = bool(safe_res)
-                details["auto_danger_blocked"] = not bool(danger_res)
-                if not safe_res:
-                    return CheckResult(name, commit, CheckStatus.FAIL, "autonomous handler blocked safe read_file", (time.monotonic() - t0) * 1000, details)
-                if danger_res:
-                    return CheckResult(name, commit, CheckStatus.FAIL, "autonomous handler allowed dangerous sudo", (time.monotonic() - t0) * 1000, details)
+                import logging as _logging
+
+                _rt_logger = _logging.getLogger("wisp.core.runtime")
+                _old_level = _rt_logger.level
+                _rt_logger.setLevel(_logging.ERROR)
+                try:
+                    runtime = AgentRuntime.__new__(AgentRuntime)  # type: ignore
+                    runtime.config = cfg  # type: ignore[attr-defined]
+                    handler = runtime._autonomous_approval_handler()  # type: ignore[attr-defined]
+                    safe_ev = {"name": "read_file", "arguments": {"path": "a.txt"}}
+                    danger_ev = {"name": "run_bash", "arguments": {"command": "sudo rm -rf /"}}
+                    safe_res = await handler(safe_ev)
+                    danger_res = await handler(danger_ev)
+                    details["auto_safe"] = bool(safe_res)
+                    details["auto_danger_blocked"] = not bool(danger_res)
+                    if not safe_res:
+                        return CheckResult(name, commit, CheckStatus.FAIL, "autonomous handler blocked safe read_file", (time.monotonic() - t0) * 1000, details)
+                    if danger_res:
+                        return CheckResult(name, commit, CheckStatus.FAIL, "autonomous handler allowed dangerous sudo", (time.monotonic() - t0) * 1000, details)
+                finally:
+                    _rt_logger.setLevel(_old_level)
             except Exception as e:
                 details["handler_error"] = str(e)
                 # Fallback: if handler instantiation fails, at least check_dangerous_command passed
 
-            # Also check CLI auto-approve path exists
+            # Also check CLI auto-approve path exists — workspace-independent via spec
             try:
-                src = Path("wisp/transport/cli.py").read_text()
-                details["cli_autonomous_path"] = "autonomous" in src
-                if "autonomous" not in src:
-                    return CheckResult(name, commit, CheckStatus.WARN, "CLITransport missing autonomous auto-approve", (time.monotonic() - t0) * 1000, details)
+                import importlib.util as _ilu2
+
+                _cli_spec = _ilu2.find_spec("wisp.transport.cli")
+                if _cli_spec and _cli_spec.origin:
+                    src = Path(_cli_spec.origin).read_text(encoding="utf-8", errors="ignore")
+                    details["cli_autonomous_path"] = "autonomous" in src
+                    if "autonomous" not in src:
+                        return CheckResult(name, commit, CheckStatus.WARN, "CLITransport missing autonomous auto-approve", (time.monotonic() - t0) * 1000, details)
+                else:
+                    details["cli_autonomous_path"] = False
             except Exception:
                 pass
 

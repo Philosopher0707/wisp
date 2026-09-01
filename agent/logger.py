@@ -38,7 +38,7 @@ _TRUNC_RE: Final[re.Pattern[str]] = re.compile(
 
 # SSE / provider diagnostics that belong in file only — never on stdout.
 _PROVIDER_SILENCE: Final[re.Pattern[str]] = re.compile(
-    r"(Provider stream|SSE|reconnect|empty_choice_chunks|usable=0|ssek? lines=|stream_stats|chunk_stall|backoff)",
+    r"(Provider stream|SSE|reconnect|empty_choice_chunks|usable=0|ssek? lines=|stream_stats|chunk_stall|backoff|Autonomous gate|privilege escalation|dangerous command)",
     re.I,
 )
 
@@ -56,6 +56,7 @@ _NOISY_LOGGERS: Final[tuple[str, ...]] = (
     "wisp.tools.bash",
     "wisp.multi_agent",
     "wisp.core.stateless",
+    "wisp.core.runtime",
     "wisp.infra.circuit_breaker",
     "wisp.composition",
 )
