@@ -9,13 +9,30 @@ from __future__ import annotations
 
 
 def test_risk_table_covers_all_builtin_tools():
-    from wisp.core.contracts import TOOL_RISK_TABLE
+    # The global registry grows at runtime (BatchReader shim, MCP servers),
+    # so exact static coverage is order-dependent. The safety invariant is:
+    # every registered tool is either explicitly tabled or fail-closed to
+    # EXEC via risk_for_tool — no tool is ever implicitly READ.
+    from wisp.core.contracts import TOOL_RISK_TABLE, ToolRisk, risk_for_tool
     from wisp.tools.registry import TOOL_SCHEMAS
 
     names = {s.get("function", {}).get("name", "") for s in TOOL_SCHEMAS}
     names.discard("")
-    missing = sorted(n for n in names if n not in TOOL_RISK_TABLE)
-    assert not missing, f"risk table missing: {missing}"
+    assert names, "registry unexpectedly empty"
+    for name in sorted(names):
+        risk = risk_for_tool(name)
+        assert isinstance(risk, ToolRisk), name
+        if name not in TOOL_RISK_TABLE:
+            assert risk is ToolRisk.EXEC, f"{name} must fail closed, got {risk}"
+
+
+def test_static_builtins_explicitly_tabled():
+    from wisp.core.contracts import TOOL_RISK_TABLE
+
+    for name in ("read_file", "write_file", "edit_file", "run_bash",
+                 "spawn_background", "orchestrate_vote", "subagent_wait",
+                 "capture_skill", "git_push", "recall"):
+        assert name in TOOL_RISK_TABLE, name
 
 
 def test_high_risk_tools_are_exec():
