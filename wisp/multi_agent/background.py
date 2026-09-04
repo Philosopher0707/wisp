@@ -71,15 +71,27 @@ class BackgroundAgentManager:
     conversation thread (see :meth:`send`).
     """
 
+    # Manager status vocabulary mapped into the M3 RunState machine.
+    _STATUS_TO_RUN_STATE = {
+        STATUS_RUNNING: "running",
+        STATUS_COMPLETED: "succeeded",
+        STATUS_FAILED: "failed",
+        STATUS_CANCELLED: "cancelled",
+    }
+
     def __init__(
         self,
         orchestrator: Any,
         max_running: int = MAX_RUNNING_AGENTS,
         max_finished: int = MAX_FINISHED_ENTRIES,
+        run_store: Any = None,
     ):
         self._orchestrator = orchestrator
         self._max_running = max_running
         self._max_finished = max_finished
+        # Durable registry (M3 J1): source of truth for run status. None
+        # preserves the legacy pure-in-memory behavior (tests, embeddings).
+        self._run_store = run_store
         self._entries: dict[str, BackgroundAgentEntry] = {}
         self._counter = 0
         # Settlement fan-out: each subscriber gets one event per agent
@@ -132,6 +144,82 @@ class BackgroundAgentManager:
             event["summary"] = summary
         self._publish(event)
 
+    # ── Durable registry (M3 J1) ────────────────────────────────────
+
+    def _persist_create(self, entry: BackgroundAgentEntry, contract: Any) -> None:
+        """Insert the run row (queued) and move it to running."""
+        if self._run_store is None:
+            return
+        try:
+            from wisp.runs.record import RunRecord, RunState
+            ws = getattr(contract, "workspace", ".") or "."
+            self._run_store.create(RunRecord(
+                run_id=entry.id,
+                prompt=getattr(contract, "task", "") or "",
+                workspace=str(ws),
+                status=RunState.QUEUED,
+            ))
+            self._run_store.transition(
+                entry.id, RunState.QUEUED, RunState.RUNNING, reason="launched")
+        except Exception:
+            logger.warning("run persistence failed on create %s",
+                           entry.id, exc_info=True)
+
+    def _persist_status(self, entry: BackgroundAgentEntry) -> None:
+        """Best-effort status sync. Persistence must never break execution:
+        stale/illegal transitions are logged, not raised. Continuation
+        relaunches (send()) that revisit a terminal state are skipped."""
+        if self._run_store is None:
+            return
+        try:
+            from wisp.runs.record import RunRecord, RunState
+            target = RunState(self._STATUS_TO_RUN_STATE[entry.status])
+            rec = self._run_store.get(entry.id)
+            if rec is None:
+                self._run_store.create(RunRecord(
+                    run_id=entry.id,
+                    prompt=getattr(entry.contract, "task", "") or "",
+                    status=RunState.QUEUED))
+                rec = self._run_store.get(entry.id)
+                assert rec is not None
+            if rec.status == target:
+                return
+            self._run_store.transition(
+                entry.id, rec.status, target,
+                reason=f"settled:{entry.status}")
+        except Exception:
+            logger.warning("run persistence failed on status %s (%s)",
+                           entry.id, entry.status, exc_info=True)
+
+    def recover(self, lease_owner: str = "") -> dict[str, int]:
+        """Park rows abandoned by dead processes. Stale RUNNING → PAUSED
+        (explicit resume only); other non-terminal states → CANCELLED.
+        Live leases owned by others are left alone. Never resumes effects."""
+        report = {"paused": 0, "cancelled": 0, "left": 0}
+        if self._run_store is None:
+            return report
+        from wisp.runs.record import TERMINAL_STATES, RunState
+        now = time.time()
+        for rec in self._run_store.list():
+            if rec.status in TERMINAL_STATES:
+                continue
+            live = bool(rec.lease_owner) and rec.lease_expires >= now \
+                and rec.lease_owner != lease_owner
+            if live:
+                report["left"] += 1
+                continue
+            target = RunState.PAUSED if rec.status == RunState.RUNNING \
+                else RunState.CANCELLED
+            try:
+                self._run_store.transition(
+                    rec.run_id, rec.status, target,
+                    reason="abandoned at restart")
+                report["paused" if target == RunState.PAUSED else "cancelled"] += 1
+            except Exception:
+                logger.warning("recover failed for %s", rec.run_id, exc_info=True)
+                report["left"] += 1
+        return report
+
     # ── Launch ────────────────────────────────────────────────────────
 
     async def launch(self, contract: Any, label: str = "") -> dict[str, Any]:
@@ -154,6 +242,7 @@ class BackgroundAgentManager:
             contract=contract,
         )
         self._entries[agent_id] = entry
+        self._persist_create(entry, contract)
         entry.handle = asyncio.create_task(self._run_entry(entry))
         self._publish({
             "type": "agent_started",
@@ -194,6 +283,7 @@ class BackgroundAgentManager:
         finally:
             if entry.finished_at is None:
                 entry.finished_at = time.monotonic()
+            self._persist_status(entry)
 
         summary = ""
         files: list[str] = []
@@ -344,6 +434,7 @@ class BackgroundAgentManager:
             handle.cancel()
         entry.status = STATUS_CANCELLED
         entry.error = "cancelled by caller"
+        self._persist_status(entry)
         return {"ok": True, "agent_id": agent_id, "status": STATUS_CANCELLED}
 
     def shutdown_pending(self) -> int:
@@ -364,6 +455,7 @@ class BackgroundAgentManager:
                 live += 1
             entry.status = STATUS_CANCELLED
             entry.error = entry.error or "shutdown"
+            self._persist_status(entry)
         return live
 
     def prune(self) -> int:
