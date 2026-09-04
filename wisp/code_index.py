@@ -8,7 +8,9 @@ The index is exposed to the LLM via:
 """
 
 import logging
+import os
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -17,8 +19,24 @@ logger = logging.getLogger(__name__)
 
 # Maximum files to scan to avoid performance issues
 _MAX_SCAN_FILES = 200
+# Safety cap on collected candidates: the walk prunes ignored dirs, but a
+# pathological non-ignored tree must still terminate promptly.
+_MAX_COLLECT_FILES = 2000
 # Maximum lines per file to read (skip huge files)
 _MAX_FILE_LINES = 5000
+# Index cache TTL: repeat searches in one session skip disk I/O.
+_INDEX_TTL_S = 30.0
+
+# Directories never descended into (pruned during the walk, not filtered
+# after it — a post-hoc filter still pays the full traversal cost).
+_IGNORE_DIRS = frozenset({
+    ".git", "node_modules", "__pycache__", ".venv", "venv",
+    "target", "build", "dist", ".eggs", "egg-info",
+    ".pytest_cache", ".mypy_cache", ".ruff_cache",
+})
+
+# Resolved-workspace -> (built_at, index).
+_CACHE: dict[str, tuple[float, "CodeIndex"]] = {}
 # File extensions to scan by language
 _EXTENSIONS = {
     ".py": "Python",
@@ -53,36 +71,47 @@ class CodeIndex:
     languages: set[str] = field(default_factory=set)
 
 
-def build_index(workspace: str) -> CodeIndex:
-    """Scan workspace for source files and build a symbol index.
+def _iter_source_files(workspace: str) -> list[Path]:
+    """Collect candidate source files, pruning ignored dirs during descent.
 
-    Walks the directory tree up to _MAX_SCAN_FILES files, reads each
-    source file, and extracts symbol definitions using language-specific
-    regex patterns.
+    Returns sorted unique paths (deterministic order, as before).
     """
     ws = Path(workspace).resolve()
+    wanted = set(_EXTENSIONS)
+    found: list[Path] = []
+    for root, dirs, files in os.walk(ws):
+        # Prune in place: os.walk will not descend into removed dirs.
+        # Hidden dirs (except the workspace root itself) are also pruned.
+        dirs[:] = [d for d in dirs
+                   if d not in _IGNORE_DIRS
+                   and not (d.startswith(".") and os.path.join(root, d) != str(ws))]
+        for name in files:
+            if Path(name).suffix.lower() in wanted:
+                found.append(Path(root) / name)
+                if len(found) >= _MAX_COLLECT_FILES:
+                    logger.debug("collection cap reached at %s", root)
+                    return sorted(set(found))
+    return sorted(set(found))
+
+
+def build_index(workspace: str, *, use_cache: bool = True) -> CodeIndex:
+    """Scan workspace for source files and build a symbol index.
+
+    Collects candidates with a pruned walk (ignored dirs are never
+    descended into), then reads up to _MAX_SCAN_FILES files and extracts
+    symbol definitions using language-specific regex patterns. Results
+    are cached per workspace for _INDEX_TTL_S seconds.
+    """
+    ws = Path(workspace).resolve()
+    if use_cache:
+        hit = _CACHE.get(str(ws))
+        if hit is not None and time.time() - hit[0] < _INDEX_TTL_S:
+            return hit[1]
+
     index = CodeIndex()
     files_scanned = 0
 
-    # Collect source files first (avoid scanning .git, node_modules, etc.)
-    source_files = []
-    for ext in _EXTENSIONS:
-        source_files.extend(ws.rglob(f"*{ext}"))
-
-    # Filter out common non-project directories
-    ignore_dirs = {
-        ".git", "node_modules", "__pycache__", ".venv", "venv",
-        "target", "build", "dist", ".eggs", "egg-info",
-        ".pytest_cache", ".mypy_cache", ".ruff_cache",
-    }
-    source_files = [
-        f for f in source_files
-        if not any(part.startswith(".") and part != "." for part in f.relative_to(ws).parts[:1])
-        and not any(ignore in f.parts for ignore in ignore_dirs)
-    ]
-
-    # Sort for deterministic order
-    source_files = sorted(set(source_files))
+    source_files = _iter_source_files(str(ws))
 
     for file_path in source_files:
         if files_scanned >= _MAX_SCAN_FILES:
@@ -119,6 +148,8 @@ def build_index(workspace: str) -> CodeIndex:
         index.total_symbols, index.files_scanned,
         ", ".join(sorted(index.languages)),
     )
+    if use_cache:
+        _CACHE[str(ws)] = (time.time(), index)
     return index
 
 

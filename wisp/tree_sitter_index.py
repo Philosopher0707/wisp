@@ -51,6 +51,8 @@ from wisp.code_index import (
     search_symbols,       # noqa: F401
     format_index_summary,   # noqa: F401
     _MAX_SCAN_FILES,
+    _INDEX_TTL_S,
+    _iter_source_files,
     _MAX_FILE_LINES,
     _EXTENSIONS,            # noqa: F401
 )
@@ -113,17 +115,30 @@ def is_tree_sitter_available() -> bool:
     return _HAVE_TREE_SITTER and len(_LANGUAGE_PARSERS) > 0
 
 
-def build_index(workspace: str) -> CodeIndex:
+# Separate TTL cache: TS and regex indexes must never share entries.
+_TS_CACHE: dict[str, tuple[float, CodeIndex]] = {}
+
+
+def build_index(workspace: str, *, use_cache: bool = True) -> CodeIndex:
     """Build a code index using tree-sitter when available, falling back to regex.
 
     Same interface as code_index.build_index() — drop-in replacement.
     """
+    import time as _time
+    ws = str(Path(workspace).resolve())
+    if use_cache:
+        hit = _TS_CACHE.get(ws)
+        if hit is not None and _time.time() - hit[0] < _INDEX_TTL_S:
+            return hit[1]
     if is_tree_sitter_available():
-        return _build_index_ts(workspace)
+        index = _build_index_ts(workspace)
     else:
         # Fall back to regex-based index
         from wisp.code_index import build_index as regex_build
-        return regex_build(workspace)
+        index = regex_build(workspace)
+    if use_cache:
+        _TS_CACHE[ws] = (_time.time(), index)
+    return index
 
 
 def _build_index_ts(workspace: str) -> CodeIndex:
@@ -132,23 +147,9 @@ def _build_index_ts(workspace: str) -> CodeIndex:
     index = CodeIndex()
     files_scanned = 0
 
-    # Collect source files
-    source_files = []
-    for ext in _EXT_TO_TS_LANG:
-        source_files.extend(ws.rglob(f"*{ext}"))
-
-    # Filter out non-project directories
-    ignore_dirs = {
-        ".git", "node_modules", "__pycache__", ".venv", "venv",
-        "target", "build", "dist", ".eggs", "egg-info",
-        ".pytest_cache", ".mypy_cache", ".ruff_cache",
-    }
-    source_files = [
-        f for f in source_files
-        if not any(part.startswith(".") and part != "." for part in f.relative_to(ws).parts[:1])
-        and not any(ignore in f.parts for ignore in ignore_dirs)
-    ]
-    source_files = sorted(set(source_files))
+    # Collect candidates with the shared pruned walk (ignored dirs are
+    # never descended into — a post-hoc filter still pays full traversal).
+    source_files = _iter_source_files(str(ws))
 
     for file_path in source_files:
         if files_scanned >= _MAX_SCAN_FILES:

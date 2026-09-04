@@ -214,3 +214,37 @@ def test_ignores_hidden_directories(tmp_path):
     (hidden / "main.py").write_text("def hidden_func(): pass")
     index = build_index(str(tmp_path))
     assert index.total_symbols == 0
+
+
+def test_walk_prunes_ignored_dirs(tmp_path):
+    """The file walk must not descend into ignored dirs (H1: 30k-file walk)."""
+    from wisp.code_index import _iter_source_files
+    (tmp_path / "app.py").write_text("def real(): pass\n")
+    for d in ("node_modules", ".venv", ".git", "target", "__pycache__"):
+        sub = tmp_path / d
+        sub.mkdir()
+        (sub / "bulk.py").write_text("def ignored_fn(): pass\n")
+    found = _iter_source_files(str(tmp_path))
+    assert len(found) == 1 and found[0].name == "app.py"
+
+
+def test_ignored_dir_symbols_absent(tmp_path):
+    """End-to-end: ignored-dir symbols never reach the index."""
+    (tmp_path / "app.py").write_text("def real(): pass\n")
+    nm = tmp_path / "node_modules"
+    nm.mkdir()
+    (nm / "bulk.py").write_text("def ignored_fn(): pass\n")
+    index = build_index(str(tmp_path), use_cache=False)
+    assert "node_modules/bulk.py" not in index.symbols
+    assert index.total_symbols == 1
+
+
+def test_build_cache_returns_same_index(tmp_path):
+    """Repeat builds within TTL skip disk I/O (H2)."""
+    (tmp_path / "app.py").write_text("def real(): pass\n")
+    first = build_index(str(tmp_path))
+    second = build_index(str(tmp_path))
+    assert second is first
+    third = build_index(str(tmp_path), use_cache=False)
+    assert third is not first
+    assert third.total_symbols == first.total_symbols
