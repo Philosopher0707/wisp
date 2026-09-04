@@ -28,7 +28,8 @@ def test_derive_subagent_narrows():
     assert child.kind == PrincipalKind.SUBAGENT
     assert child.parent_principal_id == parent.principal_id
     assert child.capabilities == frozenset({"read_file"})
-    assert child.capabilities <= parent.capabilities
+    assert all(parent.allows_tool(t) for t in child.capabilities)
+    assert not child.allows_tool("run_bash")
 
 
 def test_derive_cannot_widen():
