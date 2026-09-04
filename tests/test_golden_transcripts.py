@@ -57,12 +57,39 @@ def _make_transport() -> CLITransport:
     return t
 
 
+def _reset_style_ansi_cache() -> None:
+    """Rich memoizes ``Style._ansi`` on first render (style.py: _make_ansi_codes).
+
+    Any Style instance rendered under one palette (e.g. the ambient terminal's
+    256/truecolor codes) freezes those SGR bytes; a later golden comparison on
+    a different Console color-system then drifts even though the text/glyphs
+    are identical. Sweep every live Style instance so rendering re-derives
+    codes under the pinned standard palette.
+    """
+    import gc
+
+    from rich.style import Style
+
+    for obj in gc.get_objects():
+        if type(obj) is Style and obj._ansi is not None:
+            obj._ansi = None
+
+
 def _render_sequence(events: list[dict], mode: Any) -> str:
     from wisp.terminal_width import set_output_mode
 
     out = _Buffer()
     t = _make_transport()
     set_output_mode(mode)
+    _reset_style_ansi_cache()
+    # Pin the ANSI palette: Rich sniffs COLORTERM/TERM at Console creation,
+    # so a truecolor terminal would re-encode every SGR sequence and poison
+    # the byte comparison. 'standard' (8-color) is the canonical golden
+    # palette — layout + glyphs are the contract, not the host terminal.
+    env_keys = ("COLORTERM", "FORCE_COLOR", "NO_COLOR")
+    saved_env = {k: os.environ.pop(k, None) for k in env_keys}
+    saved_term = os.environ.get("TERM")
+    os.environ["TERM"] = "xterm"
     try:
         with mpatch("wisp.transport.cli._term_width", lambda: 60):
             for ev in events:
@@ -73,6 +100,13 @@ def _render_sequence(events: list[dict], mode: Any) -> str:
         from wisp.terminal_width import OutputMode
 
         set_output_mode(OutputMode.UNICODE)
+        for k, v in saved_env.items():
+            if v is not None:
+                os.environ[k] = v
+        if saved_term is None:
+            os.environ.pop("TERM", None)
+        else:
+            os.environ["TERM"] = saved_term
     # Strip volatile spinner-frame remnants if any slipped in; the
     # contract under test is layout + glyphs, not frame counts.
     return out.getvalue()

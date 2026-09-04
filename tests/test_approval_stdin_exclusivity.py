@@ -151,7 +151,7 @@ class TestApproveExclusiveStdin:
 
         transport = self._bare_transport()
 
-        async def fake_read():
+        async def fake_read(**kwargs):
             calls.append("read")
             return "y"
 
@@ -174,7 +174,7 @@ class TestApproveExclusiveStdin:
 
         transport = self._bare_transport()
 
-        async def boom():
+        async def boom(**kwargs):
             calls.append("read")
             raise EOFError
 

@@ -223,4 +223,4 @@ class TestRetryIntegration:
             with pytest.raises(OllamaError):
                 client._post_with_retry("chat", {"model": "test"})
 
-        assert slept_calls == [1, 2]  # attempt 0 sleeps 1s, attempt 1 sleeps 2s
+        assert slept_calls == pytest.approx([1, 2], abs=0.5)

@@ -88,3 +88,6 @@ workspace/
 
 # Editor planning artifacts
 .opencode/
+
+# Subsystem verification & agent runtime logs
+.agent/

@@ -154,19 +154,66 @@ def _raw_mode_supported() -> bool:
 
 
 def _read_key(stdin) -> str:
-    """Read one logical key sequence from a tty in cbreak mode."""
-    ch = stdin.read(1)
-    if ch != "\x1b":
-        return ch
-    # Escape sequence — probe for follow-up bytes so a lone Esc press
-    # still cancels promptly.
+    """Read one logical key sequence from a tty in cbreak mode.
+
+    Fixed ESC trap: a lone ``\\x1b`` only cancels when *no* trailing bytes
+    arrive within 20 ms; ``\\x1b[A`` / ``\\x1b[B`` are Up/Down, ``\\x1b[Z``
+    is Shift-Tab.  Uses a two-stage timeout (20 ms for CSI starter,
+    10 ms for terminator) so arrow keys never trigger premature cancel.
+    """
     import select
+
+    try:
+        ch = stdin.read(1)
+    except Exception:
+        return ""
+    if not ch:
+        return ""
+    if ch != "\x1b":
+        if ch == "\r":
+            # Normalize CRLF without losing the following LF
+            try:
+                ready, _, _ = select.select([stdin], [], [], 0.005)
+                if ready:
+                    nxt = stdin.read(1)
+                    if nxt == "\n":
+                        return "\r\n"
+            except Exception:
+                pass
+        return ch
+
+    # Potential ESC sequence — wait esc_timeout for follower
     seq = ch
-    while len(seq) < 3:
-        ready, _, _ = select.select([stdin], [], [], 0.05)
+    ready, _, _ = select.select([stdin], [], [], 0.02)
+    if not ready:
+        return "\x1b"  # standalone ESC
+
+    try:
+        nxt = stdin.read(1)
+    except Exception:
+        return "\x1b"
+    if not nxt:
+        return "\x1b"
+    seq += nxt
+    if nxt not in ("[", "O"):
+        return seq
+
+    # CSI/SS3 — read terminator with short timeout, up to 5 more bytes
+    while len(seq) < 6:
+        ready, _, _ = select.select([stdin], [], [], 0.01)
         if not ready:
             break
-        seq += stdin.read(1)
+        try:
+            more = stdin.read(1)
+        except Exception:
+            break
+        if not more:
+            break
+        seq += more
+        if more.isalpha() or more == "~":
+            break
+        if more not in "0123456789;":
+            break
     return seq
 
 

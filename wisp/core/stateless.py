@@ -102,6 +102,7 @@ def _ttl_get(kind: str, key: str, builder, ttl: float):
     return value
 
 
+
 def _flatten_event(ev: AgentEvent | dict[str, Any]) -> dict[str, Any]:
     """Convert canonical AgentEvent to flat dict for backward compatibility."""
     if isinstance(ev, dict):

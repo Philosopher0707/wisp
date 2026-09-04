@@ -1,7 +1,22 @@
+import os
+
 import pytest
 import tempfile
 import shutil
 from pathlib import Path
+
+# ── Deterministic ANSI palette for the whole test process ────────────────
+# Rich's Console sniffs COLORTERM/TERM, and wisp.diff_renderer renders
+# through module-level Style singletons whose ANSI codes Rich memoizes on
+# FIRST render (Style._make_ansi_codes). If any test renders before the
+# golden transcripts do, the ambient terminal's palette (e.g. truecolor)
+# gets frozen and byte-compared goldens drift. Pin the canonical standard
+# (8-color) palette before rich is ever imported, so the memoized codes
+# match the checked-in goldens on every machine.
+os.environ.pop("COLORTERM", None)
+os.environ.pop("FORCE_COLOR", None)
+os.environ.setdefault("TERM", "xterm")
+
 
 
 @pytest.fixture

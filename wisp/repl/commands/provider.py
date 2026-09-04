@@ -185,10 +185,20 @@ def _print_model_listing(provider: str, agent, models: list[str]) -> None:
 
 def _pick(title: str, options: list[str], current: str | None = None,
           descriptions: dict | None = None) -> int | None:
-    """Interactive picker with the numbered-list fallback. None = cancelled."""
-    from wisp.repl.picker import select_option
-    return select_option(title, options, current=current,
-                         descriptions=descriptions)
+    """Interactive picker with the numbered-list fallback. None = cancelled.
+
+    Prefers the ANSI-safe `wisp.cli.ui.fuzzy_selector` (20 ms ESC, 10 ms CSI,
+    circular wrap, clamp) with fallback to the legacy picker for partial
+    checkouts.
+    """
+    try:
+        from wisp.cli.ui.fuzzy_selector import select_with_fuzzy
+
+        return select_with_fuzzy(title, options, current=current, descriptions=descriptions)
+    except ImportError:
+        from wisp.repl.picker import select_option
+
+        return select_option(title, options, current=current, descriptions=descriptions)
 
 
 def _repl_is_tty() -> bool:
