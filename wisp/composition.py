@@ -199,6 +199,14 @@ class CompositionRoot:
         # Reachable from slash commands via runtime.orchestrator.
         self.subagent_orchestrator.background_agents = self.background_agents
 
+        # Owned HTTP session registry (Phase 2.1, D4): pools acquired
+        # through this registry are closed in shutdown(). Providers that
+        # predate the registry still construct their own sessions; those
+        # remain their own responsibility until migrated.
+        from wisp.core.transport_seam import SessionRegistry
+
+        self.http_sessions = SessionRegistry()
+
         # Register services for lifecycle management
         self._registry = ServiceRegistry()
         self._registry.register(self.store)
@@ -389,6 +397,13 @@ class CompositionRoot:
             self.tool_executor._tool_pool.shutdown(wait=False)
         except Exception:
             pass
+        # Owned HTTP pools (Phase 2.1, D4): close what this root tracked.
+        # Sessions predate the registry are unaffected; close_all is a
+        # safe no-op when nothing was tracked.
+        with contextlib.suppress(Exception):
+            registry = getattr(self, "http_sessions", None)
+            if registry is not None:
+                registry.close_all()
         # NOTE: deliberately NOT shutting down the process-global shared
         # executor or background loop here. They are singletons shared by
         # every root in the process (tests, server restarts, embedded use);

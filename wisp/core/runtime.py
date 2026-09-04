@@ -108,6 +108,45 @@ def _serialize_tool_exchanges(
 
 
 
+def _evict_session_state_maps(maps: list[dict[str, Any]], cap: int,
+                                access: dict[str, float]) -> None:
+    """Evict coldest session ids across auxiliary maps, bounded at cap.
+
+    Module-level so it works on partial test doubles (stubs binding single
+    methods, bare __new__ instances): only the maps actually present are
+    considered. Fires at == cap since the caller inserts right after,
+    guaranteeing post-insert <= cap.
+    """
+    keys: set[str] = set()
+    for table in maps:
+        keys.update(table)
+    if len(keys) < cap:
+        return
+    overflow = len(keys) - cap + 1
+    to_evict = max(int(cap * 0.2) or 1, overflow)
+    for key in sorted(keys, key=lambda sid: access.get(sid, 0.0))[:to_evict]:
+        for table in maps:
+            table.pop(key, None)
+
+
+def _maybe_evict_session_state(runtime: Any) -> None:
+    """Best-effort bound for per-session auxiliary maps; never raises."""
+    try:
+        maps: list[dict[str, Any]] = []
+        for name in ("_steering_inbox", "_approval_states",
+                     "_touched_files", "_turn_counts"):
+            table = getattr(runtime, name, None)
+            if isinstance(table, dict):
+                maps.append(table)
+        _evict_session_state_maps(
+            maps,
+            cap=getattr(runtime, "_max_session_state", 1000),
+            access=getattr(runtime, "_session_access", {}),
+        )
+    except Exception:
+        pass
+
+
 def _stringify_tool_call_arguments(messages: list[dict[str, Any]]) -> None:
     """Heal sessions persisted before tool-call arguments were stored as JSON strings."""
     import json
@@ -167,6 +206,13 @@ class AgentRuntime:
     # Files each session has touched, folded into its memory summary.
     _touched_files: dict[str, set[str]] = field(default_factory=dict, repr=False)
     _turn_counts: dict[str, int] = field(default_factory=dict, repr=False)
+
+    # Cap for the per-session auxiliary maps above (+ inbox/approvals).
+    # Mirrors _max_session_locks: all four are best-effort caches, so
+    # dropping a cold session's entries is loss-safe (steering re-queues,
+    # approval memory rebuilds, touched files/turn counts re-accumulate
+    # and merge with persisted agent_memory). Phase 3.2 (D10).
+    _max_session_state: int = field(default=1000, repr=False)
 
     # Configurable thresholds (can be overridden)
     max_messages: int = field(default=50, repr=False)
@@ -278,6 +324,17 @@ class AgentRuntime:
         async with session_lock:
             # Auto-compact before turn to prevent context overflow
             await self.maybe_compact(session)
+
+            # Live byte budget: condense historical tool payloads in the
+            # in-memory session so provider dispatch cost stays flat between
+            # compactions. No-op when under budget (single O(n) byte walk);
+            # persisted history keeps full fidelity. See context_manager.
+            try:
+                from wisp.core.context_manager import prune_live_session
+
+                prune_live_session(session)
+            except Exception:
+                logger.debug("live context prune failed — continuing unpruned", exc_info=True)
 
             # ── Autonomous mode: hydrate graph state + synthesize approval handler
             # so safe coding turns run fully autonomously (Cursor/Aider-like) while
@@ -484,6 +541,8 @@ class AgentRuntime:
         for key in self._FILE_ARG_KEYS:
             val = (data.get("arguments") or {}).get(key)
             if isinstance(val, str) and val:
+                if sid not in self._touched_files:
+                    _maybe_evict_session_state(self)
                 self._touched_files.setdefault(sid, set()).add(val)
                 return
 
@@ -495,6 +554,8 @@ class AgentRuntime:
         Best-effort: memory must never break a turn.
         """
         try:
+            if sid not in self._turn_counts:
+                _maybe_evict_session_state(self)
             self._turn_counts[sid] = self._turn_counts.get(sid, 0) + 1
             from wisp.agent_memory import get_agent_memory
             from datetime import datetime, timezone
@@ -525,6 +586,7 @@ class AgentRuntime:
         """Session-scoped approval memory, created on first access."""
         state = self._approval_states.get(session_id)
         if state is None:
+            _maybe_evict_session_state(self)
             state = ApprovalSessionState()
             self._approval_states[session_id] = state
         return state
@@ -558,6 +620,38 @@ class AgentRuntime:
             return False
         return key in ("y", "Y", "a")
 
+    def get_doctor_report(self) -> dict[str, Any]:
+        """Public pre-flight report summary for UI layers (/doctor, banner).
+
+        Returns the last DoctorRunner report as plain data, or a degraded
+        sentinel when no check has run yet in this process. Never raises —
+        diagnostics must not break the REPL.
+        """
+        try:
+            from wisp.core.doctor import last_report
+
+            report = last_report()
+        except ImportError:
+            report = None
+        if report is None:
+            return {"healthy": False, "passed": 0, "total": 0,
+                    "banner": "pre-flight has not run yet", "checks": []}
+        try:
+            checks = [
+                f"{getattr(c, 'symbol', '?')} {getattr(c, 'name', '?')}: {getattr(c, 'message', '')}"
+                for c in (getattr(report, "checks", None) or [])
+            ]
+            return {
+                "healthy": bool(getattr(report, "healthy", False)),
+                "passed": int(getattr(report, "passed", 0) or 0),
+                "total": int(getattr(report, "total", 0) or 0),
+                "banner": str(getattr(report, "banner", "") or ""),
+                "checks": checks,
+            }
+        except Exception:
+            return {"healthy": False, "passed": 0, "total": 0,
+                    "banner": "pre-flight report unreadable", "checks": []}
+
     def drain_steering(self, session_id: str) -> list[str]:
         """Remove and return pending steering notes for *session_id*."""
         return self._steering_inbox.pop(session_id, [])
@@ -571,6 +665,8 @@ class AgentRuntime:
         text = str(text).strip()
         if not text:
             return
+        if session_id not in self._steering_inbox:
+            _maybe_evict_session_state(self)
         self._steering_inbox.setdefault(session_id, []).append(text)
 
 
@@ -713,6 +809,14 @@ class AgentRuntime:
             "after_count": len(session["messages"]),
             "summary": summary,
         }
+
+    def _evict_old_session_state(self) -> None:
+        """Evict coldest sessions' auxiliary maps if we exceed the limit.
+
+        Kept for API compatibility; delegates to :func:`_maybe_evict_session_state`.
+        Evict-before-insert keeps the just-created entry alive.
+        """
+        _maybe_evict_session_state(self)
 
     def _evict_old_session_locks(self) -> None:
         """Evict least-recently-used session locks if we exceed the limit."""

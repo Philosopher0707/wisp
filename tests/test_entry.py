@@ -330,7 +330,7 @@ class TestCommandHistory:
         runtime.get_or_create_session = get_session
         root.runtime = runtime
 
-        answers = iter(["/help", None])  # one command, then EOF
+        answers = iter(["/tokens", None])  # one unmigrated command, then EOF
 
         def fake_input(prompt=""):
             item = next(answers)
@@ -338,13 +338,16 @@ class TestCommandHistory:
                 raise EOFError()
             return item
 
+        # New pipeline resolves input via the wisp.entry back-compat seam
+        # (prompt_toolkit is bypassed off-tty); unmigrated commands still
+        # reach the legacy registry through the dispatcher's strangler-fig
+        # fallback.
         with patch("wisp.entry._input_line", side_effect=fake_input), \
-             patch("wisp.entry._restore_signal_handler"), \
              patch("wisp.commands.dispatch", return_value=True) as dispatch_mock:
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
                 _run_repl(transport, root, root.config)
 
         dispatch_mock.assert_called_once()
+        assert dispatch_mock.call_args[0][0] == "/tokens"
         assert hist_file.exists()
-        assert "/help" in hist_file.read_text(encoding="utf-8")

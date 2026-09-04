@@ -23,8 +23,13 @@ from typing import Any
 
 from wisp.composition import CompositionRoot
 from wisp.config import WispConfig
-from wisp.transport.cli import CLITransport, _input_line, _input_multiline, _restore_signal_handler
-from wisp.transport.typeahead import TypeAheadBuffer
+from wisp.transport.cli import CLITransport
+# Re-exported for backward compatibility (tests + external shims patch
+# these entry-level names). Canonical homes: wisp.transport.cli / wisp.cli.repl.
+from wisp.transport.cli import _input_line as _input_line  # noqa: F401
+from wisp.transport.cli import _input_multiline as _input_multiline  # noqa: F401
+from wisp.transport.cli import _restore_signal_handler as _restore_signal_handler  # noqa: F401
+from wisp.transport.typeahead import TypeAheadBuffer as TypeAheadBuffer  # noqa: F401
 from wisp.transport.renderer import render_turn_stats, render_file_ticker
 from wisp.terminal_width import status_symbols
 from wisp.colors import dim, error
@@ -130,42 +135,24 @@ def _term_width() -> int:
 
 
 def _history_path() -> Path:
-    import os
-    custom = os.environ.get("WISP_HISTORY_FILE")
-    return Path(custom).expanduser() if custom else Path.home() / ".wisp" / "history"
+    """Backward-compat alias — canonical home is wisp.cli.repl.history_path."""
+    from wisp.cli.repl import history_path
+
+    return history_path()
 
 
 def _load_command_history() -> bool:
-    """Load prior prompts into readline so up-arrow recalls them."""
-    try:
-        import readline
-    except ImportError:
-        return False
-    path = _history_path()
-    try:
-        if path.exists():
-            readline.read_history_file(str(path))
-        readline.set_history_length(5000)
-        return True
-    except Exception:
-        logger.debug("Could not load command history from %s", path, exc_info=True)
-        return False
+    """Backward-compat alias — canonical home is wisp.cli.repl."""
+    from wisp.cli.repl import load_command_history
+
+    return load_command_history()
 
 
 def _save_command_history() -> bool:
-    try:
-        import readline
-    except ImportError:
-        return False
-    path = _history_path()
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        readline.set_history_length(5000)
-        readline.write_history_file(str(path))
-        return True
-    except Exception:
-        logger.debug("Could not save command history to %s", path, exc_info=True)
-        return False
+    """Backward-compat alias — canonical home is wisp.cli.repl."""
+    from wisp.cli.repl import save_command_history
+
+    return save_command_history()
 
 
 def _show_turn_stats(transport: CLITransport, adapter: Any | None = None) -> None:
@@ -230,7 +217,75 @@ def make_repl_sigint_handler(transport, get_current_task, restore_default):
 
 
 def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig, loop: asyncio.AbstractEventLoop | None = None, **kwargs) -> None:
-    """Synchronous REPL — single persistent event loop for the session.
+    """Synchronous REPL — 5-step composition-root lifecycle driver.
+
+    Step 1 boot_env → Step 2 preflight → Step 3 assembly (CompositionRoot,
+    built by run_mode) → Step 4 banner → Step 5 interactive loop, all
+    executed through the injected ReplRunner (wisp.cli.repl). See
+    _run_repl_legacy for the pre-refactor inline implementation, kept for
+    one release as a behavioral reference.
+    """
+    import uuid
+
+    session_id = kwargs.get("session_id") or str(uuid.uuid4())
+    skill = kwargs.get("skill")
+
+    own_loop = loop is None
+    if own_loop:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        root.bind_loop(loop)
+
+    assert loop is not None
+    session = loop.run_until_complete(root.runtime.get_or_create_session(
+        session_id=session_id,
+        model=config.model,
+        workspace=config.workspace,
+    ))
+    is_continuation = len(session.get("messages", [])) > 0
+
+    from wisp.cli.dispatcher import Dispatcher
+    from wisp.cli.repl import ReplRunner
+    from wisp.commands import dispatch as _legacy_dispatch
+
+    runner = ReplRunner(
+        runtime=root.runtime,
+        transport=transport,
+        renderer=None,
+        dispatcher=Dispatcher(legacy_dispatch=_legacy_dispatch),
+        config=config,
+        session=session,
+        loop=loop,
+        on_turn_stats=lambda sess: _show_turn_stats(transport, runner.adapter),
+    )
+    # Step 1: environment & config boot.
+    workspace = runner.boot_env()
+    # Step 2: async pre-flight inside the startup budget (non-fatal).
+    loop.run_until_complete(runner.preflight(workspace or config.workspace))
+    # Step 3: transport & runtime assembly — owned by CompositionRoot,
+    # constructed by run_mode before dispatch. Nothing to build here.
+    # Step 4: single-frame startup banner.
+    runner.banner(is_continuation=is_continuation, skill=skill)
+    # Step 5: hand off to the interactive loop (shutdown runs inside).
+    try:
+        runner.run()
+    finally:
+        # Loop teardown stays here: the loop is owned by this driver
+        # (or shared with single-shot mode), not by the runner.
+        _previous_sigint = signal.getsignal(signal.SIGINT)
+        signal.signal(signal.SIGINT, lambda *_a: None)
+        try:
+            loop.run_until_complete(_drain_pending_tasks(loop, timeout=3.0))
+            if own_loop:
+                loop.close()
+        finally:
+            signal.signal(signal.SIGINT, _previous_sigint)
+
+
+def _run_repl_legacy(transport: CLITransport, root: CompositionRoot, config: WispConfig, loop: asyncio.AbstractEventLoop | None = None, **kwargs) -> None:
+    """Pre-refactor inline REPL (behavioral reference; remove next release).
+
+    Synchronous REPL — single persistent event loop for the session.
 
     Uses *loop* if provided (shared with single-shot mode), otherwise creates
     a new persistent loop. Background threads reference this loop.
@@ -239,6 +294,8 @@ def _run_repl(transport: CLITransport, root: CompositionRoot, config: WispConfig
     """
     import sys
     import uuid
+
+    from wisp.transport.typeahead import TypeAheadBuffer  # noqa: F401  (legacy path only)
 
     session_id = kwargs.get("session_id") or str(uuid.uuid4())
 
