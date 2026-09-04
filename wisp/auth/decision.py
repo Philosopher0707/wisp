@@ -29,10 +29,42 @@ class AuthorizationDecision:
     version: int = 1
 
 
+def _mcp_server_id(tool_name: str) -> str | None:
+    """Extract the server id from namespaced MCP tool names."""
+    if tool_name.startswith("mcp:") and "/" in tool_name:
+        return tool_name[4:].split("/", 1)[0]
+    if tool_name.startswith("mcp__") and tool_name.count("__") >= 2:
+        return tool_name.split("__")[1]
+    return None
+
+
 def authorize(principal: Principal, tool_name: str, args: dict[str, Any],
               workspace_trust: WorkspaceTrust,
               permission_mode: str = "auto_edit",
-              sensitivity: str = "confidential") -> AuthorizationDecision:
+              sensitivity: str = "confidential",
+              effective_policy: Any = None) -> AuthorizationDecision:
+    # L0 — organization policy bundle (narrow-only; absent = no opinion).
+    if effective_policy is not None:
+        matrix = getattr(effective_policy, "approval_matrix", {}) or {}
+        provenance = getattr(effective_policy, "provenance", {}) or {}
+        level = matrix.get(tool_name)
+        if level == "deny":
+            layer = provenance.get(f"approval:{tool_name}", "organization")
+            return AuthorizationDecision(
+                allowed=False, controlling_layer=layer,
+                reason=f"Denied {tool_name}: approval level is 'deny', "
+                       f"controlled by the {layer} policy layer")
+        allowlist = tuple(getattr(effective_policy, "mcp_allowlist", ()) or ())
+        server = _mcp_server_id(tool_name)
+        if server is not None and allowlist and server not in allowlist:
+            return AuthorizationDecision(
+                allowed=False, controlling_layer="organization",
+                reason=f"Denied {tool_name}: MCP server {server!r} is not "
+                       f"on the organization allowlist")
+        policy_approves = (level == "approve")
+    else:
+        policy_approves = False
+
     # L1 — principal capabilities.
     if not principal.allows_tool(tool_name):
         return AuthorizationDecision(
@@ -67,6 +99,12 @@ def authorize(principal: Principal, tool_name: str, args: dict[str, Any],
             reason="hook-directory mutation refused (privilege-escalation guard)")
 
     # L5 — approval requirement from session preference layer.
+    # A bundle-level "approve" forces approval even in full mode.
+    if policy_approves:
+        return AuthorizationDecision(
+            allowed=True, controlling_layer="approval",
+            reason=f"{tool_name} requires explicit approval (policy)",
+            approval_required=True, obligations=("explicit-user-approval",))
     mode = (permission_mode or "auto_edit").lower()
     if mode == "full":
         approval_required = False
