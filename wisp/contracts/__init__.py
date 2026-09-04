@@ -1,4 +1,5 @@
 from wisp.contracts.envelope import CONTRACT_VERSION, CanonicalEvent
+from wisp.contracts.manifest import MCPServerContract, PluginContract
 from wisp.contracts.policy import CANCELLED_BY_USER, PolicyDecisionEnvelope
 from wisp.contracts.run import EVENT_KINDS, RunStatus, Transition
 from wisp.contracts.tool import BLOCK_REASONS, STATUSES, ToolRequest, ToolResult
@@ -10,6 +11,8 @@ __all__ = [
     "EVENT_KINDS",
     "STATUSES",
     "CanonicalEvent",
+    "MCPServerContract",
+    "PluginContract",
     "PolicyDecisionEnvelope",
     "RunStatus",
     "ToolRequest",
