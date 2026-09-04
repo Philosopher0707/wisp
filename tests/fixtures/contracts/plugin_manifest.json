@@ -1,0 +1,24 @@
+{
+  "agents": [],
+  "author": "a",
+  "commands": [
+    "c1"
+  ],
+  "contract_version": 1,
+  "description": "d",
+  "homepage": null,
+  "hooks": [],
+  "license": "MIT",
+  "mcp_servers": [],
+  "name": "x",
+  "namespace": "n",
+  "origin": null,
+  "plugin_dependencies": {},
+  "repository": null,
+  "requires_wisp_version": ">=0.1.0",
+  "scopes": [],
+  "signature": null,
+  "skills": [],
+  "themes": [],
+  "version": "1.0"
+}

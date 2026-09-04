@@ -1,0 +1,21 @@
+{
+  "always_load": false,
+  "args": [
+    "mcp"
+  ],
+  "auth": "none",
+  "auth_config": null,
+  "command": "uvx",
+  "contract_version": 1,
+  "disabled": false,
+  "disabled_tools": null,
+  "env": {},
+  "headers": null,
+  "name": "s",
+  "origin": null,
+  "scopes": [],
+  "signature": null,
+  "timeout_seconds": 30,
+  "transport": "stdio",
+  "url": null
+}

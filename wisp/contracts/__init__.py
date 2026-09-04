@@ -1,3 +1,11 @@
+from wisp.contracts.adapters import (
+    for_cli,
+    for_headless,
+    for_tui,
+    for_websocket,
+    from_flat,
+    to_flat,
+)
 from wisp.contracts.envelope import CONTRACT_VERSION, CanonicalEvent
 from wisp.contracts.manifest import MCPServerContract, PluginContract
 from wisp.contracts.policy import CANCELLED_BY_USER, PolicyDecisionEnvelope
@@ -18,4 +26,10 @@ __all__ = [
     "ToolRequest",
     "ToolResult",
     "Transition",
+    "for_cli",
+    "for_headless",
+    "for_tui",
+    "for_websocket",
+    "from_flat",
+    "to_flat",
 ]

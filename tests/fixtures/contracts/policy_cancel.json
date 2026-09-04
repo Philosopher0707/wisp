@@ -1,0 +1,11 @@
+{
+  "allowed": false,
+  "controlling_layer": "",
+  "correlation_id": "c1",
+  "modified_args": null,
+  "principal_id": "",
+  "reason": "cancelled_by_user",
+  "risk": "read",
+  "rule_name": "",
+  "version": 1
+}

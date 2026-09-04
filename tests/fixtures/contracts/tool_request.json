@@ -1,0 +1,11 @@
+{
+  "args": {
+    "path": "a.py"
+  },
+  "correlation_id": "",
+  "idempotency_key": "k1",
+  "name": "read_file",
+  "principal_id": "",
+  "tool_call_id": "c1",
+  "version": 1
+}

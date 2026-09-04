@@ -1,0 +1,10 @@
+{
+  "data": {
+    "text": "hi"
+  },
+  "schema_version": 1,
+  "span_id": "s1",
+  "timestamp": 1.5,
+  "trace_id": "t1",
+  "type": "content"
+}

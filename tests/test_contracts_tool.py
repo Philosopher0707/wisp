@@ -14,6 +14,7 @@ def test_result_denied_carries_block_reason():
     res = ToolResult(tool_call_id="c1", status="denied",
                      block_reason="danger", error="rm -rf / blocked")
     assert res.to_dict()["block_reason"] == "danger"
+    assert res.block_reason in BLOCK_REASONS
 
 
 def test_bad_status_rejected():

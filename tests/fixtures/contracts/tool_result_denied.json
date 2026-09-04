@@ -1,0 +1,10 @@
+{
+  "auto_approved": false,
+  "block_reason": "danger",
+  "data": null,
+  "error": "blocked",
+  "metadata": {},
+  "status": "denied",
+  "tool_call_id": "c1",
+  "version": 1
+}
