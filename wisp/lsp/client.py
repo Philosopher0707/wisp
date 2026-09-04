@@ -314,6 +314,28 @@ class LSPServer:
         )
         self._open_docs[uri] = 1
 
+    def notify_text_change(self, file_path: str, text: str) -> int:
+        """Send textDocument/didChange with caller-supplied in-memory text.
+
+        Unlike :meth:`notify_change` (which re-reads disk), this carries
+        speculative content — the basis for pre-mutation diagnostics.
+        Returns the new document version. Disk is never touched.
+        """
+        uri = path_to_uri(os.path.abspath(file_path))
+        if uri not in self._open_docs:
+            self.ensure_document_open(file_path)
+            uri = path_to_uri(os.path.abspath(file_path))
+        version = self._open_docs[uri] + 1
+        self._open_docs[uri] = version
+        self._send_notification(
+            "textDocument/didChange",
+            {
+                "textDocument": {"uri": uri, "version": version},
+                "contentChanges": [{"text": text}],
+            },
+        )
+        return version
+
     def notify_change(self, file_path: str) -> None:
         """Send textDocument/didChange with full content replacement."""
         uri = path_to_uri(os.path.abspath(file_path))
