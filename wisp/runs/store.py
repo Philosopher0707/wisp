@@ -52,6 +52,8 @@ class RunStore(abc.ABC):
     @abc.abstractmethod
     def claim_lease(self, run_id: str, owner: str, ttl_s: float) -> bool: ...
     @abc.abstractmethod
+    def release_lease(self, run_id: str) -> None: ...
+    @abc.abstractmethod
     def idempotent_get(self, key: str) -> str | None: ...
     @abc.abstractmethod
     def idempotent_put(self, key: str, result: str) -> None: ...
@@ -126,6 +128,9 @@ class SQLiteRunStore(RunStore):
 
     def claim_lease(self, run_id: str, owner: str, ttl_s: float) -> bool:
         return self._store.bg_claim_lease(run_id, owner, time.time() + ttl_s)
+
+    def release_lease(self, run_id: str) -> None:
+        self._store.bg_update(run_id, lease_owner="", lease_expires=0.0)
 
     def idempotent_get(self, key: str) -> str | None:
         return self._store.idem_get(key)

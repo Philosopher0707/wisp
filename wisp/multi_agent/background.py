@@ -34,6 +34,8 @@ STATUS_COMPLETED = "completed"
 STATUS_FAILED = "failed"
 STATUS_CANCELLED = "cancelled"
 _TERMINAL = {STATUS_COMPLETED, STATUS_FAILED, STATUS_CANCELLED}
+# Lease time-to-live for durable run rows (renewed by scheduler heartbeat).
+_LEASE_TTL_S = 300.0
 
 
 @dataclass
@@ -92,6 +94,13 @@ class BackgroundAgentManager:
         # Durable registry (M3 J1): source of truth for run status. None
         # preserves the legacy pure-in-memory behavior (tests, embeddings).
         self._run_store = run_store
+        self._owner_id = f"mgr-{uuid.uuid4().hex[:8]}"
+        self._scheduler = None
+        if run_store is not None:
+            from wisp.runs.scheduler import Scheduler
+            self._scheduler = Scheduler(
+                run_store, max_running=max_running,
+                lease_ttl_s=_LEASE_TTL_S, owner=self._owner_id)
         self._entries: dict[str, BackgroundAgentEntry] = {}
         self._counter = 0
         # Settlement fan-out: each subscriber gets one event per agent
@@ -161,6 +170,7 @@ class BackgroundAgentManager:
             ))
             self._run_store.transition(
                 entry.id, RunState.QUEUED, RunState.RUNNING, reason="launched")
+            self._run_store.claim_lease(entry.id, self._owner_id, _LEASE_TTL_S)
         except Exception:
             logger.warning("run persistence failed on create %s",
                            entry.id, exc_info=True)
@@ -187,6 +197,8 @@ class BackgroundAgentManager:
             self._run_store.transition(
                 entry.id, rec.status, target,
                 reason=f"settled:{entry.status}")
+            if target in (RunState.SUCCEEDED, RunState.FAILED, RunState.CANCELLED):
+                self._run_store.release_lease(entry.id)
         except Exception:
             logger.warning("run persistence failed on status %s (%s)",
                            entry.id, entry.status, exc_info=True)
@@ -224,18 +236,24 @@ class BackgroundAgentManager:
 
     async def launch(self, contract: Any, label: str = "") -> dict[str, Any]:
         """Start a contract in the background. Returns a launch snapshot."""
-        running = [e for e in self._entries.values() if e.status == STATUS_RUNNING]
-        if len(running) >= self._max_running:
-            return {
-                "ok": False,
-                "error": (
-                    f"Background agent limit reached ({self._max_running} running). "
-                    "Collect or cancel existing agents first."
-                ),
-            }
-
         self._counter += 1
         agent_id = f"bg-{uuid.uuid4().hex[:8]}"
+        if self._scheduler is not None:
+            # Durable admission (M3 J2): store counts replace the
+            # in-memory head-count so limits survive restarts.
+            admitted = self._scheduler.admit(agent_id)
+            if not admitted.allowed:
+                return {"ok": False, "error": admitted.reason}
+        else:
+            running = [e for e in self._entries.values() if e.status == STATUS_RUNNING]
+            if len(running) >= self._max_running:
+                return {
+                    "ok": False,
+                    "error": (
+                        f"Background agent limit reached ({self._max_running} running). "
+                        "Collect or cancel existing agents first."
+                    ),
+                }
         entry = BackgroundAgentEntry(
             id=agent_id,
             label=label or f"{getattr(contract, 'role', 'generalist')}-{self._counter}",
