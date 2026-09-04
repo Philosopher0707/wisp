@@ -19,7 +19,7 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +265,33 @@ class UnifiedStore:
                     conn.execute(_ddl)
                 except sqlite3.OperationalError:
                     pass  # column already present
+
+            # Schema migration (M5): trace span store. span_id is the
+            # primary key so retried appends are idempotent; run_id is a
+            # real column (not JSON extraction) for indexability.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS trace_spans (
+                    span_id TEXT PRIMARY KEY,
+                    trace_id TEXT NOT NULL,
+                    parent_span_id TEXT NOT NULL DEFAULT '',
+                    kind TEXT NOT NULL,
+                    name TEXT NOT NULL DEFAULT '',
+                    run_id TEXT NOT NULL DEFAULT '',
+                    started_at REAL NOT NULL DEFAULT 0,
+                    finished_at REAL NOT NULL DEFAULT 0,
+                    attrs TEXT NOT NULL DEFAULT '{}',
+                    status TEXT NOT NULL DEFAULT 'ok',
+                    version INTEGER NOT NULL DEFAULT 1
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_trace_spans_trace
+                ON trace_spans(trace_id, started_at)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_trace_spans_run
+                ON trace_spans(run_id, started_at)
+            """)
         finally:
             conn.close()
 
@@ -674,6 +701,58 @@ class UnifiedStore:
             """,
             (key, result, _time.time()),
         )
+
+    # ── Trace spans (M5) ─────────────────────────────────────────────
+
+    def trace_append(self, span: dict) -> None:
+        """Append a span (idempotent on span_id — retries are safe)."""
+        import json as _json
+        self._get_conn().execute(
+            """
+            INSERT INTO trace_spans (span_id, trace_id, parent_span_id, kind,
+                name, run_id, started_at, finished_at, attrs, status, version)
+            VALUES (:span_id, :trace_id, :parent_span_id, :kind, :name,
+                :run_id, :started_at, :finished_at, :attrs, :status, :version)
+            ON CONFLICT(span_id) DO NOTHING
+            """,
+            {
+                "span_id": span["span_id"], "trace_id": span["trace_id"],
+                "parent_span_id": span.get("parent_span_id", ""),
+                "kind": span["kind"], "name": span.get("name", ""),
+                "run_id": span.get("run_id", ""),
+                "started_at": span.get("started_at", 0.0),
+                "finished_at": span.get("finished_at", 0.0),
+                "attrs": _json.dumps(span.get("attrs") or {}),
+                "status": span.get("status", "ok"),
+                "version": span.get("version", 1),
+            },
+        )
+
+    @staticmethod
+    def _span_row(r: Any) -> dict:
+        import json as _json
+        return {"trace_id": r["trace_id"], "span_id": r["span_id"],
+                "parent_span_id": r["parent_span_id"], "kind": r["kind"],
+                "name": r["name"], "started_at": r["started_at"],
+                "finished_at": r["finished_at"],
+                "attrs": _json.loads(r["attrs"]),
+                "status": r["status"], "version": r["version"]}
+
+    def trace_list(self, trace_id: str) -> list[dict]:
+        """Spans for one trace, oldest first."""
+        rows = self._get_conn().execute(
+            "SELECT * FROM trace_spans WHERE trace_id = ? ORDER BY started_at ASC",
+            (trace_id,),
+        ).fetchall()
+        return [self._span_row(r) for r in rows]
+
+    def trace_list_run(self, run_id: str) -> list[dict]:
+        """Spans for one run, oldest first."""
+        rows = self._get_conn().execute(
+            "SELECT * FROM trace_spans WHERE run_id = ? ORDER BY started_at ASC",
+            (run_id,),
+        ).fetchall()
+        return [self._span_row(r) for r in rows]
 
     def bg_list(self) -> list[dict]:
         """List all background runs."""
