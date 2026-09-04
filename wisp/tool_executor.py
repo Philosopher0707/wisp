@@ -337,9 +337,13 @@ class ToolExecutor:
         audit_trail: Any | None = None,
         background_agents: Any | None = None,
         extensions: Any | None = None,
+        policy: Any = None,
     ):
         self.config = config
         self.extensions = extensions
+        # EffectivePolicy (M4 seam closure): denials enforced in the I1
+        # consult; "approve" entries force the approval path below.
+        self.policy = policy
 
         # Tools run on a DEDICATED bounded pool, not the interpreter's
         # shared default executor: a timed-out tool cannot be killed (no
@@ -458,6 +462,7 @@ class ToolExecutor:
             func_name, func_args,
             classify_workspace(workspace),
             permission_mode=_pm.value if hasattr(_pm, "value") else str(_pm),
+            effective_policy=self.policy,
         )
         if not _decision.allowed:
             yield _tool_result_event(
@@ -504,9 +509,18 @@ class ToolExecutor:
         # ── Approval gating ──
         needs_approval = func_name in _get_write_tools(self.config)
         forced_approval = self._needs_forced_approval(func_name)
+        # Bundle-level "approve" forces the approval path even in full
+        # mode (explicit, no ambiguity with session-layer requirements).
+        _matrix = getattr(self.policy, "approval_matrix", None) or {}
+        if _matrix.get(func_name) == "approve":
+            needs_approval = True
+            forced_approval = True
         is_full_mode = getattr(self.config, "permission_mode", PermissionMode.AUTO_EDIT) == PermissionMode.FULL
         was_auto_approved = False
-        if needs_approval and not is_full_mode and (not getattr(self.config, "auto_approve", False) or forced_approval):
+        # Forced approval (incl. bundle-level) always enters the branch —
+        # without a handler it blocks. Otherwise the original mode logic.
+        if needs_approval and (forced_approval or (
+                not is_full_mode and not getattr(self.config, "auto_approve", False))):
             if not approval_handler:
                 if forced_approval:
                     yield _tool_result_event(
