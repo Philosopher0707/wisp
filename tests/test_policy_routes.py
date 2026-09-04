@@ -1,10 +1,21 @@
 # tests/test_policy_routes.py — minimal control-plane API (M4 T4).
 import time
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from wisp.policy.bundle import PolicyBundle, generate_keypair, sign_bundle
+
+
+@pytest.fixture(autouse=True)
+def _isolated_rate_limiter(tmp_path, monkeypatch):
+    """Route tests share a home-DB 30-req/min limiter; isolate per module."""
+    from wisp.server import deps
+    monkeypatch.setattr(
+        deps, "_rate_limiter_instance",
+        deps.SQLiteRateLimiter(db_path=tmp_path / "rl.db",
+                               max_requests=1000, window_seconds=60))
 
 
 def _payload(**overrides):
