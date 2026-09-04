@@ -1,0 +1,43 @@
+{
+  "approval_matrix": {
+    "git_push": "deny",
+    "run_bash": "approve",
+    "write_file": "approve"
+  },
+  "approved_models": [
+    "ollama/qwen3:8b"
+  ],
+  "approved_providers": [
+    "ollama"
+  ],
+  "bundle_version": 1,
+  "expires_at": 1791086774.799401,
+  "issued_at": 1788494774.799401,
+  "mcp_allowlist": [
+    "git",
+    "filesystem"
+  ],
+  "network_policy": {
+    "egress": [
+      "proxy.internal"
+    ],
+    "mode": "allowlisted"
+  },
+  "org_id": "example-org",
+  "plugin_allowlist": [],
+  "redaction_rules": [
+    "aws-access-key",
+    "github-token",
+    "bearer-token"
+  ],
+  "revocation_seq": 1,
+  "shell_restrictions": {
+    "deny_patterns": [
+      "rm -rf /",
+      "mkfs"
+    ]
+  },
+  "telemetry_policy": {
+    "tier": "metrics-only"
+  }
+}
