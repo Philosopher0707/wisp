@@ -5,11 +5,16 @@ Replaces 3 duplicated approval blocks in engine.py with one check() call.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
-from typing import Any, Callable, Awaitable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
+from wisp.cli.approval import ApprovalCancelled
 from wisp.infra.security import Action, Context
+
+if TYPE_CHECKING:
+    from wisp.core.contracts import ApprovalDecision
 
 logger = logging.getLogger(__name__)
 
@@ -81,9 +86,31 @@ class ApprovalGate:
                         approved = await handler(event)
                         if approved:
                             return ApprovalDecision(allowed=True, risk=risk_for_tool(tool_name))
+                    except (asyncio.CancelledError, KeyboardInterrupt, GeneratorExit, SystemExit):
+                        # Genuine external cancellation — propagate untouched.
+                        # (Cancellation-first: only these types carry it; the
+                        # handler must never synthesize them from input.)
+                        raise
+                    except ApprovalCancelled as cancelled:
+                        # User verdict, not an interruption: record it as an
+                        # explicit denial so history stays protocol-consistent
+                        # and the model sees an outcome instead of replaying.
+                        return ApprovalDecision(
+                            allowed=False,
+                            reason=f"cancelled by user at approval ({cancelled.tool_name or tool_name})",
+                            risk=risk_for_tool(tool_name),
+                        )
                     except Exception as e:
                         logger.exception("Approval handler failed: %s", e)
                 return decision_to_approval_decision(decision, tool_name=tool_name)
+        except (asyncio.CancelledError, KeyboardInterrupt, GeneratorExit, SystemExit):
+            raise
+        except ApprovalCancelled as cancelled:
+            return ApprovalDecision(
+                allowed=False,
+                reason=f"cancelled by user at approval ({cancelled.tool_name or tool_name})",
+                risk=risk_for_tool(tool_name),
+            )
         except Exception as e:
             logger.exception("Security check failed — treating as deny: %s", e)
             return ApprovalDecision(allowed=False, reason=str(e), risk=risk_for_tool(tool_name))

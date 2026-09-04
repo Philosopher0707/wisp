@@ -680,6 +680,11 @@ class CLITransport(Transport):
         self._turn_number: int = 0
         self._phase: str = "understand"
         self._interrupted: bool = False
+        # Serializes interactive approval prompts: parallel tool calls in
+        # one iteration must not share stdin, or answers cross prompts and
+        # the wrong tool gets approved/denied (then re-emitted -> loop).
+        # Created lazily — asyncio primitives must not bind a loop here.
+        self._approval_lock: asyncio.Lock | None = None
         _transport_instances.append(self)
 
     def is_interrupted(self) -> bool:
@@ -726,7 +731,6 @@ class CLITransport(Transport):
             parse_tool_approval,
             render_approval_badge,
             render_approval_options,
-            render_diff_view,
         )
 
         tool_name = tool_call.get("name", "unknown")
@@ -736,7 +740,8 @@ class CLITransport(Transport):
         # Dangerous commands still denied via check_dangerous_command in the
         # executor layer, so this is safe to auto-approve.
         try:
-            if self.config is not None and bool(getattr(self.config, "autonomous", False)):
+            _cfg = getattr(self, "config", None)
+            if _cfg is not None and bool(getattr(_cfg, "autonomous", False)):
                 from wisp.tools._utils import check_dangerous_command
                 if tool_name == "run_bash":
                     cmd = str((tool_call.get("arguments", {}) or {}).get("command", "") or "")
@@ -784,52 +789,84 @@ class CLITransport(Transport):
         typeahead = TypeAheadBuffer.active_instance()
         if typeahead is not None and typeahead.enabled:
             typeahead.pause()
+        # getattr-tolerant: bare __new__ instances in tests skip __init__.
+        _lock = getattr(self, "_approval_lock", None)
+        if _lock is None:
+            _lock = asyncio.Lock()
+            try:
+                self._approval_lock = _lock
+            except AttributeError:
+                pass
         try:
-            while True:
-                try:
-                    raw = await self._read_approval_answer_with_reminders(is_file_edit=approval_info.is_file_edit)
-                except (EOFError, OSError):
-                    return False
-                choice = raw.strip()
-
-                # Expandable diff toggle
-                if approval_info.is_file_edit and choice in ("v", "V", "view", "diff"):
-                    diff_output = render_diff_view(approval_info)
-                    print(file=sys.stderr)
-                    print(diff_output, file=sys.stderr)
-                    print(file=sys.stderr)
-                    print(render_approval_badge(approval_info), file=sys.stderr)
-                    print(render_approval_options(approval_info.is_file_edit), file=sys.stderr)
-                    continue
-
-                if choice in ("y", "Y"):
-                    if choice == "Y":
-                        self._approval_state.allow_tool(tool_name)
-                    self._get_spinner().start(f"{tool_name} {_args_preview(args_map)}")
-                    return True
-                if choice == "a":
-                    self._approval_state.set_auto()
-                    self._get_spinner().start(f"{tool_name} {_args_preview(args_map)}")
-                    return True
-                if choice in ("n", "N"):
-                    if choice == "N":
-                        self._approval_state.deny_tool(tool_name)
-                    return False
-                if choice == "d":
-                    self._approval_state.set_block()
-                    return False
-                if choice == "c":
-                    # Honest cancel: unwind the turn (the REPL renders it like an
-                    # interrupt), not a silent deny that lets the agent continue.
-                    print(dim(f"{status_symbols()['cancel']}  Turn cancelled."), file=sys.stderr)
-                    raise asyncio.CancelledError(
-                        f"User cancelled the turn at the approval prompt for {tool_name}"
-                    )
-                # Any other key = deny
-                return False
+            async with _lock:
+                return await self._prompt_loop(tool_call, tool_name, args_map, approval_info)
         finally:
             if typeahead is not None and typeahead.enabled:
                 typeahead.resume()
+
+    async def _prompt_loop(self, tool_call: dict, tool_name: str,
+                           args_map: dict, approval_info: Any) -> bool:
+        """Run the y/n/v/a/d/c prompt until it resolves to allow/deny.
+
+        Mapping lives in :func:`prompt_for_approval` (pure, piped-testable).
+        ``CANCEL`` raises :class:`ApprovalCancelled` — a verdict, NOT a
+        task cancellation: callers record it as an explicit denial so the
+        model sees an outcome instead of replaying the call. Genuine
+        external cancellation (SIGINT task-cancel) propagates untouched
+        because only CancelledError/KeyboardInterrupt carry it, and this
+        loop never synthesizes either from input bytes.
+        """
+        from wisp.cli.approval import (
+            ApprovalCancelled,
+            normalize_answer,
+            prompt_for_approval,
+            ApprovalVerdict,
+            render_diff_view,
+            render_approval_badge,
+            render_approval_options,
+        )
+
+        while True:
+            try:
+                raw = await self._read_approval_answer_with_reminders(is_file_edit=approval_info.is_file_edit)
+            except (EOFError, OSError):
+                return False
+            choice = normalize_answer(raw)
+            try:
+                verdict = prompt_for_approval(choice, is_file_edit=approval_info.is_file_edit)
+            except KeyboardInterrupt:
+                # Literal Ctrl+C byte only — genuine interrupt semantics.
+                raise
+            if verdict == ApprovalVerdict.VIEW:
+                diff_output = render_diff_view(approval_info)
+                print(file=sys.stderr)
+                print(diff_output, file=sys.stderr)
+                print(file=sys.stderr)
+                print(render_approval_badge(approval_info), file=sys.stderr)
+                print(render_approval_options(approval_info.is_file_edit), file=sys.stderr)
+                continue
+            if verdict in (ApprovalVerdict.APPROVE, ApprovalVerdict.APPROVE_ALWAYS):
+                if verdict == ApprovalVerdict.APPROVE_ALWAYS:
+                    self._approval_state.allow_tool(tool_name)
+                self._get_spinner().start(f"{tool_name} {_args_preview(args_map)}")
+                return True
+            if verdict == ApprovalVerdict.AUTO_ALL:
+                self._approval_state.set_auto()
+                self._get_spinner().start(f"{tool_name} {_args_preview(args_map)}")
+                return True
+            if verdict in (ApprovalVerdict.REJECT, ApprovalVerdict.REJECT_ALWAYS):
+                if verdict == ApprovalVerdict.REJECT_ALWAYS:
+                    self._approval_state.deny_tool(tool_name)
+                return False
+            if verdict == ApprovalVerdict.BLOCK_ALL:
+                self._approval_state.set_block()
+                return False
+            if verdict == ApprovalVerdict.CANCEL:
+                print(dim(f"{status_symbols()['cancel']}  Turn cancelled."), file=sys.stderr)
+                raise ApprovalCancelled(tool_name)
+            # Unmapped input is fail-closed deny (mapper guarantees this,
+            # but the loop stays total even if the mapper ever changes).
+            return False
 
     @staticmethod
     def _read_approval_line(prompt_text: str, stop: threading.Event) -> str:
@@ -837,20 +874,41 @@ class CLITransport(Transport):
 
         select() keeps the worker thread polling instead of parking inside
         input(), so a cancelled approval can't leave an orphaned reader
-        swallowing the user's next typed line.
+        swallowing the user's next typed line — or worse, parking forever
+        in input() on a pipe and hanging interpreter shutdown (to_thread
+        workers are joined at loop close). Pipes are select()-able on
+        POSIX, so the tty check is gone: any fileno-backed stdin polls;
+        only fileno-less streams (StringIO, Windows console) use input().
         """
         sys.stderr.write(prompt_text)
         sys.stderr.flush()
-        use_select = hasattr(sys.stdin, "isatty") and sys.stdin.isatty() and hasattr(select, "select")
-        if not use_select:
-            return input(prompt_text)
+        selectable = False
+        try:
+            fileno = sys.stdin.fileno() if hasattr(sys.stdin, "fileno") else -1
+            selectable = isinstance(fileno, int) and fileno >= 0 and hasattr(select, "select")
+        except Exception:
+            selectable = False
+        if not selectable:
+            try:
+                return input(prompt_text)
+            except (EOFError, OSError):
+                return ""
         while not stop.is_set():
             try:
                 ready, _, _ = select.select([sys.stdin], [], [], 0.2)
             except (OSError, ValueError):
-                return input(prompt_text)
+                # Non-selectable console (e.g. Windows): blocking input()
+                # is the only option — same as the historical behavior.
+                try:
+                    return input(prompt_text)
+                except (EOFError, OSError):
+                    return ""
             if ready:
-                return sys.stdin.readline()
+                try:
+                    line = sys.stdin.readline()
+                except Exception:
+                    return ""
+                return line if line else ""
         return ""
 
     async def _read_approval_answer(self) -> str:

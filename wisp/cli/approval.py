@@ -25,6 +25,99 @@ from wisp.ui.diff_viewer import compute_diff_stats, create_diff_panel, render_di
 logger = logging.getLogger(__name__)
 
 
+class ApprovalVerdict(str):
+    """Outcome of mapping one approval answer. Plain strings, no enum import."""
+
+    APPROVE = "approve"
+    APPROVE_ALWAYS = "approve_always"
+    REJECT = "reject"
+    REJECT_ALWAYS = "reject_always"
+    VIEW = "view"
+    AUTO_ALL = "auto_all"
+    BLOCK_ALL = "block_all"
+    CANCEL = "cancel"
+
+
+class ApprovalCancelled(Exception):
+    """The user chose 'cancel' at an approval prompt.
+
+    Deliberately NOT a CancelledError/KeyboardInterrupt: it is a *verdict*,
+    not an external interruption. Callers convert it to a recorded denial
+    ("cancelled by user") so history stays protocol-consistent. Genuine
+    task cancellation (SIGINT) still arrives as CancelledError and must
+    propagate untouched — see the explicit re-raise guards at every
+    approval catch site.
+    """
+
+    def __init__(self, tool_name: str = ""):
+        self.tool_name = tool_name
+        super().__init__(f"User cancelled at the approval prompt for {tool_name or 'tool'}")
+
+
+_ANSI_TAIL_RE = None
+
+
+def _ansi_tail_re():
+    global _ANSI_TAIL_RE
+    if _ANSI_TAIL_RE is None:
+        import re
+
+        _ANSI_TAIL_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b[()][0-9A-B]|\x1b.")
+    return _ANSI_TAIL_RE
+
+
+def normalize_answer(raw: object) -> str:
+    """Clean one approval line: strip newline/whitespace and residual escapes.
+
+    Never raises on odd input (None/bytes fall back to ""). A literal
+    Ctrl+C byte (``\\x03``) survives normalization so the caller can turn
+    exactly that — and only that — into KeyboardInterrupt.
+    """
+    if raw is None:
+        return ""
+    if isinstance(raw, bytes):
+        try:
+            raw = raw.decode("utf-8", errors="replace")
+        except Exception:
+            return ""
+    if not isinstance(raw, str):
+        return ""
+    text = _ansi_tail_re().sub("", raw)
+    return text.strip().strip("\x00")
+
+
+def prompt_for_approval(answer: str, *, is_file_edit: bool = False) -> str:
+    """Map one normalized answer to an ApprovalVerdict (pure, total).
+
+    - 'y'/'Y'/'yes' -> APPROVE / APPROVE_ALWAYS
+    - 'v'/'view'/'diff' (file edits only) -> VIEW (toggle, no state change)
+    - 'a'/'auto' -> AUTO_ALL, 'n'/'no'/'N' -> REJECT / REJECT_ALWAYS
+    - 'd'/'deny-all' -> BLOCK_ALL, 'c'/'cancel' -> CANCEL
+    - literal '\\x03' -> raises KeyboardInterrupt (real Ctrl+C byte only)
+    - anything else (incl. "") -> REJECT (fail-closed)
+
+    Raises:
+        KeyboardInterrupt: only when the answer is the literal Ctrl+C byte.
+    """
+    choice = (answer or "").strip()
+    if choice == "\x03" or choice.startswith("\x03"):
+        raise KeyboardInterrupt
+    lowered = choice.lower()
+    if lowered in ("y", "yes"):
+        return ApprovalVerdict.APPROVE_ALWAYS if choice == "Y" else ApprovalVerdict.APPROVE
+    if lowered in ("n", "no"):
+        return ApprovalVerdict.REJECT_ALWAYS if choice == "N" else ApprovalVerdict.REJECT
+    if is_file_edit and lowered in ("v", "view", "diff"):
+        return ApprovalVerdict.VIEW
+    if lowered in ("a", "auto", "all"):
+        return ApprovalVerdict.AUTO_ALL
+    if lowered in ("d", "deny", "deny-all", "block"):
+        return ApprovalVerdict.BLOCK_ALL
+    if lowered in ("c", "cancel"):
+        return ApprovalVerdict.CANCEL
+    return ApprovalVerdict.REJECT
+
+
 @dataclass
 class ToolApprovalInfo:
     """Structured information extracted from a pending tool call."""

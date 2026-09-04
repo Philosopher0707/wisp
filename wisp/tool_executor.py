@@ -34,6 +34,7 @@ from wisp.core.events import (
     subagent as _subagent_event,
     system as system_event,
 )
+from wisp.cli.approval import ApprovalCancelled
 from wisp.tools.errors import ToolError
 from wisp.tools._utils import check_dangerous_command
 from wisp.tools import context as exec_ctx
@@ -497,7 +498,22 @@ class ToolExecutor:
             else:
                 reason = f"{func_name} modifies workspace state"
                 yield _approval_request_event(func_name, func_args, reason)
-                approved, modified = await approval_handler(func_name, func_args, reason)
+                try:
+                    approved, modified = await approval_handler(func_name, func_args, reason)
+                except (asyncio.CancelledError, KeyboardInterrupt, GeneratorExit, SystemExit):
+                    # Genuine external cancellation — propagate untouched.
+                    raise
+                except ApprovalCancelled as cancelled:
+                    # User verdict, not an interruption: purge the pending
+                    # invocation with an explicit outcome so the model sees
+                    # a rejection instead of re-emitting the identical call.
+                    tool = cancelled.tool_name or func_name
+                    yield _tool_result_event(
+                        func_name,
+                        f"[Cancelled by user at approval for {tool} — do not retry this call]",
+                        tool_call_id=tool_call_id,
+                    )
+                    return
                 if modified is not None:
                     func_args.clear()
                     func_args.update(modified)
