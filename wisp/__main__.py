@@ -515,6 +515,12 @@ def cmd_completion(args: list[str]):
     raise SystemExit(_cmd_completion(args, _sys.stdout))
 
 
+def cmd_release(args: list[str]):
+    """Supply-chain and support commands (M7)."""
+    from wisp.release.cli import main as release_main
+    raise SystemExit(release_main(args))
+
+
 def cmd_mcp(args: list[str]):
     """Manage MCP server configurations."""
     if not args or args[0] == "list":
@@ -1012,6 +1018,7 @@ _SUBCOMMAND_HELP: dict[str, str] = {
     "audit": 'Usage: wisp audit verify\n\nVerify the tamper-evident audit chain.',
     "task": 'Usage: wisp task <start|list|inspect|review|approve-plan|pause|resume|cancel|export-evidence> [--json]\n\nTask lifecycle over the durable run store.',
     "completion": 'Usage: wisp completion <bash|zsh>\n\nPrint shell completion scripts.',
+    "release": 'Usage: wisp release <lock|verify-deps|sbom|licenses|health|diagnostics> [--out FILE]\n\nSupply-chain and support commands.',
     "git": 'Usage: wisp git\n\nShow git context for the workspace (branch, status, recent commits).',
     "plan": 'Usage: wisp plan <list|show|...>\n\nManage structured plans.',
     "progress": 'Usage: wisp progress\n\nShow current plan progress.',
@@ -1034,7 +1041,7 @@ _SUBCOMMAND_HELP: dict[str, str] = {
 _SUBCOMMAND_NAMES = frozenset({
     "run", "repl", "tui", "skills", "config", "check", "models",
     "session", "memory", "mcp", "policy", "trace", "replay", "audit", "task",
-    "completion",
+    "completion", "release",
     "git", "plan", "progress", "diagnose",
     "locks", "changes", "acp", "server", "compact", "swarm", "agents",
     "bench",
@@ -1258,6 +1265,8 @@ def main():
             cmd_task(rest)
         elif first == "completion":
             cmd_completion(rest)
+        elif first == "release":
+            cmd_release(rest)
         elif first == "git":
             cmd_git(rest)
         elif first == "plan":

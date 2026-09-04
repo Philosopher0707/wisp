@@ -1,3 +1,5 @@
+from wisp.release.diagnostics import support_bundle, write_bundle
+from wisp.release.health import health_check
 from wisp.release.lock import (
     audit_licenses,
     declared_deps,
@@ -12,5 +14,8 @@ __all__ = [
     "declared_deps",
     "generate_lock",
     "generate_sbom",
+    "health_check",
+    "support_bundle",
     "verify_lock",
+    "write_bundle",
 ]
