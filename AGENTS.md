@@ -37,6 +37,13 @@ Guidance for AI coding agents working in the Wisp codebase.
 | `wisp/colors.py` | Terminal colors | `success()`, `error()`, `warning()`, `dim()`, `info()`, `accent()`, `bold()` |
 | `wisp/terminal_width.py` | Display width | `display_width()`, `BoxChars`, `OutputMode`, `is_accessible()` |
 | `wisp/tui/task_owner.py` | TUI fire-and-forget ownership | `OwnedTasks`: named spawn, exception logging via done-callbacks, `cancel_all()` on unmount — no bare `create_task` in screens (structural pin enforces) |
+| `wisp/contracts/` | Versioned wire envelopes (M1) | `CanonicalEvent`, `ToolRequest`/`ToolResult`, `PolicyDecisionEnvelope`, `RunStatus`/`Transition`, manifest schemas, flat↔nested `adapters` |
+| `wisp/auth/` | Local authority layer (M2) | `Principal` + narrowing derivation, layered `authorize()`, `WorkspaceTrust`, secret `redact()`/`scan_for_secrets()`, extension consent/quarantine |
+| `wisp/runs/` | Durable runtime (M3) | `RunRecord` state machine, `RunStore` ABC + `SQLiteRunStore`, `Scheduler` (admission/leases/idempotency), compensation records, `ReproManifest` |
+| `wisp/policy/` | Governance bundles (M4) | Ed25519 `PolicyBundle`, narrow-only precedence merge, managed/disconnected loader, `explain`/`dry_run`, admin CLI, control-plane routes |
+| `wisp/trace/` + `wisp/eval/` | Evidence + evaluation (M5) | `Span` store (redaction at append), evidence export, replay plans, tier-gated OTLP, eval scenarios + safety/latency/cost metrics |
+| `wisp/task/` | CLI workflow (M6) | `TaskManager` lifecycle, plan review render + scope approval, 5 profiles, task CLI with `--json` contract |
+| `wisp/release/` | Supply chain + support (M7) | Dep lock verify, CycloneDX SBOM, license audit, health checks, redacted diagnostics, release CLI |
 
 ## Common patterns
 
@@ -67,8 +74,13 @@ pytest tests/test_websocket.py tests/test_transport_headless.py -v
 # Core + runtime tests
 pytest tests/test_core_stateless.py tests/test_runtime_concurrent.py tests/test_provider_integration.py -v
 
-# Full suite (all 184 test files collect cleanly — 2,765+ tests)
+# Full suite (all 285 test files collect cleanly — 3,950 tests)
 python -m pytest tests/test_*.py -v
+
+# Enterprise track gate (contracts, auth, runs, policy, trace, eval, task, release)
+python3 -m pytest tests/test_contracts_*.py tests/test_auth_*.py tests/test_runs_*.py \
+  tests/test_policy_*.py tests/test_trace_*.py tests/test_eval_*.py \
+  tests/test_task_*.py tests/test_release_*.py tests/test_no_bypass.py -q
 ```
 
 ## File conventions

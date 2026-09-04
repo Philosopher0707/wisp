@@ -3,6 +3,22 @@
 Generated 2026-08-25 by direct source extraction (all anchors file:line-verified).
 Scale: ~11.5k LOC across core/transport/tools/multi_agent/infra/server.
 
+> **Addendum 2026-09-04 — enterprise track (M1–M7).** Eight new packages sit
+> alongside this map without rewriting it: `wisp/contracts/` (versioned
+> envelopes + edge adapters), `wisp/auth/` (Principal, layered `authorize()`,
+> workspace trust, secrets, consent — `ToolExecutor` the only action path),
+> `wisp/runs/` (RunStore, scheduler, compensation, repro), `wisp/policy/`
+> (Ed25519 bundles, precedence, modes, admin CLI, control-plane routes),
+> `wisp/trace/` + `wisp/eval/` (span store, evidence export, replay, OTLP,
+> eval harness), `wisp/task/` (lifecycle, plan review, profiles),
+> `wisp/release/` (lock, SBOM, health, diagnostics). New CLI: `task`,
+> `policy`, `trace`, `replay`, `audit`, `release`, `completion`. New tables:
+> `run_transitions`, `trace_spans`, `task_plans` (+ lease columns on
+> `background_runs`). Full map: `docs/enterprise-target-architecture.md`;
+> specs: `docs/superpowers/specs/2026-09-04-*.md`; 285 test files / 3,950
+> tests. Section-by-section re-extraction of this document is deferred —
+> treat anchors below as 2026-08-25-accurate for pre-enterprise modules.
+
 ## 0. The one-paragraph version
 
 `python -m wisp <cmd>` (`wisp/__main__.py`) parses flags → `cmd_*(...)` handlers →

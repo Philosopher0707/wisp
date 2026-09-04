@@ -40,6 +40,17 @@ Warp (github.com/warpdotdev/warp) open-sourced its client under AGPL, but its ag
 
 ## What's New
 
+### 🏢 Enterprise-Managed, Local-First Track (M1–M7)
+Wisp runs on your machine and can work fully offline, with optional enterprise governance:
+- **Contracts** — versioned envelopes for events, tools, policy decisions, runs, and manifests (`wisp/contracts/`)
+- **Local authority** — principals, layered authorization, workspace trust, secret redaction, extension consent (`wisp/auth/`); `ToolExecutor` is the only action path
+- **Durable runtime** — run state machine, SQLite `RunStore`, crash recovery, leases, idempotent resume (`wisp/runs/`)
+- **Governance** — signed Ed25519 policy bundles, narrow-only precedence, managed/disconnected modes, `wisp policy ...`
+- **Evidence** — span store, `wisp trace`, `wisp replay --dry-run`, tier-gated OTLP, eval harness with safety metrics
+- **Workflow** — `wisp task ...` lifecycle, plan-review-apply, 5 profiles (`ci-headless` safest by default)
+- **Release** — `wisp release ...` (lock verify, SBOM, licenses, health, diagnostics) + [`docs/RELEASE.md`](docs/RELEASE.md), [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md), [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md)
+- Start here: [`docs/QUICKSTART.md`](docs/QUICKSTART.md) (developers), [`docs/ADMIN-GUIDE.md`](docs/ADMIN-GUIDE.md) (fleet admins)
+
 ### 🌊 Background Agents & Live Observability
 The agent can delegate work to the background and keep talking to you:
 - **`spawn_background`** returns an agent id immediately — the parent turn never blocks
@@ -164,6 +175,12 @@ Then install the Android APK and connect to `wss://your-domain.com`.
 | `wisp check` | Verify Ollama connectivity |
 | `wisp models` | List available models |
 | `wisp server` | Start cloud server |
+| `wisp task start/list/inspect/review/approve-plan/pause/resume/cancel` | Durable task lifecycle (`--json` for scripts) |
+| `wisp policy inspect/verify/explain/dry-run/health/import/export` | Signed governance bundles |
+| `wisp trace <id>` / `wisp replay --dry-run <id>` | Span tree / tool sequence without executing |
+| `wisp audit verify` | Verify the tamper-evident audit chain |
+| `wisp release health/diagnostics/sbom/lock` | Health, support bundle, supply chain |
+| `wisp completion <bash\|zsh>` | Shell completion |
 
 ### REPL Slash Commands
 
@@ -340,13 +357,20 @@ wisp/
 │   │   ├── registry.py      # TOOL_SCHEMAS + TOOL_IMPLS
 │   │   └── ...
 │   ├── multi_agent/         # Subagent orchestration
+│   ├── contracts/           # Versioned wire envelopes (events, tools, policy, runs)
+│   ├── auth/                # Local authority: principals, layered authz, secrets
+│   ├── runs/                # Durable runtime: RunStore, scheduler, compensation
+│   ├── policy/              # Signed governance bundles + admin CLI
+│   ├── trace/ + eval/       # Evidence store, replay, OTLP, eval harness
+│   ├── task/                # Task lifecycle, plan review, profiles
+│   ├── release/             # Supply chain (SBOM, lock), health, diagnostics
 │   ├── infra/               # Security, telemetry, extensions
 │   ├── config.py            # Settings schema + resolution
 │   ├── commands.py          # REPL slash commands
 │   └── ...
 ├── android/                 # Android app
 │   └── app/src/main/java/   # Jetpack Compose UI
-├── tests/                   # 184 test files
+├── tests/                   # 285 test files (3,950 tests)
 ├── skills/                  # Warp-compatible skill files
 ├── docker-compose.yml       # One-command cloud deploy
 └── docs/archive/            # Historical guides & reports
@@ -376,6 +400,11 @@ Wisp has undergone a comprehensive security audit (52 findings, 4 severity level
 | **Multi-agent** | Subagent recursion capped at `MAX_SUBAGENT_DEPTH=2`; `auto_approve=False` by default |
 | **Schema** | Tool arguments pre-validated against JSON schemas before execution; malicious regex patterns gracefully handled |
 | **Subagent** | Sensitive tool arguments (api_key, token, password, etc.) redacted before approval requests reach the client |
+| **Authority (M2)** | `Principal` model with narrowing subagent derivation; layered `authorize()` (capabilities → workspace → risk → args → sensitivity → approval); no-executor fallback is read-only; denials carry the controlling layer |
+| **Secrets (M2)** | 6 secret-pattern families redacted at record construction (audit, traces, diagnostics); hook-dir mutation guard against privilege escalation |
+| **Governance (M4)** | Ed25519-signed policy bundles with revocation + expiry-trim; quarantine markers deny writes even in full mode; extension consent + origin pinning |
+| **Evidence (M5)** | Hash-chained audit (`wisp audit verify`); redacted span store; replay is dry-run only; OTLP export is tier-gated, `local-only-full` refuses export |
+| **Supply chain (M7)** | `requirements.lock` verify, CycloneDX SBOM, license allowlist audit, signed-artifact workflow (CI) |
 
 ### Configuration
 
