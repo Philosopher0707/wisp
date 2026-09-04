@@ -166,6 +166,16 @@ tools in ``_WRITE_TOOLS``).  Records the decision path — auto-approved
             logger.warning("Audit append failed for %s", entry.get("tool", "?"), exc_info=True)
 
 
+def _redacted_summary(func_name: str, func_args: dict) -> dict[str, str]:
+    """Scrub long values, then redact secret patterns (M2 I3).
+
+    Redaction at record construction — not export — so a misconfigured
+    sink cannot leak key material into the audit trail.
+    """
+    from wisp.auth.secrets import redact
+    return {k: redact(v) for k, v in _scrub_args(func_name, func_args).items()}
+
+
 def _build_entry(
     func_name: str,
     func_args: dict,
@@ -181,7 +191,7 @@ def _build_entry(
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "tool": func_name,
         "args_keys": sorted(func_args.keys()),
-        "arg_summary": _scrub_args(func_name, func_args),
+        "arg_summary": _redacted_summary(func_name, func_args),
         "workspace": str(Path(workspace).resolve()),
         "result_status": _result_status(result),
         "duration_ms": round(duration_ms, 2),
