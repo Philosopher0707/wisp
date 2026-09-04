@@ -239,6 +239,32 @@ class UnifiedStore:
                     )
                 """)
                 conn.execute("CREATE INDEX idx_bg_runs_status ON background_runs(status)")
+
+            # Schema migration (M3): run transition history + lease columns.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS run_transitions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL REFERENCES background_runs(id) ON DELETE CASCADE,
+                    seq INTEGER NOT NULL,
+                    from_state TEXT NOT NULL,
+                    to_state TEXT NOT NULL,
+                    reason TEXT NOT NULL DEFAULT '',
+                    created_at REAL NOT NULL DEFAULT 0
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_run_transitions_run
+                ON run_transitions(run_id, seq)
+            """)
+            for _ddl in (
+                "ALTER TABLE background_runs ADD COLUMN lease_owner TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE background_runs ADD COLUMN lease_expires REAL NOT NULL DEFAULT 0",
+                "ALTER TABLE background_runs ADD COLUMN idempotency_key TEXT NOT NULL DEFAULT ''",
+            ):
+                try:
+                    conn.execute(_ddl)
+                except sqlite3.OperationalError:
+                    pass  # column already present
         finally:
             conn.close()
 
@@ -557,11 +583,17 @@ class UnifiedStore:
             "files_changed": json.loads(row["files_changed"]),
             "error": row["error"],
             "iterations": row["iterations"],
+            # M3 lease columns (absent on pre-migration rows in theory;
+            # the migration backfills defaults, keys() guard is belt-and-braces).
+            "lease_owner": row["lease_owner"] if "lease_owner" in row.keys() else "",
+            "lease_expires": row["lease_expires"] if "lease_expires" in row.keys() else 0.0,
+            "idempotency_key": row["idempotency_key"] if "idempotency_key" in row.keys() else "",
         }
 
     def bg_update(self, run_id: str, **kwargs) -> None:
         """Update fields of a background run."""
-        allowed = {"status", "started_at", "finished_at", "content", "error", "iterations", "tool_calls", "files_changed"}
+        allowed = {"status", "started_at", "finished_at", "content", "error", "iterations", "tool_calls", "files_changed",
+                   "lease_owner", "lease_expires", "idempotency_key"}
         fields = {k: v for k, v in kwargs.items() if k in allowed}
         if not fields:
             return
@@ -582,6 +614,65 @@ class UnifiedStore:
         self._get_conn().execute(
             "DELETE FROM background_runs WHERE id = ?",
             (run_id,),
+        )
+
+    # ── Run transitions + leases + idempotency (M3) ──────────────────
+
+    def bg_append_transition(self, run_id: str, seq: int, from_state: str,
+                             to_state: str, reason: str = "",
+                             created_at: float = 0.0) -> None:
+        """Append one transition record (append-only; never updated)."""
+        self._get_conn().execute(
+            """
+            INSERT INTO run_transitions (run_id, seq, from_state, to_state, reason, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (run_id, seq, from_state, to_state, reason, created_at),
+        )
+
+    def bg_list_transitions(self, run_id: str) -> list[dict]:
+        """List transition records for a run, oldest first."""
+        rows = self._get_conn().execute(
+            "SELECT * FROM run_transitions WHERE run_id = ? ORDER BY seq ASC",
+            (run_id,),
+        ).fetchall()
+        return [
+            {"run_id": r["run_id"], "seq": r["seq"],
+             "from_state": r["from_state"], "to_state": r["to_state"],
+             "reason": r["reason"], "timestamp": r["created_at"]}
+            for r in rows
+        ]
+
+    def bg_claim_lease(self, run_id: str, owner: str, expires_at: float) -> bool:
+        """Claim/renew a run lease iff free, expired, or owned by caller."""
+        import time as _time
+        cur = self._get_conn().execute(
+            """
+            UPDATE background_runs
+            SET lease_owner = ?, lease_expires = ?
+            WHERE id = ? AND (lease_expires < ? OR lease_owner = ? OR lease_owner = '')
+            """,
+            (owner, expires_at, run_id, _time.time(), owner),
+        )
+        return cur.rowcount == 1
+
+    def idem_get(self, key: str) -> str | None:
+        """Fetch a memoized idempotent result, or None."""
+        row = self._get_conn().execute(
+            "SELECT result FROM idempotency WHERE key = ?", (key,)
+        ).fetchone()
+        return None if row is None else row["result"]
+
+    def idem_put(self, key: str, result: str) -> None:
+        """Memoize an idempotent result (first write wins)."""
+        import time as _time
+        self._get_conn().execute(
+            """
+            INSERT INTO idempotency (key, result, created_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO NOTHING
+            """,
+            (key, result, _time.time()),
         )
 
     def bg_list(self) -> list[dict]:
