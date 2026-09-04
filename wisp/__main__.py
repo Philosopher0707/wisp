@@ -502,9 +502,17 @@ def cmd_audit(args: list[str]):
 
 
 def cmd_task(args: list[str]):
-    """Task workflow (M5 slice: export-evidence; full UX in M6)."""
-    from wisp.trace.cli import task_main
-    raise SystemExit(task_main(args))
+    """Task workflow: start/list/inspect/review/approve-plan/pause/resume/
+    cancel/export-evidence (M6)."""
+    from wisp.task.cli import main as task_cli_main
+    raise SystemExit(task_cli_main(args))
+
+
+def cmd_completion(args: list[str]):
+    """Print shell completion scripts."""
+    from wisp.task.cli import _cmd_completion
+    import sys as _sys
+    raise SystemExit(_cmd_completion(args, _sys.stdout))
 
 
 def cmd_mcp(args: list[str]):
@@ -1002,7 +1010,8 @@ _SUBCOMMAND_HELP: dict[str, str] = {
     "trace": 'Usage: wisp trace <trace-id|run-id> [--db PATH]\n\nShow recorded spans.',
     "replay": 'Usage: wisp replay --dry-run <trace-id>\n\nShow the recorded tool sequence without executing.',
     "audit": 'Usage: wisp audit verify\n\nVerify the tamper-evident audit chain.',
-    "task": 'Usage: wisp task export-evidence <id> [--out FILE]\n\nExport redacted evidence (full task UX in M6).',
+    "task": 'Usage: wisp task <start|list|inspect|review|approve-plan|pause|resume|cancel|export-evidence> [--json]\n\nTask lifecycle over the durable run store.',
+    "completion": 'Usage: wisp completion <bash|zsh>\n\nPrint shell completion scripts.',
     "git": 'Usage: wisp git\n\nShow git context for the workspace (branch, status, recent commits).',
     "plan": 'Usage: wisp plan <list|show|...>\n\nManage structured plans.',
     "progress": 'Usage: wisp progress\n\nShow current plan progress.',
@@ -1025,6 +1034,7 @@ _SUBCOMMAND_HELP: dict[str, str] = {
 _SUBCOMMAND_NAMES = frozenset({
     "run", "repl", "tui", "skills", "config", "check", "models",
     "session", "memory", "mcp", "policy", "trace", "replay", "audit", "task",
+    "completion",
     "git", "plan", "progress", "diagnose",
     "locks", "changes", "acp", "server", "compact", "swarm", "agents",
     "bench",
@@ -1246,6 +1256,8 @@ def main():
             cmd_audit(rest)
         elif first == "task":
             cmd_task(rest)
+        elif first == "completion":
+            cmd_completion(rest)
         elif first == "git":
             cmd_git(rest)
         elif first == "plan":
