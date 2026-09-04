@@ -474,6 +474,12 @@ def _cmd_memory_summaries(args: list[str]):
 
 # ── MCP server commands ──────────────────────────────────────────────
 
+def cmd_policy(args: list[str]):
+    """Inspect/verify/explain/dry-run policy bundles (M4 admin controls)."""
+    from wisp.policy.cli import main as policy_main
+    raise SystemExit(policy_main(args))
+
+
 def cmd_mcp(args: list[str]):
     """Manage MCP server configurations."""
     if not args or args[0] == "list":
@@ -965,6 +971,7 @@ _SUBCOMMAND_HELP: dict[str, str] = {
         "Manage cross-session memory (learned preferences, project facts)."
     ),
     "mcp": 'Usage: wisp mcp <list|add|remove|...>\n\nManage MCP server configurations.',
+    "policy": 'Usage: wisp policy <inspect|verify|explain|dry-run|health|import|export>\n\nInspect and verify signed policy bundles.',
     "git": 'Usage: wisp git\n\nShow git context for the workspace (branch, status, recent commits).',
     "plan": 'Usage: wisp plan <list|show|...>\n\nManage structured plans.',
     "progress": 'Usage: wisp progress\n\nShow current plan progress.',
@@ -986,7 +993,7 @@ _SUBCOMMAND_HELP: dict[str, str] = {
 
 _SUBCOMMAND_NAMES = frozenset({
     "run", "repl", "tui", "skills", "config", "check", "models",
-    "session", "memory", "mcp", "git", "plan", "progress", "diagnose",
+    "session", "memory", "mcp", "policy", "git", "plan", "progress", "diagnose",
     "locks", "changes", "acp", "server", "compact", "swarm", "agents",
     "bench",
 })
@@ -1197,6 +1204,8 @@ def main():
             cmd_memory(rest)
         elif first == "mcp":
             cmd_mcp(rest)
+        elif first == "policy":
+            cmd_policy(rest)
         elif first == "git":
             cmd_git(rest)
         elif first == "plan":
