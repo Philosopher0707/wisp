@@ -292,6 +292,17 @@ class UnifiedStore:
                 CREATE INDEX IF NOT EXISTS idx_trace_spans_run
                 ON trace_spans(run_id, started_at)
             """)
+
+            # Schema migration (M6): task plan sidecar (lifecycle stays on
+            # the run row; intent lives here).
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS task_plans (
+                    run_id TEXT PRIMARY KEY REFERENCES background_runs(id)
+                        ON DELETE CASCADE,
+                    plan TEXT NOT NULL DEFAULT '{}',
+                    updated_at REAL NOT NULL DEFAULT 0
+                )
+            """)
         finally:
             conn.close()
 
@@ -753,6 +764,28 @@ class UnifiedStore:
             (run_id,),
         ).fetchall()
         return [self._span_row(r) for r in rows]
+
+    # ── Task plans (M6) ──────────────────────────────────────────────
+
+    def task_plan_put(self, run_id: str, plan: dict) -> None:
+        """Attach/replace a task plan (upsert)."""
+        import time as _time
+        self._get_conn().execute(
+            """
+            INSERT INTO task_plans (run_id, plan, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET plan = excluded.plan,
+                updated_at = excluded.updated_at
+            """,
+            (run_id, json.dumps(plan), _time.time()),
+        )
+
+    def task_plan_get(self, run_id: str) -> dict | None:
+        """Fetch a task plan, or None when absent."""
+        row = self._get_conn().execute(
+            "SELECT plan FROM task_plans WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        return None if row is None else json.loads(row["plan"])
 
     def bg_list(self) -> list[dict]:
         """List all background runs."""

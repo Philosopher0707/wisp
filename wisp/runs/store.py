@@ -57,6 +57,10 @@ class RunStore(abc.ABC):
     def idempotent_get(self, key: str) -> str | None: ...
     @abc.abstractmethod
     def idempotent_put(self, key: str, result: str) -> None: ...
+    @abc.abstractmethod
+    def task_plan_put(self, run_id: str, plan: dict) -> None: ...
+    @abc.abstractmethod
+    def task_plan_get(self, run_id: str) -> dict | None: ...
 
 
 class SQLiteRunStore(RunStore):
@@ -137,3 +141,9 @@ class SQLiteRunStore(RunStore):
 
     def idempotent_put(self, key: str, result: str) -> None:
         self._store.idem_put(key, result)
+
+    def task_plan_put(self, run_id: str, plan: dict) -> None:
+        self._store.task_plan_put(run_id, plan)
+
+    def task_plan_get(self, run_id: str) -> dict | None:
+        return self._store.task_plan_get(run_id)
