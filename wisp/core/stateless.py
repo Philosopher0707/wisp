@@ -1502,7 +1502,23 @@ class WispAgentCore:
             ):
                 yield _flatten_event(agent_event)
         else:
-            # Fallback: direct execution when no ToolExecutor wired
+            # Fallback: no ToolExecutor wired — safe reads only (M2 I2).
+            # Anything else is denied: without an executor there is no
+            # approval, policy, or audit, so execution would be a bypass.
+            from wisp.core.contracts import ToolRisk, risk_for_tool
+            if risk_for_tool(name) != ToolRisk.READ:
+                yield _flatten_event(
+                    tool_result_event(
+                        name,
+                        {"status": "error",
+                         "data": f"[Denied: {name} requires a wired "
+                                 "ToolExecutor (no approval/policy/audit "
+                                 "on the fallback path)]"},
+                        duration_ms=0,
+                        tool_call_id=event.get("id"),
+                    )
+                )
+                return
             from wisp.tools.registry import TOOL_IMPLS as _BUILTINS, execute_tool
             start = time.time()
             if name not in _BUILTINS and self.extensions is not None:

@@ -285,10 +285,13 @@ class TestToolsRunOffLoop:
                     await asyncio.sleep(0.05)
                     ticks["count"] += 1
 
+            # NOTE (M2 I2): the no-executor fallback executes safe reads
+            # only; web_fetch would be denied. read_file exercises the same
+            # to_thread off-loop path.
             tool_call = {
                 "type": "tool_call",
-                "name": "web_fetch",
-                "arguments": {"url": "https://slow.example.com"},
+                "name": "read_file",
+                "arguments": {"path": "/tmp/slow_read_probe.txt"},
                 "id": "tc-1",
             }
             ticker_task = asyncio.create_task(ticker())

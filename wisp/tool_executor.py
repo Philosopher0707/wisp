@@ -34,6 +34,7 @@ from wisp.core.events import (
     subagent as _subagent_event,
     system as system_event,
 )
+from wisp.auth import authorize, classify_workspace, local_principal
 from wisp.cli.approval import ApprovalCancelled
 from wisp.tools.errors import ToolError
 from wisp.tools._utils import check_dangerous_command
@@ -445,6 +446,26 @@ class ToolExecutor:
         """
         func_name = tool_name
         func_args = dict(tool_args) if tool_args else {}
+
+        # ── Layered authority consult (M2 I1) — denials only; approval
+        # stays with the existing gate below. Default workspace trust is
+        # REVIEW_REQUIRED (no behavior change); quarantine markers deny
+        # non-read tools even in FULL mode.
+        _profile = getattr(self.config, "profile", None) or "default"
+        _pm = getattr(self.config, "permission_mode", PermissionMode.AUTO_EDIT)
+        _decision = authorize(
+            local_principal(workspace=workspace, profile=str(_profile)),
+            func_name, func_args,
+            classify_workspace(workspace),
+            permission_mode=_pm.value if hasattr(_pm, "value") else str(_pm),
+        )
+        if not _decision.allowed:
+            yield _tool_result_event(
+                func_name,
+                f"[Denied by {_decision.controlling_layer} layer: {_decision.reason}]",
+                tool_call_id=tool_call_id,
+            )
+            return
 
         # ── Repeat-call guard for network-bound tools ──
         # Live evidence: a looping model re-fetched one URL for minutes,
