@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from typing import Any, AsyncIterator, Callable, Iterable
 
 from wisp.core.events import (
@@ -83,6 +84,11 @@ async def guarded_provider_stream(
             try:
                 stream = open_stream()
             except BaseException as exc:
+                if isinstance(
+                    exc,
+                    (asyncio.CancelledError, KeyboardInterrupt, GeneratorExit, SystemExit),
+                ):
+                    raise
                 # open_stream itself can raise transient socket errors (e.g., WriteTimeout during
                 # large payload flush, ConnectionResetError)
                 if _is_transport_transient is not None and _is_transport_transient(exc):
@@ -107,6 +113,14 @@ async def guarded_provider_stream(
                             stalled = True
                             break
                         except BaseException as exc:
+                            # Cancellation-first (D2): never classify a cancel
+                            # as transient, even if its message contains a
+                            # transient substring.
+                            if isinstance(
+                                exc,
+                                (asyncio.CancelledError, KeyboardInterrupt, GeneratorExit, SystemExit),
+                            ):
+                                raise
                             if _is_transport_transient is not None and _is_transport_transient(exc):
                                 transient_error = exc
                                 last_transient_error = exc
@@ -124,6 +138,11 @@ async def guarded_provider_stream(
                             stalled = True
                             break
                         except BaseException as exc:
+                            if isinstance(
+                                exc,
+                                (asyncio.CancelledError, KeyboardInterrupt, GeneratorExit, SystemExit),
+                            ):
+                                raise
                             if _is_transport_transient is not None and _is_transport_transient(exc):
                                 transient_error = exc
                                 last_transient_error = exc
@@ -162,6 +181,12 @@ async def guarded_provider_stream(
             # Already captured transient_error, proceed to retry handling
             pass
         except BaseException as exc:
+            # Cancellation-first (D2): propagate without retry bookkeeping.
+            if isinstance(
+                exc,
+                (asyncio.CancelledError, KeyboardInterrupt, GeneratorExit, SystemExit),
+            ):
+                raise
             # Check if this is a transient error that should be retried
             # This catches exceptions that escaped the inner loop (e.g., from
             # normalize_event or unexpected stream errors)
@@ -188,21 +213,8 @@ async def guarded_provider_stream(
                 ))
             return
 
-        # Include transient socket errors in retry decision
-        if transient_error is not None:
-            # Transient socket/write errors are always retryable (unless got_meaningful)
-            if got_meaningful:
-                # Mid-stream transient after partial output — treat as chunk stall,
-                # not retry, to avoid duplication (same as stalled handling above)
-                pass
-            else:
-                # No meaningful content yet — retry
-                pass
-        if attempt < max_attempts and (stalled or api_status is not None or transient_error is not None or not got_meaningful) is not False:
-            pass  # fall through to shared retry handling below
-        if got_meaningful and api_status is None and transient_error is None:
-            return
-
+        # NOTE: got_meaningful always returns above, so reaching here means
+        # the attempt produced nothing usable — fall through to retry handling.
         if attempt < max_attempts:
             last_transient_status = api_status or last_transient_status
             if transient_error is not None:
@@ -242,7 +254,9 @@ async def guarded_provider_stream(
                 base = 0.75
             else:
                 base = 0.0
-            jitter = (asyncio.get_event_loop().time() * 1000 % 1.5)
+            # Random jitter over the same 0–1.5s range (replaces the old
+            # deprecated loop-clock derivation, which was deterministic-ish).
+            jitter = random.uniform(0, 1.5)
             wait_s = base + jitter
             if wait_s > 0:
                 logger.info(

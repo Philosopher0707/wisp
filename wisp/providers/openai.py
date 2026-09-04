@@ -128,12 +128,13 @@ class OpenAIProvider(Provider):
         _pruned_messages = messages
         try:
             from wisp.core.context_pruner import prune_messages as _prune
+            from wisp.core.contracts import DEFAULT_PRUNE_POLICY as _OPENAI_PRUNE_POLICY
 
             # Quick size estimate — only prune if over 150KB (well below 200KB ceiling)
             # to avoid overhead for small turns
             _est = len(json.dumps(messages).encode("utf-8", errors="ignore"))
             if _est > 150000:
-                _pruned_messages = _prune(messages)
+                _pruned_messages = _prune(messages, _OPENAI_PRUNE_POLICY)
                 logger.debug("Pre-pruned messages from %d to %d bytes", _est, len(json.dumps(_pruned_messages).encode("utf-8", errors="ignore")))
         except Exception:
             _pruned_messages = messages
@@ -143,10 +144,11 @@ class OpenAIProvider(Provider):
         # Defensive re-check: if payload still >200KB, prune again and rebuild
         try:
             from wisp.core.context_pruner import prune_messages as _prune2
+            from wisp.core.contracts import DEFAULT_PRUNE_POLICY as _OPENAI_PRUNE_POLICY2
 
             _payload_str = json.dumps(payload)
             if len(_payload_str.encode("utf-8", errors="ignore")) > 200000:
-                _pruned2 = _prune2(messages)
+                _pruned2 = _prune2(messages, _OPENAI_PRUNE_POLICY2)
                 payload = self._build_payload(system_prompt, _pruned2, tools, stream=True)
                 logger.debug(
                     "Pruned payload from %d to %d bytes before dispatch",

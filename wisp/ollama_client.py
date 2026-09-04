@@ -94,6 +94,9 @@ class OllamaClient:
         self.max_tokens = config.max_tokens
         if session is not None:
             self._session = session
+            # Injected sessions are caller-owned (shared pools, test fakes):
+            # close() must not close what it does not own (Phase 2.1, D4).
+            self._owns_session = False
         else:
             try:
                 from wisp.core.transport import get_hardened_session
@@ -101,6 +104,7 @@ class OllamaClient:
                 self._session = get_hardened_session()
             except ImportError:
                 self._session = requests.Session()
+            self._owns_session = True
         # SECURITY: stream_response is stored in a ContextVar (not a
         # mutable instance attribute) so that concurrent turns cannot
         # overwrite or leak each other's response data.
@@ -115,8 +119,12 @@ class OllamaClient:
         _ollama_stream_response.set(value)
 
     def close(self) -> None:
-        """Close the underlying requests session."""
-        if self._session is not None:
+        """Close the underlying requests session if owned.
+
+        Injected (caller-owned) sessions are left open — the owner
+        (CompositionRoot registry, test, or caller) closes them.
+        """
+        if self._session is not None and getattr(self, "_owns_session", True):
             self._session.close()
             self._session = None
 
@@ -296,13 +304,14 @@ class OllamaClient:
         # Prune historical tool results to prevent write timeout on large payloads
         try:
             from wisp.core.context_pruner import prune_messages
+            from wisp.core.contracts import DEFAULT_PRUNE_POLICY as _OLLAMA_PRUNE_POLICY
 
             # Estimate payload size and prune if needed
             import json as _json
 
             _est = len(_json.dumps(ollama_messages).encode("utf-8", errors="ignore"))
             if _est > 150000:
-                ollama_messages = prune_messages(ollama_messages)  # type: ignore[arg-type]
+                ollama_messages = prune_messages(ollama_messages, _OLLAMA_PRUNE_POLICY)  # type: ignore[arg-type]
                 logger.debug("Pruned Ollama messages from %d to %d bytes", _est, len(_json.dumps(ollama_messages).encode("utf-8", errors="ignore")))
         except Exception:
             pass
@@ -366,12 +375,13 @@ class OllamaClient:
         # Prune for write timeout budget (same as non-stream)
         try:
             from wisp.core.context_pruner import prune_messages
+            from wisp.core.contracts import DEFAULT_PRUNE_POLICY as _OLLAMA_STREAM_PRUNE_POLICY
 
             import json as _json2
 
             _est2 = len(_json2.dumps(ollama_messages).encode("utf-8", errors="ignore"))
             if _est2 > 150000:
-                ollama_messages = prune_messages(ollama_messages)  # type: ignore[arg-type]
+                ollama_messages = prune_messages(ollama_messages, _OLLAMA_STREAM_PRUNE_POLICY)  # type: ignore[arg-type]
                 logger.debug("Pruned stream Ollama messages from %d to %d bytes", _est2, len(_json2.dumps(ollama_messages).encode("utf-8", errors="ignore")))
         except Exception:
             pass

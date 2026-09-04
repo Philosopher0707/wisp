@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
 
 from wisp.core.context_pruner import PrunerConfig, prune_messages
+from wisp.core.contracts import DEFAULT_PRUNE_POLICY as _DEFAULT_PRUNE_POLICY
 from wisp.core.events import (
     CODE_TURN_TIMEOUT,
     CODE_PROVIDER_STREAM,
@@ -72,7 +73,13 @@ logger = logging.getLogger(__name__)
 # Per-instance caches were useless because subagents create fresh cores,
 # discarding the parent's cached system prompt on every spawn.
 _ASSEMBLER: ContextAssembler | None = None
-_SYSTEM_PROMPT_CACHE: dict[tuple[str, float, str], str] = {}
+# Bounded LRU (Phase 2.5, D1): the key includes the agent-memory mtime,
+# which changes every turn — an unbounded dict grew one entry per turn
+# for the process lifetime (invalidate_caches has no callers). 64 entries
+# cover workspace × variant × role-hash working set; dict-compatible API.
+from wisp.core.prompt_cache import BoundedPromptCache as _BoundedPromptCache
+
+_SYSTEM_PROMPT_CACHE: _BoundedPromptCache = _BoundedPromptCache(maxsize=64)
 
 # TTL-memoized expensive, near-static context builders. The full system
 # prompt cache key (above) includes the agent-memory file's mtime, which
@@ -256,7 +263,7 @@ class WispAgentCore:
             # list_files to status/diff, enforce 8KB/200KB ceilings.
             _pruned_for_provider: list[dict[str, Any]] | None = None
             try:
-                _pruned_for_provider = prune_messages(messages)
+                _pruned_for_provider = prune_messages(messages, _DEFAULT_PRUNE_POLICY)
             except Exception:
                 logger.debug("Context pruning failed — sending raw messages", exc_info=True)
                 _pruned_for_provider = None
@@ -653,7 +660,7 @@ class WispAgentCore:
             # Prune before final wrap-up as well — same payload bloat risk
             _wrap_messages: list[dict[str, Any]] | None = None
             try:
-                _wrap_messages = prune_messages(messages)
+                _wrap_messages = prune_messages(messages, _DEFAULT_PRUNE_POLICY)
             except Exception:
                 _wrap_messages = None
             async for ev in self._stream_events_async(system_prompt, _wrap_messages if _wrap_messages is not None else messages, None):
@@ -698,7 +705,7 @@ class WispAgentCore:
         # Even if caller forgot to prune, we prune here to enforce write
         # timeout budget (60s) and prevent payload stalling.
         try:
-            messages = prune_messages(messages)
+            messages = prune_messages(messages, _DEFAULT_PRUNE_POLICY)
         except Exception:
             logger.debug("Pruning in _stream_events_async failed", exc_info=True)
 

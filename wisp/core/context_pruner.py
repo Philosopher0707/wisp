@@ -447,9 +447,41 @@ def prune_tool_result(
             return enforce_byte_ceiling(content, max_bytes)
 
 
+def pruner_config_from_policy(policy: Any) -> PrunerConfig:
+    """Convert a contracts PrunePolicy to the legacy PrunerConfig.
+
+    Phase 2.3 seam (D3): lets call sites pass the shared PrunePolicy while
+    the engine still runs on PrunerConfig. Token ceilings have no policy
+    counterpart — they keep canonical defaults. Duck-typed (no import) so
+    this module never depends on contracts at import time.
+    """
+    return PrunerConfig(
+        keep_last_n_full=int(getattr(policy, "keep_last_n_full", 3)),
+        max_bytes_per_historical_result=int(getattr(policy, "max_bytes_per_historical_result", 8192)),
+        max_bytes_per_recent_result=int(getattr(policy, "max_bytes_per_recent_result", 50000)),
+        max_total_bytes=int(getattr(policy, "max_total_bytes", 200000)),
+        read_file_historical_max_bytes=int(getattr(policy, "read_file_historical_max_bytes", 2048)),
+        list_files_historical_max_bytes=int(getattr(policy, "list_files_historical_max_bytes", 2048)),
+        preserve_status_line=bool(getattr(policy, "preserve_status_line", True)),
+        add_pruned_marker=bool(getattr(policy, "add_pruned_marker", True)),
+    )
+
+
+def _normalize_prune_config(config: Any | None) -> PrunerConfig:
+    """Accept PrunerConfig, contracts PrunePolicy, or None (defaults)."""
+    if config is None:
+        return PrunerConfig()
+    if isinstance(config, PrunerConfig):
+        return config
+    # Contracts PrunePolicy (or any duck-typed policy with the same fields).
+    if hasattr(config, "keep_last_n_full") and hasattr(config, "max_total_bytes"):
+        return pruner_config_from_policy(config)
+    return config
+
+
 def prune_messages(
     messages: list[dict[str, Any]],
-    config: Optional[PrunerConfig] = None,
+    config: Any | None = None,
     *,
     return_stats: bool = False,
 ) -> list[dict[str, Any]] | tuple[list[dict[str, Any]], PrunerStats]:
@@ -461,14 +493,16 @@ def prune_messages(
 
     Args:
         messages: List of message dicts (role, content, tool_calls, etc.)
-        config: Pruner configuration (uses defaults if None)
+        config: PrunerConfig, contracts PrunePolicy, or None (defaults).
+            PrunePolicy is the preferred contract (D3); it is normalized
+            via pruner_config_from_policy().
         return_stats: If True, return (pruned_messages, stats) tuple
 
     Returns:
         Pruned messages list (new list, never mutates input), or
         (pruned_messages, stats) if return_stats=True
     """
-    config = config or PrunerConfig()
+    config = _normalize_prune_config(config)
     stats = PrunerStats(
         original_messages=len(messages),
         total_original_bytes=sum(len(str(m.get("content", "")).encode("utf-8", errors="ignore")) for m in messages),

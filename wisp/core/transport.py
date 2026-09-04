@@ -460,7 +460,25 @@ def is_transient_error(exc: BaseException) -> bool:
       - requests.exceptions.Timeout, ConnectionError
       - aiohttp.ClientError variants
       - Generic string matching for wrapped errors
+
+    Cancellation signals (CancelledError, KeyboardInterrupt, GeneratorExit,
+    SystemExit) are NEVER transient — they must propagate immediately
+    without retry (Phase 2.2, D2). Checked first so message-substring
+    fallback cannot misclassify e.g. CancelledError("connection reset").
     """
+    # Cancellation-first: never retry, even if the message contains a
+    # transient substring. Local import keeps this module importable even
+    # if contracts gains dependencies later (contracts itself is stdlib-only).
+    try:
+        from wisp.core.contracts import is_cancellation as _is_cancelled
+
+        if _is_cancelled(exc):
+            return False
+    except ImportError:
+        import asyncio as _asyncio
+
+        if isinstance(exc, (_asyncio.CancelledError, KeyboardInterrupt, GeneratorExit, SystemExit)):
+            return False
     # Direct type checks for stdlib
     if isinstance(exc, (TimeoutError, ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
         return True
@@ -585,6 +603,13 @@ def retry_with_backoff(
                 try:
                     return func(*args, **kwargs)
                 except BaseException as exc:
+                    import asyncio as _asyncio_cancel_guard_retry
+
+                    if isinstance(
+                        exc,
+                        (_asyncio_cancel_guard_retry.CancelledError, KeyboardInterrupt, GeneratorExit, SystemExit),
+                    ):
+                        raise
                     last_exc = exc
                     if not is_transient_error(exc) and not is_transient_status(getattr(exc, "status_code", None)):
                         # Check for status code in response
@@ -631,6 +656,13 @@ async def async_retry_with_backoff(
         try:
             return await coro_func(*args, **kwargs)
         except BaseException as exc:
+            import asyncio as _asyncio_cancel_guard_aretry
+
+            if isinstance(
+                exc,
+                (_asyncio_cancel_guard_aretry.CancelledError, KeyboardInterrupt, GeneratorExit, SystemExit),
+            ):
+                raise
             last_exc = exc
             if not is_transient_error(exc):
                 resp = getattr(exc, "response", None)
@@ -737,10 +769,12 @@ def hardened_post(
     if timeout is None:
         # Try to use session's hardened timeout, else default
         timeout = getattr(session, "_wisp_hardened_timeout", HARDENED_TIMEOUT)
+    # Backend flag must exist on every path: a tuple timeout (or a session
+    # without a stored bundle) skips the branch below that assigns it.
+    is_httpx = False
     if isinstance(timeout, HardenedTimeout):
         # For requests, we need (connect, read) tuple
         # Check if session is httpx (has .post with timeout as httpx.Timeout)
-        is_httpx = False
         try:
             import httpx
 
@@ -800,6 +834,16 @@ def hardened_post(
                 continue
             return resp
         except BaseException as exc:
+            # Cancellation-first (D2): never log-and-retry a cancel.
+            # Inline isinstance (mirrors contracts.is_cancellation) to avoid
+            # an import edge from the transport hot path to contracts.
+            import asyncio as _asyncio_cancel_guard
+
+            if isinstance(
+                exc,
+                (_asyncio_cancel_guard.CancelledError, KeyboardInterrupt, GeneratorExit, SystemExit),
+            ):
+                raise
             last_exc = exc
             if not is_transient_error(exc):
                 raise
@@ -872,6 +916,13 @@ def hardened_get(
                 continue
             return resp
         except BaseException as exc:
+            import asyncio as _asyncio_cancel_guard_get
+
+            if isinstance(
+                exc,
+                (_asyncio_cancel_guard_get.CancelledError, KeyboardInterrupt, GeneratorExit, SystemExit),
+            ):
+                raise
             last_exc = exc
             if not is_transient_error(exc):
                 raise
