@@ -1,44 +1,45 @@
-# REPL TUI Design — streaming blocks, alt-screen pager, raw-mode gates
+# REPL TUI Design — streaming blocks, pager, raw-mode gates (v2)
 
-- Status: proposed (brainstormed 2026-09-05, companion server mockups deferred to implementation)
-- Scope: all five spec systems, sequenced as vertical slices in the existing layer
-- Anchor: `wisp/cli/repl.py` (`ReplRunner` + `CLIEventRenderer`), pure fns in `wisp/transport/renderer.py`
-- Non-goals: replacing Textual `tui.py`, changing the `Transport` ABC, touching provider/core layers
+- Status: revised after spec review iter-1 (2026-09-05); all iter-1 issues addressed inline
+- Scope: scrollback blocks + approval gates + telemetry line + diff pager, sequenced as vertical slices in the existing layer
+- Explicitly out of scope (follow-up spec): multi-agent topology inspect, config menu (no such REPL commands/views exist yet)
+- Anchor: `wisp/cli/repl.py` (`ReplRunner`, `CLIEventRenderer`, `ReplLifecycle`), pure fns in `wisp/transport/renderer.py`
+- Non-goals: replacing Textual `tui.py`, changing the `Transport` ABC or `ApprovalVerdict`, touching provider/core layers, new token/cost tracking infra
 
-## 1. Screen model & state machine (approved)
+## 1. Screen model & state machine
 
-- `ScreenModel` dataclass owns viewport state: `mode` (`SCROLLBACK` | `ALTSCREEN` | `DEGRADED`), append-only block list (cap 500, prune oldest), collapsed-set of block IDs, telemetry snapshot, at most one pending gate.
-- Pure `render(model, width, output_mode) -> list[str]` in `renderer.py`; same `BoxChars`/`OutputMode` handling as existing code (accessible/ascii free).
-- Inputs become events (`Key`, `Resize`, `Tick`, `GateResult`, `SigInt`) folded via `reduce(model, event) -> (model, effects[])`. Runner executes effects (kill subprocess, open pager, exit); reduce is side-effect-free and TTY-less testable.
-- Alt-screen (`\e[?1049h`) only for: topology inspect, multi-file diff pager, config menu. `DEGRADED` chosen once at startup via `isatty()`; irreversible; NDJSON to stdout, no ANSI/spinner/cursor moves.
+- `ScreenModel` dataclass holds viewport *data only*: `viewport` (`SCROLLBACK` | `ALTSCREEN`), append-only block list (cap 500, prune oldest), collapsed-set of block IDs, telemetry snapshot, at most one pending gate. No formatting lives here.
+- Display styling reuses the existing system verbatim: new `render_*` functions live in `renderer.py`, return `str` like `render_tool_call`/`render_thinking_block` (`renderer.py:78-133`), and read the global mode via `BoxChars()`/`status_symbols()`/`is_accessible()` (`terminal_width.py`). No parallel mode enum; `DEGRADED`/pipe behavior follows the existing detector (`WISP_OUTPUT_MODE`, `WISP_ACCESSIBLE`, `NO_COLOR`, non-TTY, `TERM=dumb`, `terminal_width.py:38-59`).
+- Events: `Key`, `Resize`, `Tick`, `GateResult { verdict: str }`, `SigInt`, folded via `reduce(model, event) -> (model, list[Effect])` with `Effect = CancelTurn | OpenPager | ExitLoop | NoOp`. `Tick` reuses the existing wait-clock thread; `Resize` defers to the prompt_toolkit/SIGWINCH redraw (`repl.py:536-542`); cancel target is `_turn_task.cancel()` (the runner owns no child handle).
+- Integration: `CLIEventRenderer.render_event` keeps its streaming calls and additionally appends block data to `ScreenModel`. Alt-screen (`\e[?1049h`) engages only for the diff pager. NDJSON follows the `repl-aesthetics.md` WS-identical schema on **stderr** (chrome discipline: `stdout`=prose/data), honoring the `--json` opt-in; auto-degrade on pipe/`NO_COLOR`/`CI=true`/`TERM=dumb`.
 
 ## 2. Block hierarchy & widgets
 
-- Block types: `Plan` (checklist with states), `Thought` (collapsed default: `▸ Thinking: … [1.2s]`; `Tab`/`Space` toggles newest collapsible), `Tool` (2-row envelope: row 1 glyph `⚡/🔍/⌨` + id + concise params; row 2 braille spinner `⠋` → `✔/✖` + duration + one-line summary), `Diff` (inline unified diff ≤60 lines, `+` green / `-` red, 2–3 context lines via existing diff viewer; above threshold → aggregate `Modified 3 files (+42, −12)` + `v` pager offer), `Log`, `Gate` (approval prompt row).
-- Rendering rules: atomic appends only (never rewrite scrollback except the `\r`-repainted telemetry line); every block carries a stable ID for collapse/pager targeting; all strings width-truncated with `display_width()`.
+- Block types: `Plan`, `Thought` (collapsed default `▸ Thinking: … [1.2s]`; `Space` toggles newest collapsible — `Tab` stays with completion), `Tool` (2-row envelope: row 1 glyph+id+params; row 2 spinner→outcome + duration + summary), `Diff` (inline iff added+removed ≤ 60 lines via `wisp/ui/diff_viewer.py`; else aggregate `Modified 3 files (+42, −12)` + `v` pager offer), `Log`, `Gate`.
+- Render rule: append-only, except the spinner-owned line and the telemetry line, both finalized in place via `\r…\e[K` (+newline) exactly like `Spinner.succeed/fail` (`spinner.py:121-151`). Block IDs are `blk-{seq}`; prune drops oldest blocks and their collapsed flags (documented, acceptable).
+- Glyphs per mode (via existing helpers, never raw unicode): `⚡`→`[!]`/`[TOOL]`/`""`, `▸`→`>`/`[THINKING]`/`""`, braille→`...`/`[busy]`/`""`, `✔/✖`→`status_symbols()`/`[PASS]/[FAIL]`/`""`.
 
-## 3. Gates, keyboard matrix, signals
+## 3. Gates, keyboard, signals
 
-- termios raw mode (`ICANON`/`ECHO` off) scoped narrowly to pending-gate prompts; saved attrs restored immediately after; readline input path untouched.
-- Matrices: tool gate `y/n/a/e/?`, diff gate `y/n/v/r`, subagent `Enter/s/i`. `?` renders the legend as a plain block (accessible-safe). Session `a` (always-allow) reuses existing `ApprovalSessionState` memory.
-- SIGINT: first press cancels generation/child subprocess → prompt; second within 1s → `TerminalGuard` teardown (leave alt-screen, `\e[?25h` show cursor, restore termios) + exit 130. `TerminalGuard` also covers `atexit`/exception paths so the terminal is never left raw.
+- The shipped approval contract is frozen: keys `y/Y/v/a/n/N/d/c` map through `prompt_for_approval` to the 8 `ApprovalVerdict`s (`cli/approval.py:89-118`); `Y`≠`a` (`APPROVE_ALWAYS` vs `AUTO_ALL`) preserved; unknown/empty/EOF fail closed to `REJECT`; `c` raises `ApprovalCancelled` (recorded denial, not task-cancel).
+- Spec input matrix expressed as contextual aliases of existing verdicts, no new verdicts: subagent spawn uses `y` (approve) / `n` (skip) / `v` (inspect context slice as a non-mutating view, mirroring file-edit `VIEW`); `?` prints the key legend as a plain block. `e` (edit args) and `r` (reject-with-critique) are dropped — no verdict mapping exists; recorded as future work.
+- termios raw mode (`ICANON`/`ECHO` off) applies only while a gate is pending, coordinated with the prompt_toolkit session (`repl.py:209-247`), `TypeAheadBuffer.pause/resume`, and `_approval_lock` stdin exclusivity (`transport/cli.py:786-805`); POSIX `select` fallback per `cli.py:883-912`; non-POSIX/non-tty falls back to plain-line prompting. `TerminalGuard` (armed in `ReplLifecycle`) owns termios save/restore + alt-screen exit + `\e[?25h`, covering `atexit`/exception paths.
+- SIGINT behavior unchanged from `repl.py:520-542`: first press cancels `_turn_task`; second raises `KeyboardInterrupt` into `_show_exit`/`shutdown` with history+session persist. No custom exit-130 path.
 
 ## 4. Telemetry bar
 
-- One `\r`-repainted status line (zero scrollback pollution): `STATE │ TOKENS in/out/cache% │ COST │ branch cwd-root`. Refresh on 2Hz `Tick` + block append. Degraded mode emits NDJSON `telemetry` events instead.
-- Sources: existing runtime telemetry (`record_turn`), existing git context; no new tracking infra.
+- One `\r`-repainted status line showing only fields that exist today (via `render_turn_stats` + git segment): turn/tools/files/elapsed/ctx-estimate + branch. Cache-hit % and session cost are explicitly out of scope (provider accounting does not emit them; `telemetry.record_turn` carries latency+tokens only).
+- Single-`\r`-writer rule: telemetry pauses while `ACTIVE_SPINNER` is held (existing pause protocol) and refreshes at ≤10Hz per `repl-aesthetics.md` single-status-row rules. Degraded mode emits NDJSON `telemetry` events instead.
 
-## 5. Degradation, async I/O, testing
+## 5. Testing
 
-- Non-TTY/CI: plain-text NDJSON per block/gate/telemetry event; spinners/cursor code compiled out by mode branch (not runtime flags).
-- Subprocess pipes drained by a single reader thread into `queue.Queue` (mirrors `cli.py` approval-reader `select` pattern); reduce loop never blocks on I/O.
-- Tests mirror source (`tests/test_terminal_*.py`): reduce/render unit tests with no TTY, ANSI golden tests for escape sequences, one pty smoke test for the raw-mode gate + reset guarantee.
+- `tests/test_terminal_*.py` mirroring source: `reduce`/`render_*` unit tests with no TTY; ANSI golden tests for `\r…\e[K` sequences and all four output modes; one pty smoke test proving the raw-mode gate restores termios and the cursor on both SIGINT stages.
 
 ## 6. Sequencing (vertical slices)
 
 1. Streaming blocks + collapsible thought + tool envelopes on scrollback.
-2. Diff aggregate rule + Textual alt-screen pager (Textual already a dependency).
-3. Raw-mode gate matrix + SIGINT two-stage + `TerminalGuard`.
-4. Telemetry line + NDJSON degraded mode + golden/pty tests.
+2. Diff aggregate rule + lazy-imported Textual alt-screen pager (startup budget per `entry.py:735`; collaborates with the tui bridge, does not replace it).
+3. Raw-mode gate matrix (aliases only) + `TerminalGuard` + SIGINT conformance tests.
+4. Telemetry line + NDJSON degraded branch + golden/pty tests.
 
-Each slice shippable against the existing suite; no slice changes the `Transport` ABC.
+Each slice shippable against the existing suite; no slice changes the `Transport` ABC or `ApprovalVerdict`.
