@@ -796,3 +796,18 @@ def render_tool_done(name: str, duration_ms: float, ok: bool, summary: str, widt
         mark = "\u2714" if ok else "\u2716"
     return dim(truncate(f"    {mark} {name} {format_duration(duration_ms)} {summary or ''}", width))
 
+
+def render_diff_aggregate(files: list[tuple[str, int, int]]) -> str:
+    """Aggregate row for big diffs, including the [v] pager offer."""
+    box = BoxChars()
+    added = sum(a for _, a, _ in files)
+    removed = sum(r for _, _, r in files)
+    n = len(files)
+    word = "file" if n == 1 else "files"
+    if box.mode == OutputMode.MINIMAL:
+        return f"  diff: {n} {word} +{added} -{removed} [v]"
+    if box.mode == OutputMode.ACCESSIBLE:
+        return dim(f"  [DIFF] Modified {n} {word} (+{added}, -{removed}) [v] inspect")
+    glyph = "\u270e" if box.mode == OutputMode.UNICODE else "diff:"
+    return dim(f"  {glyph} Modified {n} {word} (+{added}, -{removed}) [v]")
+
