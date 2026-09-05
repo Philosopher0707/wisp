@@ -91,3 +91,9 @@ workspace/
 
 # Subsystem verification & agent runtime logs
 .agent/
+
+# Git worktrees (isolated implementation workspaces)
+.worktrees/
+
+# Brainstorm drafts & visual companion sessions
+.superpowers/
