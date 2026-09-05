@@ -74,3 +74,15 @@ def test_pager_missing_textual_aborts(monkeypatch):
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
     monkeypatch.setitem(sys.modules, "textual.app", None)
     assert pg.show_diff([("a.py", "x\n", "y\n")]) == "abort"
+
+
+def test_v_key_emits_open_pager_with_texts():
+    from wisp.cli.ui.blocks import ScreenModel, diff_pager_effect
+    m = ScreenModel()
+    m.append("log", {"text": "hi"})
+    assert diff_pager_effect(m, "v") is None
+    m.append("diff", {"files": [("a.py", "x\n", "x\n" + "l\n" * 70)]})
+    effect = diff_pager_effect(m, "v")
+    assert effect is not None and effect[0] == "open_pager"
+    assert effect[1][0][0] == "a.py"
+    assert diff_pager_effect(m, "x") is None

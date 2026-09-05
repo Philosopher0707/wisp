@@ -75,3 +75,21 @@ def reduce_event(model: ScreenModel, event: dict) -> list:
     elif etype in ("plan", "diff", "log", "gate"):
         model.append(etype, dict(data))
     return []
+
+
+def diff_pager_effect(model: ScreenModel, key: str):
+    """Map the v keystroke to ("open_pager", texts) for the newest pageable diff.
+
+    Returns None when the key is not v or no pageable diff exists.
+    The runner consumes the effect by calling pager.show_diff(texts) while
+    holding TerminalGuard (same input-loop hook as the Space binding).
+    """
+    if key != "v":
+        return None
+    from wisp.cli.ui.pager import should_page_diff
+    for b in reversed(model.blocks):
+        if b.kind == "diff":
+            pairs = b.payload.get("files", [])
+            if pairs and should_page_diff(pairs):
+                return ("open_pager", pairs)
+    return None
