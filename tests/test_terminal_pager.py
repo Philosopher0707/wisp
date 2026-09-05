@@ -43,3 +43,34 @@ def test_summarize_uses_diff_viewer_counts():
     edge = [("a.py", "x\n", "x\n" + "l\n" * 60)]
     assert summarize_diffs(edge) == [("a.py", 60, 0)]
     assert should_page_diff(edge) is (60 > DIFF_PAGE_THRESHOLD)
+
+
+def test_pager_key_verdicts_full_mapping():
+    from wisp.cli.ui.pager import _pager_verdict
+    assert _pager_verdict("y") == "apply"
+    assert _pager_verdict("Y") == "apply"
+    assert _pager_verdict("n") == "abort"
+    assert _pager_verdict("N") == "abort"
+    assert _pager_verdict("q") == "abort"
+    assert _pager_verdict("Q") == "abort"
+    assert _pager_verdict("escape") == "abort"
+    assert _pager_verdict("x") is None
+
+def test_pager_refuses_without_tty(monkeypatch):
+    import sys
+    from wisp.cli.ui import pager as pg
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+    assert pg.show_diff([("a.py", "x\n", "y\n")]) == "abort"
+
+def test_pager_module_top_has_no_textual_import():
+    import pathlib
+    import wisp.cli.ui.pager as pg
+    top = pathlib.Path(pg.__file__).read_text().split("def show_diff")[0]
+    assert "textual" not in top
+
+def test_pager_missing_textual_aborts(monkeypatch):
+    import sys
+    import wisp.cli.ui.pager as pg
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    monkeypatch.setitem(sys.modules, "textual.app", None)
+    assert pg.show_diff([("a.py", "x\n", "y\n")]) == "abort"
