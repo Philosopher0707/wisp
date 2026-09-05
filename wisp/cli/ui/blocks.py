@@ -50,3 +50,28 @@ class ScreenModel:
                 self.toggle(b.id)
                 return b
         return None
+
+
+def reduce_event(model: ScreenModel, event: dict) -> list:
+    """Map one agent event to viewport block(s). Returns effects (chunk 1: always []).
+
+    Key/Resize/Tick/SigInt stay runner-owned (prompt_toolkit redraw, wait-clock,
+    signal handler); gate-key effects arrive in chunk 3.
+    """
+    etype = (event or {}).get("type", "")
+    data = (event or {}).get("data", {}) or {}
+    if etype == "thinking" and str(data.get("text", "")).strip():
+        model.append("thought", {"text": data["text"]})
+    elif etype == "tool_call":
+        model.append("tool", {"name": data.get("name", "?"),
+                              "arguments": data.get("arguments", {}),
+                              "status": "running"})
+    elif etype == "tool_result":
+        for b in reversed(model.blocks):
+            if b.kind == "tool" and b.payload.get("status") == "running":
+                b.payload.update({"status": "done",
+                                  "summary": str(data.get("summary") or data.get("result") or "")[:120]})
+                break
+    elif etype in ("plan", "diff", "log", "gate"):
+        model.append(etype, dict(data))
+    return []

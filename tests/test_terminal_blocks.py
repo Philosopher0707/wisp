@@ -85,3 +85,91 @@ def test_tool_head_and_done_rows_all_modes():
     with _mode(OutputMode.ACCESSIBLE):
         f = R.render_tool_done("x", 1, False, "boom", 80)
         assert syms()["fail"] in f and "boom" in f
+
+
+def test_reduce_returns_effects_and_maps_kinds():
+    from wisp.cli.ui.blocks import ScreenModel, reduce_event
+    m = ScreenModel()
+    assert reduce_event(m, {"type": "thinking", "data": {"text": "hmm"}}) == []
+    assert reduce_event(m, {"type": "tool_call", "data": {"name": "read_file", "arguments": {}}}) == []
+    assert reduce_event(m, {"type": "plan", "data": {"steps": ["a"]}}) == []
+    assert reduce_event(m, {"type": "unknown-bogus"}) == []
+    assert [b.kind for b in m.blocks] == ["thought", "tool", "plan"]
+    assert m.is_collapsed(m.blocks[0].id) is True
+
+
+def test_cli_event_renderer_appends_blocks():
+    from wisp.cli.repl import CLIEventRenderer
+    from wisp.cli.ui.blocks import ScreenModel
+    from unittest.mock import MagicMock
+    m = ScreenModel()
+    t = MagicMock()
+    r = CLIEventRenderer(t, model=m)
+    r.render_event(MagicMock(), {"type": "thinking", "data": {"text": "hmm"}})
+    assert [b.kind for b in m.blocks] == ["thought"]
+    t._render_event.assert_called_once()
+
+
+def test_repl_wiring_present_in_source():
+    import inspect
+    import wisp.cli.repl as repl
+    src_full = inspect.getsource(repl)
+    assert "_injected_model" in src_full and "or ScreenModel()" in src_full
+    assert "make_input_fn(model=" in src_full
+    src_fn = inspect.getsource(repl.make_input_fn)
+    assert "toggle_newest_collapsible" in src_fn
+    assert "key_bindings" in src_fn
+
+
+def test_cli_event_renderer_without_model_is_noop_for_model_path():
+    from wisp.cli.repl import CLIEventRenderer
+    from unittest.mock import MagicMock
+    t = MagicMock()
+    r = CLIEventRenderer(t)
+    assert r._model is None
+    r.render_event(MagicMock(), {"type": "thinking", "data": {"text": "hmm"}})
+    t._render_event.assert_called_once()
+
+
+def test_tool_result_completes_running_tool_block():
+    from wisp.cli.ui.blocks import ScreenModel, reduce_event
+    m = ScreenModel()
+    reduce_event(m, {"type": "tool_call", "data": {"name": "read_file", "arguments": {"path": "a.py"}}})
+    assert m.blocks[0].payload["status"] == "running"
+    reduce_event(m, {"type": "tool_result", "data": {"summary": "x" * 200}})
+    assert m.blocks[0].payload["status"] == "done"
+    assert m.blocks[0].payload["summary"] == "x" * 120
+    m2 = ScreenModel()
+    reduce_event(m2, {"type": "tool_call", "data": {"name": "run_bash", "arguments": {}}})
+    reduce_event(m2, {"type": "tool_result", "data": {"summary": None, "result": "fallback"}})
+    assert m2.blocks[0].payload["summary"] == "fallback"
+    m3 = ScreenModel()
+    reduce_event(m3, {"type": "tool_call", "data": {"name": "run_bash", "arguments": {}}})
+    reduce_event(m3, {"type": "tool_result", "data": {"summary": None}})
+    assert m3.blocks[0].payload["summary"] == ""
+
+
+def test_repl_runner_reuses_injected_model():
+    import asyncio
+    from unittest.mock import MagicMock
+    from wisp.cli.dispatcher import Dispatcher
+    from wisp.cli.repl import CLIEventRenderer, ReplRunner
+    from wisp.cli.ui.blocks import ScreenModel
+    m = ScreenModel()
+    r = CLIEventRenderer(MagicMock(), model=m)
+    loop = asyncio.new_event_loop()
+    try:
+        runner = ReplRunner(
+            runtime=MagicMock(),
+            transport=MagicMock(),
+            renderer=r,
+            dispatcher=Dispatcher(),
+            config=MagicMock(),
+            session={"id": "s1"},
+            loop=loop,
+            input_fn=lambda prompt: "exit",
+        )
+        assert runner.screen_model is m
+        assert runner.renderer is r
+    finally:
+        loop.close()

@@ -99,10 +99,14 @@ class EventRenderer(Protocol):
 class CLIEventRenderer:
     """Adapter exposing CLITransport through the EventRenderer protocol."""
 
-    def __init__(self, transport: Any) -> None:
+    def __init__(self, transport: Any, model: Any | None = None) -> None:
         self._transport = transport
+        self._model = model
 
     def render_event(self, out: Any, event: dict) -> None:
+        if self._model is not None:
+            from wisp.cli.ui.blocks import reduce_event
+            reduce_event(self._model, event)
         self._transport._render_event(out, event)
 
     def reset(self) -> None:
@@ -192,7 +196,7 @@ PROMPT_TEXT = "wisp ❯ "
 PROMPT_CONTINUATION = "... "
 
 
-def make_input_fn(history_file: Path | None = None) -> InputFn:
+def make_input_fn(history_file: Path | None = None, model: Any | None = None) -> InputFn:
     """Single-line prompt: prompt_toolkit when available+tty, else readline.
 
     The prompt_toolkit session binds FileHistory (persisted across launches),
@@ -222,6 +226,19 @@ def make_input_fn(history_file: Path | None = None) -> InputFn:
                 # Mocked/odd stdio (tests), missing terminfo, etc.
                 logger.debug("prompt_toolkit session failed; using readline", exc_info=True)
                 return _readline_input
+
+            if model is not None:
+                from prompt_toolkit.filters import Condition
+                from prompt_toolkit.application.current import get_app
+                from prompt_toolkit.key_binding import KeyBindings
+                _toggle_kb = KeyBindings()
+
+                @_toggle_kb.add(" ", filter=Condition(
+                    lambda: get_app().current_buffer.text == ""))
+                def _toggle_block(event) -> None:
+                    model.toggle_newest_collapsible()
+
+                session.key_bindings = _toggle_kb
 
             try:
                 from prompt_toolkit.formatted_text import HTML
@@ -307,7 +324,14 @@ class ReplRunner:
     ) -> None:
         self.runtime = runtime
         self.transport = transport
-        self.renderer = renderer or CLIEventRenderer(transport)
+        from wisp.cli.ui.blocks import ScreenModel
+        _injected_model = getattr(renderer, "_model", None)
+        self.screen_model = _injected_model or ScreenModel()
+        if renderer is None:
+            renderer = CLIEventRenderer(transport, model=self.screen_model)
+        elif getattr(renderer, "_model", "missing") is None:
+            renderer._model = self.screen_model
+        self.renderer = renderer
         if dispatcher is None:
             from wisp.commands import dispatch as _legacy_dispatch
 
@@ -323,7 +347,7 @@ class ReplRunner:
         # fresh at every write; properties below preserve that.
         self._out = out
         self._err = err
-        self.input_fn = input_fn or make_input_fn()
+        self.input_fn = input_fn or make_input_fn(model=getattr(self, "screen_model", None))
         self.multiline_input_fn = multiline_input_fn or _readline_multiline
         self.lifecycle = lifecycle or ReplLifecycle()
         self.on_turn_stats = on_turn_stats
