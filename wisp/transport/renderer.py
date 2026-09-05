@@ -21,6 +21,8 @@ from wisp.terminal_width import (
     OutputMode,
     get_output_mode,
     is_accessible,
+    status_symbols,
+    truncate,
 )
 
 
@@ -747,4 +749,50 @@ def _md_lang(first_fence_line: str) -> str:
     if s.startswith("```"):
         return s[3:].strip()
     return ""
+
+
+def render_thought_row(text: str, elapsed_s: float, collapsed: bool, width: int) -> str:
+    """Single-line thought trace; collapsed by default."""
+    box = BoxChars()
+    preview = truncate(" ".join(str(text).split()), width - 30)
+    if box.mode == OutputMode.ACCESSIBLE:
+        state = "(collapsed)" if collapsed else "(expanded)"
+        return dim(f"  {status_symbols()['thinking']} {preview} [{elapsed_s:.1f}s] {state}")
+    if box.mode == OutputMode.MINIMAL:
+        return f"  think: {preview} [{elapsed_s:.1f}s]"
+    if box.mode == OutputMode.ASCII:
+        glyph = ">" if collapsed else "v"
+    else:
+        glyph = "\u25b8" if collapsed else "\u25be"
+    tail = " (Collapsed)" if collapsed and box.mode == OutputMode.UNICODE else ""
+    return dim(f"  {glyph} Thinking: {preview} [{elapsed_s:.1f}s]{tail}")
+
+
+def render_tool_head(name: str, args: dict, width: int) -> str:
+    """Row 1 of the tool envelope: glyph + identifier + concise params."""
+    args = args or {}
+    box = BoxChars()
+    params = ", ".join(f"{k}={format_arg_value(k, v)}" for k, v in list(args.items())[:3])
+    if len(args) > 3:
+        params += ", ..."
+    if box.mode == OutputMode.ACCESSIBLE:
+        return dim(f"  [TOOL] {name}({params})")
+    if box.mode == OutputMode.MINIMAL:
+        return truncate(f"  tool: {name} {params}", width)
+    glyph = "\u26a1" if box.mode == OutputMode.UNICODE else "!"
+    return dim(truncate(f"  {glyph} Tool: {name}({params})", width))
+
+
+def render_tool_done(name: str, duration_ms: float, ok: bool, summary: str, width: int) -> str:
+    """Row 2 of the tool envelope: outcome + duration + summary."""
+    box = BoxChars()
+    if box.mode == OutputMode.ACCESSIBLE:
+        mark = status_symbols()["ok"] if ok else status_symbols()["fail"]
+    elif box.mode == OutputMode.MINIMAL:
+        mark = "ok" if ok else "fail"
+    elif box.mode == OutputMode.ASCII:
+        mark = "[OK]" if ok else "[X]"
+    else:
+        mark = "\u2714" if ok else "\u2716"
+    return dim(truncate(f"    {mark} {name} {format_duration(duration_ms)} {summary or ''}", width))
 
