@@ -146,3 +146,21 @@ def test_maybe_arm_gate_arms_on_tty(monkeypatch):
     assert g is not None
     assert t._gate_key_reader is G.read_gate_key
     g.restore()
+
+
+def test_sigint_two_stage_mechanism_pinned():
+    """First SIGINT cancels _turn_task and re-arms the default handler; the
+    second raises KeyboardInterrupt into the shutdown path. No custom exit-130."""
+    import inspect
+    import wisp.cli.repl as repl
+    src = inspect.getsource(repl.ReplRunner._on_sigint)
+    assert "task.cancel()" in src
+    assert "default_int_handler" in src
+    assert "KeyboardInterrupt" in src
+
+def test_ctrl_c_byte_maps_to_keyboard_interrupt():
+    """Raw-mode \x03 arrivals already mean KeyboardInterrupt (existing mapping)."""
+    import pytest as _pytest
+    from wisp.cli.approval import prompt_for_approval
+    with _pytest.raises(KeyboardInterrupt):
+        prompt_for_approval("\x03")
