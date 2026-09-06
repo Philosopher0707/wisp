@@ -863,3 +863,22 @@ def render_telemetry_line(state: str, stats: dict, branch: str, width: int = 80)
         return core
     return dim(core)
 
+
+def render_ndjson_event(event: dict) -> str:
+    """One NDJSON line mirroring CanonicalEvent.to_dict keys.
+
+    Machine branch of the --json automation contract (stdout); see
+    wisp/contracts/envelope.py CanonicalEvent.
+    """
+    import json
+    import time
+    etype = (event or {}).get("type", "unknown")
+    data = (event or {}).get("data", {})
+    d = {"type": etype, "data": data,
+         "timestamp": time.time(), "schema_version": 1}
+    if (event or {}).get("trace_id"):
+        d["trace_id"] = event["trace_id"]
+    if (event or {}).get("span_id"):
+        d["span_id"] = event["span_id"]
+    return json.dumps(d, ensure_ascii=False)
+

@@ -28,3 +28,15 @@ def test_telemetry_line_all_modes():
     with _mode(OutputMode.MINIMAL):
         s = R.render_telemetry_line("EXECUTING", stats, "main", 100)
         assert "EXECUTING" in s and "ctx" not in s
+
+
+def test_ndjson_event_schema_matches_canonical():
+    import json
+    s = R.render_ndjson_event({"type": "tool_call", "data": {"name": "read_file"},
+                               "trace_id": "t1", "span_id": "s1"})
+    obj = json.loads(s)
+    assert obj["type"] == "tool_call"
+    assert isinstance(obj["timestamp"], float)
+    assert obj["schema_version"] == 1
+    assert obj["data"]["name"] == "read_file"
+    assert obj["trace_id"] == "t1" and obj["span_id"] == "s1"
