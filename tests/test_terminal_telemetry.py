@@ -59,3 +59,18 @@ def test_paint_status_pauses_spinner_writes_crlf_clear():
         assert out.getvalue() == "\rEXECUTING | turn 7\x1b[K"
     finally:
         sp.ACTIVE_SPINNER = None
+
+
+def test_spinner_collapse_uses_cr_and_el():
+    """Spinner.succeed/fail finalize in place with \\r + \\x1b[K (no scrollback smear)."""
+    import inspect
+    import wisp.transport.spinner as sp
+    src = inspect.getsource(sp.Spinner.succeed) + inspect.getsource(sp.Spinner.fail)
+    assert r"\r" in src and (r"\x1b[K" in src or r"\033[K" in src)
+
+def test_paint_status_uses_cr_and_el():
+    """paint_status shares the same \\r + \\x1b[K contract (no silent divergence)."""
+    import inspect
+    import wisp.cli.ui.guard as G
+    src = inspect.getsource(G.paint_status)
+    assert r"\r" in src and (r"\x1b[K" in src or r"\033[K" in src)
