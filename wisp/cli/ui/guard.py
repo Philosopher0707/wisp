@@ -196,3 +196,31 @@ def maybe_arm_gate(transport):
     g = TerminalGuard()
     g.__enter__()
     return g
+
+
+def paint_status(out, text: str) -> None:
+    """Write one status repaint: pause spinner, \\r + text + EL, resume.
+
+    Throttling (≤10Hz) is owned by the Tick caller (wait-clock already ticks
+    at ~8Hz); this helper only guarantees atomicity of the repaint.
+    Callers pass sys.stderr (stdout stays chrome-free per the aesthetics doc).
+    """
+    spinner = None
+    try:
+        from wisp.transport import spinner as _sp
+        spinner = _sp.ACTIVE_SPINNER
+    except Exception:
+        spinner = None
+    paused = False
+    try:
+        if spinner is not None and hasattr(spinner, "pause"):
+            spinner.pause()
+            paused = True
+        out.write("\r" + text + "\x1b[K")
+        out.flush()
+    finally:
+        if paused:
+            try:
+                spinner.resume()
+            except Exception:
+                pass

@@ -40,3 +40,22 @@ def test_ndjson_event_schema_matches_canonical():
     assert obj["schema_version"] == 1
     assert obj["data"]["name"] == "read_file"
     assert obj["trace_id"] == "t1" and obj["span_id"] == "s1"
+
+
+def test_paint_status_pauses_spinner_writes_crlf_clear():
+    """Pause ACTIVE_SPINNER across the write; sequence \r + text + \x1b[K."""
+    import io
+    from wisp.cli.ui.guard import paint_status
+    import wisp.transport.spinner as sp
+    order = []
+    class FakeSpinner:
+        def pause(self): order.append("pause")
+        def resume(self): order.append("resume")
+    sp.ACTIVE_SPINNER = FakeSpinner()
+    try:
+        out = io.StringIO()
+        paint_status(out, "EXECUTING | turn 7")
+        assert order == ["pause", "resume"]
+        assert out.getvalue() == "\rEXECUTING | turn 7\x1b[K"
+    finally:
+        sp.ACTIVE_SPINNER = None
