@@ -84,6 +84,12 @@ def cmd_spawn(agent, args: str):
         print(error(f"Role '{_first}' requires a task description"))
         print(dim("Usage: /spawn [role] <task description>"))
         return
+    import sys
+    if sys.stdin.isatty():
+        from wisp.cli.ui.guard import run_spawn_gate
+        if run_spawn_gate({"task": task, "role": role}) != "approve":
+            print("Spawn cancelled.")
+            return
     contract = SubagentContract(
         name="spawn",
         task=task,

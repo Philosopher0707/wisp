@@ -178,24 +178,31 @@ def run_spawn_gate(payload: dict, timeout_s: float = 30.0) -> str:
     so this standalone loop is correct here rather than in _prompt_loop:
     y/Enter approve, n skip, v renders the context slice and re-prompts,
     ? prints the legend and re-prompts; anything else fail-closes to reject.
+
+    Key parity note: tool gates map Enter to REJECT (fail-closed security
+    contract, prompt_for_approval) while this spawn gate maps Enter to approve:
+    a spawn gate only appears after an explicit /spawn invocation, so Enter
+    confirms an already-intended dispatch; tool calls arrive unbidden from the
+    model and must fail closed.
     """
     import sys
     from wisp.transport.renderer import render_context_slice, render_gate_legend
     while True:
         key = read_gate_key(timeout_s=timeout_s)
-        if key in ("y", "\r", "\n"):
-            return "approve"
-        if key == "n":
-            return "reject"
-        if key == "v":
-            sys.stderr.write(render_context_slice(payload) + "\n")
-            sys.stderr.flush()
-            continue
+        if key in ("\r", "\n"):
+            return "approve"  # TTY Enter confirms an explicit dispatch (see parity note)
         if key == "?":
             sys.stderr.write(render_gate_legend("spawn") + "\n")
             sys.stderr.flush()
             continue
-        return "reject"
+        alias = resolve_gate_alias("spawn", key)
+        if alias == "view":
+            sys.stderr.write(render_context_slice(payload) + "\n")
+            sys.stderr.flush()
+            continue
+        if alias == "approve":
+            return "approve"
+        return "reject"  # "reject" alias or unknown/None (timeout/EOF) fail-closes
 
 
 def maybe_arm_gate(transport):

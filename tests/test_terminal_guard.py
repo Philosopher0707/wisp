@@ -194,3 +194,19 @@ def test_pty_raw_then_restore(monkeypatch, capsys):
     finally:
         r.close()
         _os.close(master)
+
+
+def test_run_spawn_gate_uses_alias_map():
+    """v resolves through the same alias table as y/n (no inline duplication)."""
+    import inspect
+    import wisp.cli.ui.guard as G
+    src = inspect.getsource(G.run_spawn_gate)
+    assert "resolve_gate_alias" in src
+
+
+def test_spawn_gate_parity_documented():
+    """Enter/?? parity rationale is written down, not tribal knowledge."""
+    import inspect
+    import wisp.cli.ui.guard as G
+    src = inspect.getsource(G.run_spawn_gate)
+    assert "fail-closed" in src.lower() or "fail closed" in src.lower()
