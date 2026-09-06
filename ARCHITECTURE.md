@@ -13,8 +13,11 @@ User Input
 ┌────────────────────────────────────────────────────────────────┐
 │                     TRANSPORT LAYER                            │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐          │
-│  │   CLI    │ │   TUI    │ │ WebSocket│ │   SSE    │          │
+│  │   CLI    │ │   TUI    │ │ WebSocket│ │ Headless │          │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────┘          │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐                       │
+│  │   File   │ │  Multi   │ │ Metrics  │                       │
+│  └──────────┘ └──────────┘ └──────────┘                       │
 │         │           │           │           │                   │
 │         └───────────┴───────────┴───────────┘                   │
 │                         │                                       │
@@ -174,9 +177,10 @@ class Transport(ABC):
 - `CLITransport` — REPL with structured panels, spinners, approval prompts
 - `TUITransport` — Textual-based full-screen UI
 - `WebSocketTransport` — JSON event streaming for web clients
-- `SSETransport` — Server-Sent Events for simple HTTP streaming
 - `HeadlessTransport` — Collects events for testing/programmatic use
 - `FileTransport` — Logs events to file
+- `MultiTransport` — Fans events out to multiple transports
+- `MetricsTransport` — Wraps a transport with timing/counter telemetry
 
 ### Renderer (`wisp/transport/renderer.py`)
 
@@ -438,10 +442,13 @@ wisp/
 │   ├── base.py              # Transport ABC
 │   ├── cli.py               # CLITransport
 │   ├── tui.py               # TUITransport
-│   ├── server.py            # WebSocketTransport
-│   ├── sse.py               # SSETransport
+│   ├── websocket.py         # WebSocketTransport
 │   ├── headless.py          # HeadlessTransport
 │   ├── file.py              # FileTransport
+│   ├── multi.py             # MultiTransport
+│   ├── metrics.py           # MetricsTransport
+│   ├── protocol.py          # Transport protocol helpers
+│   ├── typeahead.py         # Type-ahead input buffer
 │   ├── renderer.py          # Pure rendering functions
 │   ├── progress.py          # ProgressTracker
 │   └── spinner.py           # Spinner
