@@ -109,17 +109,21 @@ def _serialize_tool_exchanges(
 
 
 def _evict_session_state_maps(maps: list[dict[str, Any]], cap: int,
-                                access: dict[str, float]) -> None:
+                                access: dict[str, float],
+                                skip: set[str] | None = None) -> None:
     """Evict coldest session ids across auxiliary maps, bounded at cap.
 
     Module-level so it works on partial test doubles (stubs binding single
     methods, bare __new__ instances): only the maps actually present are
     considered. Fires at == cap since the caller inserts right after,
-    guaranteeing post-insert <= cap.
+    guaranteeing post-insert <= cap. Ids in `skip` are never evicted
+    (live turns holding their session lock).
     """
     keys: set[str] = set()
     for table in maps:
         keys.update(table)
+    if skip:
+        keys -= set(skip)
     if len(keys) < cap:
         return
     overflow = len(keys) - cap + 1
@@ -138,10 +142,26 @@ def _maybe_evict_session_state(runtime: Any) -> None:
             table = getattr(runtime, name, None)
             if isinstance(table, dict):
                 maps.append(table)
+        # Never evict a session whose turn is live: same held-lock
+        # exemption as _evict_old_session_locks — dropping mid-turn
+        # steering/approval/touched-file state would corrupt the live turn.
+        live: set[str] = set()
+        try:
+            locks = getattr(runtime, "_session_locks", None)
+            if isinstance(locks, dict):
+                for sid, lock in locks.items():
+                    try:
+                        if lock is not None and lock.locked():
+                            live.add(sid)
+                    except Exception:
+                        continue
+        except Exception:
+            live = set()
         _evict_session_state_maps(
             maps,
             cap=getattr(runtime, "_max_session_state", 1000),
             access=getattr(runtime, "_session_access", {}),
+            skip=live,
         )
     except Exception:
         pass
@@ -294,21 +314,6 @@ class AgentRuntime:
         from wisp.infra.tracing import new_trace
         new_trace(session_id=sid)
 
-        # Crash recovery: if last event in session_events isn't DONE,
-        # replay from last UserMessage to rebuild state
-        if self.session_repo is not None:
-            try:
-                if not self.session_repo.was_last_turn_complete(sid):
-                    logger.warning("Session %s has incomplete turn — replaying", sid)
-                    last_seq = self.session_repo.get_last_sequence(sid)
-                    if last_seq >= 0:
-                        replayed = self.session_repo.load_session(sid)
-                        if replayed is not None:
-                            session["messages"] = replayed.messages
-                            _stringify_tool_call_arguments(session["messages"])
-            except Exception:
-                pass  # table might not exist
-
         # Events are NOT accumulated into a turn-wide list — transports
         # consume them live and the grouped serializer in the finally block
         # tracks only the tool-call subset it needs. Holding every streamed
@@ -322,6 +327,21 @@ class AgentRuntime:
                 pass
 
         async with session_lock:
+            # Crash recovery: if last event in session_events isn't DONE,
+            # replay from last UserMessage to rebuild state
+            if self.session_repo is not None:
+                try:
+                    if not self.session_repo.was_last_turn_complete(sid):
+                        logger.warning("Session %s has incomplete turn — replaying", sid)
+                        last_seq = self.session_repo.get_last_sequence(sid)
+                        if last_seq >= 0:
+                            replayed = self.session_repo.load_session(sid)
+                            if replayed is not None:
+                                session["messages"] = replayed.messages
+                                _stringify_tool_call_arguments(session["messages"])
+                except Exception:
+                    pass  # table might not exist
+
             # Auto-compact before turn to prevent context overflow
             await self.maybe_compact(session)
 
