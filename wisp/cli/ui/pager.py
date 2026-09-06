@@ -35,7 +35,13 @@ def show_diff(files: list[tuple[str, str, str]]) -> str:
     """Open unified diffs fullscreen; returns 'apply' | 'abort'.
 
     Never opens a pager without a TTY or without Textual (returns 'abort').
-    Caller must hold TerminalGuard (alt-screen ownership lives there).
+    Single alt-screen owner: Textual manages the alternate screen itself —
+    callers must NOT wrap this in TerminalGuard().enter_alt(). TTY-domain:
+    stdout.isatty() gates (a piped stdout is the machine contract; an
+    interactive pager needs a real terminal).
+    Inspect-only: the apply/abort verdict is intentionally unconsumed by the
+    v binding — v means "inspect", and approval happens at the gate, not
+    the pager.
     """
     import sys
     if not sys.stdout.isatty():

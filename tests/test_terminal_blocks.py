@@ -244,5 +244,4 @@ def test_repl_wiring_pins_current():
     assert "key_bindings" in src_fn
     assert "diff_pager_effect" in src_fn
     assert "show_diff" in src_fn
-    assert "TerminalGuard" in src_fn
     assert "viewport" in src_fn

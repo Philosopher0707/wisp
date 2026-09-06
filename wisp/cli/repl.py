@@ -279,14 +279,14 @@ def make_input_fn(history_file: Path | None = None, model: Any | None = None) ->
                     # no key collision.
                     from wisp.cli.ui.blocks import diff_pager_effect
                     from wisp.cli.ui import pager as _pager
-                    from wisp.cli.ui.guard import TerminalGuard
                     eff = diff_pager_effect(model, "v")
+                    # NOTE (inspect-only): show_diff's apply/abort verdict is
+                    # intentionally unconsumed here — v means "inspect", and
+                    # approval happens at the gate, not the pager.
                     if eff is not None:
                         model.viewport = "altscreen"
                         try:
-                            with TerminalGuard() as _g:
-                                _g.enter_alt()
-                                _pager.show_diff(eff[1])
+                            _pager.show_diff(eff[1])
                         finally:
                             model.viewport = "scrollback"
 

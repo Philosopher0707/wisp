@@ -99,8 +99,9 @@ def diff_pager_effect(model: ScreenModel, key: str):
     """Map the v keystroke to ("open_pager", texts) for the newest pageable diff.
 
     Returns None when the key is not v or no pageable diff exists.
-    The runner consumes the effect by calling pager.show_diff(texts) while
-    holding TerminalGuard (same input-loop hook as the Space binding).
+    The runner consumes the effect by calling pager.show_diff(texts) directly
+    WITHOUT a TerminalGuard wrapper — Textual is the single alt-screen owner
+    (same input-loop hook as the Space binding).
     """
     if key != "v":
         return None

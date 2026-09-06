@@ -94,5 +94,5 @@ def test_v_binding_consumes_open_pager_effect():
     src = inspect.getsource(repl.make_input_fn)
     assert "diff_pager_effect" in src
     assert "show_diff" in src
-    assert "TerminalGuard" in src
-    assert "viewport" in src
+    assert "enter_alt" not in src  # single owner: Textual manages alt-screen
+    assert "TerminalGuard" not in src
