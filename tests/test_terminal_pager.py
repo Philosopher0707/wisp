@@ -86,3 +86,12 @@ def test_v_key_emits_open_pager_with_texts():
     assert effect is not None and effect[0] == "open_pager"
     assert effect[1][0][0] == "a.py"
     assert diff_pager_effect(m, "x") is None
+
+
+def test_v_binding_consumes_open_pager_effect():
+    import inspect
+    import wisp.cli.repl as repl
+    src = inspect.getsource(repl.make_input_fn)
+    assert "diff_pager_effect" in src
+    assert "show_diff" in src
+    assert "TerminalGuard" in src

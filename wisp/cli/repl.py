@@ -238,6 +238,21 @@ def make_input_fn(history_file: Path | None = None, model: Any | None = None) ->
                 def _toggle_block(event) -> None:
                     model.toggle_newest_collapsible()
 
+                @_toggle_kb.add("v", filter=Condition(
+                    lambda: get_app().current_buffer.text == ""))
+                def _open_pager(event) -> None:
+                    # v here opens the diff pager (input loop, empty buffer).
+                    # v inside an approval prompt means VIEW — different loop,
+                    # no key collision.
+                    from wisp.cli.ui.blocks import diff_pager_effect
+                    from wisp.cli.ui import pager as _pager
+                    from wisp.cli.ui.guard import TerminalGuard
+                    eff = diff_pager_effect(model, "v")
+                    if eff is not None:
+                        with TerminalGuard() as _g:
+                            _g.enter_alt()
+                            _pager.show_diff(eff[1])
+
                 session.key_bindings = _toggle_kb
 
             try:
