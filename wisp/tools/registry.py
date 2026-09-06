@@ -882,12 +882,59 @@ def _build_tool_metadata(name: str, args: dict, result: str) -> dict:
     return meta
 
 
-def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0, file_lock=None, lsp_manager=None, security_policy=None) -> str:
+def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0, file_lock=None, lsp_manager=None, security_policy=None,
+                 *, principal=None, permission_mode: str = "auto_edit", effective_policy=None, _skip_authorize: bool = False) -> str:
     """Execute a tool by name. Delegates to default_registry.execute().
 
     For advanced features (security_policy, lsp_manager, file_lock), uses
     the module-level TOOL_IMPLS directly.
+
+    Authority gate (M2): direct callers are untrusted by default, so this
+    entrypoint consults authorize() and fails closed — hard denials AND
+    approval-required outcomes are refused, because there is no approval
+    handler on the direct path. The two already-gated internal paths
+    (ToolExecutor.execute, which authorizes with the session config, and
+    the core no-executor fallback, which is risk-gated to safe reads) opt
+    out explicitly via _skip_authorize=True. Never pass _skip_authorize=True
+    from plugin, helper, or test-double code.
     """
+    # Unknown tools fail fast with the pinned contract (ToolError) before any
+    # authority consult — there is nothing to authorize. Applies on both the
+    # gated and the already-authorized paths.
+    _impl = TOOL_IMPLS.get(name)
+    if _impl is None and not has_plugin_tool(name):
+        raise ToolError(f"Unknown tool: {name}")
+
+    if not _skip_authorize:
+        # Lazy imports: wisp.auth must never become a hard dependency of
+        # the registry module (import-cycle surface).
+        from wisp.auth.decision import authorize
+        from wisp.auth.principal import local_principal
+        from wisp.auth.workspace_trust import classify_workspace
+        _principal = principal if principal is not None else local_principal(
+            workspace=workspace, profile="default")
+        _decision = authorize(
+            _principal, name, args or {},
+            classify_workspace(workspace),
+            permission_mode=permission_mode or "auto_edit",
+            effective_policy=effective_policy,
+        )
+        if not _decision.allowed:
+            return json.dumps({
+                "status": "error",
+                "tool": name,
+                "data": f"[Denied by {_decision.controlling_layer} layer: {_decision.reason}]",
+                "metadata": _build_tool_metadata(name, args, ""),
+            }, ensure_ascii=False)
+        if _decision.approval_required:
+            return json.dumps({
+                "status": "error",
+                "tool": name,
+                "data": (f"[Denied by approval layer: {name} requires explicit "
+                         "approval (no approval handler on the direct registry path)]"),
+                "metadata": _build_tool_metadata(name, args, ""),
+            }, ensure_ascii=False)
+
     # Security check (not yet in ToolRegistry.execute)
     impl = TOOL_IMPLS.get(name)
     if security_policy is not None and impl is not None:
@@ -924,9 +971,6 @@ def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0,
                 "data": f"Plugin tool error: {e}",
                 "metadata": _build_tool_metadata(name, args, ""),
             }, ensure_ascii=False)
-
-    if not impl:
-        raise ToolError(f"Unknown tool: {name}")
 
     # Filter args with extra kwargs support (file_lock, lsp_manager)
     import inspect

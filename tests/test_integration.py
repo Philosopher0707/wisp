@@ -13,6 +13,9 @@ enforce security boundaries.
   build_tool_message()) — see test_integration_tool_executor.py for that.
 - JSON extraction into conversation history — see
   test_integration_tool_executor.py::TestBuildToolMessageJSONExtraction.
+- Authority gating on the direct path: approval-gated tools (EXEC/NETWORK)
+  are invoked here with _skip_authorize=True, since these tests pin tool
+  behavior and the gate itself is pinned in test_no_bypass.py.
 """
 
 import json
@@ -140,21 +143,24 @@ class TestIntegrationEditFile:
 
 class TestIntegrationRunBash:
     def test_run_bash_echo(self, temp_workspace):
-        raw = execute_tool("run_bash", {"command": "echo hello"}, str(temp_workspace))
+        raw = execute_tool("run_bash", {"command": "echo hello"}, str(temp_workspace),
+                             _skip_authorize=True)
         result = parse_tool_result(raw)
         assert result["status"] == "ok"
         assert "hello" in result["data"]
         assert result["metadata"]["command"] == "echo hello"
 
     def test_run_bash_failure(self, temp_workspace):
-        raw = execute_tool("run_bash", {"command": "false"}, str(temp_workspace))
+        raw = execute_tool("run_bash", {"command": "false"}, str(temp_workspace),
+                             _skip_authorize=True)
         result = parse_tool_result(raw)
         assert result["status"] == "ok"  # bash returns output even on failure
         assert "exit code: 1" in result["data"]
         assert result["metadata"]["exit_code"] == 1
 
     def test_run_bash_timeout(self, temp_workspace):
-        raw = execute_tool("run_bash", {"command": "sleep 10", "timeout": 1}, str(temp_workspace))
+        raw = execute_tool("run_bash", {"command": "sleep 10", "timeout": 1}, str(temp_workspace),
+                             _skip_authorize=True)
         result = parse_tool_result(raw)
         assert result["status"] == "error"
         assert "timed out" in result["data"].lower()
@@ -196,7 +202,8 @@ class TestIntegrationWebFetch:
     def test_web_fetch_success(self, temp_workspace):
         import pytest
         # Use httpbin for reliable testing
-        raw = execute_tool("web_fetch", {"url": "https://httpbin.org/get", "max_chars": 2000}, str(temp_workspace))
+        raw = execute_tool("web_fetch", {"url": "https://httpbin.org/get", "max_chars": 2000}, str(temp_workspace),
+                             _skip_authorize=True)
         result = parse_tool_result(raw)
         if result["status"] == "error" and "DNS resolution failed" in result["data"]:
             pytest.skip("Network/DNS unavailable in this environment")
@@ -209,13 +216,15 @@ class TestIntegrationWebFetch:
         assert result["metadata"]["url"] == "https://httpbin.org/get"
 
     def test_web_fetch_invalid_url(self, temp_workspace):
-        raw = execute_tool("web_fetch", {"url": "not-a-url"}, str(temp_workspace))
+        raw = execute_tool("web_fetch", {"url": "not-a-url"}, str(temp_workspace),
+                             _skip_authorize=True)
         result = parse_tool_result(raw)
         assert result["status"] == "error"
         assert "invalid" in result["data"].lower()
 
     def test_web_fetch_unsupported_scheme(self, temp_workspace):
-        raw = execute_tool("web_fetch", {"url": "ftp://example.com/file"}, str(temp_workspace))
+        raw = execute_tool("web_fetch", {"url": "ftp://example.com/file"}, str(temp_workspace),
+                             _skip_authorize=True)
         result = parse_tool_result(raw)
         assert result["status"] == "error"
         assert "unsupported" in result["data"].lower()
@@ -517,7 +526,8 @@ class TestIntegrationSecurity:
         assert "access denied" in result["data"].lower()
 
     def test_command_length_limit(self, temp_workspace):
-        raw = execute_tool("run_bash", {"command": "x" * 20000}, str(temp_workspace))
+        raw = execute_tool("run_bash", {"command": "x" * 20000}, str(temp_workspace),
+                             _skip_authorize=True)
         result = parse_tool_result(raw)
         assert result["status"] == "error"
         assert "too long" in result["data"].lower()
@@ -563,7 +573,8 @@ class TestIntegrationFullWorkflow:
         assert "app.py" in result["data"]
 
         # 6. Run it
-        raw = execute_tool("run_bash", {"command": "python3 app.py"}, str(temp_workspace))
+        raw = execute_tool("run_bash", {"command": "python3 app.py"}, str(temp_workspace),
+                             _skip_authorize=True)
         result = parse_tool_result(raw)
         assert result["status"] == "ok"
         assert "hello world" in result["data"]

@@ -5,6 +5,10 @@ which caught SystemExit (from sys.exit) and GeneratorExit (from generator cleanu
 and buried them in a JSON error string.  These must propagate uncaught.
 
 KeyboardInterrupt was already handled correctly via explicit re-raise.
+
+NOTE: these tests pin exception propagation, not authority, so they invoke
+execute_tool with _skip_authorize=True (the direct registry path now fails
+closed on approval-gated tools; authority is pinned in test_no_bypass.py).
 """
 
 import json
@@ -48,12 +52,12 @@ class TestKeyboardInterruptPropagates:
         """execute_tool must re-raise KeyboardInterrupt, not convert to JSON."""
         with patch("wisp.tools.registry.TOOL_IMPLS", {"run_bash": _fake_raising_kb}):
             with pytest.raises(KeyboardInterrupt):
-                execute_tool("run_bash", {"command": "x"}, "/tmp")
+                execute_tool("run_bash", {"command": "x"}, "/tmp", _skip_authorize=True)
 
     def test_other_exceptions_still_caught(self):
         """Non-interrupt exceptions (e.g. ValueError) must still be handled cleanly."""
         with patch("wisp.tools.registry.TOOL_IMPLS", {"run_bash": _fake_error}):
-            result = execute_tool("run_bash", {"command": "x"}, "/tmp")
+            result = execute_tool("run_bash", {"command": "x"}, "/tmp", _skip_authorize=True)
 
         data = json.loads(result)
         assert data["status"] == "error"
@@ -67,13 +71,13 @@ class TestBaseExceptionMustPropagate:
         """A tool that calls sys.exit(0) must propagate — not buried as JSON error."""
         with patch("wisp.tools.registry.TOOL_IMPLS", {"run_bash": _fake_system_exit}):
             with pytest.raises(SystemExit):
-                execute_tool("run_bash", {"command": "x"}, "/tmp")
+                execute_tool("run_bash", {"command": "x"}, "/tmp", _skip_authorize=True)
 
     def test_generator_exit_escapes_registry(self):
         """GeneratorExit raised during tool execution must propagate uncaught."""
         with patch("wisp.tools.registry.TOOL_IMPLS", {"run_bash": _fake_generator_exit}):
             with pytest.raises(GeneratorExit):
-                execute_tool("run_bash", {"command": "x"}, "/tmp")
+                execute_tool("run_bash", {"command": "x"}, "/tmp", _skip_authorize=True)
 
 
 class TestServerWebsocketHandlesException:

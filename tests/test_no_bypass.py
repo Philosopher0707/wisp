@@ -66,3 +66,44 @@ def test_fallback_read_still_works(tmp_path):
          "id": "t2"},
         {"workspace": str(tmp_path)})))
     assert any("hello" in t for t in _texts(events)), _texts(events)
+
+
+def test_registry_denies_quarantined_write_direct(tmp_path):
+    """Direct registry calls honor workspace authority (M2 I1).
+
+    Regression pin for the unauthenticated entrypoint audit finding:
+    wisp.tools.registry.execute_tool must consult authorize() instead of
+    executing blindly.
+    """
+    import json
+    from wisp.tools.registry import execute_tool
+    (tmp_path / ".wisp-quarantine").write_text("untrusted")
+    out = json.loads(execute_tool(
+        "write_file", {"path": str(tmp_path / "evil.py"), "content": "x"},
+        str(tmp_path)))
+    assert out["status"] == "error", out
+    assert "Denied by workspace" in out["data"], out
+    assert not (tmp_path / "evil.py").exists()
+
+
+def test_registry_read_direct_still_works(tmp_path):
+    """Direct reads are unaffected by the registry authority gate."""
+    import json
+    from wisp.tools.registry import execute_tool
+    (tmp_path / "a.txt").write_text("hello")
+    out = json.loads(execute_tool(
+        "read_file", {"path": str(tmp_path / "a.txt")}, str(tmp_path)))
+    assert out["status"] == "ok", out
+    assert "hello" in out["data"], out
+
+
+def test_registry_hook_dir_write_denied_direct(tmp_path):
+    """L4 hook-directory guard applies to direct registry calls."""
+    import json
+    from wisp.tools.registry import execute_tool
+    out = json.loads(execute_tool(
+        "write_file",
+        {"path": str(tmp_path / ".wisp" / "hooks" / "evil.sh"), "content": "x"},
+        str(tmp_path)))
+    assert out["status"] == "error", out
+    assert "hook" in out["data"].lower(), out

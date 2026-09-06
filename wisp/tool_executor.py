@@ -1016,6 +1016,9 @@ class ToolExecutor:
                         max_data_chars=8000,
                         file_lock=self.file_lock,
                         lsp_manager=self.lsp_manager,
+                        # Already authorized above (layered M2 consult); the
+                        # registry gate must not re-consult with defaults.
+                        _skip_authorize=True,
                     )
             except asyncio.TimeoutError:
                 # The worker thread keeps running — unkillable by design.

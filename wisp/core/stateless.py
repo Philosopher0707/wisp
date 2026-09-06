@@ -1539,6 +1539,8 @@ class WispAgentCore:
                 # off the loop or one slow fetch freezes every concurrent
                 # turn — parent AND sibling subagents — while their wall-
                 # clock timeouts keep ticking.
+                # Risk-gated to safe reads above (M2 I2 fallback); the public
+                # registry gate additionally applies (reads pass it).
                 raw_result: str | dict[str, Any] = await asyncio.to_thread(
                     execute_tool, name, args, workspace=workspace
                 )

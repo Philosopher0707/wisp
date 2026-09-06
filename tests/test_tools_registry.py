@@ -137,7 +137,10 @@ class TestExecuteTool:
         from wisp.tools import execute_tool
         result = execute_tool("spawn", {"task": "test"}, ".")
         assert "error" in result
-        assert "agent loop" in result
+        # Authority gate runs before the impl stub: the direct registry path
+        # has no approval handler, so approval-gated tools are refused here
+        # (previously the impl stub reported "agent loop").
+        assert "approval" in result
 
 
 # ═══════════════════════════════════════════════════════════════════
