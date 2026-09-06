@@ -1018,3 +1018,62 @@ class TestSubagentLifecycleHonesty:
         assert failed.payload.get("role") == "coder", (
             "failed event lost role — renderer would show [fanout-0-coder]"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Gate key-reader routing (armed approval path)
+# ═══════════════════════════════════════════════════════════════════
+
+class TestGateKeyReaderRouting:
+    """Armed _gate_key_reader routes approval through the injected reader.
+
+    Mirrors TestApprovalArgRedaction: bare __new__ + minimal attrs, stderr
+    patched. Under pytest stdin is not a TTY so maybe_arm_gate() is a noop
+    that preserves the pre-injected fake; _prompt_loop consumes it instead
+    of the line reader.
+    """
+
+    def _transport_with_reader(self, fake):
+        from unittest.mock import MagicMock
+
+        transport = CLITransport.__new__(CLITransport)
+        transport._approval_state = ApprovalSessionState()
+        transport._force_approval_mode = False
+        transport._spinner = MagicMock()  # no animation threads
+        transport._gate_key_reader = fake
+        return transport
+
+    def _approve(self, transport):
+        import io
+        from unittest.mock import patch
+
+        buf = io.StringIO()
+        with patch.object(cli_mod.sys, "stderr", buf):
+            approved = asyncio.run(transport.approve({
+                "name": "write_file",
+                "arguments": {"path": "a.py", "content": "x"},
+            }))
+        return approved, buf.getvalue()
+
+    def test_gate_reader_y_approves(self):
+        consumed = []
+
+        def fake():
+            consumed.append(True)
+            return "y"
+
+        approved, _ = self._approve(self._transport_with_reader(fake))
+        assert approved is True
+        assert consumed == [True]
+
+    def test_gate_reader_timeout_denies(self):
+        consumed = []
+
+        def fake():
+            consumed.append(True)
+            return ""
+
+        approved, err = self._approve(self._transport_with_reader(fake))
+        assert approved is False
+        assert consumed == [True]
+        assert "fail-closed" in err

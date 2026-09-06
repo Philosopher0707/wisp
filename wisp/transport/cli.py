@@ -798,10 +798,14 @@ class CLITransport(Transport):
                 self._approval_lock = _lock
             except AttributeError:
                 pass
+        from wisp.cli.ui.guard import maybe_arm_gate
+        _guard = maybe_arm_gate(self)
         try:
             async with _lock:
                 return await self._prompt_loop(tool_call, tool_name, args_map, approval_info)
         finally:
+            if _guard is not None:
+                _guard.restore()
             if typeahead is not None and typeahead.enabled:
                 typeahead.resume()
 
@@ -833,6 +837,7 @@ class CLITransport(Transport):
                 if _reader is not None:
                     raw = await asyncio.to_thread(_reader)
                     if raw == "":
+                        print("No response within 30s — denying (fail-closed).", file=sys.stderr)
                         return False
                 else:
                     raw = await self._read_approval_answer_with_reminders(is_file_edit=approval_info.is_file_edit)

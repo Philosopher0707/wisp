@@ -120,3 +120,29 @@ def test_run_spawn_gate_renders_slice_and_failcloses(monkeypatch, capsys):
     assert G.run_spawn_gate({"task": "t"}) == "reject"
     monkeypatch.setattr(G, "read_gate_key", lambda timeout_s=30.0: "q")
     assert G.run_spawn_gate({"task": "t"}) == "reject"
+
+
+def test_maybe_arm_gate_noop_off_tty(monkeypatch):
+    import sys
+    import types
+    from wisp.cli.ui.guard import maybe_arm_gate
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    t = types.SimpleNamespace()
+    assert maybe_arm_gate(t) is None
+    assert not hasattr(t, "_gate_key_reader")
+
+def test_maybe_arm_gate_arms_on_tty(monkeypatch):
+    import sys
+    import types
+    from wisp.cli.ui import guard as G
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdin, "fileno", lambda: 7)
+    monkeypatch.setitem(sys.modules, "termios", types.ModuleType("termios"))
+    sys.modules["termios"].TCSADRAIN = 1
+    sys.modules["termios"].tcgetattr = lambda fd: ["a"]
+    sys.modules["termios"].tcsetattr = lambda fd, w, a: None
+    t = types.SimpleNamespace()
+    g = G.maybe_arm_gate(t)
+    assert g is not None
+    assert t._gate_key_reader is G.read_gate_key
+    g.restore()

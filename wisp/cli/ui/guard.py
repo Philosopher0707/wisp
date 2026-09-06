@@ -139,7 +139,10 @@ def read_gate_key(timeout_s: float = 30.0) -> str:
                 ready, _, _ = select.select([sys.stdin], [], [], timeout_s)
                 if not ready:
                     return ""
-                return sys.stdin.read(1)
+                try:
+                    return sys.stdin.read(1)
+                except OSError:
+                    return ""
             finally:
                 termios.tcsetattr(fd, termios.TCSANOW, saved)  # not TCSADRAIN: nothing was output, and drain stalls on macOS ptys with pending input
         except Exception:
@@ -176,3 +179,20 @@ def run_spawn_gate(payload: dict, timeout_s: float = 30.0) -> str:
             sys.stderr.flush()
             continue
         return "reject"
+
+
+def maybe_arm_gate(transport):
+    """Arm raw-mode gating for one approval, TTY only (None preserves behavior).
+
+    Assigns transport._gate_key_reader and enters TerminalGuard. Callers must
+    restore() the returned guard in a finally. No lifecycle-level arming:
+    gates are per-approval by design, so ReplLifecycle needs no changes.
+    """
+    import sys
+    if not sys.stdin.isatty():
+        return None
+    if getattr(transport, "_gate_key_reader", None) is None:
+        transport._gate_key_reader = read_gate_key
+    g = TerminalGuard()
+    g.__enter__()
+    return g
