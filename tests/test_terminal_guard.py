@@ -41,3 +41,17 @@ def test_guard_cursor_show_targets_tty_stderr(monkeypatch, capsys):
     monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
     TerminalGuard().restore()
     assert "\x1b[?25h" in capsys.readouterr().err
+
+
+def test_aliases_map_to_shipped_verdicts_only():
+    from wisp.cli.ui.guard import resolve_gate_alias
+    assert resolve_gate_alias("spawn", "y") == "approve"
+    assert resolve_gate_alias("spawn", "n") == "reject"
+    assert resolve_gate_alias("spawn", "v") == "view"
+    assert resolve_gate_alias("spawn", "") is None
+    assert resolve_gate_alias("spawn", "zzz") is None
+    assert resolve_gate_alias("tool", "e") is None  # dropped: no verdict mapping
+    assert resolve_gate_alias("tool", "r") is None
+    # Shipped Y/a/N/d/c keys are never remapped here (prompt_for_approval owns them)
+    for k in ("Y", "a", "N", "d", "c"):
+        assert resolve_gate_alias("spawn", k) is None

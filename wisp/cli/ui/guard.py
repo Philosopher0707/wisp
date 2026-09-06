@@ -95,3 +95,20 @@ class TerminalGuard:
         except Exception:
             pass
         self.restore()
+
+
+def resolve_gate_alias(context: str, key: str) -> str | None:
+    """Map a gate keystroke to a shipped ApprovalVerdict value.
+
+    Only aliases of existing verdicts; None falls through to
+    prompt_for_approval (which fail-closes). Never remaps Y/a/N/d/c.
+    """
+    k = (key or "").strip()
+    if context == "spawn":
+        if k == "y":
+            return "approve"
+        if k == "n":
+            return "reject"
+        if k == "v":
+            return "view"
+    return None
