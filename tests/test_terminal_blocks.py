@@ -87,15 +87,27 @@ def test_tool_head_and_done_rows_all_modes():
         assert syms()["fail"] in f and "boom" in f
 
 
-def test_reduce_returns_effects_and_maps_kinds():
+def test_reduce_returns_affected_blocks():
     from wisp.cli.ui.blocks import ScreenModel, reduce_event
     m = ScreenModel()
-    assert reduce_event(m, {"type": "thinking", "data": {"text": "hmm"}}) == []
-    assert reduce_event(m, {"type": "tool_call", "data": {"name": "read_file", "arguments": {}}}) == []
-    assert reduce_event(m, {"type": "plan", "data": {"steps": ["a"]}}) == []
-    assert reduce_event(m, {"type": "unknown-bogus"}) == []
-    assert [b.kind for b in m.blocks] == ["thought", "tool", "plan"]
+    r1 = reduce_event(m, {"type": "thinking", "data": {"text": "hmm"}})
+    assert len(r1) == 1 and r1[0].kind == "thought" and r1[0].id == m.blocks[0].id
+    r2 = reduce_event(m, {"type": "tool_call", "data": {"name": "x", "arguments": {}}})
+    assert len(r2) == 1 and r2[0].payload["status"] == "running"
+    r3 = reduce_event(m, {"type": "tool_result", "data": {"result": "ok"}})
+    assert len(r3) == 1 and r3[0] is r2[0] and r3[0].payload["status"] == "done"
+    assert [b.kind for b in m.blocks] == ["thought", "tool"]
     assert m.is_collapsed(m.blocks[0].id) is True
+    assert reduce_event(m, {"type": "unknown-bogus"}) == []
+
+def test_block_timestamps_monotonic():
+    import time
+    from wisp.cli.ui.blocks import ScreenModel
+    m = ScreenModel()
+    a = m.append("log", {"text": "a"})
+    assert a.ts <= time.monotonic()
+    b = m.append("log", {"text": "b"})
+    assert b.ts >= a.ts
 
 
 def test_cli_event_renderer_appends_blocks():
