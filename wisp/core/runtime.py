@@ -24,7 +24,7 @@ from typing import Any, AsyncIterator, Callable, ClassVar
 
 from wisp.agent_memory import SessionSummary
 from wisp.approval_state import ApprovalSessionState, SessionPolicy
-from wisp.core.events import normalize_event
+from wisp.core.events import normalize_event, nudge_message, steering_message
 
 logger = logging.getLogger(__name__)
 logger = logging.getLogger(__name__)
@@ -391,6 +391,11 @@ class AgentRuntime:
             # (see finally block — one assistant message with ALL of an
             # iteration's tool_calls blocks, then exactly ITS replies).
             tool_sequence: list[tuple[str, dict[str, Any]]] = []
+            # Provider-visible injections the core appended to its LOCAL
+            # messages mid-turn (verification nudges, steering notes,
+            # budget notice). Persisted in the finally block so
+            # resume/replay sees exactly what the model saw (issue #2B).
+            injected_context: list[dict[str, Any]] = []
             turn_succeeded = False
 
             try:
@@ -418,6 +423,29 @@ class AgentRuntime:
                     elif etype == "tool_result":
                         tool_results.append(event)
                         tool_sequence.append(("reply", event))
+                    elif etype == "system":
+                        # Persist provider-visible [SYSTEM] injections
+                        # (verification nudge, budget notice) in the exact
+                        # shape the core used for its local messages.
+                        # Turn-ephemeral advice (truncation / retry notices)
+                        # carries no [SYSTEM] prefix and stays unpersisted.
+                        _msg = event.get("message")
+                        if _msg is None:
+                            _d = event.get("data")
+                            _msg = _d.get("message") if isinstance(_d, dict) else None
+                        if isinstance(_msg, str) and _msg.startswith("[SYSTEM]"):
+                            injected_context.append(nudge_message(_msg))
+                    elif etype in ("steering_inject", "steering_feedback"):
+                        # steering_feedback() factory emits type
+                        # "steering_inject" ("steering_feedback" is the
+                        # function name); accept both. Mirrors the core's
+                        # local f"[steering] {note}" user message exactly.
+                        _note = event.get("text")
+                        if _note is None:
+                            _d = event.get("data")
+                            _note = _d.get("text") if isinstance(_d, dict) else None
+                        if isinstance(_note, str) and _note.strip():
+                            injected_context.append(steering_message(_note))
 
                 turn_succeeded = True
 
@@ -492,6 +520,19 @@ class AgentRuntime:
                         "role": "assistant",
                         "content": "".join(assistant_content),
                     })
+
+                # Transcript unification (issue #2, part B): record the
+                # injected context above so the persisted transcript shows
+                # the model exactly what it saw mid-turn.
+                # ORDERING: pure append AFTER exchanges + assistant content.
+                # Intra-turn interleaving (e.g. a steering note between two
+                # exchanges) is normalized on persist. This keeps the
+                # positional exchange serializer above untouched — strict
+                # providers require each tool reply to immediately follow
+                # its assistant tool_calls block, and splicing user
+                # messages between exchanges risks orphaning ids.
+                for ctx_msg in injected_context:
+                    session["messages"].append(ctx_msg)
 
                 # Persist the turn OFF the event loop: saving the full session
                 # blob, writing the DONE event, and folding turn memory are all

@@ -37,6 +37,8 @@ from wisp.core.events import (
     system,
     provider_status as provider_status_event,
     steering_feedback,
+    nudge_message,
+    steering_message,
 )
 from wisp.core.provider_stream import guarded_provider_stream
 from wisp.core.approval_gate import ApprovalGate
@@ -570,7 +572,7 @@ class WispAgentCore:
                         f"only then summarize. If you genuinely cannot verify, "
                         f"say the work is UNVERIFIED instead of claiming success."
                     )
-                    messages.append({"role": "user", "content": nudge})
+                    messages.append(nudge_message(nudge))
                     yield _flatten_event(system(nudge, level="warning"))
                     continue
                 yield _flatten_event(done_event(session.get("id", "")))
@@ -658,10 +660,7 @@ class WispAgentCore:
                     note = str(note).strip()
                     if not note:
                         continue
-                    messages.append({
-                        "role": "user",
-                        "content": f"[steering] {note}",
-                    })
+                    messages.append(steering_message(note))
                     yield _flatten_event(steering_feedback(note))
 
         # Max iterations reached — don't discard the turn's work. One final
@@ -669,14 +668,16 @@ class WispAgentCore:
         # raw error only surfaces if even that fails. (Live evidence: 50
         # tools / 7 minutes of research died behind this error with zero
         # answer delivered.)
-        messages.append({
-            "role": "user",
-            "content": (
-                "[SYSTEM] Iteration budget exhausted. Do NOT call any more "
-                "tools. Summarize your findings and answer the user's request "
-                "with what you have, noting anything left incomplete."
-            ),
-        })
+        budget_notice = (
+            "[SYSTEM] Iteration budget exhausted. Do NOT call any more "
+            "tools. Summarize your findings and answer the user's request "
+            "with what you have, noting anything left incomplete."
+        )
+        messages.append(nudge_message(budget_notice))
+        # Transcript unification (issue #2, part B): the notice above is a
+        # provider-visible injection like the verification nudge — mirror it
+        # as a system event so the runtime persist loop can record it.
+        yield _flatten_event(system(budget_notice, level="warning"))
         wrapped_up = False
         try:
             # Prune before final wrap-up as well — same payload bloat risk

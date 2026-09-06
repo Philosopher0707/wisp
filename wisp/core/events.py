@@ -299,6 +299,16 @@ def steering_feedback(text: str) -> AgentEvent:
     return _make_event(TYPE_STEERING_INJECT, {"text": text})
 
 
+def nudge_message(text: str) -> dict[str, Any]:
+    """User-role message shape for provider-injected system context (mirrors system() yields)."""
+    return {"role": "user", "content": text}
+
+
+def steering_message(note: str) -> dict[str, Any]:
+    """User-role message shape for steering injections (mirrors steering_feedback yields)."""
+    return {"role": "user", "content": f"[steering] {note.strip()}"}
+
+
 def approval_request(tool_name: str, args: dict[str, Any], reason: str = "") -> AgentEvent:
     return _make_event(TYPE_APPROVAL_REQUEST, {"name": tool_name, "arguments": args, "reason": reason})
 
@@ -361,6 +371,8 @@ __all__ = [
     "steering_paused",
     "steering_resumed",
     "steering_feedback",
+    "nudge_message",
+    "steering_message",
     "approval_request",
     "provider_status",
     "subagent",
