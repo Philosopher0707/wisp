@@ -104,10 +104,26 @@ class CLIEventRenderer:
         self._model = model
 
     def render_event(self, out: Any, event: dict) -> None:
+        new_blocks = []
         if self._model is not None:
             from wisp.cli.ui.blocks import reduce_event
-            reduce_event(self._model, event)
+            new_blocks = reduce_event(self._model, event)
         self._transport._render_event(out, event)
+        if self._model is not None and new_blocks:
+            import shutil
+            import time
+            from wisp.cli.ui.blocks import STREAM_PAINT_KINDS
+            from wisp.transport.renderer import render_block
+            try:
+                width = shutil.get_terminal_size((80, 24)).columns
+            except Exception:
+                width = 80
+            now = time.monotonic()
+            for b in new_blocks:
+                if b.kind in STREAM_PAINT_KINDS:
+                    text = render_block(b, self._model.is_collapsed(b.id), now, width)
+                    if text:
+                        out.write(text + "\n")
 
     def reset(self) -> None:
         self._transport._reset_buffers()

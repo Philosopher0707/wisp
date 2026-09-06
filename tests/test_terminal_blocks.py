@@ -185,3 +185,39 @@ def test_repl_runner_reuses_injected_model():
         assert runner.renderer is r
     finally:
         loop.close()
+
+
+def test_render_block_dispatch():
+    import time
+    from wisp.cli.ui.blocks import Block
+    t = Block(id="blk-0", kind="thought", payload={"text": "hmm"}, ts=time.monotonic())
+    with _mode(OutputMode.UNICODE):
+        assert "hmm" in R.render_block(t, True, 0.0, 80)
+        assert "0.0s" in R.render_block(t, True, 0.0, 80)
+        tool = Block(id="blk-1", kind="tool",
+                     payload={"name": "read_file", "arguments": {}, "status": "running"}, ts=0)
+        assert "read_file" in R.render_block(tool, False, 0.0, 80)
+        done = Block(id="blk-2", kind="tool",
+                     payload={"name": "read_file", "arguments": {}, "status": "done", "summary": "ok"}, ts=0)
+        assert "ok" in R.render_block(done, False, 0.0, 80)
+        d = Block(id="blk-3", kind="diff", payload={"counts": [("a.py", 30, 10)]}, ts=0)
+        assert "+30" in R.render_block(d, False, 0.0, 80)
+        lg = Block(id="blk-4", kind="log", payload={"text": "hi"}, ts=0)
+        assert "hi" in R.render_block(lg, False, 0.0, 80)
+        pl = Block(id="blk-5", kind="plan", payload={"steps": ["a", "b"]}, ts=0)
+        assert "1. a" in R.render_block(pl, False, 0.0, 80)
+        assert R.render_block(Block(id="x", kind="bogus", payload={}, ts=0), False, 0.0, 80) is None
+
+def test_render_event_paints_gap_kinds_only():
+    from wisp.cli.repl import CLIEventRenderer
+    from wisp.cli.ui.blocks import ScreenModel
+    from unittest.mock import MagicMock
+    import io
+    m = ScreenModel()
+    r = CLIEventRenderer(MagicMock(), model=m)
+    out = io.StringIO()
+    r.render_event(out, {"type": "plan", "data": {"steps": ["a", "b"]}})
+    assert "1. a" in out.getvalue()
+    out2 = io.StringIO()
+    r.render_event(out2, {"type": "thinking", "data": {"text": "hmm"}})
+    assert out2.getvalue() == ""

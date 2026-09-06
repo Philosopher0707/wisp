@@ -882,3 +882,46 @@ def render_ndjson_event(event: dict) -> str:
         d["span_id"] = event["span_id"]
     return json.dumps(d, ensure_ascii=False)
 
+
+def _is_counts(files) -> bool:
+    return (isinstance(files, list) and bool(files) and isinstance(files[0], (list, tuple))
+            and len(files[0]) == 3 and isinstance(files[0][1], int))
+
+
+def render_block(block, collapsed: bool, now: float, width: int):
+    """Render one viewport block for streaming paint. None when unpaintable.
+
+    Paint set: plan/gate/log/diff (see STREAM_PAINT_KINDS in wisp.cli.ui.blocks).
+    Thought/tool rows are transport-owned in scrollback; their renderers serve
+    pager/alt-screen consumers.
+    """
+    kind = getattr(block, "kind", "")
+    p = getattr(block, "payload", {}) or {}
+    ts = getattr(block, "ts", None)
+    if kind == "thought":
+        elapsed = max(0.0, now - ts) if ts else 0.0
+        text = str(p.get("text", ""))
+        if collapsed:
+            return render_thought_row(text, elapsed, True, width)
+        return render_thought_row(text, elapsed, False, width) + "\n" + "\n".join(wrap_text(text, width, indent="    "))
+    if kind == "tool":
+        name = str(p.get("name", "?"))
+        args = p.get("arguments", {}) or {}
+        if p.get("status") == "done":
+            return render_tool_done(name, float(p.get("duration_ms", 0.0) or 0.0), True, str(p.get("summary", "")), width)
+        return render_tool_head(name, args, width)
+    if kind == "diff":
+        counts = p.get("counts")
+        if not counts and _is_counts(p.get("files")):
+            counts = p["files"]
+        if counts:
+            return render_diff_aggregate(counts)
+        return dim(truncate("  diff: " + str(p.get("summary", "changed")), width))
+    if kind in ("plan", "gate", "log"):
+        if kind == "plan" and isinstance(p.get("steps"), list):
+            text = "plan: " + "; ".join(f"{i + 1}. {s}" for i, s in enumerate(p["steps"][:5]))
+        else:
+            text = str(p.get("text") or p.get("summary") or p.get("name") or kind)
+        return dim(truncate("  " + text, width))
+    return None
+

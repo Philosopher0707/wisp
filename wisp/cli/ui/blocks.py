@@ -55,6 +55,12 @@ class ScreenModel:
         return None
 
 
+#: Event kinds painted into scrollback by CLIEventRenderer. Thought/tool rows
+#: are owned by the transport streaming path today (pager/alt-screen consumers
+#: use their renderers next); painting them here too would duplicate output.
+STREAM_PAINT_KINDS = frozenset({"plan", "gate", "log", "diff"})
+
+
 def reduce_event(model: ScreenModel, event: dict) -> list:
     """Map one agent event to viewport block(s). Returns affected blocks.
 
@@ -79,7 +85,13 @@ def reduce_event(model: ScreenModel, event: dict) -> list:
                 affected.append(b)
                 break
     elif etype in ("plan", "diff", "log", "gate"):
-        affected.append(model.append(etype, dict(data)))
+        payload = dict(data)
+        if etype == "diff":
+            pairs = payload.get("files", [])
+            if pairs and isinstance(pairs, list) and pairs and isinstance(pairs[0], (list, tuple)) and len(pairs[0]) == 3 and isinstance(pairs[0][1], str):
+                from wisp.cli.ui.pager import summarize_diffs
+                payload["counts"] = summarize_diffs(pairs)
+        affected.append(model.append(etype, payload))
     return affected
 
 
