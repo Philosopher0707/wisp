@@ -39,6 +39,7 @@ class TerminalGuard:
         which prompt_for_approval already maps to KeyboardInterrupt.
         TCSANOW (not the TCSAFLUSH default): must not discard a pre-typed
         key, and flush stalls on macOS ptys with pending input.
+        The approval path uses read_gate_key's per-keystroke raw instead; this method remains as the tested primitive (see the pty raw-restore test).
         """
         if self._fd is None:
             return

@@ -919,7 +919,10 @@ def render_block(block, collapsed: bool, now: float, width: int):
         return dim(truncate("  diff: " + str(p.get("summary", "changed")), width))
     if kind in ("plan", "gate", "log"):
         if kind == "plan" and isinstance(p.get("steps"), list):
-            text = "plan: " + "; ".join(f"{i + 1}. {s}" for i, s in enumerate(p["steps"][:5]))
+            steps = p["steps"][:5]
+            text = "plan: " + "; ".join(f"{i + 1}. {s}" for i, s in enumerate(steps))
+            if len(p["steps"]) > 5:
+                text += f"; +{len(p['steps']) - 5} more"
         else:
             text = str(p.get("text") or p.get("summary") or p.get("name") or kind)
         return dim(truncate("  " + text, width))

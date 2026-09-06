@@ -245,3 +245,11 @@ def test_repl_wiring_pins_current():
     assert "diff_pager_effect" in src_fn
     assert "show_diff" in src_fn
     assert "viewport" in src_fn
+
+
+def test_render_block_plan_truncation_indicator():
+    from wisp.cli.ui.blocks import Block
+    with _mode(OutputMode.UNICODE):
+        many = Block(id="blk-9", kind="plan", payload={"steps": [f"s{i}" for i in range(8)]}, ts=0)
+        s = R.render_block(many, False, 0.0, 200)
+        assert "1. s0" in s and "+3 more" in s
