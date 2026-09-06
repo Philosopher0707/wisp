@@ -37,12 +37,18 @@ class TerminalGuard:
 
         ISIG is also disabled while raw, so Ctrl-C arrives as the \x03 byte,
         which prompt_for_approval already maps to KeyboardInterrupt.
+        TCSANOW (not the TCSAFLUSH default): must not discard a pre-typed
+        key, and flush stalls on macOS ptys with pending input.
         """
         if self._fd is None:
             return
         import tty
         try:
-            tty.setraw(self._fd)
+            try:
+                import termios
+                tty.setraw(self._fd, termios.TCSANOW)
+            except Exception:
+                tty.setraw(self._fd)
         except Exception:
             pass
 
@@ -62,7 +68,18 @@ class TerminalGuard:
         if self._saved_attrs is not None and self._fd is not None:
             try:
                 import termios
-                termios.tcsetattr(self._fd, termios.TCSADRAIN, self._saved_attrs)
+                # TCSANOW: flush-free restore preserves paused type-ahead and
+                # never stalls on macOS ptys with pending input (TCSAFLUSH
+                # discards input and stalls there; TCSADRAIN stalls too).
+                # Darwin leaves PENDIN sticky after raw->cooked; the pty pin
+                # test masks that benign status bit. getattr chain keeps the
+                # headless stub tests (TCSADRAIN-only fake) green.
+                _when = getattr(
+                    termios,
+                    "TCSANOW",
+                    getattr(termios, "TCSADRAIN", 0),
+                )
+                termios.tcsetattr(self._fd, _when, self._saved_attrs)
             except Exception:
                 pass
             self._saved_attrs = None
