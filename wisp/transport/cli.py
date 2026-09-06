@@ -647,6 +647,7 @@ class CLITransport(Transport):
         self.background_agents = background_agents
         self._bg_task: asyncio.Task[None] | None = None
         self._bg_queue: Any | None = None
+        self._gate_key_reader = None  # Injectable single-keystroke reader; None keeps the line reader
         self._stdin: Any = None
         self._stdout: Any = None
         # Stream discipline (docs/repl-aesthetics.md §0): stdout carries
@@ -828,7 +829,13 @@ class CLITransport(Transport):
 
         while True:
             try:
-                raw = await self._read_approval_answer_with_reminders(is_file_edit=approval_info.is_file_edit)
+                _reader = getattr(self, "_gate_key_reader", None)
+                if _reader is not None:
+                    raw = await asyncio.to_thread(_reader)
+                    if raw == "":
+                        return False
+                else:
+                    raw = await self._read_approval_answer_with_reminders(is_file_edit=approval_info.is_file_edit)
             except (EOFError, OSError):
                 return False
             choice = normalize_answer(raw)

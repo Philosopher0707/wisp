@@ -55,3 +55,33 @@ def test_aliases_map_to_shipped_verdicts_only():
     # Shipped Y/a/N/d/c keys are never remapped here (prompt_for_approval owns them)
     for k in ("Y", "a", "N", "d", "c"):
         assert resolve_gate_alias("spawn", k) is None
+
+
+def test_read_gate_key_line_fallback():
+    """Non-selectable stdin (StringIO): first char of the line wins."""
+    import io
+    import sys
+    from wisp.cli.ui.guard import read_gate_key
+    real_stdin = sys.stdin
+    sys.stdin = io.StringIO("y\n")
+    try:
+        assert read_gate_key() == "y"
+    finally:
+        sys.stdin = real_stdin
+
+def test_read_gate_key_pty(monkeypatch):
+    """PTY: single keystroke returned without Enter."""
+    if os.name != "posix":
+        pytest.skip("POSIX only")
+    import pty
+    import sys as _sys
+    master, slave = pty.openpty()
+    r = os.fdopen(slave, "r")
+    monkeypatch.setattr(_sys, "stdin", r)
+    os.write(master, b"n")
+    try:
+        from wisp.cli.ui.guard import read_gate_key
+        assert read_gate_key(timeout_s=2.0) == "n"
+    finally:
+        r.close()
+        os.close(master)

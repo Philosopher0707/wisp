@@ -112,3 +112,40 @@ def resolve_gate_alias(context: str, key: str) -> str | None:
         if k == "v":
             return "view"
     return None
+
+
+def read_gate_key(timeout_s: float = 30.0) -> str:
+    """Read one gate keystroke: raw+select on TTY, line fallback otherwise.
+
+    Returns "" on EOF/timeout (callers fail closed).
+    TCSANOW (not TCSAFLUSH/TCSADRAIN) on both transitions: drain/flush stall
+    on macOS ptys with pending input, and this function must preserve type-ahead.
+    """
+    import sys
+    try:
+        fileno = sys.stdin.fileno() if hasattr(sys.stdin, "fileno") else -1
+        selectable = isinstance(fileno, int) and fileno >= 0
+    except Exception:
+        selectable = False
+    if selectable and sys.stdin.isatty():
+        try:
+            import select
+            import termios
+            import tty
+            fd = sys.stdin.fileno()
+            saved = termios.tcgetattr(fd)
+            try:
+                tty.setraw(fd, termios.TCSANOW)  # not TCSAFLUSH: must not discard a pre-typed key; TCSAFLUSH also hangs on macOS with a pending partial line
+                ready, _, _ = select.select([sys.stdin], [], [], timeout_s)
+                if not ready:
+                    return ""
+                return sys.stdin.read(1)
+            finally:
+                termios.tcsetattr(fd, termios.TCSANOW, saved)  # not TCSADRAIN: nothing was output, and drain stalls on macOS ptys with pending input
+        except Exception:
+            pass
+    try:
+        line = input()
+    except (EOFError, OSError):
+        return ""
+    return (line.strip()[:1] if line else "")
