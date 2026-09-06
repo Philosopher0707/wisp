@@ -474,6 +474,72 @@ class TestRoleToolRestriction:
         assert any("not allowed" in str(e.get("message", "")) for e in errors)
 
     @pytest.mark.asyncio
+    async def test_batch_denial_visible_in_history(self, core):
+        """Batch-gate refusals must stay history-visible (no replay loop).
+
+        A denied call inside a parallel ``tool_calls`` batch must yield a
+        refusal ``tool_result`` AND land in the message history the next
+        provider round sees — mirroring the singular path.
+        """
+        seen: list = []
+
+        def make_provider():
+            class BatchDenyProvider:
+                def __init__(self):
+                    self.call_count = 0
+
+                def generate_stream_events(self, system_prompt, messages, tools=None, checkpoint_every=50):
+                    self.call_count += 1
+                    seen.append((system_prompt, list(messages), tools))
+                    if self.call_count == 1:
+                        yield {
+                            "type": "tool_calls",
+                            "calls": [
+                                {
+                                    "id": "call_denied_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "write_file",
+                                        "arguments": {"path": "/tmp/evil.txt", "content": "x"},
+                                    },
+                                }
+                            ],
+                        }
+                        yield {"type": "done"}
+                    else:
+                        yield {"type": "token", "text": "ok", "phase": "content"}
+                        yield {"type": "done"}
+            return BatchDenyProvider()
+
+        core.provider = make_provider()
+        session = {
+            "id": "s-batch-deny", "messages": [], "model": "qwen", "workspace": "/tmp",
+            "allowed_tools": ["read_file"],
+        }
+
+        with patch("wisp.tools.registry.execute_tool",
+                   side_effect=AssertionError("disallowed tool must not execute")):
+            events = [ev async for ev in core.turn(session, "do it")]
+
+        # (a) a refusal tool_result is yielded for the denied item
+        refusals = [
+            e for e in events
+            if e.get("type") == "tool_result" and e.get("tool_call_id") == "call_denied_1"
+        ]
+        assert refusals, f"denied batch call must yield a refusal tool_result: {events}"
+        assert "Blocked" in str(refusals[0].get("result", "")), refusals[0]
+
+        # (b) the denial appears in the turn's message history
+        assert len(seen) >= 2, f"expected a second provider round, got {len(seen)}"
+        second_messages = seen[1][1]
+        tool_msgs = [
+            m for m in second_messages
+            if m.get("role") == "tool" and m.get("tool_call_id") == "call_denied_1"
+        ]
+        assert tool_msgs, f"denial missing from next-round history: {second_messages}"
+        assert "Blocked" in str(tool_msgs[0].get("content", "")), tool_msgs[0]
+
+    @pytest.mark.asyncio
     async def test_allowed_tool_still_executes_under_restriction(self, core):
         def make_provider():
             class StatefulProvider:

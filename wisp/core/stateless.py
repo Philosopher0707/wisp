@@ -315,6 +315,12 @@ class WispAgentCore:
                                             _hint = " — run_bash is blocked in auto_edit mode; use list_files/read_file instead, or switch to full mode"
                                         elif _blocked_name in ("spawn", "fanout"):
                                             _hint = " — subagent spawning is blocked in auto_edit; switch to full mode"
+                                        tc_event["_blocked"] = (
+                                            f"tool '{_blocked_name}' is not allowed "
+                                            f"for this agent's role{_hint}")
+                                        pending_tool_calls.append(tc_event)
+                                        tool_results_events_early.append(
+                                            self._refusal_result_event(tc_event))
                                         yield _flatten_event(
                                             error_event(
                                                 f"Blocked: tool '{_blocked_name}' is not allowed for this agent's role{_hint}",
@@ -328,6 +334,10 @@ class WispAgentCore:
                                         tc_event, session, approval_handler=approval_handler
                                     )
                                     if not allowed:
+                                        tc_event["_blocked"] = reason or "blocked"
+                                        pending_tool_calls.append(tc_event)
+                                        tool_results_events_early.append(
+                                            self._refusal_result_event(tc_event))
                                         yield _flatten_event(
                                             error_event(
                                                 f"Blocked: {reason}",
@@ -341,6 +351,12 @@ class WispAgentCore:
                                         try:
                                             ext_result = self.extensions.intercept(tc_event)
                                             if ext_result.get("action") == "block":
+                                                tc_event["_blocked"] = (
+                                                    f"blocked by extension: "
+                                                    f"{ext_result.get('reason', 'unknown')}")
+                                                pending_tool_calls.append(tc_event)
+                                                tool_results_events_early.append(
+                                                    self._refusal_result_event(tc_event))
                                                 yield _flatten_event(
                                                     error_event(
                                                         f"Blocked: {ext_result.get('reason', 'by extension')}",
@@ -353,6 +369,11 @@ class WispAgentCore:
                                                 "Extension intercept failed — treating as deny: %s",
                                                 e,
                                             )
+                                            tc_event["_blocked"] = (
+                                                f"extension intercept failed: {e}")
+                                            pending_tool_calls.append(tc_event)
+                                            tool_results_events_early.append(
+                                                self._refusal_result_event(tc_event))
                                             yield _flatten_event(
                                                 error_event(
                                                     f"Extension intercept failed: {e}. Tool call denied.",
