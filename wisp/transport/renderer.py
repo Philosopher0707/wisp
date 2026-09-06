@@ -838,3 +838,28 @@ def render_gate_legend(context: str) -> str:
         return f"  keys: {keys}"
     return dim(f"  {keys}")
 
+
+def render_telemetry_line(state: str, stats: dict, branch: str, width: int = 80) -> str:
+    """Single-row status line reusing render_turn_stats fields + git branch.
+
+    Cache-hit % and session cost are out of scope (provider accounting
+    does not emit them). The tools_succeeded/failed breakdown is
+    intentionally omitted (render_turn_stats owns the verbose form).
+    """
+    box = BoxChars()
+    tools = stats.get("tools_run", 0)
+    files = stats.get("files_changed", [])
+    elapsed = stats.get("elapsed", 0.0)
+    core = (f"{state} | turn {stats.get('turn_number', 0)} tools {tools} "
+            f"files {len(files)} {elapsed:.1f}s")
+    ctx_tokens = stats.get("ctx_tokens")
+    ctx_limit = stats.get("ctx_limit")
+    if ctx_tokens and ctx_limit and box.mode != OutputMode.MINIMAL:
+        pct = round(100.0 * ctx_tokens / max(1, ctx_limit))
+        core += f" ctx {ctx_tokens / 1024.0:.0f}k ({pct}%)"
+    core += f" | {branch}"
+    core = truncate(core, width)
+    if box.mode == OutputMode.MINIMAL:
+        return core
+    return dim(core)
+
