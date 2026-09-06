@@ -85,3 +85,38 @@ def test_read_gate_key_pty(monkeypatch):
     finally:
         r.close()
         os.close(master)
+
+
+def test_context_slice_and_legend_render():
+    with _mode(OutputMode.UNICODE):
+        s = R.render_context_slice({"task": "migrate auth", "files": ["a.py", "b.py"]})
+        assert "migrate auth" in s and "a.py" in s
+        legend = R.render_gate_legend("spawn")
+        assert "y" in legend and "n" in legend and "v" in legend
+
+def test_run_spawn_gate_view_then_approve(monkeypatch):
+    import wisp.transport.renderer as rend
+    from wisp.cli.ui import guard as G
+    keys = iter(["v", "y"])
+    monkeypatch.setattr(G, "read_gate_key", lambda timeout_s=30.0: next(keys))
+    seen = []
+    monkeypatch.setattr(rend, "render_context_slice", lambda p: seen.append(p) or "CTX")
+    assert G.run_spawn_gate({"task": "t"}) == "approve"
+    assert seen == [{"task": "t"}]
+
+def test_run_spawn_gate_help_repeatable(monkeypatch):
+    from wisp.cli.ui import guard as G
+    keys = iter(["?", "?", "n"])
+    monkeypatch.setattr(G, "read_gate_key", lambda timeout_s=30.0: next(keys))
+    assert G.run_spawn_gate({"task": "t"}) == "reject"
+
+def test_run_spawn_gate_renders_slice_and_failcloses(monkeypatch, capsys):
+    from wisp.cli.ui import guard as G
+    keys = iter(["v", "n"])
+    monkeypatch.setattr(G, "read_gate_key", lambda timeout_s=30.0: next(keys))
+    assert G.run_spawn_gate({"task": "migrate auth", "files": ["a.py"]}) == "reject"
+    assert "Scoped context" in capsys.readouterr().err
+    monkeypatch.setattr(G, "read_gate_key", lambda timeout_s=30.0: "")
+    assert G.run_spawn_gate({"task": "t"}) == "reject"
+    monkeypatch.setattr(G, "read_gate_key", lambda timeout_s=30.0: "q")
+    assert G.run_spawn_gate({"task": "t"}) == "reject"

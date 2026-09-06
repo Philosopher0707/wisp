@@ -811,3 +811,30 @@ def render_diff_aggregate(files: list[tuple[str, int, int]]) -> str:
     glyph = "\u270e" if box.mode == OutputMode.UNICODE else "diff:"
     return dim(f"  {glyph} Modified {n} {word} (+{added}, -{removed}) [v]")
 
+
+def render_context_slice(payload: dict) -> str:
+    """Non-mutating inspect view for spawn gates (VIEW branch without a diff)."""
+    box = BoxChars()
+    task = str(payload.get("task", "?"))[:60]
+    files = payload.get("files", []) or []
+    lines = [f"  Scoped context: {task}"]
+    for f in files[:8]:
+        lines.append(f"    - {f}")
+    if len(files) > 8:
+        lines.append(f"    ... +{len(files) - 8} more")
+    if box.mode == OutputMode.MINIMAL:
+        return "\n".join(l[2:] if l.startswith("  ") else l for l in lines)
+    return "\n".join(dim(l) for l in lines)
+
+
+def render_gate_legend(context: str) -> str:
+    """Key legend block for gates (? key). Non-mutating, mode-aware."""
+    box = BoxChars()
+    if context == "spawn":
+        keys = "[Enter]/y approve · n skip · v inspect · ? help"
+    else:
+        keys = "y yes · n no · v view · a always · d block all · c cancel · ? help"
+    if box.mode == OutputMode.MINIMAL:
+        return f"  keys: {keys}"
+    return dim(f"  {keys}")
+

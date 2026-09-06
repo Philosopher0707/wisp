@@ -149,3 +149,30 @@ def read_gate_key(timeout_s: float = 30.0) -> str:
     except (EOFError, OSError):
         return ""
     return (line.strip()[:1] if line else "")
+
+
+def run_spawn_gate(payload: dict, timeout_s: float = 30.0) -> str:
+    """Spawn-gate loop returning a shipped verdict value.
+
+    Spawn gates originate at subagent dispatch (not the tool approval path),
+    so this standalone loop is correct here rather than in _prompt_loop:
+    y/Enter approve, n skip, v renders the context slice and re-prompts,
+    ? prints the legend and re-prompts; anything else fail-closes to reject.
+    """
+    import sys
+    from wisp.transport.renderer import render_context_slice, render_gate_legend
+    while True:
+        key = read_gate_key(timeout_s=timeout_s)
+        if key in ("y", "\r", "\n"):
+            return "approve"
+        if key == "n":
+            return "reject"
+        if key == "v":
+            sys.stderr.write(render_context_slice(payload) + "\n")
+            sys.stderr.flush()
+            continue
+        if key == "?":
+            sys.stderr.write(render_gate_legend("spawn") + "\n")
+            sys.stderr.flush()
+            continue
+        return "reject"
