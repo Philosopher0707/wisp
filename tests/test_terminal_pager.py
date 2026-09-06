@@ -95,3 +95,4 @@ def test_v_binding_consumes_open_pager_effect():
     assert "diff_pager_effect" in src
     assert "show_diff" in src
     assert "TerminalGuard" in src
+    assert "viewport" in src

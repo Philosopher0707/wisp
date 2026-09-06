@@ -129,7 +129,7 @@ def test_repl_wiring_present_in_source():
     assert "_injected_model" in src_full and "or ScreenModel()" in src_full
     assert "make_input_fn(model=" in src_full
     src_fn = inspect.getsource(repl.make_input_fn)
-    assert "toggle_newest_collapsible" in src_fn
+    assert "expand_newest" in src_fn
     assert "key_bindings" in src_fn
 
 
@@ -221,3 +221,28 @@ def test_render_event_paints_gap_kinds_only():
     out2 = io.StringIO()
     r.render_event(out2, {"type": "thinking", "data": {"text": "hmm"}})
     assert out2.getvalue() == ""
+
+
+def test_expand_newest_appends_log_on_expand():
+    from wisp.cli.ui.blocks import ScreenModel, expand_newest
+    m = ScreenModel()
+    assert expand_newest(m) is None
+    m.append("thought", {"text": "full story here"})
+    out = expand_newest(m)
+    assert out is not None and out.kind == "log" and "full story here" in out.payload["text"]
+    assert expand_newest(m) is None  # now collapsing: silent, nothing appended
+    assert len(m.blocks) == 2
+
+def test_repl_wiring_pins_current():
+    import inspect
+    import wisp.cli.repl as repl
+    src_full = inspect.getsource(repl)
+    assert "_injected_model" in src_full and "or ScreenModel()" in src_full
+    assert "make_input_fn(model=" in src_full
+    src_fn = inspect.getsource(repl.make_input_fn)
+    assert "expand_newest" in src_fn
+    assert "key_bindings" in src_fn
+    assert "diff_pager_effect" in src_fn
+    assert "show_diff" in src_fn
+    assert "TerminalGuard" in src_fn
+    assert "viewport" in src_fn

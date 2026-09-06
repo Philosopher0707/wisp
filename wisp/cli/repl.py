@@ -252,7 +252,24 @@ def make_input_fn(history_file: Path | None = None, model: Any | None = None) ->
                 @_toggle_kb.add(" ", filter=Condition(
                     lambda: get_app().current_buffer.text == ""))
                 def _toggle_block(event) -> None:
-                    model.toggle_newest_collapsible()
+                    import sys
+                    import time
+                    import shutil
+                    from wisp.cli.ui.blocks import expand_newest
+                    from wisp.transport.renderer import render_block
+                    b = expand_newest(model)
+                    if b is not None:
+                        try:
+                            width = shutil.get_terminal_size((80, 24)).columns
+                        except Exception:
+                            width = 80
+                        text = render_block(b, False, time.monotonic(), width)
+                        if text:
+                            try:
+                                sys.stderr.write(text + "\n")
+                                sys.stderr.flush()
+                            except OSError:
+                                pass
 
                 @_toggle_kb.add("v", filter=Condition(
                     lambda: get_app().current_buffer.text == ""))
@@ -265,9 +282,13 @@ def make_input_fn(history_file: Path | None = None, model: Any | None = None) ->
                     from wisp.cli.ui.guard import TerminalGuard
                     eff = diff_pager_effect(model, "v")
                     if eff is not None:
-                        with TerminalGuard() as _g:
-                            _g.enter_alt()
-                            _pager.show_diff(eff[1])
+                        model.viewport = "altscreen"
+                        try:
+                            with TerminalGuard() as _g:
+                                _g.enter_alt()
+                                _pager.show_diff(eff[1])
+                        finally:
+                            model.viewport = "scrollback"
 
                 session.key_bindings = _toggle_kb
 

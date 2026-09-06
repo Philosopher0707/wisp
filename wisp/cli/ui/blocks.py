@@ -111,3 +111,17 @@ def diff_pager_effect(model: ScreenModel, key: str):
             if pairs and should_page_diff(pairs):
                 return ("open_pager", pairs)
     return None
+
+
+def expand_newest(model: ScreenModel):
+    """Toggle newest collapsible; when expanding, append full text as a log block.
+
+    Returns the appended log Block, or None (collapse direction, or nothing
+    collapsible). Collapse is intentionally silent: scrollback cannot un-print,
+    and the earlier collapsed row plus any prior expansion remain as history.
+    """
+    b = model.toggle_newest_collapsible()
+    if b is not None and not model.is_collapsed(b.id):
+        text = b.payload.get("text", "")
+        return model.append("log", {"text": f"Expanded {b.kind} {b.id}: {text}"})
+    return None
