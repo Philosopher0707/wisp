@@ -164,3 +164,33 @@ def test_ctrl_c_byte_maps_to_keyboard_interrupt():
     from wisp.cli.approval import prompt_for_approval
     with _pytest.raises(KeyboardInterrupt):
         prompt_for_approval("\x03")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="pty only")
+def test_pty_raw_then_restore(monkeypatch, capsys):
+    """On a real pty: raw() clears ICANON, restore() brings attrs back exactly,
+    and the cursor-show lands on stderr."""
+    import os as _os
+    import pty
+    import sys
+    import termios
+    master, slave = pty.openpty()
+    before = termios.tcgetattr(slave)
+    r = _os.fdopen(slave, "r")
+    monkeypatch.setattr(sys, "stdin", r)
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
+    try:
+        from wisp.cli.ui.guard import TerminalGuard
+        g = TerminalGuard()
+        g.__enter__()
+        g.raw()
+        mid = termios.tcgetattr(slave)
+        assert not (mid[3] & termios.ICANON)
+        g.restore()
+        PENDIN = getattr(termios, "PENDIN", 0x20000000)  # Darwin leaves this sticky status bit set after raw->cooked; benign
+        after = termios.tcgetattr(slave)
+        assert [(a & ~PENDIN if i == 3 else a) for i, a in enumerate(after)] == [(b & ~PENDIN if i == 3 else b) for i, b in enumerate(before)]
+        assert "\x1b[?25h" in capsys.readouterr().err
+    finally:
+        r.close()
+        _os.close(master)
