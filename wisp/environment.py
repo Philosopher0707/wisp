@@ -16,7 +16,6 @@ import json
 import logging
 import os
 import platform
-import shutil
 import subprocess
 import sys
 from dataclasses import dataclass

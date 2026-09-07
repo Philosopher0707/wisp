@@ -279,3 +279,60 @@ class TestMCPToolPermissions:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 6. Strict child environment (F2 migration)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestStrictChildEnv:
+    """MCP stdio children must not implicitly inherit process secrets."""
+
+    def _connect_capture(self, monkeypatch, config_env=None):
+        import wisp.mcp.manager as mgrmod
+        from wisp.mcp.manager import MCPServer, MCPServerConfig, _connect_stdio
+
+        captured = {}
+
+        class FakePopen:
+            def __init__(self, *a, **k):
+                captured.update(k)
+
+        monkeypatch.setattr(mgrmod.subprocess, "Popen", FakePopen)
+        server = MCPServer(config=MCPServerConfig(
+            name="env-test-srv", command="x", args=[], env=config_env or {}))
+        _connect_stdio(server)
+        return captured
+
+    def test_strict_mode_drops_ambient_secrets(self, monkeypatch):
+        import os
+
+        monkeypatch.setenv("WISP_STRICT_ENV", "1")
+        monkeypatch.setenv("WISP_REPRO_MARKER_SECRET", "s3cr3t")
+        captured = self._connect_capture(monkeypatch, {"CUSTOM": "1"})
+        env = captured.get("env") or {}
+        assert env.get("CUSTOM") == "1", "explicit server env must survive"
+        assert "WISP_REPRO_MARKER_SECRET" not in env
+        assert "WISP_API_KEY" not in env or "WISP_API_KEY" not in os.environ
+        assert "PATH" in env, "minimal runtime must stay usable"
+
+    def test_legacy_default_preserved_without_flag(self, monkeypatch):
+        monkeypatch.delenv("WISP_STRICT_ENV", raising=False)
+        monkeypatch.setenv("WISP_REPRO_MARKER_SECRET", "s3cr3t")
+        captured = self._connect_capture(monkeypatch, {"CUSTOM": "1"})
+        env = captured.get("env") or {}
+        assert env.get("WISP_REPRO_MARKER_SECRET") == "s3cr3t"
+        assert env.get("CUSTOM") == "1"
+
+    def test_migration_warning_fires_once_without_values(self, monkeypatch, caplog):
+        import wisp.mcp.manager as mgrmod
+
+        monkeypatch.delenv("WISP_STRICT_ENV", raising=False)
+        monkeypatch.setenv("WISP_REPRO_MARKER_SECRET", "s3cr3t")
+        mgrmod._strict_env_warned.clear()
+        with caplog.at_level("WARNING", logger="wisp.mcp.manager"):
+            self._connect_capture(monkeypatch)
+            self._connect_capture(monkeypatch)
+        warns = [r for r in caplog.records if "WISP_STRICT_ENV=1" in r.message]
+        assert len(warns) == 1, "telemetry warning must fire exactly once per server"
+        assert "s3cr3t" not in warns[0].message, "values must never reach logs"

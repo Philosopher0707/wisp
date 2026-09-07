@@ -468,7 +468,6 @@ class AgentRuntime:
             finally:
                 # Always record what happened in the session
                 if tool_sequence:
-                    import json
 
                     # ── Group into provider-boundary exchanges ──────────
                     # REGRESSION GUARD (2026-08-27): this block used to emit

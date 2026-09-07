@@ -284,12 +284,20 @@ class HookManager:
         return env
 
     def _substitute_command(self, command: str, context: dict) -> str:
-        """Replace {placeholders} in command with context values."""
+        """Replace {placeholders} in command with context values.
+
+        Every value is shlex-quoted: hook commands run with shell=True,
+        so an unquoted workspace like ``/x/$(...)`` would execute as shell
+        syntax (F3). Quoting is safe for mid-word use too — shell joins
+        adjacent quoted/unquoted segments into one word.
+        """
+        import shlex
+
         subs = {
-            "tool_name": str(context.get("tool_name", "")),
-            "event": str(context.get("event", "")),
-            "workspace": str(context.get("workspace", "")),
-            "session_id": str(context.get("session_id", "")),
+            "tool_name": shlex.quote(str(context.get("tool_name", ""))),
+            "event": shlex.quote(str(context.get("event", ""))),
+            "workspace": shlex.quote(str(context.get("workspace", ""))),
+            "session_id": shlex.quote(str(context.get("session_id", ""))),
         }
         result = command
         for key, val in subs.items():

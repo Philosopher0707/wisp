@@ -737,21 +737,15 @@ class CLITransport(Transport):
         tool_name = tool_call.get("name", "unknown")
         args_map = redact_sensitive_tool_args(tool_call.get("arguments", {}))
 
-        # Autonomous mode: safe tools auto-approve without prompt (Cursor-like)
-        # Dangerous commands still denied via check_dangerous_command in the
-        # executor layer, so this is safe to auto-approve.
-        try:
-            _cfg = getattr(self, "config", None)
-            if _cfg is not None and bool(getattr(_cfg, "autonomous", False)):
-                from wisp.tools._utils import check_dangerous_command
-                if tool_name == "run_bash":
-                    cmd = str((tool_call.get("arguments", {}) or {}).get("command", "") or "")
-                    danger = check_dangerous_command(cmd)
-                    if danger:
-                        return False
-                return True
-        except Exception:
-            pass
+        # Autonomous mode: auto-approve without prompt (Cursor-like).
+        # Dangerous commands are denied by the executor's danger gate,
+        # which runs unconditionally before any approval request — so by
+        # the time approve() is consulted, nothing dangerous can arrive.
+        # The transport therefore owns no danger semantics (F9: no
+        # tool-layer imports here).
+        _cfg = getattr(self, "config", None)
+        if _cfg is not None and bool(getattr(_cfg, "autonomous", False)):
+            return True
 
         # Non-interactive / piped input = auto-deny unless session policy is auto
         if self._force_approval_mode or self._approval_state.session_policy is SessionPolicy.AUTO:

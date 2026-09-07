@@ -1,9 +1,7 @@
 """Pytest suite — concurrent telemetry, stream isolation, Pydantic report serialization."""
 
-import asyncio
 import json
 import logging
-import time
 
 import pytest
 from pydantic import ValidationError
@@ -89,8 +87,6 @@ class TestModels:
 
 class TestStreamIsolation:
     def test_provider_warnings_go_to_file_not_console(self, tmp_path, caplog):
-        from agent.logger import BadgeFilter, install, uninstall, LOG_PATH
-        import logging
 
         # Install with file at tmp .agent/runtime.log
         # Patch LOG_PATH to tmp
@@ -208,7 +204,7 @@ class TestSynthesizer:
                 "source_subagent": "ui-render",
             }
         ]
-        r = syn.run(payloads, findings=findings)
+        _r = syn.run(payloads, findings=findings)
         # JSON persisted and valid
         jpath = tmp_path / ".agent" / "audit_summary.json"
         assert jpath.exists()
@@ -253,3 +249,46 @@ class TestSynthesizer:
         r = synthesize([], out_dir=tmp_path / ".agent", findings=[])
         assert r.issue_matrix  # canonical gaps injected
         assert (tmp_path / ".agent" / "audit_summary.json").exists()
+
+
+class TestRuntimeLogPermissions:
+    """F4: the runtime log may contain redacted-but-sensitive material: owner-only."""
+
+    def test_install_creates_owner_only_log(self, tmp_path):
+        import os
+        import stat
+
+        import agent.logger as lg
+
+        orig = lg.LOG_PATH
+        lg.LOG_PATH = tmp_path / "runtime.log"
+        try:
+            lg.install()
+            mode = stat.S_IMODE(os.stat(tmp_path / "runtime.log").st_mode)
+            assert mode == 0o600, f"runtime.log mode {oct(mode)}, want 0o600"
+        finally:
+            lg.uninstall()
+            lg.LOG_PATH = orig
+
+    def test_rotation_keeps_owner_only(self, tmp_path):
+        """A post-rollover base file must not revert to umask perms."""
+        import logging
+        import os
+        import stat
+
+        from agent.logger import _OwnerOnlyRotatingHandler
+
+        h = _OwnerOnlyRotatingHandler(str(tmp_path / "r.log"), maxBytes=200, backupCount=2)
+        try:
+            lg = logging.getLogger("test-rot-perms")
+            lg.addHandler(h)
+            lg.setLevel(logging.DEBUG)
+            lg.propagate = False
+            for i in range(50):
+                lg.info("line %d %s", i, "x" * 50)
+            h.flush()
+            mode = stat.S_IMODE(os.stat(tmp_path / "r.log").st_mode)
+            assert mode == 0o600, f"post-rollover mode {oct(mode)}, want 0o600"
+        finally:
+            logging.getLogger("test-rot-perms").removeHandler(h)
+            h.close()

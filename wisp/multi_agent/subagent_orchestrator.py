@@ -810,7 +810,7 @@ class SubagentOrchestrator:
             # parent turn's remaining clock. Slow reasoning models (nemotron
             # ultra) regularly need just a bit more than a role's base budget.
             if result.timed_out and contract.retry_count == 0:
-                from wisp.core.stateless import get_turn_deadline
+                from wisp.tools.context import get_turn_deadline
 
                 budget = contract.timeout_seconds * 1.5
                 deadline = get_turn_deadline()

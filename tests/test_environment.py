@@ -1,6 +1,5 @@
 """Tests for dynamic environment grounding (wisp/environment.py)."""
 
-import os
 import subprocess
 from pathlib import Path
 

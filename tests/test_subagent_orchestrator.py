@@ -1611,7 +1611,7 @@ class TestTimeoutRetry:
             return ok_success if len(timeouts_seen) > 1 else ok
 
         monkeypatch.setattr(o._runner, "run", fake_run)
-        with patch("wisp.core.stateless.get_turn_deadline", return_value=None), \
+        with patch("wisp.tools.context.get_turn_deadline", return_value=None), \
              patch.object(o, "_resolve_worktree", new=AsyncMock(return_value=None)), \
              patch.object(o, "_fire_subagent_hook", new=AsyncMock()):
             result = asyncio.run(o.run(
@@ -1642,7 +1642,7 @@ class TestTimeoutRetry:
 
         monkeypatch.setattr(o._runner, "run", fake_run)
         exhausted = _time.monotonic() + 1.0  # 1s left — hopeless
-        with patch("wisp.core.stateless.get_turn_deadline", return_value=exhausted), \
+        with patch("wisp.tools.context.get_turn_deadline", return_value=exhausted), \
              patch.object(o, "_resolve_worktree", new=AsyncMock(return_value=None)), \
              patch.object(o, "_fire_subagent_hook", new=AsyncMock()):
             result = asyncio.run(o.run(
@@ -1674,7 +1674,7 @@ class TestTimeoutRetry:
             return failed
 
         monkeypatch.setattr(o._runner, "run", fake_run)
-        with patch("wisp.core.stateless.get_turn_deadline", return_value=None), \
+        with patch("wisp.tools.context.get_turn_deadline", return_value=None), \
              patch.object(o, "_resolve_worktree", new=AsyncMock(return_value=None)), \
              patch.object(o, "_fire_subagent_hook", new=AsyncMock()):
             asyncio.run(o.run(
@@ -1795,7 +1795,7 @@ class TestFirstTokenDeadline:
             worktree_isolated=False,
         )
         with patch("wisp.core.engine.WispAgentCore", _RevivingCore), \
-             patch("wisp.core.stateless.get_turn_deadline", return_value=None), \
+             patch("wisp.tools.context.get_turn_deadline", return_value=None), \
              patch.object(o, "_resolve_worktree", new=AsyncMock(return_value=None)), \
              patch.object(o, "_fire_subagent_hook", new=AsyncMock()):
             result = asyncio.run(o.run(contract))

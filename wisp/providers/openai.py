@@ -361,6 +361,12 @@ class OpenAIProvider(Provider):
         except requests.exceptions.Timeout as exc:
             yield {"type": "error", "message": f"Request timed out: {exc}", "status": 500}
         except BaseException as exc:
+            # Cancellation-first (F8): interrupts must unwind, never become
+            # data. Matches the codebase-wide cancellation tuple.
+            import asyncio as _asyncio
+
+            if isinstance(exc, (_asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
+                raise
             # Check for httpcore.WriteTimeout, RemoteProtocolError, etc.
             try:
                 from wisp.core.transport import is_transient_error

@@ -374,6 +374,12 @@ class CompositionRoot:
             self.background_agents.shutdown_pending()
         with contextlib.suppress(Exception):
             self.subagent_orchestrator.request_cancel_live()
+        # Restore tool implementations replaced by install_sink() (F14a):
+        # the sink patch is process-global, so a root that never uninstalled
+        # would silently change tool behavior for everything after it.
+        with contextlib.suppress(Exception):
+            from agent.tools.runner import uninstall_sink as _uninstall_sink  # type: ignore
+            _uninstall_sink()
         self.stop()
         try:
             from wisp.infra.telemetry import export_metrics

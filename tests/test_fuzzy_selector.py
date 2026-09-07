@@ -5,14 +5,12 @@ Tab, Shift-Tab, and type-to-filter, verifying the ESC trap is fixed.
 """
 
 import io
-import sys
 
 from wisp.cli.ui.fuzzy_selector import (
     FuzzyState,
     classify_ansi,
     render_selector,
     select_with_fuzzy,
-    _read_ansi,
     KEY_UP,
     KEY_DOWN,
 )

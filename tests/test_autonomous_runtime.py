@@ -30,14 +30,14 @@ async def test_autonomous_auto_approves_safe_bash(tmp_path):
         sess = await root.runtime.get_or_create_session(f"auto-safe-{tmp_path.name}", cfg.model, str(tmp_path))
         (tmp_path / "hello.txt").write_text("hi")
         # No approval_handler — autonomous should auto-approve run_bash "cat hello.txt"
-        responses = [
+        _responses = [
             {"type": "tool_call", "name": "run_bash", "arguments": {"command": "cat hello.txt"}},
             {"type": "done"},
         ]
         # Second turn: content to complete (verification loop requires exit-0 then content)
         # Simulate by patching provider to yield tool_call then content
         call_n = {"c": 0}
-        orig = root.runtime._get_core(sess["id"]).provider
+        _orig = root.runtime._get_core(sess["id"]).provider
         class FlippingProvider:
             def generate_stream_events(self, system_prompt, messages, tools=None, checkpoint_every=50):
                 call_n["c"] += 1

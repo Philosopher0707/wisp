@@ -67,6 +67,27 @@ class TestToolWriteFile:
         result = tool_write_file("empty.txt", str(temp_workspace), "")
         assert "Wrote" in result["data"]
 
+    def test_write_failure_still_releases_lock(self, temp_workspace, monkeypatch):
+        """F5: an exception between acquire and release must not leak the lock."""
+        import wisp.tools.filesystem as fsmod
+
+        released = []
+
+        class StubLock:
+            def acquire(self, path):
+                return True
+
+            def release(self, path):
+                released.append(path)
+
+        def _boom(*a, **k):
+            raise OSError("disk on fire")
+
+        monkeypatch.setattr(fsmod, "_safe_write_text", _boom)
+        with pytest.raises(OSError, match="disk on fire"):
+            tool_write_file("locked.txt", str(temp_workspace), "x", file_lock=StubLock())
+        assert released == ["locked.txt"], "lock leaked on write failure"
+
 
 class TestToolEditFile:
 
@@ -211,6 +232,28 @@ class TestToolRunBash:
         result = tool_run_bash("python3 -c \"print('a'*60000)\"", str(temp_workspace))
         assert "[output truncated]" in result
         assert len(result) <= 50100  # 50K max + overhead
+
+    def test_bash_log_line_redacts_secrets(self, temp_workspace, caplog):
+        """F4: secret-bearing commands must not reach log records unredacted."""
+        import logging
+
+        secret = "sk-test-secret-12345"
+        with caplog.at_level(logging.INFO, logger="wisp.tools.bash"):
+            tool_run_bash(f"echo api_key={secret}", str(temp_workspace))
+        logged = "\n".join(r.message for r in caplog.records)
+        assert secret not in logged, "raw secret leaked into bash logs"
+        assert "REDACTED" in logged
+
+    def test_bash_timeout_error_redacts_secrets(self, temp_workspace, caplog):
+        """F4: timeout ToolError text flows into logs via the registry warning."""
+        import logging
+
+        secret = "sk-test-secret-67890"
+        with caplog.at_level(logging.INFO, logger="wisp.tools.bash"):
+            with pytest.raises(ToolError, match="REDACTED"):
+                tool_run_bash(f"sleep 5 # api_key={secret}", str(temp_workspace), timeout=1)
+        logged = "\n".join(r.message for r in caplog.records)
+        assert secret not in logged
 
 
 class TestToolListFiles:

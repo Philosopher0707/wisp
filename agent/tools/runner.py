@@ -20,14 +20,14 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 try:
-    from agent.ui.formatter import collapse, DisplayPayload, ARTIFACT_DIR, LAST_PATH
+    from agent.ui.formatter import collapse, DisplayPayload, ARTIFACT_DIR
 except Exception:
-    from ui.formatter import collapse, DisplayPayload, ARTIFACT_DIR, LAST_PATH  # type: ignore
+    from ui.formatter import collapse, DisplayPayload, ARTIFACT_DIR  # type: ignore
 
-__all__ = ["RunResult", "run_bash_with_sink", "install_sink", "LOG_DIR"]
+__all__ = ["RunResult", "run_bash_with_sink", "install_sink", "uninstall_sink", "LOG_DIR"]
 
 LOG_DIR = ARTIFACT_DIR
 _SANITIZE_RE = re.compile(r"[^a-zA-Z0-9._-]+")
@@ -173,7 +173,7 @@ def run_bash_with_sink_sync(
 ) -> RunResult:
     """Sync wrapper for non-async callers (tests, CLI)."""
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()  # probe only; result unused
     except RuntimeError:
         return asyncio.run(run_bash_with_sink(cmd, cwd, timeout_s, max_preview_lines))
     # already in loop — run in thread
@@ -200,8 +200,33 @@ def install_sink() -> None:
         orig = getattr(_bash, "async_tool_run_bash", None)
         if orig and not getattr(orig, "_sink_patched", False):
 
-            async def _wrapped(cmd: str, workspace: str = ".", timeout: int = 30, **kw):  # type: ignore
-                res = await run_bash_with_sink(cmd, cwd=workspace, timeout_s=float(timeout))
+            async def _wrapped(  # type: ignore
+                command: str,
+                workspace: str = ".",
+                timeout: int = 60,
+                **kw: object,
+            ):
+                # Mirror the original contract exactly (F14b/F14c): same
+                # parameter names (the executor dispatches by keyword),
+                # same input validation, same danger gate — the sink only
+                # changes where output lands, never what may execute.
+                from wisp.tools._utils import (
+                    _MAX_CMD_LENGTH,
+                    _validate_int,
+                    _validate_string,
+                    check_dangerous_command,
+                )
+                from wisp.tools.errors import ToolError
+
+                _validate_string(command, "command", _MAX_CMD_LENGTH)
+                timeout_val = _validate_int(timeout, "timeout", 1, 3600)
+                if "\x00" in command:
+                    raise ToolError("Null bytes not allowed in command")
+                danger = check_dangerous_command(command)
+                if danger:
+                    raise ToolError(f"Dangerous command blocked: {danger}")
+                res = await run_bash_with_sink(
+                    command, cwd=workspace, timeout_s=float(timeout_val))
                 # Return preview text for LLM history, but disk holds full
                 # Preserve original contract: caller expects str output
                 # We embed badge + link so UI shows preview; full stays on disk.
@@ -226,3 +251,26 @@ def install_sink() -> None:
         import logging
 
         logging.getLogger("agent.tools.runner").info("run_bash sink installed (%d patches) → %s", patched, LOG_DIR)
+
+
+def uninstall_sink() -> int:
+    """Restore tool implementations replaced by install_sink().
+
+    Reverses the global patch (F14a): without this, any process that ever
+    constructed a CompositionRoot keeps the sink variant for all later
+    direct tool calls — silently changing validation, logging, and output
+    shape, and breaking test isolation. Idempotent; safe to call without
+    a prior install. Returns how many patches were reverted.
+    """
+    reverted = 0
+    try:
+        import wisp.tools.bash as _bash
+
+        current = getattr(_bash, "async_tool_run_bash", None)
+        orig = getattr(current, "_orig", None)
+        if current is not None and getattr(current, "_sink_patched", False) and orig is not None:
+            _bash.async_tool_run_bash = orig  # type: ignore
+            reverted += 1
+    except Exception:
+        pass
+    return reverted

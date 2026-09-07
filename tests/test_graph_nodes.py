@@ -314,7 +314,7 @@ class TestHumanApprovalNode:
     @pytest.mark.asyncio
     async def test_handler_bool_shape(self):
         s = GraphState.initial()
-        deps = ApprovalDeps(approval_handler=lambda n, a, r: True)  # type: ignore[arg-type]
+        _deps = ApprovalDeps(approval_handler=lambda n, a, r: True)  # type: ignore[arg-type]
         # wrap sync bool in async by node — it handles non-coroutine
         # Actually node does iscoroutine check, so we need async
         async def bool_handler(name, args, reason):

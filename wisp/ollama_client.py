@@ -221,14 +221,17 @@ class OllamaClient:
         """
         # Resolve timeout to hardened tuple if int passed
         try:
-            from wisp.core.transport import HARDENED_TIMEOUT, is_transient_error
+            from wisp.core.transport import HARDENED_TIMEOUT
 
             if isinstance(timeout, int):
                 # For non-streaming POST, use (connect, read) where read is generous
                 # Write is folded into read for requests
                 timeout = (HARDENED_TIMEOUT.connect, HARDENED_TIMEOUT.read)
         except ImportError:
-            is_transient_error = lambda e: False  # type: ignore
+            # No fallback binding: the retry handler below re-imports as
+            # _is_trans per attempt and degrades to requests-specific
+            # checks when the import is unavailable.
+            pass
 
         url = f"{self.base_url}/api/{endpoint}"
         max_retries = 3

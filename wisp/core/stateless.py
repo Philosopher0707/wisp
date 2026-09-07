@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
 
-from wisp.core.context_pruner import PrunerConfig, prune_messages
+from wisp.core.context_pruner import prune_messages
 from wisp.core.contracts import DEFAULT_PRUNE_POLICY as _DEFAULT_PRUNE_POLICY
 from wisp.core.events import (
     CODE_TURN_TIMEOUT,
@@ -47,19 +47,6 @@ from wisp.infra.circuit_breaker import (
     CircuitOpenError,
     CircuitState,
 )
-
-from contextvars import ContextVar
-
-# Absolute monotonic deadline of the innermost running turn, published so
-# subagent retries can bound themselves by the parent's remaining clock
-# instead of guessing. None outside a turn.
-_turn_deadline: ContextVar[float | None] = ContextVar("wisp_turn_deadline", default=None)
-
-
-def get_turn_deadline() -> float | None:
-    """Deadline (time.monotonic) of the running turn, or None."""
-    return _turn_deadline.get()
-
 
 if TYPE_CHECKING:
     from wisp.providers.protocol import Provider
@@ -163,8 +150,9 @@ class WispAgentCore:
         turn_timeout = getattr(self.config, "turn_timeout", 1800) if self.config else 1800
         # Publish the absolute deadline so nested consumers (subagent
         # orchestrator retries) can budget themselves against the same clock.
-        # Overwritten by every turn; only read while a turn is live.
-        _turn_deadline.set(time.monotonic() + turn_timeout)
+        # Overwritten by every turn; only read while a turn is live. Lives
+        # in wisp.tools.context so leaf tools need no engine import.
+        _exec_ctx.turn_deadline.set(time.monotonic() + turn_timeout)
         # Publish the EXECUTING agent's nesting identity for the duration of
         # this turn. The shared ToolExecutor's own config is the root's, so
         # without this a child's spawn/fanout would stamp depth from 0. The

@@ -146,7 +146,6 @@ class ProviderFactory:
         In production, rejects private IP ranges, metadata endpoints,
         and any URL that does not point to an explicitly allowed host.
         """
-        import os
         import urllib.parse
 
         allowed_hosts = os.environ.get("WISP_ALLOWED_OLLAMA_HOSTS", "localhost,127.0.0.1").split(",")

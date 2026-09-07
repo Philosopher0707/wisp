@@ -11,13 +11,11 @@ from __future__ import annotations
 
 import difflib
 from io import StringIO
-from pathlib import Path
 from typing import Optional
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.syntax import Syntax
-from rich.text import Text
 
 
 def extract_change_summary(old_text: str, new_text: str) -> str:

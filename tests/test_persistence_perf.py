@@ -13,14 +13,13 @@ Covers the behaviors changed in the memory/persistence optimization:
 
 from __future__ import annotations
 
-import json
 import tempfile
 import time
 from pathlib import Path
 
 import pytest
 
-from wisp.agent_memory import AgentMemory, AGENT_MEMORY_DIR, SESSIONS_FILE
+from wisp.agent_memory import AgentMemory, AGENT_MEMORY_DIR
 from wisp.config import WispConfig
 from wisp.core.engine import WispAgentCore
 from wisp.core.runtime import AgentRuntime
@@ -182,7 +181,6 @@ async def test_persist_off_thread_still_saves_session(tmp_path):
     assert reloaded["updated_at"]  # timestamp set inside the worker thread
 
 
-from wisp.infra.security import SecurityPolicy  # noqa: E402
 
 
 def test_guard_field_reader_helpers_importable():

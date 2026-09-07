@@ -52,7 +52,6 @@ def test_read_tools_are_read():
 
 def test_approval_gate_check_decision_returns_decision():
     from wisp.core.approval_gate import ApprovalGate
-    from wisp.core.contracts import ApprovalDecision
 
     assert hasattr(ApprovalGate, "check_decision")
     import inspect

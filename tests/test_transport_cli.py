@@ -8,6 +8,8 @@ import json
 
 import asyncio
 
+import pytest
+
 
 from wisp.transport import cli as cli_mod
 from wisp.transport.cli import CLITransport, AgentAdapter, ApprovalSessionState
@@ -1077,3 +1079,43 @@ class TestGateKeyReaderRouting:
         assert approved is False
         assert consumed == [True]
         assert "fail-closed" in err
+
+
+# ═══════════════════════════════════════════════════════════════════
+# F9: transport must not reach into tool internals for danger checks.
+# Denial of dangerous commands is owned by the executor layer
+# (ToolExecutor.execute danger gate, unconditional, pre-approval), so
+# approve() auto-approves in autonomous mode without consulting tools.
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestAutonomousApproveOwnsNoDangerCheck:
+    def _transport(self, autonomous=True):
+        from types import SimpleNamespace
+
+        from wisp.transport.cli import CLITransport
+
+        t = CLITransport.__new__(CLITransport)
+        t.config = SimpleNamespace(autonomous=autonomous)
+        return t
+
+    @pytest.mark.asyncio
+    async def test_autonomous_approves_even_dangerous_command(self):
+        t = self._transport()
+        approved = await t.approve({
+            "name": "run_bash",
+            "arguments": {"command": "rm -rf /tmp/whatever"},
+        })
+        assert approved is True, (
+            "executor denies dangerous commands at dispatch; "
+            "transport must not second-guess in autonomous mode"
+        )
+
+    def test_approve_references_no_tool_internals(self):
+        import inspect
+
+        from wisp.transport import cli as cli_mod
+
+        src = inspect.getsource(cli_mod.CLITransport.approve)
+        assert "check_dangerous_command" not in src
+        assert "wisp.tools" not in src

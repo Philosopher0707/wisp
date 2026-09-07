@@ -338,11 +338,11 @@ class TestCommandHistory:
                 raise EOFError()
             return item
 
-        # New pipeline resolves input via the wisp.entry back-compat seam
-        # (prompt_toolkit is bypassed off-tty); unmigrated commands still
+        # Input resolves at its canonical home (wisp.transport.cli;
+        # prompt_toolkit is bypassed off-tty); unmigrated commands still
         # reach the legacy registry through the dispatcher's strangler-fig
         # fallback.
-        with patch("wisp.entry._input_line", side_effect=fake_input), \
+        with patch("wisp.transport.cli._input_line", side_effect=fake_input), \
              patch("wisp.commands.dispatch", return_value=True) as dispatch_mock:
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
@@ -351,3 +351,19 @@ class TestCommandHistory:
         dispatch_mock.assert_called_once()
         assert dispatch_mock.call_args[0][0] == "/tokens"
         assert hist_file.exists()
+
+
+class TestNoTransportPrivateReexports:
+    """entry.py must not alias transport privates (F9 inversion)."""
+
+    def test_private_aliases_removed(self):
+        import wisp.entry as entry_mod
+
+        for name in ("_input_line", "_input_multiline", "_restore_signal_handler"):
+            assert not hasattr(entry_mod, name), f"wisp.entry still aliases {name}"
+
+    def test_public_surface_intact(self):
+        import wisp.entry as entry_mod
+
+        for name in ("run_mode", "run_headless", "TypeAheadBuffer"):
+            assert hasattr(entry_mod, name), f"wisp.entry lost public {name}"

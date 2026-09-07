@@ -67,6 +67,71 @@ def scrub_sensitive_env(env: dict | None = None) -> dict[str, str]:
     return {k: v for k, v in src.items() if k in _ALLOWED_ENV_KEYS}
 
 
+# Keys a third-party child process (MCP server) may see under strict mode.
+# Deliberately smaller than _ALLOWED_ENV_KEYS: MCP servers need a working
+# POSIX runtime (PATH/HOME/locales/tmp), not hook plumbing or identity.
+_MINIMAL_PROCESS_ENV_KEYS: frozenset[str] = frozenset({
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TERM",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+})
+
+# Windows-only runtime keys, added to the minimal set on nt.
+_NT_MINIMAL_ENV_KEYS: frozenset[str] = frozenset({
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "PATHEXT",
+    "COMSPEC",
+    "WINDIR",
+})
+
+
+def strict_env_enabled() -> bool:
+    """True when third-party children must get a minimal environment.
+
+    Migration flag (F2): default off so existing MCP setups keep working
+    for one release while the startup warning names what strict mode
+    would drop. Flip to default-on once operators have adjusted.
+    """
+    return os.environ.get("WISP_STRICT_ENV", "").strip().lower() in ("1", "true", "on", "yes")
+
+
+def _minimal_allowed_keys() -> set[str]:
+    allowed = set(_MINIMAL_PROCESS_ENV_KEYS)
+    if os.name == "nt":
+        allowed |= _NT_MINIMAL_ENV_KEYS
+    return allowed
+
+
+def minimal_process_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Build the least-privilege environment for a third-party subprocess.
+
+    Starts from the minimal key set above (never the full process env),
+    then layers ``extra`` (e.g. per-server MCP config) on top — explicit
+    configuration wins, ambient secrets never leak implicitly.
+    """
+    allowed = _minimal_allowed_keys()
+    src = os.environ
+    out = {k: src[k] for k in allowed if k in src}
+    if extra:
+        out.update({str(k): str(v) for k, v in extra.items()})
+    return out
+
+
+def non_minimal_keys(extra: dict[str, str] | None = None) -> list[str]:
+    """Sorted environ key names strict mode would drop. Names only, never values."""
+    allowed = _minimal_allowed_keys() | set(extra or {})
+    return sorted(k for k in os.environ if k not in allowed)
+
+
 def credential_free_env(env: dict | None = None) -> tuple[dict[str, str], int]:
     """Return ``(scrbed_env, stripped_count)`` with credential vars removed.
 

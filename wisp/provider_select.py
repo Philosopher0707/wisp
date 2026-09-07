@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import pathlib
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -312,8 +313,6 @@ def _persist_env(update: dict[str, str]) -> None:
     Writes to both the workspace's .env and ~/.config/wisp/.env for
     durability. Only writes keys that are in `update` and non-empty.
     """
-    import pathlib
-
     # Map config keys to env vars
     env_map = {
         "provider": "WISP_PROVIDER",
@@ -371,8 +370,6 @@ def _persist_env(update: dict[str, str]) -> None:
 
 def _upsert_env_file(path: "pathlib.Path", update: dict[str, str]) -> None:
     """Create or update a .env file with KEY=VALUE lines."""
-    import pathlib
-
     path = pathlib.Path(path)
     existing: dict[str, str] = {}
     lines: list[str] = []

@@ -286,7 +286,7 @@ class TestWaitDeadlineClamp:
     @pytest.mark.asyncio
     async def test_wait_clamps_to_turn_deadline(self):
         import time as _time
-        from wisp.core.stateless import _turn_deadline
+        from wisp.tools.context import turn_deadline
 
         manager = _FakeManager()
         ex = _executor_with(manager)
@@ -294,7 +294,7 @@ class TestWaitDeadlineClamp:
             {"tasks": [{"task": "slow", "role": "researcher"}]}, "/ws"))
         ids = launched["metadata"]["agent_ids"]
 
-        token = _turn_deadline.set(_time.monotonic() + 3.0)
+        token = turn_deadline.set(_time.monotonic() + 3.0)
         try:
             t0 = _time.monotonic()
             out = json.loads(await ex._subagent_wait(
@@ -303,7 +303,7 @@ class TestWaitDeadlineClamp:
             assert took < 5.0, "wait must clamp to remaining turn budget"
             assert out["data"]["still_running"]
         finally:
-            _turn_deadline.reset(token)
+            turn_deadline.reset(token)
 
 
 class TestWatcherDedup:

@@ -1,6 +1,5 @@
 """Unit tests for GraphState / ExecutionLog / GraphStatus — the agentic graph state schema."""
 
-import pytest
 
 from wisp.core.graph_state import ExecutionLog, GraphState, GraphStatus
 
@@ -112,7 +111,7 @@ class TestGraphState:
             s.upsert_code_file(f"file_{i}.py", "x")
         assert len(s.code_files) <= 100
         # Large content truncated
-        big = "a" * (GraphState.__dataclass_fields__["code_files"].default_factory.__code__.co_consts[0] if False else 10)
+        _big = "a" * (GraphState.__dataclass_fields__["code_files"].default_factory.__code__.co_consts[0] if False else 10)
         # Directly test large file truncation path (use internal constant)
         from wisp.core.graph_state import DEFAULT_MAX_CODE_FILE_BYTES
         huge = "a" * (DEFAULT_MAX_CODE_FILE_BYTES + 100)
@@ -285,3 +284,23 @@ class TestGraphState:
             cfg2 = cfg2.replace(graph_max_iterations=5)
         assert GraphState.resolve_max_iterations(cfg2) == 5
         assert GraphState.resolve_max_iterations(None) == 5
+
+
+class TestExecutionLogSecretRedaction:
+    """F4: execution-log prune warnings must redact secret-bearing commands."""
+
+    def test_prune_warning_redacts_command(self, caplog):
+        import logging
+
+        from wisp.core.graph_state import GraphState
+
+        secret = "sk-test-secret-abcde"
+        s = GraphState.initial()
+        with caplog.at_level(logging.WARNING, logger="wisp.core.graph_state"):
+            assert s.add_execution_log(
+                {"command": f"deploy --token={secret}",
+                 "stdout": "x" * 60_000, "exit_code": 0},
+            )
+        logged = "\n".join(r.getMessage() for r in caplog.records)
+        assert "pruning" in logged, "prune warning did not fire — test is vacuous"
+        assert secret not in logged, "raw secret leaked into graph_state logs"

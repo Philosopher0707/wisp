@@ -260,7 +260,6 @@ def test_reply_only_group_synthesizes_matching_block():
 def test_interrupted_call_gets_honest_placeholder_reply():
     """Call recorded but turn died before its result — history must stay
     answerable (no dangling tool_calls without replies) for crash replay."""
-    import uuid
 
     from wisp.core.runtime import _serialize_tool_exchanges
 

@@ -11,8 +11,7 @@ Covers:
 from __future__ import annotations
 
 import json
-import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -300,7 +299,7 @@ class TestRetry:
         assert call_count == 3
 
     def test_hardened_post_retries_429(self):
-        from wisp.core.transport import hardened_post, HARDENED_TIMEOUT
+        from wisp.core.transport import hardened_post
 
         call_count = 0
 
@@ -353,7 +352,7 @@ class TestContextPruner:
         # Check that historical ones are condensed (smaller)
         # First tool result (idx 2) should be pruned, last (idx 10) should be recent
         first_tool_content = pruned[2]["content"]
-        last_tool_content = pruned[10]["content"] if len(pruned) > 10 else pruned[-1]["content"]
+        _last_tool_content = pruned[10]["content"] if len(pruned) > 10 else pruned[-1]["content"]
         assert len(first_tool_content) < 1000  # historical condensed
         # Last should be larger or full
         assert "pruned" in first_tool_content.lower() or len(first_tool_content) < len(messages[2]["content"])
@@ -550,7 +549,7 @@ class TestIntegration:
         from wisp.core.transport import get_hardened_session, POOL_LIMITS, KEEPALIVE_CONFIG
 
         # 1. Pruning keeps payload small
-        messages = [{"role": "tool", "tool_call_id": f"c{i}", "content": "x" * 20000} for i in range(30)]
+        _messages = [{"role": "tool", "tool_call_id": f"c{i}", "content": "x" * 20000} for i in range(30)]
         # Add assistant messages for mapping
         full_messages = []
         for i in range(30):

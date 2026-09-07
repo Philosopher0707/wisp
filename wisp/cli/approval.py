@@ -9,18 +9,14 @@ Provides:
 
 from __future__ import annotations
 
-import difflib
 import logging
 from dataclasses import dataclass, field
-from io import StringIO
 from typing import Any, Optional
 
-from rich.console import Console
-from rich.panel import Panel
 
-from wisp.colors import bold, dim, error, success, warning, info
+from wisp.colors import bold, dim, error, success, warning
 from wisp.terminal_width import status_symbols, is_accessible
-from wisp.ui.diff_viewer import compute_diff_stats, create_diff_panel, render_diff_string
+from wisp.ui.diff_viewer import compute_diff_stats, render_diff_string
 
 logger = logging.getLogger(__name__)
 

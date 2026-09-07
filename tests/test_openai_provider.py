@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
+import pytest
 
 from wisp.providers.openai import OpenAIProvider
 
@@ -229,6 +230,27 @@ class TestOpenAIProviderStreaming:
         error_events = [e for e in events if e["type"] == "error"]
         assert len(error_events) == 1
         assert "Connection error" in error_events[0]["message"]
+
+
+    def test_cancellation_propagates_instead_of_error_event(self):
+        """F8: CancelledError/KeyboardInterrupt must unwind, not become data."""
+        import asyncio
+
+        provider = OpenAIProvider(model="gpt-4o", api_key="sk-test")
+        chunks = [{"choices": [{"delta": {"content": "Hello"}}]}]
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.iter_lines.return_value = self._make_sse_lines(chunks)
+
+        with patch("requests.post", return_value=mock_resp):
+            gen = provider.generate_stream_events("sys", [{"role": "user", "content": "hi"}])
+            assert next(gen)["type"] == "content"
+            with pytest.raises(asyncio.CancelledError):
+                gen.throw(asyncio.CancelledError())
+            gen2 = provider.generate_stream_events("sys", [{"role": "user", "content": "hi"}])
+            assert next(gen2)["type"] == "content"
+            with pytest.raises(KeyboardInterrupt):
+                gen2.throw(KeyboardInterrupt())
 
 
 class TestOpenAIProviderHealth:

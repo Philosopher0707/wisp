@@ -165,7 +165,6 @@ async def planner_coder_node(
                 # Normalize batched calls
                 if "calls" in ev and "name" not in ev:
                     for call in ev.get("calls", []):
-                        func = call.get("function", {})
                         new_state.messages.append({"role": "assistant", "tool_calls": [call]})
                 else:
                     new_state.messages.append({"role": "assistant", "tool_calls": [{"function": {"name": ev.get("name", ""), "arguments": str(ev.get("arguments", ""))}}]})
@@ -480,7 +479,6 @@ async def human_approval_node(
         # No handler — auto-approve only when policy doesn't require forced approval.
         # Be conservative: any bookmarkable write-class tool without a handler must
         # surface as NEEDS_HUMAN_REVIEW so it isn't silently executed.
-        from wisp.tool_executor import _get_write_tools  # local import to avoid cycle at import time
 
         try:
             # Reuse the executor's write-set definition if a config is available via state.

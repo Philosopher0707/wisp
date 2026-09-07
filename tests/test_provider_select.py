@@ -282,3 +282,31 @@ class TestModelCommandProviderAware:
         agent = CmdAgent()
         C.cmd_model(agent, "qwen2.5-coder")
         assert agent.runtime.invalidations == 1
+
+
+# ── .env persistence helpers ──────────────────────────────────────────
+
+
+class TestPersistEnvHelpers:
+    def test_upsert_annotations_resolve(self):
+        """F1 residue: the pathlib annotation must resolve at module scope."""
+        import typing
+
+        from wisp.provider_select import _upsert_env_file
+
+        hints = typing.get_type_hints(_upsert_env_file)
+        assert hints["path"].__module__ == "pathlib"
+
+    def test_persist_env_writes_both_env_files(self, tmp_path, monkeypatch):
+        """End-to-end: workspace .env and global .env get the mapped keys."""
+        from wisp import provider_select as psmod
+
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("WISP_WORKSPACE", str(tmp_path))
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+        psmod._persist_env({"api_key": "sk-test-123", "provider": "openai"})
+        assert "WISP_API_KEY=sk-test-123" in (tmp_path / ".env").read_text()
+        global_env = home / ".config" / "wisp" / ".env"
+        assert "WISP_API_KEY=sk-test-123" in global_env.read_text()

@@ -67,7 +67,7 @@ async def wait(deps: SubagentDeps, func_args: dict[str, Any]) -> str:
     # Never out-wait the parent turn: the engine's wall-clock would
     # unwind the whole turn mid-poll. Clamp to remaining budget.
     try:
-        from wisp.core.stateless import get_turn_deadline
+        from wisp.tools.context import get_turn_deadline
 
         deadline_abs = get_turn_deadline()
         if deadline_abs is not None:

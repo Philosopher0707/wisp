@@ -468,13 +468,54 @@ def call_tool(server: MCPServer, tool_name: str, arguments: dict[str, Any]) -> s
 # ── JSON-RPC communication ───────────────────────────────────────────
 
 
+# Servers already warned about the strict-env migration (F2), so the
+# release-long telemetry warning fires once per server name. Best-effort
+# dedup (GIL-atomic set ops; connects may race across threads).
+_strict_env_warned: set[str] = set()
+
+
+def _warn_strict_env_pending(server: MCPServer) -> None:
+    """One-time migration telemetry: name what strict mode would drop.
+
+    Fires while WISP_STRICT_ENV is off so operators can adjust per-server
+    `env` before the default flips. Counts, never values — secret material
+    must not land in logs even as evidence.
+    """
+    name = server.config.name
+    if name in _strict_env_warned:
+        return
+    _strict_env_warned.add(name)
+    try:
+        from wisp.tools._utils_env import non_minimal_keys
+
+        dropped = non_minimal_keys(server.config.env)
+    except Exception:
+        dropped = []
+    logger.warning(
+        "MCP server '%s' inherits the full process environment "
+        "(%d vars). Set WISP_STRICT_ENV=1 to restrict it to a minimal "
+        "runtime; first dropped: %s",
+        name, len(dropped), ", ".join(dropped[:5]),
+    )
+
+
 def _connect_stdio(server: MCPServer):
     """Connect to a stdio-based MCP server by spawning its process."""
-    env = None
-    if server.config.env:
+    from wisp.tools._utils_env import minimal_process_env, strict_env_enabled
+
+    if strict_env_enabled():
+        # Least privilege: minimal runtime + explicit per-server config.
+        # Ambient secrets (API keys, cloud tokens, agent sockets) never
+        # reach the child implicitly.
+        env: dict[str, str] | None = minimal_process_env(server.config.env)
+    elif server.config.env:
         full_env = dict(subprocess.os.environ)
         full_env.update(server.config.env)
         env = full_env
+        _warn_strict_env_pending(server)
+    else:
+        env = None
+        _warn_strict_env_pending(server)
 
     server.process = subprocess.Popen(
         [server.config.command] + server.config.args,

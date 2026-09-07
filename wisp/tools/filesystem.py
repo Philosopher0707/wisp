@@ -116,27 +116,29 @@ def tool_write_file(path: str = "", workspace: str = "", content: str = "", file
         holder = lock_info.get("agent", "unknown") if lock_info else "unknown"
         raise ToolError(f"File {path} is locked by {holder}. Wait or coordinate before editing.")
 
-    # Read old content for diff (before overwriting)
-    old_content = None
-    if full_path.exists():
-        logger.warning("Overwriting existing file: %s (%d bytes)", path, full_path.stat().st_size)
-        try:
-            old_content = _safe_read_text(path, workspace, encoding="utf-8")
-        except Exception:
-            pass  # Binary or unreadable — skip diff
+    try:
+        # Read old content for diff (before overwriting)
+        old_content = None
+        if full_path.exists():
+            logger.warning("Overwriting existing file: %s (%d bytes)", path, full_path.stat().st_size)
+            try:
+                old_content = _safe_read_text(path, workspace, encoding="utf-8")
+            except Exception:
+                pass  # Binary or unreadable — skip diff
 
-    full_path.parent.mkdir(parents=True, exist_ok=True)
-    _safe_write_text(path, workspace, content, encoding="utf-8")
-    logger.info("Wrote %d bytes to %s", len(content), path)
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        _safe_write_text(path, workspace, content, encoding="utf-8")
+        logger.info("Wrote %d bytes to %s", len(content), path)
 
-    # ── Collaborative editing: record change ──
-    tracker = _change_tracker_ctx.get()
-    if tracker:
-        tracker.record_write(path, content)
-
-    # Release lock after write
-    if lock:
-        lock.release(path)
+        # ── Collaborative editing: record change ──
+        tracker = _change_tracker_ctx.get()
+        if tracker:
+            tracker.record_write(path, content)
+    finally:
+        # Release lock even when the write fails (F5: an exception above
+        # used to leak the advisory lock until its TTL expired).
+        if lock:
+            lock.release(path)
 
     # Generate diff: for new files, all lines are additions;
     # for overwrites, show the actual LCS diff.

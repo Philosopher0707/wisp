@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
+import os
 import re
 from pathlib import Path
 from typing import Any, Final
@@ -102,13 +103,41 @@ class BadgeFilter(logging.Filter):
         return True
 
 
+class _OwnerOnlyRotatingHandler(logging.handlers.RotatingFileHandler):
+    """Rotating file handler that keeps every generation owner-only.
+
+    Rotation renames (perms preserved) but recreates the base file under
+    the process umask — typically world-readable. Re-chmod on every open
+    so no generation is ever exposed, including post-rollover files.
+    """
+
+    def _open(self):  # type: ignore[no-untyped-def]
+        stream = super()._open()
+        try:
+            os.chmod(self.baseFilename, 0o600)
+        except OSError:
+            pass
+        return stream
+
+
 def _ensure_file_handler(log_path: Path = LOG_PATH) -> logging.Handler:
-    """Create (and ensure directory for) the rotating file handler."""
+    """Create (and ensure directory for) the rotating file handler.
+
+    The log may carry redacted-but-sensitive material, so the file is
+    owner-only (F4). Tightened on every install, including pre-existing
+    files that a permissive umask may have created world-readable.
+    """
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if not log_path.exists():
+            log_path.touch(exist_ok=True)
+        os.chmod(log_path, 0o600)
+    except OSError:
+        pass
     formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
     # Prefer size-bounded rotation; fall back to plain file if unavailable.
     try:
-        handler: logging.Handler = logging.handlers.RotatingFileHandler(
+        handler: logging.Handler = _OwnerOnlyRotatingHandler(
             str(log_path),
             maxBytes=5 * 1024 * 1024,
             backupCount=3,

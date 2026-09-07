@@ -24,11 +24,10 @@ from typing import Any
 from wisp.composition import CompositionRoot
 from wisp.config import WispConfig
 from wisp.transport.cli import CLITransport
-# Re-exported for backward compatibility (tests + external shims patch
-# these entry-level names). Canonical homes: wisp.transport.cli / wisp.cli.repl.
-from wisp.transport.cli import _input_line as _input_line  # noqa: F401
-from wisp.transport.cli import _input_multiline as _input_multiline  # noqa: F401
-from wisp.transport.cli import _restore_signal_handler as _restore_signal_handler  # noqa: F401
+# Internal use only: module reference, not a re-export. Transport privates
+# must be addressed at their canonical home (wisp.transport.cli), never
+# aliased here (F9: entry must not re-export transport internals).
+from wisp.transport import cli as _cli_transport
 from wisp.transport.typeahead import TypeAheadBuffer as TypeAheadBuffer  # noqa: F401
 from wisp.transport.renderer import render_turn_stats, render_file_ticker
 from wisp.terminal_width import status_symbols
@@ -542,9 +541,9 @@ def _run_repl_legacy(transport: CLITransport, root: CompositionRoot, config: Wis
                 # Prompt typed while the previous turn ran — replay it.
                 line = pending.popleft()
             elif input_mode == "multi":
-                line = _input_multiline("➜ ", "... ")
+                line = _cli_transport._input_multiline("➜ ", "... ")
             else:
-                line = _input_line("➜ ")
+                line = _cli_transport._input_line("➜ ")
         except KeyboardInterrupt:
             # Single-line mode: Ctrl+C at prompt exits gracefully
             _show_exit()
@@ -633,7 +632,7 @@ def _run_repl_legacy(transport: CLITransport, root: CompositionRoot, config: Wis
             pending.extend(queued)
 
     # Restore original signal handler before cleanup
-    _restore_signal_handler()
+    _cli_transport._restore_signal_handler()
 
     # Teardown is uninterruptible: a Ctrl+C landing mid-cleanup used to kill
     # the save, leave asyncio tasks half-reaped, and spray "Task exception

@@ -29,9 +29,11 @@ import hashlib
 import json
 import logging
 import time
+
+from wisp.auth.secrets import redact
 from dataclasses import dataclass, field, asdict
 from enum import StrEnum
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +125,7 @@ class ExecutionLog:
             if "... [output truncated]" in raw_output or "... [truncated" in raw_output:
                 truncated = True
         except Exception as e:
-            logger.debug("ExecutionLog.from_raw parse failed for %r: %s", command[:60], e)
+            logger.debug("ExecutionLog.from_raw parse failed for %r: %s", redact(command)[:60], e)
         return cls(
             command=command,
             exit_code=exit_code,
@@ -507,11 +509,11 @@ class GraphState:
             # Prune by count
             if len(self.execution_logs) >= DEFAULT_MAX_LOGS:
                 evicted = self.execution_logs.pop(0)
-                logger.debug("GraphState execution_logs cap %d — evicted oldest command %r", DEFAULT_MAX_LOGS, evicted.command[:60])
+                logger.debug("GraphState execution_logs cap %d — evicted oldest command %r", DEFAULT_MAX_LOGS, redact(evicted.command)[:60])
 
             # Prune by per-entry chars (prune payload, not drop entry)
             if len(entry.stdout) > DEFAULT_MAX_LOG_CHARS:
-                logger.warning("GraphState execution log stdout too large (%d) — pruning (command %r)", len(entry.stdout), entry.command[:40])
+                logger.warning("GraphState execution log stdout too large (%d) — pruning (command %r)", len(entry.stdout), redact(entry.command)[:40])
                 entry.stdout = entry.stdout[:DEFAULT_MAX_LOG_CHARS] + "\n... [log pruned]"
                 entry.truncated = True
             if len(entry.stderr) > DEFAULT_MAX_LOG_CHARS:
@@ -523,7 +525,7 @@ class GraphState:
             self.execution_logs.append(entry)
             return True
         except Exception as e:
-            logger.error("GraphState.add_execution_log failed (command %r): %s", command[:40], e, exc_info=True)
+            logger.error("GraphState.add_execution_log failed (command %r): %s", redact(command)[:40], e, exc_info=True)
             return False
 
     def last_execution(self) -> ExecutionLog | None:

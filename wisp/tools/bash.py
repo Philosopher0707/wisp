@@ -21,6 +21,7 @@ from wisp.tools._utils import (
     check_dangerous_command,
 )
 from wisp.tools._utils_env import credential_free_env
+from wisp.auth.secrets import redact
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ async def async_tool_run_bash(command: str, workspace: str, timeout: int = 60) -
         raise ToolError(f"Dangerous command blocked: {danger}")
 
     cwd = Path(workspace).resolve()
-    logger.info("Running bash (timeout=%ds): %.100s", timeout_val, command)
+    logger.info("Running bash (timeout=%ds): %.100s", timeout_val, redact(command))
 
     # Deny-list scrub: LLM-generated commands must not read credentials
     # from the environment (API keys, cloud tokens, SSH agents).
@@ -94,14 +95,17 @@ async def async_tool_run_bash(command: str, workspace: str, timeout: int = 60) -
         duration_ms = round((time.time() - start_time) * 1000)
         logger.info(
             "Bash execution — workspace=%s command=%.100s exit_code=%d output_len=%d duration_ms=%d",
-            workspace, command, returncode, len(output), duration_ms,
+            workspace, redact(command), returncode, len(output), duration_ms,
         )
         return output or "(no output)"
     except asyncio.TimeoutError:
-        logger.warning("Command timed out after %ds: %.100s", timeout_val, command)
-        raise ToolError(f"Command timed out after {timeout_val}s: {command[:100]}...")
+        # Redact: this ToolError text reaches logs via the registry's
+        # failure warning, and the command may carry secrets (F4).
+        safe_command = redact(command)[:100]
+        logger.warning("Command timed out after %ds: %.100s", timeout_val, safe_command)
+        raise ToolError(f"Command timed out after {timeout_val}s: {safe_command}...")
     except asyncio.CancelledError:
-        logger.warning("Command execution cancelled: %.100s", command)
+        logger.warning("Command execution cancelled: %.100s", redact(command))
         raise
     except OSError as e:
         logger.error("Command failed with OSError: %s", e)

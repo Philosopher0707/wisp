@@ -23,6 +23,8 @@ ContextVars, which give:
 Setters:
   * agent_depth / agent_branch — WispAgentCore.turn() at turn start, from
     the executing agent's own config (wisp/core/stateless.py).
+  * turn_deadline — WispAgentCore.turn() at turn start, absolute monotonic
+    deadline (turn_timeout budget).
   * sub_event_queue — ToolExecutor.execute() streaming branch, for the
     duration of one spawn/fanout/orchestrate call.
   * repeat_key — ToolExecutor._check_repeat_call, consumed by
@@ -59,3 +61,15 @@ repeat_key: ContextVar[str | None] = ContextVar("wisp_repeat_key", default=None)
 # reader then falls back to the executor's own config for that identity.
 agent_depth: ContextVar[int | None] = ContextVar("wisp_agent_depth", default=None)
 agent_branch: ContextVar[int | None] = ContextVar("wisp_agent_branch", default=None)
+
+# Absolute monotonic deadline of the currently executing turn. Set by the
+# engine at turn start; read by subagent wait/retry budgeting so children
+# never out-wait the parent turn. Lives here (not in core.stateless) so
+# leaf tools can read it without importing the engine (F9 inversion fix).
+# None outside a live turn.
+turn_deadline: ContextVar[float | None] = ContextVar("wisp_turn_deadline", default=None)
+
+
+def get_turn_deadline() -> float | None:
+    """Remaining-budget clock for subagent waits/retries. None = no live turn."""
+    return turn_deadline.get()
