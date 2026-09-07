@@ -5,7 +5,6 @@ Covers: /new session split-brain, /continue in single-shot mode,
 cancellable approval stdin reads, multiline Ctrl+C contract.
 """
 
-import asyncio
 import io
 import signal
 from unittest.mock import MagicMock
@@ -257,7 +256,16 @@ class TestApprovalCancel:
         return transport
 
     @pytest.mark.asyncio
-    async def test_c_raises_cancelled_error(self):
+    async def test_c_raises_approval_cancelled_verdict(self):
+        """'c' is a user verdict (ApprovalCancelled), not task cancellation.
+
+        Deliberately NOT CancelledError: the executor catches
+        ApprovalCancelled and records an explicit denial so the model sees
+        an outcome instead of replaying the call (see _prompt_loop
+        docstring and ToolExecutor approval handling).
+        """
+        from wisp.cli.approval import ApprovalCancelled
+
         transport = self._interactive_transport()
 
         async def fake_answer() -> str:
@@ -265,7 +273,7 @@ class TestApprovalCancel:
 
         transport._read_approval_answer = fake_answer
 
-        with pytest.raises(asyncio.CancelledError):
+        with pytest.raises(ApprovalCancelled):
             await transport.approve({"name": "write_file", "arguments": {}})
 
     @pytest.mark.asyncio

@@ -885,7 +885,12 @@ class CLITransport(Transport):
         workers are joined at loop close). Pipes are select()-able on
         POSIX, so the tty check is gone: any fileno-backed stdin polls;
         only fileno-less streams (StringIO, Windows console) use input().
+        A stop that is already set returns immediately: parking in input()
+        when cancellation predates the read reproduces the exact pipe-hang
+        this helper exists to prevent (and breaks fileno-less test doubles).
         """
+        if stop.is_set():
+            return ""
         sys.stderr.write(prompt_text)
         sys.stderr.flush()
         selectable = False

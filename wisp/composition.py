@@ -380,6 +380,12 @@ class CompositionRoot:
         with contextlib.suppress(Exception):
             from agent.tools.runner import uninstall_sink as _uninstall_sink  # type: ignore
             _uninstall_sink()
+        # Reverse the logging interceptor the same way (BadgeFilter + file
+        # sink are process-global too; without this, retry diagnostics stay
+        # file-routed for every later turn/test in the process).
+        with contextlib.suppress(Exception):
+            from agent.logger import uninstall as _uninstall_agent_logger  # type: ignore
+            _uninstall_agent_logger()
         self.stop()
         try:
             from wisp.infra.telemetry import export_metrics

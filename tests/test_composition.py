@@ -259,3 +259,60 @@ class TestShutdownTearsDownMCP:
         root._lsp_manager = MagicMock()
         root.shutdown()
         root._mcp_manager.shutdown.assert_called_once()
+
+
+# ── Logging interceptor lifecycle ─────────────────────────────────────
+
+
+class TestLoggingInterceptorLifecycle:
+    """shutdown() must reverse install(): global logging filters/handlers
+    installed at root construction must not leak into later turns/tests."""
+
+    def test_shutdown_removes_badge_filter_and_file_sink(self, config, tmp_path):
+        import logging
+
+        import agent.logger as alog
+        from wisp.composition import CompositionRoot
+
+        orig = alog.LOG_PATH
+        alog.LOG_PATH = tmp_path / "runtime.log"
+        try:
+            root = CompositionRoot(config)
+            noisy = logging.getLogger("wisp.core.provider_stream")
+            assert any(isinstance(f, alog.BadgeFilter) for f in noisy.filters)
+            root.shutdown()
+            assert not any(isinstance(f, alog.BadgeFilter) for f in noisy.filters), \
+                "BadgeFilter leaked past shutdown"
+        finally:
+            alog.uninstall()
+            alog.LOG_PATH = orig
+
+    def test_shutdown_restores_retry_log_visibility(self, config, tmp_path):
+        """End-to-end of the leak: retry warnings must reach caplog-style
+        handlers again after a root's shutdown (stream-forensics canary)."""
+        import logging
+
+        import agent.logger as alog
+        from wisp.composition import CompositionRoot
+
+        orig = alog.LOG_PATH
+        alog.LOG_PATH = tmp_path / "runtime.log"
+        records: list[logging.LogRecord] = []
+
+        class Cap(logging.Handler):
+            def emit(self, record):
+                records.append(record)
+
+        probe = Cap()
+        logging.getLogger().addHandler(probe)
+        try:
+            root = CompositionRoot(config)
+            root.shutdown()
+            logging.getLogger("wisp.core.provider_stream").warning(
+                "Provider stream closed without any content (attempt 1/3) — retrying")
+            assert any("retrying" in r.getMessage() for r in records), \
+                "retry warning invisible after shutdown"
+        finally:
+            logging.getLogger().removeHandler(probe)
+            alog.uninstall()
+            alog.LOG_PATH = orig
