@@ -989,6 +989,22 @@ class CLITransport(Transport):
         except RuntimeError:
             pass
 
+    def _write_bg_line(self, out: Any, text: str) -> None:
+        """Write one background notice without tearing the spinner row.
+
+        Same pause/write/resume protocol as the SUBAGENT branch: the
+        watcher shares stdout with the spinner, so an unpaused notice
+        landing mid-frame smears the live row (GH#8).
+        """
+        spinner = self._get_spinner()
+        had_row = self._spinner is not None and getattr(self._spinner, "_active", False)
+        if had_row:
+            spinner.pause()
+        out.write(text)
+        out.flush()
+        if had_row:
+            spinner.resume()
+
     async def _watch_background(self) -> None:
         """Print spawn_background lifecycle notices between turn output.
 
@@ -1015,8 +1031,7 @@ class CLITransport(Transport):
                         f'fetch: subagent_result {{"agent_id": "{event.get("agent_id", "")}"}}'
                     )
                     out = self._stdout or sys.stdout
-                    out.write("\n" + dim(" ".join(str(x) for x in parts)) + "\n")
-                    out.flush()
+                    self._write_bg_line(out, "\n" + dim(" ".join(str(x) for x in parts)) + "\n")
                 elif etype == "agent_started":
                     who = event.get("label") or event.get("agent_id", "?")
                     # Batch fanout launches are announced once by the
@@ -1025,8 +1040,7 @@ class CLITransport(Transport):
                     if str(who).startswith("fanout-"):
                         continue
                     out = self._stdout or sys.stdout
-                    out.write("\n" + dim(f"[bg] started {who} (continues across turns)") + "\n")
-                    out.flush()
+                    self._write_bg_line(out, "\n" + dim(f"[bg] started {who} (continues across turns)") + "\n")
                 # agent_progress intentionally unrendered: per-turn noise;
                 # subagent_list remains the polling surface.
         except asyncio.CancelledError:
