@@ -464,9 +464,12 @@ class TestGroup5Sessions:
         proc = run_cli(["session", "show", "nope-missing"], e2e["home"], e2e["ws"])
         assert "not found" in (proc.stdout + proc.stderr).lower()
 
-    @pytest.mark.xfail(strict=True, reason="GH#12: turns persist to workspace DB, session cmds read HOME DB")
     def test_workspace_session_visible_in_list(self, e2e) -> None:
-        """A session created by `run -S` must show in `session list`."""
+        """GH#12: a session created by `run -S` shows in `session list`.
+
+        Resolution: explicit -w wins, else the cwd workspace store when one
+        exists, else the legacy home store.
+        """
         home, ws = e2e["home"], e2e["ws"]
         proc = run_cli(["-S", "e2e-visible", "run", "say hi"], home, ws)
         assert proc.returncode == 0, proc.stderr

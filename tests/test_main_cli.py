@@ -161,7 +161,7 @@ class TestCmdSessionList:
     def test_empty_sessions(self, capsys, monkeypatch):
         store = MagicMock()
         store.list_sessions.return_value = []
-        monkeypatch.setattr("wisp.__main__.get_store", lambda: store)
+        monkeypatch.setattr("wisp.__main__.get_store", lambda *args: store)
         with patch.object(sys, "exit"):
             main_mod.cmd_session_list()
         captured = capsys.readouterr()
@@ -179,7 +179,7 @@ class TestCmdSessionList:
                 "msg_count": 5,
             }
         ]
-        monkeypatch.setattr("wisp.__main__.get_store", lambda: store)
+        monkeypatch.setattr("wisp.__main__.get_store", lambda *args: store)
         main_mod.cmd_session_list()
         captured = capsys.readouterr()
         assert "Fix bug" in captured.out
@@ -195,7 +195,7 @@ class TestCmdSessionShow:
         session.to_dict.return_value = {"id": "20240101-120000-abc123", "title": "Test"}
         mgr = MagicMock()
         mgr.load_session.return_value = session
-        monkeypatch.setattr("wisp.__main__.get_store", lambda: mgr)
+        monkeypatch.setattr("wisp.__main__.get_store", lambda *args: mgr)
         with patch("wisp.__main__.format_session_preview", return_value="Session preview"):
             main_mod.cmd_session_show("20240101-120000-abc123")
         captured = capsys.readouterr()
@@ -210,10 +210,36 @@ class TestCmdSessionDelete:
         session.id = "20240101-120000-abc123"
         mgr = MagicMock()
         mgr.load_session.return_value = session
-        monkeypatch.setattr("wisp.__main__.get_store", lambda: mgr)
+        monkeypatch.setattr("wisp.__main__.get_store", lambda *args: mgr)
         with patch("builtins.input", return_value="yes"):
             main_mod.cmd_session_delete("20240101-120000-abc123")
         mgr.delete_session.assert_called_once()
+
+
+# ── _session_store resolution (GH#12) ──────────────────────────────────
+
+class TestSessionStoreResolution:
+    def test_explicit_workspace_wins(self, tmp_path, monkeypatch):
+        seen: list = []
+        monkeypatch.setattr("wisp.__main__.get_store", lambda *a: seen.append(a) or MagicMock())
+        main_mod._session_store(str(tmp_path / "ws"))
+        assert seen == [(str(tmp_path / "ws" / ".wisp" / "wisp.db"),)]
+
+    def test_cwd_workspace_db_preferred_over_home(self, tmp_path, monkeypatch):
+        (tmp_path / ".wisp").mkdir()
+        (tmp_path / ".wisp" / "wisp.db").write_bytes(b"")
+        monkeypatch.chdir(tmp_path)
+        seen: list = []
+        monkeypatch.setattr("wisp.__main__.get_store", lambda *a: seen.append(a) or MagicMock())
+        main_mod._session_store(None)
+        assert seen == [(str(tmp_path / ".wisp" / "wisp.db"),)]
+
+    def test_home_fallback_without_workspace_db(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        seen: list = []
+        monkeypatch.setattr("wisp.__main__.get_store", lambda *a: seen.append(a) or MagicMock())
+        main_mod._session_store(None)
+        assert seen == [()]
 
 
 # ── cmd_plan ─────────────────────────────────────────────────────────

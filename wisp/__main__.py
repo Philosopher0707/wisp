@@ -52,6 +52,8 @@ import json
 import logging
 import os
 import sys
+from pathlib import Path
+
 from wisp import __version__
 from wisp.config import WispConfig, load_config, save_config
 from wisp.providers import get_provider
@@ -779,9 +781,27 @@ def cmd_acp(args: list[str]):
     acp_main(args)
 
 
-def cmd_session_list():
+def _session_store(workspace: str | None = None):
+    """Resolve the session store readers use (GH#12).
+
+    Turns persist to ``<workspace>/.wisp/wisp.db`` (composition root) while
+    the session commands historically read the HOME db — so ``session list``
+    never saw CLI-created sessions. Resolution: explicit ``-w`` wins, else
+    the cwd workspace db when one exists (the common run-then-list case),
+    else the legacy HOME db. Always goes through module-level ``get_store``
+    so tests can intercept it.
+    """
+    if workspace:
+        return get_store(str(Path(workspace) / ".wisp" / "wisp.db"))
+    cwd_db = Path.cwd() / ".wisp" / "wisp.db"
+    if cwd_db.is_file():
+        return get_store(str(cwd_db))
+    return get_store()
+
+
+def cmd_session_list(workspace: str | None = None):
     """List all saved sessions."""
-    mgr = get_store()
+    mgr = _session_store(workspace)
     sessions = mgr.list_sessions()
     if not sessions:
         print(dim("No saved sessions."))
@@ -816,9 +836,9 @@ def _resolve_session_or_fragment(mgr, session_id: str):
     return session
 
 
-def cmd_session_show(session_id: str):
+def cmd_session_show(session_id: str, workspace: str | None = None):
     """Show details of a specific session."""
-    mgr = get_store()
+    mgr = _session_store(workspace)
     session = _resolve_session_or_fragment(mgr, session_id)
     if session is None:
         print(error(f"✗ Session '{session_id}' not found."))
@@ -832,9 +852,9 @@ def cmd_session_show(session_id: str):
     print(dim(f"  Continue: wisp -S {session['id']} \"your next question\""))
 
 
-def cmd_session_delete(session_id: str):
+def cmd_session_delete(session_id: str, workspace: str | None = None):
     """Delete a session."""
-    mgr = get_store()
+    mgr = _session_store(workspace)
     session = _resolve_session_or_fragment(mgr, session_id)
     if session is None:
         print(error(f"✗ Session '{session_id}' not found."))
@@ -844,10 +864,10 @@ def cmd_session_delete(session_id: str):
     print(success(f"✓ Deleted session {session['id']}"))
 
 
-def cmd_session_compact(session_id: str, keep: int = 6):
+def cmd_session_compact(session_id: str, keep: int = 6, workspace: str | None = None):
     """Compact a session by summarizing old messages and keeping recent ones."""
     from wisp.infra.session_dto import SessionDTO
-    mgr = get_store()
+    mgr = _session_store(workspace)
     session = _resolve_session_or_fragment(mgr, session_id)
     if session is None:
         print(error(f"✗ Session '{session_id}' not found."))
@@ -871,7 +891,7 @@ def cmd_session_compact(session_id: str, keep: int = 6):
         print(dim("Compaction skipped: not enough messages to summarize."))
 
 
-def cmd_session_trim(session_id: str, keep: int = 10):
+def cmd_session_trim(session_id: str, keep: int = 10, workspace: str | None = None):
     """Trim a session to the last N exchanges (for context window management).
 
     Trims intelligently by counting complete user turns (user → assistant exchanges),
@@ -881,7 +901,7 @@ def cmd_session_trim(session_id: str, keep: int = 10):
         print(error(f"✗ keep must be at least 1, got {keep}"))
         return
 
-    mgr = get_store()
+    mgr = _session_store(workspace)
     session = _resolve_session_or_fragment(mgr, session_id)
     if session is None:
         print(error(f"✗ Session '{session_id}' not found."))
@@ -1182,41 +1202,43 @@ def main():
 
         elif first == "session":
             if not rest:
-                print(info("Usage: wisp session (list|show|delete|trim|compact) [args]"))
+                print(info("Usage: wisp session [-w workspace] (list|show|delete|trim|compact) [args]"))
                 print(dim("  wisp session list              List all sessions"))
                 print(dim("  wisp session show <id>         Show session details"))
                 print(dim("  wisp session delete <id>       Delete a session"))
                 print(dim("  wisp session trim <id> [n]     Trim to last N exchanges"))
                 print(dim("  wisp session compact <id> [n]  Compact old messages, keep last N"))
+                print(dim("  Sessions resolve to -w <workspace> when given, else the"))
+                print(dim("  current directory's workspace store, else the home store."))
                 return
 
             sub = rest[0]
             args = rest[1:]
 
             if sub == "list":
-                cmd_session_list()
+                cmd_session_list(flags_workspace)
             elif sub == "show":
                 if not args:
                     print(error("✗ Usage: wisp session show <id>"))
                     return
-                cmd_session_show(args[0])
+                cmd_session_show(args[0], flags_workspace)
             elif sub == "delete":
                 if not args:
                     print(error("✗ Usage: wisp session delete <id>"))
                     return
-                cmd_session_delete(args[0])
+                cmd_session_delete(args[0], flags_workspace)
             elif sub == "trim":
                 if not args:
                     print(error("✗ Usage: wisp session trim <id> [n]"))
                     return
                 keep = int(args[1]) if len(args) > 1 else 10
-                cmd_session_trim(args[0], keep)
+                cmd_session_trim(args[0], keep, flags_workspace)
             elif sub == "compact":
                 if not args:
                     print(error("✗ Usage: wisp session compact <id> [n]"))
                     return
                 keep = int(args[1]) if len(args) > 1 else 6
-                cmd_session_compact(args[0], keep)
+                cmd_session_compact(args[0], keep, flags_workspace)
             else:
                 print(error(f"✗ Unknown session subcommand: {sub}"))
                 print(dim("  Try: list, show <id>, delete <id>, trim <id> [n], compact <id> [n]"))
@@ -1227,7 +1249,7 @@ def main():
                 print(dim("  wisp compact 20260430-123456-abcdef 6"))
                 return
             keep = int(rest[1]) if len(rest) > 1 else 6
-            cmd_session_compact(rest[0], keep)
+            cmd_session_compact(rest[0], keep, flags_workspace)
 
         elif first == "skills":
             cmd_skills(flags_workspace)
