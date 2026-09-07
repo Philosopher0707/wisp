@@ -43,6 +43,36 @@ def isolated_wisp_env(monkeypatch, tmp_path):
     return monkeypatch
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _neutralize_server_auth():
+    """Force server dev-mode (no auth) for the unit-test session.
+
+    wisp.server.deps builds its _AuthConfig singleton at import time from
+    the ambient WISP_API_KEY. A set key silently flips every server route
+    test to 401 (seen live: 14 red tests, all environmental). Live E2E
+    runs (WISP_E2E_LIVE=1) keep ambient credentials.
+    """
+    if os.environ.get("WISP_E2E_LIVE") == "1":
+        yield
+        return
+    import wisp.server.deps as deps_mod
+
+    auth = deps_mod._auth
+    saved_key, saved_no_auth = auth._key, auth._no_auth
+    saved_valid = dict(auth._valid_keys)
+    saved_env = os.environ.pop("WISP_API_KEY", None)
+    auth._key = ""
+    auth._no_auth = True
+    auth._valid_keys = {}
+    try:
+        yield
+    finally:
+        auth._key, auth._no_auth = saved_key, saved_no_auth
+        auth._valid_keys = saved_valid
+        if saved_env is not None:
+            os.environ["WISP_API_KEY"] = saved_env
+
+
 @pytest.fixture
 def temp_workspace():
     """Provide a temporary workspace directory for file operations."""
