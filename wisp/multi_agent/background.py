@@ -20,6 +20,8 @@ from dataclasses import dataclass, field, replace as dc_replace
 from datetime import datetime, timezone
 from typing import Any, List
 
+from wisp.multi_agent.telemetry import SubagentTelemetryBuffer
+
 logger = logging.getLogger(__name__)
 
 # Bounded registries: runaway launches must hit a ceiling, and finished
@@ -109,6 +111,9 @@ class BackgroundAgentManager:
         # Settlement fan-out: each subscriber gets one event per agent
         # reaching a terminal state (used by WebSocket push).
         self._subscribers: set["asyncio.Queue[dict[str, Any]]"] = set()
+        # Telemetry rings (GH#9): per-agent event logs a monitor can attach
+        # to without pausing the worker. Bounded by construction, always on.
+        self.telemetry = SubagentTelemetryBuffer()
 
     def subscribe(self) -> "asyncio.Queue[dict[str, Any]]":
         """Register a settlement-event queue (WebSocket push, dashboards)."""
@@ -266,6 +271,14 @@ class BackgroundAgentManager:
         )
         self._entries[agent_id] = entry
         self._persist_create(entry, contract)
+        self.telemetry.register(
+            agent_id, label=entry.label,
+            role=str(getattr(contract, "role", "generalist") or "generalist"),
+        )
+        self.telemetry.append(
+            agent_id, "started",
+            f"{entry.label} claimed: {(getattr(contract, 'task', '') or '')[:200]}",
+        )
         entry.handle = asyncio.create_task(self._run_entry(entry))
         self._publish({
             "type": "agent_started",
@@ -276,9 +289,54 @@ class BackgroundAgentManager:
         })
         return {"ok": True, "agent_id": agent_id, "label": entry.label, "status": entry.status}
 
+    # ── Telemetry (GH#9) ────────────────────────────────────────────
+
+    def _chain_telemetry_callback(self, entry: BackgroundAgentEntry) -> None:
+        """Forward orchestrator TASK_* events into the telemetry ring.
+
+        Chains — never clobbers — a pre-existing ``progress_callback``.
+        The wrapper marks itself so ``send()``'s ``dc_replace`` copy (which
+        carries the field value over) is not wrapped a second time.
+        Orchestrator events map to ``progress``: lifecycle owns
+        started/settled, so the manager stays the single author of those.
+        """
+        contract = entry.contract
+        prior = getattr(contract, "progress_callback", None)
+        if getattr(prior, "_telemetry_chained", False):
+            return
+        manager = self
+
+        async def _forward(event: Any) -> None:
+            try:
+                kind = getattr(event, "event_type", "")
+                payload = getattr(event, "payload", {}) or {}
+                if kind:
+                    detail = str(
+                        payload.get("error")
+                        or payload.get("description")
+                        or payload.get("name")
+                        or f"attempt {payload.get('attempt', '')}"
+                    ).strip()[:200]
+                    manager.telemetry.append(
+                        entry.id, "progress", f"{kind}{(': ' + detail) if detail else ''}")
+            except Exception:
+                logger.debug("Telemetry forward failed", exc_info=True)
+            if prior is not None:
+                try:
+                    if asyncio.iscoroutinefunction(prior):
+                        await prior(event)
+                    else:
+                        prior(event)
+                except Exception:
+                    logger.debug("Chained progress callback failed", exc_info=True)
+
+        _forward._telemetry_chained = True  # type: ignore[attr-defined]
+        contract.progress_callback = _forward
+
     async def _run_entry(self, entry: BackgroundAgentEntry) -> None:
         entry.turns += 1
         message = entry.contract.task
+        self._chain_telemetry_callback(entry)
         try:
             result = await self._orchestrator._run_with_retry(entry.contract)
             entry.result = result
@@ -295,6 +353,7 @@ class BackgroundAgentManager:
                 "status": entry.status,
                 "summary": "",
             })
+            self.telemetry.append(entry.id, "settled", f"cancelled: {entry.error or ''}"[:200])
             entry.done.set()
             self._publish_settlement(entry)
             raise
@@ -324,6 +383,11 @@ class BackgroundAgentManager:
         if session_id:
             entry.last_session_id = session_id
         entry.files_changed = files
+        if entry.status == STATUS_COMPLETED:
+            note = f"ok: {summary[:160]}" if summary else "ok"
+        else:
+            note = f"failed: {(entry.error or 'subagent reported failure')[:160]}"
+        self.telemetry.append(entry.id, "settled", note)
         entry.done.set()
         self._publish_settlement(entry)
 
@@ -443,6 +507,8 @@ class BackgroundAgentManager:
             "note": "continuation started",
             "task": message[:120],
         })
+        self.telemetry.append(
+            entry.id, "progress", f"continuation started (turn {entry.turns + 1})")
         return {"ok": True, "agent_id": agent_id, "status": entry.status}
 
     # ── Cancellation & pruning ────────────────────────────────────────
@@ -491,6 +557,7 @@ class BackgroundAgentManager:
         excess = len(finished) - self._max_finished
         for entry in finished[:max(0, excess)]:
             del self._entries[entry.id]
+            self.telemetry.drop(entry.id)
         return max(0, excess)
 
     # ── Parent-facing context ─────────────────────────────────────────
