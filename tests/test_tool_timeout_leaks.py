@@ -97,8 +97,17 @@ async def test_composition_shutdown_closes_tool_pool():
     called = []
     root.tool_executor._tool_pool.shutdown = \
         lambda wait: called.append(wait)
+    network_called = []
+    root.tool_executor._network_pool.shutdown = \
+        lambda wait: network_called.append(wait)
     import contextlib
     with contextlib.suppress(Exception):
         # replicate composition.shutdown()'s pool teardown line
         root.tool_executor._tool_pool.shutdown(wait=False)
+    with contextlib.suppress(Exception):
+        # replicate composition.shutdown()'s network-pool teardown line
+        network_pool = getattr(root.tool_executor, "_network_pool", None)
+        if network_pool is not None:
+            network_pool.shutdown(wait=False)
     assert called == [False]
+    assert network_called == [False]

@@ -57,6 +57,7 @@ class TestAgentMetrics:
         m.record_turn(latency_s=1.0, prompt_chars=400, completion_chars=400)
         m.record_tool("read_file", 10.0, True)
         m.record_tool("run_bash", 200.0, False)
+        m.record_pool_timeout("network")
         snap = m.snapshot()
         assert snap["turns"] == 1
         assert snap["total_tokens"] == 200
@@ -66,6 +67,7 @@ class TestAgentMetrics:
         assert snap["avg_tool_duration_ms"]["read_file"] == 10.0
         assert snap["avg_tool_duration_ms"]["run_bash"] == 200.0
         assert snap["avg_latency_ms"] == 1000.0
+        assert snap["pool_timeouts_total"] == 1
 
     def test_snapshot_with_no_data(self):
         m = AgentMetrics()

@@ -49,6 +49,7 @@ class AgentMetrics:
     compactions: int = 0           # session.compact() calls
     tool_blocks: int = 0           # dangerous-command blocks
     tool_approvals: int = 0        # approval prompts answered "yes"
+    pool_timeouts_total: int = 0   # tool calls abandoned to a leaked pool thread
 
     def record_turn(self, latency_s: float, prompt_chars: int, completion_chars: int, chars_per_token: int = 4) -> None:
         """Record completion of one user turn."""
@@ -79,6 +80,11 @@ class AgentMetrics:
     def record_compaction(self) -> None:
         with self._lock:
             self.compactions += 1
+
+    def record_pool_timeout(self, pool_name: str) -> None:
+        """Record a tool timeout attributed to the named pool."""
+        with self._lock:
+            self.pool_timeouts_total += 1
 
     def record_interruption(self) -> None:
         with self._lock:
@@ -111,6 +117,7 @@ class AgentMetrics:
                 "compactions": self.compactions,
                 "tool_blocks": self.tool_blocks,
                 "tool_approvals": self.tool_approvals,
+                "pool_timeouts_total": self.pool_timeouts_total,
             }
 
     def reset(self) -> None:
@@ -128,6 +135,7 @@ class AgentMetrics:
             self.compactions = 0
             self.tool_blocks = 0
             self.tool_approvals = 0
+            self.pool_timeouts_total = 0
 
     def __repr__(self) -> str:
         return (

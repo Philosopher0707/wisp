@@ -397,6 +397,14 @@ class CompositionRoot:
             self.tool_executor._tool_pool.shutdown(wait=False)
         except Exception:
             pass
+        # The network pool mirrors the tool pool lifecycle (root-LOCAL);
+        # getattr-guarded: older executors lack the attr.
+        try:
+            network_pool = getattr(self.tool_executor, "_network_pool", None)
+            if network_pool is not None:
+                network_pool.shutdown(wait=False)
+        except Exception:
+            pass
         # Owned HTTP pools (Phase 2.1, D4): close what this root tracked.
         # Sessions predate the registry are unaffected; close_all is a
         # safe no-op when nothing was tracked.

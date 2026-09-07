@@ -356,6 +356,19 @@ class ToolExecutor:
             thread_name_prefix="wisp-tool",
         )
         self.leaked_tool_threads = 0
+        # NETWORK-risk tools (web_fetch/web_search) hang on remote I/O far
+        # more often than local tools hang on disk/CPU. A stuck network
+        # thread on the shared tool pool would eventually starve every
+        # other tool (issue #4), so they run on their own bounded pool
+        # with separate orphan accounting. Both pools are closed by the
+        # composition root's owned-shutdown path (wisp/composition.py);
+        # threads that outlive a timeout die with the interpreter only
+        # if shutdown never runs.
+        self._network_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=int(getattr(config, "tool_pool_network_size", 4) or 4),
+            thread_name_prefix="wisp-tool-net",
+        )
+        self.network_leaked_tool_threads = 0
         self.hook_manager = hook_manager
         self.metrics = metrics
         self.mcp = mcp
@@ -427,12 +440,51 @@ class ToolExecutor:
             self._repeat_cache[key] = (time.monotonic(), result_str, 0)
         exec_ctx.repeat_key.set(None)
 
-    async def _run_blocking(self, fn, *args, **kwargs):
+    async def _run_blocking(self, fn, *args, pool=None, **kwargs):
         """Run *fn* on the dedicated bounded tool pool (test seam: mock this
-        to skip real execution while keeping the dispatch path real)."""
+        to skip real execution while keeping the dispatch path real).
+
+        *pool* selects the executor; None keeps the default tool pool.
+        NETWORK-risk tools pass the isolated network pool (issue #4).
+        """
+        target = pool if pool is not None else self._tool_pool
         return await asyncio.get_running_loop().run_in_executor(
-            self._tool_pool, functools.partial(fn, *args, **kwargs),
+            target, functools.partial(fn, *args, **kwargs),
         )
+
+    def pool_stats(self) -> dict[str, dict[str, int]]:
+        """Per-pool observability snapshot; never raises.
+
+        Private-attr reads are each try/except-guarded with a -1 sentinel
+        (pool internals differ across versions and during shutdown).
+        """
+        stats: dict[str, dict[str, int]] = {}
+        pools = (
+            ("default", getattr(self, "_tool_pool", None),
+             getattr(self, "leaked_tool_threads", 0)),
+            ("network", getattr(self, "_network_pool", None),
+             getattr(self, "network_leaked_tool_threads", 0)),
+        )
+        for name, pool, leaked in pools:
+            try:
+                max_workers = pool._max_workers
+            except Exception:
+                max_workers = -1
+            try:
+                queued = pool._work_queue.qsize()
+            except Exception:
+                queued = -1
+            try:
+                threads = len(pool._threads)
+            except Exception:
+                threads = -1
+            stats[name] = {
+                "max_workers": max_workers,
+                "queued": queued,
+                "threads": threads,
+                "leaked": leaked,
+            }
+        return stats
 
     async def execute(
         self,
@@ -1006,6 +1058,15 @@ class ToolExecutor:
         else:
             # Per-tool timeout to prevent hanging the agent on stuck tools
             tool_timeout = getattr(self.config, "tool_timeout", 300) if self.config else 300
+            # Lazy import: wisp.core.__init__ pulls in graph_state, so a
+            # module-level import would risk a cycle (precedent: stateless.py).
+            from wisp.core.contracts import ToolRisk, risk_for_tool
+            _pool = (
+                self._network_pool
+                if risk_for_tool(func_name) is ToolRisk.NETWORK
+                else self._tool_pool
+            )
+            _pool_name = "network" if _pool is self._network_pool else "default"
             try:
                 async with asyncio.timeout(tool_timeout):
                     result = await self._run_blocking(
@@ -1019,17 +1080,29 @@ class ToolExecutor:
                         # Already authorized above (layered M2 consult); the
                         # registry gate must not re-consult with defaults.
                         _skip_authorize=True,
+                        pool=_pool,
                     )
             except asyncio.TimeoutError:
                 # The worker thread keeps running — unkillable by design.
-                # Track it so starvation is observable before it bites.
-                self.leaked_tool_threads += 1
+                # Track it on the pool that leaked it so starvation is
+                # observable before it bites.
+                if _pool is self._network_pool:
+                    self.network_leaked_tool_threads += 1
+                    _leaked = self.network_leaked_tool_threads
+                else:
+                    self.leaked_tool_threads += 1
+                    _leaked = self.leaked_tool_threads
+                try:
+                    _queued = _pool._work_queue.qsize()
+                except Exception:
+                    _queued = -1
                 logger.warning(
                     "Tool %s timed out after %ds — worker thread leaked "
-                    "(%d total; pool size %d)",
+                    "(%d total; pool size %d; pool %s queued %d)",
                     func_name, tool_timeout,
-                    self.leaked_tool_threads, self._tool_pool._max_workers,
+                    _leaked, _pool._max_workers, _pool_name, _queued,
                 )
+                getattr(self.metrics, "record_pool_timeout", lambda *a: None)(_pool_name)
                 structured = {
                     "status": "error",
                     "tool": func_name,
