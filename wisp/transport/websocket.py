@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from wisp.approval_state import SessionPolicy
@@ -27,6 +29,15 @@ logger = logging.getLogger(__name__)
 # Default timeout for approval responses from the WebSocket client
 _APPROVAL_TIMEOUT = 60.0
 
+# Active (session_id, ws) for the turn currently executing on this task.
+# stream_turn() sets it; approve() reads it so concurrent turns on distinct
+# connections route approvals to their own client instead of the last-writer
+# _current_ws. When unset, approve() falls back to the legacy
+# (self._session_id, self._current_ws) pair.
+_active_turn: ContextVar[tuple[str | None, Any] | None] = ContextVar(
+    "wisp_ws_active_turn", default=None
+)
+
 
 class WebSocketTransport(Transport):
     """WebSocket transport layer."""
@@ -36,9 +47,20 @@ class WebSocketTransport(Transport):
         self._connections: dict[int, dict] = {}
         self._counter = 0
         self._current_ws: Any = None
-        self._pending_approval: asyncio.Future | None = None
-        self._pending_tool_name: str | None = None
         self._session_id: str | None = None
+        self._session_ws: dict[str, Any] = {}
+        self._approvals: dict[str, dict] = {}
+        self._approval_counter = 0
+
+    @staticmethod
+    @contextmanager
+    def _turn_context(sid: str | None, ws: Any):
+        """Mark (sid, ws) as the active turn on this task (ContextVar)."""
+        token = _active_turn.set((sid, ws))
+        try:
+            yield
+        finally:
+            _active_turn.reset(token)
 
     # ── Transport ABC implementation ────────────────────────────────
 
@@ -81,7 +103,13 @@ class WebSocketTransport(Transport):
         """
         import os
 
-        if self._current_ws is None:
+        ctx = _active_turn.get()
+        if ctx is not None:
+            sid, ws = ctx
+        else:
+            sid, ws = self._session_id, self._current_ws
+
+        if ws is None:
             if os.environ.get("WISP_WS_AUTO_APPROVE", "").strip().lower() == "true":
                 logger.warning(
                     "Auto-approving tool %s with no client connected "
@@ -94,16 +122,12 @@ class WebSocketTransport(Transport):
             )
             return False
 
-        # If already waiting, deny to prevent re-entrant approval
-        if self._pending_approval is not None and not self._pending_approval.done():
-            return False
-
         # Session memory short-circuits the prompt entirely — same
         # precedence as CLITransport, applied server-side so memory
         # belongs to the session, not whichever client is attached.
         name = str(tool_call.get("name", "unknown"))
-        if self._session_id:
-            state = self.runtime.approval_state(self._session_id)
+        if sid:
+            state = self.runtime.approval_state(sid)
             policy = state.session_policy
             if policy is SessionPolicy.AUTO:
                 return True
@@ -114,14 +138,30 @@ class WebSocketTransport(Transport):
             if name in state.denied_tools:
                 return False
 
-        self._pending_tool_name = name
-        self._pending_approval = asyncio.get_event_loop().create_future()
+        self._approval_counter += 1
+        tool_id = tool_call.get("id") or f"{name}:{self._approval_counter}"
+        approval_id = f"{sid}:{tool_id}"
+
+        # Re-entrant guard is per-KEY: the same approval id unresolved
+        # denies, but concurrent DISTINCT approvals proceed.
+        existing = self._approvals.get(approval_id)
+        if existing is not None and not existing["future"].done():
+            return False
+
+        future: asyncio.Future = asyncio.get_event_loop().create_future()
+        self._approvals[approval_id] = {
+            "future": future,
+            "ws": ws,
+            "sid": sid,
+            "tool_name": name,
+        }
         try:
-            await self._current_ws.send_json({
+            await ws.send_json({
                 "type": "approval_request",
+                "approval_id": approval_id,
                 "tool_call": tool_call,
             })
-            return await asyncio.wait_for(self._pending_approval, timeout=_APPROVAL_TIMEOUT)
+            return await asyncio.wait_for(future, timeout=_APPROVAL_TIMEOUT)
         except asyncio.TimeoutError:
             logger.warning("Approval timed out for tool %s", tool_call.get("name", "unknown"))
             return False
@@ -129,30 +169,78 @@ class WebSocketTransport(Transport):
             logger.exception("Approval request failed")
             return False
         finally:
-            self._pending_approval = None
+            self._approvals.pop(approval_id, None)
 
-    def resolve_approval(self, approved: bool) -> None:
+    def resolve_approval(self, approved: bool, approval_id: str | None = None) -> bool:
         """Resolve a pending approval request.
 
         Called by the WebSocket route handler when the client sends
-        a tool_approval message.
+        a tool_approval message. With approval_id, resolves that entry
+        (falls back to single-unresolved entry when unknown, else no-op).
+        Without it, resolves iff exactly one entry is unresolved
+        (back-compat), else no-op. Returns True iff an entry resolved.
         """
-        if self._pending_approval is not None and not self._pending_approval.done():
-            self._pending_approval.set_result(approved)
+        if approval_id is not None:
+            entry = self._approvals.get(approval_id)
+            if entry is not None and not entry["future"].done():
+                entry["future"].set_result(approved)
+                return True
+            # Unknown id (old-protocol client or non-echoed id): fall back
+            # to single-unresolved-entry behavior so the gate does not
+            # stay shut until the 60s timeout.
+            pending = [
+                e for e in self._approvals.values()
+                if not e["future"].done()
+            ]
+            if len(pending) == 1:
+                pending[0]["future"].set_result(approved)
+                return True
+            return False
+        pending = [
+            entry for entry in self._approvals.values()
+            if not entry["future"].done()
+        ]
+        if len(pending) == 1:
+            pending[0]["future"].set_result(approved)
+            return True
+        return False
 
-    def resolve_decision(self, key: str) -> bool:
+    def resolve_decision(self, key: str, approval_id: str | None = None) -> bool:
         """Fold a y/Y/n/N/a/d/c decision into session memory and resolve.
 
         Returns False when nothing was pending. The verdict for this
         call comes from runtime.apply_approval_decision; 'c' cancels by
-        resolving False (the turn unwinds at the gate).
+        resolving False (the turn unwinds at the gate). Uses the ENTRY's
+        sid/tool so concurrent sessions fold into their own memory.
         """
-        if self._pending_approval is None or self._pending_approval.done():
+        if approval_id is not None:
+            entry = self._approvals.get(approval_id)
+            if entry is None or entry["future"].done():
+                # Unknown id: fall back to single-unresolved entry so
+                # old-protocol clients still resolve the gate.
+                pending = [
+                    e for e in self._approvals.values()
+                    if not e["future"].done()
+                ]
+                if len(pending) != 1:
+                    return False
+                entry = pending[0]
+            sid = entry["sid"] or ""
+            tool = entry["tool_name"] or "unknown"
+            approved = self.runtime.apply_approval_decision(sid, tool, key)
+            entry["future"].set_result(approved)
+            return True
+        pending = [
+            entry for entry in self._approvals.values()
+            if not entry["future"].done()
+        ]
+        if len(pending) != 1:
             return False
-        sid = self._session_id or ""
-        tool = self._pending_tool_name or "unknown"
+        entry = pending[0]
+        sid = entry["sid"] or ""
+        tool = entry["tool_name"] or "unknown"
         approved = self.runtime.apply_approval_decision(sid, tool, key)
-        self._pending_approval.set_result(approved)
+        entry["future"].set_result(approved)
         return True
 
     def start(self) -> None:
@@ -183,6 +271,7 @@ class WebSocketTransport(Transport):
             "ws": ws,
             "session": session,
         }
+        self._session_ws[session_id] = ws
 
         # Set current connection for targeted send/approve
         self._current_ws = ws
@@ -228,20 +317,40 @@ class WebSocketTransport(Transport):
         resolvers live on the reader loop, so interactive approval
         deadlocked until timeout and auto-denied.
         """
-        try:
-            async for event in self.runtime.run_turn(
-                session, prompt, approval_handler=self.approve,
-            ):
-                await ws.send_json(event)
-        except Exception as exc:
-            logger.exception("Error during turn")
-            await ws.send_json({"type": "error", "message": str(exc)})
+        if isinstance(session, dict):
+            sid = session.get("id", self._session_id)
+        else:
+            sid = self._session_id
+        with self._turn_context(sid, ws):
+            try:
+                async for event in self.runtime.run_turn(
+                    session, prompt, approval_handler=self.approve,
+                ):
+                    await ws.send_json(event)
+            except Exception as exc:
+                logger.exception("Error during turn")
+                await ws.send_json({"type": "error", "message": str(exc)})
 
     async def disconnect(self, ws: Any) -> None:
         """Handle WebSocket disconnection."""
         conn_id = getattr(ws, "_wisp_conn_id", None)
         if conn_id is not None:
             self._connections.pop(conn_id, None)
+        # Fail closed: deny every pending approval belonging to this ws
+        # immediately so turns do not hang to the 60s timeout.
+        for key in [
+            key for key, entry in self._approvals.items()
+            if entry["ws"] is ws
+        ]:
+            entry = self._approvals.pop(key)
+            if not entry["future"].done():
+                logger.warning(
+                    "Denying approval %s: client disconnected", key,
+                )
+                entry["future"].set_result(False)
+        for sid, mapped in list(self._session_ws.items()):
+            if mapped is ws:
+                del self._session_ws[sid]
         if ws is self._current_ws:
             self._current_ws = None
         if not ws.closed:
