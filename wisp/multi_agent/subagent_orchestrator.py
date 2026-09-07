@@ -5,7 +5,7 @@ Delegates all responsibilities to focused internal classes:
 - ``BudgetTracker`` — token accounting
 - ``ResultCache`` — result caching with TTL
 - ``WorktreeManager`` — git worktree lifecycle
-- ``Telemetry`` — metrics collection
+- ``OrchestratorMetrics`` — per-model run metrics (latency, success, tokens)
 - ``Persistence`` — JSONL audit logging
 - ``_patterns`` — map-reduce, vote, chain workflows
 """
@@ -282,7 +282,7 @@ class ResultCache:
         self._misses = 0
 
 
-class Telemetry:
+class OrchestratorMetrics:
     """Collect per-model telemetry: latency, success rate, token usage."""
 
     def __init__(self):
@@ -378,7 +378,7 @@ class SubagentOrchestrator:
         self.hook_manager = hook_manager
         # Worker telemetry rings (GH#10): when set, the blocking fanout path
         # forwards TASK_* lifecycle events here so the monitor sees blocking
-        # children too. Distinct from Telemetry (aggregate metrics below).
+        # children too. Distinct from OrchestratorMetrics (aggregate run metrics below).
         self.worker_telemetry = telemetry
 
         # Unique cache namespace — prevents cross-session cache collisions
@@ -388,7 +388,7 @@ class SubagentOrchestrator:
         # Composed subsystems
         self._budget = BudgetTracker()
         self._cache = ResultCache()
-        self._telemetry = Telemetry()
+        self._telemetry = OrchestratorMetrics()
         self._persistence = Persistence(self.workspace / ".wisp" / "subagent_results.jsonl")
         self._worktree_mgr = WorktreeManager(self.workspace)
         # Worktree isolation degrades to a shared workspace when it cannot
@@ -620,7 +620,7 @@ class SubagentOrchestrator:
     def clear_cache(self) -> None:
         self._cache.clear()
 
-    # ── Telemetry API ──────────────────────────────────────────────────
+    # ── Run-metrics API ──────────────────────────────────────────────────
 
     def get_telemetry(self) -> dict[str, list[dict]]:
         return self._telemetry.get()

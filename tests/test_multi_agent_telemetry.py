@@ -1,19 +1,19 @@
 """Unit tests for Telemetry."""
 
 
-from wisp.multi_agent.subagent_orchestrator import Telemetry
+from wisp.multi_agent.subagent_orchestrator import OrchestratorMetrics
 from wisp.multi_agent.task import SubagentResult
 
 
 class TestTelemetry:
 
     def test_init_empty(self):
-        t = Telemetry()
+        t = OrchestratorMetrics()
         assert t.get() == {}
         assert t.summary() == {}
 
     def test_record_single(self):
-        t = Telemetry()
+        t = OrchestratorMetrics()
         r = SubagentResult(task_id="a", success=True, elapsed_seconds=1.5, tokens_used=100)
         r.model_used = "gpt-4"
         t.record("gpt-4", r)
@@ -23,7 +23,7 @@ class TestTelemetry:
         assert raw["gpt-4"][0]["success"] is True
 
     def test_summary(self):
-        t = Telemetry()
+        t = OrchestratorMetrics()
         for i in range(3):
             r = SubagentResult(task_id=f"a{i}", success=True, elapsed_seconds=1.0 + i, tokens_used=50)
             r.model_used = "gpt-4"
@@ -38,7 +38,7 @@ class TestTelemetry:
         assert s["total_tokens"] == 150
 
     def test_aggregate(self):
-        t = Telemetry()
+        t = OrchestratorMetrics()
         results = [
             SubagentResult(task_id="a", success=True, elapsed_seconds=1.0, tokens_used=50),
             SubagentResult(task_id="b", success=False, elapsed_seconds=2.0, tokens_used=100),
@@ -50,7 +50,7 @@ class TestTelemetry:
         assert summary["gpt-4"]["success_rate"] == 0.5
 
     def test_multiple_models(self):
-        t = Telemetry()
+        t = OrchestratorMetrics()
         r1 = SubagentResult(task_id="a", success=True, elapsed_seconds=1.0, tokens_used=50)
         r1.model_used = "gpt-4"
         r2 = SubagentResult(task_id="b", success=True, elapsed_seconds=0.5, tokens_used=20)
@@ -62,7 +62,7 @@ class TestTelemetry:
         assert "llama3" in summary
 
     def test_clear(self):
-        t = Telemetry()
+        t = OrchestratorMetrics()
         r = SubagentResult(task_id="a", success=True, elapsed_seconds=1.0, tokens_used=50)
         r.model_used = "gpt-4"
         t.record("gpt-4", r)
@@ -72,7 +72,7 @@ class TestTelemetry:
 
     def test_no_model_used_skipped(self):
         """Results without model_used are not recorded."""
-        t = Telemetry()
+        t = OrchestratorMetrics()
         r = SubagentResult(task_id="a", success=True, elapsed_seconds=1.0, tokens_used=50)
         # model_used defaults to ""
         t.aggregate([r])
