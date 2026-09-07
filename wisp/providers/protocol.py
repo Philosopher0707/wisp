@@ -72,6 +72,17 @@ class Provider(ABC):
         producer_error: list[BaseException] = []
         cancelled = threading.Event()
 
+        def _close_sync_gen() -> None:
+            # Deterministic teardown: run GeneratorExit through the provider
+            # generator here, on the thread that owns it, instead of leaving
+            # it to GC timing in some unrelated thread (which is where the
+            # "generator ignored GeneratorExit" teardown crash came from).
+            # Idempotent: closing an exhausted generator is a no-op.
+            close = getattr(sync_gen, "close", None)
+            if close is not None:
+                with contextlib.suppress(Exception):
+                    close()
+
         def _sync_producer() -> None:
             try:
                 for event in sync_gen:
@@ -87,6 +98,8 @@ class Provider(ABC):
                 producer_error.append(exc)
                 with contextlib.suppress(RuntimeError):
                     loop.call_soon_threadsafe(queue.put_nowait, done)  # type: ignore[arg-type]
+            finally:
+                _close_sync_gen()
 
         thread = threading.Thread(target=_sync_producer, daemon=True)
         thread.start()
@@ -121,6 +134,12 @@ class Provider(ABC):
                         await asyncio.sleep(0.02)
                 except RuntimeError:
                     pass  # loop closed mid-poll during interpreter teardown
+                # The producer is dead, so the generator is suspended — not
+                # executing — and close() is safe. (If the producer is still
+                # stuck mid-read past the grace window, its own finally
+                # closes the generator when the read returns.)
+                if not thread.is_alive():
+                    _close_sync_gen()
 
         return _bridge()
 

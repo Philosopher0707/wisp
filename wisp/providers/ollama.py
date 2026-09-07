@@ -123,6 +123,14 @@ class OllamaProvider(Provider):
         producer_error: list[BaseException] = []
         cancelled = threading.Event()
 
+        def _close_sync_gen():
+            # Deterministic teardown on the owning thread — see
+            # providers/protocol.py for the incident. Idempotent.
+            close = getattr(sync_gen, "close", None)
+            if close is not None:
+                with contextlib.suppress(Exception):
+                    close()
+
         def _sync_producer():
             try:
                 for event in sync_gen:
@@ -136,6 +144,8 @@ class OllamaProvider(Provider):
                 producer_error.append(exc)
                 with contextlib.suppress(RuntimeError):
                     loop.call_soon_threadsafe(queue.put_nowait, done)
+            finally:
+                _close_sync_gen()
 
         thread = threading.Thread(target=_sync_producer, daemon=True)
         thread.start()
@@ -164,6 +174,10 @@ class OllamaProvider(Provider):
                         await asyncio.sleep(0.02)
                 except RuntimeError:
                     pass  # loop closed mid-poll during interpreter teardown
+                # Producer dead ⇒ generator suspended ⇒ close() is safe.
+                # A producer stuck mid-read closes it from its own finally.
+                if not thread.is_alive():
+                    _close_sync_gen()
 
         return _async_generator()
 

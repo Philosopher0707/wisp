@@ -166,6 +166,17 @@ _REPEAT_TTL_SECONDS = 600.0
 _REPEAT_NUDGE_AFTER = 1   # first repeat serves the cached copy with a warning
 _REPEAT_BLOCK_AFTER = 2   # further repeats get an instruction to synthesize
 
+# Fetch-failure circuit breaker: mechanizes the researcher-prompt FAIL FAST
+# rule (wisp/multi_agent/roles.py) that the model often ignores mid-thrash.
+# Consecutive web_fetch hard failures (404s, robots/SSRF blocks, DNS) pause
+# fetching for THAT agent only — keyed by (depth, branch) like the recursion
+# guard — until a web_search succeeds or the TTL lapses. Scoped per agent so
+# one thrashing child never disarms the parent or its siblings.
+_FETCH_BREAK_TRIP = 2
+_FETCH_BREAK_TTL_S = 300.0
+_FETCH_BREAK_MAX_KEYS = 512
+_FETCH_FAIL_MARKERS = ("[WEB_FETCH_FAILED]", "[WEB_FETCH_BLOCKED]")
+
 # Executor-dispatched subagent tools — never shadowed by MCP bare names.
 _SUBAGENT_TOOLS: frozenset[str] = frozenset({
     "spawn", "fanout", "spawn_background",
@@ -385,6 +396,10 @@ class ToolExecutor:
         # state and lives in exec_ctx.repeat_key (concurrent calls must not
         # steal each other's pending identity).
         self._repeat_cache: dict[str, tuple[float, str, int]] = {}
+        # (depth, branch) -> (monotonic_ts, consecutive_failures).
+        # Read/written only on the event loop inside execute(), so no lock;
+        # opportunistically purged on write (TTL + key cap).
+        self._fetch_breaker: dict[tuple[int, int], tuple[float, int]] = {}
 
     # ── Public API ───────────────────────────────────────────────────
 
@@ -432,6 +447,63 @@ class ToolExecutor:
         # while a child web_fetches) don't swap identities mid-flight.
         exec_ctx.repeat_key.set(key)
         return None
+
+    def _fetch_breaker_key(self) -> tuple[int, int]:
+        """Identity of the agent whose fetch streak is being tracked."""
+        return (_exec_depth(self.config), _exec_branch(self.config))
+
+    def _check_fetch_breaker(self, func_name: str) -> str | None:
+        """Short-circuit message when this agent's fetching is paused."""
+        if func_name != "web_fetch":
+            return None
+        key = self._fetch_breaker_key()
+        entry = self._fetch_breaker.get(key)
+        if entry is None:
+            return None
+        ts, count = entry
+        if time.monotonic() - ts > _FETCH_BREAK_TTL_S:
+            self._fetch_breaker.pop(key, None)
+            return None
+        if count < _FETCH_BREAK_TRIP:
+            return None
+        return (
+            f"[FETCH BREAKER] web_fetch is paused for this agent after "
+            f"{count} consecutive fetch failures (404s/blocks). "
+            f"Use web_search snippets to make progress instead — a "
+            f"successful web_search re-enables fetching. "
+            f"Do NOT retry web_fetch directly."
+        )
+
+    def _note_fetch_outcome(self, func_name: str, result_str: str) -> None:
+        """Record a dispatched fetch/search outcome for the breaker.
+
+        Only call for calls that actually dispatched: short-circuits
+        (repeat guard, breaker block) must neither trip nor reset it.
+        """
+        key = self._fetch_breaker_key()
+        if func_name == "web_fetch":
+            if any(m in result_str for m in _FETCH_FAIL_MARKERS):
+                ts, count = self._fetch_breaker.get(key, (0.0, 0))
+                now = time.monotonic()
+                count = count + 1 if now - ts <= _FETCH_BREAK_TTL_S else 1
+                self._fetch_breaker[key] = (now, count)
+                self._purge_fetch_breaker()
+            elif '"status": "error"' not in result_str[:200]:
+                self._fetch_breaker.pop(key, None)
+        elif func_name == "web_search":
+            if '"status": "ok"' in result_str[:300]:
+                # New leads: the agent has fresh URLs worth fetching.
+                self._fetch_breaker.pop(key, None)
+
+    def _purge_fetch_breaker(self) -> None:
+        """Drop expired keys; hard-cap the dict if a storm of agents hit it."""
+        now = time.monotonic()
+        for key, (ts, _count) in list(self._fetch_breaker.items()):
+            if now - ts > _FETCH_BREAK_TTL_S:
+                self._fetch_breaker.pop(key, None)
+        while len(self._fetch_breaker) > _FETCH_BREAK_MAX_KEYS:
+            oldest = min(self._fetch_breaker, key=lambda k: self._fetch_breaker[k][0])
+            self._fetch_breaker.pop(oldest, None)
 
     def _record_repeat_result(self, func_name: str, result_str: str) -> None:
         """Cache a successful guarded-tool result for the repeat guard."""
@@ -532,6 +604,14 @@ class ToolExecutor:
         repeat_msg = self._check_repeat_call(func_name, func_args)
         if repeat_msg is not None:
             yield _tool_result_event(func_name, repeat_msg)
+            return
+
+        # ── Fetch-failure circuit breaker ──
+        # 2 consecutive web_fetch hard failures pause fetching for this
+        # agent until a web_search succeeds. Scoped by (depth, branch).
+        fetch_block_msg = self._check_fetch_breaker(func_name)
+        if fetch_block_msg is not None:
+            yield _tool_result_event(func_name, fetch_block_msg)
             return
 
         # ── Pre-tool hooks ──
@@ -731,6 +811,12 @@ class ToolExecutor:
                 self._record_repeat_result(func_name, str(result))
             except Exception:
                 logger.debug("repeat-cache record failed", exc_info=True)
+
+        # Fetch breaker: streak accounting for actually-dispatched calls.
+        try:
+            self._note_fetch_outcome(func_name, result_str)
+        except Exception:
+            logger.debug("fetch-breaker record failed", exc_info=True)
 
         # ── Post-tool event hooks (best-effort, non-blocking) ──
         await self._run_post_tool_hooks(func_name, func_args, result, workspace)

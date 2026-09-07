@@ -42,16 +42,29 @@ _PROVIDER_SILENCE: Final[re.Pattern[str]] = re.compile(
     re.I,
 )
 
-# Tool miss / 404 warnings — also file-only.
+# Tool miss / 404 warnings — also file-only. The generic "Tool X failed"
+# arm covers web_fetch/web_search (which the model already sees as
+# tool_result error events — the console line is a duplicate that shreds
+# the spinner mid-fanout).
 _TOOL_MISS_RE: Final[re.Pattern[str]] = re.compile(
-    r"Tool .*read_file failed|File not found:|Path not found:|Cannot list|no matches for",
+    r"Tool \w+ failed|File not found:|Path not found:|Cannot list|no matches for",
     re.I,
 )
 
 # Loggers whose WARNING+ output is considered engine chrome.
+# Concrete logger names only: logging filters do NOT inherit through
+# propagation (only handlers do), so a filter on the "wisp.providers"
+# parent would never see records originating in openai/ollama children.
+# These cover the stream diagnostics ("OpenAI provider stream failed")
+# that otherwise print raw over the TUI mid-fanout.
 _NOISY_LOGGERS: Final[tuple[str, ...]] = (
     "wisp.core.provider_stream",
+    "wisp.providers.openai",
+    "wisp.providers.ollama",
+    "wisp.providers.openrouter",
+    "wisp.providers.mock",
     "wisp.tools.registry",
+    "wisp.tools.web",
     "wisp.tools.filesystem",
     "wisp.tools.bash",
     "wisp.multi_agent",

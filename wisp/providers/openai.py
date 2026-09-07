@@ -163,6 +163,11 @@ class OpenAIProvider(Provider):
             "Authorization": f"Bearer {self.api_key}",
         }
 
+        # Owned by this generator invocation: reclaimed in `finally` on
+        # every exit path (consume / error / early close). Never yield
+        # from `finally` — yielding during GeneratorExit teardown raises
+        # RuntimeError: generator ignored GeneratorExit (fanout crash).
+        resp = None
         try:
             # Hardened transport: granular timeouts (connect 15, write 60, read 120, pool 30)
             # with TCP keepalive and retry for write timeouts / RemoteProtocolError.
@@ -343,6 +348,14 @@ class OpenAIProvider(Provider):
             }
             yield {"type": "done", "done_reason": done_reason}
 
+        except GeneratorExit:
+            # Consumer went away: turn cancelled, bridge abandoned, or an
+            # explicit .close(). Yielding anything here — even an error
+            # event — raises "RuntimeError: generator ignored
+            # GeneratorExit" out of close(), which is the crash seen in
+            # background worker threads during fanout teardown. Exit
+            # silently; `finally` reclaims the socket.
+            return
         except requests.exceptions.ConnectionError as exc:
             yield {"type": "error", "message": f"Connection error: {exc}", "status": 500}
         except requests.exceptions.Timeout as exc:
@@ -359,6 +372,14 @@ class OpenAIProvider(Provider):
                 pass
             logger.exception("OpenAI provider stream failed")
             yield {"type": "error", "message": str(exc)}
+        finally:
+            # Reclaim the HTTP connection on every exit path. No yields:
+            # this also runs during GeneratorExit handling above.
+            if resp is not None:
+                try:
+                    resp.close()
+                except Exception:
+                    pass
 
     def _auth_headers(self) -> dict[str, str]:
         """Authorization header(s) for API calls; subclass hook."""

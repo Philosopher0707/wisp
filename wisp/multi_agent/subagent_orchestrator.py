@@ -13,6 +13,7 @@ Delegates all responsibilities to focused internal classes:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -33,6 +34,51 @@ logger = logging.getLogger(__name__)
 
 # Fallback defaults — runtime values come from config
 _MAX_SUBAGENT_DEPTH_DEFAULT = 2
+
+# Cancellation-join deadline: when a turn is interrupted (Ctrl+C), live
+# children get this long to wind down before the parent reclaims the REPL.
+# asyncio has no CancellationToken primitive, so this bounded join is the
+# cancellation scope: cooperative children settle, stubborn ones are left
+# tracked (not awaited) and reported — teardown never stalls on them.
+_CANCEL_JOIN_TIMEOUT_S = 2.0
+
+
+async def _cancel_and_reap(tasks: list[asyncio.Task], *, owner: str) -> int:
+    """Cancel *tasks* and wait for them up to the join deadline.
+
+    Returns how many are still running afterwards (stubborn orphans stay
+    tracked in _live_tasks; their done-callbacks log any late crash, so a
+    late failure still surfaces instead of dying in threading excepthooks).
+
+    Uses asyncio.wait — NOT wait_for(gather(...)): awaiting a gather future
+    past the deadline hangs even with a timeout, because cancelling the
+    waiter re-cancels the (uncooperative) children instead of waking the
+    waiter. wait() returns its done/pending sets when the deadline lapses
+    regardless of what the children do.
+    """
+    pending = [t for t in tasks if not t.done()]
+    for t in pending:
+        t.cancel()
+    still: set[asyncio.Task] = set(pending)
+    if pending:
+        try:
+            done, still = await asyncio.wait(pending, timeout=_CANCEL_JOIN_TIMEOUT_S)
+        except Exception:
+            logger.debug("%s: join wait failed", owner, exc_info=True)
+            still = {t for t in pending if not t.done()}
+            done = set()
+        for d in done:
+            # Retrieve outcomes so "exception was never retrieved" never
+            # fires for children that died as we cancelled them.
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                d.result()
+    if still:
+        logger.warning(
+            "%s: %d subagent(s) ignored cancellation past %.1fs deadline — "
+            "teardown continues, orphans stay tracked",
+            owner, len(still), _CANCEL_JOIN_TIMEOUT_S,
+        )
+    return len(still)
 
 # Below this much remaining budget, a new child cannot even warm up —
 # admission refuses instead of admitting into certain overshoot.
@@ -358,12 +404,31 @@ class SubagentOrchestrator:
         return len(live)
 
     async def cancel_live_tasks(self, timeout: float = 3.0) -> int:
-        """Cancel and reap every live child; returns how many were running."""
+        """Cancel and reap every live child; returns how many were running.
+
+        The join is bounded by *timeout* (previously the parameter was
+        accepted but ignored, so one stubborn child stalled teardown
+        indefinitely). Orphans past the deadline stay tracked.
+        """
         live = [t for t in self._live_tasks if not t.done()]
         for t in live:
             t.cancel()
         if live:
-            await asyncio.gather(*live, return_exceptions=True)
+            # asyncio.wait, not wait_for(gather): see _cancel_and_reap —
+            # a gather-based join hangs on children that swallow cancel.
+            try:
+                _done, _still = await asyncio.wait(live, timeout=timeout)
+            except Exception:
+                logger.debug("cancel_live_tasks join failed", exc_info=True)
+                _still = {t for t in live if not t.done()}
+            for d in _done:
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    d.result()
+            if _still:
+                logger.warning(
+                    "cancel_live_tasks: %d subagent(s) past %.1fs deadline",
+                    len(_still), timeout,
+                )
         return len(live)
 
     # ── Workspace resolution ────────────────────────────────────────────
@@ -890,20 +955,39 @@ class SubagentOrchestrator:
                         await asyncio.sleep(backoff)
                 return result
 
+        if not contracts:
+            return []
         tasks = [self._spawn_tracked(_guarded(c)) for c in contracts]
         try:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            # asyncio.wait, NOT asyncio.gather: parking a task on a gather
+            # future is a cancellation trap — cancelling the waiter only
+            # cancels the gather, which only cancels the children, and if
+            # one child swallows cancellation the gather never completes
+            # so the waiter never wakes (wedged REPL on Ctrl+C, proven
+            # live). wait() parks on a private plain future that cancel()
+            # completes immediately, so delivery is guaranteed no matter
+            # what the children do. Result semantics below mirror
+            # gather(return_exceptions=True).
+            await asyncio.wait(tasks)
         except asyncio.CancelledError:
-            # Caller (the turn task) was interrupted: reap every child here
-            # so none outlive the turn streaming into teardown.
-            for t in tasks:
-                if not t.done():
-                    t.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            # Caller (the turn task) was interrupted: reap every child on
+            # the join deadline so teardown never stalls on a stubborn
+            # child streaming into a dying REPL.
+            await _cancel_and_reap(tasks, owner="run_parallel")
             raise
 
+        gathered: list = []
+        for t in tasks:
+            try:
+                gathered.append(t.result())
+            except (asyncio.CancelledError, KeyboardInterrupt, SystemExit, GeneratorExit):
+                # Cancellation-first: a cancelled child is not a result.
+                raise
+            except BaseException as exc:
+                gathered.append(exc)
+
         resolved: list[SubagentResult] = []
-        for i, result in enumerate(results):
+        for i, result in enumerate(gathered):
             if isinstance(result, BaseException):
                 contract = contracts[i]
                 resolved.append(
@@ -970,12 +1054,12 @@ class SubagentOrchestrator:
         finally:
             # If the consumer abandons the generator (GeneratorExit) or the
             # loop unwinds early, cancel remaining children instead of letting
-            # them run to timeout with nobody collecting results.
+            # them run to timeout with nobody collecting results. Bounded:
+            # a stubborn child must not stall the abandoning consumer.
+            # (No yields here — this finally also runs on GeneratorExit.)
             pending = [t for t in tasks if not t.done()]
-            for t in pending:
-                t.cancel()
             if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
+                await _cancel_and_reap(pending, owner="run_parallel_streaming")
                 logger.warning("Cancelled %d abandoned streaming subagents", len(pending))
 
     def _adaptive_max_concurrent(self, requested: int, queue_size: int) -> int:

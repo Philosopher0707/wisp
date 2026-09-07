@@ -752,13 +752,26 @@ class WispAgentCore:
             producer_error: list[BaseException] = []
             cancelled = threading.Event()
 
+            _sync_gen = None
+
+            def _close_sync_gen() -> None:
+                # Deterministic teardown on the owning thread — see
+                # providers/protocol.py for the incident. Idempotent.
+                if _sync_gen is not None:
+                    close = getattr(_sync_gen, "close", None)
+                    if close is not None:
+                        with contextlib.suppress(Exception):
+                            close()
+
             def _sync_producer() -> None:
+                nonlocal _sync_gen
                 try:
-                    for event in provider.generate_stream_events(
+                    _sync_gen = provider.generate_stream_events(
                         system_prompt=system_prompt,
                         messages=messages,
                         tools=tools,
-                    ):
+                    )
+                    for event in _sync_gen:
                         if cancelled.is_set():
                             break
                         loop.call_soon_threadsafe(queue.put_nowait, event)
@@ -769,6 +782,8 @@ class WispAgentCore:
                     producer_error.append(exc)
                     with contextlib.suppress(RuntimeError):
                         loop.call_soon_threadsafe(queue.put_nowait, done)  # type: ignore[arg-type]
+                finally:
+                    _close_sync_gen()
 
             thread = threading.Thread(target=_sync_producer, daemon=True)
             thread.start()
@@ -796,6 +811,10 @@ class WispAgentCore:
                         await asyncio.sleep(0.02)
                 except RuntimeError:
                     pass  # loop closed mid-poll during interpreter teardown
+                # Producer dead ⇒ generator suspended ⇒ close() is safe.
+                # A producer stuck mid-read closes it from its own finally.
+                if not thread.is_alive():
+                    _close_sync_gen()
 
         # Use circuit breaker if configured
         if self._circuit_breaker is not None:

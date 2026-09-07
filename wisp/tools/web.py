@@ -339,11 +339,19 @@ def tool_web_fetch(url: str, workspace: str = ".", max_chars: int = 10000) -> st
     """
     from urllib.parse import urlparse
 
-    # Validate URL
+    # Validate URL — strict at the boundary (the tool layer validates
+    # with helpers by design, no pydantic; these checks ARE the schema):
+    # natural-language queries and bare hostnames are a model error, not
+    # a fetch target. Fail fast and redirect to web_search instead of
+    # burning DNS/robots round-trips on every hallucinated URL.
     _validate_string(url, "url", _MAX_CMD_LENGTH)
     parsed = urlparse(url)
-    if not parsed.scheme or not parsed.netloc:
-        raise ToolError(f"Invalid URL: {url}")
+    if not parsed.scheme or not parsed.netloc or any(ch.isspace() for ch in url):
+        raise ToolError(
+            f"Invalid URL for web_fetch: {url!r}. web_fetch needs a complete "
+            f"http(s):// URL — pass search queries to web_search first, "
+            f"then fetch one of the URLs it returns."
+        )
     if parsed.scheme not in ("http", "https"):
         raise ToolError(f"Unsupported URL scheme: {parsed.scheme}")
 

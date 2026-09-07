@@ -136,7 +136,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "web_fetch",
-            "description": "Fetch content from a URL (web page, API endpoint, etc.). Returns extracted text content. Respects robots.txt and has 30s timeout. Max 100K chars returned.",
+            "description": "Fetch content from a URL (web page, API endpoint, etc.). Returns extracted text content. Respects robots.txt and has 30s timeout. Max 100K chars returned. Pass a complete http(s):// URL — use web_search to find URLs first; raw queries and bare hostnames are rejected.",
             "parameters": {
                 "type": "object",
                 "properties": {
