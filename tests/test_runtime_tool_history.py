@@ -323,3 +323,71 @@ def test_result_dict_survives_as_json_and_args_stay_strings():
     assert isinstance(args, str) and json.loads(args) == {"path": "a"}
     assert json.loads(msgs[1]["content"]) == {"status": "ok", "data": "z"}
 
+
+
+def test_mixed_batch_blocked_first_pairs_refusal_with_correct_id():
+    """GH#6: a gate-refused call streams no call event, but its denial
+    reply bears the blocked call's id. Arrival: call_B, reply_A, reply_B.
+    The grouping layer splits this into {B:[rA]} + {[]:[rB]}; the
+    serializer must NOT attach A's refusal content to B's call id."""
+    from wisp.core.runtime import _serialize_tool_exchanges
+
+    session: dict = {"messages": []}
+    field_reader = lambda ev, key: ev.get(key)
+    call_B = {"type": "tool_call", "id": "call-B", "name": "write_file",
+              "arguments": {"path": "b"}}
+    reply_A = {"type": "tool_result", "id": "call-A", "tool_call_id": "call-A",
+               "name": "read_file", "result": "[Blocked: user declined read_file]"}
+    reply_B = {"type": "tool_result", "id": "call-B", "tool_call_id": "call-B",
+               "name": "write_file", "result": "wrote b"}
+    _serialize_tool_exchanges(
+        session,
+        [{"calls": [call_B], "replies": [reply_A]},
+         {"calls": [], "replies": [reply_B]}],
+        field_reader,
+    )
+    msgs = session["messages"]
+    assert_strict_openai_history(msgs)
+    # Every reply's tool_call_id must be declared on its preceding block,
+    # and the refusal content must sit under A's id — never B's.
+    for m in msgs:
+        if m.get("role") != "tool":
+            continue
+        content = str(m.get("content", ""))
+        if "[Blocked:" in content:
+            assert m["tool_call_id"] == "call-A", (
+                f"refusal attached to wrong call id: {m['tool_call_id']}")
+    denials = [m for m in msgs
+                 if m.get("role") == "tool" and "[Blocked:" in str(m.get("content", ""))]
+    assert len(denials) == 1
+    assert denials[0]["tool_call_id"] == "call-A"
+    block_a = next(b for m in msgs if m.get("tool_calls") for b in m["tool_calls"]
+                   if b["id"] == "call-A")
+    assert block_a["function"]["name"] == "read_file"
+
+
+def test_crossed_arrivals_still_pair_by_id():
+    """Same mechanism, no gate involved: crossed reply order must not
+    swap contents between calls."""
+    from wisp.core.runtime import _serialize_tool_exchanges
+
+    session: dict = {"messages": []}
+    field_reader = lambda ev, key: ev.get(key)
+    call_A = {"type": "tool_call", "id": "call-A", "name": "read_file",
+              "arguments": {"path": "a"}}
+    call_B = {"type": "tool_call", "id": "call-B", "name": "write_file",
+              "arguments": {"path": "b"}}
+    reply_B = {"type": "tool_result", "id": "call-B", "tool_call_id": "call-B",
+               "name": "write_file", "result": "wrote b"}
+    reply_A = {"type": "tool_result", "id": "call-A", "tool_call_id": "call-A",
+               "name": "read_file", "result": "alpha"}
+    _serialize_tool_exchanges(
+        session,
+        [{"calls": [call_A, call_B], "replies": [reply_B, reply_A]}],
+        field_reader,
+    )
+    msgs = session["messages"]
+    assert_strict_openai_history(msgs)
+    by_id = {m["tool_call_id"]: str(m.get("content", ""))
+             for m in msgs if m.get("role") == "tool"}
+    assert by_id == {"call-A": "alpha", "call-B": "wrote b"}

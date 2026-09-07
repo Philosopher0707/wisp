@@ -40,25 +40,44 @@ def _serialize_tool_exchanges(
     Per provider boundary: ONE assistant message holding every tool_calls
     block, IMMEDIATELY followed by that boundary's role:"tool" replies.
 
-    Pairing is POSITIONAL inside a boundary (calls[i] <-> replies[i]):
-    streamed tool_call events may carry no stable id while tool_result
-    events get one independently, so identity comes from the call event,
-    falling back to its paired reply's id, falling back to a fresh id
-    shared by both sides. Missing replies (turn interrupted mid-execute)
-    get an honest placeholder; reply-only groups (gate-refused calls that
-    never streamed a call event) synthesize their block.
+    Pairing is BY tool_call_id inside a boundary (GH#6): positional
+    pairing corrupts mixed batches, because a gate-refused call streams
+    NO call event while its denial reply still arrives — sequence
+    call_B, reply_A, reply_B paired positionally as (call_B<->reply_A),
+    attaching A's refusal content to B's call id in the persisted
+    transcript. Identity comes from the reply's tool_call_id (falling back
+    to its own id), matched against the call event's id; id-less traffic
+    matches first-unmatched in arrival order, which degrades exactly to
+    the old positional behavior. Missing replies (turn interrupted
+    mid-execute) get an honest placeholder; reply-only groups
+    (gate-refused calls that never streamed a call event) synthesize
+    their block. Emission order is deterministic: calls in arrival order,
+    then unmatched replies in arrival order.
     """
     for ex in exchanges:
         calls, replies = ex["calls"], ex["replies"]
-        total = max(len(calls), len(replies))
-        if total == 0:
+        if not calls and not replies:
             continue
+
+        def _reply_key(rp: dict[str, Any]) -> Any:
+            return rp.get("tool_call_id") or field_reader(rp, "id")
+
+        remaining = list(replies)
+        pairs: list[tuple[dict[str, Any] | None, dict[str, Any] | None]] = []
+        for c in calls:
+            key = field_reader(c, "id")
+            match: dict[str, Any] | None = None
+            for i, rp in enumerate(remaining):
+                if _reply_key(rp) == key:
+                    match = remaining.pop(i)
+                    break
+            pairs.append((c, match))
+        for rp in remaining:
+            pairs.append((None, rp))
+
         blocks: list[dict[str, Any]] = []
         reply_msgs: list[dict[str, Any]] = []
-        for i in range(total):
-            c = calls[i] if i < len(calls) else None
-            rp = replies[i] if i < len(replies) else None
-
+        for c, rp in pairs:
             name = ""
             if c is not None:
                 name = field_reader(c, "name") or ""
