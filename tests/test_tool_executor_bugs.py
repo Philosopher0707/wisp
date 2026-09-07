@@ -322,10 +322,10 @@ def _collect(te, tool_name, args, workspace="/tmp"):
     return asyncio.run(_run())
 
 
-def _mcp_targets(to_thread_mock):
-    """First positional arg of every to_thread call that targets MCP."""
+def _mcp_targets(dispatch_mock):
+    """First positional arg of every dispatched call that targets MCP."""
     import wisp.tools.registry as reg
-    return [c.args[0] for c in to_thread_mock.call_args_list
+    return [c.args[0] for c in dispatch_mock.call_args_list
             if c.args and c.args[0] not in (reg.execute_tool,)]
 
 
@@ -360,34 +360,38 @@ def test_builtin_beats_shadowing_mcp_bare_name(tmp_path):
 def test_prefixed_mcp_still_routes_to_server(tmp_path):
     """Canonical prefixed form reaches the MCP server regardless of collisions."""
     from wisp.tool_executor import ToolExecutor
+    from wisp.tool_executor import ToolExecutor as _TE
 
     mgr = _FakeMCPManager(["read_file"])
     cfg = _mk_config(str(tmp_path), PermissionMode.FULL, auto_approve=True)
     te = ToolExecutor(config=cfg, hook_manager=_make_async_hook_mgr(), mcp=mgr)
 
-    with patch("asyncio.to_thread", new_callable=AsyncMock,
-               return_value="MCP-RESULT") as tt:
+    with patch.object(_TE, "_run_blocking", new_callable=AsyncMock,
+                      return_value="MCP-RESULT") as rb:
         _collect(te, "mcp:srv/read_file", {"path": "/tmp/x"})
 
-    targets = _mcp_targets(tt)
+    targets = _mcp_targets(rb)
     assert len(targets) == 1 and targets[0] == mgr.call_tool
-    call = next(c for c in tt.call_args_list if c.args and c.args[0] == mgr.call_tool)
+    call = next(c for c in rb.call_args_list if c.args and c.args[0] == mgr.call_tool)
     assert call.args[1] == "mcp:srv/read_file"
+    # GH#7.1: bounded network pool, never the shared default executor.
+    assert call.kwargs.get("pool") is te._network_pool
 
 
 def test_noncolliding_bare_name_routes_to_mcp(tmp_path):
     """A pure MCP tool name (no builtin collision) still routes to MCP."""
     from wisp.tool_executor import ToolExecutor
+    from wisp.tool_executor import ToolExecutor as _TE
 
     mgr = _FakeMCPManager(["acme_widget_spin"])
     cfg = _mk_config(str(tmp_path), PermissionMode.FULL, auto_approve=True)
     te = ToolExecutor(config=cfg, hook_manager=_make_async_hook_mgr(), mcp=mgr)
 
-    with patch("asyncio.to_thread", new_callable=AsyncMock,
-               return_value="MCP-RESULT") as tt:
+    with patch.object(_TE, "_run_blocking", new_callable=AsyncMock,
+                      return_value="MCP-RESULT") as rb:
         _collect(te, "acme_widget_spin", {"query": "x"})
 
-    targets = _mcp_targets(tt)
+    targets = _mcp_targets(rb)
     assert len(targets) == 1 and targets[0] == mgr.call_tool
 
 

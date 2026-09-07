@@ -111,3 +111,68 @@ async def test_composition_shutdown_closes_tool_pool():
             network_pool.shutdown(wait=False)
     assert called == [False]
     assert network_called == [False]
+
+
+@pytest.mark.asyncio
+async def test_saturated_network_pool_errors_cleanly_and_spares_default_pool(
+    tmp_path, monkeypatch,
+):
+    """GH#7.2: size-1 network pool with N=2 stuck fetches + 1 fast read.
+
+    Stuck fetches must each error cleanly on the tool timeout (no hang
+    past it), the default pool must stay usable throughout, and orphan
+    accounting must attribute both leaks to the network pool.
+    """
+    import asyncio as _asyncio
+    import time as _time
+
+    (tmp_path / "fast.txt").write_text("fast-data")
+    config = WispConfig().replace(
+        tool_timeout=1, tool_pool_size=2, tool_pool_network_size=1)
+    ex = ToolExecutor(config=config)
+    try:
+        import wisp.tools.registry as reg
+
+        def _stuck(*a, **k):
+            import time as _t
+            _t.sleep(2)  # short orphan: threads linger, never killable
+
+        monkeypatch.setitem(reg.TOOL_IMPLS, "web_fetch", _stuck)
+        monkeypatch.setattr(reg, "_build_tool_metadata", lambda *a, **k: {})
+
+        async def _run(name, args, cid):
+            out = []
+            async for ev in ex.execute(
+                name, args, str(tmp_path), tool_call_id=cid,
+            ):
+                if getattr(ev.type, "value", str(ev.type)) == "tool_result":
+                    out.append(json.loads(ev.data["result"]))
+            assert out, f"no tool_result for {name}"
+            return out[-1]
+
+        async def _timed_fast():
+            start = _time.monotonic()
+            payload = await _run("read_file", {"path": "fast.txt"}, "f1")
+            return payload, _time.monotonic() - start
+
+        started = _time.monotonic()
+        (r1, r2), (fast, fast_elapsed) = await _asyncio.gather(
+            _asyncio.gather(
+                _run("web_fetch", {"url": "https://example.com/a"}, "s1"),
+                _run("web_fetch", {"url": "https://example.com/b"}, "s2"),
+            ),
+            _timed_fast(),
+        )
+        total = _time.monotonic() - started
+        for r in (r1, r2):
+            assert r["status"] == "error", r
+            assert "timed out" in r["data"], r
+        assert total < 8.0, f"saturated pool hung the turn: {total:.1f}s"
+        assert fast["status"] == "ok", fast
+        assert "fast-data" in json.dumps(fast), fast
+        assert fast_elapsed < 3.0, f"default pool starved: {fast_elapsed:.1f}s"
+        assert ex.network_leaked_tool_threads == 2
+        assert ex.leaked_tool_threads == 0
+    finally:
+        ex._tool_pool.shutdown(wait=False)
+        ex._network_pool.shutdown(wait=False)

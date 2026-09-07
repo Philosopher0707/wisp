@@ -116,3 +116,29 @@ class TestAgentMetrics:
         assert "turns=1" in r
         assert "tokens=375" in r  # 1000/4 + 500/4 = 375
         assert "tools=1" in r
+
+
+class TestPoolTimeoutBreakdown:
+    """GH#7.3: per-pool breakdown alongside the total (total kept for compat)."""
+
+    def test_breakdown_counts_per_pool(self):
+        from wisp.metrics import AgentMetrics
+
+        m = AgentMetrics()
+        m.record_pool_timeout("network")
+        m.record_pool_timeout("network")
+        m.record_pool_timeout("default")
+        assert m.pool_timeouts_total == 3
+        assert m.pool_timeouts_by_pool == {"network": 2, "default": 1}
+
+    def test_breakdown_in_snapshot_and_reset(self):
+        from wisp.metrics import AgentMetrics
+
+        m = AgentMetrics()
+        m.record_pool_timeout("mcp")
+        snap = m.snapshot()
+        assert snap["pool_timeouts_by_pool"] == {"mcp": 1}
+        assert snap["pool_timeouts_total"] == 1
+        m.reset()
+        assert m.pool_timeouts_by_pool == {}
+        assert m.pool_timeouts_total == 0

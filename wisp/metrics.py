@@ -50,6 +50,7 @@ class AgentMetrics:
     tool_blocks: int = 0           # dangerous-command blocks
     tool_approvals: int = 0        # approval prompts answered "yes"
     pool_timeouts_total: int = 0   # tool calls abandoned to a leaked pool thread
+    pool_timeouts_by_pool: dict[str, int] = field(default_factory=dict)
 
     def record_turn(self, latency_s: float, prompt_chars: int, completion_chars: int, chars_per_token: int = 4) -> None:
         """Record completion of one user turn."""
@@ -85,6 +86,9 @@ class AgentMetrics:
         """Record a tool timeout attributed to the named pool."""
         with self._lock:
             self.pool_timeouts_total += 1
+            self.pool_timeouts_by_pool[pool_name] = (
+                self.pool_timeouts_by_pool.get(pool_name, 0) + 1
+            )
 
     def record_interruption(self) -> None:
         with self._lock:
@@ -118,6 +122,7 @@ class AgentMetrics:
                 "tool_blocks": self.tool_blocks,
                 "tool_approvals": self.tool_approvals,
                 "pool_timeouts_total": self.pool_timeouts_total,
+                "pool_timeouts_by_pool": dict(self.pool_timeouts_by_pool),
             }
 
     def reset(self) -> None:
@@ -136,6 +141,7 @@ class AgentMetrics:
             self.tool_blocks = 0
             self.tool_approvals = 0
             self.pool_timeouts_total = 0
+            self.pool_timeouts_by_pool.clear()
 
     def __repr__(self) -> str:
         return (

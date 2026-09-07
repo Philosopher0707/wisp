@@ -136,3 +136,37 @@ class TestGetSchema:
             assert "type" in info, f"{key} missing type"
             assert "default" in info, f"{key} missing default"
             assert "description" in info, f"{key} missing description"
+
+
+class TestToolPoolSizeSettings:
+    """GH#7.4: pool sizes are validated, documented settings — not bare getattr."""
+
+    def test_valid_pool_sizes(self):
+        assert validate_config({"tool_pool_size": 8}) == []
+        assert validate_config({"tool_pool_network_size": 4}) == []
+
+    def test_pool_size_range_enforced(self):
+        assert validate_config({"tool_pool_size": 0})
+        assert validate_config({"tool_pool_network_size": 99})
+
+    def test_pool_size_type_enforced(self):
+        errors = validate_config({"tool_pool_size": "many"})
+        assert len(errors) == 1 and "tool_pool_size" in errors[0]
+
+    def test_schema_declares_env_vars(self):
+        schema = get_schema()
+        assert schema["tool_pool_size"]["env_var"] == "WISP_TOOL_POOL_SIZE"
+        assert schema["tool_pool_network_size"]["env_var"] == "WISP_TOOL_POOL_NETWORK_SIZE"
+
+    def test_config_reads_env_and_clamps(self, monkeypatch):
+        from wisp.config import WispConfig
+
+        monkeypatch.setenv("WISP_TOOL_POOL_SIZE", "3")
+        monkeypatch.setenv("WISP_TOOL_POOL_NETWORK_SIZE", "2")
+        cfg = WispConfig()
+        assert cfg.tool_pool_size == 3
+        assert cfg.tool_pool_network_size == 2
+        monkeypatch.setenv("WISP_TOOL_POOL_SIZE", "0")
+        assert WispConfig().tool_pool_size == 1, "out-of-range clamps to min"
+        monkeypatch.setenv("WISP_TOOL_POOL_SIZE", "notanint")
+        assert WispConfig().tool_pool_size == 8, "unparseable falls back to default"

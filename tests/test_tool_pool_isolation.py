@@ -129,3 +129,85 @@ def test_record_pool_timeout_unit():
     m.record_pool_timeout("network")
     m.record_pool_timeout("default")
     assert m.pool_timeouts_total == 2
+
+
+class _FakeMCPManager:
+    """Duck-typed stand-in for MCPManager (only call_tool is used)."""
+
+    def __init__(self, fn):
+        self._fn = fn
+        self.calls = []
+
+    def call_tool(self, name, args):
+        self.calls.append((name, args))
+        return self._fn(name, args)
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_times_out_on_network_pool():
+    """GH#7.1: a hung MCP stdio server must error cleanly, leak-counted."""
+    from wisp.metrics import AgentMetrics
+
+    def _stuck(name, args):
+        import time as _t
+        _t.sleep(3)
+
+    config = WispConfig().replace(tool_timeout=1, tool_pool_network_size=2)
+    metrics = AgentMetrics()
+    ex = ToolExecutor(config=config, mcp=_FakeMCPManager(_stuck), metrics=metrics)
+    try:
+        result = json.loads(await ex._call_mcp_tool("mcp:srv/tool", {"x": 1}))
+        assert result["status"] == "error", result
+        assert "timed out" in result["data"], result
+        assert ex.network_leaked_tool_threads == 1
+        assert ex.leaked_tool_threads == 0, "MCP must not consume the default pool"
+        assert metrics.pool_timeouts_by_pool.get("mcp") == 1
+        assert metrics.pool_timeouts_total == 1
+    finally:
+        _teardown(ex)
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_dispatched_to_network_pool():
+    """GH#7.1: MCP dispatch must target the network pool, not the default."""
+    config = WispConfig().replace(tool_timeout=5)
+    ex = ToolExecutor(config=config, mcp=_FakeMCPManager(lambda n, a: "mcp-ok"))
+    seen = {}
+    orig = ex._run_blocking
+
+    async def _recorder(fn, *args, **kwargs):
+        seen["pool"] = kwargs.get("pool")
+        return await orig(fn, *args, **kwargs)
+
+    ex._run_blocking = _recorder  # type: ignore[method-assign]
+    try:
+        # Fast path returns the raw string, unchanged from before (GH#7.1
+        # only changes thread placement + timeout, not the result shape).
+        result = await ex._call_mcp_tool("mcp:srv/tool", {})
+        assert result == "mcp-ok", result
+        assert seen.get("pool") is ex._network_pool
+    finally:
+        _teardown(ex)
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_still_truncates_and_reports_errors():
+    """Pre-existing MCP behavior (truncate, no-manager, exception) preserved."""
+    ex = ToolExecutor(config=WispConfig().replace(tool_timeout=5),
+                      mcp=_FakeMCPManager(lambda n, a: "z" * 9000))
+    try:
+        result = await ex._call_mcp_tool("mcp:srv/tool", {})
+        assert "truncated" in result
+
+        def _boom(name, args):
+            raise RuntimeError("server exploded")
+
+        ex.mcp = _FakeMCPManager(_boom)
+        err = json.loads(await ex._call_mcp_tool("mcp:srv/tool", {}))
+        assert err["status"] == "error" and "server exploded" in err["data"]
+
+        ex.mcp = None
+        nomgr = json.loads(await ex._call_mcp_tool("mcp:srv/tool", {}))
+        assert nomgr["status"] == "error" and "no MCP manager" in nomgr["data"]
+    finally:
+        _teardown(ex)

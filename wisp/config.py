@@ -259,6 +259,22 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Fully autonomous coding agent — auto-approves safe writes/bash, drives GraphRunner without human prompts (Cursor/Aider mode). Dangerous commands still blocked.",
         "env_var": "WISP_AUTONOMOUS",
     },
+    "tool_pool_size": {
+        "type": int,
+        "default": 8,
+        "min": 1,
+        "max": 64,
+        "description": "Worker threads for local tool execution (bounded pool)",
+        "env_var": "WISP_TOOL_POOL_SIZE",
+    },
+    "tool_pool_network_size": {
+        "type": int,
+        "default": 4,
+        "min": 1,
+        "max": 32,
+        "description": "Worker threads for network-bound tools and MCP calls (isolated pool)",
+        "env_var": "WISP_TOOL_POOL_NETWORK_SIZE",
+    },
 }
 
 
@@ -527,6 +543,8 @@ class WispConfig:
 
     # ── Concurrency & subagents ───────────────────────────────────
     thread_pool_size: int
+    tool_pool_size: int
+    tool_pool_network_size: int
     subagent_pool_size: int
     subagent_token_budget: int
     max_subagent_timeout: int
@@ -670,6 +688,12 @@ class WispConfig:
         # Concurrency limits
         object.__setattr__(self, "thread_pool_size", _parse_int(
             get_setting("thread_pool_size", "8"), 8, 1, 64
+        ))
+        object.__setattr__(self, "tool_pool_size", _parse_int(
+            get_setting("tool_pool_size", "8"), 8, 1, 64
+        ))
+        object.__setattr__(self, "tool_pool_network_size", _parse_int(
+            get_setting("tool_pool_network_size", "4"), 4, 1, 32
         ))
         object.__setattr__(self, "subagent_pool_size", _parse_int(
             get_setting("subagent_pool_size", "4"), 4, 1, 32

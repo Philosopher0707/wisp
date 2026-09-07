@@ -1298,19 +1298,50 @@ class ToolExecutor:
         return name
 
     async def _call_mcp_tool(self, func_name: str, func_args: dict) -> str:
-        """Call an MCP tool and truncate if needed.  Runs in a thread so stdio doesn't block the loop."""
+        """Call an MCP tool and truncate if needed.
+
+        Runs on the NETWORK pool under tool_timeout (GH#7.1): stdio
+        servers block on pipe reads that can hang forever, and the old
+        asyncio.to_thread ran on the shared default executor with no
+        timeout — one hung server starved every other to_thread user
+        server-wide. Orphan accounting mirrors the generic tool path
+        (leak counted on the network pool; metrics attributed to "mcp").
+        """
         if not self.mcp:
             return json.dumps({
                 "status": "error",
                 "tool": func_name,
                 "data": "MCP error: no MCP manager",
             }, ensure_ascii=False)
+        tool_timeout = getattr(self.config, "tool_timeout", 300) if self.config else 300
         try:
             canonical = self._canonical_mcp_name(func_name)
-            result = await asyncio.to_thread(self.mcp.call_tool, canonical, func_args)
+            async with asyncio.timeout(tool_timeout):
+                result = await self._run_blocking(
+                    self.mcp.call_tool, canonical, func_args,
+                    pool=self._network_pool,
+                )
             if isinstance(result, str) and len(result) > 8000:
                 result = result[:8000] + f"\n... [truncated {len(result)} total chars]"
             return result
+        except asyncio.TimeoutError:
+            # Unkillable worker thread, same as timed-out tools: count it
+            # on the pool that leaked it so starvation stays observable.
+            self.network_leaked_tool_threads += 1
+            logger.warning(
+                "MCP tool %s timed out after %ds — worker thread leaked "
+                "(%d total; network pool size %d)",
+                func_name, tool_timeout,
+                self.network_leaked_tool_threads,
+                self._network_pool._max_workers,
+            )
+            getattr(self.metrics, "record_pool_timeout", lambda *a: None)("mcp")
+            return json.dumps({
+                "status": "error",
+                "tool": func_name,
+                "data": f"MCP tool timed out after {tool_timeout}s",
+                "metadata": _build_tool_metadata(func_name, func_args, ""),
+            }, ensure_ascii=False)
         except Exception as e:
             tb = traceback.format_exc()
             logger.error("MCP tool %s failed: %s\n%s", func_name, str(e), tb)
