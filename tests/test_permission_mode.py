@@ -58,7 +58,9 @@ class TestReadOnlyMode:
         events = await _collect(executor, tool)
         result = _find_result(events)
         assert result is not None, f"Expected a tool_result for {tool}"
-        assert "Blocked" in result.data.get("result", ""), \
+        # Authority vocabulary is "Denied by <layer> layer" (pinned by
+        # test_no_bypass); "Blocked:" belongs to the legacy role gate.
+        assert "Denied" in result.data.get("result", ""), \
             f"{tool} should be blocked in read_only mode: {result.data}"
 
     @pytest.mark.parametrize("tool", [
