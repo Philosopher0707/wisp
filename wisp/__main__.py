@@ -1338,9 +1338,9 @@ def main():
                 print(error(f"✗ Unknown agents subcommand: {sub}"))
                 print(dim("  Try: list, status"))
 
-    elif first == "bench":
-        from wisp.benchmark.cli import run_bench
-        sys.exit(run_bench(rest))
+        elif first == "bench":
+            from wisp.benchmark.cli import run_bench
+            sys.exit(run_bench(rest))
 
     else:
         # Implicit mode: wisp [flags] 'prompt'  OR  wisp --print "prompt"

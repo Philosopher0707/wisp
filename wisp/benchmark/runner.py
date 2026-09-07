@@ -49,6 +49,14 @@ def make_ollama_core_factory(config: Any):
 
     def factory(model: str) -> WispAgentCore:
         cfg = config.model_copy() if hasattr(config, "model_copy") else config
+        if isinstance(cfg, dict):
+            # load_config() returns a plain dict — hydrate a real config so
+            # per-model swaps and provider construction see typed settings.
+            from wisp.config import WispConfig
+
+            base = WispConfig()
+            known = {f.name for f in base.__dataclass_fields__.values()}
+            cfg = base.replace(**{k: v for k, v in cfg.items() if k in known})
         try:
             object.__setattr__(cfg, "model", model)
         except Exception:

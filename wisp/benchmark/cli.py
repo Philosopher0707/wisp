@@ -44,7 +44,7 @@ def run_bench(argv: list[str]) -> int:
     config = load_config()
     models = [m.strip() for m in args.models.split(",") if m.strip()]
     if not models:
-        models = [config.model]
+        models = [config.get("model") or ""]
 
     try:
         tasks = tasks_by_ids([t.strip() for t in args.tasks.split(",") if t.strip()])
