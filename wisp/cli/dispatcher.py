@@ -270,6 +270,15 @@ class Dispatcher:
             )
             return CommandResult.FOLLOWUP
 
+        @self.register("subagents", "Open the background-worker monitor", usage="/subagents")
+        def _subagents(ctx: ReplContext, args: str) -> CommandResult:
+            opener = getattr(ctx.transport, "open_subagent_monitor", None)
+            if opener is None:
+                ctx.emit("Worker monitor unavailable in this transport.")
+                return CommandResult.CONSUMED
+            ctx.emit(opener())
+            return CommandResult.CONSUMED
+
         def _exit(ctx: ReplContext, args: str) -> CommandResult:
             return CommandResult.EXIT
 

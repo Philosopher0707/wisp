@@ -198,6 +198,9 @@ class CompositionRoot:
         self.tool_executor.background_agents = self.background_agents
         # Reachable from slash commands via runtime.orchestrator.
         self.subagent_orchestrator.background_agents = self.background_agents
+        # One shared ring set: blocking fanout children (orchestrator) and
+        # background agents (manager) are visible in the same monitor (GH#10).
+        self.subagent_orchestrator.worker_telemetry = self.background_agents.telemetry
 
         # Owned HTTP session registry (Phase 2.1, D4): pools acquired
         # through this registry are closed in shutdown(). Providers that

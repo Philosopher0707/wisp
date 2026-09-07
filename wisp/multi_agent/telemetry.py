@@ -17,15 +17,39 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from typing import Literal
 
 __all__ = [
     "TeleEvent",
     "AgentSnapshot",
+    "TeleKind",
+    "TeleStatus",
+    "mask_text",
     "SubagentTelemetryBuffer",
     "DEFAULT_MAX_EVENTS",
     "DEFAULT_MAX_BYTES",
     "MAX_EVENT_CHARS",
 ]
+
+TeleKind = Literal["started", "thinking", "tool_call", "tool_result", "progress", "settled"]
+TeleStatus = Literal["queued", "running", "settled-ok", "settled-fail", "cancelled"]
+
+
+def mask_text(text: str) -> str:
+    """Producer-boundary secret masking for telemetry payloads.
+
+    Task text and result summaries can carry tokens/keys — mask before the
+    event reaches any ring so no consumer can observe secrets. The auth
+    layer must never break telemetry, hence the guarded import.
+    """
+    try:
+        from wisp.auth.secrets import redact
+    except Exception:
+        return str(text)
+    try:
+        return redact(str(text))
+    except Exception:
+        return str(text)
 
 DEFAULT_MAX_EVENTS = 500
 DEFAULT_MAX_BYTES = 256_000
@@ -39,7 +63,7 @@ class TeleEvent:
     seq: int
     t: float  # monotonic seconds on the buffer-local clock
     agent_id: str
-    kind: str
+    kind: TeleKind
     text: str
 
 
@@ -50,7 +74,7 @@ class AgentSnapshot:
     agent_id: str
     label: str = ""
     role: str = ""
-    status: str = "running"  # queued|running|settled-ok|settled-fail|cancelled
+    status: TeleStatus = "running"  # queued|running|settled-ok|settled-fail|cancelled
     started_at: float = field(default_factory=time.monotonic)
     ended_at: float | None = None
     tool_calls: int = 0
@@ -76,16 +100,22 @@ class SubagentTelemetryBuffer:
         self._agents: dict[str, AgentSnapshot] = {}
 
     def register(self, agent_id: str, label: str = "", role: str = "") -> AgentSnapshot:
-        """Idempotently create the per-agent ring + snapshot."""
+        """Idempotently create the per-agent ring + snapshot.
+
+        A repeated worker name (e.g. ``fanout-0`` across turns) re-registers
+        only once the previous snapshot reached a terminal state; a live
+        worker keeps its ring so concurrent same-name runs never clobber.
+        """
         with self._lock:
             snap = self._agents.get(agent_id)
-            if snap is None:
-                snap = AgentSnapshot(agent_id=agent_id, label=label, role=role)
+            if snap is None or snap.status in ("settled-ok", "settled-fail", "cancelled"):
+                snap = AgentSnapshot(agent_id=agent_id, label=label or (snap.label if snap else ""),
+                                     role=role or (snap.role if snap else ""))
                 self._agents[agent_id] = snap
                 self._events[agent_id] = deque()
             return snap
 
-    def append(self, agent_id: str, kind: str, text: str) -> TeleEvent:
+    def append(self, agent_id: str, kind: TeleKind, text: str) -> TeleEvent:
         """Append one event; evict oldest-first past either bound."""
         clipped = str(text)
         if len(clipped) > MAX_EVENT_CHARS:

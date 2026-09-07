@@ -29,6 +29,7 @@ from ._runner import SubagentRunner
 from ._worktree_manager import WorktreeManager
 from .roles import ROLE_CONFIGS
 from .task import EventKind, OrchestratorEvent, SubagentContract, SubagentResult
+from .telemetry import mask_text
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,41 @@ async def _cancel_and_reap(tasks: list[asyncio.Task], *, owner: str) -> int:
 # admission refuses instead of admitting into certain overshoot.
 _MIN_ADMISSION_HEADROOM_TOKENS = 1_000
 _MAX_SUBAGENT_BRANCHING_DEFAULT = 3
+
+
+def _forward_task_event(sink: Any, event: OrchestratorEvent) -> None:
+    """Forward one runner TASK_* event into a telemetry ring (GH#10).
+
+    The blocking fanout path has no manager entries, so the orchestrator
+    authors started/settled itself keyed by contract name. Best-effort:
+    telemetry must never break the run path. The runner emits only
+    TASK_STARTED / TASK_COMPLETED / TASK_FAILED / TASK_RETRY — per-tool
+    granularity needs runner surgery and stays a follow-up.
+    """
+    try:
+        kind = getattr(event, "event_type", "")
+        payload = getattr(event, "payload", {}) or {}
+        worker = getattr(event, "task_id", "") or "subagent"
+        if kind == EventKind.TASK_STARTED:
+            role = str(payload.get("role", "") or "")
+            try:
+                sink.register(worker, label=worker, role=role)
+            except Exception:
+                pass
+            text = str(payload.get("description", "") or "")[:200]
+            sink.append(worker, "started", mask_text(f"{worker} claimed: {text}"))
+        elif kind == EventKind.TASK_COMPLETED:
+            out = str(payload.get("output", "") or "")[:160]
+            sink.append(worker, "settled", mask_text(f"ok: {out}" if out else "ok"))
+        elif kind == EventKind.TASK_FAILED:
+            err = str(payload.get("error", "") or "")[:160]
+            sink.append(worker, "settled", mask_text(f"failed: {err}"))
+        elif kind:
+            detail = str(payload.get("error", "") or "")[:200]
+            text = f"{kind}{(': ' + detail) if detail else ''}"
+            sink.append(worker, "progress", mask_text(text))
+    except Exception:
+        logging.getLogger(__name__).debug("Task-event forward failed", exc_info=True)
 
 
 class BudgetTracker:
@@ -322,6 +358,7 @@ class SubagentOrchestrator:
         hook_manager: Any = None,
         agent_runtime: Any = None,
         store: Any = None,
+        telemetry: Any = None,
     ):
         self.parent = parent_agent
         self.config = config or (getattr(parent_agent, "config", None) if parent_agent else WispConfig())
@@ -339,6 +376,10 @@ class SubagentOrchestrator:
         # where REPL starts from home dir but project is in a subdirectory.
         self._resolve_git_root()
         self.hook_manager = hook_manager
+        # Worker telemetry rings (GH#10): when set, the blocking fanout path
+        # forwards TASK_* lifecycle events here so the monitor sees blocking
+        # children too. Distinct from Telemetry (aggregate metrics below).
+        self.worker_telemetry = telemetry
 
         # Unique cache namespace — prevents cross-session cache collisions
         import uuid
@@ -1488,6 +1529,8 @@ class SubagentOrchestrator:
         contract.timeout_seconds = self._clamp_subagent_timeout(contract.timeout_seconds)
 
         # ── Progress callback ──────────────────────────────────────────
+        telemetry_sink = self.worker_telemetry
+
         async def _progress(event: OrchestratorEvent) -> None:
             if event.event_type == EventKind.TASK_STARTED:
                 logger.info("[sub] %s started", event.task_id)
@@ -1495,6 +1538,8 @@ class SubagentOrchestrator:
                 logger.info("[sub] %s completed", event.task_id)
             elif event.event_type == EventKind.TASK_FAILED:
                 logger.warning("[sub] %s failed: %s", event.task_id, event.payload.get("error", ""))
+            if telemetry_sink is not None:
+                _forward_task_event(telemetry_sink, event)
 
         contract.progress_callback = _progress
         # auto_retry only retries on non-timeout failures (e.g. transient errors).

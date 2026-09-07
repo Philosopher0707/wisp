@@ -647,6 +647,11 @@ class CLITransport(Transport):
         self.background_agents = background_agents
         self._bg_task: asyncio.Task[None] | None = None
         self._bg_queue: Any | None = None
+        # Monitor suspension (GH#10): while the alternate-screen worker
+        # monitor owns the terminal, bg notices buffer here instead of
+        # writing stdout — drained in order when the monitor exits.
+        self._suspend_bg_output = False
+        self._pending_bg_lines: list[str] = []
         self._gate_key_reader = None  # Injectable single-keystroke reader; None keeps the line reader
         self._stdin: Any = None
         self._stdout: Any = None
@@ -995,7 +1000,13 @@ class CLITransport(Transport):
         Same pause/write/resume protocol as the SUBAGENT branch: the
         watcher shares stdout with the spinner, so an unpaused notice
         landing mid-frame smears the live row (GH#8).
+
+        While the worker monitor owns the terminal (_suspend_bg_output),
+        the line buffers instead — replayed in order on monitor exit.
         """
+        if self._suspend_bg_output:
+            self._pending_bg_lines.append(text)
+            return
         spinner = self._get_spinner()
         had_row = self._spinner is not None and getattr(self._spinner, "_active", False)
         if had_row:
@@ -1004,6 +1015,47 @@ class CLITransport(Transport):
         out.flush()
         if had_row:
             spinner.resume()
+
+    def open_subagent_monitor(self) -> str:
+        """Run the alternate-screen worker monitor; restore REPL after.
+
+        /subagents bridge (GH#10): stops the spinner row, parks the
+        typeahead stdin reader (same handshake as approval prompts), and
+        suspends bg-notice writes while the Textual monitor owns the
+        terminal. Everything is restored in ``finally`` — buffered notices
+        replay in order — so the REPL scrollback continues (**no
+        prompt_toolkit or Rich Live enters the REPL path**).
+        Returns a one-line status for the REPL to print.
+        """
+        mgr = self.background_agents
+        telemetry = getattr(mgr, "telemetry", None) if mgr is not None else None
+        if mgr is None or telemetry is None:
+            return "No background agents in this session."
+        if not sys.stdin.isatty():
+            return "The worker monitor needs an interactive terminal."
+        if self._spinner is not None:
+            self._spinner.stop()
+        typeahead = TypeAheadBuffer.active_instance()
+        parked = typeahead is not None and typeahead.enabled
+        if parked:
+            typeahead.pause()
+        self._suspend_bg_output = True
+        pending: list[str] = []
+        try:
+            from wisp.tui.screens.subagents import SubagentMonitorApp
+            SubagentMonitorApp(telemetry, manager=mgr).run()
+        except Exception as exc:
+            logger.debug("Subagent monitor failed", exc_info=True)
+            return f"Monitor failed: {exc}"
+        finally:
+            self._suspend_bg_output = False
+            if parked:
+                typeahead.resume()
+            pending, self._pending_bg_lines = self._pending_bg_lines, []
+            out = self._stdout or sys.stdout
+            for line in pending:
+                self._write_bg_line(out, line)
+        return f"Monitor closed ({len(pending)} buffered notice(s) replayed)."
 
     async def _watch_background(self) -> None:
         """Print spawn_background lifecycle notices between turn output.
@@ -1041,8 +1093,9 @@ class CLITransport(Transport):
                         continue
                     out = self._stdout or sys.stdout
                     self._write_bg_line(out, "\n" + dim(f"[bg] started {who} (continues across turns)") + "\n")
-                # agent_progress intentionally unrendered: per-turn noise;
-                # subagent_list remains the polling surface.
+                # agent_progress intentionally unrendered: per-turn noise.
+                # Full fidelity lives in the telemetry rings (GH#9/10) for the
+                # monitor; subagent_list remains the polling surface.
         except asyncio.CancelledError:
             raise
         except Exception:

@@ -20,7 +20,7 @@ from dataclasses import dataclass, field, replace as dc_replace
 from datetime import datetime, timezone
 from typing import Any, List
 
-from wisp.multi_agent.telemetry import SubagentTelemetryBuffer
+from wisp.multi_agent.telemetry import SubagentTelemetryBuffer, mask_text
 
 logger = logging.getLogger(__name__)
 
@@ -275,7 +275,7 @@ class BackgroundAgentManager:
             agent_id, label=entry.label,
             role=str(getattr(contract, "role", "generalist") or "generalist"),
         )
-        self.telemetry.append(
+        self._tel(
             agent_id, "started",
             f"{entry.label} claimed: {(getattr(contract, 'task', '') or '')[:200]}",
         )
@@ -290,6 +290,18 @@ class BackgroundAgentManager:
         return {"ok": True, "agent_id": agent_id, "label": entry.label, "status": entry.status}
 
     # ── Telemetry (GH#9) ────────────────────────────────────────────
+
+    def _tel(self, agent_id: str, kind: str, text: str) -> None:
+        """Append one telemetry event with producer-boundary secret masking.
+
+        Task text and result summaries can carry tokens/keys — mask before
+        the event reaches the ring so no consumer can observe secrets.
+        """
+        masked = mask_text(text)
+        try:
+            self.telemetry.append(agent_id, kind, masked)  # type: ignore[arg-type]
+        except Exception:
+            logger.debug("Telemetry append failed", exc_info=True)
 
     def _chain_telemetry_callback(self, entry: BackgroundAgentEntry) -> None:
         """Forward orchestrator TASK_* events into the telemetry ring.
@@ -317,7 +329,7 @@ class BackgroundAgentManager:
                         or payload.get("name")
                         or f"attempt {payload.get('attempt', '')}"
                     ).strip()[:200]
-                    manager.telemetry.append(
+                    manager._tel(
                         entry.id, "progress", f"{kind}{(': ' + detail) if detail else ''}")
             except Exception:
                 logger.debug("Telemetry forward failed", exc_info=True)
@@ -353,7 +365,7 @@ class BackgroundAgentManager:
                 "status": entry.status,
                 "summary": "",
             })
-            self.telemetry.append(entry.id, "settled", f"cancelled: {entry.error or ''}"[:200])
+            self._tel(entry.id, "settled", f"cancelled: {entry.error or ''}"[:200])
             entry.done.set()
             self._publish_settlement(entry)
             raise
@@ -387,7 +399,7 @@ class BackgroundAgentManager:
             note = f"ok: {summary[:160]}" if summary else "ok"
         else:
             note = f"failed: {(entry.error or 'subagent reported failure')[:160]}"
-        self.telemetry.append(entry.id, "settled", note)
+        self._tel(entry.id, "settled", note)
         entry.done.set()
         self._publish_settlement(entry)
 
@@ -507,7 +519,7 @@ class BackgroundAgentManager:
             "note": "continuation started",
             "task": message[:120],
         })
-        self.telemetry.append(
+        self._tel(
             entry.id, "progress", f"continuation started (turn {entry.turns + 1})")
         return {"ok": True, "agent_id": agent_id, "status": entry.status}
 
