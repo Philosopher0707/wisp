@@ -580,3 +580,38 @@ class TestNotificationsAndCounts:
         lines = mgr.drain_notifications()
         assert len(lines) == 1
         assert "go again" in lines[0]
+
+
+# ── Persist-skip surfacing (issue #5A) ────────────────────────────────────
+
+
+class TestPersistSkipCounter:
+    def _mgr_with_store(self, tmp_path):
+        from wisp.infra.store import UnifiedStore
+        from wisp.runs.store import SQLiteRunStore
+        store = SQLiteRunStore(UnifiedStore(tmp_path / "persist.db"))
+        mgr = BackgroundAgentManager(FakeOrchestrator(), run_store=store)
+        return mgr, store
+
+    def test_persist_status_stale_transition_counts_and_continues(self, tmp_path):
+        from wisp.multi_agent.background import BackgroundAgentEntry
+        from wisp.runs.record import RunRecord, RunState
+        mgr, rstore = self._mgr_with_store(tmp_path)
+        assert mgr.persist_stats() == {"persist_skipped_total": 0}
+        entry = BackgroundAgentEntry(id="bg-stale-1", label="stale", contract=_contract())
+        rstore.create(RunRecord(run_id="bg-stale-1", status=RunState.QUEUED))
+        rstore.transition("bg-stale-1", RunState.QUEUED, RunState.RUNNING, reason="t")
+        rstore.transition("bg-stale-1", RunState.RUNNING, RunState.SUCCEEDED, reason="t")
+        entry.status = STATUS_FAILED  # FAILED is illegal from terminal SUCCEEDED
+        mgr._persist_status(entry)  # must not raise
+        assert mgr.persist_stats() == {"persist_skipped_total": 1}
+        assert mgr.counts()["persist_skipped_total"] == 1
+
+    def test_persist_create_failure_counts_and_continues(self, tmp_path):
+        from wisp.multi_agent.background import BackgroundAgentEntry
+        from wisp.runs.record import RunRecord, RunState
+        mgr, rstore = self._mgr_with_store(tmp_path)
+        entry = BackgroundAgentEntry(id="bg-dup-1", label="dup", contract=_contract())
+        rstore.create(RunRecord(run_id="bg-dup-1", status=RunState.QUEUED))
+        mgr._persist_create(entry, entry.contract)  # duplicate id -> swallowed
+        assert mgr.persist_stats() == {"persist_skipped_total": 1}

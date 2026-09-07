@@ -67,3 +67,19 @@ def test_lease_claim_and_expiry(rstore):
     assert rstore.claim_lease("bg-5", owner="proc-A", ttl_s=-1) is True
     assert rstore.claim_lease("bg-5", owner="proc-B", ttl_s=60) is True
     assert rstore.claim_lease("bg-5", owner="proc-C", ttl_s=60) is False
+
+
+def test_list_skips_unknown_status_with_warning_and_counter(rstore, caplog):
+    import logging
+    store = rstore._store
+    store.bg_create({"id": "bogus-1", "prompt": "p", "status": "bogus-status"})
+    store.bg_create({"id": "good-1", "prompt": "p", "status": "queued"})
+    with caplog.at_level(logging.WARNING, logger="wisp.runs.store"):
+        recs = rstore.list()
+        recs2 = rstore.list()
+    ids = {r.run_id for r in recs}
+    assert "bogus-1" not in ids
+    assert "good-1" in ids
+    assert {r.run_id for r in recs2} == ids
+    assert rstore.skipped_unknown_total == 1
+    assert sum(1 for rec in caplog.records if "bogus-1" in rec.message) == 1

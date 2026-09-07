@@ -103,6 +103,9 @@ class BackgroundAgentManager:
                 lease_ttl_s=_LEASE_TTL_S, owner=self._owner_id)
         self._entries: dict[str, BackgroundAgentEntry] = {}
         self._counter = 0
+        # Durability canary (issue #5A): persistence is best-effort, so every
+        # swallowed persist failure is counted here for observability.
+        self.persist_skipped_total = 0
         # Settlement fan-out: each subscriber gets one event per agent
         # reaching a terminal state (used by WebSocket push).
         self._subscribers: set["asyncio.Queue[dict[str, Any]]"] = set()
@@ -172,8 +175,9 @@ class BackgroundAgentManager:
                 entry.id, RunState.QUEUED, RunState.RUNNING, reason="launched")
             self._run_store.claim_lease(entry.id, self._owner_id, _LEASE_TTL_S)
         except Exception:
-            logger.warning("run persistence failed on create %s",
-                           entry.id, exc_info=True)
+            self.persist_skipped_total += 1
+            logger.warning("run persistence failed on create %s (reason=create, persist_skipped_total=%d)",
+                           entry.id, self.persist_skipped_total, exc_info=True)
 
     def _persist_status(self, entry: BackgroundAgentEntry) -> None:
         """Best-effort status sync. Persistence must never break execution:
@@ -200,8 +204,9 @@ class BackgroundAgentManager:
             if target in (RunState.SUCCEEDED, RunState.FAILED, RunState.CANCELLED):
                 self._run_store.release_lease(entry.id)
         except Exception:
-            logger.warning("run persistence failed on status %s (%s)",
-                           entry.id, entry.status, exc_info=True)
+            self.persist_skipped_total += 1
+            logger.warning("run persistence failed on status %s (%s) (reason=status, persist_skipped_total=%d)",
+                           entry.id, entry.status, self.persist_skipped_total, exc_info=True)
 
     def recover(self, lease_owner: str = "") -> dict[str, int]:
         """Park rows abandoned by dead processes. Stale RUNNING → PAUSED
@@ -344,6 +349,7 @@ class BackgroundAgentManager:
             "status": entry.status,
             "turns": entry.turns,
             "elapsed_seconds": round(entry.elapsed(), 1),
+            "persist_skipped_total": self.persist_skipped_total,
         }
         if entry.status in _TERMINAL:
             snap["result"] = self._result_payload(entry)
@@ -494,7 +500,12 @@ class BackgroundAgentManager:
         out = {"running": 0, "completed": 0, "failed": 0, "cancelled": 0}
         for entry in self._entries.values():
             out[entry.status] = out.get(entry.status, 0) + 1
+        out["persist_skipped_total"] = self.persist_skipped_total
         return out
+
+    def persist_stats(self) -> dict[str, int]:
+        """Durability canary: how many best-effort persist writes were skipped."""
+        return {"persist_skipped_total": self.persist_skipped_total}
 
     def drain_notifications(self) -> List[str]:
         """One line per agent that reached a terminal state since last drain.

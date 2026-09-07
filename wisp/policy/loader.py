@@ -7,12 +7,15 @@ which layer controls each decision.
 """
 from __future__ import annotations
 import json
+import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
 from wisp.policy.bundle import PolicyBundle, verify_bundle
+
+logger = logging.getLogger(__name__)
 
 # approval strictness: higher number = stricter.
 _STRICTNESS = {"allow": 0, "approve": 1, "deny": 2}
@@ -201,8 +204,14 @@ def load_managed(cache_dir: str | Path, public_key_b64: str,
                     bundle_file.write_text(json.dumps(payload, sort_keys=True),
                                            encoding="utf-8")
                     _sig_path(bundle_file).write_text(sig, encoding="utf-8")
+                else:
+                    logger.warning("policy refresh revocation-seq regression; keeping cached bundle")
+            else:
+                logger.warning("policy refresh signature invalid; serving cached bundle")
         except Exception:
-            pass  # refresh failures keep serving cache (logged by caller)
+            # Refresh failures keep serving cache (offline-first); the failure
+            # itself is logged here — no caller logs it.
+            logger.warning("policy refresh failed; serving cached bundle", exc_info=True)
     if not bundle_file.exists():
         raise FileNotFoundError("no cached policy bundle (offline with no cache)")
     bundle, sig = _read_bundle_file(bundle_file)

@@ -6,11 +6,14 @@ process-memory registry is the source of truth — managers are caches.
 """
 from __future__ import annotations
 import abc
+import logging
 import time
 from typing import Any
 
 from wisp.contracts.run import Transition
 from wisp.runs.record import RunRecord, RunState, is_legal
+
+logger = logging.getLogger(__name__)
 
 # Legacy produced-vocabulary values (pre-M3 rows) mapped into the 8-state
 # machine on read. Unknown values surface as ValueError — fail loud, not
@@ -69,6 +72,11 @@ class SQLiteRunStore(RunStore):
 
     def __init__(self, store: Any):
         self._store = store
+        # Durability canary (issue #5B): rows with unknown statuses are still
+        # excluded from list(), but each distinct run is now counted once for
+        # observability (routine polling must not inflate the counter).
+        self.skipped_unknown_total = 0
+        self._skipped_unknown_ids: set[str] = set()
 
     def create(self, record: RunRecord) -> None:
         self._store.bg_create({
@@ -96,7 +104,14 @@ class SQLiteRunStore(RunStore):
             try:
                 rec = self.get(row["run_id"])
             except ValueError:
-                continue  # unknown status — visible via direct query, not here
+                # unknown status — visible via direct query, not here
+                run_id = row.get("run_id")
+                if run_id not in self._skipped_unknown_ids:
+                    self._skipped_unknown_ids.add(run_id)
+                    self.skipped_unknown_total += 1
+                    logger.warning("skipping run with unknown status %r (run_id=%s, skipped_unknown_total=%d)",
+                                   row.get("status"), row.get("run_id"), self.skipped_unknown_total)
+                continue
             if rec is not None and (status is None or rec.status == status):
                 out.append(rec)
         return out

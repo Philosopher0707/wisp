@@ -111,3 +111,60 @@ def test_disconnected_expired_trims(tmp_path):
                 tmp_path / "cache" / "policy-bundle.json.sig")
     eff = load_managed(tmp_path / "cache", pub, refresh_fn=None)
     assert eff.approval_matrix.get("run_bash", "deny") == "deny"
+
+
+def test_managed_expired_with_failing_refresh_returns_trimmed(caplog, tmp_path):
+    import logging
+    priv, pub = _keys()
+    _write_bundle_file(tmp_path / "policy-bundle.json",
+                       _payload(expires_at=time.time() - 5,
+                                approval_matrix={"run_bash": "allow",
+                                                 "spawn_background": "approve"}),
+                       priv)
+
+    def _boom():
+        raise ConnectionError("offline")
+
+    with caplog.at_level(logging.WARNING, logger="wisp.policy.loader"):
+        eff = load_managed(tmp_path, pub, refresh_fn=_boom)
+    # offline serving preserved: returns trimmed policy, does not raise
+    assert eff.network_policy == {"mode": "off"}
+    assert eff.approval_matrix and all(
+        v == "deny" for v in eff.approval_matrix.values())
+    assert any("refresh failed" in rec.message for rec in caplog.records)
+
+
+def test_managed_invalid_signature_refresh_serves_cache_with_warning(caplog, tmp_path):
+    import logging
+    from wisp.policy.loader import CACHE_FILE
+    priv, pub = _keys()
+    seed = _payload(revocation_seq=5)
+    load_managed(tmp_path, pub, refresh_fn=lambda: (
+        seed, sign_bundle(PolicyBundle.from_dict(seed), priv)))
+    # valid structure, wrong key → verify fails
+    wrong_priv, _ = _keys()
+    bad = _payload(revocation_seq=6)
+    bad_sig = sign_bundle(PolicyBundle.from_dict(bad), wrong_priv)
+    with caplog.at_level(logging.WARNING, logger="wisp.policy.loader"):
+        eff = load_managed(tmp_path, pub, refresh_fn=lambda: (bad, bad_sig))
+    assert eff.org_id == "acme"  # cache still served
+    cached = json.loads((tmp_path / CACHE_FILE).read_text(encoding="utf-8"))
+    assert cached["revocation_seq"] == 5
+    assert any("signature invalid" in rec.message for rec in caplog.records)
+
+
+def test_managed_rollback_refresh_logs_warning(caplog, tmp_path):
+    import logging
+    from wisp.policy.loader import CACHE_FILE
+    priv, pub = _keys()
+    new = _payload(revocation_seq=5)
+    load_managed(tmp_path, pub, refresh_fn=lambda: (
+        new, sign_bundle(PolicyBundle.from_dict(new), priv)))
+    old = _payload(revocation_seq=2)
+    with caplog.at_level(logging.WARNING, logger="wisp.policy.loader"):
+        eff = load_managed(tmp_path, pub, refresh_fn=lambda: (
+            old, sign_bundle(PolicyBundle.from_dict(old), priv)))
+    assert eff.org_id == "acme"  # cache kept
+    cached = json.loads((tmp_path / CACHE_FILE).read_text(encoding="utf-8"))
+    assert cached["revocation_seq"] == 5
+    assert any("revocation-seq regression" in rec.message for rec in caplog.records)
