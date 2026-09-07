@@ -331,6 +331,75 @@ class TestGroup3Headless:
         assert len(lines) == 1, proc.stdout
         assert json.loads(lines[0]).get("ok") is True
 
+    def test_print_blackhole_server_falls_back(self, e2e) -> None:
+        """F5: a listener that accepts but never replies must not hang.
+
+        Binds :8000 with a black hole (accept-and-hold); --print must give
+        up within its server timeout and return the in-process answer.
+        Skips if :8000 is already taken (a real server owns the verdict).
+        """
+        import socket
+        import threading
+
+        hole = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        hole.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            hole.bind(("127.0.0.1", 8000))
+        except OSError:
+            pytest.skip("port 8000 occupied — a real server owns this path")
+        hole.listen(5)
+        stop = threading.Event()
+
+        def _hold() -> None:
+            while not stop.is_set():
+                try:
+                    hole.settimeout(0.5)
+                    conn, _ = hole.accept()
+                except OSError:
+                    continue
+                # Hold the connection open, never reply (stale server).
+                threading.Thread(target=_drain_conn,
+                                 args=(conn, stop), daemon=True).start()
+
+        def _drain_conn(conn: socket.socket, stop: threading.Event) -> None:
+            # Hold forever: recv timeouts are normal silence while the
+            # client waits — only a client close or stop ends the hold.
+            # (Breaking on the first timeout closes the socket, which the
+            # client reads as EOF and fast-falls-back: a false pin.)
+            try:
+                conn.settimeout(0.5)
+                while not stop.is_set():
+                    try:
+                        if not conn.recv(4096):
+                            break
+                    except socket.timeout:
+                        continue
+                    except OSError:
+                        break
+            finally:
+                try:
+                    conn.close()
+                except OSError:
+                    pass
+
+        thread = threading.Thread(target=_hold, daemon=True)
+        thread.start()
+        try:
+            start = time.time()
+            proc = run_cli(["--print", "say hi", "--output-format", "json"],
+                           e2e["home"], e2e["ws"], timeout=120)
+            elapsed = time.time() - start
+        finally:
+            stop.set()
+            hole.close()
+        assert proc.returncode == 0, proc.stderr
+        assert json.loads(proc.stdout).get("ok") is True
+        assert elapsed < 90, f"server fallback took {elapsed:.0f}s (unbounded?)"
+        # Lower bound proves the hole was actually held (not a fast
+        # disconnect/EOF, which falls back in ~3s): the client must have
+        # waited out its ~15s server read timeout.
+        assert elapsed > 10, f"fallback in {elapsed:.1f}s — hole never held?"
+
 
 # ══════════════════════════════════════════════════════════════════════
 # Group 4: Interactive REPL & TUI entrypoints

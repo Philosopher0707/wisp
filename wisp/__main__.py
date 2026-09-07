@@ -223,7 +223,10 @@ def cmd_print(prompt, model=None, session_id=None, output_format="json", quiet=F
     result = None
     exit_code = 0
 
-    # Try local server first
+    # Try local server first — bounded: a listener that accepts but never
+    # replies (stale server, port squatter) must not hang headless runs.
+    # (connect 5s, read 15s); on timeout we fall through to in-process,
+    # which returns the correct answer with at most duplicative server work.
     try:
         api_key = os.environ.get("WISP_API_KEY", "")
         headers = {}
@@ -237,7 +240,7 @@ def cmd_print(prompt, model=None, session_id=None, output_format="json", quiet=F
                 "session_id": session_id,
             },
             headers=headers,
-            timeout=600,
+            timeout=(5, 15),
         )
         if resp.status_code == 200:
             result = resp.json()
