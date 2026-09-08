@@ -11,7 +11,36 @@ import asyncio
 import logging
 import os
 import shutil
+import signal
 import subprocess
+
+
+async def _kill_process_group(process) -> None:
+    """SIGTERM then SIGKILL to the whole process group (never just the pid).
+
+    start_new_session makes the child PID equal its PGID, so grandchildren
+    die too and a reused PID can never point at an unrelated process.
+    Async: never blocks the event loop while waiting out SIGTERM.
+    """
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except Exception:
+        logger.debug("Process-group SIGTERM failed", exc_info=True)
+        return
+    try:
+        await asyncio.wait_for(process.wait(), timeout=2.0)
+    except asyncio.TimeoutError:
+        pass
+    if process.returncode is None:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+            await process.wait()
+        except ProcessLookupError:
+            pass
+        except Exception:
+            logger.debug("Process-group SIGKILL failed", exc_info=True)
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +216,10 @@ class NoopSandbox(SandboxProvider):
         danger = check_dangerous_command(command)
         if danger:
             return (-1, "", f"Dangerous command blocked: {danger}")
+        # Parity with the tool path: LLM-generated commands must not see
+        # credential env vars even when running unconfined on the host.
+        from wisp.tools._utils_env import credential_free_env
+        env, _stripped = credential_free_env()
         workdir = os.path.join(self.workspace, cwd) if cwd else self.workspace
         try:
             process = await asyncio.create_subprocess_exec(
@@ -194,14 +227,15 @@ class NoopSandbox(SandboxProvider):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=workdir,
+                env=env,
+                start_new_session=True,
             )
             try:
                 stdout_bytes, stderr_bytes = await asyncio.wait_for(
                     process.communicate(), timeout=timeout
                 )
             except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
+                await _kill_process_group(process)
                 return (-1, "", f"Command timed out after {timeout}s")
 
             stdout = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
@@ -250,6 +284,16 @@ def get_sandbox(workspace: str | None = None) -> SandboxProvider:
         # Workspace changed — tear down the stale sandbox before creating a new one
         logger.info("Sandbox workspace changed %s -> %s; recreating", current_ws, ws_abs)
         reset_sandbox()
+
+    # Explicit kill-switch: WISP_SANDBOX=off (also 0/false/no/host/noop)
+    # forces host execution for environments where confinement is handled
+    # outside wisp. Anything else means "confine when possible".
+    if os.environ.get("WISP_SANDBOX", "auto").strip().lower() in (
+        "off", "0", "false", "no", "host", "noop",
+    ):
+        _app_sandbox = NoopSandbox(ws_abs)
+        logger.info("Sandbox: host (explicitly disabled via WISP_SANDBOX=off)")
+        return _app_sandbox
 
     docker = DockerSandbox(ws_abs)
     if docker.is_available():
