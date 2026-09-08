@@ -59,6 +59,16 @@ The agent can delegate work to the background and keep talking to you:
 - **REST + WebSocket** surfaces (`/api/agents/background*`, `ws /ws/agent`) push lifecycle events — `agent_started`, `agent_progress`, `agent_settled` — so dashboards are live, not polled
 - **Settlement notifications**: when background work finishes between turns, the model is *told* on its next turn — no polling required
 
+### 🔭 Subagent Monitor (`/subagents`)
+Every worker's lifecycle streams into bounded per-agent telemetry rings (with secret masking at the source). `/subagents` in the REPL suspends the spinner, parks input, and opens a full-screen Textual monitor — roster plus live transcript per worker — then restores the terminal untouched:
+- **`]` / `[`** cycle workers (Tab is consumed by Textual focus navigation), **`c`** cancels the focused worker without touching the parent turn, **`q` / `Ctrl+O` / `Esc`** exits back to the REPL
+- Buffered background notices replay in order on exit; the stdio REPL path stays plain `input()` + ANSI (no prompt_toolkit, no Rich Live)
+
+### ↩️ Checkpoints & Rewind
+Every `write_file` / `edit_file` / `edit_file_multi` snapshots pre-mutation content automatically (bounded per-workspace store; failed mutations leave no snapshot):
+- **`rewind` tool** — the agent undoes its own bad edits: list checkpoints, restore by number or file (restoring a never-existed file deletes it; rewind itself is rewindable)
+- **`/rewind [seq|path]`** — same undo for humans in the REPL
+
 ### 🎼 Orchestration Patterns as Tools
 The model can compose subagents into higher-order strategies itself:
 - **`orchestrate_vote`** — N independent voters, consensus threshold, majority wins
@@ -73,6 +83,11 @@ Wisp records its own tool-call sequences, detects when a workflow repeats, and s
 - Re-captures *merge* (a `wisp_captures` count bumps); genuinely different step sequences become variants; foreign hand-written skills are never overwritten
 - Captured skills are immediately auto-discovered — including by future sessions
 
+### 🔌 User Hooks (`.wisp/hooks/*.json`)
+Your scripts around tool calls — block, warn, observe, or rewrite arguments, no wisp changes needed. Project hooks live in `.wisp/hooks/`, global ones in `~/.config/wisp/hooks/`; exit `0` allows, `1` warns (tool still runs), anything else blocks. Hooks see a strict allow-list env (`WISP_TOOL_NAME`, `WISP_TOOL_ARGS`, …) and can return `{"tool_args": {...}}` to rewrite the call:
+- **`/hooks`** lists loaded hooks with events and matchers
+- Full guide: [`docs/hooks.md`](docs/hooks.md)
+
 ### 🧭 Operating Context (the agent knows its own posture)
 Every turn's system prompt declares live state: model/provider, permission mode, workspace, session, subagent nesting depth, background-agent counts, plugin/MCP tool inventory, plus settled-work notifications. The "## Tools available" menu is generated from the live registry, so newly registered or MCP/plugin-provided tools announce themselves automatically.
 
@@ -86,6 +101,13 @@ Sessions auto-compact when they grow too long — old messages get summarized in
 Memory facts include timestamps in the system prompt so the model knows recency.
 Important facts survive ~30 days longer than normal facts during LRU eviction,
 but are no longer immortal — stale important facts can still be evicted.
+
+### 🔒 Confinement & Server Auth Defaults
+- **`run_bash` runs confined when Docker is available** (network-none, memory/CPU-capped container, workspace-mounted); otherwise it executes on the host with a loud `UNCONFINED` warning per call. `WISP_SANDBOX=off` forces host mode explicitly.
+- **`wisp server` refuses to boot unauthenticated by default** (exit 2 with key-minting instructions); `--no-auth` is an explicit, loudly-warned bypass. Non-loopback binds always require a key.
+
+### 🏁 Benchmark Predictions (`--predictions`)
+`wisp bench --models m1,m2 -t task --predictions preds.jsonl` runs the matrix and additionally writes SWE-bench-format predictions (`{instance_id, model_patch, model_name}` per line) — the turn's workspace git diff is captured win or lose, ready for the official harness.
 
 ### 📱 Native Android App
 Control your coding agent from anywhere. Features:
@@ -171,6 +193,11 @@ Then install the Android APK and connect to `wss://your-domain.com`.
 | `wisp compact <id>` | Compact session history |
 | `wisp session list` | List saved sessions |
 | `wisp session show <id>` | Show session details |
+| `wisp session trim <id> [n]` | Trim to last N exchanges |
+| `wisp skills` | List discovered skills |
+| `wisp swarm 'goal' [--roles ...]` | Dispatch a multi-agent swarm |
+| `wisp agents [list|status]` | Subagent roles / live swarm status |
+| `wisp bench -m m1,m2 [-t task] [--predictions f.jsonl]` | Benchmark matrix (+ SWE-bench predictions) |
 | `wisp memory list` | View remembered facts |
 | `wisp check` | Verify Ollama connectivity |
 | `wisp models` | List available models |
@@ -193,6 +220,9 @@ Then install the Android APK and connect to `wss://your-domain.com`.
 | `/skill suggest` | Show detected repeated workflows |
 | `/skill save <name>` | Save the captured workflow as a skill |
 | `/agents` (`/ba`) | Background agents: list, `<id>` detail, `cancel <id>`, `send <id> <msg>` |
+| `/subagents` | Full-screen worker monitor (telemetry rings) |
+| `/rewind [seq|path]` | Undo file edits via checkpoints |
+| `/hooks` | List loaded user hooks |
 | `/compact` | Compact session now |
 | `/tokens` | Show context usage |
 | `/approve` | Toggle auto-approve |
@@ -210,7 +240,8 @@ Then install the Android APK and connect to `wss://your-domain.com`.
 | `write_file` | Create or overwrite a file |
 | `edit_file` | Targeted text replacement (surgical edits) |
 | `edit_file_multi` | Multiple precise edits in a single call |
-| `run_bash` | Execute shell commands (dangerous commands blocked) |
+| `rewind` | Undo file edits via auto-checkpoints (list/restore) |
+| `run_bash` | Execute shell commands (Docker-confined when available, dangerous commands blocked) |
 | `list_files` | Explore directory structure |
 | `web_fetch` | Fetch content from URLs |
 | `web_search` | Search the web for current information |
@@ -354,9 +385,10 @@ wisp/
 │   │   ├── spinner.py       # Terminal inline spinner
 │   │   └── ...
 │   ├── tools/               # Tool schemas + implementations
-│   │   ├── registry.py      # TOOL_SCHEMAS + TOOL_IMPLS
+│   │   ├── registry.py      # TOOL_SCHEMAS + TOOL_IMPLS (42 tools)
+│   │   ├── checkpoints.py   # Pre-mutation snapshots + rewind
 │   │   └── ...
-│   ├── multi_agent/         # Subagent orchestration
+│   ├── multi_agent/         # Subagent orchestration (+ telemetry.py rings)
 │   ├── contracts/           # Versioned wire envelopes (events, tools, policy, runs)
 │   ├── auth/                # Local authority: principals, layered authz, secrets
 │   ├── runs/                # Durable runtime: RunStore, scheduler, compensation
@@ -364,13 +396,15 @@ wisp/
 │   ├── trace/ + eval/       # Evidence store, replay, OTLP, eval harness
 │   ├── task/                # Task lifecycle, plan review, profiles
 │   ├── release/             # Supply chain (SBOM, lock), health, diagnostics
-│   ├── infra/               # Security, telemetry, extensions
+│   ├── sandbox.py           # Docker/Noop confinement providers
+│   ├── infra/               # Security, telemetry, extensions (+ hook_types user hooks)
+│   ├── benchmark/           # Deterministic tasks + SWE-bench predictions
 │   ├── config.py            # Settings schema + resolution
 │   ├── commands.py          # REPL slash commands
 │   └── ...
 ├── android/                 # Android app
 │   └── app/src/main/java/   # Jetpack Compose UI
-├── tests/                   # 285 test files (3,950 tests)
+├── tests/                   # 310 test files (~4,200 tests)
 ├── skills/                  # Warp-compatible skill files
 ├── docker-compose.yml       # One-command cloud deploy
 └── docs/archive/            # Historical guides & reports
@@ -410,7 +444,7 @@ Wisp has undergone a comprehensive security audit (52 findings, 4 severity level
 
 ```bash
 # Production-hardened environment
-export WISP_API_KEY="sk-change-me-here"    # Required in production; set before start
+export WISP_API_KEY="sk-change-me-here"    # Required: `wisp server` refuses to boot without it (or pass --no-auth explicitly for local-only)
 export WISP_PRODUCTION_MODE="true"           # Blocks internal IPs and metadata services
 export WISP_ALLOWED_OLLAMA_HOSTS="localhost,127.0.0.1,my-llm.internal"
 export WISP_ALLOWED_WORKSPACE_ROOTS="/var/wisp-workspaces"  # Prevents workspace escape
@@ -429,7 +463,7 @@ Full audit report: [SECURITY_AUDIT_2025-05-21.md](docs/archive/SECURITY_AUDIT_20
 - 🔒 **Bash timeout** — Commands killed after 60 seconds
 - 🔒 **CORS restricted** — Same-origin by default, configurable via `WISP_CORS_ORIGINS`
 - 🔒 **TLS recommended** — Use `wss://` in production (Let's Encrypt / Cloudflare)
-- 🔒 **Docker sandbox recommended** — `NoopSandbox` (host execution) is the fallback when Docker is unavailable
+- 🔒 **Docker sandbox by default** — `run_bash` routes through `get_sandbox()`: Docker (network-none, capped) when the daemon is reachable, else host execution with a loud per-call `UNCONFINED` warning; `WISP_SANDBOX=off` forces host mode explicitly
 
 ---
 

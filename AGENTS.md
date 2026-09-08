@@ -20,7 +20,8 @@ Guidance for AI coding agents working in the Wisp codebase.
 | `wisp/core/events.py` | Event system | `AgentEvent`, 12 factory functions (`thinking()`, `tool_call()`, etc.), `EventType` enum |
 | `wisp/core/runtime.py` | Session management | `AgentRuntime`: session CRUD, per-session locks; `_get_core(session_id)` caches one `WispAgentCore` per (session, fingerprint), FIFO-bounded (`MAX_SESSION_CORES`); `invalidate_core_cache()` on config change |
 | `wisp/transport/base.py` | Transport ABC | `Transport`: `send()`, `recv()`, `approve()`, `start()`, `stop()` |
-| `wisp/transport/cli.py` | CLI transport | `CLITransport`: REPL loop, event rendering, thinking/content buffering |
+| `wisp/transport/cli.py` | CLI transport | `CLITransport`: REPL loop, event rendering, thinking/content buffering; `_write_bg_line()` pause/write/resume protocol for bg notices; `open_subagent_monitor()` suspend/park/drain bridge |
+| `wisp/cli/dispatcher.py` | Slash-command router | `Dispatcher.register()` decorator + `ReplContext` (runtime, transport, session, config); builtins: help/doctor/provider/model/expand/subagents/rewind/hooks; unknown names fall back to legacy registry, never reach the LLM |
 | `wisp/transport/renderer.py` | Terminal rendering | Pure functions: `render_tool_call()`, `_box()`, `_rule()`, `render_phase_bar()`, `render_turn_stats()` |
 | `wisp/transport/progress.py` | Progress tracking | `ProgressTracker`, `TurnProgress` — phase detection, tool counting, file tracking |
 | `wisp/transport/spinner.py` | Terminal spinner | `Spinner` — inline `\r`-based spinner with mode-aware frames |
@@ -31,7 +32,12 @@ Guidance for AI coding agents working in the Wisp codebase.
 | `wisp/tools/orchestration.py` | Orchestration pattern tools | `vote`, `map_reduce`, `chain`, `dag` behind `OrchestrationDeps(orchestrator, build_contract, tool_error)` — free functions, executor methods are one-line delegates |
 | `wisp/tools/subagent_tools.py` | Background-subagent lifecycle tools | `wait`/`list_agents`/`result`/`send`/`cancel` behind `SubagentDeps(resolve_manager, tool_error)`; wait clamps to the parent turn deadline |
 | `wisp/multi_agent/` | Subagent system | `SubagentOrchestrator`, `SubagentRunner`, `WorktreeManager`, `DelegationAnalyzer` |
-| `wisp/multi_agent/background.py` | Background agent registry | `BackgroundAgentManager`: launch/send/cancel, lifecycle pub-sub (`agent_started/progress/settled`) |
+| `wisp/multi_agent/background.py` | Background agent registry | `BackgroundAgentManager`: launch/send/cancel, lifecycle pub-sub (`agent_started/progress/settled`); publishes all lifecycle + chained TASK_* events into `telemetry` rings; `prune()` drops rings |
+| `wisp/multi_agent/telemetry.py` | Per-agent telemetry rings | `SubagentTelemetryBuffer`: dual-bounded (events + bytes) per-worker rings, replay (`transcript`) + cursor poll, settle-status mapping; `mask_text()` producer-boundary secret masking |
+| `wisp/tools/checkpoints.py` | File checkpoints | `CheckpointStore` (bounded per-workspace snapshots), `snapshot_before_mutation()`, `tool_rewind` (list/restore, rewindable rewind); auto-hooked in write/edit/edit_multi with drop-on-failed-mutation |
+| `wisp/tui/screens/subagents.py` | Worker monitor screen | `SubagentMonitorScreen` (roster + live transcript, `]`/`[` cycle — never Tab — `c` cancel, `q`/`Ctrl+O`/`Esc` exit) + `SubagentMonitorApp` standalone host for the REPL bridge |
+| `wisp/sandbox.py` | Command confinement | `SandboxProvider` ABC; `DockerSandbox` (network-none, capped) + `NoopSandbox` (host, credential-scrubbed); `get_sandbox()` singleton (Docker-first, loud host fallback, `WISP_SANDBOX=off` kill-switch); `run_bash` routes through it |
+| `wisp/benchmark/` | Benchmark + predictions | `run_task` (isolated ws, git-baseline/diff patch capture), `BenchResult.model_patch`, `run_bench --predictions PATH` (SWE-bench `{instance_id,model_patch,model_name}` JSONL), injectable core factory |
 | `wisp/skill_capture.py` | Workflow capture | `SkillCapture`: record tool sequences, detect repeats, render Warp-compatible SKILL.md with merge-on-recapture |
 | `wisp/config.py` | Configuration | `WispConfig` dataclass |
 | `wisp/colors.py` | Terminal colors | `success()`, `error()`, `warning()`, `dim()`, `info()`, `accent()`, `bold()` |
@@ -62,6 +68,11 @@ Guidance for AI coding agents working in the Wisp codebase.
 2. Call from `CLITransport._render_event()` in `cli.py`
 3. Follow existing patterns: use `BoxChars`, `display_width()`, `dim()`/`success()`/`error()`
 
+### Adding a slash command
+1. Register in `Dispatcher._register_builtins()` in `wisp/cli/dispatcher.py` via `@self.register("name", "desc", usage="/name")`
+2. Handler signature `(ctx: ReplContext, args: str) -> CommandResult`; read workspace via dict-or-object config pattern (see `_rewind`); never touch transport privates
+3. For terminal takeovers (monitor), suspend spinner + park typeahead + buffer bg writes, restore in `finally` (see `open_subagent_monitor()`)
+
 ## Testing
 
 ```bash
@@ -74,8 +85,19 @@ pytest tests/test_websocket.py tests/test_transport_headless.py -v
 # Core + runtime tests
 pytest tests/test_core_stateless.py tests/test_runtime_concurrent.py tests/test_provider_integration.py -v
 
-# Full suite (all 285 test files collect cleanly — 3,950 tests)
+# Full suite (310 test files, ~4,200 tests — foreign-session WIP files excluded below)
 python -m pytest tests/test_*.py -v
+
+# CLI surface E2E (hermetic HOME + mock provider, PTY repl/tui, 7+ groups)
+./scripts/audit_cli_surface.sh
+
+# Full suite minus known-foreign WIP (uncollectable until coordinated)
+python -m pytest tests/ -q --ignore=tests/test_auto_delegate_defense.py \
+  --ignore=tests/test_delegation_research_only.py \
+  --ignore=tests/test_input_and_interrupts.py \
+  --ignore=tests/test_subagent_enterprise.py \
+  --ignore=tests/e2e_live_background.py --ignore=tests/e2e_live_no_autodelegate.py \
+  --ignore=tests/manual_test_repl_skill_ack.py --ignore=tests/smoke_repl_multi_turn.py
 
 # Enterprise track gate (contracts, auth, runs, policy, trace, eval, task, release)
 python3 -m pytest tests/test_contracts_*.py tests/test_auth_*.py tests/test_runs_*.py \
