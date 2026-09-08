@@ -101,7 +101,11 @@ def _git_diff_patch(ws) -> str:
     """Unified diff of everything the turn changed (tracked + new files)."""
     _git(["add", "-N", "."], ws)  # intent-to-add: new files enter the diff
     rc, out = _git(["diff", "HEAD", "--", "."], ws)
-    return out if rc == 0 else ""
+    if rc != 0 or not out:
+        return ""
+    # _git() strips output; a patch missing its final newline is corrupt
+    # (git apply --check rejects it), so restore the terminator.
+    return out + "\n"
 
 
 async def run_task(
