@@ -85,9 +85,9 @@ class TestRunnerPredictions:
         lines = out.read_text(encoding="utf-8").splitlines()
         assert len(lines) == 1
         body = json.loads(lines[0])
-        assert set(body.keys()) == {"instance_id", "model_patch", "model_name"}
+        assert set(body.keys()) == {"instance_id", "model_patch", "model_name_or_path"}
         assert body["instance_id"] == "probe-instance-1"
-        assert body["model_name"] == "mock-model"
+        assert body["model_name_or_path"] == "mock-model"
         assert "answer.py" in body["model_patch"]
 
     def test_run_bench_predictions_flag(self, tmp_path, capsys) -> None:
@@ -105,6 +105,6 @@ class TestRunnerPredictions:
         lines = (tmp_path / "p.jsonl").read_text(encoding="utf-8").splitlines()
         assert len(lines) == 1
         assert set(json.loads(lines[0]).keys()) == {
-            "instance_id", "model_patch", "model_name"}
+            "instance_id", "model_patch", "model_name_or_path"}
         # tasks_by_ids import keeps linters honest about the id existing
         assert tasks_by_ids(["json-edit"])[0].id == "json-edit"

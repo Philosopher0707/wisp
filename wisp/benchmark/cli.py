@@ -96,6 +96,7 @@ def run_bench(argv: list[str], core_factory=None) -> int:
 
     if args.predictions:
         write_predictions_jsonl(args.predictions, models, results)
+        print(predictions_summary(results))
 
     failed = any(not r.passed for r in results)
     return 1 if failed else 0
@@ -104,8 +105,8 @@ def run_bench(argv: list[str], core_factory=None) -> int:
 def write_predictions_jsonl(path: str | Path, models: list[str],
                             results) -> Path:
     """Write SWE-bench-format predictions: one JSON per line with exactly
-    {instance_id, model_patch, model_name} — the keys the official harness
-    scores. Returns the written path."""
+    {instance_id, model_patch, model_name_or_path} — the keys the official
+    harness scores. Returns the written path."""
     import json
 
     out = Path(path)
@@ -115,6 +116,26 @@ def write_predictions_jsonl(path: str | Path, models: list[str],
             fh.write(json.dumps({
                 "instance_id": res.instance_id or res.task_id,
                 "model_patch": res.model_patch or "",
-                "model_name": res.model,
+                "model_name_or_path": res.model,
             }, ensure_ascii=False) + "\n")
     return out
+
+
+def predictions_summary(results) -> str:
+    """One-line ASCII diagnostic for a predictions file: count, apply
+    pass-rate, and touched-file/line totals across all patches."""
+    total = len(results)
+    applying = sum(1 for r in results if getattr(r, "patch_applies", False)
+                   and (r.model_patch or ""))
+    files = lines_add = lines_del = 0
+    for r in results:
+        for line in (r.model_patch or "").splitlines():
+            if line.startswith("+++ "):
+                if not line.endswith("/dev/null"):
+                    files += 1
+            elif line.startswith("+") and not line.startswith("+++"):
+                lines_add += 1
+            elif line.startswith("-") and not line.startswith("---"):
+                lines_del += 1
+    return (f"{total} prediction(s), {applying}/{total} patches apply cleanly, "
+            f"{files} file(s) touched (+{lines_add}/-{lines_del})")

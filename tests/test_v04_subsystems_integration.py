@@ -11,10 +11,9 @@ Boundary handshake tests for the five newly landed subsystems:
 Deliberate deviations from the audit brief (pinned, not silent):
   - Hooks live in ``<workspace>/.wisp/hooks/*.json`` (see docs/hooks.md),
     not ``.agent/hooks/`` — the tests use the real path.
-  - Predictions JSONL keys are ``{instance_id, model_patch, model_name}``
-    (wisp/benchmark/cli.py); the brief names ``model_name_or_path``,
-    which the official SWE-bench harness accepts as an alias but this
-    repo never writes. Pinned as-is, flagged in the audit report.
+  - Predictions JSONL keys are ``{instance_id, model_patch,
+    model_name_or_path}`` (wisp/benchmark/cli.py) — the official
+    SWE-bench key set (renamed from model_name in GH#20/S7).
 """
 
 from __future__ import annotations
@@ -595,11 +594,10 @@ class TestScenarioEBenchSerialization:
         lines = out.read_text(encoding="utf-8").splitlines()
         assert len(lines) == 1
         body = json.loads(lines[0])
-        # NOTE: repo writes `model_name`; the brief's `model_name_or_path`
-        # is the alias the official SWE-bench harness also accepts.
-        assert set(body.keys()) == {"instance_id", "model_patch", "model_name"}
+        assert set(body.keys()) == {"instance_id", "model_patch",
+                                    "model_name_or_path"}
         assert body["instance_id"] == "v04-probe-instance-1"
-        assert body["model_name"] == "mock-model"
+        assert body["model_name_or_path"] == "mock-model"
         assert "answer.py" in body["model_patch"]
 
     def test_run_bench_predictions_flag_end_to_end(
@@ -620,4 +618,4 @@ class TestScenarioEBenchSerialization:
             encoding="utf-8").splitlines()
         assert len(lines) == 1
         assert set(json.loads(lines[0]).keys()) == {
-            "instance_id", "model_patch", "model_name"}
+            "instance_id", "model_patch", "model_name_or_path"}

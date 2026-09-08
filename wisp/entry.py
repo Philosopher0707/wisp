@@ -64,6 +64,9 @@ def run_mode(mode: str, prompt: str | None = None, **kwargs) -> None:
     model = kwargs.get("model")
     if model:
         config = config.replace(model=model)
+    provider = kwargs.get("provider")
+    if provider:
+        config = config.replace(provider=provider)
     workspace = kwargs.get("workspace")
     if workspace:
         config = config.replace(workspace=workspace)

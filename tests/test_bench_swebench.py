@@ -175,5 +175,75 @@ class TestSweRun:
         assert rc == 0
         body = json.loads((tmp_path / "p.jsonl").read_text(encoding="utf-8"))
         assert body["instance_id"] == "mini__calc-1"
-        assert body["model_name"] == "mock-model"
+        assert body["model_name_or_path"] == "mock-model"
         assert "return a + b" in body["model_patch"]
+
+
+class TestApplyCheck:
+    def _fixed_ws(self, tmp_path, mini_repo) -> Path:
+        from wisp.benchmark.runner import _git_baseline
+        from wisp.benchmark.swebench import _setup_from_instance
+
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        _setup_from_instance(mini_repo, ws)
+        _git_baseline(ws)
+        (ws / "calc.py").write_text("def add(a, b):\n    return a + b\n",
+                                    encoding="utf-8")
+        return ws
+
+    def test_valid_patch_reverse_checks(self, tmp_path, mini_repo) -> None:
+        from wisp.benchmark.runner import _git_diff_patch
+        from wisp.benchmark.swebench import patch_applies_cleanly
+
+        ws = self._fixed_ws(tmp_path, mini_repo)
+        patch = _git_diff_patch(ws)
+        assert patch
+        assert patch_applies_cleanly(ws, patch) is True
+
+    def test_garbage_patch_fails(self, tmp_path, mini_repo) -> None:
+        from wisp.benchmark.swebench import _setup_from_instance, patch_applies_cleanly
+
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        _setup_from_instance(mini_repo, ws)
+        assert patch_applies_cleanly(ws, "not a diff at all") is False
+        assert patch_applies_cleanly(ws, "") is True
+        assert patch_applies_cleanly(tmp_path / "nope", "diff --git x") is False
+
+    def test_run_task_records_patch_applies(self, tmp_path, mini_repo) -> None:
+        import asyncio
+
+        from wisp.benchmark.runner import run_task
+
+        res = asyncio.run(run_task(
+            task_from_swe_instance(mini_repo), "mock-model",
+            _mock_core(_FIXED), workdir=tmp_path))
+        assert res.passed is True
+        assert res.patch_applies is True
+
+    def test_predictions_summary_shape(self) -> None:
+        from wisp.benchmark.cli import predictions_summary
+        from wisp.benchmark.runner import BenchResult
+
+        ok = BenchResult(model="m", task_id="t", passed=True,
+                         model_patch="diff --git a/f.py b/f.py\n"
+                                     "--- a/f.py\n+++ b/f.py\n@@ -1 +1 @@\n-a\n+b\n",
+                         patch_applies=True)
+        bad = BenchResult(model="m", task_id="t2", passed=False,
+                          model_patch="", patch_applies=False)
+        text = predictions_summary([ok, bad])
+        assert "2 prediction(s)" in text and "1/2 patches apply cleanly" in text
+        assert "1 file(s)" in text and "+1/-1" in text
+
+    def test_bench_prints_summary(self, tmp_path, mini_repo, capsys) -> None:
+        from wisp.benchmark.cli import run_bench
+
+        f = tmp_path / "inst.jsonl"
+        f.write_text(json.dumps(mini_repo) + "\n", encoding="utf-8")
+        run_bench(
+            ["--models", "mock-model", "--instances", str(f),
+             "--workdir", str(tmp_path / "ws"),
+             "--predictions", str(tmp_path / "p.jsonl")],
+            core_factory=_mock_core(_FIXED))
+        assert "apply cleanly" in capsys.readouterr().out

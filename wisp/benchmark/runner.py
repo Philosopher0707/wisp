@@ -34,6 +34,8 @@ class BenchResult:
     # SWE-bench competition surface: workspace git diff + instance key.
     instance_id: str = ""
     model_patch: str = ""
+    # Reverse-apply check (git apply --check -R) of model_patch.
+    patch_applies: bool = False
 
     def status(self) -> str:
         if self.timed_out:
@@ -98,9 +100,17 @@ def _git_baseline(ws) -> None:
 
 
 def _git_diff_patch(ws) -> str:
-    """Unified diff of everything the turn changed (tracked + new files)."""
+    """Unified diff of everything the turn changed (tracked + new files).
+
+    Tool exhaust (__pycache__, .pytest_cache) is excluded: it is never
+    model work, and binary hunks would corrupt the patch for
+    ``git apply --check`` downstream.
+    """
     _git(["add", "-N", "."], ws)  # intent-to-add: new files enter the diff
-    rc, out = _git(["diff", "HEAD", "--", "."], ws)
+    # NOTE: ':!...' short exclude magic is broken in some git builds
+    # (fatal: Unimplemented pathspec magic); the long form is portable.
+    rc, out = _git(["diff", "HEAD", "--", ".", ":(exclude)__pycache__",
+                    ":(exclude).pytest_cache"], ws)
     if rc != 0 or not out:
         return ""
     # _git() strips output; a patch missing its final newline is corrupt
@@ -174,6 +184,9 @@ async def run_task(
     # SWE-bench surface: capture the turn's workspace diff as the patch,
     # win or lose — a failing run's partial diff is still scorable data.
     result.model_patch = _git_diff_patch(ws)
+    if result.model_patch:
+        from wisp.benchmark.swebench import patch_applies_cleanly
+        result.patch_applies = patch_applies_cleanly(ws, result.model_patch)
     return result
 
 

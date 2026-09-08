@@ -118,21 +118,21 @@ def cmd_server(host="127.0.0.1", port=8000, no_auth=False):
     run_mode("server", host=host, port=port, no_auth=no_auth)
 
 
-def cmd_run(prompt, model=None, skill=None, workspace=None, auto_approve=False, session_id=None, show_thinking=False):
+def cmd_run(prompt, model=None, skill=None, workspace=None, auto_approve=False, session_id=None, show_thinking=False, provider=None):
     """Run Wisp with a prompt."""
     from wisp.entry import run_mode
     run_mode("cli", prompt=prompt, model=model, skill=skill, workspace=workspace,
-             auto_approve=auto_approve, session_id=session_id, show_thinking=show_thinking)
+             auto_approve=auto_approve, session_id=session_id, show_thinking=show_thinking, provider=provider)
 
 
-def cmd_repl(model=None, skill=None, workspace=None, session_id=None, show_thinking=False, auto_approve=False):
+def cmd_repl(model=None, skill=None, workspace=None, session_id=None, show_thinking=False, auto_approve=False, provider=None):
     """Run Wisp in interactive REPL mode."""
     from wisp.entry import run_mode
     run_mode("cli", model=model, skill=skill, workspace=workspace,
-             session_id=session_id, show_thinking=show_thinking, auto_approve=auto_approve)
+             session_id=session_id, show_thinking=show_thinking, auto_approve=auto_approve, provider=provider)
 
 
-def cmd_tui(model=None, workspace=None, show_thinking=False, auto_approve=False):
+def cmd_tui(model=None, workspace=None, show_thinking=False, auto_approve=False, provider=None):
     """Run the full-screen terminal app with a real composition root.
 
     The app needs root.runtime for local turns — building the bare
@@ -141,7 +141,8 @@ def cmd_tui(model=None, workspace=None, show_thinking=False, auto_approve=False)
     """
     from wisp.entry import run_mode
     run_mode("tui", model=model, workspace=workspace,
-             show_thinking=show_thinking, auto_approve=auto_approve)
+             show_thinking=show_thinking, auto_approve=auto_approve,
+             provider=provider)
 
 
 def cmd_skills(workspace=None):
@@ -941,6 +942,7 @@ _SHORT_HELP = """Usage: wisp [options] 'prompt'
 
 Options:
   --model, -m <name>       Ollama model to use (default: kimi-k2.6:cloud)
+  --provider, -p <name>    Provider backend: ollama, openai, nvidia, openrouter, mock
   --skill, -s <name>       Load a skill to guide the agent
   --session, -S <id>       Continue an existing session
   --workspace, -w <dir>    Working directory (default: current dir)
@@ -1147,6 +1149,7 @@ def main():
 
     # Global flags
     flags_model = None
+    flags_provider = None
     flags_skill = None
     flags_session = None
     flags_workspace = None
@@ -1158,7 +1161,7 @@ def main():
 
     def extract_global_flags(args):
         """Extract global flags from args list, return remaining args."""
-        nonlocal flags_model, flags_skill, flags_session, flags_workspace, flags_auto, flags_show_thinking
+        nonlocal flags_model, flags_provider, flags_skill, flags_session, flags_workspace, flags_auto, flags_show_thinking
         nonlocal flags_print, flags_output_format, flags_quiet
         result = []
         i = 0
@@ -1166,6 +1169,9 @@ def main():
             a = args[i]
             if a in ("--model", "-m") and i + 1 < len(args):
                 flags_model = args[i + 1]
+                i += 2
+            elif a in ("--provider", "-p") and i + 1 < len(args):
+                flags_provider = args[i + 1]
                 i += 2
             elif a in ("--skill", "-s") and i + 1 < len(args):
                 flags_skill = args[i + 1]
@@ -1206,13 +1212,13 @@ def main():
             if not rest:
                 print("✗ Please provide a prompt.")
                 return
-            cmd_run(" ".join(rest), flags_model, flags_skill, flags_workspace, flags_auto, flags_session, flags_show_thinking)
+            cmd_run(" ".join(rest), flags_model, flags_skill, flags_workspace, flags_auto, flags_session, flags_show_thinking, flags_provider)
 
         elif first == "repl":
-            cmd_repl(flags_model, flags_skill, flags_workspace, flags_session, flags_show_thinking, flags_auto)
+            cmd_repl(flags_model, flags_skill, flags_workspace, flags_session, flags_show_thinking, flags_auto, flags_provider)
 
         elif first == "tui":
-            cmd_tui(flags_model, flags_workspace, flags_show_thinking, flags_auto)
+            cmd_tui(flags_model, flags_workspace, flags_show_thinking, flags_auto, flags_provider)
 
         elif first == "session":
             if not rest:
@@ -1401,7 +1407,7 @@ def main():
             print(error("✗ Please provide a prompt."))
             print_help()
             return
-        cmd_run(" ".join(rest), flags_model, flags_skill, flags_workspace, flags_auto, flags_session, flags_show_thinking)
+        cmd_run(" ".join(rest), flags_model, flags_skill, flags_workspace, flags_auto, flags_session, flags_show_thinking, flags_provider)
 
 
 if __name__ == "__main__":

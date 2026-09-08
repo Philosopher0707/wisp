@@ -243,6 +243,20 @@ class TestGroup1Baseline:
                            ("e2e-flags",)).fetchall()
         assert rows, "session id from -S did not persist"
 
+    def test_provider_flag_selects_backend(self, e2e) -> None:
+        """-p/--provider overrides the provider for one invocation."""
+        home, ws = e2e["home"], e2e["ws"]
+        proc = run_cli(["-p", "mock", "run", "say hi"], home, ws,
+                       extra_env={"WISP_PROVIDER": "ollama",
+                                  "WISP_OLLAMA_URL": "http://127.0.0.1:9"})
+        assert proc.returncode == 0, proc.stderr
+        assert "Traceback" not in proc.stderr
+
+    def test_unknown_provider_fails_fast(self, e2e) -> None:
+        proc = run_cli(["-p", "wat", "run", "hi"], e2e["home"], e2e["ws"])
+        assert proc.returncode != 0
+        assert "Unknown provider" in (proc.stdout + proc.stderr)
+
 
 # ══════════════════════════════════════════════════════════════════════
 # Group 2: Diagnostics & provider subcommands
