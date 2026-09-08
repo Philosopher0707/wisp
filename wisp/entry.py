@@ -17,6 +17,7 @@ warnings.filterwarnings("ignore", category=SyntaxWarning)
 import asyncio
 import logging
 import signal
+import sys
 from collections import deque
 from pathlib import Path
 from typing import Any
@@ -103,6 +104,15 @@ def _run_cli(root: CompositionRoot, prompt: str | None = None, **kwargs) -> None
         hook_manager=getattr(root, "_tool_hook_manager", None),
     )
     transport.start()
+
+    # Interactive setup offer (GH#18): tty-only, mock counts as usable,
+    # scripts/pipes never block. A completed setup needs a restart since
+    # the live graph already holds the stale config.
+    from wisp.cli.setup import maybe_offer_setup
+    if maybe_offer_setup(config):
+        sys.stdout.write("Configuration saved — restart `wisp` to use it.\n")
+        sys.stdout.flush()
+        return
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)

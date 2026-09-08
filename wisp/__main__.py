@@ -160,6 +160,14 @@ def cmd_skills(workspace=None):
         print()
 
 
+def cmd_setup() -> int:
+    """Run the interactive provider setup wizard (GH#18)."""
+    from wisp.cli.setup import run_setup
+
+    result = run_setup()
+    return 0 if result and result.get("saved") else 1
+
+
 def cmd_config(set_kv=None, validate=False):
     """View or set configuration."""
     from wisp.config import validate_config, get_schema, _type_name
@@ -955,6 +963,7 @@ Subcommands:
   session trim <id> [n]    Trim session to last N exchanges (default: 10)
   session compact <id> [n] Summarize old messages, keep last N (default: 6)
   skills                   List discovered skills
+  setup                    Interactive provider/model/credentials wizard
   config [--set k=v]       View or set configuration
   check                    Verify Ollama connectivity
   models                   List available Ollama models
@@ -1017,6 +1026,7 @@ _SUBCOMMAND_HELP: dict[str, str] = {
         "Flags: -m model, -w workspace, -y auto-approve, -T show-thinking"
     ),
     "skills": 'Usage: wisp skills\n\nList all discovered skills.',
+    "setup": 'Usage: wisp setup\n\nInteractive wizard: pick a provider, choose a model, enter credentials, validate live, save.',
     "config": 'Usage: wisp config [key] [value]\n\nView or set configuration values. With no arguments, dumps effective config.',
     "check": 'Usage: wisp check\n\nVerify the provider is reachable and the configured model is usable.',
     "models": 'Usage: wisp models\n\nList models available on the Ollama endpoint.',
@@ -1063,6 +1073,7 @@ _SUBCOMMAND_HELP: dict[str, str] = {
 
 _SUBCOMMAND_NAMES = frozenset({
     "run", "repl", "tui", "skills", "config", "check", "models",
+    "setup",
     "session", "memory", "mcp", "policy", "trace", "replay", "audit", "task",
     "completion", "release",
     "git", "plan", "progress", "diagnose",
@@ -1256,6 +1267,8 @@ def main():
 
         elif first == "skills":
             cmd_skills(flags_workspace)
+        elif first == "setup":
+            sys.exit(cmd_setup())
         elif first == "config":
             set_kv = None
             validate = False

@@ -330,6 +330,18 @@ def _type_name(tp: type | tuple[type, ...]) -> str:
 # ── File I/O ─────────────────────────────────────────────────────────
 
 
+def _restrict_secret_file(path: Path) -> None:
+    """chmod 0600 best-effort: config/.env files can carry API keys.
+
+    Never raises — a restrictive umask may already handle it, and a
+    permission failure must not break the save itself.
+    """
+    try:
+        os.chmod(path, 0o600)
+    except Exception:
+        pass
+
+
 def get_config_path() -> Path:
     """Return path to wisp config file, creating dir if needed."""
     WISP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -360,7 +372,9 @@ def save_config(config: dict[str, Any]) -> None:
             "Cannot save config with invalid values:\n" + "\n".join(f"  - {e}" for e in errors)
         )
     cfg_path = get_config_path()
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg_path.write_text(json.dumps(config, indent=2) + "\n")
+    _restrict_secret_file(cfg_path)
 
 
 def get_setting(key: str, default: Any = None) -> Any:

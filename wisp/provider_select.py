@@ -399,6 +399,10 @@ def _upsert_env_file(path: "pathlib.Path", update: dict[str, str]) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        try:
+            os.chmod(path, 0o600)  # .env files carry API keys
+        except Exception:
+            pass
     except Exception:
         pass
 
