@@ -41,6 +41,11 @@ def run_bench(argv: list[str], core_factory=None) -> int:
         help="Write SWE-bench-format predictions JSONL here "
              "({instance_id, model_patch, model_name} per line)",
     )
+    parser.add_argument(
+        "--instances",
+        default=None,
+        help="SWE-bench-format instances JSONL to run instead of builtin tasks",
+    )
     args = parser.parse_args(argv)
 
     from wisp.benchmark.runner import make_ollama_core_factory, run_benchmark
@@ -53,7 +58,11 @@ def run_bench(argv: list[str], core_factory=None) -> int:
         models = [config.get("model") or ""]
 
     try:
-        tasks = tasks_by_ids([t.strip() for t in args.tasks.split(",") if t.strip()])
+        if args.instances:
+            from wisp.benchmark.swebench import tasks_from_jsonl
+            tasks = tasks_from_jsonl(args.instances)
+        else:
+            tasks = tasks_by_ids([t.strip() for t in args.tasks.split(",") if t.strip()])
     except ValueError as exc:
         print(f"✗ {exc}")
         return 2
