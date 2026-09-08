@@ -322,7 +322,11 @@ class TestCoreSeams:
         assert "exec_sandbox" in menu and "run_bash" not in menu
 
     def test_primitive_dispatch_end_to_end(self, tmp_path: Path) -> None:
+        # GH#25: thin names run through the wired ToolExecutor (gated path),
+        # never around it — without an executor they fail closed.
+        from wisp.config import WispConfig, PermissionMode
         from wisp.core.stateless import WispAgentCore
+        from wisp.tool_executor import ToolExecutor
 
         core = WispAgentCore()
         core.config = SimpleNamespace(thin_tools=True)  # type: ignore[assignment]
@@ -335,5 +339,12 @@ class TestCoreSeams:
                  "arguments": {"command": "echo dispatched"}},
                 {"workspace": str(tmp_path)})]
 
+        events = asyncio.run(_go())
+        assert events and "requires a wired ToolExecutor" in str(events[-1])
+
+        cfg = WispConfig().replace(
+            workspace=str(tmp_path), permission_mode=PermissionMode.FULL,
+            auto_approve=True)
+        core.tool_executor = ToolExecutor(config=cfg)
         events = asyncio.run(_go())
         assert events and "dispatched" in str(events[-1])

@@ -142,6 +142,10 @@ _DEFAULT_WRITE_TOOLS: set[str] = {
     "edit_file",
     "edit_file_multi",
     "run_bash",
+    # Thin-harness equivalents of the above (GH#25): same approval /
+    # plan-mode / read-only treatment as the 42-tool names they replace.
+    "exec_sandbox",
+    "fs_mutate",
     "git_branch",
     "git_commit",
     "git_push",
@@ -159,6 +163,11 @@ _DEFAULT_WRITE_TOOLS: set[str] = {
     "orchestrate_dag",
     "capture_skill",
 }
+
+# Thin-harness names that are ALWAYS write-classified (GH#25) — unioned
+# into every resolution in _get_write_tools so no config default or user
+# override can leave the run_bash / write_file equivalents ungated.
+_THIN_WRITE_TOOLS: set[str] = {"exec_sandbox", "fs_mutate"}
 
 # Pure, network-bound tools worth memoizing against model loops.
 _REPEAT_GUARD_TOOLS: frozenset[str] = frozenset({"web_fetch", "web_search"})
@@ -188,10 +197,16 @@ _SUBAGENT_TOOLS: frozenset[str] = frozenset({
 
 
 def _get_write_tools(config: Any = None) -> set[str]:
-    """Resolve write-classification tools from config (env: WISP_WRITE_TOOLS)."""
+    """Resolve write-classification tools from config (env: WISP_WRITE_TOOLS).
+
+    Thin-harness names are always unioned in: exec_sandbox / fs_mutate are
+    the gated path's equivalents of run_bash + write_file/edit_file, so no
+    user config (or config default) may accidentally leave them ungated
+    (GH#25). git_checkpoint stays read-classified, matching rewind.
+    """
     if config is not None and hasattr(config, "write_tools") and config.write_tools:
-        return set(config.write_tools)
-    return _DEFAULT_WRITE_TOOLS
+        return set(config.write_tools) | _THIN_WRITE_TOOLS
+    return set(_DEFAULT_WRITE_TOOLS) | _THIN_WRITE_TOOLS
 
 
 def _should_block_hook(hook_results: list) -> bool:
@@ -280,6 +295,51 @@ def _route_run_bash(ex: Any, fa: dict[str, Any], ws: str) -> Any:
     return ex._run_bash_tool(fa, ws)
 
 
+async def _run_primitive(name: str, func_args: dict[str, Any], workspace: str) -> str:
+    """Run one thin-harness primitive through the standard gated path.
+
+    The implementations live in ``wisp.tools.primitives`` (pydantic arg
+    validation, danger-list, workspace bounds, auto-checkpoint — shared
+    with the 42-tool path); this adapter only normalizes their outcome
+    to the executor's structured result shape so approval, hooks,
+    metrics, and post-processing treat primitives like any other tool.
+    """
+    from wisp.tools.primitives import PRIMITIVE_IMPLS
+
+    try:
+        raw = await PRIMITIVE_IMPLS[name](dict(func_args), workspace)
+    except ToolError as exc:
+        return json.dumps({"status": "error", "tool": name,
+                           "data": f"ToolError: {exc}"}, ensure_ascii=False)
+    except Exception as exc:  # never leak a traceback to the model
+        logger.warning("Primitive %s failed: %s", name, exc)
+        return json.dumps({"status": "error", "tool": name,
+                           "data": f"Unexpected error: {exc}"},
+                          ensure_ascii=False)
+    if isinstance(raw, str):
+        data: Any = raw
+    else:
+        try:
+            json.dumps(raw)
+            data = raw
+        except (TypeError, ValueError):
+            data = str(raw)
+    return json.dumps({"status": "ok", "tool": name, "data": data},
+                      ensure_ascii=False)
+
+
+def _route_primitive_exec_sandbox(ex: Any, fa: dict[str, Any], ws: str) -> Any:
+    return _run_primitive("exec_sandbox", fa, ws)
+
+
+def _route_primitive_fs_mutate(ex: Any, fa: dict[str, Any], ws: str) -> Any:
+    return _run_primitive("fs_mutate", fa, ws)
+
+
+def _route_primitive_git_checkpoint(ex: Any, fa: dict[str, Any], ws: str) -> Any:
+    return _run_primitive("git_checkpoint", fa, ws)
+
+
 _SPECIAL_TOOL_ROUTES: dict[str, Any] = {
     "spawn": _route_spawn,
     "fanout": _route_fanout,
@@ -295,6 +355,9 @@ _SPECIAL_TOOL_ROUTES: dict[str, Any] = {
     "orchestrate_dag": _route_orch_dag,
     "capture_skill": _route_capture_skill,
     "run_bash": _route_run_bash,
+    "exec_sandbox": _route_primitive_exec_sandbox,
+    "fs_mutate": _route_primitive_fs_mutate,
+    "git_checkpoint": _route_primitive_git_checkpoint,
 }
 
 

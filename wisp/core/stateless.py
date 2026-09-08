@@ -1562,36 +1562,6 @@ class WispAgentCore:
             )
             return
 
-        # ── Thin dispatcher: primitives run directly (their guards —
-        # danger-list, workspace bounds, auto-checkpoint — live in the
-        # underlying implementations, shared with the 42-tool path).
-        from wisp.tools.primitives import PRIMITIVE_IMPLS
-
-        if name in PRIMITIVE_IMPLS:
-            import time as _time
-
-            from wisp.tools.errors import ToolError as _ToolError
-
-            start = _time.time()
-            try:
-                raw = await PRIMITIVE_IMPLS[name](
-                    args if isinstance(args, dict) else {}, workspace)
-                payload: dict[str, Any] = {"status": "ok", "data": raw}
-            except _ToolError as exc:
-                payload = {"status": "error", "data": str(exc)}
-            except Exception as exc:  # never leak a traceback to the model
-                logger.warning("Primitive %s failed: %s", name, exc)
-                payload = {"status": "error", "data": f"Unexpected error: {exc}"}
-            yield _flatten_event(
-                tool_result_event(
-                    name,
-                    self._normalize_tool_result(payload),
-                    duration_ms=int((_time.time() - start) * 1000),
-                    tool_call_id=event.get("id"),
-                )
-            )
-            return
-
         if self.tool_executor is not None:
             # Wrap simple handler (event_dict -> bool) to ToolExecutor's protocol
             # (name, args, reason) -> (approved, modified_args_or_none)
