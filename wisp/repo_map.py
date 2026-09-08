@@ -189,6 +189,8 @@ class RepoMap:
         self._deps: dict[str, set[str]] = {}
         # Reverse dependency graph: file_path -> set of files that depend on it
         self._rev_deps: dict[str, set[str]] = {}
+        # File list of the last full build (seed recomputation without re-parse)
+        self._seed_files: list[str] = []
 
     # ── Build ───────────────────────────────────────────────────────
 
@@ -487,6 +489,79 @@ class RepoMap:
         rev = self._rev_deps.get(file_path, set())
         return sorted(rev)
 
+    def seeded_importance(self, seeds: dict[str, float]) -> dict[str, float]:
+        """Recompute file importance with issue/traceback seeds (GH#26).
+
+        Pure re-score over the in-memory dependency graph — no re-parse,
+        no disk touch (never reads or writes the entry cache), so it is
+        cheap to call per issue or per failure. Requires a prior full
+        build; returns {} when the map was never built.
+        """
+        if not self._seed_files:
+            return {}
+        return _compute_pagerank(
+            list(self._seed_files), self._deps, self._rev_deps, seeds=seeds)
+
+    def expand_frames(
+        self,
+        frames: list[tuple[str, int | None, str | None]],
+        max_neighbors: int = 5,
+    ) -> list[RepoMapEntry]:
+        """Pull definition sites of traceback frames into context (GH#26).
+
+        For each (file, line, func) frame — the output shape of
+        ``test_distill.parse_frames`` — resolves the enclosing symbol
+        (nearest symbol at or above the frame line) and returns its entry
+        plus the file's import-neighbors (deps + reverse deps, top by
+        importance): the file-granularity call-graph expansion around the
+        failure. Unknown files are skipped. Order: frames first, then
+        neighbors; deduplicated by (path, name, line).
+        """
+        if not self._entries:
+            return []
+        by_path: dict[str, list[RepoMapEntry]] = {}
+        for e in self._entries:
+            by_path.setdefault(e.path, []).append(e)
+        out: list[RepoMapEntry] = []
+        seen: set[tuple[str, str, int]] = set()
+
+        def _emit(entry: RepoMapEntry) -> None:
+            key = (entry.path, entry.name, entry.line)
+            if key not in seen:
+                seen.add(key)
+                out.append(entry)
+
+        neighbor_paths: list[str] = []
+        for fpath, line, func in frames or []:
+            bucket = by_path.get(fpath)
+            if not bucket:
+                continue
+            syms = sorted(
+                (e for e in bucket if e.kind != "file"),
+                key=lambda e: e.line)
+            target: RepoMapEntry | None = None
+            if func:
+                for e in syms:
+                    if e.name == func and (line is None or e.line <= line):
+                        target = e
+            if target is None and line is not None:
+                below = [e for e in syms if e.line <= line]
+                target = below[-1] if below else None
+            if target is None:
+                target = next((e for e in bucket if e.kind == "file"), None)
+            if target is not None:
+                _emit(target)
+            for nb in sorted(set(self._deps.get(fpath, set()))
+                             | set(self._rev_deps.get(fpath, set()))):
+                if nb not in neighbor_paths:
+                    neighbor_paths.append(nb)
+        for nb in neighbor_paths:
+            cands = sorted(by_path.get(nb, []),
+                           key=lambda e: e.importance, reverse=True)
+            for e in cands[:max_neighbors]:
+                _emit(e)
+        return out
+
     def _do_build_skeleton(self) -> list[RepoMapEntry]:
         """Fast skeleton build: file listing only, no parsing.
 
@@ -535,6 +610,7 @@ class RepoMap:
             self._deps,
             self._rev_deps,
         )
+        self._seed_files = list(file_infos.keys())
 
         # Step 5: Assemble entries
         entries = _assemble_entries(file_infos, importances, self._deps, self.max_entries)
@@ -1627,12 +1703,68 @@ def _resolve_dep_path(workspace: Path, from_file: str, dep_str: str) -> Optional
 # ── PageRank ─────────────────────────────────────────────────────────────
 
 
+# Traceback frame inside issue text: File "pkg/core.py", line 4, in save
+_SEED_TB_FRAME_RE = re.compile(r'File "(?P<file>[^"]+)", line (?P<line>\d+)(?:, in (?P<func>\S+))?')
+# Bare path:line mention: pkg/core.py:4 / tests/test_x.py:12
+_SEED_PATH_LINE_RE = re.compile(r"(?P<path>[\w\-./]+\.\w+):(?P<line>\d+)")
+_MIN_SYMBOL_LEN = 4
+
+
+def extract_seeds(
+    text: str,
+    files: list[str] | set[str],
+    symbols_by_file: dict[str, list[str]] | None = None,
+) -> dict[str, float]:
+    """Extract per-file relevance seeds from issue/traceback text (GH#26).
+
+    Pure function: matches ``File "p", line N`` frames, bare ``p:N``
+    mentions, file basenames, and known symbol names (word-boundary,
+    length-gated against noise) against the repo's file/symbol lists.
+    Unknown paths are ignored. Returns file -> weight (mention count,
+    capped); empty text yields {} (no-seed default, ranking unchanged).
+    """
+    known = set(files)
+    by_base = {Path(f).name: f for f in known}
+    sym_owner: dict[str, list[str]] = {}
+    for f, syms in (symbols_by_file or {}).items():
+        for s in syms:
+            if len(s) >= _MIN_SYMBOL_LEN:
+                sym_owner.setdefault(s, []).append(f)
+    seeds: dict[str, float] = {}
+
+    def _hit(f: str, w: float = 1.0) -> None:
+        if f in known:
+            seeds[f] = min(seeds.get(f, 0.0) + w, 8.0)
+
+    for m in _SEED_TB_FRAME_RE.finditer(text or ""):
+        _hit(m.group("file"), 2.0)
+        if m.group("func"):
+            for owner in sym_owner.get(m.group("func"), []):
+                _hit(owner, 1.0)
+    rest = _SEED_TB_FRAME_RE.sub(" ", text or "")
+    for m in _SEED_PATH_LINE_RE.finditer(rest):
+        p = m.group("path")
+        _hit(p, 1.5)
+        _hit(by_base.get(Path(p).name, ""), 1.0)
+    words = set(re.findall(r"[A-Za-z_][\w.]*", rest))
+    for w in words:
+        base = w if "." in w else w + ".py"
+        if base in by_base:
+            _hit(by_base[base], 1.0)
+        elif w in by_base:
+            _hit(by_base[w], 1.0)
+        for owner in sym_owner.get(w, []):
+            _hit(owner, 1.0)
+    return seeds
+
+
 def _compute_pagerank(
     files: list[str],
     deps: dict[str, set[str]],
     rev_deps: dict[str, set[str]],
     damping: float = 0.85,
     iterations: int = 30,
+    seeds: dict[str, float] | None = None,
 ) -> dict[str, float]:
     """Compute PageRank importance scores for files.
 
@@ -1653,6 +1785,11 @@ def _compute_pagerank(
         rev_deps: Reverse dependency graph (file -> set of files depending on it).
         damping: PageRank damping factor (default 0.85).
         iterations: Number of PageRank iterations.
+        seeds: Optional file -> boost multiplier from issue/traceback text
+            (see extract_seeds). Multiplies the personalized initial
+            scores (dense branch) and base scores (sparse branch), so
+            mentioned files start — and stay — higher. None = legacy
+            behavior, byte-identical scores.
 
     Returns:
         Mapping of file path to importance score (0.0-1.0 range).
@@ -1690,6 +1827,8 @@ def _compute_pagerank(
                 base *= 3.0
             elif Path(f).name == "__init__.py":
                 base *= 1.5
+            if seeds:
+                base *= seeds.get(f, 1.0)
             initial[i] = base
         total_init = sum(initial)
         scores = [v / total_init for v in initial]
@@ -1722,7 +1861,6 @@ def _compute_pagerank(
 
             # Base score
             score = 0.3
-
             # Entry points are most important
             if _is_entry_point(f):
                 score = 0.9
@@ -1745,6 +1883,8 @@ def _compute_pagerank(
                 if depth > 3:
                     score -= min((depth - 3) * 0.04, 0.2)
 
+            if seeds:
+                score *= seeds.get(f, 1.0)
             score_map[f] = score
 
         # Normalize to 0.0-1.0 range
@@ -1840,4 +1980,4 @@ def _kind_icon(kind: str) -> str:
 
 # ── Public API ──────────────────────────────────────────────────────────
 
-__all__ = ["RepoMap", "RepoMapEntry"]
+__all__ = ["RepoMap", "RepoMapEntry", "extract_seeds"]

@@ -143,3 +143,27 @@ def _cap(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
     return text[:max_chars] + "\n... (distilled output truncated)"
+
+
+# Distiller-normalized frame: "  tests/test_x.py:12 in test_y"
+_NORM_FRAME_RE = re.compile(r"^\s{2}(?P<file>\S+):(?P<line>\d+) in (?P<func>\S+)\s*$")
+
+
+def parse_frames(distilled: str) -> list[tuple[str, int | None, str | None]]:
+    """Parse (file, line, func) frames back out of distilled output.
+
+    Inverse of the distiller's frame normalization — feeds RepoMap frame
+    expansion (GH#26) so a failure digest becomes definition sites without
+    re-parsing raw logs. Also accepts raw ``File "p", line N, in f``
+    tracebacks. Unknown lines are skipped, never fatal.
+    """
+    frames: list[tuple[str, int | None, str | None]] = []
+    for line in (distilled or "").splitlines():
+        m = _NORM_FRAME_RE.match(line)
+        if m:
+            frames.append((m.group("file"), int(m.group("line")), m.group("func")))
+            continue
+        m2 = _LONG_FRAME_RE.match(line)
+        if m2:
+            frames.append((m2.group("file"), int(m2.group("line")), m2.group("func")))
+    return frames
