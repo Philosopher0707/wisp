@@ -18,6 +18,7 @@ Strictly typed, no placeholders, stdlib + wisp.colors only.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Protocol
@@ -277,6 +278,27 @@ class Dispatcher:
                 ctx.emit("Worker monitor unavailable in this transport.")
                 return CommandResult.CONSUMED
             ctx.emit(opener())
+            return CommandResult.CONSUMED
+
+        @self.register("rewind", "Undo file edits (list or restore checkpoints)", usage="/rewind [seq|path]")
+        def _rewind(ctx: ReplContext, args: str) -> CommandResult:
+            from wisp.tools.checkpoints import tool_rewind
+            from wisp.tools.errors import ToolError
+
+            if isinstance(ctx.config, dict):
+                workspace = ctx.config.get("workspace") or os.getcwd()
+            else:
+                workspace = getattr(ctx.config, "workspace", None) or os.getcwd()
+            try:
+                if not args:
+                    result = tool_rewind(workspace, list_only=True)
+                elif args.isdigit():
+                    result = tool_rewind(workspace, seq=int(args))
+                else:
+                    result = tool_rewind(workspace, path=args)
+                ctx.emit(result["data"])
+            except ToolError as exc:
+                ctx.emit(f"Rewind failed: {exc}")
             return CommandResult.CONSUMED
 
         def _exit(ctx: ReplContext, args: str) -> CommandResult:

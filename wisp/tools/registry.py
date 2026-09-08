@@ -40,6 +40,7 @@ from wisp.tools.search import tool_search_symbols, tool_search_codebase
 from wisp.tools.plan import tool_plan_task, tool_mark_step_done, tool_update_plan
 from wisp.tools.diagnose import tool_diagnose
 from wisp.tools.tests import tool_run_tests
+from wisp.tools.checkpoints import tool_rewind
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,21 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["path", "edits"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "rewind",
+            "description": "Undo file edits: list pre-mutation checkpoints or restore one. Every write_file/edit_file auto-checkpoints. No target lists checkpoints newest-first; seq restores that checkpoint; path restores the latest checkpoint for the file. Restore of a never-existed file deletes it.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "seq": {"type": "integer", "description": "Checkpoint number to restore (see list)"},
+                    "path": {"type": "string", "description": "Restore latest checkpoint for this file"},
+                    "list_only": {"type": "boolean", "description": "List checkpoints without restoring"},
+                },
             },
         },
     },
@@ -792,6 +808,7 @@ TOOL_IMPLS = {
     "write_file": tool_write_file,
     "edit_file": tool_edit_file,
     "edit_file_multi": tool_edit_file_multi,
+    "rewind": tool_rewind,
     "run_bash": tool_run_bash,
     "list_files": tool_list_files,
     "web_fetch": _lazy_tool("wisp.tools.web", "tool_web_fetch"),

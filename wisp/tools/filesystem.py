@@ -116,6 +116,10 @@ def tool_write_file(path: str = "", workspace: str = "", content: str = "", file
         holder = lock_info.get("agent", "unknown") if lock_info else "unknown"
         raise ToolError(f"File {path} is locked by {holder}. Wait or coordinate before editing.")
 
+    # ── Checkpoint (GH#15): stash pre-mutation content for rewind ──
+    from wisp.tools.checkpoints import get_checkpoint_store, snapshot_before_mutation
+    _cp = snapshot_before_mutation(workspace, path, "write")
+
     try:
         # Read old content for diff (before overwriting)
         old_content = None
@@ -134,6 +138,11 @@ def tool_write_file(path: str = "", workspace: str = "", content: str = "", file
         tracker = _change_tracker_ctx.get()
         if tracker:
             tracker.record_write(path, content)
+    except Exception:
+        # Mutation failed — the checkpoint must not outlive it.
+        if _cp is not None:
+            get_checkpoint_store(workspace).drop(_cp.seq)
+        raise
     finally:
         # Release lock even when the write fails (F5: an exception above
         # used to leak the advisory lock until its TTL expired).
@@ -211,6 +220,10 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str, file
         holder = lock_info.get("agent", "unknown") if lock_info else "unknown"
         raise ToolError(f"File {path} is locked by {holder}. Wait or coordinate before editing.")
 
+    # ── Checkpoint (GH#15): stash pre-mutation content for rewind ──
+    from wisp.tools.checkpoints import get_checkpoint_store, snapshot_before_mutation
+    _cp = snapshot_before_mutation(workspace, path, "edit")
+
     try:
         result = apply_edit_with_diff(path, [EditOp(old_text=old_text, new_text=new_text)], workspace)
 
@@ -250,6 +263,11 @@ def tool_edit_file(path: str, workspace: str, old_text: str, new_text: str, file
             },
         }
 
+    except Exception:
+        # Mutation failed — the checkpoint must not outlive it.
+        if _cp is not None:
+            get_checkpoint_store(workspace).drop(_cp.seq)
+        raise
     finally:
         if lock:
             lock.release(path)
@@ -295,6 +313,10 @@ def tool_edit_file_multi(path: str, workspace: str, edits: list[dict], file_lock
         holder = lock_info.get("agent", "unknown") if lock_info else "unknown"
         raise ToolError(f"File {path} is locked by {holder}. Wait or coordinate before editing.")
 
+    # ── Checkpoint (GH#15): stash pre-mutation content for rewind ──
+    from wisp.tools.checkpoints import get_checkpoint_store, snapshot_before_mutation
+    _cp = snapshot_before_mutation(workspace, path, "edit_multi")
+
     try:
         ops = [EditOp(old_text=e["old_text"], new_text=e["new_text"]) for e in edits]
         result = apply_edit_with_diff(path, ops, workspace)
@@ -335,6 +357,11 @@ def tool_edit_file_multi(path: str, workspace: str, edits: list[dict], file_lock
             },
         }
 
+    except Exception:
+        # Mutation failed — the checkpoint must not outlive it.
+        if _cp is not None:
+            get_checkpoint_store(workspace).drop(_cp.seq)
+        raise
     finally:
         if lock:
             lock.release(path)

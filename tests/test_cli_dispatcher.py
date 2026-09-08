@@ -140,3 +140,43 @@ def test_handler_exception_is_contained():
     out: list[str] = []
     assert d.dispatch(_ctx(out=out), "/boom") is CommandResult.CONSUMED
     assert any("kablam" in line for line in out)
+
+
+def test_rewind_lists_empty(tmp_path):
+    from wisp.cli.dispatcher import Dispatcher
+
+    d = Dispatcher()
+    ctx = _ctx()
+    ctx.config = {"workspace": str(tmp_path)}
+    assert d.dispatch(ctx, "/rewind") is CommandResult.CONSUMED
+    assert any("no checkpoints" in line for line in ctx.out)
+
+
+def test_rewind_restores_by_seq(tmp_path):
+    from wisp.cli.dispatcher import Dispatcher
+    from wisp.tools.checkpoints import reset_checkpoint_stores
+    from wisp.tools.filesystem import tool_write_file
+
+    reset_checkpoint_stores()
+    try:
+        ws = str(tmp_path)
+        (tmp_path / "a.txt").write_text("v1")
+        tool_write_file(path="a.txt", workspace=ws, content="v2")
+        d = Dispatcher()
+        ctx = _ctx()
+        ctx.config = {"workspace": ws}
+        assert d.dispatch(ctx, "/rewind 1") is CommandResult.CONSUMED
+        assert any("Rewound" in line for line in ctx.out)
+        assert (tmp_path / "a.txt").read_text() == "v1"
+    finally:
+        reset_checkpoint_stores()
+
+
+def test_rewind_unknown_seq_reports(tmp_path):
+    from wisp.cli.dispatcher import Dispatcher
+
+    d = Dispatcher()
+    ctx = _ctx()
+    ctx.config = {"workspace": str(tmp_path)}
+    assert d.dispatch(ctx, "/rewind 999") is CommandResult.CONSUMED
+    assert any("Rewind failed" in line for line in ctx.out)
