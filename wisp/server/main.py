@@ -157,17 +157,19 @@ app.include_router(diagnostics_router)
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "::"}
 
 
-def main(host: str = "127.0.0.1", port: int = 8000, no_auth: bool = False):
-    """Entry point to run the Wisp API server."""
-    import os
-    import sys
-    import uvicorn
-    from fastapi import Header
+def _check_bind_auth(host: str, no_auth: bool, has_key: bool) -> str | None:
+    """Gate a server bind on authentication posture (P0.2).
 
-    # Non-loopback binds expose /api/bash (host command execution) to the network:
-    # require an API key, and never allow --no-auth off-loopback.
+    Returns a warning banner for explicit ``--no-auth`` loopback boots,
+    None when authentication is configured, and raises ``SystemExit(2)``
+    when the bind would expose command execution without authentication:
+    any non-loopback bind without a key (even with ``--no-auth``), and
+    loopback binds without a key unless ``--no-auth`` was passed
+    explicitly. Pure function — unit-testable without booting uvicorn.
+    """
+    import sys
+
     if host not in _LOOPBACK_HOSTS:
-        has_key = bool(os.environ.get("WISP_API_KEY", "").strip())
         if no_auth or not has_key:
             print(
                 "error: refusing to bind Wisp server to a non-loopback address "
@@ -177,6 +179,38 @@ def main(host: str = "127.0.0.1", port: int = 8000, no_auth: bool = False):
                 file=sys.stderr,
             )
             raise SystemExit(2)
+        return None
+    if has_key:
+        return None
+    if no_auth:
+        return (
+            "WARNING: Wisp server authentication DISABLED explicitly "
+            "(--no-auth). Local loopback only — never expose this port."
+        )
+    print(
+        "error: refusing to start Wisp server without authentication.\n"
+        "Set WISP_API_KEY to require an API key "
+        "(e.g. `export WISP_API_KEY=$(openssl rand -hex 32)`), or pass "
+        "--no-auth for explicitly unauthenticated local-only access.",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+
+
+def main(host: str = "127.0.0.1", port: int = 8000, no_auth: bool = False):
+    """Entry point to run the Wisp API server."""
+    import os
+    import sys
+    import uvicorn
+    from fastapi import Header
+
+    # Non-loopback binds expose /api/bash (host command execution) to the network:
+    # require an API key, and never allow --no-auth off-loopback. Loopback
+    # binds without a key require explicit --no-auth (fail fast otherwise).
+    has_key = bool(os.environ.get("WISP_API_KEY", "").strip())
+    warning = _check_bind_auth(host, no_auth, has_key)
+    if warning:
+        print(warning, file=sys.stderr)
 
     if no_auth:
         from wisp.server.deps import _auth, verify_api_key

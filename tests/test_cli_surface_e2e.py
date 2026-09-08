@@ -575,6 +575,56 @@ class TestGroup6SkillsBench:
 
 
 # ══════════════════════════════════════════════════════════════════════
+# Group 8: Server boot posture (P0.2, GH#14)
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestGroup8ServerBoot:
+    def test_server_refuses_without_key(self, e2e) -> None:
+        """No key + no flag: fail fast (rc 2), never silently open."""
+        proc = run_cli(["server", "--port", "18924"], e2e["home"], e2e["ws"],
+                       timeout=60)
+        assert proc.returncode == 2, proc.stdout + proc.stderr
+        assert "WISP_API_KEY" in proc.stderr
+
+    def test_server_no_auth_boots_and_serves(self, e2e) -> None:
+        """Explicit --no-auth: boots loopback, serves, terminates cleanly."""
+        import json as _json
+        import socket as _socket
+        import urllib.request as _url
+
+        home, ws = e2e["home"], e2e["ws"]
+        env = cli_env(home)
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "wisp", "server",
+             "--port", "18925", "--no-auth"],
+            env=env, cwd=str(ws),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            deadline = time.time() + 45
+            while time.time() < deadline:
+                with _socket.socket() as sock:
+                    if sock.connect_ex(("127.0.0.1", 18925)) == 0:
+                        break
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.5)
+            assert proc.poll() is None, "server exited before serving"
+            with _url.urlopen("http://127.0.0.1:18925/api/sessions",
+                              timeout=10) as resp:
+                body = _json.loads(resp.read().decode())
+            assert resp.status == 200
+            assert "sessions" in body
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=15)
+
+
+# ══════════════════════════════════════════════════════════════════════
 # Group 7: Swarm & multi-agent subcommands
 # ══════════════════════════════════════════════════════════════════════
 

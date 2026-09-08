@@ -45,3 +45,45 @@ class TestServerMain:
             _auth._no_auth = orig_no_auth
             _auth._key = orig_key
             app.dependency_overrides = orig_overrides
+
+
+class TestBindAuth:
+    """P0.2 gate: no silent unauthenticated boots (GH#14)."""
+
+    def test_loopback_with_key_ok(self, capsys):
+        from wisp.server.main import _check_bind_auth
+        assert _check_bind_auth("127.0.0.1", False, True) is None
+        assert capsys.readouterr().err == ""
+
+    def test_loopback_no_key_no_flag_refuses(self, capsys):
+        import pytest
+
+        from wisp.server.main import _check_bind_auth
+        with pytest.raises(SystemExit) as exc:
+            _check_bind_auth("127.0.0.1", False, False)
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert "WISP_API_KEY" in err and "--no-auth" in err
+
+    def test_loopback_no_auth_warns(self, capsys):
+        from wisp.server.main import _check_bind_auth
+        warning = _check_bind_auth("127.0.0.1", True, False)
+        assert warning is not None and "DISABLED" in warning
+
+    def test_non_loopback_no_key_refuses(self):
+        import pytest
+
+        from wisp.server.main import _check_bind_auth
+        with pytest.raises(SystemExit):
+            _check_bind_auth("0.0.0.0", False, False)
+
+    def test_non_loopback_no_auth_never_allowed(self):
+        import pytest
+
+        from wisp.server.main import _check_bind_auth
+        with pytest.raises(SystemExit):
+            _check_bind_auth("0.0.0.0", True, False)
+
+    def test_non_loopback_with_key_ok(self):
+        from wisp.server.main import _check_bind_auth
+        assert _check_bind_auth("0.0.0.0", False, True) is None
