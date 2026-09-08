@@ -31,6 +31,9 @@ class BenchResult:
     verify_detail: str = ""
     duration_s: float = 0.0
     stats: TurnStats | None = None
+    # SWE-bench competition surface: workspace git diff + instance key.
+    instance_id: str = ""
+    model_patch: str = ""
 
     def status(self) -> str:
         if self.timed_out:
@@ -67,6 +70,40 @@ def make_ollama_core_factory(config: Any):
     return factory
 
 
+def _git(cmd: list[str], cwd) -> tuple[int, str]:
+    """Run one git plumbing command; never raises (returns rc + output)."""
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["git", *cmd], cwd=cwd, capture_output=True, text=True, timeout=30)
+        return proc.returncode, (proc.stdout or "").strip()
+    except Exception:
+        return 1, ""
+
+
+def _git_baseline(ws) -> None:
+    """Commit the post-setup workspace so the turn diff is a clean patch.
+
+    Best-effort: without git (or on any failure) the patch is simply empty
+    and scoring proceeds on verify() alone.
+    """
+    rc, _ = _git(["rev-parse", "--git-dir"], ws)
+    if rc != 0:
+        _git(["init", "-q"], ws)
+    _git(["-c", "user.email=wisp@bench", "-c", "user.name=wisp",
+          "add", "-A"], ws)
+    _git(["-c", "user.email=wisp@bench", "-c", "user.name=wisp",
+          "commit", "-qm", "bench baseline", "--allow-empty"], ws)
+
+
+def _git_diff_patch(ws) -> str:
+    """Unified diff of everything the turn changed (tracked + new files)."""
+    _git(["add", "-N", "."], ws)  # intent-to-add: new files enter the diff
+    rc, out = _git(["diff", "HEAD", "--", "."], ws)
+    return out if rc == 0 else ""
+
+
 async def run_task(
     task: BenchmarkTask,
     model: str,
@@ -76,6 +113,7 @@ async def run_task(
 ) -> BenchResult:
     """Run one task against one model in an isolated workspace."""
     result = BenchResult(model=model, task_id=task.id)
+    result.instance_id = task.instance_id or task.id
 
     ws = (workdir or Path.cwd()) / f"{task.id}-{uuid.uuid4().hex[:8]}"
     ws.mkdir(parents=True, exist_ok=True)
@@ -85,6 +123,8 @@ async def run_task(
     except Exception as exc:  # setup failure = harness bug, not model fault
         result.error = f"setup failed: {exc}"
         return result
+
+    _git_baseline(ws)
 
     core = core_factory(model)
     session = {
@@ -127,6 +167,9 @@ async def run_task(
             detail = f"events: {edetail}"
     result.passed = ok
     result.verify_detail = detail[:200]
+    # SWE-bench surface: capture the turn's workspace diff as the patch,
+    # win or lose — a failing run's partial diff is still scorable data.
+    result.model_patch = _git_diff_patch(ws)
     return result
 
 

@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 
-def run_bench(argv: list[str]) -> int:
+def run_bench(argv: list[str], core_factory=None) -> int:
     """Parse bench args, run the matrix, print the scoreboard."""
     parser = argparse.ArgumentParser(
         prog="wisp bench",
@@ -35,6 +35,12 @@ def run_bench(argv: list[str]) -> int:
         default=None,
         help="Directory for isolated task workspaces (default: .wisp/bench)",
     )
+    parser.add_argument(
+        "--predictions",
+        default=None,
+        help="Write SWE-bench-format predictions JSONL here "
+             "({instance_id, model_patch, model_name} per line)",
+    )
     args = parser.parse_args(argv)
 
     from wisp.benchmark.runner import make_ollama_core_factory, run_benchmark
@@ -53,7 +59,8 @@ def run_bench(argv: list[str]) -> int:
         return 2
 
     workdir = Path(args.workdir) if args.workdir else Path(".wisp/bench")
-    core_factory = make_ollama_core_factory(config)
+    if core_factory is None:
+        core_factory = make_ollama_core_factory(config)
 
     def _progress(res):
         from wisp.benchmark.report import render_result_line
@@ -78,5 +85,27 @@ def run_bench(argv: list[str]) -> int:
 
     print(render_scoreboard(aggregate(models, results)))
 
+    if args.predictions:
+        write_predictions_jsonl(args.predictions, models, results)
+
     failed = any(not r.passed for r in results)
     return 1 if failed else 0
+
+
+def write_predictions_jsonl(path: str | Path, models: list[str],
+                            results) -> Path:
+    """Write SWE-bench-format predictions: one JSON per line with exactly
+    {instance_id, model_patch, model_name} — the keys the official harness
+    scores. Returns the written path."""
+    import json
+
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", encoding="utf-8") as fh:
+        for res in results:
+            fh.write(json.dumps({
+                "instance_id": res.instance_id or res.task_id,
+                "model_patch": res.model_patch or "",
+                "model_name": res.model,
+            }, ensure_ascii=False) + "\n")
+    return out

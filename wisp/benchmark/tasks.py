@@ -23,6 +23,8 @@ class BenchmarkTask:
     title: str
     prompt: str
     difficulty: str = "easy"
+    # SWE-bench-style instance key for predictions output; defaults to id.
+    instance_id: str = ""
     setup: Callable[[Path], None] = lambda ws: None
     verify: Callable[[Path], tuple[bool, str]] = lambda ws: (False, "no verifier")
     # Optional capability gate on the turn's event stream — e.g. prove a
