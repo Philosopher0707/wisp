@@ -113,6 +113,63 @@ class TestScoring:
     def test_zero_tools_means_perfect_health(self):
         assert score_events([]).tool_health == 1.0
 
+    def test_run_tests_marks_ran_tests(self):
+        stats = score_events([
+            {"type": "tool_call", "name": "write_file"},
+            {"type": "tool_call", "name": "run_tests"},
+        ])
+        assert stats.ran_tests is True
+        assert stats.surrendered is False
+
+    def test_pytest_bash_marks_ran_tests(self):
+        stats = score_events([
+            {"type": "tool_call", "name": "run_bash",
+             "arguments": {"command": "python -m pytest tests/ -q"}},
+        ])
+        assert stats.ran_tests is True
+
+    def test_plain_bash_is_surrender(self):
+        stats = score_events([
+            {"type": "tool_call", "name": "write_file"},
+            {"type": "tool_call", "name": "run_bash",
+             "arguments": {"command": "ls -la"}},
+        ])
+        assert stats.ran_tests is False
+        assert stats.surrendered is True
+
+    def test_no_calls_never_surrenders(self):
+        stats = score_events([{"type": "content", "text": "hi"}])
+        assert stats.surrendered is False
+
+    def test_result_line_flags_surrender(self):
+        from wisp.benchmark.report import render_result_line
+        from wisp.benchmark.runner import BenchResult
+        from wisp.benchmark.scoring import TurnStats
+
+        res = BenchResult(model="m", task_id="t", passed=False,
+                          verify_detail="nope", duration_s=1.0,
+                          stats=TurnStats(tool_calls=2, ran_tests=False))
+        assert "no-tests" in render_result_line(res)
+        ok = BenchResult(model="m", task_id="t", passed=True, duration_s=1.0,
+                         stats=TurnStats(tool_calls=2, ran_tests=True))
+        assert "no-tests" not in render_result_line(ok)
+
+    def test_aggregate_counts_surrender_and_scoreboard_shows_it(self):
+        from wisp.benchmark.report import render_scoreboard
+        from wisp.benchmark.runner import aggregate, BenchResult
+        from wisp.benchmark.scoring import TurnStats
+
+        results = [
+            BenchResult(model="m", task_id="t1", passed=False, duration_s=1.0,
+                        stats=TurnStats(tool_calls=3, ran_tests=False)),
+            BenchResult(model="m", task_id="t2", passed=False, duration_s=1.0,
+                        stats=TurnStats(tool_calls=1, ran_tests=True)),
+        ]
+        cards = aggregate(["m"], results)
+        assert cards[0].surrendered == 1
+        out = render_scoreboard(cards)
+        assert "Surrendered" in out and "1/2" in out
+
 
 # ═══════════════════════════════════════════════════════════════════
 # Runner with injected mock cores

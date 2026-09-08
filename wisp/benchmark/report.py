@@ -18,6 +18,9 @@ def render_result_line(res: BenchResult, width: int = 72) -> str:
     marker = {"PASS": "✓", "FAIL": "✗", "TIMEOUT": "⏱"}.get(res.status(), "?")
     detail = res.verify_detail or res.error
     suffix = f" — {detail}" if detail and not res.passed else ""
+    stats = getattr(res, "stats", None)
+    if stats is not None and getattr(stats, "surrendered", False):
+        suffix += " ⚑ no-tests"
     line = f"  {marker} {res.model} · {res.task_id}: {res.status()} ({res.duration_s:.1f}s){suffix}"
     if len(line) > width:
         return line[: width - 1] + "…"
@@ -47,6 +50,12 @@ def render_scoreboard(cards: list[ModelScorecard]) -> str:
         )
 
     out = "\n".join(lines)
+
+    surrendered = sum(getattr(c, "surrendered", 0) for c in cards)
+    if surrendered:
+        total = sum(c.total for c in cards)
+        out += (f"\nSurrendered (finished without running tests): "
+                f"{surrendered}/{total}")
 
     best = _best_model(cards)
     if best is not None:

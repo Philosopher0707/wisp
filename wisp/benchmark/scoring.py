@@ -20,6 +20,10 @@ class TurnStats:
     thinking_events: int = 0
     errored: bool = False
     error_message: str = ""
+    # Premature-surrender signal: did the turn execute any test runner?
+    # A turn that changed code and finished without this is a surrender
+    # candidate regardless of what it claims in prose.
+    ran_tests: bool = False
 
     @property
     def tool_health(self) -> float:
@@ -27,6 +31,19 @@ class TurnStats:
         if self.tool_calls == 0:
             return 1.0
         return round(1.0 - self.tool_errors / self.tool_calls, 3)
+
+    @property
+    def surrendered(self) -> bool:
+        """Finished work without ever running tests."""
+        return self.tool_calls > 0 and not self.ran_tests
+
+
+# Substrings matching a test-runner invocation inside run_bash commands.
+TEST_RUNNER_TOKENS = (
+    "pytest", "unittest", "npm test", "yarn test", "pnpm test",
+    "go test", "cargo test", "make test", "ctest", "rspec",
+    "jest", "vitest", "phpunit",
+)
 
 
 def score_events(events: list[dict[str, Any]]) -> TurnStats:
@@ -36,6 +53,8 @@ def score_events(events: list[dict[str, Any]]) -> TurnStats:
         etype = ev.get("type", "")
         if etype == "tool_call":
             stats.tool_calls += 1
+            if _is_test_execution(ev):
+                stats.ran_tests = True
         elif etype == "tool_result":
             if _is_error_result(ev.get("result")):
                 stats.tool_errors += 1
@@ -47,6 +66,23 @@ def score_events(events: list[dict[str, Any]]) -> TurnStats:
             stats.errored = True
             stats.error_message = str(ev.get("message", ""))[:200]
     return stats
+
+
+def _is_test_execution(ev: dict[str, Any]) -> bool:
+    """True when a tool_call event executes a test runner.
+
+    The dedicated run_tests tool always counts; run_bash counts when its
+    command invokes a known runner (pytest, go test, npm test, ...).
+    """
+    name = str(ev.get("name", "") or "")
+    if name == "run_tests":
+        return True
+    if name != "run_bash":
+        return False
+    args = ev.get("arguments") or {}
+    command = args.get("command", "") if isinstance(args, dict) else ""
+    lowered = str(command or "").lower()
+    return any(tok in lowered for tok in TEST_RUNNER_TOKENS)
 
 
 def _is_error_result(result: Any) -> bool:
@@ -74,6 +110,7 @@ class ModelScorecard:
     passed: int = 0
     failed: int = 0
     timed_out: int = 0
+    surrendered: int = 0
     total_duration_s: float = 0.0
     task_rows: list[dict[str, Any]] = field(default_factory=list)
 

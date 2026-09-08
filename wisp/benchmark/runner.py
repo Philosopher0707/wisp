@@ -225,9 +225,12 @@ def aggregate(models: list[str], results: list[BenchResult]) -> list[ModelScorec
             "status": res.status(),
             "duration_s": round(res.duration_s, 1),
             "tool_calls": res.stats.tool_calls if res.stats else 0,
+            "ran_tests": bool(res.stats and res.stats.ran_tests),
             "detail": res.error or res.verify_detail,
         })
         card.total_duration_s += res.duration_s
+        if getattr(getattr(res, "stats", None), "surrendered", False):
+            card.surrendered += 1
         if res.timed_out:
             card.timed_out += 1
         elif res.passed:
