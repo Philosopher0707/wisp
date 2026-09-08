@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from wisp.import_graph import build_import_graph, find_affected_tests
+from wisp.test_distill import distill_traceback
 
 logger = logging.getLogger(__name__)
 
@@ -63,9 +64,7 @@ class UnitTestRunSummary:
                 if r.outcome in ("failed", "error"):
                     lines.append(f"\n**{r.test_id}** — {r.outcome}")
                     if r.traceback:
-                        tb = r.traceback[:500]
-                        if len(r.traceback) > 500:
-                            tb += "\n... (truncated)"
+                        tb = distill_traceback(r.traceback)
                         lines.append(f"```\n{tb}\n```")
                     shown += 1
                     if shown >= max_results:
