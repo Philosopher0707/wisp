@@ -251,8 +251,15 @@ class WorktreeManager:
                 logger.warning("Patch %d/%d conflicted — skipping remaining", i + 1, len(patches))
         return results
 
-    async def get_patch(self, worktree_path: Path) -> str:
-        """Capture all uncommitted changes (tracked & untracked) in the worktree as a patch string."""
+    async def get_patch(self, worktree_path: Path,
+                      exclude: list[str] | None = None) -> str:
+        """Capture all uncommitted changes (tracked & untracked) in the worktree as a patch string.
+
+        *exclude* is an optional list of git pathspec patterns omitted
+        from the diff (e.g. oracle artifacts like ``__pycache__/`` that
+        would otherwise poison the patch with un-appliable binary
+        deltas). None (default) preserves the legacy full diff.
+        """
         if not worktree_path.exists():
             return ""
         
@@ -266,8 +273,15 @@ class WorktreeManager:
         await add_proc.communicate()
 
         # Generate a patch of all changes compared to HEAD
+        if exclude:
+            # Long-form :(exclude) — the :! short magic was removed in
+            # newer git (2.53+ rejects it as unimplemented).
+            diff_cmd = ["git", "diff", "HEAD", "--", ".",
+                        *(f":(exclude){pat}" for pat in exclude)]
+        else:
+            diff_cmd = ["git", "diff", "HEAD"]  # legacy argv, untouched
         diff_proc = await asyncio.create_subprocess_exec(
-            "git", "diff", "HEAD",
+            *diff_cmd,
             cwd=str(worktree_path),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
