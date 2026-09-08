@@ -63,8 +63,6 @@ class TestPatchCapture:
 
 class TestRunnerPredictions:
     async def _run(self, tmp_path):
-        import asyncio
-
         return await run_task(_task(), "mock-model",
                               _mock_factory(_solve), workdir=tmp_path)
 
