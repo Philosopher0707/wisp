@@ -90,7 +90,14 @@ async def async_exec_sandbox(args: dict[str, Any], workspace: str) -> str:
 # ── Primitive 2: file mutation ─────────────────────────────────────────
 
 async def async_fs_mutate(args: dict[str, Any], workspace: str) -> Any:
-    """Read / write / surgical-edit one file (auto-checkpointed on mutate)."""
+    """Read / write / surgical-edit one file (auto-checkpointed on mutate).
+
+    Write/edit ops pass the in-memory post-image through the LSP compiler
+    gate when a language-server manager is published on
+    ``_lsp_manager_ctx`` (no manager = zero behavior change; gate failures
+    fail open, only positive error evidence blocks).
+    """
+    from wisp.tools._utils import _lsp_manager_ctx, _resolve_path
     from wisp.tools.filesystem import tool_edit_file, tool_read_file, tool_write_file
 
     parsed = _validated(FsMutateArgs, args, "fs_mutate")
@@ -98,6 +105,27 @@ async def async_fs_mutate(args: dict[str, Any], workspace: str) -> Any:
     if parsed.op == "read":
         return tool_read_file(path=parsed.path, workspace=workspace,
                               offset=parsed.offset, limit=parsed.limit)
+    manager = _lsp_manager_ctx.get()
+    if manager is not None:
+        from wisp.core.lsp.gate import gate_from_manager, proposed_content
+
+        gate = gate_from_manager(manager)
+        if gate is not None:
+            current: str | None = None
+            if parsed.op == "edit":
+                try:
+                    current = _resolve_path(parsed.path, workspace).read_text(
+                        encoding="utf-8", errors="replace")
+                except OSError:
+                    current = None
+            proposal = proposed_content(
+                parsed.op, current, content=parsed.content,
+                old_text=parsed.old_text, new_text=parsed.new_text)
+            if proposal is not None:
+                abs_path = str(_resolve_path(parsed.path, workspace))
+                verdict = await gate.check(parsed.path, abs_path, proposal)
+                if verdict.blocked:
+                    raise ToolError(verdict.frame)
     if parsed.op == "write":
         return tool_write_file(path=parsed.path, workspace=workspace,
                                content=parsed.content)
