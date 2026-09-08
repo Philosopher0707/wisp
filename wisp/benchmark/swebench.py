@@ -106,6 +106,36 @@ def _verify_from_instance(inst: dict[str, Any], ws: Path) -> tuple[bool, str]:
     return False, f"pytest exit {rc}: {detail}"
 
 
+def patch_applies_cleanly(ws: Path, patch_text: str) -> bool:
+    """Validate a captured patch via ``git apply --check -R``.
+
+    The check runs against the dirty tree that produced the patch, so the
+    REVERSE direction is the honest one: it proves the diff cleanly
+    un-applies, i.e. it applied cleanly in the first place. Empty patches
+    vacuously pass (nothing to apply). Never raises.
+    """
+    if not (patch_text or "").strip():
+        return True
+    import tempfile
+
+    tmp = ""
+    try:
+        with tempfile.NamedTemporaryFile("w", suffix=".diff",
+                                         delete=False) as fh:
+            fh.write(patch_text if patch_text.endswith("\n") else patch_text + "\n")
+            tmp = fh.name
+        rc, _ = _sh(["git", "apply", "--check", "-R", tmp], ws, 30)
+        return rc == 0
+    except Exception:
+        return False
+    finally:
+        try:
+            if tmp:
+                Path(tmp).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
 def task_from_swe_instance(inst: dict[str, Any]) -> BenchmarkTask:
     """Convert one SWE-bench-format instance dict to a BenchmarkTask.
 
