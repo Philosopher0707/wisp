@@ -251,7 +251,7 @@ class WispAgentCore:
         # Verification floor (harness > model on completion calls): the
         # guard owns wrote_code / exit-0-evidence / grind-budget state so
         # _turn_inner never re-derives the invariant inline.
-        from wisp.core.verification import VerificationFloorGuard
+        from wisp.core.verification import VerificationFloorGuard, compose_nudge
 
         verification_enabled = True
         if self.config is not None:
@@ -567,13 +567,10 @@ class WispAgentCore:
                             "no verification command (tests/linter) has been "
                             "run since your code changes"
                         )
-                    nudge = (
-                        f"[SYSTEM] Verification loop: you changed code this turn, "
-                        f"but {reason}. {rejection} Run the project's test/lint "
-                        f"command, fix any failures, and only then summarize. "
-                        f"If you genuinely cannot verify, say the work is "
-                        f"UNVERIFIED instead of claiming success."
-                    )
+                    # Nudge text derives from the invariant's home module
+                    # (verification.compose_nudge) so the intervention can
+                    # never drift from the gate (GH#27).
+                    nudge = compose_nudge(reason)
                     messages.append(nudge_message(nudge))
                     yield _flatten_event(system(nudge, level="warning"))
                     continue

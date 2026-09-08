@@ -30,6 +30,8 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 
+from wisp.core.verification import INVARIANT_STATEMENT
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -97,6 +99,11 @@ You are NOT done when the code is merely written — you are done when it is VER
 3. If verification fails: read the failure output, fix the cause, and re-run. Repeat until it passes or you can prove the failure predates your change.
 4. Never report success without a passing verification in this conversation. Summaries must state which check verified the work.
 """
+
+# The canonical invariant, owned by the gate (verification.py) and quoted
+# here so prose can never drift from enforcement (GH#27).
+VERIFICATION_LOOP_RULES += "\n> " + INVARIANT_STATEMENT + "\n"
+VERIFICATION_LOOP_RULES_NO_BASH += "\n> " + INVARIANT_STATEMENT + "\n"
 
 DEFAULT_SYSTEM = DEFAULT_BASE_SYSTEM + VERIFICATION_LOOP_RULES
 

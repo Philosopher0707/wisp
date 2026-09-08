@@ -26,6 +26,36 @@ HARNESS_REJECTION = (
     "finishing."
 )
 
+# Single source of the turn-completion invariant (GH#27). The gate below
+# enforces it, the prompt prose quotes it, and compose_nudge() derives
+# the intervention text from it — change the policy here and all three
+# expressions follow. Wording is gate-faithful: the guard blocks iff the
+# turn mutated code AND no verification exit-0 postdates the mutation AND
+# the grind floor is unspent.
+INVARIANT_STATEMENT = (
+    "Harness rule: a turn that changed code may finish only after a "
+    "verification command exits 0 on the current code — or after the "
+    "grind floor is spent, in which case report the work UNVERIFIED, "
+    "never success."
+)
+
+
+def compose_nudge(reason: str) -> str:
+    """Build the harness intervention message for a premature finish.
+
+    *reason* is the run-context detail (no verification run yet vs the
+    latest run failed); the invariant, the rejection, and the recovery
+    instruction all come from this module so prose can never drift from
+    the gate.
+    """
+    return (
+        "[SYSTEM] Verification loop: you changed code this turn, "
+        f"but {reason}. {HARNESS_REJECTION} {INVARIANT_STATEMENT} "
+        "Run the project's test/lint command, fix any failures, and only "
+        "then summarize. If you genuinely cannot verify, say the work is "
+        "UNVERIFIED instead of claiming success."
+    )
+
 # Tool names that mutate code (legacy 42-tool surface + thin primitives).
 _MUTATING_TOOLS = frozenset({"write_file", "edit_file", "edit_file_multi", "fs_mutate"})
 # Tool names whose exit status counts as verification evidence.
