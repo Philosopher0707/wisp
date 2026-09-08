@@ -168,6 +168,26 @@ class WispAgentCore:
         )
         # Build messages list
         messages = list(session.get("messages", []))
+        # Turn-0 boot seed (GH#22): workspace reality as the first message,
+        # ahead of the user's prompt. Turn-0 means no prior history: either
+        # the session carries nothing yet, or exactly the just-added user
+        # prompt (the runtime appends it before turn(); post-/clear lands
+        # here too since clear empties the transcript). Resumes keep their
+        # persisted seed, subagent children stay lean. The static system
+        # prompt below is untouched (KV-cache invariant).
+        _fresh = (not messages or (len(messages) == 1
+                  and messages[0].get("role") == "user"
+                  and messages[0].get("content") == prompt))
+        if _fresh and not session.get("subagent_system_prompt"):
+            try:
+                from wisp.core.context.boot import BootContextAssembler
+                seed = BootContextAssembler(
+                    session.get("workspace", ".")).seed_message()
+            except Exception:
+                logger.debug("Boot seed failed", exc_info=True)
+                seed = None
+            if seed:
+                messages.insert(0, seed)
         # Avoid duplicating the user message if runtime already added it
         if (
             not messages

@@ -1,4 +1,4 @@
-"""Tests for wisp.core.doctor — 5/5 pre-flight checks must pass.
+"""Tests for wisp.core.doctor — 6/6 pre-flight checks must pass.
 
 Exercises the doctor end-to-end via `run_preflight_sync`, plus targeted
 coverage of each subsystem check, the report aggregator, and the
@@ -28,10 +28,10 @@ from wisp.core.doctor import (
 )
 
 
-# ── Top-level: 5/5 must be healthy ──────────────────────────────────
+# ── Top-level: 6/6 must be healthy ──────────────────────────────────
 
 
-class TestPreflightFiveOfFive:
+class TestPreflightSixOfSix:
     def test_all_five_checks_pass(self):
         report = run_preflight_sync(timeout_s=2.0)
         statuses = {c.name: c.status for c in report.checks}
@@ -41,7 +41,7 @@ class TestPreflightFiveOfFive:
                 f"{name} did not pass: "
                 f"{next(c.message for c in report.checks if c.name == name)}"
             )
-        assert report.passed == 5
+        assert report.passed == 6
         assert report.failed == 0
         assert report.warnings == 0
         assert report.healthy is True
@@ -53,12 +53,13 @@ class TestPreflightFiveOfFive:
             "tool_cache",
             "autonomous_policy",
             "graph_integrity",
+            "boot_context",
         )
 
     def test_banner_healthy(self):
         report = run_preflight_sync(timeout_s=2.0)
         assert report.banner == format_banner(report)
-        assert "5/5" in report.banner
+        assert "6/6" in report.banner
         assert report.banner.startswith("✓")
 
     def test_detailed_contains_all_sections(self):
@@ -70,10 +71,10 @@ class TestPreflightFiveOfFive:
     def test_report_to_dict_is_jsonable(self):
         report = run_preflight_sync(timeout_s=2.0)
         d = report.to_dict()
-        assert d["passed"] == 5
-        assert d["total"] == 5
+        assert d["passed"] == 6
+        assert d["total"] == 6
         assert d["healthy"] is True
-        assert len(d["checks"]) == 5
+        assert len(d["checks"]) == 6
 
     def test_last_report_stored(self):
         report = run_preflight_sync(timeout_s=2.0)
@@ -227,10 +228,10 @@ class TestBanner:
 class TestRunnerShielding:
     def test_timeout_budget_does_not_drop_results(self):
         report = run_preflight_sync(timeout_s=0.001)
-        assert report.total == 5
+        assert report.total == 6
         # Even with a 1 ms budget the structure survives; some checks may
-        # legitimately complete that fast, but we never get fewer than 5.
-        assert len(report.checks) == 5
+        # legitimately complete that fast, but we never get fewer than 6.
+        assert len(report.checks) == 6
 
     def test_total_duration_under_generous_budget(self):
         report = run_preflight_sync(timeout_s=2.0)

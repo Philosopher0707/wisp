@@ -74,15 +74,28 @@ class TestTurnExecution:
         assert events[2]["type"] == "done"
 
     @pytest.mark.asyncio
-    async def test_turn_builds_system_prompt(self, core):
+    async def test_turn_builds_system_prompt(self, core, tmp_path, monkeypatch):
         core.provider = _MockProvider([
             {"type": "token", "text": "ok", "phase": "content"},
             {"type": "done"},
         ])
 
-        session = {"id": "s1", "messages": [], "model": "qwen", "workspace": "/tmp"}
+        # Hermetic workspace: no guidelines, no memory, no symbols — the
+        # Turn-0 boot seed stays out and the prompt shape is exact (GH#22).
+        # See test_boot_context.py for seed placement pins.
+        import wisp.memory as mem_mod
+        monkeypatch.setattr(mem_mod, "load_memory",
+                            lambda: {"global_facts": [], "workspace_facts": {}})
+        session = {"id": "s1", "messages": [], "model": "qwen",
+                   "workspace": str(tmp_path)}
         async for _ in core.turn(session, "hi"):
             pass
+
+        assert len(core.provider.calls) == 1
+        system_prompt, messages, tools = core.provider.calls[0]
+        assert "Wisp" in system_prompt or "wisp" in system_prompt.lower()
+        assert len(messages) == 1
+        assert messages[0]["role"] == "user"
 
         assert len(core.provider.calls) == 1
         system_prompt, messages, tools = core.provider.calls[0]

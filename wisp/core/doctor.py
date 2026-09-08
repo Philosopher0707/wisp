@@ -6,12 +6,13 @@ Isolation contract:
   * Failures never abort REPL — they degrade to a warning banner.
   * 100 ms budget via `asyncio.wait` with per-check shielding.
 
-Covers 5 subsystems, each mapped to a real `wisp.*` module:
+Covers 6 subsystems, each mapped to a real `wisp.*` module:
   1. Path & Environment  — `wisp.config.safe_getcwd`, workspace, run dirs
   2. Stream Hygiene      — provider stream guard + renderer health
   3. Tool Cache          — tool registry integrity + fingerprint stability
   4. Autonomous Policy   — `check_dangerous_command` + SecurityPolicy + handler
   5. Graph Integrity     — GraphState, nodes, GraphRunner, circuit breaker
+  6. Boot Context        — Turn-0 guideline discovery (source/bytes/tokens)
 
 All imports use the canonical `wisp.*` namespace. Optional subsystems that
 are not present in this checkout degrade to WARN, never FAIL the report
@@ -141,6 +142,7 @@ CHECK_NAMES: Final[tuple[str, ...]] = (
     "tool_cache",
     "autonomous_policy",
     "graph_integrity",
+    "boot_context",
 )
 
 _LAST_REPORT: DoctorReport | None = None
@@ -709,12 +711,48 @@ async def _check_graph_integrity() -> CheckResult:
 # ── Runner ─────────────────────────────────────────────────────────────
 
 
+async def _check_boot_context() -> CheckResult:
+    """Turn-0 boot discovery: guideline source, bytes, est. tokens.
+
+    Discovery-only (file scan, no repomap/memory build) to stay inside
+    the pre-flight budget. Always OK — a missing guidelines file is
+    information, not breakage; the status rides in details.
+    """
+    t0 = time.monotonic()
+    name = "boot_context"
+    commit = "boot-ctx"
+    details: dict[str, Any] = {}
+    try:
+        from wisp.config import safe_getcwd
+        from wisp.core.context.boot import BootContextAssembler
+
+        ws = safe_getcwd()
+        source, text = BootContextAssembler(ws).discover()
+        details = {
+            "source": source,
+            "status": "found" if source else "none",
+            "bytes": len(text.encode("utf-8", "replace")),
+            "est_tokens": max(0, len(text) // 4),
+        }
+        latency = (time.monotonic() - t0) * 1000
+        if source:
+            return CheckResult(name, commit, CheckStatus.OK,
+                               f"guidelines: {source}", latency, details)
+        return CheckResult(name, commit, CheckStatus.OK,
+                           "no guidelines file", latency, details)
+    except Exception as e:
+        latency = (time.monotonic() - t0) * 1000
+        logger.debug("boot_context check failed: %s", e, exc_info=True)
+        return CheckResult(name, commit, CheckStatus.FAIL,
+                           f"unexpected: {e}", latency, details)
+
+
 async def run_preflight(
     workspace: str | Path | None = None,
     config: Any | None = None,
     timeout_s: float = 0.1,
 ) -> DoctorReport:
-    """Run all 5 subsystem checks concurrently with 100 ms budget.
+    """Run all 6 subsystem checks concurrently with 100 ms budget.
 
     Args:
         workspace: Workspace to validate (defaults to safe_getcwd).
@@ -734,6 +772,7 @@ async def run_preflight(
         _check_tool_cache(),
         _check_autonomous_policy(),
         _check_graph_integrity(),
+        _check_boot_context(),
     ]
 
     # Shield each check so one failure doesn't cancel others; overall timeout
