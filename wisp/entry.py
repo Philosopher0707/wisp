@@ -100,6 +100,7 @@ def _run_cli(root: CompositionRoot, prompt: str | None = None, **kwargs) -> None
         root.runtime,
         config,
         background_agents=getattr(root, "background_agents", None),
+        hook_manager=getattr(root, "_tool_hook_manager", None),
     )
     transport.start()
 

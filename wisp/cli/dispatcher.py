@@ -301,6 +301,34 @@ class Dispatcher:
                 ctx.emit(f"Rewind failed: {exc}")
             return CommandResult.CONSUMED
 
+        @self.register("hooks", "List loaded user hooks", usage="/hooks")
+        def _hooks(ctx: ReplContext, args: str) -> CommandResult:
+            mgr = getattr(ctx.transport, "hook_manager", None)
+            if mgr is None:
+                ctx.emit("Hook manager unavailable in this transport.")
+                return CommandResult.CONSUMED
+            try:
+                reload = getattr(mgr, "maybe_reload_hooks", None)
+                if callable(reload):
+                    reload()
+                hooks = mgr.list_hooks()
+            except Exception as exc:
+                ctx.emit(f"Could not list hooks: {exc}")
+                return CommandResult.CONSUMED
+            if not hooks:
+                ctx.emit("No hooks loaded. Add JSON files to .wisp/hooks/ (see docs/hooks.md).")
+                return CommandResult.CONSUMED
+            lines = ["Loaded hooks:"]
+            for h in hooks:
+                name = getattr(h, "name", "?")
+                event = getattr(h, "event", "?")
+                matcher = getattr(h, "matcher", "") or "*"
+                enabled = getattr(h, "enabled", True)
+                state = "" if enabled else " [disabled]"
+                lines.append(f"  {name:<24} {event:<14} {matcher}{state}")
+            ctx.emit("\n".join(lines))
+            return CommandResult.CONSUMED
+
         def _exit(ctx: ReplContext, args: str) -> CommandResult:
             return CommandResult.EXIT
 

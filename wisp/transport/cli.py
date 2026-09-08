@@ -639,12 +639,15 @@ class CLITransport(Transport):
         runtime: Any,
         config: Any | None = None,
         background_agents: Any | None = None,
+        hook_manager: Any | None = None,
     ):
         self.runtime = runtime
         self.config = config
         # Lifecycle fan-out for spawn_background agents; the server transport
         # pushes these over WS — the CLI prints settlement notices instead.
         self.background_agents = background_agents
+        # ToolHookManager for /hooks listing (executor owns execution).
+        self.hook_manager = hook_manager
         self._bg_task: asyncio.Task[None] | None = None
         self._bg_queue: Any | None = None
         # Monitor suspension (GH#10): while the alternate-screen worker
