@@ -228,18 +228,19 @@ class WispAgentCore:
             str(a).lower() for a in allowed_tools
         }:
             _allowed_set = {str(a) for a in allowed_tools}
-        # Verification-loop state (persists across iterations of this turn):
-        # - verification_enabled: config gate
-        # - verify_ok_after_edit: None = no run_bash since the last edit;
-        #   True/False = exit status of the latest run_bash (a bash run
-        #   BEFORE the last edit is stale and reads as None)
-        # - verification_nudges: bounded self-correction reminders issued
+        # Verification floor (harness > model on completion calls): the
+        # guard owns wrote_code / exit-0-evidence / grind-budget state so
+        # _turn_inner never re-derives the invariant inline.
+        from wisp.core.verification import VerificationFloorGuard
+
         verification_enabled = True
         if self.config is not None:
             verification_enabled = getattr(self.config, "verification_loop", True) is True
-        verify_ok_after_edit: bool | None = None
-        wrote_code = False
-        verification_nudges = 0
+        guard = VerificationFloorGuard(
+            enabled=verification_enabled,
+            min_turns=int(getattr(self.config, "grind_min_turns", 5) or 5)
+            if self.config is not None else 5,
+        )
         for iteration in range(max_iterations):
             pending_tool_calls: list[dict[str, Any]] = []
             tool_results_events_early: list[dict[str, Any]] = []
@@ -529,20 +530,14 @@ class WispAgentCore:
 
             # ── If no tool calls, the model produced final content ──
             if not has_tool_calls:
-                # Verification loop: a turn that changed code but ended with a
-                # failing (or never-run) verification command is NOT complete.
-                # Nudge the model to verify with exit-0 evidence and give it
-                # another provider round; bounded so it can always finish.
-                _MAX_VERIFICATION_NUDGES = 2
-                needs_verification = (
-                    verification_enabled
-                    and wrote_code
-                    and verification_nudges < _MAX_VERIFICATION_NUDGES
-                    and verify_ok_after_edit is not True
-                )
-                if needs_verification:
-                    verification_nudges += 1
-                    if verify_ok_after_edit is False:
+                # Verification floor: a turn that changed code but ended with
+                # a failing (or never-run) verification command is NOT
+                # complete. Reject the finish, inject the harness reminder,
+                # and give it another provider round; bounded so it can
+                # always finish (floor exhaustion surrenders honestly).
+                rejection = guard.rejection()
+                if rejection is not None:
+                    if guard.verify_ok_after_edit is False:
                         reason = (
                             "the most recent verification command FAILED "
                             "(non-zero exit status)"
@@ -554,21 +549,39 @@ class WispAgentCore:
                         )
                     nudge = (
                         f"[SYSTEM] Verification loop: you changed code this turn, "
-                        f"but {reason}. A task is not complete until a "
-                        f"verification command exits 0. Call run_bash with the "
-                        f"project's test/lint command, fix any failures, and "
-                        f"only then summarize. If you genuinely cannot verify, "
-                        f"say the work is UNVERIFIED instead of claiming success."
+                        f"but {reason}. {rejection} Run the project's test/lint "
+                        f"command, fix any failures, and only then summarize. "
+                        f"If you genuinely cannot verify, say the work is "
+                        f"UNVERIFIED instead of claiming success."
                     )
                     messages.append(nudge_message(nudge))
                     yield _flatten_event(system(nudge, level="warning"))
                     continue
+                # RESOLVED (verified, not surrendered) → distill the trail
+                # into a permanent auto skill, best-effort, never blocking.
+                if guard.resolved():
+                    try:
+                        from wisp.skill_capture import capture_resolved_skill
+
+                        if self.config is None or getattr(
+                            self.config, "auto_skill_capture", True
+                        ) is True:
+                            capture_resolved_skill(
+                                prompt, guard.steps,
+                                session.get("workspace", "."))
+                    except Exception:
+                        logger.debug("Auto-skill capture failed", exc_info=True)
                 yield _flatten_event(done_event(session.get("id", "")))
                 return
 
             # ── Execute tools and feed results back to messages ──
             tool_results_events: list[dict[str, Any]] = list(tool_results_events_early)
             has_tool_results = any(e.get("type") == "tool_result" for e in provider_events)
+            # Args by call id for the verification guard's skill trail.
+            _call_args_by_id: dict[str, Any] = {
+                str(tc.get("id", "")): tc.get("arguments", {})
+                for tc in pending_tool_calls if tc.get("id")
+            }
             if pending_tool_calls and not has_tool_results:
                 for tc in pending_tool_calls:
                     if "_blocked" in tc:
@@ -586,23 +599,21 @@ class WispAgentCore:
                     ):
                         tool_results_events.append(result_event)
                         yield result_event
-                        # Verification-loop tracking: watch bash exit status
-                        # and code-mutating tools so the done-path guard can
-                        # demand exit-0 evidence before the turn completes.
-                        # verify_ok_after_edit tracks ORDERING: any edit
+                        # Verification-floor tracking: fold every tool outcome
+                        # into the guard (ORDERING preserved — any edit
                         # invalidates prior verification, so a bash run
-                        # before the last code change never counts.
+                        # before the last code change never counts).
                         if result_event.get("type") == "tool_result":
+                            from wisp.skill_capture import _digest_args
+
                             t_name = str(result_event.get("name", ""))
                             t_res = result_event.get("result", "")
                             t_text = t_res if isinstance(t_res, str) else str(t_res)
-                            if t_name == "run_bash":
-                                verify_ok_after_edit = (
-                                    not t_text.startswith("[exit code:")
-                                )
-                            elif t_name in ("write_file", "edit_file"):
-                                wrote_code = True
-                                verify_ok_after_edit = None  # stale now
+                            t_args = _call_args_by_id.get(
+                                result_event.get("tool_call_id", ""), {})
+                            guard.note_tool_result(
+                                t_name, t_text,
+                                _digest_args(t_args) if isinstance(t_args, dict) else {})
 
             # Append assistant + tool messages to continue the conversation
             assistant_msg: dict[str, Any] = {"role": "assistant", "content": "".join(partial_content)}
@@ -917,7 +928,11 @@ class WispAgentCore:
         if isinstance(allowed, (list, tuple, set)) and "all" not in {str(a).lower() for a in allowed}:
             allowed_set = {str(a) for a in allowed}
             allowed_hash = hashlib.sha256(",".join(sorted(allowed_set)).encode()).hexdigest()[:8]
-        cache_key = (ws, context_mt, prompt_variant, allowed_hash)  # type: ignore[assignment]
+        # Thin-harness posture changes the tools menu — part of the key,
+        # or a thin turn reuses a 42-tool prompt from the cache.
+        thin = "thin" if (self.config is not None
+                          and getattr(self.config, "thin_tools", False) is True) else ""
+        cache_key = (ws, context_mt, prompt_variant, allowed_hash, thin)  # type: ignore[assignment]
         static_prompt = _SYSTEM_PROMPT_CACHE.get(cache_key)
 
         if static_prompt is None:
@@ -1438,9 +1453,11 @@ class WispAgentCore:
                 first = first[:137] + "..."
             return name, first
 
-        from wisp.tools.registry import TOOL_SCHEMAS
-
-        for schema in TOOL_SCHEMAS:
+        # Source of truth is _get_tool_schemas() (thin_tools-aware), not
+        # TOOL_SCHEMAS directly — otherwise thin mode advertises 42 tools
+        # the provider never receives (the exact hallucination seed the
+        # allowed_set filter below was built to prevent for roles).
+        for schema in self._get_tool_schemas():
             fn = schema.get("function", {}) if isinstance(schema, dict) else {}
             name, first = _describe(fn)
             if not name or name in seen:
@@ -1475,8 +1492,18 @@ class WispAgentCore:
         return "\n".join(lines)
 
     def _get_tool_schemas(self) -> list[dict[str, Any]]:
-        """Get all tool schemas — built-in + extensions."""
+        """Get all tool schemas — built-in + extensions.
+
+        Thin-harness posture (``thin_tools`` on the config): the model sees
+        only the 3 primitives. Everything else stays callable server-side
+        but leaves the system prompt.
+        """
         from wisp.tools.registry import TOOL_SCHEMAS
+
+        if self.config is not None and getattr(self.config, "thin_tools", False) is True:
+            from wisp.tools.primitives import PRIMITIVE_SCHEMAS
+
+            return list(PRIMITIVE_SCHEMAS)
 
         schemas = list(TOOL_SCHEMAS)
 
@@ -1510,6 +1537,36 @@ class WispAgentCore:
                         {"status": "error", "data": schema_error}
                     ),
                     duration_ms=0,
+                    tool_call_id=event.get("id"),
+                )
+            )
+            return
+
+        # ── Thin dispatcher: primitives run directly (their guards —
+        # danger-list, workspace bounds, auto-checkpoint — live in the
+        # underlying implementations, shared with the 42-tool path).
+        from wisp.tools.primitives import PRIMITIVE_IMPLS
+
+        if name in PRIMITIVE_IMPLS:
+            import time as _time
+
+            from wisp.tools.errors import ToolError as _ToolError
+
+            start = _time.time()
+            try:
+                raw = await PRIMITIVE_IMPLS[name](
+                    args if isinstance(args, dict) else {}, workspace)
+                payload: dict[str, Any] = {"status": "ok", "data": raw}
+            except _ToolError as exc:
+                payload = {"status": "error", "data": str(exc)}
+            except Exception as exc:  # never leak a traceback to the model
+                logger.warning("Primitive %s failed: %s", name, exc)
+                payload = {"status": "error", "data": f"Unexpected error: {exc}"}
+            yield _flatten_event(
+                tool_result_event(
+                    name,
+                    self._normalize_tool_result(payload),
+                    duration_ms=int((_time.time() - start) * 1000),
                     tool_call_id=event.get("id"),
                 )
             )

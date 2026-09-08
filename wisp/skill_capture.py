@@ -163,6 +163,37 @@ class SkillCapture:
 _capture: SkillCapture | None = None
 
 
+def capture_resolved_skill(task: str, steps: list[tuple[str, dict[str, str]]],
+                           workspace: str) -> Path | None:
+    """Persist a verified turn's trail as an auto skill (harness learning).
+
+    Called when a turn transitions to RESOLVED (exit-0 evidence postdates
+    the last mutation). Writes ``<workspace>/.wisp/skills/auto/<slug>/SKILL.md``
+    via the same renderer as manual capture, so future boots replay the
+    proven sequence instead of rediscovering it. Never raises — learning
+    must not break the turn it observes. Returns the skill dir, or None
+    when there was nothing worth keeping.
+    """
+    digested = [CapturedStep(tool=name, args=_digest_args(args))
+                for name, args in steps if name]
+    # The verify command itself is evidence, not workflow — keep the trail
+    # to the mutating prefix plus the passing command.
+    if len(digested) < 2:
+        return None
+    slug = _slugify(f"auto-{task[:60]}")
+    skill_dir = Path(workspace).resolve() / ".wisp" / "skills" / "auto" / slug
+    try:
+        body = _render_new(slug, f"Auto-captured RESOLVED workflow: {task[:120]}",
+                           digested)
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(body, encoding="utf-8")
+    except OSError:
+        logger.debug("Auto-skill write failed for %s", slug, exc_info=True)
+        return None
+    logger.info("Auto-captured skill %s (%d steps)", slug, len(digested))
+    return skill_dir
+
+
 def _render_new(slug: str, description: str, steps: list[CapturedStep]) -> str:
     lines = [
         "---",

@@ -36,9 +36,11 @@ Guidance for AI coding agents working in the Wisp codebase.
 | `wisp/multi_agent/telemetry.py` | Per-agent telemetry rings | `SubagentTelemetryBuffer`: dual-bounded (events + bytes) per-worker rings, replay (`transcript`) + cursor poll, settle-status mapping; `mask_text()` producer-boundary secret masking |
 | `wisp/tools/checkpoints.py` | File checkpoints | `CheckpointStore` (bounded per-workspace snapshots), `snapshot_before_mutation()`, `tool_rewind` (list/restore, rewindable rewind); auto-hooked in write/edit/edit_multi with drop-on-failed-mutation |
 | `wisp/tui/screens/subagents.py` | Worker monitor screen | `SubagentMonitorScreen` (roster + live transcript, `]`/`[` cycle — never Tab — `c` cancel, `q`/`Ctrl+O`/`Esc` exit) + `SubagentMonitorApp` standalone host for the REPL bridge |
-| `wisp/sandbox.py` | Command confinement | `SandboxProvider` ABC; `DockerSandbox` (network-none, capped) + `NoopSandbox` (host, credential-scrubbed); `get_sandbox()` singleton (Docker-first, loud host fallback, `WISP_SANDBOX=off` kill-switch); `run_bash` routes through it |
+| `wisp/sandbox/` | Command confinement | Package (`__init__` = providers); `router.py`: `SandboxRouter` (Docker → `PtySandbox` → `NoopSandbox`, TTL-cached decision, silent failover) + `get_router()`; legacy `get_sandbox()` unchanged |
+| `wisp/tools/primitives.py` | Thin harness surface | `exec_sandbox` / `fs_mutate` / `git_checkpoint` (pydantic args, delegate to bash/filesystem/checkpoints); `PRIMITIVE_SCHEMAS`; core opts in via `thin_tools` config (schemas + prompt menu + dispatcher) |
+| `wisp/core/verification.py` | Completion gate | `VerificationFloorGuard`: blocks finish until exit-0 postdates last mutation or grind floor (`min_turns` + nudges) exhausts; `HARNESS_REJECTION` text; `resolved()` triggers auto-capture |
 | `wisp/benchmark/` | Benchmark + predictions | `run_task` (isolated ws, git-baseline/diff patch capture), `BenchResult.model_patch`, `run_bench --predictions PATH` (SWE-bench `{instance_id,model_patch,model_name}` JSONL), injectable core factory |
-| `wisp/skill_capture.py` | Workflow capture | `SkillCapture`: record tool sequences, detect repeats, render Warp-compatible SKILL.md with merge-on-recapture |
+| `wisp/skill_capture.py` | Workflow capture | `SkillCapture`: record tool sequences, detect repeats, render Warp-compatible SKILL.md with merge-on-recapture; `capture_resolved_skill()` persists verified turns to `.wisp/skills/auto/` |
 | `wisp/config.py` | Configuration | `WispConfig` dataclass |
 | `wisp/colors.py` | Terminal colors | `success()`, `error()`, `warning()`, `dim()`, `info()`, `accent()`, `bold()` |
 | `wisp/terminal_width.py` | Display width | `display_width()`, `BoxChars`, `OutputMode`, `is_accessible()` |
