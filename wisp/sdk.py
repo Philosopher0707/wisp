@@ -110,6 +110,19 @@ class Wisp:
                 data={k: v for k, v in event_dict.items() if k not in ("type", "timestamp")},
             )
 
+    def graph(self, graph, inputs: dict | None = None, on_event=None):
+        """Run a Graph and return a GraphHandle (wait/status/cancel/resume/trace).
+
+        Example:
+            with Wisp(workspace=".") as wisp:
+                run = wisp.graph(graph, {"goal": "audit the repository"})
+                print(run.trace())
+                result = run.wait()
+        """
+        from wisp.graph.api import run_graph as _run_graph
+        return _run_graph(graph, inputs or {}, workspace=self._config.workspace,
+                          on_event=on_event)
+
     def shutdown(self):
         """Shut down the agent and release resources."""
         if self._closed:

@@ -42,10 +42,22 @@ from wisp.transport.cli import CLITransport
 
 from wisp.config import WispConfig
 
+# ── Graph execution engine ──────────────────────────────────────────
+
+from wisp.graph import Graph, GraphEdge, GraphNode, GraphPolicy, NodeResult
+from wisp.graph.api import GraphHandle, run_graph
+
 __all__ = [
     "Wisp",
     "WispAgentCore",
     "AgentEvent",
     "CLITransport",
     "WispConfig",
+    "Graph",
+    "GraphEdge",
+    "GraphNode",
+    "GraphPolicy",
+    "NodeResult",
+    "GraphHandle",
+    "run_graph",
 ]

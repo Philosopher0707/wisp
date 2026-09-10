@@ -1,0 +1,39 @@
+version: "1"
+graph:
+  id: repo-audit
+  entry: split
+  nodes:
+    split:
+      type: function
+      function: split_work
+      responsibility: partition the audit into independent slices
+    architecture:
+      type: agent
+      responsibility: audit architecture and module boundaries
+      allowed_tools: [read, search]
+    security:
+      type: agent
+      responsibility: audit authorization and secret handling
+      allowed_tools: [read, search]
+    tests:
+      type: agent
+      responsibility: audit test coverage and flakiness
+      allowed_tools: [read, run_bash]
+    join:
+      type: join
+      join_policy: best_effort
+    verifier:
+      type: verifier
+      responsibility: verify findings carry file/line evidence
+    synthesis:
+      type: agent
+      responsibility: synthesize ranked findings
+  edges:
+    - {from: split, to: architecture, reason: architecture consumes split.output.slice}
+    - {from: split, to: security, reason: security consumes split.output.slice}
+    - {from: split, to: tests, reason: tests consumes split.output.slice}
+    - {from: architecture, to: join, reason: join consumes architecture.output.findings}
+    - {from: security, to: join, reason: join consumes security.output.findings}
+    - {from: tests, to: join, reason: join consumes tests.output.findings}
+    - {from: join, to: verifier, reason: verifier consumes join.output.successes, mapping: {findings: output.successes}}
+    - {from: verifier, to: synthesis, reason: synthesis consumes verifier.output.findings, when: accept}

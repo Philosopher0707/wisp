@@ -970,6 +970,7 @@ Subcommands:
   check                    Verify Ollama connectivity
   models                   List available Ollama models
   swarm 'goal'             Spawn multi-agent swarm to accomplish a goal
+  graph ...              Deterministic graph execution (list/run/trace…)
   agents list              List available agent roles
   agents status            Show running swarm agent status
   bench -m model1,model2   Benchmark models on deterministic tasks
@@ -1068,6 +1069,7 @@ _SUBCOMMAND_HELP: dict[str, str] = {
     ),
     "compact": 'Usage: wisp compact <session-id> [keep-n]\n\nCompact a stored session, keeping the last keep-n exchanges (default 6).',
     "swarm": 'Usage: wisp swarm "<goal>" [--roles r1,r2] [-m model] [-w dir] [--max-parallel N]\n\nRun a multi-agent swarm to accomplish a goal.',
+    "graph": 'Usage: wisp graph <list|show|validate|run|resume|status|cancel|trace|inspect|metrics> [args]\n\nDeterministic graph execution (see wisp graph --help).',
     "agents": 'Usage: wisp agents [list|status]\n\nList agent roles or show running swarm agent status.',
     "bench": 'Usage: wisp bench -m model1,model2 [...]\n\nBenchmark models on deterministic tasks.',
 }
@@ -1079,7 +1081,7 @@ _SUBCOMMAND_NAMES = frozenset({
     "session", "memory", "mcp", "policy", "trace", "replay", "audit", "task",
     "completion", "release",
     "git", "plan", "progress", "diagnose",
-    "locks", "changes", "acp", "server", "compact", "swarm", "agents",
+    "locks", "changes", "acp", "server", "compact", "swarm", "agents", "graph",
     "bench",
 })
 
@@ -1381,6 +1383,10 @@ def main():
             else:
                 print(error(f"✗ Unknown agents subcommand: {sub}"))
                 print(dim("  Try: list, status"))
+
+        elif first == "graph":
+            from wisp.graph.cli import main as graph_main
+            sys.exit(graph_main(rest, workspace=flags_workspace or "."))
 
         elif first == "bench":
             from wisp.benchmark.cli import run_bench

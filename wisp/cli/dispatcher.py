@@ -335,6 +335,23 @@ class Dispatcher:
         self.register("exit", "Leave the REPL", usage="/exit")(_exit)
         self.register("quit", "Leave the REPL")(_exit)
 
+        @self.register("graph", "Graph execution (list/run/status/trace)",
+                        usage="/graph [list|run|status|trace] ...")
+        def _graph(ctx: ReplContext, args: str) -> CommandResult:
+            from wisp.graph.cli import main as graph_main
+            import contextlib as _cl
+            from io import StringIO
+
+            if isinstance(ctx.config, dict):
+                workspace = ctx.config.get("workspace") or os.getcwd()
+            else:
+                workspace = getattr(ctx.config, "workspace", None) or os.getcwd()
+            buf = StringIO()
+            with _cl.redirect_stdout(buf):
+                code = graph_main(args.split() if args else ["list"], workspace=workspace)
+            ctx.emit(buf.getvalue().strip() or f"(exit {code})")
+            return CommandResult.CONSUMED
+
 
 class _LegacyAdapter:
     """Minimal bridge letting legacy handlers run against a ReplContext.
