@@ -318,7 +318,8 @@ class TestRouter:
         r = await ex.run(g, {})
         assert r["status"] == "succeeded"
         assert "audit" in r["results_by_node"]
-        assert "quick" not in r["results_by_node"]  # untaken lane skipped, never run
+        # untaken lane skipped, never executed (explicit skip record, not success)
+        assert r["results_by_node"]["quick"]["status"] == "skipped"
 
     @pytest.mark.asyncio
     async def test_unknown_label_falls_to_default(self, tmp_path):
@@ -360,7 +361,7 @@ class TestVerifier:
         g = Graph(id="v", entrypoint="gen", nodes=nodes, edges=edges)
         ex = _ex(tmp_path, _ok_runner(outputs={"ver": {"decision": "REJECT"}}))
         r = await ex.run(g, {})
-        assert "publish" not in r["results_by_node"]
+        assert r["results_by_node"]["publish"]["status"] == "skipped"
 
     @pytest.mark.asyncio
     async def test_correction_edge_retries_failed_unit(self, tmp_path):
@@ -452,7 +453,8 @@ class TestPersistence:
         ex = _ex(tmp_path, _ok_runner())
         r = await ex.run(g, {}, run_id="run-ap")
         assert r["status"] == "awaiting_approval"
-        assert "b" not in r["results_by_node"]
+        assert "b" not in r["results_by_node"] or \
+            r["results_by_node"]["b"]["status"] != "success"
         r2 = await ex.resume(g, "run-ap", approvals={"gate": True})
         assert r2["status"] == "succeeded"
         assert "b" in r2["results_by_node"]
@@ -529,8 +531,8 @@ class TestSurface:
         store = ArtifactStore(workspace=ws, store=GraphStore(workspace=ws))
         art = store.put("r1", "n1", "research_report", {"a": 1}, producer="t")
         assert art.uri.startswith("artifact://")
-        assert store.get(art.artifact_id) == {"a": 1}
-        assert store.resolve_inputs({"x": art.uri}) == {"x": {"a": 1}}
+        assert store.get(art.uri, "r1") == {"a": 1}
+        assert store.resolve_inputs({"x": art.uri}, "r1") == {"x": {"a": 1}}
 
     def test_trace_render(self):
         trace = {"graph_id": "g", "run_id": "r", "status": "succeeded", "wall_s": 1.0,

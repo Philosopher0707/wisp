@@ -113,8 +113,10 @@ class GraphStore:
 
     # ── runs ──
     def create_run(self, run_id: str, graph_id: str, version: str,
-                   graph_hash: str, graph_def: dict, inputs: dict) -> None:
+                   graph_hash: str, graph_def: dict, inputs: dict,
+                   workspace: str = "") -> None:
         now = time.time()
+        graph_def = {**graph_def, "workspace": os.path.abspath(workspace or ".")}
         with self._lock, self._conn() as conn:
             conn.execute(
                 "INSERT INTO graph_runs(run_id,graph_id,graph_version,graph_hash,"
@@ -134,6 +136,7 @@ class GraphStore:
 
     def list_runs(self, graph_id: str = "", limit: int = 50) -> list[dict[str, Any]]:
         with self._lock, self._conn() as conn:
+            limit = _clamp_limit(limit)
             if graph_id:
                 rows = conn.execute("SELECT * FROM graph_runs WHERE graph_id=? "
                                     "ORDER BY created_at DESC LIMIT ?", (graph_id, limit)).fetchall()
@@ -177,14 +180,20 @@ class GraphStore:
             conn.execute(
                 "INSERT OR REPLACE INTO graph_artifacts(artifact_id,run_id,node_run_id,type,"
                 "schema_version,content_hash,uri,producer,created_at,metadata)"
-                " VALUES(?,?,?,?,?,'1',?,?,?,?)",
-                (artifact_id, run_id, node_run_id, type, content_hash, uri,
+                " VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (artifact_id, run_id, node_run_id, type, "1", content_hash, uri,
                  producer, time.time(), json.dumps(metadata)))
 
     def artifacts(self, run_id: str) -> list[dict[str, Any]]:
         with self._lock, self._conn() as conn:
             rows = conn.execute("SELECT * FROM graph_artifacts WHERE run_id=? ORDER BY created_at",
                                 (run_id,)).fetchall()
+            return [dict(r) for r in rows]
+
+    def list_artifacts(self, limit: int = 1000) -> list[dict[str, Any]]:
+        with self._lock, self._conn() as conn:
+            rows = conn.execute("SELECT * FROM graph_artifacts ORDER BY created_at DESC LIMIT ?",
+                                (_clamp_limit(limit),)).fetchall()
             return [dict(r) for r in rows]
 
     # ── events / checkpoints ──
@@ -196,7 +205,7 @@ class GraphStore:
     def events(self, run_id: str, limit: int = 500) -> list[dict[str, Any]]:
         with self._lock, self._conn() as conn:
             rows = conn.execute("SELECT * FROM graph_events WHERE run_id=? ORDER BY id LIMIT ?",
-                                (run_id, limit)).fetchall()
+                                (run_id, _clamp_limit(limit))).fetchall()
             return [dict(r) for r in rows]
 
     def put_checkpoint(self, run_id: str, seq: int, state: dict) -> None:
@@ -209,3 +218,12 @@ class GraphStore:
             row = conn.execute("SELECT * FROM graph_checkpoints WHERE run_id=? "
                                "ORDER BY seq DESC LIMIT 1", (run_id,)).fetchone()
             return dict(row) if row else None
+
+
+def _clamp_limit(limit: Any) -> int:
+    """Negative SQLite LIMIT means unbounded — never allow that."""
+    try:
+        n = int(limit)
+    except (TypeError, ValueError):
+        return 500
+    return max(1, min(n, 5000))

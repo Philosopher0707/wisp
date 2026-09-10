@@ -19,8 +19,15 @@ class GraphHandle:
         self._result = result
 
     def wait(self) -> dict[str, Any]:
+        """Return the completed result. Raises if the run paused for approval
+        or was cancelled — callers MUST check ``status``; a paused dict is
+        not a completion."""
         if self._result is None:
             raise RuntimeError("run has not completed (paused or cancelled?)")
+        if self._result.get("status") not in ("succeeded", "failed", "cancelled"):
+            raise RuntimeError(f"run is {self._result.get('status')}: "
+                               f"{self._result.get('error', '')} "
+                               "(resume to continue)")
         return self._result
 
     def status(self) -> str:
@@ -50,6 +57,16 @@ def run_graph(graph: Graph, inputs: dict[str, Any], runner: NodeRunner | None = 
               workspace: str = ".", max_concurrency: int = 8,
               on_event: Callable[[dict], None] | None = None,
               run_id: str = "") -> GraphHandle:
+    from wisp.graph.validator import validate_graph
+    errors = validate_graph(graph)
+    if errors:
+        raise ValueError("invalid graph: " + "; ".join(errors[:5]))
+    if not isinstance(inputs, dict):
+        raise ValueError("inputs must be a mapping")
+    try:
+        max_concurrency = max(1, min(int(max_concurrency), 32))
+    except (TypeError, ValueError):
+        max_concurrency = 8
     ex = GraphExecutor(runner=runner, workspace=workspace,
                        max_concurrency=max_concurrency,
                        emit=on_event or (lambda e: None))

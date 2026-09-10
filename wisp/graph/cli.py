@@ -10,9 +10,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shlex
 from typing import Any
 
-from wisp.graph.dsl import graph_from_yaml
+from wisp.graph.security import scrub_text as redact
+from wisp.graph.dsl import MAX_YAML_BYTES, graph_from_yaml
 from wisp.graph.executor import GraphExecutor
 from wisp.graph.reference import REFERENCE_YAML, coding_agent_graph
 from wisp.graph.store import GraphStore
@@ -37,11 +39,18 @@ def _load_graph(name: str):
     if name == "coding-agent":
         return coding_agent_graph()
     if os.path.isfile(name):
+        if os.path.getsize(name) > MAX_YAML_BYTES:
+            raise ValueError(f"graph file too large (max {MAX_YAML_BYTES} bytes)")
         with open(name) as fh:
             return graph_from_yaml(fh.read())
-    for cand in (f"graphs/{name}.yaml", f"graphs/{name}.yml", f"{name}.yaml"):
-        if os.path.isfile(cand):
-            with open(cand) as fh:
+    base = os.path.abspath("graphs")
+    for cand in (f"{name}.yaml", f"{name}.yml"):
+        # Contained lookup: names cannot traverse out of ./graphs/.
+        path = os.path.realpath(os.path.join(base, cand))
+        if path != base and path.startswith(base + os.sep) and os.path.isfile(path):
+            if os.path.getsize(path) > MAX_YAML_BYTES:
+                raise ValueError("graph file too large")
+            with open(path) as fh:
                 return graph_from_yaml(fh.read())
     raise FileNotFoundError(f"unknown graph '{name}' (try 'coding-agent' or a YAML path)")
 
@@ -56,6 +65,15 @@ def main(argv: list[str], workspace: str = ".") -> int:
         print(USAGE)
         return 0
     verb, args = argv[0], argv[1:]
+    try:
+        return _main(verb, args, workspace)
+    except (FileNotFoundError, ValueError, KeyError, PermissionError) as exc:
+        # Fail closed with a diagnostic — never a traceback with paths/SQL.
+        print(f"✗ {redact(str(exc))[:500]}")
+        return 1
+
+
+def _main(verb: str, args: list[str], workspace: str) -> int:
     store = GraphStore(workspace=workspace)
     if verb == "list":
         print("graphs: coding-agent")
@@ -78,7 +96,10 @@ def main(argv: list[str], workspace: str = ".") -> int:
             return 0
         fmt = "ascii"
         if "--format" in args:
-            fmt = args[args.index("--format") + 1]
+            idx = args.index("--format") + 1
+            if idx >= len(args):
+                print("Usage: wisp graph show <graph> [--format ascii|dot|json]"); return 1
+            fmt = args[idx]
         gdef = {"id": graph.id, "nodes": [n.id for n in graph.nodes],
                 "edges": [(e.from_node, e.to_node, e.condition) for e in graph.edges]}
         if fmt == "dot":
@@ -98,11 +119,23 @@ def main(argv: list[str], workspace: str = ".") -> int:
             print("Usage: wisp graph run <graph> '<json-input>' [--max N]"); return 1
         graph = _load_graph(args[0])
         raw = args[1] if len(args) > 1 and not args[1].startswith("--") else "{}"
+        if len(raw) > 1_048_576:
+            print("✗ input too large (max 1MB)"); return 1
         try:
             inputs = json.loads(raw)
         except json.JSONDecodeError as exc:
             print(f"✗ input must be JSON: {exc}"); return 1
-        max_c = int(args[args.index("--max") + 1]) if "--max" in args else 8
+        if not isinstance(inputs, dict):
+            print("✗ input must be a JSON object"); return 1
+        max_c = 8
+        if "--max" in args:
+            idx = args.index("--max") + 1
+            if idx >= len(args):
+                print("Usage: wisp graph run <graph> '<json>' [--max N]"); return 1
+            try:
+                max_c = max(1, min(int(args[idx]), 32))
+            except ValueError:
+                print("✗ --max must be an integer"); return 1
         from wisp.graph.runner import SubagentNodeRunner
         ex = GraphExecutor(workspace=workspace, max_concurrency=max_c)
         try:
@@ -120,10 +153,19 @@ def main(argv: list[str], workspace: str = ".") -> int:
             print("Usage: wisp graph resume <run-id> [--approve node=true]"); return 1
         approvals: dict[str, bool] = {}
         for a in args[1:]:
-            if a.startswith("--approve"):
+            # Accept both "--approve node=true" and "--approve=node=true".
+            if a == "--approve":
+                continue
+            if a.startswith("--approve="):
                 _, _, kv = a.partition("=")
-                k, _, v = kv.partition("=")
-                approvals[k or ""] = v.lower() == "true"
+            elif "=" in a and not a.startswith("--"):
+                kv = a
+            else:
+                continue
+            k, _, v = kv.partition("=")
+            k, v = k.strip(), v.strip().lower()
+            if k and v in ("true", "false"):
+                approvals[k] = v == "true"
         row = store.get_run(args[0])
         if row is None:
             print(f"✗ unknown run {args[0]}"); return 1
@@ -148,6 +190,8 @@ def main(argv: list[str], workspace: str = ".") -> int:
     if verb == "cancel":
         if not args:
             print("Usage: wisp graph cancel <run-id>"); return 1
+        if store.get_run(args[0]) is None:
+            print(f"✗ unknown run {args[0]}"); return 1
         GraphExecutor(workspace=workspace, store=store).cancel(args[0])
         print(f"cancelled {args[0]}")
         return 0
@@ -157,9 +201,17 @@ def main(argv: list[str], workspace: str = ".") -> int:
         row = store.get_run(args[0])
         if row is None:
             print(f"✗ unknown run {args[0]}"); return 1
-        nodes = {n["node_id"]: {"status": n["status"], "attempt": n["attempt"],
-                                **(json.loads(n["result"] or "{}"))}
-                 for n in store.node_runs(args[0])}
+        nodes = {}
+        for n in store.node_runs(args[0]):
+            try:
+                payload = json.loads(n["result"] or "{}")
+            except (ValueError, TypeError):
+                payload = {"status": "corrupt"}
+            if not isinstance(payload, dict):
+                payload = {"value": payload}
+            # Stored outputs win over row columns on conflict.
+            nodes[n["node_id"]] = {"status": n["status"], "attempt": n["attempt"],
+                                   **payload}
         trace = {"graph_id": row["graph_id"], "run_id": row["run_id"],
                  "status": row["status"], "results_by_node": nodes,
                  "wall_s": 0, "tokens": {}, "cost_usd": 0}
@@ -168,7 +220,8 @@ def main(argv: list[str], workspace: str = ".") -> int:
         elif verb == "metrics":
             print(json.dumps(quality_metrics(trace), indent=2))
         else:
-            print(render_json(trace))
+            # inspect dumps operator-visible state: redact like any audit sink.
+            print(redact(render_json(trace)))
         return 0
     print(USAGE)
     return 1
@@ -185,7 +238,13 @@ def register_repl(dispatcher) -> None:
 
     @dispatcher.register("graph", "Graph execution (list/run/status/trace)", usage="/graph ...")
     def _graph(ctx, args: str):
-        parts = args.split() if args else ["list"]
+        try:
+            parts = shlex.split(args) if args else ["list"]
+        except ValueError as exc:
+            ctx.emit(f"bad quoting: {exc}")
+            return CommandResult.CONSUMED
+        if not parts:
+            return CommandResult.CONSUMED
         from io import StringIO
         import contextlib as _cl
         buf = StringIO()

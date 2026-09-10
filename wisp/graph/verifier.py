@@ -20,20 +20,32 @@ VALID_DECISIONS = ("ALLOW", "REJECT", "RETRY", "ESCALATE")
 
 
 def normalize_verdict(output: dict[str, Any]) -> VerificationResult:
-    decision = str(output.get("decision", "REJECT")).upper()
+    if not isinstance(output, dict):
+        return VerificationResult(decision="REJECT", reason_codes=["MALFORMED"])
+    decision = str(output.get("decision", "REJECT"))[:32].upper()
     if decision not in VALID_DECISIONS:
         decision = "REJECT"
-    codes = output.get("reason_codes", []) or []
-    evidence = output.get("evidence", []) or []
-    return VerificationResult(decision=decision, reason_codes=list(codes),
-                              evidence=list(evidence),
-                              message=str(output.get("message", "")))
+    codes = [str(c)[:128] for c in (output.get("reason_codes", []) or [])[:32]
+             if isinstance(c, (str, int))]
+    evidence = [str(e)[:512] for e in (output.get("evidence", []) or [])[:64]
+                if isinstance(e, str)]
+    return VerificationResult(decision=decision, reason_codes=codes,
+                              evidence=evidence,
+                              message=str(output.get("message", ""))[:2048])
 
 
 # ── Deterministic gates (pure; use for exit conditions + merge checks) ──
 
 def gate_tests_green(evidence: dict[str, Any]) -> GateResult:
-    if evidence.get("tests_green") is True or evidence.get("exit_code") == 0:
+    """Pass ONLY on measured evidence: int exit code 0 or explicit True.
+
+    Callers must feed tool-measured results (test runner exit codes), never
+    raw model output — a model string like "0" or "true" fails closed here.
+    """
+    code = evidence.get("exit_code")
+    if isinstance(code, int) and not isinstance(code, bool) and code == 0:
+        return GateResult(True, "tests green", evidence_ids(evidence))
+    if evidence.get("tests_green") is True:
         return GateResult(True, "tests green", evidence_ids(evidence))
     return GateResult(False, "tests not green", evidence_ids(evidence),
                       failure_code="TEST_FAILURE")

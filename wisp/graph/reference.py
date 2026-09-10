@@ -119,17 +119,32 @@ def coding_agent_graph() -> Graph:
 
 
 def default_functions() -> dict:
-    """Deterministic helpers wired by the host app (RepoMap, test results…)."""
+    """Deterministic helpers wired by the host app (RepoMap, test results…).
+
+    Security contract: the release gate passes ONLY on measured evidence —
+    an int exit code 0 from the test tool plus at least one artifact://
+    evidence URI. Self-attested model strings ("true", "passed") fail
+    closed. Hosts must wire gate inputs to tool-measured evidence, never
+    raw model output.
+    """
     from wisp.graph.control import split_by_items
 
     def split_work(inputs: dict) -> dict:
         items = inputs.get("symbols", inputs.get("items", []))
         if isinstance(items, dict):
             items = list(items.values())
-        return {"slices": split_by_items(list(items), 4)}
+        if not isinstance(items, list):
+            return {"slices": []}
+        return {"slices": split_by_items(items, 4)}
 
     def release_gate(inputs: dict) -> dict:
-        ok = bool(inputs.get("tests_green", inputs.get("allowed", False)))
+        code = inputs.get("exit_code")
+        measured = isinstance(code, int) and not isinstance(code, bool) and code == 0
+        evidence = inputs.get("evidence", [])
+        has_evidence = isinstance(evidence, list) and any(
+            isinstance(e, str) and e.startswith("artifact://") for e in evidence)
+        ok = bool(measured and has_evidence)
         return {"allowed": ok,
-                "reason": "evidence green" if ok else "evidence missing"}
+                "reason": "measured exit 0 + evidence" if ok
+                else "missing measured evidence (exit_code int 0 + artifact:// evidence)"}
     return {"split_work": split_work, "release_gate": release_gate}

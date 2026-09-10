@@ -204,13 +204,45 @@ class Graph:
         return {n.id: n for n in self.nodes}
 
     def fingerprint(self) -> str:
+        """Hash ALL security-relevant fields. Resume refuses hash drift, so
+        any privilege-relevant change (tools, models, routes, policies,
+        retries, functions, prompts) must change the fingerprint."""
+        import dataclasses
+
+        def canon(node: GraphNode) -> dict:
+            c = node.effective_contract()
+            return {
+                "id": node.id, "type": node.type.value, "function": node.function,
+                "join": [node.join_policy.value, node.join_param, node.join_timeout_s],
+                "routes": dict(sorted(node.routes.items())),
+                "default_route": node.default_route,
+                "cycle": ([node.cycle.entry, list(node.cycle.body),
+                           node.cycle.exit_gate, node.cycle.max_iterations]
+                          if node.cycle else None),
+                "contract": {
+                    "input_schema": c.input_schema, "output_schema": c.output_schema,
+                    "allowed_tools": list(c.allowed_tools),
+                    "model": [c.model_policy.model_class, c.model_policy.provider,
+                              c.model_policy.model, list(c.model_policy.fallback_chain)],
+                    "retry": [c.retry_policy.max_attempts, c.retry_policy.retry_on_timeout,
+                              c.retry_policy.unsafe_side_effects],
+                    "timeout_s": c.timeout_s,
+                    "budget": [c.budget.max_tokens, c.budget.max_cost_usd,
+                               c.budget.max_runtime_s, c.budget.max_attempts],
+                    "permissions": list(c.permissions), "idempotent": c.idempotent,
+                },
+                "config": node.config,
+            }
+
         payload = json.dumps(
             {"id": self.id, "version": self.version,
-             "nodes": sorted(n.id for n in self.nodes),
-             "edges": sorted(f"{e.from_node}->{e.to_node}:{e.condition}" for e in self.edges)},
-            sort_keys=True,
+             "nodes": [canon(n) for n in sorted(self.nodes, key=lambda n: n.id)],
+             "edges": sorted(f"{e.from_node}->{e.to_node}:{e.condition}:"
+                             f"{json.dumps(e.mapping, sort_keys=True)}" for e in self.edges),
+             "policies": dataclasses.asdict(self.policies)},
+            sort_keys=True, default=str,
         )
-        return hashlib.sha256(payload.encode()).hexdigest()[:16]
+        return hashlib.sha256(payload.encode()).hexdigest()[:32]
 
 
 @dataclass

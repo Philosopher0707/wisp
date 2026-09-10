@@ -340,15 +340,21 @@ class Dispatcher:
         def _graph(ctx: ReplContext, args: str) -> CommandResult:
             from wisp.graph.cli import main as graph_main
             import contextlib as _cl
+            import shlex as _shlex
             from io import StringIO
 
             if isinstance(ctx.config, dict):
                 workspace = ctx.config.get("workspace") or os.getcwd()
             else:
                 workspace = getattr(ctx.config, "workspace", None) or os.getcwd()
+            try:
+                parts = _shlex.split(args) if args else ["list"]
+            except ValueError as exc:
+                ctx.emit(f"Bad quoting: {exc}")
+                return CommandResult.CONSUMED
             buf = StringIO()
             with _cl.redirect_stdout(buf):
-                code = graph_main(args.split() if args else ["list"], workspace=workspace)
+                code = graph_main(parts, workspace=workspace)
             ctx.emit(buf.getvalue().strip() or f"(exit {code})")
             return CommandResult.CONSUMED
 

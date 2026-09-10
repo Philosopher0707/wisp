@@ -26,7 +26,10 @@ def resolve_route(routes: dict[str, str], default: str, label: str) -> str:
 
 def classify_label(output: dict[str, Any], label_key: str = "label") -> str:
     value = output.get(label_key, "unknown")
-    return str(value) if value else "unknown"
+    if value is None or value is False or value == 0 or value == "":
+        return "unknown"
+    # Cap: unbounded model strings must not become event/DB bloat.
+    return str(value)[:200] if value else "unknown"
 
 
 # ── Joins ─────────────────────────────────────────────────────────────
@@ -75,12 +78,15 @@ def collect_failures(results: dict[str, NodeResult]) -> dict[str, str]:
             if v.status != NodeStatus.SUCCESS}
 
 
-def dedupe_findings(findings: list[dict[str, Any]], key: str = "id") -> list[dict[str, Any]]:
+def dedupe_findings(findings: list[dict[str, Any]], key: str = "id",
+                    limit: int = 50000) -> list[dict[str, Any]]:
     seen: set[str] = set()
     out: list[dict[str, Any]] = []
-    for f in findings:
-        k = str(f.get(key, ""))
-        if k and k in seen:
+    for f in findings[:limit]:
+        if not isinstance(f, dict):
+            continue
+        k = str(f.get(key, ""))[:256]
+        if not k or k in seen:
             continue
         seen.add(k)
         out.append(f)
@@ -93,7 +99,8 @@ def split_by_items(items: list[Any], max_branches: int = 16) -> list[list[Any]]:
     """Partition independent items into branch slices (blast-radius splits)."""
     if not items or max_branches < 1:
         return []
-    n = min(max_branches, len(items))
+    items = list(items)[:10000]
+    n = max(1, min(int(max_branches), 64, len(items)))
     slices: list[list[Any]] = [[] for _ in range(n)]
     for i, item in enumerate(items):
         slices[i % n].append(item)

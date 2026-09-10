@@ -19,8 +19,14 @@ import time
 from typing import Any, Awaitable, Callable
 
 from wisp.graph import control as _control
+from wisp.graph.security import scrub, scrub_text as redact
 from wisp.graph.artifacts import ArtifactStore, content_hash
-from wisp.graph.scheduler import SchedulerState, is_finished, ready_nodes
+from wisp.graph.scheduler import (
+    SchedulerState,
+    blocked_by_failure,
+    is_finished,
+    ready_nodes,
+)
 from wisp.graph.store import GraphStore, new_run_id
 from wisp.graph.types import (
     FAILED_NODE_STATUSES,
@@ -32,12 +38,21 @@ from wisp.graph.types import (
     NodeType,
     RunStatus,
 )
-from wisp.graph.validator import validate_graph
+from wisp.graph.validator import _NODE_ID_RX as _NODE_RX, validate_graph
 from wisp.graph.verifier import normalize_verdict
 
 NodeRunner = Callable[[GraphNode, dict[str, Any]], Awaitable[NodeResult]]
 FunctionImpl = Callable[[dict[str, Any]], Any]
 EmitFn = Callable[[dict[str, Any]], None]
+
+# Result/output volume caps (DB + event bloat guard).
+MAX_OUTPUT_BYTES = 262_144
+MAX_INPUT_BYTES = 1_048_576
+
+
+def _valid_run_id(run_id: str) -> bool:
+    return isinstance(run_id, str) and 0 < len(run_id) <= 128 and \
+        all(ch.isalnum() or ch in "-_." for ch in run_id)
 
 
 def _noop_emit(event: dict[str, Any]) -> None:
@@ -65,6 +80,7 @@ class GraphExecutor:
         self._cancelled: set[str] = set()
         self._approvals: dict[str, dict[str, bool]] = {}
         self._join_wait: dict[str, float] = {}
+        self._join_wait_reason: dict[str, str] = {}
 
     # ── setup ──
     def register_function(self, name: str, fn: FunctionImpl) -> None:
@@ -85,13 +101,20 @@ class GraphExecutor:
             raise ValueError("invalid graph: " + "; ".join(errors[:5]))
         store, _ = self._stores()
         rid = run_id or new_run_id()
-        if graph.policies.workspace and os.path.abspath(graph.policies.workspace) != \
-                os.path.abspath(self.workspace):
+        if not _valid_run_id(rid):
+            raise ValueError(f"invalid run id {rid!r}")
+        if len(json.dumps(inputs, default=str)) > MAX_INPUT_BYTES:
+            raise ValueError("graph inputs too large")
+        if graph.policies.workspace and os.path.realpath(graph.policies.workspace) != \
+                os.path.realpath(self.workspace):
             raise PermissionError(
                 f"graph workspace '{graph.policies.workspace}' != execution workspace "
                 f"'{self.workspace}'")
-        store.create_run(rid, graph.id, graph.version, graph.fingerprint(),
-                         _graph_def(graph), inputs)
+        try:
+            store.create_run(rid, graph.id, graph.version, graph.fingerprint(),
+                             _graph_def(graph), inputs, self.workspace)
+        except Exception as exc:
+            raise ValueError(f"cannot create run {rid!r}: {exc}") from exc
         store.set_run_status(rid, RunStatus.RUNNING.value)
         self._event(store, rid, "graph.created",
                     {"graph_id": graph.id, "version": graph.version})
@@ -109,6 +132,14 @@ class GraphExecutor:
         if row["graph_hash"] != graph.fingerprint():
             raise ValueError(f"run {run_id} started with graph hash {row['graph_hash']}; "
                              f"definition changed ({graph.fingerprint()}). Refusing.")
+        try:
+            saved_def = json.loads(row["graph_def"] or "{}")
+        except (ValueError, TypeError):
+            saved_def = {}
+        saved_ws = saved_def.get("workspace", "")
+        if saved_ws and os.path.realpath(saved_ws) != os.path.realpath(self.workspace):
+            raise PermissionError(f"run {run_id} belongs to workspace {saved_ws!r}; "
+                                  f"refusing resume from {self.workspace!r}")
         contracts = {n.id: n.effective_contract() for n in graph.nodes}
         statuses: dict[str, NodeStatus] = {}
         results: dict[str, NodeResult] = {}
@@ -117,24 +148,44 @@ class GraphExecutor:
         seq = 0
         saved = store.latest_checkpoint(run_id)
         if saved:
-            snap = json.loads(saved["state"])
-            seq = int(saved["seq"])
-            taken = dict(snap.get("taken", {}))
+            try:
+                snap = json.loads(saved["state"])
+            except (ValueError, TypeError):
+                raise ValueError(f"run {run_id}: checkpoint corrupt; refusing resume")
+            if not isinstance(snap, dict):
+                raise ValueError(f"run {run_id}: checkpoint corrupt; refusing resume")
+            seq = int(snap.get("seq", saved["seq"]) or 0)
+            raw_taken = snap.get("taken", {})
+            if not isinstance(raw_taken, dict):
+                raw_taken = {}
+            taken = {str(k)[:128]: str(v)[:256] for k, v in raw_taken.items()
+                     if isinstance(k, str) and isinstance(v, str)}
         for row_n in store.node_runs(run_id):
             nid = row_n["node_id"]
-            attempts[nid] = max(attempts.get(nid, 0), int(row_n["attempt"] or 0))
+            if nid not in contracts:
+                continue  # definition drift beyond hash pin: ignore foreign rows
+            try:
+                attempt = max(0, int(row_n["attempt"] or 0))
+            except (TypeError, ValueError):
+                attempt = 0
+            attempts[nid] = max(attempts.get(nid, 0), attempt)
             if row_n["status"] == "success":
+                try:
+                    results[nid] = _result_from_dict(nid, json.loads(row_n["result"] or "{}"))
+                except (ValueError, TypeError):
+                    continue  # corrupt row: re-run instead of trusting it
                 statuses[nid] = NodeStatus.SUCCESS
-                results[nid] = _result_from_dict(nid, json.loads(row_n["result"] or "{}"))
+            elif row_n["status"] in ("running", "pending"):
+                # Interrupted mid-flight: safe work re-runs, side effects park.
+                # Recorded terminal states (failure/timeout/cancelled/skipped)
+                # are NOT trusted — the node re-runs under current authority.
+                if contracts[nid].idempotent:
+                    statuses[nid] = NodeStatus.PENDING
+                else:
+                    statuses[nid] = NodeStatus.CANCELLED
         for n in graph.nodes:
             if n.id not in statuses:
                 statuses[n.id] = NodeStatus.PENDING
-            elif statuses[n.id] == NodeStatus.RUNNING:
-                # Interrupted mid-flight: safe work re-runs, side effects park.
-                if contracts[n.id].idempotent:
-                    statuses[n.id] = NodeStatus.PENDING
-                else:
-                    statuses[n.id] = NodeStatus.CANCELLED
         if approvals:
             self._approvals[run_id] = approvals
         self._cancelled.discard(run_id)
@@ -178,23 +229,36 @@ class GraphExecutor:
         async def launch(nid: str) -> None:
             node = nodes[nid]
             contract = node.effective_contract()
-            node_inputs = self._derive_inputs(graph, nid, results, inputs)
+            if not _finite_timeout(contract.timeout_s):
+                sched.statuses[nid] = NodeStatus.FAILURE
+                results[nid] = NodeResult(nid, NodeStatus.FAILURE,
+                                          error_code="BAD_TIMEOUT",
+                                          message="non-finite timeout refused")
+                return
+            node_inputs = self._derive_inputs(graph, nid, results, inputs, rid)
             ihash = content_hash(node_inputs)[:12]
             attempt = attempts.get(nid, 0) + 1
             key = f"{rid}:{nid}:{ihash}:{attempt}"
             if contract.idempotent:
-                dup = store.find_completed(key)
+                try:
+                    dup = store.find_completed(key)
+                except Exception:
+                    dup = None
                 if dup:
-                    results[nid] = _result_from_dict(nid, json.loads(dup["result"] or "{}"))
-                    sched.statuses[nid] = NodeStatus.SUCCESS
-                    return
+                    try:
+                        results[nid] = _result_from_dict(nid, json.loads(dup["result"] or "{}"))
+                    except (ValueError, TypeError):
+                        pass
+                    else:
+                        sched.statuses[nid] = NodeStatus.SUCCESS
+                        return
             attempts[nid] = attempt
             sched.statuses[nid] = NodeStatus.RUNNING
             self._event(store, rid, "graph.node_ready", {"node_id": nid})
             self._event(store, rid, "graph.node_started",
                         {"node_id": nid, "attempt": attempt})
-            store.put_node_run(_nrid(rid, nid), rid, nid, "running", attempt,
-                               ihash, {}, key, time.time(), 0.0)
+            store.put_node_run(_attempt_nrid(rid, nid, attempt), rid, nid, "running",
+                               attempt, ihash, {}, key, time.time(), 0.0)
 
             async def _run() -> NodeResult:
                 async with global_sem:
@@ -205,15 +269,57 @@ class GraphExecutor:
                     return await self._exec_node(node, node_inputs, attempt)
 
             task = asyncio.create_task(_guard(node, _run(), contract.timeout_s))
-            in_flight[task] = nid
+            in_flight[task] = (nid, attempt)
 
         async def settle_one() -> bool:
-            done, _ = await asyncio.wait(list(in_flight), return_when=asyncio.FIRST_COMPLETED)
+            # Slice the wait so cancellation is responsive: a stuck node
+            # must not delay cancel until its (long) timeout expires.
+            done: set = set()
+            while not done:
+                done, _ = await asyncio.wait(list(in_flight),
+                                             return_when=asyncio.FIRST_COMPLETED,
+                                             timeout=0.5)
+                if not done and rid in self._cancelled:
+                    for t in in_flight:
+                        t.cancel()
+                    with contextlib.suppress(Exception):
+                        await asyncio.gather(*in_flight, return_exceptions=True)
+                    done = {t for t in in_flight if t.done()}
+                    for t in list(in_flight):
+                        if not t.done():
+                            done.add(t)  # processed as cancelled below
+                    break
             progressed = False
             for task in done:
-                nid = in_flight.pop(task)
-                result: NodeResult = task.result()
-                result.attempt = attempts.get(nid, 1)
+                if task not in in_flight:
+                    continue
+                nid, generation = in_flight.pop(task)
+                try:
+                    result: NodeResult = task.result()
+                except asyncio.CancelledError:
+                    result = NodeResult(nid, NodeStatus.CANCELLED,
+                                        error_code="CANCELLED",
+                                        message="node task cancelled")
+                except Exception as exc:  # defensive: _guard already converts
+                    result = NodeResult(nid, NodeStatus.FAILURE,
+                                        error_code=type(exc).__name__,
+                                        message=str(exc)[:200])
+                if generation != attempts.get(nid, 0):
+                    # Stale worker: a newer attempt already launched (retry /
+                    # correction / resume). The stale result is dropped and the
+                    # attempt row is marked superseded — never applied.
+                    self._event(store, rid, "graph.node_retry",
+                                {"node_id": nid, "stale_attempt": generation,
+                                 "current_attempt": attempts.get(nid, 0),
+                                 "dropped": True})
+                    store.put_node_run(_attempt_nrid(rid, nid, generation), rid, nid,
+                                       "cancelled", generation, "", {},
+                                       f"stale:{rid}:{nid}:{generation}",
+                                       time.time(), time.time())
+                    progressed = True
+                    continue
+                result.attempt = generation
+                _cap_result(result)
                 if await self._on_settled(graph, rid, store, sched, results, attempts,
                                           cycle_counts, nodes[nid], result):
                     progressed = True  # a retry was queued (node back to PENDING)
@@ -249,6 +355,19 @@ class GraphExecutor:
             progressed = False
             for nid in ready_nodes(graph, sched):
                 node = nodes[nid]
+                if blocked_by_failure(graph, sched, nid):
+                    # Failure containment: skip, never launch.
+                    sched.statuses[nid] = NodeStatus.SKIPPED
+                    results[nid] = NodeResult(nid, NodeStatus.SKIPPED,
+                                              error_code="UPSTREAM_FAILED",
+                                              message="an unconditional dependency failed")
+                    store.put_node_run(_attempt_nrid(rid, nid, 0), rid, nid,
+                                       "skipped", 0, "", _result_to_dict(results[nid]),
+                                       f"{rid}:{nid}", time.time(), time.time())
+                    self._event(store, rid, "graph.node_failed",
+                                {"node_id": nid, "error": "upstream failed; skipped"})
+                    progressed = True
+                    continue
                 if node.type == NodeType.APPROVAL:
                     await drain()
                     decision = self._approvals.get(rid, {}).get(nid)
@@ -292,6 +411,9 @@ class GraphExecutor:
                     break
                 for nid in pending:
                     sched.statuses[nid] = NodeStatus.SKIPPED
+                    results[nid] = NodeResult(nid, NodeStatus.SKIPPED,
+                                              error_code="LANE_UNTAKEN",
+                                              message="no incoming condition fired")
                 self._event(store, rid, "graph.join_wait",
                             {"skipped_untaken": sorted(pending)})
                 if is_finished(graph, sched):
@@ -301,9 +423,23 @@ class GraphExecutor:
                 continue
 
         sinks = [i for i in nodes if not any(e.from_node == i for e in graph.edges)]
+        # Verdict honesty: success requires every sink to have succeeded.
+        # Failed sinks -> FAILED; denied/upstream-skipped sinks -> CANCELLED
+        # (never report completion for work that never ran); untaken
+        # conditional lanes (LANE_UNTAKEN) are benign.
         failed = [s for s in sinks
                   if sched.statuses.get(s, NodeStatus.PENDING) in FAILED_NODE_STATUSES]
-        status = RunStatus.FAILED if failed else RunStatus.SUCCEEDED
+        incomplete = [s for s in sinks
+                      if sched.statuses.get(s, NodeStatus.PENDING)
+                      in (NodeStatus.CANCELLED, NodeStatus.SKIPPED, NodeStatus.PENDING,
+                          NodeStatus.RUNNING)
+                      and results.get(s, NodeResult(s)).error_code != "LANE_UNTAKEN"]
+        if failed:
+            status = RunStatus.FAILED
+        elif incomplete:
+            status = RunStatus.CANCELLED
+        else:
+            status = RunStatus.SUCCEEDED
         store.set_run_status(rid, status.value, "; ".join(failed))
         self._event(store, rid,
                     "graph.completed" if status == RunStatus.SUCCEEDED else "graph.failed",
@@ -330,17 +466,27 @@ class GraphExecutor:
                     return NodeResult(node.id, NodeStatus.FAILURE,
                                       error_code="BAD_GATE",
                                       message="gate function must return {'allowed': bool}")
-                return NodeResult(node.id, NodeStatus.SUCCESS, output=out,
-                                  duration_s=time.time() - t0, attempt=attempt)
+                res = NodeResult(node.id, NodeStatus.SUCCESS, output=out,
+                                 duration_s=time.time() - t0, attempt=attempt)
+                _cap_result(res)
+                return res
             # AGENT / VERIFIER / ROUTER-classifier: injected model runner.
             result = await self._runner(node, node_inputs)
+            if not isinstance(result, NodeResult):
+                return NodeResult(node.id, NodeStatus.FAILURE,
+                                  error_code="BAD_RUNNER",
+                                  message="runner must return NodeResult")
+            result.node_id = node.id  # runner must not spoof another node's id
             result.attempt = attempt
             result.duration_s = result.duration_s or (time.time() - t0)
             if node.type == NodeType.VERIFIER:
+                if not isinstance(result.output, dict):
+                    result.output = {}
                 verdict = normalize_verdict(result.output)
                 result.output = {**result.output, "decision": verdict.decision,
                                  "reason_codes": verdict.reason_codes,
                                  "evidence": verdict.evidence}
+            _cap_result(result)
             return result
         except asyncio.TimeoutError:
             return NodeResult(node.id, NodeStatus.TIMEOUT, error_code="TIMEOUT",
@@ -348,8 +494,8 @@ class GraphExecutor:
                               duration_s=time.time() - t0, attempt=attempt)
         except Exception as exc:  # runtime failure -> typed failure status
             return NodeResult(node.id, NodeStatus.FAILURE,
-                              error_code=type(exc).__name__,
-                              message=str(exc)[:500],
+                              error_code=redact(type(exc).__name__)[:64],
+                              message=redact(str(exc))[:500],
                               duration_s=time.time() - t0, attempt=attempt)
 
     async def _on_settled(self, graph: Graph, rid: str, store: GraphStore,
@@ -367,7 +513,8 @@ class GraphExecutor:
                             {"node_id": node.id, "error": result.message,
                              "retry": "refused-unsafe"})
             else:
-                delay = min(contract.retry_policy.backoff_base_s * (2 ** (result.attempt - 1)),
+                shift = min(max(result.attempt - 1, 0), 10)
+                delay = min(contract.retry_policy.backoff_base_s * (2 ** shift),
                             contract.retry_policy.backoff_max_s)
                 self._event(store, rid, "graph.node_retry",
                             {"node_id": node.id, "attempt": result.attempt + 1,
@@ -375,7 +522,8 @@ class GraphExecutor:
                 await self._sleep(delay)
                 # Re-queue ONLY the failed unit; successes are preserved.
                 sched.statuses[node.id] = NodeStatus.PENDING
-                store.put_node_run(_nrid(rid, node.id), rid, node.id, "pending",
+                store.put_node_run(_attempt_nrid(rid, node.id, result.attempt),
+                                   rid, node.id, "pending",
                                    result.attempt, "", {}, f"retry:{rid}:{node.id}",
                                    time.time(), 0.0)
                 return True
@@ -395,7 +543,8 @@ class GraphExecutor:
         self._event(store, rid, "graph.node_completed" if result.ok else "graph.node_failed",
                     {"node_id": node.id, "status": result.status.value,
                      "usage": result.usage()})
-        store.put_node_run(_nrid(rid, node.id), rid, node.id, result.status.value,
+        store.put_node_run(_attempt_nrid(rid, node.id, result.attempt),
+                           rid, node.id, result.status.value,
                            result.attempt, "", _result_to_dict(result),
                            f"{rid}:{node.id}", time.time(), time.time())
         # Correction edge: a taken conditional label re-arms a settled cycle
@@ -479,13 +628,18 @@ class GraphExecutor:
             self._event(store, rid, "graph.node_failed",
                         {"node_id": node.id, "error": reason})
             return True
-        self._event(store, rid, "graph.join_wait",
-                    {"node_id": node.id, "reason": reason})
+        # Throttle: join_wait is emitted only when the reason changes —
+        # unthrottled it spams one SQLite row per drive iteration (disk DoS).
+        last = self._join_wait_reason.get(f"{rid}:{node.id}")
+        if last != reason:
+            self._join_wait_reason[f"{rid}:{node.id}"] = reason
+            self._event(store, rid, "graph.join_wait",
+                        {"node_id": node.id, "reason": reason})
         return False
 
     # ── inputs: explicit mapping + artifact refs, never whole transcripts ──
     def _derive_inputs(self, graph: Graph, nid: str, results: dict[str, NodeResult],
-                       run_inputs: dict) -> dict[str, Any]:
+                       run_inputs: dict, rid: str) -> dict[str, Any]:
         _, arts = self._stores()
         data: dict[str, Any] = {}
         for e in graph.edges:
@@ -503,9 +657,16 @@ class GraphExecutor:
                                      "artifacts": list(src.artifact_ids)}
         if nid == graph.entrypoint:
             data = {**run_inputs, **data}
-        return arts.resolve_inputs(data)
+        if len(json.dumps(data, default=str)) > MAX_INPUT_BYTES:
+            raise ValueError(f"node {nid}: derived inputs exceed size cap")
+        return arts.resolve_inputs(data, rid)
 
     def _event(self, store: GraphStore, rid: str, type: str, data: dict) -> None:
+        # Redact at the boundary: secrets never reach SQLite or listeners.
+        try:
+            data = scrub(data)
+        except Exception:
+            data = {"redaction_failed": True}
         try:
             store.append_event(rid, type, data)
         except Exception:
@@ -532,19 +693,23 @@ async def _guard(node: GraphNode, coro, timeout_s: float) -> NodeResult:
 
 
 def _label_for(node: GraphNode, output: dict) -> str:
+    if not isinstance(output, dict):
+        return ""
     if node.type == NodeType.ROUTER:
         label = _control.classify_label(output)
         return _control.resolve_route(node.routes, node.default_route, label)
     if node.type == NodeType.VERIFIER:
-        d = str(output.get("decision", "reject")).lower()
-        lane = str(output.get("lane", "") or "")
+        # Unknown decisions fail closed in normalize_verdict; the label only
+        # selects graph edges, never authority — still, cap its shape.
+        d = str(output.get("decision", "reject"))[:64].lower()
+        lane = str(output.get("lane", "") or "")[:64]
         primary = {"allow": "accept", "reject": "reject", "retry": "retry",
-                   "escalate": "escalate"}.get(d, d)
-        if primary == "reject" and lane:
+                   "escalate": "escalate"}.get(d, "reject")
+        if primary == "reject" and lane and _NODE_RX.fullmatch(lane):
             return f"reject.{lane}"
         return primary
     if node.type == NodeType.GATE:
-        return "allow" if output.get("allowed") else "deny"
+        return "allow" if output.get("allowed") is True else "deny"
     return ""
 
 
@@ -590,8 +755,50 @@ def _snapshot(sched: SchedulerState, results: dict[str, NodeResult]) -> dict:
             "completed": sorted(k for k, r in results.items() if r.ok)}
 
 
+def _attempt_nrid(rid: str, nid: str, attempt: int) -> str:
+    """Per-attempt row id: retries keep history; stale attempts can't collide."""
+    return f"{rid}:{nid}#{max(int(attempt), 0)}"
+
+
 def _nrid(rid: str, nid: str) -> str:
     return f"{rid}:{nid}"
+
+
+def _finite_timeout(v: Any) -> bool:
+    import math
+    return isinstance(v, (int, float)) and not isinstance(v, bool) \
+        and math.isfinite(v) and v > 0
+
+
+def _cap_result(result: NodeResult) -> None:
+    """Bound runner-controlled values before they reach budgets/storage."""
+    try:
+        size = len(json.dumps(result.output, default=str))
+    except (TypeError, ValueError):
+        result.output = {"error": "unserializable output dropped"}
+        size = 64
+    if size > MAX_OUTPUT_BYTES:
+        result.output = {"truncated": True,
+                         "preview": json.dumps(result.output, default=str)[:4096]}
+    if not isinstance(result.artifact_ids, list):
+        result.artifact_ids = []
+    result.artifact_ids = [str(a)[:160] for a in result.artifact_ids[:64]]
+    for field in ("input_tokens", "output_tokens"):
+        v = getattr(result, field)
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            setattr(result, field, 0)
+        else:
+            setattr(result, field, max(0, int(v)))
+    if isinstance(result.cost_usd, bool) or not isinstance(result.cost_usd, (int, float)):
+        result.cost_usd = 0.0
+    else:
+        result.cost_usd = max(0.0, float(result.cost_usd))
+    if not isinstance(result.message, str):
+        result.message = str(result.message)[:500]
+    result.message = redact(result.message[:500])
+    if not isinstance(result.error_code, str):
+        result.error_code = type(result.error_code).__name__
+    result.error_code = result.error_code[:64]
 
 
 def _final(graph: Graph, rid: str, status: RunStatus, results: dict[str, NodeResult],
@@ -665,13 +872,38 @@ def _result_to_dict(r: NodeResult) -> dict:
 
 
 def _result_from_dict(nid: str, d: dict) -> NodeResult:
+    """Harden DB-restored rows: corrupt values coerce, never crash, never trust."""
+    if not isinstance(d, dict):
+        raise ValueError("corrupt node result row")
     try:
         status = NodeStatus(d.get("status", "success"))
-    except ValueError:
+    except (ValueError, AttributeError):
         status = NodeStatus.FAILURE
-    return NodeResult(node_id=nid, status=status, output=d.get("output", {}),
-                      artifact_ids=d.get("artifacts", []), model=d.get("model", ""),
-                      provider=d.get("provider", ""), input_tokens=d.get("input_tokens", 0),
-                      output_tokens=d.get("output_tokens", 0), cost_usd=d.get("cost_usd", 0.0),
-                      duration_s=d.get("duration_s", 0.0), attempt=d.get("attempt", 1),
-                      error_code=d.get("error_code", ""), message=d.get("message", ""))
+    output = d.get("output", {})
+    if not isinstance(output, dict):
+        output = {"value": output}
+    arts = d.get("artifacts", [])
+    if isinstance(arts, str):
+        arts = [arts]
+    if not isinstance(arts, list):
+        arts = []
+
+    def _num(v, default=0):
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return default
+        import math
+        return v if math.isfinite(v) else default
+
+    r = NodeResult(node_id=nid, status=status, output=output,
+                   artifact_ids=[str(a)[:160] for a in arts[:64]],
+                   model=str(d.get("model", ""))[:256],
+                   provider=str(d.get("provider", ""))[:128],
+                   input_tokens=max(0, int(_num(d.get("input_tokens", 0)))),
+                   output_tokens=max(0, int(_num(d.get("output_tokens", 0)))),
+                   cost_usd=max(0.0, float(_num(d.get("cost_usd", 0.0)))),
+                   duration_s=max(0.0, float(_num(d.get("duration_s", 0.0)))),
+                   attempt=max(0, int(_num(d.get("attempt", 1), 1))),
+                   error_code=str(d.get("error_code", ""))[:64],
+                   message=str(d.get("message", ""))[:500])
+    _cap_result(r)
+    return r

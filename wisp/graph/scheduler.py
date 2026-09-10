@@ -39,13 +39,43 @@ def ready_nodes(graph: Graph, state: SchedulerState) -> list[str]:
         preds = incoming[nid]
         if not preds:
             continue  # non-entry root without edges: dead definition, stays pending
-        if _predicates_satisfied(graph, state, nid, preds):
+        if _predicates_satisfied(graph, nodes, state, nid, preds):
             ready.append(nid)
     return ready
 
 
-def _predicates_satisfied(graph, state: SchedulerState, nid: str, preds) -> bool:
+def blocked_by_failure(graph, state: SchedulerState, nid: str) -> bool:
+    """True when a non-JOIN node must SKIP: an unconditional predecessor
+    settled non-success. JOINs decide for themselves (join policy); every
+    other node propagates failure as skip — a denied gate or failed branch
+    never launches downstream work."""
+    from wisp.graph.types import NodeType as _NT
     nodes = {n.id: n for n in graph.nodes}
+    node = nodes.get(nid)
+    if node is None:
+        return False
+    if node.type == _NT.JOIN:
+        return False
+    for e in graph.edges:
+        if e.to_node != nid or e.condition:
+            continue
+        st = state.statuses.get(e.from_node, NodeStatus.PENDING)
+        if st in (NodeStatus.FAILURE, NodeStatus.TIMEOUT, NodeStatus.CANCELLED):
+            return True
+    return False
+
+
+def _join_of(node) -> JoinPolicy:
+    jp = node.join_policy
+    if isinstance(jp, JoinPolicy):
+        return jp
+    try:
+        return JoinPolicy(str(jp).lower())
+    except ValueError:
+        return JoinPolicy.ALL  # fail closed: unknown policy = full barrier
+
+
+def _predicates_satisfied(graph, nodes, state: SchedulerState, nid: str, preds) -> bool:
     target = nodes[nid]
     # Conditional-only target: runnable when any incoming condition is taken.
     unconditional = [e for e in preds if not e.condition]
@@ -59,7 +89,7 @@ def _predicates_satisfied(graph, state: SchedulerState, nid: str, preds) -> bool
     # Unconditional (possibly mixed): join policy on the TARGET decides.
     # Streaming joins release per-branch (handled by executor); here they are
     # runnable once at least one unconsumed branch settled successfully.
-    if target.join_policy == "streaming" if isinstance(target.join_policy, str) else target.join_policy == JoinPolicy.STREAMING:
+    if _join_of(target) == JoinPolicy.STREAMING:
         return any(_settled_ok(state, e.from_node) for e in unconditional)
     for e in unconditional:
         if state.statuses.get(e.from_node, NodeStatus.PENDING) not in (
