@@ -15,6 +15,7 @@ passes ToolExecutor.authorize().
 from __future__ import annotations
 
 import math
+import os
 from typing import Any
 
 from wisp.graph.security import scrub_text as redact
@@ -44,19 +45,34 @@ class SubagentNodeRunner:
         if not (isinstance(timeout, (int, float)) and math.isfinite(timeout)
                 and timeout > 0):
             timeout = 300.0
+        isolated = inputs.get("isolated_workspace", "")
+        workspace = self._workspace
+        if isinstance(isolated, str) and isolated:
+            # Non-git fallback prepared by a setup node: run the worker with
+            # its file tools rooted at the isolated copy. Contained below.
+            try:
+                from wisp.workspace import _contain
+                _contain(self._workspace, os.path.relpath(isolated, self._workspace))
+                workspace = isolated
+            except (OSError, ValueError):
+                workspace = self._workspace
         sub = SubagentContract(
             name=node.id, role=str(node.config.get("role", "generalist"))[:64],
             task=f"{task_text}\n\n[Node input]\n{_compact(inputs)}",
             tools=list(contract.allowed_tools) or ["all"],
             max_iterations=max_iter,
             timeout_seconds=float(timeout),
-            workspace=self._workspace,
+            workspace=workspace,
+            worktree_isolated=bool(node.config.get("isolated", False)),
             output_format="json" if contract.output_schema else "text",
             output_schema=contract.output_schema or None,
             max_retries=max(min(contract.retry_policy.max_attempts - 1, 10), 0))
         result = await self._orch.run(sub)
         status = NodeStatus.SUCCESS if result.success else NodeStatus.FAILURE
         output = result.output if isinstance(result.output, dict) else {"text": str(result.output)}
+        patch = getattr(result, "worktree_patch", "")
+        if isinstance(patch, str) and patch and len(patch) < 4_000_000:
+            output = {**output, "worktree_patch": patch}
         return NodeResult(node.id, status, output=output,
                           model=str(getattr(result, "model", ""))[:256],
                           provider=str(getattr(result, "provider", ""))[:128],
@@ -109,4 +125,10 @@ def default_executor(workspace: str = ".", max_concurrency: int = 8,
         pass
     for name, fn in default_functions().items():
         ex.register_function(name, fn)
+    try:
+        from wisp.workspace import isolation_functions
+        for name, fn in isolation_functions(workspace).items():
+            ex.register_function(name, fn)
+    except Exception:
+        pass
     return ex

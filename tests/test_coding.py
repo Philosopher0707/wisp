@@ -215,3 +215,121 @@ class TestReplHook:
     def test_gate_failure_falls_through(self):
         runner, _ = self._runner()
         assert C.handle_prompt(runner, None) is False
+
+
+class TestParallelMergeTemplate:
+    def _run_graph(self, tmp_path, worker_edits):
+        import asyncio
+        import copy
+        import os
+        from wisp.graph.coding_graphs import TEMPLATES
+        from wisp.graph.executor import GraphExecutor
+        from wisp.graph.planner import compile_optimized
+        from wisp.graph.store import GraphStore
+        from wisp.graph.types import NodeResult, NodeStatus
+        from wisp.workspace import isolation_functions
+
+        async def no_sleep(s):
+            pass
+
+        async def run(node, inputs):
+            if node.id in worker_edits:
+                path, content = worker_edits[node.id]
+                with open(os.path.join(inputs["isolated_workspace"], path), "w") as fh:
+                    fh.write(content)
+                return NodeResult(node.id, NodeStatus.SUCCESS,
+                                  output={"summary": "edited"})
+            if node.id in ("test", "test2", "final", "final2", "repair"):
+                return NodeResult(node.id, NodeStatus.SUCCESS,
+                                  output={"summary": "ok", "branches": []})
+            raise AssertionError(f"unexpected agent {node.id}")
+
+        ws = str(tmp_path)
+        ir = {"objective": "x", "execution_shape": "GRAPH",
+              "graph": copy.deepcopy(TEMPLATES["parallel-implement-merge"]([]))["graph"]}
+        g, _, _, _ = compile_optimized(ir, None)
+        ex = GraphExecutor(runner=run, workspace=ws,
+                           store=GraphStore(workspace=ws), sleep=no_sleep)
+        for name, fn in isolation_functions(ws).items():
+            ex.register_function(name, fn)
+        return asyncio.run(ex.run(g, {"objective": "x", "files": ["a.py", "b.py"],
+                                      "workers": ["impl-a", "impl-b"]})), ws
+
+    def test_disjoint_workers_merge_and_apply(self, tmp_path):
+        import os
+        (tmp_path / "a.py").write_text("a = 1\n")
+        (tmp_path / "b.py").write_text("b = 1\n")
+        final, ws = self._run_graph(tmp_path, {"impl-a": ("a.py", "a = 2\n"),
+                                               "impl-b": ("b.py", "b = 2\n")})
+        assert final["status"] == "succeeded"
+        assert open(os.path.join(ws, "a.py")).read() == "a = 2\n"
+        assert open(os.path.join(ws, "b.py")).read() == "b = 2\n"
+        assert final["results_by_node"]["merge"]["output"]["label"] == "merged"
+
+    def test_conflicting_workers_reported(self, tmp_path):
+        import os
+        (tmp_path / "a.py").write_text("a = 1\n")
+        (tmp_path / "b.py").write_text("b = 1\n")
+        final, ws = self._run_graph(tmp_path, {"impl-a": ("a.py", "a = 2\n"),
+                                               "impl-b": ("a.py", "a = 3\n")})
+        assert final["status"] == "failed"  # honest terminal failure
+        assert open(os.path.join(ws, "a.py")).read() == "a = 1\n"  # untouched
+        res = C.summarize_graph("parallel-implement-merge",
+                                final.get("run_id", ""), final)
+        assert "a.py" in res.summary or "conflict" in res.summary.lower()
+
+    def test_pick_template_parallel(self):
+        from wisp.graph.coding_graphs import pick_template
+        assert pick_template("implement two independent features in parallel") == \
+            "parallel-implement-merge"
+
+    def test_repair_round_recovers(self, tmp_path):
+        import asyncio
+        import copy
+        import hashlib
+        import os
+        from wisp.graph.coding_graphs import TEMPLATES
+        from wisp.graph.executor import GraphExecutor
+        from wisp.graph.planner import compile_optimized
+        from wisp.graph.store import GraphStore
+        from wisp.graph.types import NodeResult, NodeStatus
+        from wisp.workspace import isolation_functions
+
+        async def no_sleep(s):
+            pass
+
+        (tmp_path / "a.py").write_text("a = 1\n")
+        ws = str(tmp_path)
+        base_hash = hashlib.sha256(b"a = 1\n").hexdigest()
+
+        async def run(node, inputs):
+            if node.id == "impl-a":
+                with open(os.path.join(inputs["isolated_workspace"], "a.py"), "w") as fh:
+                    fh.write("a = 2\n")
+            elif node.id == "impl-b":
+                with open(os.path.join(inputs["isolated_workspace"], "a.py"), "w") as fh:
+                    fh.write("a = 3\n")
+            elif node.id == "repair":
+                return NodeResult(node.id, NodeStatus.SUCCESS, output={
+                    "branches": [{"worker": "fix", "changes": [
+                        {"op": "MODIFY", "path": "a.py",
+                         "base_hash": base_hash, "content": "a = 9\n"}]}]})
+            return NodeResult(node.id, NodeStatus.SUCCESS, output={"summary": "ok"})
+
+        ir = {"objective": "x", "execution_shape": "GRAPH",
+              "graph": copy.deepcopy(TEMPLATES["parallel-implement-merge"]([]))["graph"]}
+        g, _, _, _ = compile_optimized(ir, None)
+        ex = GraphExecutor(runner=run, workspace=ws,
+                           store=GraphStore(workspace=ws), sleep=no_sleep)
+        for name, fn in isolation_functions(ws).items():
+            ex.register_function(name, fn)
+        final = asyncio.run(ex.run(g, {"objective": "x", "files": ["a.py"],
+                                           "workers": ["impl-a", "impl-b"]}))
+        assert final["status"] == "succeeded"
+        assert open(os.path.join(ws, "a.py")).read() == "a = 9\n"
+        assert final["results_by_node"]["merge2"]["output"]["label"] == "merged"
+
+    def test_progress_lines_for_merge(self):
+        line = C.render_progress({"type": "graph.route_selected",
+                                  "data": {"node_id": "merge", "label": "merged"}})
+        assert line and "merge" in line

@@ -207,14 +207,15 @@ def repo_context(workspace: str, query: str = "", files: tuple[str, ...] = (),
 def run_coding_template(template: str, ctx: TaskContext,
                         emit: Any = None, max_concurrency: int = 8) -> dict:
     """Compile → optimize → execute a host-authored coding template. Blocking."""
-    from wisp.graph.coding_graphs import build_template
+    from wisp.graph.coding_graphs import TEMPLATE_RUN_INPUTS, build_template
     from wisp.graph.planner import compile_optimized
     from wisp.graph.runner import default_executor
     ir = build_template(template, ctx)
     graph, diags, meta = compile_optimized(ir, None)
     ex = default_executor(ctx.workspace, max_concurrency, emit=emit)
-    result = asyncio.run(ex.run(graph, {"objective": ctx.objective,
-                                        "files": list(ctx.facts)}))
+    run_inputs = {"objective": ctx.objective, "files": list(ctx.facts)}
+    run_inputs.update(TEMPLATE_RUN_INPUTS.get(template, {}))
+    result = asyncio.run(ex.run(graph, run_inputs))
     result["template"], result["transports"] = template, meta.get(
         "artifact_transport", {}).get("transports", {})
     return result
@@ -235,10 +236,19 @@ def summarize_graph(template: str, run_id: str, final: dict) -> ExecutionResult:
                 if isinstance(f, str) and f not in changed:
                     changed.append(f)
         artifacts.extend(a for a in r.get("artifacts", []) if isinstance(a, str))
-    tail = results.get("final") or results.get("review") or {}
+    tail = results.get("final") or results.get("final2") or results.get("review") or {}
     summary = ""
     if isinstance(tail, dict) and isinstance(tail.get("output"), dict):
         summary = str(tail["output"].get("summary", tail["output"].get("text", "")))[:2000]
+    if not summary:
+        # Surface failed-node messages (e.g. conflict reports) instead of silence.
+        problems = []
+        for nid, r in results.items():
+            if isinstance(r, dict) and r.get("status") not in ("success", "skipped"):
+                msg = str(r.get("message", "") or "")[:300]
+                if msg:
+                    problems.append(f"{nid}: {msg}")
+        summary = "; ".join(problems[:4])[:2000]
     verification = "unverified"
     for r in results.values():
         if isinstance(r, dict) and isinstance(r.get("output"), dict) \

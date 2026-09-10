@@ -145,10 +145,99 @@ def complex_coding(ctx_files: list[str]) -> dict:
                       "policies": {"max_concurrency": 8}}}
 
 
+# Static run inputs per template (host-defined, never model output).
+TEMPLATE_RUN_INPUTS = {
+    "parallel-implement-merge": {"workers": ["impl-a", "impl-b"]},
+}
+
+
+def parallel_implement_merge(ctx_files: list[str]) -> dict:
+    """SETUP → IMPL-A + IMPL-B (isolated copies) → MERGE ⇄ → TEST → FINAL.
+
+    Workers never touch canonical state; the MERGE router applies only on
+    clean merge, routes conflicts to bounded repair, failures to report.
+    """
+    impl = lambda nid: {  # noqa: E731
+        "type": "agent",
+        "responsibility": "implement your slice in the isolated workspace; report summary",
+        "allowed_tools": WRITE, "timeout": 900, "retry": {"max_attempts": 1}}
+    nodes: dict[str, Any] = {
+        "setup": {"type": "function", "function": "prepare_isolation",
+                  "responsibility": "snapshot + isolated copies"},
+        "impl-a": impl("impl-a"),
+        "impl-b": impl("impl-b"),
+        "merge": {"type": "router", "function": "merge_changesets",
+                  "responsibility": "merge isolated work",
+                  "routes": {"merged": "test", "conflict": "repair",
+                             "stale": "fail", "invalid": "fail"},
+                  "default_route": "fail"},
+        "test": _agent("test", "run relevant tests on merged state",
+                       READ + ["run_bash", "run_tests"]),
+        "repair": _agent("repair", "resolve the reported conflicts completely; "
+                                     "return resolutions, do not mutate files", READ),
+        "merge2": {"type": "router", "function": "merge_changesets",
+                   "responsibility": "merge repair outcome",
+                   "routes": {"merged": "test2", "conflict": "fail",
+                              "stale": "fail", "invalid": "fail"},
+                   "default_route": "fail"},
+        "test2": _agent("test2", "run relevant tests on repaired state",
+                        READ + ["run_bash", "run_tests"]),
+        "fail": {"type": "function", "function": "report_conflict",
+                 "responsibility": "report unresolvable conflict"},
+        "final": _agent("final", "summarize the merged change", READ),
+        "final2": _agent("final2", "summarize the repaired change", READ),
+    }
+    edges = [
+        {"from": "setup", "to": "impl-a",
+         "reason": "impl-a consumes setup.output.copies",
+         "mapping": {"isolated_workspace": "output.copies.impl-a",
+                     "task_files": "output.files"}},
+        {"from": "setup", "to": "impl-b",
+         "reason": "impl-b consumes setup.output.copies",
+         "mapping": {"isolated_workspace": "output.copies.impl-b",
+                     "task_files": "output.files"}},
+        {"from": "setup", "to": "merge",
+         "reason": "merge consumes setup.output.snapshot",
+         "mapping": {"snapshot": "output.snapshot", "copies": "output.copies"}},
+        {"from": "impl-a", "to": "merge", "reason": "merge waits for impl-a"},
+        {"from": "impl-b", "to": "merge", "reason": "merge waits for impl-b"},
+        {"from": "merge", "to": "test", "reason": "test on merged", "when": "test",
+         "mapping": {"applied": "output.applied"}},
+        {"from": "merge", "to": "repair", "when": "repair",
+         "reason": "repair consumes merge.output conflicts",
+         "mapping": {"conflicts": "output.conflicts",
+                     "non_conflicting": "output.non_conflicting",
+                     "snapshot": "output.snapshot"}},
+        {"from": "setup", "to": "merge2",
+         "reason": "merge2 consumes setup.output.snapshot",
+         "mapping": {"snapshot": "output.snapshot"}},
+        {"from": "repair", "to": "merge2",
+         "reason": "merge2 consumes repair.output resolutions",
+         "mapping": {"branches": "output.branches"}},
+        {"from": "merge2", "to": "test2", "reason": "test2 on repaired", "when": "test2",
+         "mapping": {"applied": "output.applied"}},
+        {"from": "merge2", "to": "fail",
+         "reason": "fail on merge2 non-merged outcome", "when": "fail",
+         "mapping": {"conflicts": "output.conflicts"}},
+        {"from": "merge", "to": "fail",
+         "reason": "fail on merge non-merged outcome", "when": "fail"},
+        {"from": "test", "to": "final", "reason": "final summarizes test",
+         "mapping": {"report": "output.summary"}},
+        {"from": "test2", "to": "final2", "reason": "final2 summarizes test2",
+         "mapping": {"report": "output.summary"}},
+    ]
+    return {"objective": "parallel implement with isolated merge",
+            "execution_shape": "GRAPH",
+            "graph": {"id": "coding-parallel-merge", "entry": "setup",
+                      "nodes": nodes, "edges": edges,
+                      "policies": {"max_concurrency": 8}}}
+
+
 TEMPLATES = {"simple": simple_analyze_implement_verify,
              "parallel-analysis": parallel_repo_analysis,
              "repair": implement_review_repair,
-             "complex": complex_coding}
+             "complex": complex_coding,
+             "parallel-implement-merge": parallel_implement_merge}
 
 
 def build_template(name: str, ctx: Any) -> dict:
@@ -163,6 +252,10 @@ def build_template(name: str, ctx: Any) -> dict:
 def pick_template(objective: str) -> str:
     """Deterministic template routing by task shape keywords."""
     lowered = (objective or "").lower()
+    if any(k in lowered for k in ("parallel implement", "independent changes",
+                                  "two features", "simultaneous",
+                                  "independent features")):
+        return "parallel-implement-merge"
     if any(k in lowered for k in ("audit", "review the", "analyze the repo",
                                   "map the", "survey", "inventory")):
         return "parallel-analysis"

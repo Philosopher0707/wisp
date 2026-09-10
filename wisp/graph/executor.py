@@ -400,12 +400,26 @@ class GraphExecutor:
             progressed = False
             for nid in ready_nodes(graph, sched):
                 node = nodes[nid]
-                if blocked_by_failure(graph, sched, nid):
-                    # Failure containment: skip, never launch.
+                block = blocked_by_failure(graph, sched, nid)
+                if block:
+                    # Failure containment: skip, never launch. A lane that
+                    # never produced (skipped predecessor) is UPSTREAM_SKIPPED
+                    # and stays benign if its preds are benign; a genuinely
+                    # failed predecessor is UPSTREAM_FAILED and fails honesty.
+                    skipped_pred = any(
+                        sched.statuses.get(e.from_node) == NodeStatus.SKIPPED
+                        for e in graph.edges if e.to_node == nid and not e.condition)
+                    failed_pred = any(
+                        sched.statuses.get(e.from_node) in FAILED_NODE_STATUSES
+                        for e in graph.edges if e.to_node == nid and not e.condition)
+                    code = "UPSTREAM_SKIPPED" if skipped_pred and not failed_pred \
+                        else "UPSTREAM_FAILED"
                     sched.statuses[nid] = NodeStatus.SKIPPED
                     results[nid] = NodeResult(nid, NodeStatus.SKIPPED,
-                                              error_code="UPSTREAM_FAILED",
-                                              message="an unconditional dependency failed")
+                                              error_code=code,
+                                              message="an unconditional dependency failed"
+                                              if code == "UPSTREAM_FAILED" else
+                                              "waited on a lane that never produced")
                     store.put_node_run(_attempt_nrid(rid, nid, 0), rid, nid,
                                        "skipped", 0, "", _result_to_dict(results[nid]),
                                        f"{rid}:{nid}", time.time(), time.time())
@@ -461,36 +475,31 @@ class GraphExecutor:
             if is_finished(graph, sched):
                 break
             if not progressed:
-                # Dead end: conditional lanes that never fired are skipped.
-                pending = [i for i in nodes
-                           if sched.statuses.get(i, NodeStatus.PENDING) == NodeStatus.PENDING]
-                if not pending:
+                # Dead-end fixpoint: skip provably-dead pending nodes (all
+                # preds terminal yet still not runnable, i.e. unmatched
+                # conditional lanes), then re-evaluate — newly unblocked
+                # unconditional nodes must launch, not be skipped with them.
+                if not self._skip_dead(graph, sched, results, store, rid):
                     break
-                for nid in pending:
-                    sched.statuses[nid] = NodeStatus.SKIPPED
-                    results[nid] = NodeResult(nid, NodeStatus.SKIPPED,
-                                              error_code="LANE_UNTAKEN",
-                                              message="no incoming condition fired")
                 self._event(store, rid, "graph.join_wait",
-                            {"skipped_untaken": sorted(pending)})
-                if is_finished(graph, sched):
-                    break
-                # Newly skipped nodes may release joins; loop once more.
+                            {"skipped_untaken": True})
                 progressed = True
                 continue
 
         sinks = [i for i in nodes if not any(e.from_node == i for e in graph.edges)]
-        # Verdict honesty: success requires every sink to have succeeded.
-        # Failed sinks -> FAILED; denied/upstream-skipped sinks -> CANCELLED
-        # (never report completion for work that never ran); untaken
-        # conditional lanes (LANE_UNTAKEN) are benign.
+        # Verdict honesty: success requires every sink to have succeeded, or
+        # to be benignly skipped. A skip is benign when the lane never
+        # activated: LANE_UNTAKEN, or UPSTREAM_SKIPPED behind only benign
+        # preds (recursive — a terminal that correctly never ran must not
+        # fail the run). Failed sinks -> FAILED; denied/other-skipped -> CANCELLED.
         failed = [s for s in sinks
                   if sched.statuses.get(s, NodeStatus.PENDING) in FAILED_NODE_STATUSES]
+        benign = _benign_set(graph, sched, results)
         incomplete = [s for s in sinks
                       if sched.statuses.get(s, NodeStatus.PENDING)
                       in (NodeStatus.CANCELLED, NodeStatus.SKIPPED, NodeStatus.PENDING,
                           NodeStatus.RUNNING)
-                      and results.get(s, NodeResult(s)).error_code != "LANE_UNTAKEN"]
+                      and s not in benign]
         if failed:
             status = RunStatus.FAILED
         elif incomplete:
@@ -766,6 +775,53 @@ class GraphExecutor:
             raise ValueError(f"node {nid}: derived inputs exceed size cap")
         return arts.resolve_inputs(data, rid)
 
+    def _skip_dead(self, graph: Graph, sched: SchedulerState,
+                   results: dict[str, NodeResult], store: GraphStore,
+                   rid: str) -> bool:
+        """Skip one fixpoint wave of provably-dead pending nodes.
+
+        A pending node is dead when every predecessor is terminal yet the
+        node still is not runnable (unmatched conditional lane). Unconditional
+        nodes with settled preds are runnable, never dead. Returns True when
+        anything was skipped (caller re-evaluates readiness).
+        """
+        terminal = (NodeStatus.SUCCESS, NodeStatus.FAILURE, NodeStatus.TIMEOUT,
+                    NodeStatus.CANCELLED, NodeStatus.SKIPPED)
+        preds_of: dict[str, list] = {n.id: [] for n in graph.nodes}
+        for e in graph.edges:
+            if e.to_node in preds_of:
+                preds_of[e.to_node].append(e)
+        runnable = set(ready_nodes(graph, sched))
+        skipped_any = False
+        for nid in sorted(preds_of):
+            if sched.statuses.get(nid, NodeStatus.PENDING) != NodeStatus.PENDING:
+                continue
+            if nid == graph.entrypoint or nid in runnable:
+                continue
+            preds = preds_of[nid]
+            if not preds:
+                # No predecessors and not the entrypoint: unrunnable in this
+                # scheduler (validator flags it as unreachable). Skip so the
+                # drive loop always terminates.
+                sched.statuses[nid] = NodeStatus.SKIPPED
+                results[nid] = NodeResult(nid, NodeStatus.SKIPPED,
+                                          error_code="UPSTREAM_SKIPPED",
+                                          message="no incoming edges and not entrypoint")
+                skipped_any = True
+                continue
+            if any(sched.statuses.get(e.from_node, NodeStatus.PENDING) not in terminal
+                   for e in preds):
+                continue  # a predecessor may still settle
+            sched.statuses[nid] = NodeStatus.SKIPPED
+            conditional = any(e.condition for e in preds)
+            results[nid] = NodeResult(nid, NodeStatus.SKIPPED,
+                                      error_code="LANE_UNTAKEN" if conditional
+                                      else "UPSTREAM_SKIPPED",
+                                      message="no incoming condition fired" if conditional
+                                      else "unconditional predecessors settled terminal")
+            skipped_any = True
+        return skipped_any
+
     def _event(self, store: GraphStore, rid: str, type: str, data: dict) -> None:
         # Redact at the boundary: secrets never reach SQLite or listeners.
         try:
@@ -852,6 +908,33 @@ def _cycle_replay_set(graph: Graph, target: str) -> set[str]:
                 replay.add(m)
                 stack.append(m)
     return replay
+
+
+def _benign_set(graph: Graph, sched: SchedulerState,
+                results: dict[str, NodeResult]) -> set[str]:
+    """Nodes whose non-execution is correct: SUCCESS, LANE_UNTAKEN, or
+    UPSTREAM_SKIPPED behind only benign unconditional preds (fixpoint).
+    Anything else skipped (e.g. denied gates) stays incomplete."""
+    benign = {nid for nid, st in sched.statuses.items() if st == NodeStatus.SUCCESS}
+    preds_of: dict[str, list] = {n.id: [] for n in graph.nodes}
+    for e in graph.edges:
+        if e.to_node in preds_of and not e.condition:
+            preds_of[e.to_node].append(e.from_node)
+    changed = True
+    while changed:
+        changed = False
+        for nid, st in sched.statuses.items():
+            if nid in benign or st != NodeStatus.SKIPPED:
+                continue
+            code = results.get(nid, NodeResult(nid)).error_code
+            if code == "LANE_UNTAKEN":
+                benign.add(nid)
+                changed = True
+            elif code == "UPSTREAM_SKIPPED" and all(
+                    p in benign for p in preds_of.get(nid, [])):
+                benign.add(nid)
+                changed = True
+    return benign
 
 
 def _snapshot(sched: SchedulerState, results: dict[str, NodeResult]) -> dict:

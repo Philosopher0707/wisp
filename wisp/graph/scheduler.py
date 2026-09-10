@@ -48,7 +48,13 @@ def blocked_by_failure(graph, state: SchedulerState, nid: str) -> bool:
     """True when a non-JOIN node must SKIP: an unconditional predecessor
     settled non-success. JOINs decide for themselves (join policy); every
     other node propagates failure as skip — a denied gate or failed branch
-    never launches downstream work."""
+    never launches downstream work.
+
+    A SKIPPED predecessor blocks only when the edge carries a mapping (the
+    node declared a data dependence on a lane that never produced). Unmapped
+    ordering edges from skipped lanes are benign: there is nothing to wait
+    for, and downstream must still run (e.g. lane-merge sinks).
+    """
     from wisp.graph.types import NodeType as _NT
     nodes = {n.id: n for n in graph.nodes}
     node = nodes.get(nid)
@@ -61,6 +67,8 @@ def blocked_by_failure(graph, state: SchedulerState, nid: str) -> bool:
             continue
         st = state.statuses.get(e.from_node, NodeStatus.PENDING)
         if st in (NodeStatus.FAILURE, NodeStatus.TIMEOUT, NodeStatus.CANCELLED):
+            return True
+        if st == NodeStatus.SKIPPED and e.mapping:
             return True
     return False
 
