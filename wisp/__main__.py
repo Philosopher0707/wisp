@@ -1210,19 +1210,19 @@ def main():
             return
         rest = extract_global_flags(argv[1:])
 
-        if first == "run":
+        def _do_run():
             if not rest:
                 print("✗ Please provide a prompt.")
                 return
             cmd_run(" ".join(rest), flags_model, flags_skill, flags_workspace, flags_auto, flags_session, flags_show_thinking, flags_provider)
 
-        elif first == "repl":
+        def _do_repl():
             cmd_repl(flags_model, flags_skill, flags_workspace, flags_session, flags_show_thinking, flags_auto, flags_provider)
 
-        elif first == "tui":
+        def _do_tui():
             cmd_tui(flags_model, flags_workspace, flags_show_thinking, flags_auto, flags_provider)
 
-        elif first == "session":
+        def _do_session():
             if not rest:
                 print(info("Usage: wisp session [-w workspace] (list|show|delete|trim|compact) [args]"))
                 print(dim("  wisp session list              List all sessions"))
@@ -1265,7 +1265,7 @@ def main():
                 print(error(f"✗ Unknown session subcommand: {sub}"))
                 print(dim("  Try: list, show <id>, delete <id>, trim <id> [n], compact <id> [n]"))
 
-        elif first == "compact":
+        def _do_compact():
             if not rest:
                 print(error("✗ Usage: wisp compact <session-id> [keep-n]"))
                 print(dim("  wisp compact 20260430-123456-abcdef 6"))
@@ -1273,11 +1273,11 @@ def main():
             keep = int(rest[1]) if len(rest) > 1 else 6
             cmd_session_compact(rest[0], keep, flags_workspace)
 
-        elif first == "skills":
+        def _do_skills():
             cmd_skills(flags_workspace)
-        elif first == "setup":
+        def _do_setup():
             sys.exit(cmd_setup())
-        elif first == "config":
+        def _do_config():
             set_kv = None
             validate = False
             i = 0
@@ -1291,44 +1291,44 @@ def main():
                 else:
                     i += 1
             cmd_config(set_kv, validate=validate)
-        elif first == "check":
+        def _do_check():
             cmd_check(flags_model)
-        elif first == "models":
+        def _do_models():
             cmd_models()
-        elif first == "memory":
+        def _do_memory():
             cmd_memory(rest)
-        elif first == "mcp":
+        def _do_mcp():
             cmd_mcp(rest)
-        elif first == "policy":
+        def _do_policy():
             cmd_policy(rest)
-        elif first == "trace":
+        def _do_trace():
             cmd_trace(rest)
-        elif first == "replay":
+        def _do_replay():
             cmd_replay(rest)
-        elif first == "audit":
+        def _do_audit():
             cmd_audit(rest)
-        elif first == "task":
+        def _do_task():
             cmd_task(rest)
-        elif first == "completion":
+        def _do_completion():
             cmd_completion(rest)
-        elif first == "release":
+        def _do_release():
             cmd_release(rest)
-        elif first == "git":
+        def _do_git():
             cmd_git(rest)
-        elif first == "plan":
+        def _do_plan():
             cmd_plan(rest)
-        elif first == "progress":
+        def _do_progress():
             cmd_progress(rest)
-        elif first == "diagnose":
+        def _do_diagnose():
             cmd_diagnose(rest)
-        elif first == "locks":
+        def _do_locks():
             cmd_locks(rest)
-        elif first == "changes":
+        def _do_changes():
             cmd_changes(rest)
-        elif first == "acp":
+        def _do_acp():
             cmd_acp(rest)
 
-        elif first == "server":
+        def _do_server():
             host = "127.0.0.1"
             port = 8000
             no_auth = False
@@ -1347,7 +1347,7 @@ def main():
                     i += 1
             cmd_server(host=host, port=port, no_auth=no_auth)
 
-        elif first == "swarm":
+        def _do_swarm():
             if not rest:
                 print(error("✗ Usage: wisp swarm 'goal' [--roles coder,reviewer,tester] [--max-parallel N]"))
                 print(dim("  wisp swarm 'implement user auth' --roles coder,reviewer,tester"))
@@ -1370,7 +1370,7 @@ def main():
             from wisp.multi_agent.cli import cmd_swarm
             cmd_swarm(goal, roles=roles, model=flags_model, workspace=flags_workspace, max_parallel=max_parallel)
 
-        elif first == "agents":
+        def _do_agents():
             from wisp.multi_agent.cli import cmd_agents_list, cmd_agents_status
             if not rest:
                 cmd_agents_list()
@@ -1384,14 +1384,52 @@ def main():
                 print(error(f"✗ Unknown agents subcommand: {sub}"))
                 print(dim("  Try: list, status"))
 
-        elif first == "graph":
+        def _do_graph():
             from wisp.graph.cli import main as graph_main
             sys.exit(graph_main(rest, workspace=flags_workspace or ".",
                                 model=flags_model or "", provider=flags_provider or ""))
 
-        elif first == "bench":
+        def _do_bench():
             from wisp.benchmark.cli import run_bench
             sys.exit(run_bench(rest))
+
+        # ── One-shot dispatch table: single routing point for all
+        # subcommands (12.5D). Each handler preserves its original
+        # branch body verbatim; names stay in _SUBCOMMAND_NAMES.
+        _SUBCOMMAND_TABLE = {
+            "run": _do_run,
+            "repl": _do_repl,
+            "tui": _do_tui,
+            "session": _do_session,
+            "compact": _do_compact,
+            "skills": _do_skills,
+            "setup": _do_setup,
+            "config": _do_config,
+            "check": _do_check,
+            "models": _do_models,
+            "memory": _do_memory,
+            "mcp": _do_mcp,
+            "policy": _do_policy,
+            "trace": _do_trace,
+            "replay": _do_replay,
+            "audit": _do_audit,
+            "task": _do_task,
+            "completion": _do_completion,
+            "release": _do_release,
+            "git": _do_git,
+            "plan": _do_plan,
+            "progress": _do_progress,
+            "diagnose": _do_diagnose,
+            "locks": _do_locks,
+            "changes": _do_changes,
+            "acp": _do_acp,
+            "server": _do_server,
+            "swarm": _do_swarm,
+            "agents": _do_agents,
+            "graph": _do_graph,
+            "bench": _do_bench,
+        }
+        return _SUBCOMMAND_TABLE[first]()
 
     else:
         # Implicit mode: wisp [flags] 'prompt'  OR  wisp --print "prompt"
