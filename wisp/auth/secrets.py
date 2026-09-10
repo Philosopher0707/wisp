@@ -16,6 +16,12 @@ SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("bearer-token", re.compile(r"(?i)\bBearer\s+[A-Za-z0-9\-._~+/]{8,}={0,2}\b")),
     ("private-key-block", re.compile(
         r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----")),
+    # Vendor-prefixed key assignments have no \b boundary before the key
+    # name (OPENAI_API_KEY), so the generic assignment below misses them.
+    ("provider-key-assignment", re.compile(
+        r"(?i)\b(openai[_-]?api[_-]?key|anthropic[_-]?api[_-]?key)\b\s*[:=]\s*"
+        r"['\"]?([^'\"\s]{6,})['\"]?")),
+    ("sk-token", re.compile(r"\bsk-(ant|proj-)?[A-Za-z0-9\-_]{8,}\b")),
     ("secret-assignment", re.compile(
         r"(?i)\b(api[_-]?key|secret|token|password|passwd|pwd)\b\s*[:=]\s*"
         r"['\"]?([^'\"\s]{6,})['\"]?")),
@@ -48,7 +54,7 @@ def redact(text: str) -> str:
                 + m.group(0).splitlines()[-1],
                 out,
             )
-        elif name == "secret-assignment":
+        elif name in ("secret-assignment", "provider-key-assignment"):
             out = rx.sub(
                 lambda m: m.group(0).replace(m.group(2), REDACTED.format(name=name)),
                 out,

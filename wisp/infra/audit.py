@@ -68,15 +68,35 @@ class AuditTrail:
         return self._entry_count
 
     def _redact_value(self, key: str, value: Any) -> Any:
-        """Redact sensitive values before writing to the audit log."""
+        """Redact sensitive values before writing to the audit log.
+
+        Two layers (12.5E convergence, same semantics as every other audit
+        sink): key-name masking first, then the canonical
+        ``auth.secrets`` pattern scan (recursive). Previously only the
+        key mask existed, so secret-bearing values under innocent keys
+        and all nested structures reached the log raw.
+        """
+        from wisp.auth.secrets import redact_record
+        if isinstance(value, bytes):
+            try:
+                value = value.decode("utf-8", "replace")
+            except Exception:
+                return "***"
+        if not isinstance(value, (str, dict, list, tuple, int, float, bool)) \
+                and value is not None:
+            # Unserializable values must not crash the audit write; coerce.
+            try:
+                value = str(value)
+            except Exception:
+                return "***"
+            if len(value) > 2000:
+                value = value[:2000]
         key_lower = str(key).lower().replace("-", "_")
         if any(s in key_lower for s in _SENSITIVE_KEYS):
             if isinstance(value, str) and len(value) > 4:
                 return f"{value[:4]}***"
             return "***"
-        if isinstance(value, (dict, list)):
-            return value
-        return value
+        return _json_safe(redact_record(value))
 
     def record(self, action: str, *, actor: str = "system", key: str | None = None,
                old_value: Any = None, new_value: Any = None,
@@ -97,7 +117,7 @@ class AuditTrail:
             "_prev_hash": self._last_hash,
         }
         if metadata:
-            entry["metadata"] = metadata
+            entry["metadata"] = self._redact_value("metadata", metadata)
 
         payload = json.dumps(entry, sort_keys=True, separators=(",", ":"))
         entry["_hash"] = hashlib.sha256(payload.encode()).hexdigest()
@@ -182,6 +202,21 @@ class AuditTrail:
         except Exception:
             pass
         return entries
+
+
+def _json_safe(value: Any) -> Any:
+    """Recursively coerce audit values to JSON-serializable form."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(k)[:256]: _json_safe(v) for k, v in list(value.items())[:256]}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in list(value)[:256]]
+    try:
+        text = str(value)
+    except Exception:
+        return "***"
+    return text[:2000]
 
 
 class ImmutableAuditTrail:
