@@ -88,3 +88,25 @@ def _nonneg_f(v: Any) -> float:
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return 0.0
     return max(0.0, float(v))
+
+
+def default_executor(workspace: str = ".", max_concurrency: int = 8,
+                     store: Any = None) -> Any:
+    """Stock executor: SubagentOrchestrator runner + reference functions.
+
+    Single construction point shared by CLI `graph run/resume/execute` and
+    the SDK, so planner-approved graphs execute through the same governed
+    runner as manually authored ones.
+    """
+    from wisp.graph.executor import GraphExecutor
+    from wisp.graph.reference import default_functions
+    ex = GraphExecutor(workspace=workspace, max_concurrency=max_concurrency,
+                       store=store)
+    try:
+        from wisp.multi_agent import SubagentOrchestrator
+        ex._runner = SubagentNodeRunner(SubagentOrchestrator(), workspace)
+    except Exception:
+        pass
+    for name, fn in default_functions().items():
+        ex.register_function(name, fn)
+    return ex

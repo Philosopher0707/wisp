@@ -110,6 +110,31 @@ class Wisp:
                 data={k: v for k, v in event_dict.items() if k not in ("type", "timestamp")},
             )
 
+    def plan_graph(self, objective: str, policy=None) -> dict:
+        """Propose a validated, policy-narrowed graph. Never executes.
+
+        Returns the persisted proposal dict (proposal_id, ir_hash,
+        graph_hash, status, diagnostics, quality). Execute explicitly via
+        execute_proposal(..., approve=True).
+        """
+        from wisp.graph.planner import propose
+        from wisp.graph.store import GraphStore
+        from wisp.providers import get_provider
+        proposal = propose(objective, get_provider(self._config), policy,
+                           model=self._config.model)
+        GraphStore(workspace=self._config.workspace).put_proposal(proposal)
+        return proposal
+
+    def execute_proposal(self, proposal: dict, inputs: dict | None = None,
+                         approve: bool = False) -> dict:
+        """Run the EXACT approved proposal graph. approve must be True."""
+        from wisp.graph.planner import execute_proposal
+        from wisp.graph.runner import default_executor
+        from wisp.graph.store import GraphStore
+        ws = self._config.workspace
+        ex = default_executor(ws, 8, GraphStore(workspace=ws))
+        return _run_async(execute_proposal(proposal, ex, inputs or {}, approve=approve))
+
     def graph(self, graph, inputs: dict | None = None, on_event=None):
         """Run a Graph and return a GraphHandle (wait/status/cancel/resume/trace).
 

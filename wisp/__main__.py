@@ -1386,7 +1386,8 @@ def main():
 
         elif first == "graph":
             from wisp.graph.cli import main as graph_main
-            sys.exit(graph_main(rest, workspace=flags_workspace or "."))
+            sys.exit(graph_main(rest, workspace=flags_workspace or ".",
+                                model=flags_model or "", provider=flags_provider or ""))
 
         elif first == "bench":
             from wisp.benchmark.cli import run_bench

@@ -21,7 +21,7 @@ from wisp.graph.store import GraphStore
 from wisp.graph.trace import quality_metrics, render_ascii, render_dot, render_json
 from wisp.graph.validator import validate_graph
 
-USAGE = ("Usage: wisp graph <list|show|validate|run|resume|status|cancel|trace|inspect|metrics> [args]\n"
+USAGE = ("Usage: wisp graph <verb> [args]\n"
          "\n"
          "  list                    List runs (and built-in graphs)\n"
          "  show <graph> [--format ascii|dot|json]   Show topology\n"
@@ -32,7 +32,11 @@ USAGE = ("Usage: wisp graph <list|show|validate|run|resume|status|cancel|trace|i
          "  cancel <run-id>         Cancel a run\n"
          "  trace <run-id>          ASCII execution trace\n"
          "  inspect <run-id>        Full result JSON\n"
-         "  metrics <run-id>        Quality metrics (parallelism, failures…)")
+         "  metrics <run-id>        Quality metrics (parallelism, failures…)\n"
+         "  plan \"<objective>\" [--json]  Propose a graph (never executes)\n"
+         "  proposals               List planner proposals\n"
+         "  inspect-prop <id>       Show a proposal (IR + diagnostics)\n"
+         "  execute <id> --yes ['<json-input>']     Run the approved proposal")
 
 
 def _load_graph(name: str):
@@ -60,20 +64,22 @@ def _builtin_defs() -> dict[str, Any]:
     return {"coding-agent": yaml.safe_load(REFERENCE_YAML)["graph"]}
 
 
-def main(argv: list[str], workspace: str = ".") -> int:
+def main(argv: list[str], workspace: str = ".", model: str = "",
+           provider: str = "") -> int:
     if not argv or argv[0] in ("-h", "--help"):
         print(USAGE)
         return 0
     verb, args = argv[0], argv[1:]
     try:
-        return _main(verb, args, workspace)
+        return _main(verb, args, workspace, model, provider)
     except (FileNotFoundError, ValueError, KeyError, PermissionError) as exc:
         # Fail closed with a diagnostic — never a traceback with paths/SQL.
         print(f"✗ {redact(str(exc))[:500]}")
         return 1
 
 
-def _main(verb: str, args: list[str], workspace: str) -> int:
+def _main(verb: str, args: list[str], workspace: str, model: str = "",
+          provider: str = "") -> int:
     store = GraphStore(workspace=workspace)
     if verb == "list":
         print("graphs: coding-agent")
@@ -147,15 +153,8 @@ def _main(verb: str, args: list[str], workspace: str) -> int:
                 max_c = max(1, min(int(args[idx]), 32))
             except ValueError:
                 print("✗ --max must be an integer"); return 1
-        from wisp.graph.runner import SubagentNodeRunner
-        ex = GraphExecutor(workspace=workspace, max_concurrency=max_c)
-        try:
-            from wisp.multi_agent import SubagentOrchestrator
-            ex._runner = SubagentNodeRunner(SubagentOrchestrator(), workspace)
-        except Exception:
-            pass
-        for name, fn in _default_functions().items():
-            ex.register_function(name, fn)
+        from wisp.graph.runner import default_executor
+        ex = default_executor(workspace, max_c)
         result = asyncio.run(ex.run(graph, inputs))
         print(render_ascii(result))
         return 0 if result["status"] == "succeeded" else 1
@@ -182,9 +181,8 @@ def _main(verb: str, args: list[str], workspace: str) -> int:
             print(f"✗ unknown run {args[0]}"); return 1
         graph = _load_graph(row["graph_id"]) if row["graph_id"] != "coding-agent" \
             else coding_agent_graph()
-        ex = GraphExecutor(workspace=workspace, store=store)
-        for name, fn in _default_functions().items():
-            ex.register_function(name, fn)
+        from wisp.graph.runner import default_executor
+        ex = default_executor(workspace, 8, store)
         result = asyncio.run(ex.resume(graph, args[0], approvals or None))
         print(render_ascii(result))
         return 0
@@ -234,13 +232,128 @@ def _main(verb: str, args: list[str], workspace: str) -> int:
             # inspect dumps operator-visible state: redact like any audit sink.
             print(redact(render_json(trace)))
         return 0
+    if verb == "plan":
+        return _plan(args, workspace, store,
+                     model=model or _opt(args, "--model"),
+                     provider=provider or _opt(args, "--provider"),
+                     as_json="--json" in args)
+    if verb == "proposals":
+        for p in store.list_proposals():
+            print(f"  {p['proposal_id']}  {p['graph_id']}  {p['status']}  "
+                  f"{str(p.get('objective', ''))[:60]}")
+        return 0
+    if verb == "inspect-prop":
+        if not args:
+            print("Usage: wisp graph inspect-prop <proposal-id>"); return 1
+        prop = store.get_proposal(args[0])
+        if prop is None:
+            print(f"✗ unknown proposal {args[0]}"); return 1
+        print(f"Proposal: {prop['proposal_id']}  Status: {prop['status']}")
+        print(f"Graph: {prop['graph_id']}  hash: {prop['graph_hash']}")
+        print(f"IR hash: {prop['ir_hash']}  model: {prop['planner_model']}")
+        for d in prop.get("diagnostics", []):
+            print(f"  - {d}")
+        if "--ir" in args:
+            print(redact(json.dumps(prop.get("ir", {}), indent=2)[:8000]))
+        return 0
+    if verb == "execute":
+        if not args or "--yes" not in args:
+            print("Usage: wisp graph execute <proposal-id> --yes ['<json-input>']")
+            print("Execution requires explicit --yes approval."); return 2
+        pid = args[0]
+        prop = store.get_proposal(pid)
+        if prop is None:
+            print(f"✗ unknown proposal {pid}"); return 1
+        if prop["status"] not in ("APPROVAL_REQUIRED", "APPROVED"):
+            print(f"✗ proposal is {prop['status']}, not executable"); return 1
+        raw = next((a for a in args[1:] if not a.startswith("--")), "{}")
+        try:
+            inputs = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            print(f"✗ input must be JSON: {exc}"); return 1
+        if not isinstance(inputs, dict):
+            print("✗ input must be a JSON object"); return 1
+        from wisp.graph.planner import PlanError, execute_proposal
+        from wisp.graph.runner import default_executor
+        try:
+            result = asyncio.run(execute_proposal(
+                prop, default_executor(workspace, 8, store), inputs, approve=True))
+        except PlanError as exc:
+            print(f"✗ {exc}"); return 1
+        store.set_proposal_status(pid, "EXECUTED" if result["status"] == "succeeded"
+                                  else "APPROVED")
+        print(render_ascii(result))
+        return 0 if result["status"] == "succeeded" else 1
     print(USAGE)
     return 1
 
 
-def _default_functions() -> dict:
-    from wisp.graph.reference import default_functions
-    return default_functions()
+def _opt(args: list[str], flag: str) -> str:
+    return args[args.index(flag) + 1] if flag in args and \
+        args.index(flag) + 1 < len(args) else ""
+
+
+def _plan(args: list[str], workspace: str, store, model: str, provider: str,
+          as_json: bool) -> int:
+    positional = [a for a in args if not a.startswith("--")]
+    if not positional:
+        print('Usage: wisp graph plan "<objective>" [--json] [--model M] [--provider P]')
+        return 1
+    objective = positional[0]
+    if len(objective) > 8192:
+        print("✗ objective too long (max 8192 chars)"); return 1
+    from wisp.config import WispConfig
+    from wisp.graph.planner import PlanError, propose
+    from wisp.graph.types import GraphPolicy
+    from wisp.providers import get_provider
+    config = WispConfig()
+    if model:
+        config = config.replace(model=model)
+    if provider:
+        config = config.replace(provider=provider)
+    try:
+        prov = get_provider(config)
+    except Exception as exc:
+        print(f"✗ cannot build provider: {exc}"); return 1
+    policy = GraphPolicy(workspace=workspace)
+    try:
+        proposal = propose(objective, prov, policy,
+                           model=model or config.model)
+    except PlanError as exc:
+        try:
+            from wisp.graph.audit import GraphSecurityAuditor
+            GraphSecurityAuditor(workspace=workspace).emit(
+                "graph.proposal_decided", allowed=False,
+                reason=f"{exc.code}: {exc}", evidence={"objective": objective[:200]})
+        except Exception:
+            pass
+        print(f"✗ proposal {exc.code}: {exc}"); return 1
+    store.put_proposal(proposal)
+    if any("narrowed" in d or "clamped" in d for d in proposal["diagnostics"]):
+        try:
+            from wisp.graph.audit import GraphSecurityAuditor
+            GraphSecurityAuditor(workspace=workspace).emit(
+                "graph.policy_narrowed", graph_id=proposal["graph_id"],
+                graph_hash=proposal["graph_hash"], allowed=True,
+                reason="; ".join(proposal["diagnostics"][:3]))
+        except Exception:
+            pass
+    if as_json:
+        print(redact(json.dumps({k: v for k, v in proposal.items() if k != "ir"},
+                                indent=2, default=str)))
+        return 0
+    q = proposal["quality"]
+    print(f"Plan generated.\n\nGraph: {proposal['graph_id']}\n"
+          f"Proposal: {proposal['proposal_id']}\n"
+          f"Nodes: {proposal['nodes']}  Edges: {proposal['edges']}  "
+          f"Quality: {q['score']}/100")
+    for f in q["findings"]:
+        print(f"  ! {f}")
+    for d in proposal["diagnostics"]:
+        print(f"  - {d}")
+    print(f"\nUse:\n  wisp graph inspect-prop {proposal['proposal_id']}\n"
+          f"  wisp graph execute {proposal['proposal_id']} --yes")
+    return 0
 
 
 def register_repl(dispatcher) -> None:

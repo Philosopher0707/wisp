@@ -111,7 +111,11 @@ def _parse_text_fallback(provider: Any, messages: list[dict]) -> Any:
     from wisp.multi_agent.schema_validator import extract_json_from_markdown
     try:
         if hasattr(provider, "generate"):
-            text = provider.generate(PLANNER_SYSTEM, messages)
+            out = provider.generate(PLANNER_SYSTEM, messages)
+            if isinstance(out, dict):  # BaseProvider shape: {message: {content}}
+                text = out.get("message", {}).get("content", "")
+            else:
+                text = out
         else:
             chunks = list(provider.generate_stream_events(PLANNER_SYSTEM, messages))
             text = "".join(c.get("text", c.get("content", ""))
@@ -326,7 +330,6 @@ async def execute_proposal(proposal: dict[str, Any], executor: Any,
 
 STATUSES = ("PROPOSED", "VALIDATED", "POLICY_CHECKED", "APPROVAL_REQUIRED",
             "APPROVED", "INVALID", "REJECTED", "EXPIRED", "EXECUTED")
-
 
 def new_proposal_id() -> str:
     return f"prop-{uuid.uuid4().hex[:12]}"
