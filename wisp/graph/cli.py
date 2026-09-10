@@ -232,6 +232,19 @@ def _main(verb: str, args: list[str], workspace: str, model: str = "",
             # inspect dumps operator-visible state: redact like any audit sink.
             print(redact(render_json(trace)))
         return 0
+    if verb == "pause":
+        # Runs are synchronous: pause == cancel now, resume later from the
+        # durable checkpoint. Terminal runs are untouched (cancel is a no-op).
+        if not args:
+            print("Usage: wisp graph pause <run-id>"); return 1
+        row = store.get_run(args[0])
+        if row is None:
+            print(f"✗ unknown run {args[0]}"); return 1
+        if row["status"] in ("succeeded", "failed", "cancelled"):
+            print(f"run {args[0]} already {row['status']}"); return 0
+        GraphExecutor(workspace=workspace, store=store).cancel(args[0])
+        print(f"paused {args[0]} (resume with: wisp graph resume {args[0]})")
+        return 0
     if verb == "plan":
         return _plan(args, workspace, store,
                      model=model or _opt(args, "--model"),

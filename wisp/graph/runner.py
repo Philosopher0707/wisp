@@ -91,7 +91,7 @@ def _nonneg_f(v: Any) -> float:
 
 
 def default_executor(workspace: str = ".", max_concurrency: int = 8,
-                     store: Any = None) -> Any:
+                     store: Any = None, emit: Any = None) -> Any:
     """Stock executor: SubagentOrchestrator runner + reference functions.
 
     Single construction point shared by CLI `graph run/resume/execute` and
@@ -101,7 +101,7 @@ def default_executor(workspace: str = ".", max_concurrency: int = 8,
     from wisp.graph.executor import GraphExecutor
     from wisp.graph.reference import default_functions
     ex = GraphExecutor(workspace=workspace, max_concurrency=max_concurrency,
-                       store=store)
+                       store=store, emit=emit or (lambda e: None))
     try:
         from wisp.multi_agent import SubagentOrchestrator
         ex._runner = SubagentNodeRunner(SubagentOrchestrator(), workspace)

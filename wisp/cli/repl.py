@@ -796,6 +796,14 @@ class ReplRunner:
                     if outcome is CommandResult.FOLLOWUP and ctx.followup:
                         self.run_turn(ctx.followup)
                     continue
+                # Strategy gate: graph-worthy prompts run the coding graph;
+                # anything else (or any gate failure) uses the agent loop.
+                try:
+                    from wisp import coding as _coding
+                    if _coding.handle_prompt(self, prompt):
+                        continue
+                except Exception:
+                    logger.exception("coding gate failed")
                 # Model turn with typeahead steering.
                 sid = str(self.session.get("id", ""))
 
