@@ -22,7 +22,7 @@ from wisp.graph.validator import validate_graph
 logger = logging.getLogger(__name__)
 
 # Pass registry: fixed deterministic order. 10D+ append here.
-PASS_ORDER: tuple[str, ...] = ("dependency", "artifact_transport")
+PASS_ORDER: tuple[str, ...] = ("dependency", "artifact_transport", "verification")
 MAX_PASSES = 1  # single pipeline run; no fixed-point loop (cycle protection)
 
 
@@ -36,6 +36,10 @@ class OptimizationContext:
     # Absent hint = UNKNOWN size -> conservative (inline + advisory).
     size_hints: dict[tuple[str, str, str], int] = field(default_factory=dict)
     max_diagnostics: int = 256
+    # Host-supplied verifier profile for OPT-002 insertion. Absent keys or
+    # any value outside graph+policy authority -> advisory only, never insert.
+    # Shape: {"tools": [...], "model": "...", "provider": "..."}.
+    verifier_profile: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if not (1024 <= self.inline_threshold_bytes <= 4_000_000):
@@ -99,7 +103,12 @@ def authority_of(graph: Graph) -> dict[str, Any]:
 
 
 def is_narrower_or_equal(before: dict[str, Any], after: dict[str, Any]) -> tuple[bool, str]:
-    """optimized_authority ⊆ original_authority. Returns (ok, reason)."""
+    """optimized_authority ⊆ original_authority. Returns (ok, reason).
+
+    Structural node changes (add/remove) are allowed — revalidation governs
+    structure. What must never widen: tools, models, providers, workspace,
+    budgets, and approval topology (human-authority semantics).
+    """
     for key in ("tools", "models", "providers"):
         extra = set(after[key]) - set(before[key])
         if extra:
@@ -111,8 +120,6 @@ def is_narrower_or_equal(before: dict[str, Any], after: dict[str, Any]) -> tuple
         b, a = before[key], after[key]
         if b is not None and (a is None or a > b):
             return False, f"budget/limit widened: {key} {b}->{a}"
-    if set(after["nodes"]) - set(before["nodes"]):
-        return False, "nodes added"
     if set(after["approval_nodes"]) - set(before["approval_nodes"]):
         return False, "approval requirements changed"
     if len(after["approval_nodes"]) < len(before["approval_nodes"]):
