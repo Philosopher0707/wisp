@@ -310,9 +310,11 @@ class TestRuntimeBoundary:
 
 class TestFingerprint:
     def test_noop_preserves_fingerprint(self):
+        from wisp.graph.types import GraphPolicy
         g = Graph(id="t", entrypoint="a",
                   nodes=(_agent("a"), _ver(), _agent("s")),
-                  edges=(_e("a", "v"), _e("v", "s", when="accept")))
+                  edges=(_e("a", "v"), _e("v", "s", when="accept")),
+                  policies=GraphPolicy(max_concurrency=3))
         r = optimize_graph(g, context=_ctx())
         assert r.status == "UNCHANGED"
         assert r.graph.fingerprint() == g.fingerprint()
