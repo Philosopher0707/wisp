@@ -1,536 +1,216 @@
-# Wisp 🤖
+# Wisp
 
-**A local-first coding agent powered by Ollama — with an experimental Android app for remote control.**
+**A production-grade, local-first CLI coding agent with enterprise governance. Runs frontier cloud models and local inference behind one runtime.**
 
-> **What is Wisp?** A single Python CLI that runs an AI coding agent on your
-> machine (or any server with Ollama). It reads your codebase, edits files, runs
-> tests, and remembers context across sessions. The TUI and WebSocket server are
-> optional front-ends — the core is the CLI agent. The Android app is
-> experimental and not actively maintained.
+[![Python](https://img.shields.io/badge/Python-3.11%2B-blue)](https://python.org)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](#license)
+[![SWE-bench](https://img.shields.io/badge/SWE--bench-Ready-orange)](wisp/benchmark/)
 
+```bash
+pip install -e .
+wisp setup                    # pick provider, validate live, save sealed
+wisp "fix the off-by-one in totals.py and prove it with tests"
 ```
-wisp "refactor the auth module to use async/await"
-```
 
-[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://python.org)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Android](https://img.shields.io/badge/Android-API%2026%2B-brightgreen)](android/)
+Wisp reads your codebase, edits files, runs tests, and remembers context across sessions. One Python CLI drives interactive REPL, single-shot, headless CI, and server modes. It serves frontier cloud models (Claude 3.7 Sonnet, DeepSeek R1, GPT-4o via OpenRouter/OpenAI/NVIDIA) and local inference (Ollama, vLLM-compatible endpoints) through the same provider interface, with `wisp setup` handling selection, live validation, and sealed credential storage.
+
+Where Claude Code, Aider, and SWE-agent stop at the single-turn loop, Wisp adds the runtime around it: multi-agent orchestration with bounded concurrency, AST-grounded repository context, automatic per-turn mutation checkpoints with rewind, and Ed25519-signed governance policies with tamper-evident audit logs.
 
 ---
 
-## Why Wisp?
+## Key Architectural Pillars
 
-Warp (github.com/warpdotdev/warp) open-sourced its client under AGPL, but its agent orchestration platform **Oz** remains a commercial cloud product using GPT/Claude. Wisp fills the gap: a **local/cloud-agnostic** agent that works with whatever models your Ollama instance provides — no per-request API fees, no vendor lock-in.
+### Resilient Mutation Engine
 
-| Feature | Warp Oz | Wisp |
-|---------|---------|------|
-| Model inference | GPT models (paid API) | Ollama (cloud or local) |
-| Code generation | ✅ | ✅ |
-| File read/write/edit | ✅ | ✅ |
-| Bash execution | ✅ | ✅ |
-| Skill support | ✅ | ✅ (same format) |
-| **Android remote control** | ❌ | 🧪 experimental |
-| **Session compaction** | ❌ | ✅ |
-| **Cross-session memory** | ❌ | ✅ |
-| Data leaves your machine | To OpenAI/Anthropic | To your Ollama host |
-| Per-request cost | Credits / subscription | Free |
-| Open source | Server is closed | ✅ MIT |
+Every `write_file` / `edit_file` / `edit_file_multi` snapshots pre-mutation content automatically into a bounded per-workspace store. Failed mutations leave no snapshot behind.
 
----
+- **Surgical search/replace** — exact match with Unicode-aware fuzzy fallback; multi-edit applies atomically against the original.
+- **`rewind` tool + `/rewind [seq|path]`** — the agent undoes its own bad edits; restoring a never-existed file deletes it; rewind snapshots first, so rewind itself is rewindable.
+- **Verification loop** — turns that edit code must see an exit-0 verification command before completing.
 
-## What's New
+### AST Grounding & Smart Context
 
-### 🏢 Enterprise-Managed, Local-First Track (M1–M7)
-Wisp runs on your machine and can work fully offline, with optional enterprise governance:
-- **Contracts** — versioned envelopes for events, tools, policy decisions, runs, and manifests (`wisp/contracts/`)
-- **Local authority** — principals, layered authorization, workspace trust, secret redaction, extension consent (`wisp/auth/`); `ToolExecutor` is the only action path
-- **Durable runtime** — run state machine, SQLite `RunStore`, crash recovery, leases, idempotent resume (`wisp/runs/`)
-- **Governance** — signed Ed25519 policy bundles, narrow-only precedence, managed/disconnected modes, `wisp policy ...`
-- **Evidence** — span store, `wisp trace`, `wisp replay --dry-run`, tier-gated OTLP, eval harness with safety metrics
-- **Workflow** — `wisp task ...` lifecycle, plan-review-apply, 5 profiles (`ci-headless` safest by default)
-- **Release** — `wisp release ...` (lock verify, SBOM, licenses, health, diagnostics) + [`docs/RELEASE.md`](docs/RELEASE.md), [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md), [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md)
-- Start here: [`docs/QUICKSTART.md`](docs/QUICKSTART.md) (developers), [`docs/ADMIN-GUIDE.md`](docs/ADMIN-GUIDE.md) (fleet admins)
+- **Tree-sitter RepoMap** (`wisp/repo_map.py`, `wisp/core/context/repomap.py`) — PageRank over the symbol graph grounds prompts in what the code actually references, not nearest-neighbor text.
+- **Semantic + symbol search** — `search_codebase` (embeddings) and `search_symbols` (index) for definition lookup without reading every file.
+- **3-tier session compactor** — auto-compaction past the token threshold preserves recent turns verbatim and summarizes the rest into a structured memory block; `remember`/`recall` carry facts across sessions.
 
-### 🌊 Background Agents & Live Observability
-The agent can delegate work to the background and keep talking to you:
-- **`spawn_background`** returns an agent id immediately — the parent turn never blocks
-- **`subagent_list` / `subagent_result` / `subagent_send` / `subagent_cancel`** inspect, collect, continue (same session!), or cancel running work
-- **`/agents`** REPL command (alias `/ba`) shows status cards; `/agents <id>` opens a detail view; `/agents send <id> <msg>` continues a finished agent
-- **REST + WebSocket** surfaces (`/api/agents/background*`, `ws /ws/agent`) push lifecycle events — `agent_started`, `agent_progress`, `agent_settled` — so dashboards are live, not polled
-- **Settlement notifications**: when background work finishes between turns, the model is *told* on its next turn — no polling required
+### Subagents & Concurrency
 
-### 🔭 Subagent Monitor (`/subagents`)
-Every worker's lifecycle streams into bounded per-agent telemetry rings (with secret masking at the source). `/subagents` in the REPL suspends the spinner, parks input, and opens a full-screen Textual monitor — roster plus live transcript per worker — then restores the terminal untouched:
-- **`]` / `[`** cycle workers (Tab is consumed by Textual focus navigation), **`c`** cancels the focused worker without touching the parent turn, **`q` / `Ctrl+O` / `Esc`** exits back to the REPL
-- Buffered background notices replay in order on exit; the stdio REPL path stays plain `input()` + ANSI (no prompt_toolkit, no Rich Live)
+- **Bounded orchestration as tools** — `spawn`, `fanout`, `orchestrate_vote`, `orchestrate_map_reduce`, `orchestrate_chain`, `orchestrate_dag` (cycles rejected before tokens are spent). Roles carry constrained `allowed_tools` so workers see scoped toolsets, not the full 42-tool schema.
+- **Background workers** — `spawn_background` returns an agent id immediately; `subagent_list` / `subagent_result` / `subagent_send` / `subagent_cancel` inspect, collect, continue, or stop. Settlement notifications reach the parent on its next turn — no polling.
+- **`/subagents` monitor** — suspends the spinner, parks input, and opens a full-screen Textual monitor (roster + live per-worker transcript over secret-masked telemetry rings), then restores the terminal untouched. `]`/`[` cycle, `c` cancels, `q` exits.
 
-### ↩️ Checkpoints & Rewind
-Every `write_file` / `edit_file` / `edit_file_multi` snapshots pre-mutation content automatically (bounded per-workspace store; failed mutations leave no snapshot):
-- **`rewind` tool** — the agent undoes its own bad edits: list checkpoints, restore by number or file (restoring a never-existed file deletes it; rewind itself is rewindable)
-- **`/rewind [seq|path]`** — same undo for humans in the REPL
+### Graph Execution Engine
 
-### 🎼 Orchestration Patterns as Tools
-The model can compose subagents into higher-order strategies itself:
-- **`orchestrate_vote`** — N independent voters, consensus threshold, majority wins
-- **`orchestrate_map_reduce`** — parallel mappers over up to 20 items + synthesized reducer
-- **`orchestrate_chain`** — sequential specialists, each seeing the previous output (implement → review → fix)
-- **`orchestrate_dag`** — dependency graphs: independent nodes run in parallel per level, upstream outputs injected into dependents; cycles rejected before any tokens are spent
+Deterministic, durable multi-agent execution in `wisp/graph/` — the graph owns authority (what runs, waits, retries, stops); models provide judgment inside nodes:
 
-### 🪝 Skill Capture (self-writing skills)
-Wisp records its own tool-call sequences, detects when a workflow repeats, and saves it as a Warp-compatible skill:
-- **`capture_skill`** tool — the agent saves a proven procedure mid-conversation
-- **`/skill suggest`** — shows detected repeated workflows; **`/skill save <name>`** writes them out
-- Re-captures *merge* (a `wisp_captures` count bumps); genuinely different step sequences become variants; foreign hand-written skills are never overwritten
-- Captured skills are immediately auto-discovered — including by future sessions
+- **Contracts** — every node declares input/output schemas, allowed tools, retry/timeout/budget; failures are typed values, not exceptions.
+- **Real dependencies** — edges require a stated reason (`B consumes A.output`); independent branches fan out with isolated contexts and merge by node id, never positionally.
+- **Control** — chain/fan/router/controlled-cycle topologies, six join policies, evidence-based verifier nodes + pure gate functions, human approval gates.
+- **Durable** — per-transition SQLite checkpoints in the workspace store; crash-safe resume reuses completed nodes and never repeats successes; graph hash pinned per run.
+- **Governed** — graph policy is narrow-only over the active policy; every tool call still passes `ToolExecutor.authorize()`.
 
-### 🔌 User Hooks (`.wisp/hooks/*.json`)
-Your scripts around tool calls — block, warn, observe, or rewrite arguments, no wisp changes needed. Project hooks live in `.wisp/hooks/`, global ones in `~/.config/wisp/hooks/`; exit `0` allows, `1` warns (tool still runs), anything else blocks. Hooks see a strict allow-list env (`WISP_TOOL_NAME`, `WISP_TOOL_ARGS`, …) and can return `{"tool_args": {...}}` to rewrite the call:
-- **`/hooks`** lists loaded hooks with events and matchers
-- Full guide: [`docs/hooks.md`](docs/hooks.md)
+### Enterprise-Ready Governance
 
-### 🧭 Operating Context (the agent knows its own posture)
-Every turn's system prompt declares live state: model/provider, permission mode, workspace, session, subagent nesting depth, background-agent counts, plugin/MCP tool inventory, plus settled-work notifications. The "## Tools available" menu is generated from the live registry, so newly registered or MCP/plugin-provided tools announce themselves automatically.
-
-### 🎉 Session Compaction
-Sessions auto-compact when they grow too long — old messages get summarized into a structured memory block, preserving recent context. Keeps conversations flowing without hitting context limits.
-
-### 🧠 Active Memory (`remember` + `recall`)
-- **`remember`** — Store facts across sessions (preferences, decisions, conventions)
-- **`recall`** — Actively search memory and past session summaries for relevant context
-
-Memory facts include timestamps in the system prompt so the model knows recency.
-Important facts survive ~30 days longer than normal facts during LRU eviction,
-but are no longer immortal — stale important facts can still be evicted.
-
-### 🔒 Confinement & Server Auth Defaults
-- **`run_bash` runs confined when Docker is available** (network-none, memory/CPU-capped container, workspace-mounted); otherwise it executes on the host with a loud `UNCONFINED` warning per call. `WISP_SANDBOX=off` forces host mode explicitly.
-- **`wisp server` refuses to boot unauthenticated by default** (exit 2 with key-minting instructions); `--no-auth` is an explicit, loudly-warned bypass. Non-loopback binds always require a key.
-
-### 🏁 Benchmark Predictions (`--predictions`)
-`wisp bench --models m1,m2 -t task --predictions preds.jsonl` runs the matrix and additionally writes SWE-bench-format predictions (`{instance_id, model_patch, model_name}` per line) — the turn's workspace git diff is captured win or lose, ready for the official harness.
-
-### 📱 Native Android App
-Control your coding agent from anywhere. Features:
-- **Real-time chat** with thinking stream
-- **Tool approve/deny** cards
-- **File browser** — view workspace contents
-- **Auto-reconnect** with exponential backoff
-- **Markdown rendering** for assistant responses
-- **Connection status** indicator
+- **Signed policy bundles** — Ed25519, narrow-only precedence, revocation + expiry; `wisp policy inspect/verify/explain/dry-run`.
+- **Layered authority** — every effect passes `ToolExecutor` + `authorize()` (capabilities → workspace → risk → args → sensitivity → approval). Denials name the controlling layer.
+- **Evidence** — hash-chained audit log (`wisp audit verify`), redacted span store, dry-run-only replay, tier-gated OTLP.
+- **Durable runs & tasks** — SQLite run store with crash recovery and idempotent resume; `wisp task ...` lifecycle with plan-review-apply.
 
 ---
 
 ## Quick Start
 
-### CLI (Local)
-
 ```bash
 # Install
-cd wisp && pip install -e .
+git clone https://github.com/your-username/wisp.git && cd wisp
+pip install -e .
 
-# Check Ollama
-ollama ls
-
-# Run
-wisp "list all files and describe the project structure"
+# Configure (interactive: provider → model → credentials → live handshake)
+wisp setup
 
 # Interactive REPL
 wisp repl
 
+# Single-shot
+wisp "add retry with backoff to the API client"
+
 # Continue a session
-wisp -S 20260504-120000-abc123 "next task"
+wisp -S <session-id> "now cover it with tests"
+
+# Headless (scripts, CI)
+wisp --print "summarize uncommitted changes" --output-format json
 ```
 
-### Cloud Server + Android
+`wisp setup` offers Ollama (local default), OpenAI, NVIDIA, and OpenRouter — frontier models such as Claude 3.7 Sonnet, DeepSeek R1, and GPT-4o are reachable through OpenRouter or direct endpoints. Typed keys are stored via the OS-appropriate vault path with `0o600` files; keys already in the environment are used, never re-written to disk. No usable provider at boot on an interactive terminal offers the wizard instead of crashing the REPL.
 
-```bash
-# Deploy to VPS (Hetzner/DigitalOcean/etc)
-git clone https://github.com/your-username/wisp.git
-cd wisp
-export WISP_API_KEY="your-secure-key"
-docker-compose up -d
-
-# Pull a model
-docker exec -it wisp-ollama ollama pull deepseek-v4-flash:cloud
-```
-
-Then install the Android APK and connect to `wss://your-domain.com`.
-
-**Full guides** (in `docs/archive/`):
-- [Cloud Deployment Guide](docs/archive/CLOUD_DEPLOYMENT_GUIDE.md) — VPS setup, TLS, Docker
-- [Android Usage Guide](docs/archive/ANDROID_USAGE_GUIDE.md) — Build, install, configure
-
----
-
-## Architecture
-
-```
-┌─────────────────┐      WebSocket/HTTPS      ┌─────────────────────────────┐
-│   Android App   │  ◄──────────────────────►  │   Cloud VPS                 │
-│  (Jetpack       │                           │  ┌─────────────────────┐    │
-│   Compose)      │                           │  │  Wisp Server        │    │
-│                 │                           │  │  (FastAPI + Agent)  │    │
-│  • Chat UI      │                           │  └──────────┬──────────┘    │
-│  • File tree    │                           │             │               │
-│  • Tool         │                           │  ┌──────────▼──────────┐    │
-│    approvals    │                           │  │  Ollama / External  │    │
-│  • Settings     │                           │  │  LLM API            │    │
-└─────────────────┘                           │  └─────────────────────┘    │
-                                              └─────────────────────────────┘
-```
-
----
-
-## Commands
+Common operations:
 
 | Command | Description |
 |---------|-------------|
-| `wisp "prompt"` | Run with a prompt |
-| `wisp repl` | Interactive REPL mode |
-| `wisp -S <id> "prompt"` | Continue session |
-| `wisp --model <name> "prompt"` | Use specific model |
-| `wisp --skill <name> "prompt"` | Load a skill |
-| `wisp compact <id>` | Compact session history |
-| `wisp session list` | List saved sessions |
-| `wisp session show <id>` | Show session details |
-| `wisp session trim <id> [n]` | Trim to last N exchanges |
-| `wisp skills` | List discovered skills |
-| `wisp swarm 'goal' [--roles ...]` | Dispatch a multi-agent swarm |
-| `wisp agents [list|status]` | Subagent roles / live swarm status |
-| `wisp bench -m m1,m2 [-t task] [--predictions f.jsonl]` | Benchmark matrix (+ SWE-bench predictions) |
-| `wisp memory list` | View remembered facts |
-| `wisp check` | Verify Ollama connectivity |
-| `wisp models` | List available models |
-| `wisp server` | Start cloud server |
-| `wisp task start/list/inspect/review/approve-plan/pause/resume/cancel` | Durable task lifecycle (`--json` for scripts) |
-| `wisp policy inspect/verify/explain/dry-run/health/import/export` | Signed governance bundles |
-| `wisp trace <id>` / `wisp replay --dry-run <id>` | Span tree / tool sequence without executing |
-| `wisp audit verify` | Verify the tamper-evident audit chain |
-| `wisp release health/diagnostics/sbom/lock` | Health, support bundle, supply chain |
-| `wisp completion <bash\|zsh>` | Shell completion |
+| `wisp repl` | Interactive REPL (continuous chat) |
+| `wisp "prompt"` / `wisp run "prompt"` | Single-shot turn and exit |
+| `wisp -S <id> "prompt"` | Continue a saved session |
+| `wisp --print "prompt"` | Headless JSON result on stdout |
+| `wisp session list/show/trim/compact` | Session lifecycle |
+| `wisp swarm 'goal'` | Multi-agent swarm for a goal |
+| `wisp graph run coding-agent '{"goal":"..."}'` | Deterministic graph run (list/show/validate/resume/status/cancel/trace/inspect/metrics) |
+| `wisp bench -m m1,m2` | Benchmark matrix (see below) |
+| `wisp server` | API + WebSocket server (auth required, see below) |
+| `wisp task/policy/trace/replay/audit/release` | Durable tasks, governance, evidence, supply chain |
+| `wisp check` / `wisp models` | Provider health / model listing |
 
-### REPL Slash Commands
-
-| Command | Description |
-|---------|-------------|
-| `/help` | Show commands |
-| `/clear` | Clear conversation |
-| `/model <name>` | Switch model |
-| `/skill <name>` | Load skill |
-| `/skill suggest` | Show detected repeated workflows |
-| `/skill save <name>` | Save the captured workflow as a skill |
-| `/agents` (`/ba`) | Background agents: list, `<id>` detail, `cancel <id>`, `send <id> <msg>` |
-| `/subagents` | Full-screen worker monitor (telemetry rings) |
-| `/rewind [seq|path]` | Undo file edits via checkpoints |
-| `/hooks` | List loaded user hooks |
-| `/compact` | Compact session now |
-| `/tokens` | Show context usage |
-| `/approve` | Toggle auto-approve |
-| `/bash <cmd>` | Run shell command |
-| `/save` | Force-save session |
-| `/exit` | Quit REPL |
+REPL essentials: `/subagents` worker monitor · `/graph` runs/status/traces · `/rewind [seq|path]` undo · `/hooks` list hooks · `/provider` + `/model` switch backends · `/compact` · `/help`.
 
 ---
 
-## Tools Available to the Agent
+## Tool Surface & Profiles
 
-| Tool | Purpose |
-|------|---------|
-| `read_file` | Read file contents (with offset/limit) |
-| `write_file` | Create or overwrite a file |
-| `edit_file` | Targeted text replacement (surgical edits) |
-| `edit_file_multi` | Multiple precise edits in a single call |
-| `rewind` | Undo file edits via auto-checkpoints (list/restore) |
-| `run_bash` | Execute shell commands (Docker-confined when available, dangerous commands blocked) |
-| `list_files` | Explore directory structure |
-| `web_fetch` | Fetch content from URLs |
-| `web_search` | Search the web for current information |
-| `search_symbols` | Search code by regex for functions, classes, structs |
-| `search_codebase` | Semantic vector search over the codebase |
-| `remember` | Store a fact in cross-session memory |
-| `recall` | Search memory and past summaries |
-| `spawn` | Launch a subagent with a contract for scoped work |
-| `fanout` | Delegate a task to multiple subagents in parallel |
-| `spawn_background` | Launch a subagent without blocking; returns an agent id immediately |
-| `subagent_list` | List background agents and their statuses |
-| `subagent_result` | Collect a finished background agent's result |
-| `subagent_send` | Continue a finished agent's conversation (same session) |
-| `subagent_cancel` | Cancel a running background agent |
-| `orchestrate_vote` | N voters answer independently; consensus threshold decides |
-| `orchestrate_map_reduce` | Parallel mappers over items + synthesized reducer |
-| `orchestrate_chain` | Sequential specialists, each seeing the prior output |
-| `orchestrate_dag` | Dependency graph execution with dataflow between nodes |
-| `capture_skill` | Save a demonstrated workflow as a reusable skill |
-| `plan_task` | Create a structured plan with subtasks |
-| `run_tests` | Run tests for changed files or full suite |
-| `diagnose` | Diagnose errors from test output or tracebacks |
-| `git_status` | Show git status |
-| `git_diff` | Show uncommitted changes |
-| `git_commit` | Stage files and commit |
-| `gh_pr_create` | Create a GitHub pull request |
-| `lsp_diagnostics` | Run language server diagnostics on a file |
-| `lsp_definition` | Go to definition of a symbol |
-| `lsp_references` | Find all references to a symbol |
+42 tools, one registry (`wisp/tools/registry.py`), uniform JSON envelope on every call:
 
----
+| Category | Tools |
+|----------|-------|
+| Files & mutations | `read_file`, `write_file`, `edit_file`, `edit_file_multi`, `rewind`, `list_files` |
+| Shell | `run_bash` (sandbox-routed, heuristic deny-list) |
+| Delegation | `spawn`, `fanout`, `spawn_background`, `subagent_list/result/send/wait/cancel` |
+| Orchestration | `orchestrate_vote/map_reduce/chain/dag` |
+| Version control | `git_status/diff/branch/commit/push`, `gh_pr_create` |
+| Code intelligence | `search_symbols`, `search_codebase`, `lsp_diagnostics/definition/references/hover/symbols` |
+| Verification | `run_tests`, `diagnose`, `plan_task`, `mark_step_done`, `update_plan` |
+| Memory & web | `remember`, `recall`, `web_fetch`, `web_search` |
+| Meta | `capture_skill` (self-writing skills) |
 
-## Configuration
+Small models stay usable two ways: subagent **roles** receive constrained `allowed_tools` subsets instead of the full 42-tool schema, and **task profiles** set the posture without code changes:
 
-Settings are resolved: **env vars > config file > defaults**
-
-```bash
-# ~/.config/wisp/config.json
-{
-  "model": "deepseek-v4-flash:cloud",
-  "auto_approve": false,
-  "show_thinking": true,
-  "auto_compact": true,
-  "compact_threshold_msgs": 40,
-  "compact_threshold_tokens": 75,
-  "max_context_tokens": 256000
-}
-```
-
-Or use env vars: `WISP_MODEL`, `WISP_AUTO_APPROVE`, `WISP_AUTO_COMPACT`, etc.
-
-### Terminal Output Modes
-
-Wisp supports multiple output styles for different terminals, screen readers, and accessibility needs:
-
-| Mode | Env / How | What it looks like |
-|------|-----------|-------------------|
-| **Unicode** *(default)* | none / `WISP_OUTPUT_MODE=unicode` | Fancy boxes `┌─┐│`, colored icons `✓` `✗`, emojis `🧠` |
-| **ASCII** | `WISP_OUTPUT_MODE=ascii` or `TERM=dumb` | Simple ASCII `+--+|`, no emojis |
-| **Accessible** | `WISP_ACCESSIBLE=1` or `WISP_OUTPUT_MODE=accessible` | `[PASS]` / `[FAIL]` labels, full content shown (nothing collapsed), clear borders `[-]` |
-| **Minimal** | `WISP_OUTPUT_MODE=minimal` | No borders at all. Plain text. |
-| **High-contrast** | `WISP_HIGH_CONTRAST=1` | Colorblind-safe palette (blue instead of green for success) |
-
-Set at runtime:
-```bash
-WISP_OUTPUT_MODE=accessible wisp repl    # screen-reader friendly
-WISP_HIGH_CONTRAST=1 wisp repl           # colorblind-safe colors
-NO_COLOR=1 wisp repl                    # no colors (implies ascii mode)
-```
-
-**Key features:**
-- **Display-width aware**: CJK characters and emoji are measured correctly so wrapping, box alignment, and dot-filling work without tearing (uses `wcwidth`).
-- **Automatic detection**: If `NO_COLOR` is set or stdout is not a TTY, Wisp falls back to ASCII mode automatically.
-- **Accessible**: Thinking content is never collapsed in accessible mode — everything is rendered. Status icons become `[PASS]` / `[FAIL]` text instead of `✓` / `✗`.
-- **Unicode width-safe**: Middle-dot padding in tool result headers uses display-width calculations, so lines align perfectly even with emoji.
-
----
-
-## Android App
-
-### Build
-
-```bash
-cd android
-./gradlew assembleDebug
-# APK: app/build/outputs/apk/debug/app-debug.apk
-```
-
-### Features
-- **Jetpack Compose** UI with Material 3
-- **WebSocket** real-time connection to server
-- **Auto-reconnect** with exponential backoff (max 30s, 10 attempts)
-- **Tool approval/denial** cards
-- **Markdown rendering** for assistant messages
-- **File browser** — navigate workspace, view file contents
-- **EncryptedSharedPreferences** for API key (AES256-GCM, keyed from Android Keystore)
-- **DataStore** for non-sensitive settings (server URL, model)
-- **Connection status** badge in top bar
-
-### Configure
-
-| Setting | Example |
+| Profile | Posture |
 |---------|---------|
-| Server URL | `wss://wisp.yourdomain.com` |
-| API Key | `wisp-a1b2c3d4...` |
-| Model | `deepseek-v4-flash:cloud` |
+| `personal` | Interactive default: writes auto-approved, exec asks |
+| `enterprise-managed` | Every mutation asks; org bundle governs |
+| `offline-secure` | Local models only; managed approvals |
+| `read-only-review` | Mutations denied, reads free |
+| `ci-headless` | Safest: exec denied, network off |
 
 ---
 
-## CLI UX
+## Security & Confinement Architecture
 
-The CLI transport (`CLITransport`) renders agent activity as a **live dashboard** rather than a plain log stream:
-
-- **Phase bar** — Shows `understand → plan → execute → verify` phases, highlighting the current one
-- **Tool spinners** — Inline `⠋` spinner with live elapsed time during tool execution; replaced by `✓`/`✗` on completion
-- **File change ticker** — Accumulated changed files shown after each turn
-- **Turn stats** — `Turn 3 · 5 tools (4 ok, 1 failed) · 2 files · 12.3s` summary line
-- **Thinking collapsed** — Thinking output shown as a compact summary line (`🧠 Thinking... (12 lines — /thinking to expand)`) by default; use `--show-thinking` or `/thinking` to expand
-
-All rendering is output-mode-aware (unicode, ascii, accessible, minimal) and display-width-aware (CJK, emoji).
-
-## Project Structure
-
-```
-wisp/
-├── wisp/                    # Core agent
-│   ├── __main__.py          # CLI entry point
-│   ├── agent.py             # Deprecated compat shim
-│   ├── core/                # Event-driven stateless engine
-│   │   ├── engine.py        # WispAgentCore (async turn() loop)
-│   │   ├── events.py        # AgentEvent + 12 event types
-│   │   ├── runtime.py       # AgentRuntime (session mgmt + locks)
-│   │   └── ...
-│   ├── transport/           # I/O layer (Transport ABC)
-│   │   ├── base.py          # Transport abstract base class
-│   │   ├── server.py        # WebSocket server transport
-│   │   ├── headless.py      # Headless transport (CI/API)
-│   │   ├── tui.py           # Textual TUI transport
-│   │   ├── renderer.py      # Terminal rendering utilities
-│   │   ├── progress.py      # ProgressTracker (phase detection)
-│   │   ├── spinner.py       # Terminal inline spinner
-│   │   └── ...
-│   ├── tools/               # Tool schemas + implementations
-│   │   ├── registry.py      # TOOL_SCHEMAS + TOOL_IMPLS (42 tools)
-│   │   ├── checkpoints.py   # Pre-mutation snapshots + rewind
-│   │   └── ...
-│   ├── multi_agent/         # Subagent orchestration (+ telemetry.py rings)
-│   ├── contracts/           # Versioned wire envelopes (events, tools, policy, runs)
-│   ├── auth/                # Local authority: principals, layered authz, secrets
-│   ├── runs/                # Durable runtime: RunStore, scheduler, compensation
-│   ├── policy/              # Signed governance bundles + admin CLI
-│   ├── trace/ + eval/       # Evidence store, replay, OTLP, eval harness
-│   ├── task/                # Task lifecycle, plan review, profiles
-│   ├── release/             # Supply chain (SBOM, lock), health, diagnostics
-│   ├── sandbox.py           # Docker/Noop confinement providers
-│   ├── infra/               # Security, telemetry, extensions (+ hook_types user hooks)
-│   ├── benchmark/           # Deterministic tasks + SWE-bench predictions
-│   ├── config.py            # Settings schema + resolution
-│   ├── commands.py          # REPL slash commands
-│   └── ...
-├── android/                 # Android app
-│   └── app/src/main/java/   # Jetpack Compose UI
-├── tests/                   # 310 test files (~4,200 tests)
-├── skills/                  # Warp-compatible skill files
-├── docker-compose.yml       # One-command cloud deploy
-└── docs/archive/            # Historical guides & reports
-    ├── CLOUD_DEPLOYMENT_GUIDE.md
-    └── ANDROID_USAGE_GUIDE.md
-```
-
----
-
-## Security
-
-Wisp has undergone a comprehensive security audit (52 findings, 4 severity levels). Production deployments benefit from a defense-in-depth model across transport, API, multi-agent, and infrastructure layers.
-
-### Hardening Summary
+Threat model (`docs/THREAT-MODEL.md`): the developer is trusted; **model output, workspace content, and extensions are not**. Host execution is unconfined by default — the controls below are the real boundaries, in order:
 
 | Layer | Control |
 |-------|---------|
-| **Transport** | WebSocket message size capped (256 KiB text / 10 MB images); all interactive transports default to `auto_approve=False` |
-| **API** | Rate limiting on all state-changing routes via SQLite-backed per-IP tracking (30 req / 60 s) |
-| **API** | Security headers: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Content-Security-Policy`, `Referrer-Policy`; opt-in HSTS via `WISP_ENABLE_HSTS=true` |
-| **Auth** | API key rotation with persisted grace period (default 24h, stored in `~/.config/wisp/auth_keys.json` with `600` permissions) |
-| **Auth** | Audit trail: append-only hash-chained log with automatic PII redaction at `~/.config/wisp/audit.jsonl` |
-| **Routes** | Input validation: git refs allow-listed, hook names regex-restricted, plugin paths workspace-bound, workspace root bounded by `WISP_ALLOWED_WORKSPACE_ROOTS` |
-| **Routes** | Error sanitization: raw `str(e)` replaced with generic messages on all production routes |
-| **LLM Provider** | Ollama URL validated against `WISP_ALLOWED_OLLAMA_HOSTS`; cloud metadata endpoints (169.254.169.254) blocked in production mode via `WISP_PRODUCTION_MODE=true` |
-| **Headless API** | `/api/prompt` defaults `auto_approve=False`; operators may set `WISP_HEADLESS_AUTO_APPROVE=true` for backward-compatible CI integrations |
-| **Multi-agent** | Subagent recursion capped at `MAX_SUBAGENT_DEPTH=2`; `auto_approve=False` by default |
-| **Schema** | Tool arguments pre-validated against JSON schemas before execution; malicious regex patterns gracefully handled |
-| **Subagent** | Sensitive tool arguments (api_key, token, password, etc.) redacted before approval requests reach the client |
-| **Authority (M2)** | `Principal` model with narrowing subagent derivation; layered `authorize()` (capabilities → workspace → risk → args → sensitivity → approval); no-executor fallback is read-only; denials carry the controlling layer |
-| **Secrets (M2)** | 6 secret-pattern families redacted at record construction (audit, traces, diagnostics); hook-dir mutation guard against privilege escalation |
-| **Governance (M4)** | Ed25519-signed policy bundles with revocation + expiry-trim; quarantine markers deny writes even in full mode; extension consent + origin pinning |
-| **Evidence (M5)** | Hash-chained audit (`wisp audit verify`); redacted span store; replay is dry-run only; OTLP export is tier-gated, `local-only-full` refuses export |
-| **Supply chain (M7)** | `requirements.lock` verify, CycloneDX SBOM, license allowlist audit, signed-artifact workflow (CI) |
+| **Sandbox** | `run_bash` routes through `get_sandbox()`: Docker (network-none, memory/CPU-capped, workspace-mounted) when the daemon is reachable, else host execution with a loud per-call `UNCONFINED` warning. `WISP_SANDBOX=off` forces host mode explicitly. |
+| **Authority** | `ToolExecutor` is the only action path; layered `authorize()` denies closed-gate with the controlling layer named. Hook-controlled dirs (`.wisp/hooks/`) are un-writable by agent tools. |
+| **Credentials** | `config.json` and `.env` written `0o600`; subprocess envs are credential-stripped; 6 secret families redacted at record construction. |
+| **Server** | `wisp server` refuses to boot unauthenticated (exit 2 + key-minting instructions). `--no-auth` is loopback-only and loudly warned; non-loopback binds always require `WISP_API_KEY`. |
+| **Transport/API** | WebSocket message caps; SQLite-backed rate limits on mutating routes; security headers + opt-in HSTS; error sanitization on production routes. |
+| **Governance** | Ed25519 bundles, revocation + expiry-trim, extension consent + origin pinning, quarantine markers that deny writes even in full mode. |
 
-### Configuration
+What Wisp does **not** claim: the dangerous-command check (`sudo`, recursive `rm`, disk writes, pipe-to-shell) is a best-effort heuristic deny-list, not a security boundary — it cannot catch obfuscation, and it is documented as such. Confinement means Docker; everything else is defense in depth. Production hardening knobs:
 
 ```bash
-# Production-hardened environment
-export WISP_API_KEY="sk-change-me-here"    # Required: `wisp server` refuses to boot without it (or pass --no-auth explicitly for local-only)
-export WISP_PRODUCTION_MODE="true"           # Blocks internal IPs and metadata services
+export WISP_API_KEY="$(openssl rand -hex 32)"   # required for wisp server
+export WISP_PRODUCTION_MODE="true"               # blocks metadata IPs
+export WISP_ALLOWED_WORKSPACE_ROOTS="/var/wisp-workspaces"
 export WISP_ALLOWED_OLLAMA_HOSTS="localhost,127.0.0.1,my-llm.internal"
-export WISP_ALLOWED_WORKSPACE_ROOTS="/var/wisp-workspaces"  # Prevents workspace escape
-export WISP_ENABLE_HSTS="true"               # Enforce HTTPS via strict-transport-security
-export WISP_WORKSPACE_MUTABLE="true"         # Set to "false" to lock workspace path
 ```
-
-### Security Audit Report
-
-Full audit report: [SECURITY_AUDIT_2025-05-21.md](docs/archive/SECURITY_AUDIT_2025-05-21.md)
-
-### Legacy Controls
-
-- 🔒 **Dangerous commands blocked** — `rm -rf /`, `mkfs`, `eval`, `bash -c`, encoded payloads, etc. blocked at API + agent + sandbox layers
-- 🔒 **Path sandboxing** — File access restricted to `WISP_WORKSPACE`; symlinks that escape the workspace are rejected
-- 🔒 **Bash timeout** — Commands killed after 60 seconds
-- 🔒 **CORS restricted** — Same-origin by default, configurable via `WISP_CORS_ORIGINS`
-- 🔒 **TLS recommended** — Use `wss://` in production (Let's Encrypt / Cloudflare)
-- 🔒 **Docker sandbox by default** — `run_bash` routes through `get_sandbox()`: Docker (network-none, capped) when the daemon is reachable, else host execution with a loud per-call `UNCONFINED` warning; `WISP_SANDBOX=off` forces host mode explicitly
 
 ---
 
-## SDK Architecture
+## Benchmark & Evaluation
 
-Wisp is now built as a layered SDK:
+Deterministic tasks with machine-checked verifiers (no model-judged scoring), plus native SWE-bench ingestion:
 
-```
-┌─────────────────────────────────────────┐
-│  Transports (I/O layer)                 │
-│  - CLITransport     → live dashboard    │
-│  - ServerTransport  → WebSocket         │
-│  - HeadlessTransport → CI/API           │
-│  - TUITransport     → Textual TUI       │
-├─────────────────────────────────────────┤
-│  Core (pure logic, zero I/O)            │
-│  - WispAgentCore     → event-driven     │
-│  - AgentEvent        → structured events│
-│  - AgentRuntime      → session mgmt     │
-├─────────────────────────────────────────┤
-│  CLI Dashboard (rendering layer)        │
-│  - ProgressTracker   → phase detection  │
-│  - Spinner           → inline progress  │
-│  - Renderer          → terminal output  │
-├─────────────────────────────────────────┤
-│  Config & Tools                         │
-│  - WispConfig, TOOL_SCHEMAS, etc.       │
-└─────────────────────────────────────────┘
+```bash
+# Built-in matrix across models
+wisp bench -m model1,model2 -t json-edit
+
+# SWE-bench instances with predictions output
+wisp bench -m mymodel --instances instances.jsonl --predictions preds.jsonl
 ```
 
-### High-level API (sync)
+`--predictions` writes one JSON per line — `{instance_id, model_patch, model_name}` — capturing the turn's workspace git diff win or lose, ready for the official harness. Every patch is `git apply --check` clean (enforced by the test suite).
+
+---
+
+## SDK & Extensibility
+
+Embed the runtime headlessly (sync wrapper over `CompositionRoot` + `HeadlessTransport`):
 
 ```python
 from wisp import Wisp
 
-agent = Wisp(model="llama3.2", workspace=".")
-for event in agent.run("refactor auth.py"):
-    print(f"[{event.type}] {event.text}")
+with Wisp(model="llama3.2", workspace=".") as agent:
+    for event in agent.run("refactor auth.py"):
+        print(f"[{event.type}] {event.text}")
 ```
 
-### Low-level API (async)
+Run a declarative graph (YAML in `graphs/`, or build with `wisp.graph.Graph`) and get a typed handle:
 
 ```python
-from wisp import WispAgentCore, CLITransport
+from wisp.graph.dsl import graph_from_yaml
 
-core = WispAgentCore()
-transport = CLITransport(core)
-transport.repl()
+with open("graphs/repo-audit.yaml") as fh:
+    graph = graph_from_yaml(fh.read())
+
+with Wisp(workspace=".") as agent:
+    run = agent.graph(graph, {"goal": "audit the repository"})
+    print(run.trace())   # ASCII execution trace
+    result = run.wait()  # status / results_by_node / tokens / cost
 ```
 
-### Custom transport
+Extension points: add a tool via `TOOL_SCHEMAS` + `TOOL_IMPLS` in `wisp/tools/registry.py`; add a transport by extending the `Transport` ABC (`send`/`recv`/`approve`/`start`/`stop`); gate tool calls with user hooks (`.wisp/hooks/*.json`, full guide in `docs/hooks.md`); add a slash command in `wisp/cli/dispatcher.py`. See `examples/sdk_basic.py`, `examples/custom_transport.py`, `examples/webhook_server.py`.
 
-```python
-from wisp import WispAgentCore
+---
 
-core = WispAgentCore()
-async for event in core.run("prompt"):
-    # Handle events however you want
-    print(event.to_dict())
-```
+## Ecosystem / Community Interfaces
 
-See `examples/` for more: `sdk_basic.py`, `custom_transport.py`, `webhook_server.py`.
+- **Remote control clients** (community-maintained, experimental): build and usage guide at [`docs/archive/ANDROID_USAGE_GUIDE.md`](docs/archive/ANDROID_USAGE_GUIDE.md); cloud deploy notes at [`docs/archive/CLOUD_DEPLOYMENT_GUIDE.md`](docs/archive/CLOUD_DEPLOYMENT_GUIDE.md).
+- **Operators**: [`docs/QUICKSTART.md`](docs/QUICKSTART.md) · [`docs/ADMIN-GUIDE.md`](docs/ADMIN-GUIDE.md) · [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md) · [`docs/RELEASE.md`](docs/RELEASE.md)
+
+---
 
 ## License
 
 MIT — free for any use, including commercial.
 
----
-
-*Built with Python, FastAPI, Jetpack Compose, and Ollama.*
+*Built with Python, FastAPI, Tree-sitter, and Ollama.*
