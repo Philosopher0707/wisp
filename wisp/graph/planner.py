@@ -301,9 +301,9 @@ async def execute_proposal(proposal: dict[str, Any], executor: Any,
     ir = proposal.get("ir")
     if not isinstance(ir, dict):
         raise PlanError("COMPILATION_FAILED", "proposal has no IR")
-    policy = None  # narrowing already baked in at propose time; recompile as-is
+    policy = None  # narrowing already baked into the stored IR; recompile as-is
     try:
-        graph, _ = compile_ir(ir, policy)
+        graph, _, _, _ = compile_optimized(ir, policy)
     except PlanError as exc:
         raise PlanError("COMPILATION_FAILED", f"stored IR no longer compiles: {exc}") from exc
     if graph.fingerprint() != proposal.get("graph_hash", ""):
@@ -331,6 +331,36 @@ async def execute_proposal(proposal: dict[str, Any], executor: Any,
 STATUSES = ("PROPOSED", "VALIDATED", "POLICY_CHECKED", "APPROVAL_REQUIRED",
             "APPROVED", "INVALID", "REJECTED", "EXPIRED", "EXECUTED")
 
+
+def compile_optimized(ir: dict[str, Any], policy: GraphPolicy | None = None,
+                      context: Any = None
+                      ) -> tuple[Graph, list[str], dict[str, Any], dict[str, Any]]:
+    """Preferred pipeline: compile → optimize → revalidate → fingerprint.
+
+    Returns (final graph, diagnostics, optimizer meta, narrowed IR).
+    The narrowed IR (not the raw planner output) is what proposals store and
+    execution recompiles — otherwise narrowing itself would look like drift.
+    Raises PlanError on any failure. Deterministic.
+    """
+    import copy
+    from wisp.graph.optimizer import OptimizationContext, optimize_graph
+    graph, notes = compile_ir(ir, policy)
+    ctx = context or OptimizationContext(policy=policy)
+    res = optimize_graph(graph, policy, ctx)
+    if res.status == "REJECTED":
+        raise PlanError("COMPILATION_FAILED",
+                        f"optimization rejected: {res.error}",
+                        [res.error])
+    diags = list(notes)
+    for d in res.diagnostics:
+        diags.append(f"{d.get('code', '')} {d.get('node', '')}: "
+                     f"{d.get('reason', '')}"[:500])
+    narrowed = copy.deepcopy(ir)
+    if policy is not None and isinstance(narrowed.get("graph"), dict):
+        narrowed_graph, _ = narrow_ir(narrowed["graph"], policy)
+        narrowed["graph"] = narrowed_graph
+    return res.graph, diags, res.meta, narrowed
+
 def new_proposal_id() -> str:
     return f"prop-{uuid.uuid4().hex[:12]}"
 
@@ -350,9 +380,11 @@ def compile_proposal(ir: dict[str, Any], objective: str = "",
     diags: list[str] = []
     status = "PROPOSED"
     graph: Graph | None = None
+    meta: dict[str, Any] = {}
+    stored_ir = ir
     try:
-        graph, notes = compile_ir(ir, policy)
-        diags.extend(notes)
+        graph, opt_diags, meta, stored_ir = compile_optimized(ir, policy)
+        diags.extend(opt_diags)
         status = "POLICY_CHECKED" if policy else "VALIDATED"
     except PlanError as exc:
         return {"proposal_id": proposal_id or new_proposal_id(),
@@ -364,11 +396,12 @@ def compile_proposal(ir: dict[str, Any], objective: str = "",
             "objective": scrub(objective)[:2048],
             "planner_model": scrub(str(model))[:256],
             "planner_provider": scrub(str(getattr(provider, "__class__", type(provider)).__name__))[:128],
-            "ir_hash": ir_hash(ir),
+            "ir_hash": ir_hash(stored_ir),
             "graph_hash": graph.fingerprint(),
             "graph_id": graph.id,
             "nodes": len(graph.nodes), "edges": len(graph.edges),
             "quality": quality,
             "diagnostics": [scrub(d)[:500] for d in diags],
+            "transports": meta.get("artifact_transport", {}).get("transports", {}),
             "status": "APPROVAL_REQUIRED" if status in ("VALIDATED", "POLICY_CHECKED") else status,
-            "ir": ir, "created_at": time.time()}
+            "ir": stored_ir, "created_at": time.time()}

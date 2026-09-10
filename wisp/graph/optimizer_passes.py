@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from wisp.graph.optimizer import PassResult, OptimizationContext, diag
 from wisp.graph.types import Graph, NodeType
@@ -101,7 +101,89 @@ def _removable(graph: Graph, nodes: dict, members: set[str],
     return True
 
 
+def artifact_transport_pass(graph: Graph, ctx: OptimizationContext) -> PassResult:
+    """Decide INLINE vs ARTIFACT transport per mapping (OPT-003). Annotation only.
+
+    COMPILE-TIME BOUNDARY (hard rule): this pass never executes nodes, never
+    sees runtime values, never calls ArtifactStore.put(), never writes files,
+    never hashes content. It records a transport CONTRACT (which mappings
+    should travel as artifact references at runtime). Actual artifact
+    creation, scrubbing, sizing, and containment stay exclusively runtime
+    responsibilities of ArtifactStore.
+
+    Rules: conditional edges carry control -> always INLINE, silent. Unknown
+    size (no host hint) -> INLINE + silent (never speculate). Known size over
+    threshold -> ARTIFACT recommendation + OPT-003 diagnostic. Known size over
+    the artifact hard limit -> INLINE + advisory (runtime would reject).
+    The graph itself is never mutated by this pass.
+    """
+    from wisp.graph.artifacts import MAX_ARTIFACT_BYTES
+    nodes = {n.id: n for n in graph.nodes}
+    transports: dict[str, dict[str, Any]] = {}
+    diagnostics: list = []
+    for e in graph.edges:
+        if not e.mapping:
+            continue
+        dst_node = nodes.get(e.to_node)
+        for dst_path, src_path in e.mapping.items():
+            key = f"{e.from_node}->{e.to_node}:{dst_path}"
+            if e.condition:
+                transports[key] = {"transport": "INLINE",
+                                   "reason": "control edge: verdicts/labels stay inline"}
+                continue
+            size = ctx.size_hints.get((e.from_node, e.to_node, dst_path))
+            if size is None or not isinstance(size, (int, float)) or size < 0:
+                transports[key] = {"transport": "INLINE",
+                                   "reason": "size UNKNOWN: preserve inline, no speculation"}
+                continue
+            declared = _schema_declares(dst_node, dst_path) if dst_node else False
+            if size > MAX_ARTIFACT_BYTES:
+                transports[key] = {"transport": "INLINE",
+                                   "reason": "exceeds artifact hard limit; runtime would reject",
+                                   "estimated_bytes": int(size),
+                                   "schema_declared": declared}
+                diagnostics.append(diag(
+                    "OPT-003", "context",
+                    "large transfer exceeds artifact limit; kept inline, may fail at runtime",
+                    "reduce payload or split the mapping", node=e.to_node,
+                    extra={"mapping": key, "bytes": str(int(size))}))
+                continue
+            if size > ctx.inline_threshold_bytes:
+                transports[key] = {"transport": "ARTIFACT",
+                                   "reason": "declared transfer exceeds inline threshold",
+                                   "source": str(src_path)[:256],
+                                   "estimated_bytes": int(size),
+                                   "schema_declared": declared}
+                diagnostics.append(diag(
+                    "OPT-003", "context",
+                    "large transfer should travel as artifact reference",
+                    "runtime resolves artifact:// transparently via mappings",
+                    node=e.to_node,
+                    extra={"mapping": key, "bytes": str(int(size))}))
+            else:
+                transports[key] = {"transport": "INLINE",
+                                   "reason": "below inline threshold",
+                                   "estimated_bytes": int(size),
+                                   "schema_declared": declared}
+    return PassResult(graph, changed=False, diagnostics=diagnostics,
+                      meta={"transports": transports})
+
+
+def _schema_declares(node, dst_path: str) -> bool:
+    """Static check: does the consumer input schema declare the target field?"""
+    try:
+        schema = node.effective_contract().input_schema
+    except Exception:
+        return False
+    if not isinstance(schema, dict):
+        return False
+    props = schema.get("properties")
+    if not isinstance(props, dict):
+        return False  # no declared properties -> UNKNOWN, not incompatible
+    return dst_path.split(".")[0] in props
+
+
 PASSES: dict[str, "PassFn"] = {
     "dependency": dependency_pass,
+    "artifact_transport": artifact_transport_pass,
 }
-

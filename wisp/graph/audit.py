@@ -48,6 +48,7 @@ AUDIT_EVENTS = frozenset({
     "graph.run_terminated",
     "graph.policy_narrowed",
     "graph.proposal_decided",
+    "graph.optimization_rejected",
 })
 
 _SUMMARY_BYTES = 2000

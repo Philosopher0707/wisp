@@ -287,3 +287,222 @@ class TestDependencyPass:
                 from wisp.graph.optimizer import authority_of, is_narrower_or_equal
                 ok, _ = is_narrower_or_equal(authority_of(g), authority_of(r.graph))
                 assert ok
+
+
+def _mapped_graph():
+    a = GraphNode(id="a", type=NodeType.AGENT,
+                  contract=NodeContract(id="a", output_schema={"type": "object"}))
+    b = GraphNode(id="b", type=NodeType.AGENT,
+                  contract=NodeContract(id="b", input_schema={
+                      "type": "object",
+                      "properties": {"report": {"type": "string"}}}))
+    return Graph(id="t", entrypoint="a", nodes=(a, b),
+                 edges=(EdgeMapping("a", "b", reason="b consumes a.output.report",
+                                    mapping={"report": "output.report"}),))
+
+
+class TestArtifactTransportPass:
+    def test_small_payload_stays_inline_silent(self):
+        from wisp.graph.optimizer_passes import artifact_transport_pass
+        ctx = OptimizationContext(size_hints={("a", "b", "report"): 1024})
+        r = artifact_transport_pass(_mapped_graph(), ctx)
+        assert not r.changed
+        assert r.meta["transports"]["a->b:report"]["transport"] == "INLINE"
+        assert r.diagnostics == []
+
+    def test_large_payload_recommends_artifact(self):
+        from wisp.graph.optimizer_passes import artifact_transport_pass
+        ctx = OptimizationContext(size_hints={("a", "b", "report"): 200_000})
+        r = artifact_transport_pass(_mapped_graph(), ctx)
+        assert not r.changed  # annotation only: graph identical
+        t = r.meta["transports"]["a->b:report"]
+        assert t["transport"] == "ARTIFACT"
+        assert t["estimated_bytes"] == 200_000
+        assert t["schema_declared"] is True
+        assert any(d["code"] == "OPT-003" for d in r.diagnostics)
+        assert r.graph.fingerprint() == _mapped_graph().fingerprint()
+
+    def test_unknown_size_conservative(self):
+        from wisp.graph.optimizer_passes import artifact_transport_pass
+        r = artifact_transport_pass(_mapped_graph(), OptimizationContext())
+        assert r.meta["transports"]["a->b:report"]["transport"] == "INLINE"
+        assert r.diagnostics == []  # no evidence -> no noise
+
+    def test_control_edge_never_artifactized(self):
+        from wisp.graph.optimizer_passes import artifact_transport_pass
+        v = GraphNode(id="v", type=NodeType.VERIFIER, contract=NodeContract(id="v"))
+        g = Graph(id="t", entrypoint="g",
+                  nodes=(_agent("g"), v, _agent("p")),
+                  edges=(EdgeMapping("g", "v", reason="x"),
+                         EdgeMapping("v", "p", reason="y", condition="accept",
+                                     mapping={"lane": "output.lane"})))
+        ctx = OptimizationContext(size_hints={("v", "p", "lane"): 500_000})
+        r = artifact_transport_pass(g, ctx)
+        assert r.meta["transports"]["v->p:lane"]["transport"] == "INLINE"
+
+    def test_over_limit_kept_inline_with_advisory(self):
+        from wisp.graph.optimizer_passes import artifact_transport_pass
+        from wisp.graph.artifacts import MAX_ARTIFACT_BYTES
+        ctx = OptimizationContext(
+            size_hints={("a", "b", "report"): MAX_ARTIFACT_BYTES + 1})
+        r = artifact_transport_pass(_mapped_graph(), ctx)
+        t = r.meta["transports"]["a->b:report"]
+        assert t["transport"] == "INLINE"
+        assert any("exceeds artifact limit" in d["reason"] for d in r.diagnostics)
+
+    def test_undeclared_schema_noted_not_blocked(self):
+        from wisp.graph.optimizer_passes import artifact_transport_pass
+        g = _graph([_agent("a"), _agent("b")],
+                   _edges(("a", "b"), mapping={"blob": "output.blob"}))
+        ctx = OptimizationContext(size_hints={("a", "b", "blob"): 300_000})
+        r = artifact_transport_pass(g, ctx)
+        assert r.meta["transports"]["a->b:blob"]["schema_declared"] is False
+        assert r.meta["transports"]["a->b:blob"]["transport"] == "ARTIFACT"
+
+    def test_no_payload_inspection_possible(self):
+        # The pass sees mapping PATHS only: meta must never contain values.
+        from wisp.graph.optimizer_passes import artifact_transport_pass
+        ctx = OptimizationContext(size_hints={("a", "b", "report"): 300_000})
+        r = artifact_transport_pass(_mapped_graph(), ctx)
+        blob = str(r.meta) + str(r.diagnostics)
+        assert "output.report" in blob  # paths are fine
+        assert len(blob) < 4096  # bounded provenance, no payloads
+
+    def test_multiple_consumers_share_plan(self):
+        from wisp.graph.optimizer_passes import artifact_transport_pass
+        c = GraphNode(id="c", type=NodeType.AGENT, contract=NodeContract(id="c"))
+        g = Graph(id="t", entrypoint="a",
+                  nodes=(_mapped_graph().nodes[0], _mapped_graph().nodes[1], c),
+                  edges=(EdgeMapping("a", "b", reason="x",
+                                     mapping={"report": "output.report"}),
+                         EdgeMapping("a", "c", reason="x",
+                                     mapping={"report": "output.report"})))
+        ctx = OptimizationContext(size_hints={("a", "b", "report"): 300_000,
+                                              ("a", "c", "report"): 300_000})
+        r = artifact_transport_pass(g, ctx)
+        assert r.meta["transports"]["a->b:report"]["transport"] == "ARTIFACT"
+        assert r.meta["transports"]["a->c:report"]["transport"] == "ARTIFACT"
+
+    def test_full_pipeline_applies_both_passes(self):
+        g = _graph([_agent("a"), _agent("b"), _agent("c")],
+                   (EdgeMapping("a", "b", reason="x"),
+                    EdgeMapping("c", "b", reason="x"),
+                    EdgeMapping("a", "c", reason="x",
+                                mapping={"v": "output.v"})))
+        assert validate_graph(g) == []
+        r = optimize_graph(g)
+        assert r.status == "OPTIMIZED"  # dependency pass fired
+        assert "artifact_transport" in r.meta
+        assert validate_graph(r.graph) == []
+
+
+class TestOptimizerIntegration:
+    def _proposal_ir(self):
+        return {"objective": "wire two independent tasks", "execution_shape": "GRAPH",
+                "graph": {"id": "t", "entry": "a",
+                          "nodes": {"a": {"type": "agent", "allowed_tools": ["read_file"]},
+                                    "b": {"type": "agent", "allowed_tools": ["read_file"]},
+                                    "c": {"type": "agent", "allowed_tools": ["read_file"]}},
+                          "edges": [{"from": "a", "to": "b", "reason": "x"},
+                                    {"from": "c", "to": "b", "reason": "x"},
+                                    {"from": "a", "to": "c", "reason": "x",
+                                     "mapping": {"v": "output.v"}}]}}
+
+    def test_propose_optimizes_before_fingerprint(self):
+        from wisp.graph.planner import compile_proposal
+        from wisp.graph.types import GraphPolicy
+        p = compile_proposal(self._proposal_ir(), "x",
+                             GraphPolicy(allowed_tools=("read_file",)))
+        assert p["status"] == "APPROVAL_REQUIRED"
+        # a->b removed by the dependency pass: approved hash is the FINAL one.
+        assert any("OPT-001" in d for d in p["diagnostics"])
+
+    def test_end_to_end_optimized_execution(self):
+        import asyncio
+        from wisp.graph.executor import GraphExecutor
+        from wisp.graph.planner import compile_proposal, execute_proposal
+        from wisp.graph.store import GraphStore
+        from wisp.graph.types import GraphPolicy, NodeResult, NodeStatus
+
+        async def run(node, inputs):
+            return NodeResult(node.id, NodeStatus.SUCCESS, output={"v": 1})
+
+        async def no_sleep(s):
+            pass
+
+        import tempfile
+        ws = tempfile.mkdtemp()
+        p = compile_proposal(self._proposal_ir(), "x",
+                             GraphPolicy(allowed_tools=("read_file",)))
+        ex = GraphExecutor(runner=run, workspace=ws,
+                           store=GraphStore(workspace=ws), sleep=no_sleep)
+        r = asyncio.run(execute_proposal(p, ex, {}, approve=True))
+        assert r["status"] == "succeeded"
+        assert len(r["results_by_node"]) == 3
+
+    def test_monotonicity_property_fuzz(self):
+        import random
+        from wisp.graph.optimizer import authority_of, is_narrower_or_equal
+        for seed in range(30):
+            rng = random.Random(7000 + seed)
+            names = [f"n{i}" for i in range(rng.randint(2, 5))]
+            nodes = tuple(_agent(n) for n in names)
+            edges = []
+            for _ in range(rng.randint(1, 6)):
+                a, b = rng.choice(names), rng.choice(names)
+                if a != b:
+                    edges.append(EdgeMapping(a, b, reason="x"))
+            g = Graph(id="m", entrypoint=names[0], nodes=nodes, edges=tuple(edges))
+            if validate_graph(g):
+                continue
+            r = optimize_graph(g)
+            assert r.status in ("UNCHANGED", "OPTIMIZED")
+            final = r.graph
+            ok, reason = is_narrower_or_equal(authority_of(g), authority_of(final))
+            assert ok, (seed, reason)
+            assert validate_graph(final) == []
+
+
+class TestOptimizerRedTeam:
+    def test_pass_cannot_add_tools(self):
+        from wisp.graph.optimizer import authority_of
+        g = _graph([_agent("a"), _agent("b")], _edges(("a", "b")))
+        before = authority_of(g)
+        r = optimize_graph(g)
+        after = authority_of(r.graph)
+        assert set(after["tools"]) <= set(before["tools"])
+
+    def test_pass_never_touches_artifact_store(self):
+        # AST-level: no ArtifactStore instantiation and no .put() call
+        # anywhere in the optimizer (docstrings don't count).
+        import ast
+        import wisp.graph.optimizer as O
+        import wisp.graph.optimizer_passes as OP
+        for mod in (O, OP):
+            tree = ast.parse(open(mod.__file__).read())
+            names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+            calls = {n.func.attr for n in ast.walk(tree)
+                     if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+            assert "ArtifactStore" not in names, mod.__name__
+            assert "put" not in calls, mod.__name__
+
+    def test_malicious_size_hints_ignored_safely(self):
+        from wisp.graph.optimizer import OptimizationContext
+        from wisp.graph.optimizer_passes import artifact_transport_pass
+        ctx = OptimizationContext(size_hints={
+            ("a", "b", "report"): -5,
+            ("a", "b", "x"): "huge",
+            ("../../e", "b", "report"): 10**18,
+        })
+        r = artifact_transport_pass(_mapped_graph(), ctx)
+        assert r.meta["transports"]["a->b:report"]["transport"] == "INLINE"
+        assert not r.changed
+
+    def test_optimization_rejected_audited(self):
+        from wisp.graph.audit import GraphSecurityAuditor
+        import tempfile
+        ws = tempfile.mkdtemp()
+        auditor = GraphSecurityAuditor(workspace=ws)
+        h = auditor.emit("graph.optimization_rejected", graph_id="g",
+                         graph_hash="h", allowed=False, reason="test")
+        assert h and auditor.verify() is None
