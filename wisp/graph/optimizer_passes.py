@@ -62,7 +62,9 @@ def dependency_pass(graph: Graph, ctx: OptimizationContext) -> PassResult:
                 extra={"edge": f"{e.from_node}->{e.to_node}"}))
         else:  # advisory string reason
             keep.append(e)
-            if not e.mapping and not e.condition:
+            target = nodes.get(e.to_node)
+            if (not e.mapping and not e.condition and target is not None
+                    and target.type not in _SIGNAL_TARGETS):
                 diagnostics.append(diag(
                     "OPT-001", "dependency",
                     f"unmapped edge preserved: {verdict}",

@@ -243,7 +243,7 @@ class TestDependencyPass:
         assert validate_graph(g) == []
         r = dependency_pass(g, _ctx())
         assert not r.changed
-        assert any("completion signal" in d["reason"] for d in r.diagnostics)
+        assert len(r.graph.edges) == 4  # approval wiring untouched
 
     def test_removal_never_strands_target(self):
         # a->b, c->b, a->c: at most one incoming edge to b may drop.
