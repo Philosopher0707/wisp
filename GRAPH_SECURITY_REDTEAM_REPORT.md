@@ -172,9 +172,9 @@ compat caps + clean errors; API `wait()` paused-status guard +
 
 ## Residual Risk
 
-1. **G-1 (P2):** graph events are not hash-chained into `ImmutableAuditTrail`.
-   Tampering is *detected* (hash/integrity/row checks) but not *tamper-evident*
-   in the audit sense. Recommended: emit security decisions via existing audit.
+1. **G-1 (CLOSED in Phase 8):** graph events are hash-chained into
+   `ImmutableAuditTrail` via `wisp/graph/audit.py`. See
+   `GRAPH_AUDIT_INTEGRATION_REPORT.md`.
 2. **G-2 (accepted):** no server exposure — mark before any remote graph API.
 3. **G-3 (accepted):** DB-write access implies workspace-write access; a local
    writer can forge success rows. Same trust domain as file writes — no new

@@ -67,7 +67,8 @@ class GraphExecutor:
                  sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
                  store: GraphStore | None = None,
                  artifacts: ArtifactStore | None = None,
-                 emit: EmitFn | None = None) -> None:
+                 emit: EmitFn | None = None,
+                 auditor: Any | None = None) -> None:
         self._runner = runner or _missing_runner
         self.workspace = workspace
         self.max_concurrency = max_concurrency
@@ -76,6 +77,7 @@ class GraphExecutor:
         self._store = store
         self._artifacts = artifacts
         self._emit = emit or _noop_emit
+        self._auditor = auditor
         self._functions: dict[str, FunctionImpl] = {}
         self._cancelled: set[str] = set()
         self._approvals: dict[str, dict[str, bool]] = {}
@@ -93,12 +95,33 @@ class GraphExecutor:
             self._artifacts = ArtifactStore(workspace=self.workspace, store=self._store)
         return self._store, self._artifacts
 
+    def _audit(self, event: str, graph: Graph | None = None, run_id: str = "",
+               node_id: str = "", attempt: int = 0, allowed: bool = False,
+               reason: str = "", evidence: Any = None) -> str:
+        """Best-effort immutable audit; returns entry hash or '' (never raises)."""
+        try:
+            if self._auditor is None:
+                from wisp.graph.audit import GraphSecurityAuditor
+                self._auditor = GraphSecurityAuditor(workspace=self.workspace)
+            return self._auditor.emit(
+                event, graph_id=graph.id if graph else "",
+                graph_hash=graph.fingerprint() if graph else "",
+                run_id=run_id, node_id=node_id, attempt=attempt,
+                allowed=allowed, reason=reason, evidence=evidence)
+        except Exception:
+            return ""
+
     # ── public API ──
     async def run(self, graph: Graph, inputs: dict[str, Any],
                   run_id: str = "") -> dict[str, Any]:
         errors = validate_graph(graph)
         if errors:
-            raise ValueError("invalid graph: " + "; ".join(errors[:5]))
+            reason = "; ".join(errors[:5])
+            gov = any(k in reason for k in ("policy", "not in graph", "forbidden",
+                                            "allowed_"))
+            self._audit("graph.policy_rejected" if gov else "graph.validation_rejected",
+                        graph, "", allowed=False, reason=reason)
+            raise ValueError("invalid graph: " + reason)
         store, _ = self._stores()
         rid = run_id or new_run_id()
         if not _valid_run_id(rid):
@@ -130,6 +153,10 @@ class GraphExecutor:
         if row is None:
             raise KeyError(f"unknown run {run_id}")
         if row["graph_hash"] != graph.fingerprint():
+            self._audit("graph.fingerprint_mismatch", graph, run_id, allowed=False,
+                        reason="stored graph hash != current definition; resume refused",
+                        evidence={"stored": str(row["graph_hash"])[:64],
+                                  "current": graph.fingerprint()})
             raise ValueError(f"run {run_id} started with graph hash {row['graph_hash']}; "
                              f"definition changed ({graph.fingerprint()}). Refusing.")
         try:
@@ -138,6 +165,9 @@ class GraphExecutor:
             saved_def = {}
         saved_ws = saved_def.get("workspace", "")
         if saved_ws and os.path.realpath(saved_ws) != os.path.realpath(self.workspace):
+            self._audit("graph.state_tamper", graph, run_id, allowed=False,
+                        reason="resume workspace != run workspace",
+                        evidence={"saved": str(saved_ws)[:256]})
             raise PermissionError(f"run {run_id} belongs to workspace {saved_ws!r}; "
                                   f"refusing resume from {self.workspace!r}")
         contracts = {n.id: n.effective_contract() for n in graph.nodes}
@@ -151,8 +181,12 @@ class GraphExecutor:
             try:
                 snap = json.loads(saved["state"])
             except (ValueError, TypeError):
+                self._audit("graph.state_tamper", graph, run_id, allowed=False,
+                            reason="checkpoint JSON corrupt; resume refused")
                 raise ValueError(f"run {run_id}: checkpoint corrupt; refusing resume")
             if not isinstance(snap, dict):
+                self._audit("graph.state_tamper", graph, run_id, allowed=False,
+                            reason="checkpoint shape invalid; resume refused")
                 raise ValueError(f"run {run_id}: checkpoint corrupt; refusing resume")
             seq = int(snap.get("seq", saved["seq"]) or 0)
             raw_taken = snap.get("taken", {})
@@ -308,10 +342,14 @@ class GraphExecutor:
                     # Stale worker: a newer attempt already launched (retry /
                     # correction / resume). The stale result is dropped and the
                     # attempt row is marked superseded — never applied.
+                    audit_hash = self._audit(
+                        "graph.stale_rejected", graph, rid, nid, generation,
+                        allowed=False, reason="superseded attempt completed late",
+                        evidence={"current_attempt": attempts.get(nid, 0)})
                     self._event(store, rid, "graph.node_retry",
                                 {"node_id": nid, "stale_attempt": generation,
                                  "current_attempt": attempts.get(nid, 0),
-                                 "dropped": True})
+                                 "dropped": True, "audit_hash": audit_hash})
                     store.put_node_run(_attempt_nrid(rid, nid, generation), rid, nid,
                                        "cancelled", generation, "", {},
                                        f"stale:{rid}:{nid}:{generation}",
@@ -339,7 +377,9 @@ class GraphExecutor:
                     await asyncio.gather(*in_flight, return_exceptions=True)
                 in_flight.clear()
                 store.set_run_status(rid, RunStatus.CANCELLED.value)
-                self._event(store, rid, "graph.cancelled", {})
+                audit_hash = self._audit("graph.cancel", graph, rid, allowed=True,
+                                         reason="operator cancel")
+                self._event(store, rid, "graph.cancelled", {"audit_hash": audit_hash})
                 return _final(graph, rid, RunStatus.CANCELLED, results, "cancelled", started)
             if _over_budget(budget, _tokens(results), _cost(results), time.time() - started):
                 for t in in_flight:
@@ -348,7 +388,12 @@ class GraphExecutor:
                     await asyncio.gather(*in_flight, return_exceptions=True)
                 in_flight.clear()
                 store.set_run_status(rid, RunStatus.FAILED.value, "budget_exceeded")
-                self._event(store, rid, "graph.failed", {"error": "budget_exceeded"})
+                audit_hash = self._audit("graph.budget_exceeded", graph, rid,
+                                         allowed=False, reason="graph budget exceeded",
+                                         evidence={"tokens": _tokens(results),
+                                                   "cost_usd": _cost(results)})
+                self._event(store, rid, "graph.failed", {"error": "budget_exceeded",
+                                                         "audit_hash": audit_hash})
                 return _final(graph, rid, RunStatus.FAILED, results,
                               "budget_exceeded", started)
 
@@ -370,18 +415,30 @@ class GraphExecutor:
                     continue
                 if node.type == NodeType.APPROVAL:
                     await drain()
-                    decision = self._approvals.get(rid, {}).get(nid)
+                    # Fail closed: only an explicit True grants. Truthy
+                    # non-bools ("false", 1, [...]) must never approve.
+                    decision = self._approvals.get(rid, {}).pop(nid, None)
+                    granted = decision is True
                     if decision is None:
                         store.set_run_status(rid, RunStatus.AWAITING_APPROVAL.value)
                         seq += 1
                         store.put_checkpoint(rid, seq, _snapshot(sched, results))
+                        audit_hash = self._audit("graph.approval_requested", graph, rid,
+                                                 nid, allowed=False,
+                                                 reason="human decision required")
                         self._event(store, rid, "graph.paused",
-                                    {"node_id": nid, "reason": "approval_required"})
+                                    {"node_id": nid, "reason": "approval_required",
+                                     "audit_hash": audit_hash})
                         return _final(graph, rid, RunStatus.AWAITING_APPROVAL,
                                       results, f"awaiting approval: {nid}", started)
-                    sched.statuses[nid] = NodeStatus.SUCCESS if decision else NodeStatus.CANCELLED
+                    audit_hash = self._audit(
+                        "graph.approval_granted" if granted else "graph.approval_denied",
+                        graph, rid, nid, allowed=granted,
+                        reason="resume-channel decision")
+                    sched.statuses[nid] = NodeStatus.SUCCESS if granted else NodeStatus.CANCELLED
                     results[nid] = NodeResult(nid, sched.statuses[nid],
-                                              output={"approved": decision})
+                                              output={"approved": granted,
+                                                      "audit_hash": audit_hash})
                     self._event(store, rid,
                                 "graph.gate_opened" if decision else "graph.gate_closed",
                                 {"node_id": nid})
@@ -441,9 +498,13 @@ class GraphExecutor:
         else:
             status = RunStatus.SUCCEEDED
         store.set_run_status(rid, status.value, "; ".join(failed))
+        audit_hash = self._audit("graph.run_terminated", graph, rid,
+                                 allowed=(status == RunStatus.SUCCEEDED),
+                                 reason=status.value,
+                                 evidence={"failed": failed, "incomplete": incomplete})
         self._event(store, rid,
                     "graph.completed" if status == RunStatus.SUCCEEDED else "graph.failed",
-                    {"sinks": sinks, "failed": failed})
+                    {"sinks": sinks, "failed": failed, "audit_hash": audit_hash})
         return _final(graph, rid, status, results, "", started)
 
     # ── node execution (no model logic here; runner owns it) ──
@@ -507,18 +568,27 @@ class GraphExecutor:
         contract = node.effective_contract()
         if result.status in FAILED_NODE_STATUSES and result.attempt < contract.retry_policy.max_attempts:
             if result.status == NodeStatus.TIMEOUT and not contract.retry_policy.retry_on_timeout:
-                pass
+                self._audit("graph.retry_refused", graph, rid, node.id, result.attempt,
+                            allowed=False, reason="timeout retry not opted in")
             elif contract.retry_policy.unsafe_side_effects or not contract.idempotent:
+                audit_hash = self._audit("graph.retry_refused", graph, rid, node.id,
+                                         result.attempt, allowed=False,
+                                         reason="unsafe or non-idempotent side effects")
                 self._event(store, rid, "graph.node_failed",
                             {"node_id": node.id, "error": result.message,
-                             "retry": "refused-unsafe"})
+                             "retry": "refused-unsafe", "audit_hash": audit_hash})
             else:
                 shift = min(max(result.attempt - 1, 0), 10)
                 delay = min(contract.retry_policy.backoff_base_s * (2 ** shift),
                             contract.retry_policy.backoff_max_s)
+                audit_hash = self._audit("graph.retry_allowed", graph, rid, node.id,
+                                         result.attempt, allowed=True,
+                                         reason=f"attempt {result.attempt + 1}",
+                                         evidence={"backoff_s": delay,
+                                                   "error": result.error_code})
                 self._event(store, rid, "graph.node_retry",
                             {"node_id": node.id, "attempt": result.attempt + 1,
-                             "backoff_s": delay})
+                             "backoff_s": delay, "audit_hash": audit_hash})
                 await self._sleep(delay)
                 # Re-queue ONLY the failed unit; successes are preserved.
                 sched.statuses[node.id] = NodeStatus.PENDING
@@ -532,14 +602,44 @@ class GraphExecutor:
         label = _label_for(node, result.output)
         if label:
             sched.taken[node.id] = label
-            self._event(store, rid, "graph.route_selected"
-                        if node.type == NodeType.ROUTER else "graph.edge_evaluated",
-                        {"node_id": node.id, "label": label})
+            if node.type == NodeType.GATE:
+                pass  # audited gate emit below (single event, with hash)
+            elif node.type == NodeType.ROUTER:
+                raw = _control.classify_label(result.output if isinstance(result.output, dict)
+                                              else {})
+                unknown = raw not in node.routes
+                audit_hash = self._audit(
+                    "graph.route_unknown" if unknown else "graph.route_selected",
+                    graph, rid, node.id, result.attempt, allowed=not unknown,
+                    reason=f"label {raw!r} -> {label!r}",
+                    evidence={"label": raw, "target": label})
+                self._event(store, rid, "graph.route_selected",
+                            {"node_id": node.id, "label": label,
+                             "unknown": unknown, "audit_hash": audit_hash})
+            else:
+                self._event(store, rid, "graph.edge_evaluated",
+                            {"node_id": node.id, "label": label})
         if node.type == NodeType.VERIFIER:
+            verdict = result.output.get("decision", "REJECT") \
+                if isinstance(result.output, dict) else "REJECT"
+            audit_hash = self._audit(f"graph.verification_{verdict.lower()}", graph,
+                                     rid, node.id, result.attempt,
+                                     allowed=(verdict == "ALLOW"),
+                                     reason=f"verdict {verdict}",
+                                     evidence={"reason_codes": result.output.get("reason_codes", [])
+                                               if isinstance(result.output, dict) else []})
             self._event(store, rid, "graph.verification_accepted"
-                        if result.output.get("decision") == "ALLOW"
-                        else "graph.verification_rejected",
-                        {"node_id": node.id, "verdict": result.output.get("decision")})
+                        if verdict == "ALLOW" else "graph.verification_rejected",
+                        {"node_id": node.id, "verdict": verdict,
+                         "audit_hash": audit_hash})
+        if node.type == NodeType.GATE and label in ("allow", "deny"):
+            audit_hash = self._audit("graph.gate_decision", graph, rid, node.id,
+                                     result.attempt, allowed=(label == "allow"),
+                                     reason=f"gate {label}",
+                                     evidence={"function": node.function})
+            self._event(store, rid, "graph.edge_evaluated",
+                        {"node_id": node.id, "label": label,
+                         "audit_hash": audit_hash})
         self._event(store, rid, "graph.node_completed" if result.ok else "graph.node_failed",
                     {"node_id": node.id, "status": result.status.value,
                      "usage": result.usage()})
@@ -574,8 +674,13 @@ class GraphExecutor:
                         sched.statuses[m] = NodeStatus.PENDING
                         results.pop(m, None)
                         sched.taken.pop(m, None)
+                    audit_hash = self._audit(
+                        "graph.retry_allowed", graph, rid, e.to_node, 0,
+                        allowed=True, reason="correction edge",
+                        evidence={"from": node.id, "label": label})
                     self._event(store, rid, "graph.node_retry",
-                                {"node_id": e.to_node, "via": "correction_edge"})
+                                {"node_id": e.to_node, "via": "correction_edge",
+                                 "audit_hash": audit_hash})
                 return True
         return False
 

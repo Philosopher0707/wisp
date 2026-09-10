@@ -90,6 +90,17 @@ def _main(verb: str, args: list[str], workspace: str) -> int:
                 print("invalid:")
                 for e in errors:
                     print(f"  ✗ {e}")
+                try:
+                    from wisp.graph.audit import GraphSecurityAuditor
+                    reason = "; ".join(errors[:5])
+                    gov = any(k in reason for k in ("policy", "not in graph",
+                                                   "forbidden", "allowed_"))
+                    GraphSecurityAuditor(workspace=workspace).emit(
+                        "graph.policy_rejected" if gov else "graph.validation_rejected",
+                        graph_id=graph.id, graph_hash=graph.fingerprint(),
+                        allowed=False, reason=reason)
+                except Exception:
+                    pass
                 return 1
             print(f"✓ {graph.id} v{graph.version}: valid "
                   f"({len(graph.nodes)} nodes, {len(graph.edges)} edges)")
