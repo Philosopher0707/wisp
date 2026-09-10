@@ -279,25 +279,16 @@ def _resolve_path(path: str, workspace: str) -> Path:
     Returns the resolved absolute Path if it's within the workspace.
     Raises ToolError on path traversal or symlink escape attempts.
     """
-    real_ws = os.path.realpath(workspace)
-    if Path(path).is_absolute():
-        real_target = os.path.realpath(path)
-    else:
-        real_target = os.path.realpath(os.path.join(real_ws, path))
+    from wisp.pathsec import resolve_contained
 
-    # Exact match (e.g., path is "." or the workspace itself)
-    if real_target == real_ws:
-        return Path(real_target)
-
-    # Prefix check: target must be inside workspace, not a sibling
-    # Use os.sep to avoid matching /workspace2 when workspace is /workspace
-    prefix = real_ws if real_ws.endswith(os.sep) else real_ws + os.sep
-    if not real_target.startswith(prefix):
+    try:
+        return Path(resolve_contained(workspace, path, allow_absolute=True))
+    except ValueError as exc:
+        real_target = os.path.realpath(path if Path(path).is_absolute() else os.path.join(os.path.realpath(workspace), path))
         raise ToolError(
             f"Access denied: {path} resolves to {real_target}, "
-            f"which is outside workspace {real_ws}"
-        )
-    return Path(real_target)
+            f"which is outside workspace {os.path.realpath(workspace)}"
+        ) from exc
 def _safe_open_read(path: str, workspace: str):
     """Open a file for reading with TOCTOU-safe flags.
 

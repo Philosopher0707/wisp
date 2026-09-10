@@ -47,12 +47,10 @@ def content_hash(payload: Any) -> str:
 
 
 def _contain(directory: str, name: str) -> str:
-    """Realpath containment; raises ValueError on escape."""
-    base = os.path.realpath(directory)
-    path = os.path.realpath(os.path.join(base, name))
-    if path != base and not path.startswith(base + os.sep):
-        raise ValueError(f"artifact path escapes store: {name!r}")
-    return path
+    """Canonical containment (see wisp.pathsec). Kept as a thin local alias
+    so artifact call sites stay readable; semantics live in one place."""
+    from wisp.pathsec import resolve_contained
+    return resolve_contained(directory, name, allow_absolute=False)
 
 
 class ArtifactStore:

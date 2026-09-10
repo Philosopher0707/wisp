@@ -51,14 +51,9 @@ def sha256_text(text: str) -> str:
 
 
 def _contain(root: str, rel: str) -> str:
-    """Realpath containment mirroring tools._utils._resolve_path."""
-    base = os.path.realpath(root)
-    if os.path.isabs(rel):
-        raise ValueError(f"absolute path forbidden: {rel!r}")
-    path = os.path.realpath(os.path.join(base, rel))
-    if path != base and not path.startswith(base + os.sep):
-        raise ValueError(f"path escapes workspace: {rel!r}")
-    return path
+    """Canonical containment (see wisp.pathsec). Workspace-relative only."""
+    from wisp.pathsec import resolve_contained
+    return resolve_contained(root, rel, allow_absolute=False)
 
 
 def _norm_rel(path: str) -> str:
