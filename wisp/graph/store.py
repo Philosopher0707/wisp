@@ -72,6 +72,20 @@ CREATE TABLE IF NOT EXISTS graph_checkpoints (
   created_at REAL NOT NULL,
   PRIMARY KEY (run_id, seq)
 );
+CREATE TABLE IF NOT EXISTS graph_proposals (
+  proposal_id TEXT PRIMARY KEY,
+  objective TEXT NOT NULL DEFAULT '',
+  planner_model TEXT NOT NULL DEFAULT '',
+  planner_provider TEXT NOT NULL DEFAULT '',
+  ir_hash TEXT NOT NULL DEFAULT '',
+  ir_json TEXT NOT NULL DEFAULT '{}',
+  graph_hash TEXT NOT NULL DEFAULT '',
+  graph_id TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'PROPOSED',
+  diagnostics TEXT NOT NULL DEFAULT '[]',
+  created_at REAL NOT NULL,
+  decided_at REAL NOT NULL DEFAULT 0
+);
 """
 
 
@@ -87,6 +101,9 @@ def _db_path(workspace: str = "") -> str:
 
 def new_run_id() -> str:
     return f"graph-{uuid.uuid4().hex[:12]}"
+
+
+MAX_IR_JSON = 256_000
 
 
 class GraphStore:
@@ -218,6 +235,53 @@ class GraphStore:
             row = conn.execute("SELECT * FROM graph_checkpoints WHERE run_id=? "
                                "ORDER BY seq DESC LIMIT 1", (run_id,)).fetchone()
             return dict(row) if row else None
+
+    # ── proposals (planner IR + compiled hash + lifecycle status) ──
+    def put_proposal(self, proposal: dict[str, Any]) -> None:
+        import time as _t
+        with self._lock, self._conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO graph_proposals(proposal_id,objective,"
+                "planner_model,planner_provider,ir_hash,ir_json,graph_hash,graph_id,"
+                "status,diagnostics,created_at,decided_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (proposal["proposal_id"], str(proposal.get("objective", ""))[:2048],
+                 str(proposal.get("planner_model", ""))[:256],
+                 str(proposal.get("planner_provider", ""))[:128],
+                 str(proposal.get("ir_hash", ""))[:64],
+                 json.dumps(proposal.get("ir", {}), default=str)[:MAX_IR_JSON],
+                 str(proposal.get("graph_hash", ""))[:64],
+                 str(proposal.get("graph_id", ""))[:128],
+                 str(proposal.get("status", "PROPOSED"))[:32],
+                 json.dumps(proposal.get("diagnostics", []), default=str)[:8192],
+                 float(proposal.get("created_at", _t.time())), 0))
+
+    def get_proposal(self, proposal_id: str) -> dict[str, Any] | None:
+        with self._lock, self._conn() as conn:
+            row = conn.execute("SELECT * FROM graph_proposals WHERE proposal_id=?",
+                               (proposal_id,)).fetchone()
+            if row is None:
+                return None
+            d = dict(row)
+            try:
+                d["ir"] = json.loads(d.pop("ir_json", "{}") or "{}")
+                d["diagnostics"] = json.loads(d.pop("diagnostics", "[]") or "[]")
+            except (ValueError, TypeError):
+                return None
+            return d
+
+    def set_proposal_status(self, proposal_id: str, status: str) -> None:
+        import time as _t
+        with self._lock, self._conn() as conn:
+            conn.execute("UPDATE graph_proposals SET status=?, decided_at=? "
+                         "WHERE proposal_id=?", (status, _t.time(), proposal_id))
+
+    def list_proposals(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self._lock, self._conn() as conn:
+            rows = conn.execute("SELECT proposal_id,objective,graph_id,graph_hash,"
+                                "status,created_at FROM graph_proposals "
+                                "ORDER BY created_at DESC LIMIT ?",
+                                (_clamp_limit(limit),)).fetchall()
+            return [dict(r) for r in rows]
 
 
 def _clamp_limit(limit: Any) -> int:
