@@ -1207,8 +1207,8 @@ class ToolExecutor:
         else:
             # Per-tool timeout to prevent hanging the agent on stuck tools
             tool_timeout = getattr(self.config, "tool_timeout", 300) if self.config else 300
-            # Lazy import: wisp.core.__init__ pulls in graph_state, so a
-            # module-level import would risk a cycle (precedent: stateless.py).
+            # Lazy import: keeps this hot path decoupled from wisp.core
+            # package init (precedent: stateless.py).
             from wisp.core.contracts import ToolRisk, risk_for_tool
             _pool = (
                 self._network_pool

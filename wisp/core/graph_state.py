@@ -1,5 +1,7 @@
 """Agentic graph loop — state schema and primitives.
 
+.. deprecated:: 12.5A (QUARANTINED legacy runtime — see agentic_graph.py header).
+
 Addresses the 10 gap terms from the architecture audit:
 
  1. State Schema — typed per-turn GraphState (replaces the ad-hoc session dict + verification locals)

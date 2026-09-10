@@ -1,5 +1,7 @@
 """Agentic graph loop — node implementations.
 
+.. deprecated:: 12.5A (QUARANTINED legacy runtime — see agentic_graph.py header).
+
 Four spec nodes + shared helpers:
 
   planner_coder      — LLM call that produces tool_calls (delegates to WispAgentCore provider streaming)

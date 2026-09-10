@@ -256,7 +256,7 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
     "autonomous": {
         "type": bool,
         "default": False,
-        "description": "Fully autonomous coding agent — auto-approves safe writes/bash, drives GraphRunner without human prompts (Cursor/Aider mode). Dangerous commands still blocked.",
+        "description": "Fully autonomous coding agent — auto-approves safe writes/bash without human prompts (Cursor/Aider mode). Dangerous commands still blocked. (Legacy GraphRunner reference removed in 12.5A; canonical runtime is wisp/graph.)",
         "env_var": "WISP_AUTONOMOUS",
     },
     "tool_pool_size": {

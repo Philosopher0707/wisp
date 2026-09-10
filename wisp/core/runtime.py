@@ -375,17 +375,11 @@ class AgentRuntime:
             except Exception:
                 logger.debug("live context prune failed — continuing unpruned", exc_info=True)
 
-            # ── Autonomous mode: hydrate graph state + synthesize approval handler
-            # so safe coding turns run fully autonomously (Cursor/Aider-like) while
-            # dangerous commands still hit the hard block.
-            graph_state = None
+            # ── Autonomous mode: synthesize approval handler so safe coding
+            # turns run fully autonomously (Cursor/Aider-like) while dangerous
+            # commands still hit the hard block. (Legacy GraphState hydration
+            # removed in 12.5A: nothing read session["graph_state"].)
             if self.config is not None and bool(getattr(self.config, "autonomous", False)):
-                try:
-                    from wisp.core.graph_state import GraphState as _GraphState
-                    graph_state = _GraphState.from_session(session, self.config)
-                    session["graph_state"] = graph_state.to_dict()
-                except Exception as e:
-                    logger.debug("graph_state hydration failed — continuing without it: %s", e, exc_info=True)
                 if approval_handler is None:
                     approval_handler = self._autonomous_approval_handler()
 

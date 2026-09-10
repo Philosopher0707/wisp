@@ -1,5 +1,12 @@
 """Agentic graph loop — orchestrator (END vs fallback routing, circuit breaker, oscillation guards).
 
+.. deprecated:: 12.5A (QUARANTINED legacy runtime)
+   No new consumers. No new features. Migration target: ``wisp/graph/``
+   (GraphExecutor + scheduler + persistence + audit). Removal condition:
+   doctor graph-integrity check + legacy test trio
+   (test_agentic_graph/test_graph_nodes/test_graph_state) migrated or
+   deleted with it. See PHASE12_5 report §12.5A.
+
 This is the *additive* graph layer promised by the audit. It does not replace
 `WispAgentCore.turn()` or `AgentRuntime.run_turn()` — those remain the backwards-
 compatible hot paths. A graph loop is one object:
