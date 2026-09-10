@@ -120,7 +120,7 @@ class BackgroundRunner:
         run = BackgroundRun.from_db_row(row)
 
         try:
-            from wisp.entry import run_headless
+            from wisp.headless import run_headless
 
             result = await run_headless(
                 prompt=run.prompt,

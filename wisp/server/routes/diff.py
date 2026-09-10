@@ -87,7 +87,7 @@ async def inline_edit(req: InlineEditRequest, request: Request):
 Return ONLY the replacement code for the selection. No explanation, no markdown fences.
 """
 
-    from wisp.entry import run_headless
+    from wisp.headless import run_headless
     result = await run_headless(
         prompt=edit_prompt,
         model=req.model,

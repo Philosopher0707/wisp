@@ -79,7 +79,7 @@ async def test_cancel_persists_cancelled_not_running():
     store.bg_create({"id": "bg-x", "status": "pending"})
     store.bg_update("bg-x", status="running", started_at=time.time())
 
-    import wisp.entry as entry_mod
+    import wisp.headless as entry_mod
     orig = entry_mod.run_headless
 
     async def _parked(**kwargs):

@@ -209,7 +209,7 @@ class ArenaRunner:
                         model: str) -> tuple[str, str, list[str], int]:
         """Run the prompt with a single model using CompositionRoot."""
         import time
-        from wisp.entry import run_headless
+        from wisp.headless import run_headless
         start = time.time()
 
         try:

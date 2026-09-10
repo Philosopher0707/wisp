@@ -275,7 +275,7 @@ def cmd_print(prompt, model=None, session_id=None, output_format="json", quiet=F
             sys.stderr.write("No local server found — running agent in-process...\n")
         try:
             import asyncio
-            from wisp.entry import run_headless
+            from wisp.headless import run_headless
 
             from wisp.config import safe_getcwd
 

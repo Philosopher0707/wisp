@@ -149,7 +149,7 @@ class TestHeadlessMode:
         root.runtime.get_or_create_session = mock_get_session
         root.runtime.run_turn = mock_run_turn
 
-        with patch("wisp.entry.CompositionRoot") as mock_root:
+        with patch("wisp.headless.CompositionRoot") as mock_root:
             mock_root.return_value = root
             result = await run_headless("hello", model="test")
             assert isinstance(result, dict)

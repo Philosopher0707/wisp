@@ -118,7 +118,7 @@ def _extract_json(text: str) -> str | None:
 
 async def _run_agent_headless(prompt: str, model: str | None = None, permission_mode: str = "read_only", root=None) -> dict:
     """Run agent headlessly and return result."""
-    from wisp.entry import run_headless
+    from wisp.headless import run_headless
     return await run_headless(
         prompt=prompt,
         model=model,

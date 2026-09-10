@@ -31,7 +31,7 @@ async def _run_agent_headless(
     Delegates to wisp.entry.run_headless() for consistent
     CompositionRoot-based execution.
     """
-    from wisp.entry import run_headless
+    from wisp.headless import run_headless
 
     start = time.time()
     result = await run_headless(

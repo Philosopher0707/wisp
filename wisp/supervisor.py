@@ -117,7 +117,7 @@ class WispSupervisor:
 
         failed = False
         try:
-            from wisp.entry import run_headless
+            from wisp.headless import run_headless
             result = await run_headless(
                 prompt=prompt,
                 model=getattr(config, "model", None),

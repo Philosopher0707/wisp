@@ -1,4 +1,4 @@
-"""TDD for run_headless() in wisp.entry.
+"""TDD for run_headless() (canonical home wisp.headless since 12.5B).
 
 Tests the headless execution path using HeadlessTransport + CompositionRoot.
 """
@@ -13,17 +13,17 @@ class TestRunHeadless:
     @pytest.fixture(autouse=True)
     def _clear_headless_cache(self):
         """Clear the module-level headless root cache between tests."""
-        from wisp import entry
+        from wisp import headless as entry
         entry._headless_root = None
         yield
         entry._headless_root = None
 
     @pytest.mark.asyncio
     async def test_run_headless_returns_result(self):
-        from wisp.entry import run_headless
+        from wisp.headless import run_headless
 
-        with patch("wisp.entry.CompositionRoot") as mock_root:
-            with patch("wisp.entry.WispConfig") as mock_config:
+        with patch("wisp.headless.CompositionRoot") as mock_root:
+            with patch("wisp.headless.WispConfig") as mock_config:
                 config_instance = MagicMock()
                 config_instance.model = "test-model"
                 config_instance.workspace = "/tmp"
@@ -58,10 +58,10 @@ class TestRunHeadless:
 
     @pytest.mark.asyncio
     async def test_run_headless_handles_errors(self):
-        from wisp.entry import run_headless
+        from wisp.headless import run_headless
 
-        with patch("wisp.entry.CompositionRoot") as mock_root:
-            with patch("wisp.entry.WispConfig") as mock_config:
+        with patch("wisp.headless.CompositionRoot") as mock_root:
+            with patch("wisp.headless.WispConfig") as mock_config:
                 config_instance = MagicMock()
                 config_instance.model = "test-model"
                 config_instance.workspace = "/tmp"
@@ -96,10 +96,10 @@ class TestRunHeadless:
 
     @pytest.mark.asyncio
     async def test_run_headless_uses_session_id(self):
-        from wisp.entry import run_headless
+        from wisp.headless import run_headless
 
-        with patch("wisp.entry.CompositionRoot") as mock_root:
-            with patch("wisp.entry.WispConfig") as mock_config:
+        with patch("wisp.headless.CompositionRoot") as mock_root:
+            with patch("wisp.headless.WispConfig") as mock_config:
                 config_instance = MagicMock()
                 config_instance.model = "test-model"
                 config_instance.workspace = "/tmp"
