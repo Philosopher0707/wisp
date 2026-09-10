@@ -232,14 +232,18 @@ def verification_pass(graph: Graph, ctx: OptimizationContext) -> PassResult:
     diagnostics: list = []
     working = graph
     inserted_any = False
+    adj = _adj(working)
     for S in sorted(_sinks(working), key=lambda n: n.id):
-        if S.type in (NodeType.VERIFIER, NodeType.APPROVAL, NodeType.GATE):
-            continue  # human/deterministic check downstream: no obligation
+        if S.type in (NodeType.VERIFIER, NodeType.APPROVAL, NodeType.GATE,
+                      NodeType.JOIN, NodeType.ROUTER):
+            continue  # human/deterministic/fan-in/control sinks: no obligation.
+            # (JOIN/ROUTER sinks cannot take a gated insertion, so enumerating
+            # obligations there would be unactionable noise.)
         for P in sorted(n.id for n in working.nodes
                         if n.type == NodeType.AGENT and n.id != S.id):
-            if S.id not in _reachable(working, P):
+            if S.id not in _reachable(working, P, adj):
                 continue
-            by, detail = _satisfied_by(working, P, S.id)
+            by, detail = _satisfied_by(working, P, S.id, adj)
             if by is not None:
                 diagnostics.append(diag(
                     "OPT-002", "verification",
@@ -257,6 +261,7 @@ def verification_pass(graph: Graph, ctx: OptimizationContext) -> PassResult:
             else:
                 working = new_graph
                 inserted_any = True
+                adj = _adj(working)
                 diagnostics.append(diag(
                     "OPT-002", "verification",
                     f"inserted verifier gating {S.id} on {P} output",
@@ -270,7 +275,8 @@ def _sinks(graph: Graph) -> list:
     return [n for n in graph.nodes if n.id not in sources]
 
 
-def _satisfied_by(graph: Graph, producer: str, sink: str) -> tuple[str | None, str]:
+def _satisfied_by(graph: Graph, producer: str, sink: str,
+                  adj: dict[str, list] | None = None) -> tuple[str | None, str]:
     """Returns (guard_id, detail) or (None, detail). Proof, not presence.
 
     A verifier credits an obligation only when it (a) directly consumes the
@@ -284,12 +290,14 @@ def _satisfied_by(graph: Graph, producer: str, sink: str) -> tuple[str | None, s
     for v in sorted(verifiers):
         if producer not in fed_by.get(v, set()):
             continue  # V never sees P's output: cannot vouch for it
-        if sink not in _reachable(graph, v):
+        if sink not in _reachable(graph, v, adj):
             continue
-        if sink not in _reachable(graph, producer, skip_accept_from=frozenset({v})):
+        if sink not in _reachable(graph, producer, adj,
+                                  skip_accept_from=frozenset({v})):
             return v, f"all {producer}~{sink} paths gated by {v}"
     approvals = frozenset(n.id for n in graph.nodes if n.type == NodeType.APPROVAL)
-    if approvals and sink not in _reachable(graph, producer, skip_nodes=approvals):
+    if approvals and sink not in _reachable(graph, producer, adj,
+                                            skip_nodes=approvals):
         return "__approval__", "human gate on every path"
     return None, "no gating verifier or approval on the path"
 
@@ -320,7 +328,7 @@ def _try_insert(graph: Graph, ctx: OptimizationContext, producer: str,
     if others:
         return None, f"sink has {len(others)} other unconditional predecessors"
     # 3. No cycle risk: sink must not already reach the producer.
-    if producer in _reachable(graph, sink_node.id):
+    if producer in _reachable(graph, sink_node.id, _adj(graph)):
         return None, "insertion would close a cycle"
     # 4. Host verifier profile, fully specified and authority-contained.
     prof, why = _profile_ok(ctx, graph)
@@ -396,8 +404,140 @@ def _profile_ok(ctx: OptimizationContext, graph: Graph) -> tuple[dict | None, st
     return {"tools": tools, "model": model[:256], "provider": provider[:128]}, ""
 
 
+
+
+def resource_pass(graph: Graph, ctx: OptimizationContext) -> PassResult:
+    """OPT-004: fanout/resource analysis + provable concurrency clamp.
+
+    The ONLY topology-adjacent mutation is lowering
+    ``policies.max_concurrency`` — overlap-only, so outputs, failures,
+    joins, verifiers, approvals, and mappings are untouched. Everything else
+    (fanout shape, branch count, duplicate similarity) is advisory: fanout
+    encodes independence/diversity/isolation, never mere cost.
+
+    Clamp target = min(graph, active policy, node count), applied only when
+    strictly lower AND wall-safe (no finite runtime budget the sequential
+    worst case could newly trip). Verifiers/approvals/joins/routers are
+    never modified — preservation holds structurally.
+    """
+    import dataclasses
+    diagnostics: list = []
+    downstream: dict[str, list] = {}
+    inbound_join: dict[str, int] = {}
+    nodes = {n.id: n for n in graph.nodes}
+    for e in graph.edges:
+        downstream.setdefault(e.from_node, []).append(e)
+        if e.to_node in nodes and nodes[e.to_node].type == NodeType.JOIN:
+            inbound_join[e.to_node] = inbound_join.get(e.to_node, 0) + 1
+    for nid in sorted(downstream):
+        outs = downstream[nid]
+        width = len(outs)
+        if width > ctx.max_fanout:
+            diagnostics.append(diag(
+                "OPT-004", "resource",
+                f"fanout {width} at {nid} exceeds recommended {ctx.max_fanout}",
+                "advisory only: fanout encodes independence; not serialized",
+                node=nid, extra={"width": str(width)}))
+        # Bounded retry amplification: branches × worst branch retries.
+        t = 1
+        for e in outs:
+            if e.to_node not in nodes:
+                continue
+            try:
+                t = max(t, int(nodes[e.to_node].effective_contract()
+                               .retry_policy.max_attempts))
+            except (TypeError, ValueError):
+                continue
+        amp = min(width * t, 10 ** 12)
+        if width > 1 and t > 1:
+            diagnostics.append(diag(
+                "OPT-004", "resource",
+                f"effective work envelope at {nid}: {width} branches × {t} attempts",
+                "bounded; retries unchanged", node=nid,
+                extra={"envelope": str(amp)}))
+    for jid in sorted(inbound_join):
+        if inbound_join[jid] > ctx.max_branches:
+            diagnostics.append(diag(
+                "OPT-004", "resource",
+                f"join {jid} has {inbound_join[jid]} inbound branches "
+                f"(recommended ≤ {ctx.max_branches})",
+                "advisory only: join encodes completeness/quorum", node=jid))
+    _duplicates(graph, nodes, diagnostics)
+    # Provable clamp: min(graph, active policy, node count).
+    current = graph.policies.max_concurrency
+    target = min(current, len(graph.nodes))
+    if ctx.policy is not None:
+        target = min(target, ctx.policy.max_concurrency)
+    target = max(1, min(target, 128))
+    if target >= current:
+        return PassResult(graph, changed=False, diagnostics=diagnostics)
+    if not _wall_safe(graph, target):
+        diagnostics.append(diag(
+            "OPT-004", "resource",
+            f"concurrency {current}->{target} withheld: finite runtime budget "
+            f"the sequential worst case could trip",
+            "advisory only", extra={"kept": str(current)}))
+        return PassResult(graph, changed=False, diagnostics=diagnostics)
+    new_policies = dataclasses.replace(graph.policies, max_concurrency=target)
+    diagnostics.append(diag(
+        "OPT-004", "resource",
+        f"max_concurrency {current}->{target} (node-count/policy bound)",
+        "overlap-only change; semantics preserved", extra={"kept": str(target)}))
+    return PassResult(
+        Graph(id=graph.id, version=graph.version, entrypoint=graph.entrypoint,
+              nodes=graph.nodes, edges=graph.edges, policies=new_policies),
+        changed=True, diagnostics=diagnostics)
+
+
+def _wall_safe(graph: Graph, target: int) -> bool:
+    """Reduction is wall-safe only with a proof: the serial total (sum of
+    node timeouts, an upper bound on wall time at ANY concurrency ≥ 1) must
+    fit the finite runtime budget. Sufficient, not necessary — when it fails,
+    preserve + advisory. All timeouts are validated finite upstream."""
+    budget = graph.policies.max_runtime_s
+    if budget is None or target <= 0:
+        return budget is None
+    total = 0.0
+    for n in graph.nodes:
+        try:
+            total += float(n.effective_contract().timeout_s)
+        except (TypeError, ValueError):
+            return False  # unprovable -> conservative
+    return total <= float(budget)
+
+
+def _duplicates(graph: Graph, nodes: dict, diagnostics: list) -> None:
+    """Exact-duplicate branches: advisory ONLY (similarity is not proof;
+    duplicates may encode intentional diversity/fault isolation)."""
+    incoming: dict[str, list] = {}
+    for e in graph.edges:
+        incoming.setdefault(e.to_node, []).append(e)
+
+    def key(nid: str) -> tuple:
+        n = nodes[nid]
+        c = n.effective_contract()
+        mp = c.model_policy
+        inc = sorted((e.from_node, tuple(sorted(e.mapping.items())), e.condition)
+                     for e in incoming.get(nid, []))
+        return (n.type.value, tuple(sorted(c.allowed_tools)),
+                mp.model or "", mp.provider or "", tuple(inc))
+
+    groups: dict[tuple, list[str]] = {}
+    for nid in nodes:
+        groups.setdefault(key(nid), []).append(nid)
+    for members in groups.values():
+        if len(members) > 1 and len(members) <= 64:
+            a, b = sorted(members)[:2]
+            diagnostics.append(diag(
+                "OPT-004", "resource",
+                f"structurally duplicated branches {a},{b} (+{len(members) - 2} more)",
+                "advisory only: assumed intentional diversity; never merged",
+                node=a, extra={"group": ",".join(sorted(members)[:8])}))
+
+
 PASSES: dict[str, "PassFn"] = {
     "dependency": dependency_pass,
     "artifact_transport": artifact_transport_pass,
     "verification": verification_pass,
+    "resource": resource_pass,
 }
