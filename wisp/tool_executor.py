@@ -666,7 +666,8 @@ class ToolExecutor:
         # nudge), then an instruction to synthesize instead of re-fetching.
         repeat_msg = self._check_repeat_call(func_name, func_args)
         if repeat_msg is not None:
-            yield _tool_result_event(func_name, repeat_msg)
+            yield _tool_result_event(func_name, repeat_msg,
+                        tool_call_id=tool_call_id,)
             return
 
         # ── Fetch-failure circuit breaker ──
@@ -674,31 +675,36 @@ class ToolExecutor:
         # agent until a web_search succeeds. Scoped by (depth, branch).
         fetch_block_msg = self._check_fetch_breaker(func_name)
         if fetch_block_msg is not None:
-            yield _tool_result_event(func_name, fetch_block_msg)
+            yield _tool_result_event(func_name, fetch_block_msg,
+                        tool_call_id=tool_call_id,)
             return
 
         # ── Pre-tool hooks ──
         hook_block_msg = await self._run_pre_tool_hooks(func_name, func_args, workspace)
         if hook_block_msg:
-            yield _tool_result_event(func_name, hook_block_msg)
+            yield _tool_result_event(func_name, hook_block_msg,
+                        tool_call_id=tool_call_id,)
             return
 
         # ── Plan mode guard ──
         plan_block_msg = self._check_plan_mode(func_name)
         if plan_block_msg:
-            yield _tool_result_event(func_name, plan_block_msg)
+            yield _tool_result_event(func_name, plan_block_msg,
+                        tool_call_id=tool_call_id,)
             return
 
         # ── Dangerous command auto-block ──
         danger_block_msg = self._check_dangerous_command(func_name, func_args)
         if danger_block_msg:
-            yield _tool_result_event(func_name, danger_block_msg)
+            yield _tool_result_event(func_name, danger_block_msg,
+                        tool_call_id=tool_call_id,)
             return
 
         # ── Permission mode guard ──
         perm_block_msg = self._check_permission_mode(func_name)
         if perm_block_msg:
-            yield _tool_result_event(func_name, perm_block_msg)
+            yield _tool_result_event(func_name, perm_block_msg,
+                        tool_call_id=tool_call_id,)
             return
 
         # ── Approval gating ──
@@ -748,7 +754,8 @@ class ToolExecutor:
                     func_args.clear()
                     func_args.update(modified)
                 if not approved:
-                    yield _tool_result_event(func_name, f"[Blocked: user declined {func_name}]")
+                    yield _tool_result_event(func_name, f"[Blocked: user declined {func_name}]",
+                        tool_call_id=tool_call_id,)
                     return
         elif needs_approval and getattr(self.config, "auto_approve", False):
             was_auto_approved = True
@@ -757,12 +764,14 @@ class ToolExecutor:
         if func_name == "run_bash":
             event_block = await self._run_pre_bash_hooks(func_args, workspace)
             if event_block:
-                yield _tool_result_event(func_name, event_block)
+                yield _tool_result_event(func_name, event_block,
+                        tool_call_id=tool_call_id,)
                 return
         elif func_name in ("write_file", "edit_file", "edit_file_multi"):
             event_block = await self._run_pre_file_hooks(func_name, func_args, workspace)
             if event_block:
-                yield _tool_result_event(func_name, event_block)
+                yield _tool_result_event(func_name, event_block,
+                        tool_call_id=tool_call_id,)
                 return
 
         # ── Execute tool ──

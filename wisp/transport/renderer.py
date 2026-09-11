@@ -9,7 +9,7 @@ modes: unicode, ascii, accessible, minimal.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from wisp.colors import bold, dim, error, warning, success, accent
 from wisp.core.events import AgentEvent
@@ -24,6 +24,32 @@ from wisp.terminal_width import (
     status_symbols,
     truncate,
 )
+
+
+def result_is_error(result: Any) -> bool:
+    """Authoritative tool-result failure check (Finding A).
+
+    success icon <=> this returns False. Parses JSON-string envelopes
+    ({"status": "error", ...}) — not just raw-text prefixes — so slow
+    tools on the spinner path render failures honestly. Markers cover
+    the executor's structured errors and the web tools' bracket tags.
+    """
+    if isinstance(result, dict):
+        return result.get("status") == "error"
+    if isinstance(result, str):
+        text = result.strip()
+        if text.startswith("{"):
+            try:
+                import json as _json
+                parsed = _json.loads(text)
+                if isinstance(parsed, dict):
+                    return parsed.get("status") == "error"
+            except (ValueError, TypeError):
+                pass
+        return text.startswith(("Error", "[Error", "[WEB_FETCH_FAILED]",
+                                "[WEB_FETCH_BLOCKED]", "[Denied", "[Blocked",
+                                "[Cancelled", "ToolError:", "Unexpected error:"))
+    return False
 
 
 def format_duration(duration_ms: float | None) -> str:

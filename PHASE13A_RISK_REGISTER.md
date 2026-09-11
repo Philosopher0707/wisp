@@ -29,6 +29,24 @@ impact, root cause, evidence, remediation, regression-test requirement.
 
 ## P1
 
+### P0-ADJ Tool failure → message protocol integrity (LIVE, fixed by adjacent hotfix)
+- Trigger: any pre-execution refusal (fetch breaker, repeat guard, hooks,
+  plan/danger/perm blocks, declines, pre-hooks) on an OpenAI-schema turn;
+  plus slow JSON-string tool errors on the spinner path.
+- Reproduction: tests/test_tool_protocol_integrity.py (31 tests: TLS-fail
+  twin session, breaker chain, parallel/out-of-order, timeout/exception/
+  cancel, adversarial history, preflight matrix).
+- Impact: provider 400 (missing tool_call_id) after honest tool failures;
+  false ✓ on failed tools.
+- Root cause: early emissions dropped the inbound ID; history defaulted
+  ""; serializer sent ""; spinner check didn't parse JSON envelopes.
+- Fix: ID forwarded at all 9 emission sites; shared
+  renderer.result_is_error across spinner/header/counters; preflight
+  pairing validator in OpenAI._build_payload (OpenRouter/NVIDIA inherit;
+  Ollama has no such IDs). No generated IDs, no deleted history.
+- Regression: G1B/G1D/G1E suites green; full suite identical to clean
+  tree. Report: PHASE13_TOOL_PROTOCOL_INTEGRITY.md.
+
 ### P1-1 Truncated stream salvaged into real file write (invented path possible)
 - Trigger: mid-stream provider stall during a `write_file` call whose args
   arrived as `{"_raw"}` (openai.py:320-323), esp. auto-approve mode.

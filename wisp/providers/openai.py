@@ -522,6 +522,27 @@ class OpenAIProvider(Provider):
         # Prepend system message
         api_messages = [{"role": "system", "content": system_prompt}] + list(messages)
 
+        # Protocol preflight (tool integrity hotfix): every tool-role
+        # message must reference a known assistant tool_call id. An empty,
+        # missing, or foreign ID means the history lost protocol identity
+        # (e.g. an early refusal dropped it) — submitting it produces a
+        # provider 400 and hides the original failure. Fail closed here
+        # instead of inventing IDs or deleting history.
+        _known_ids: set[str] = set()
+        for msg in api_messages:
+            if msg.get("role") == "assistant":
+                for tc in msg.get("tool_calls") or []:
+                    if isinstance(tc, dict) and tc.get("id"):
+                        _known_ids.add(str(tc["id"]))
+            elif msg.get("role") == "tool":
+                _tid = msg.get("tool_call_id", "")
+                if not _tid or _tid not in _known_ids:
+                    raise ValueError(
+                        "refusing provider submission: tool message has "
+                        f"unknown/empty tool_call_id ({_tid!r}); the tool "
+                        "result lost its originating call ID — failing "
+                        "closed instead of sending a malformed request")
+
         # Normalize tool messages: OpenAI expects role "tool" with tool_call_id
         normalized = []
         for msg in api_messages:

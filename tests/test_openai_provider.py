@@ -74,6 +74,10 @@ class TestOpenAIProviderPayload:
         provider = OpenAIProvider(model="gpt-4o", api_key="sk-test")
         messages = [
             {"role": "user", "content": "test"},
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"id": "call_123", "type": "function",
+                             "function": {"name": "read_file",
+                                          "arguments": "{}"}}]},
             {"role": "tool", "tool_call_id": "call_123", "content": "result data"},
         ]
         payload = provider._build_payload("sys", messages, None)

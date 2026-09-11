@@ -190,17 +190,10 @@ class ProgressTracker:
         return None
 
     def _classify_result(self, result: Any) -> None:
-        """Classify tool result as success or failure."""
-        is_error = False
-        if isinstance(result, dict):
-            is_error = result.get("status") == "error"
-        elif isinstance(result, str):
-            try:
-                parsed = json.loads(result)
-                if isinstance(parsed, dict):
-                    is_error = parsed.get("status") == "error"
-            except (json.JSONDecodeError, TypeError):
-                is_error = result.startswith("Error") or result.startswith("[")
+        """Classify tool result as success or failure (Finding A: shares
+        the authoritative predicate with the spinner/header renderers)."""
+        from wisp.transport.renderer import result_is_error
+        is_error = result_is_error(result)
         # Non-string, non-dict results (bytes, int, etc.) = success
 
         if is_error:

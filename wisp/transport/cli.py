@@ -1460,11 +1460,8 @@ class CLITransport(Transport):
     @staticmethod
     def _is_error_result(result: Any) -> bool:
         """Check if a tool result indicates an error."""
-        if isinstance(result, dict):
-            return result.get("status") == "error"
-        if isinstance(result, str):
-            return result.startswith("Error") or result.startswith("[Error")
-        return False
+        from wisp.transport.renderer import result_is_error
+        return result_is_error(result)
 
     # ── CLI-specific methods ──────────────────────────────────────
 
@@ -1710,12 +1707,8 @@ class CLITransport(Transport):
         else:
             result_text = str(result)
 
-        if isinstance(parsed, dict):
-            is_error = parsed.get("status") == "error"
-        elif isinstance(result, dict):
-            is_error = result.get("status") == "error"
-        else:
-            is_error = result_text.startswith("[") or result_text.startswith("Error")
+        from wisp.transport.renderer import result_is_error
+        is_error = result_is_error(result)
 
         # Mode-aware icon selection
         sym = status_symbols()
