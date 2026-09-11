@@ -503,7 +503,8 @@ def apply_changeset(root: str, base: WorkspaceSnapshot, cs: ChangeSet,
 
     Detects external modification (canonical drifted from base on any
     touched or tracked file) and refuses instead of overwriting. Journal
-    enables crash recovery (recover() completes or rolls back).
+    enables crash recovery (recover() completes pending journals forward;
+    corrupt journals quarantine as blocked, never silent-clean).
     `fail_at` is a test-only fault injector ("stage"|"commit").
     """
     from wisp.tools.checkpoints import snapshot_before_mutation
@@ -591,13 +592,47 @@ def _post_hashes(plan: list) -> dict[str, str | None]:
 def _write_journal(journal: str, cs_id: str, base_id: str, plan: list,
                    done: list[str], pre: dict | None = None,
                    completed: bool = False) -> None:
-    with open(journal, "w", encoding="utf-8") as fh:
-        json.dump({"changeset": cs_id, "base": base_id, "plan": plan,
-                   "done": done, "pre": pre or {},
-                   "post": _post_hashes(plan),
-                   "completed": completed}, fh)
+    """Crash-safe atomic journal publication (G1A).
+
+    Protocol: serialize to a temp file in the same directory → flush →
+    fsync → atomic os.replace → best-effort directory fsync. Readers see
+    the previous complete journal or the new complete journal, never a
+    torn one (truncate/write could leave partial JSON on SIGKILL).
+    Orphaned temp files (crash in windows B–D) are swept by recover().
+    """
+    payload = json.dumps({"changeset": cs_id, "base": base_id, "plan": plan,
+                          "done": done, "pre": pre or {},
+                          "post": _post_hashes(plan),
+                          "completed": completed})
+    tmp = f"{journal}.tmp-{os.getpid()}-{time.time_ns()}"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(payload)
         fh.flush()
         os.fsync(fh.fileno())
+    os.replace(tmp, journal)
+    _fsync_dir(os.path.dirname(journal))
+
+
+def _fsync_dir(path: str) -> None:
+    """Best-effort directory durability for rename visibility.
+
+    macOS/APFS may not persist renames across power loss without this;
+    where the OS refuses directory fsync, the weaker guarantee is
+    documented (G1A report) rather than silently pretended.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass  # e.g. filesystems that reject directory fsync: weaker guarantee
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 def _op_applied(root: str, item: dict) -> bool:
@@ -612,8 +647,10 @@ def _op_applied(root: str, item: dict) -> bool:
                     and os.path.isfile(_contain(root, item["path"])))
         with open(_contain(root, item["path"]), "r", encoding="utf-8",
                    errors="replace") as fh:
-            content = item["content"]
-            if item["artifact"]:
+            content = item.get("content")
+            if not isinstance(content, str):
+                raise ValueError("plan item missing content")
+            if item.get("artifact"):
                 content = _load_artifact_content(item["artifact"], root)
             return fh.read() == content
     except (OSError, ValueError):
@@ -628,8 +665,10 @@ def _apply_op(root: str, tmpdir: str, item: dict) -> None:
     if item["op"] == RENAME:
         os.replace(_contain(root, item["rename_from"]), _contain(root, rel))
         return
-    content = item["content"]
-    if item["artifact"]:
+    content = item.get("content")
+    if not isinstance(content, str):
+        raise ValueError("plan item missing content")
+    if item.get("artifact"):
         content = _load_artifact_content(item["artifact"], root)
     tmp = os.path.join(tmpdir, sha256_text(rel))
     with open(tmp, "w", encoding="utf-8") as fh:
@@ -678,40 +717,148 @@ def _load_artifact_content(uri: str, workspace: str) -> str:
     return content
 
 
+ABSENT, VALID, CORRUPT = "ABSENT", "VALID", "CORRUPT"
+
+
+def _journal_schema_error(journal: object) -> str:
+    """Fail-closed schema check. "" means valid. Covers §17 cases 4–9."""
+    if not isinstance(journal, dict):
+        return "journal must be a JSON object"
+    if not isinstance(journal.get("changeset"), str):
+        return "missing/invalid changeset"
+    if not isinstance(journal.get("base"), str):
+        return "missing/invalid base"
+    plan = journal.get("plan")
+    if not isinstance(plan, list):
+        return "missing/invalid plan"
+    for item in plan:
+        if not isinstance(item, dict):
+            return "plan item must be an object"
+        if item.get("op") not in OPS:
+            return f"bad op {item.get('op')!r}"
+        path = item.get("path")
+        if not isinstance(path, str) or not path:
+            return "plan item missing path"
+        try:
+            _norm_rel(path)
+        except ValueError:
+            return f"plan path escapes workspace: {path[:64]!r}"
+        if item.get("op") in (CREATE, MODIFY):
+            if not isinstance(item.get("content"), str):
+                return "plan item missing content"
+            if not isinstance(item.get("artifact", ""), str):
+                return "plan item bad artifact ref"
+        rfrm = item.get("rename_from", "")
+        if rfrm:
+            if not isinstance(rfrm, str):
+                return "bad rename_from"
+            try:
+                _norm_rel(rfrm)
+            except ValueError:
+                return f"rename path escapes workspace: {rfrm[:64]!r}"
+    if not isinstance(journal.get("done"), list) or \
+            not all(isinstance(d, str) for d in journal["done"]):
+        return "missing/invalid done list"
+    if not isinstance(journal.get("completed"), bool):
+        return "missing/invalid completed flag"
+    if not isinstance(journal.get("pre", {}), dict):
+        return "missing/invalid pre-images"
+    return ""
+
+
+def _read_journal(path: str) -> tuple[str, dict | None, str]:
+    """ABSENT (no file) vs VALID vs CORRUPT (fail-closed, never guessed)."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = fh.read()
+    except FileNotFoundError:
+        return (ABSENT, None, "no journal file")
+    except (OSError, ValueError) as exc:
+        # ValueError covers undecodable bytes (UnicodeDecodeError ⊂ ValueError).
+        return (CORRUPT, None, f"unreadable journal: {exc}"[:160])
+    try:
+        journal = json.loads(raw)
+    except ValueError:
+        return (CORRUPT, None, "unparseable journal JSON")
+    err = _journal_schema_error(journal)
+    if err:
+        return (CORRUPT, None, err)
+    return (VALID, journal, "")
+
+
+def _quarantine_journal(path: str, jdir: str) -> str:
+    """Preserve corrupt bytes for diagnosis; never silently delete.
+
+    Name derives from the sanitized journal basename + timestamp + pid:
+    bounded, collision-safe, no journal content, no traversal (only
+    alphanumerics plus -_. survive; result pinned inside jdir).
+    Same-sensitivity storage (same .wisp dir) — no new secret exposure.
+    """
+    base = os.path.basename(path)
+    stem = base[:-5] if base.endswith(".json") else base
+    safe = "".join(ch for ch in stem if ch.isalnum() or ch in ("-", "_"))[:48]
+    name = f"{safe or 'journal'}.corrupt-{time.time_ns()}-{os.getpid()}.json"
+    dest = os.path.join(os.path.abspath(jdir), name)
+    if os.path.dirname(dest) != os.path.abspath(jdir):
+        raise ValueError("quarantine escape refused")  # ponytail: belt-and-braces; unreachable by construction
+    os.replace(path, dest)
+    _fsync_dir(os.path.dirname(dest))
+    return dest
+
+
+def _is_journal_file(fn: str) -> bool:
+    return (fn.endswith(".json") and ".corrupt-" not in fn
+            and ".tmp-" not in fn)
+
+
 def recover(root: str) -> str:
-    """Crash recovery over journals. Pending journals complete forward
-    (idempotent commit); completed journals are skipped; corrupt journals
-    imply a crash during journal write — always before the first replace
-    (journal is fsynced first) — so canonical is untouched and they drop.
-    Returns disposition.
+    """Crash recovery over journals. Dispositions (truthful, §5):
+
+    - "clean": no journals, or only completed records.
+    - "completed:N": N pending journals converged forward (idempotent).
+    - "blocked:N:<reason>": N journals quarantined as corrupt or failed
+      forward commit; workspace state for those is UNKNOWN — fail closed,
+      never "clean", never "rolled-back" (recover() performs no rollback).
+    Pending journals complete forward; completed records are skipped;
+    corrupt bytes are quarantined, never deleted. Recovery is idempotent:
+    re-running converges or re-reports blocked without re-mutating.
     """
     root = os.path.abspath(root)
     jdir = _journal_dir(root)
     if not os.path.isdir(jdir):
         return "clean"
-    journals = sorted(f for f in os.listdir(jdir) if f.endswith(".json"))
-    if not journals:
+    try:
+        entries = sorted(os.listdir(jdir))
+    except OSError:
         return "clean"
-    done, dropped = 0, 0
-    for fn in journals:
-        path = os.path.join(jdir, fn)
-        try:
-            with open(path, encoding="utf-8") as fh:
-                journal = json.load(fh)
-        except (OSError, ValueError):
+    # Sweep orphaned temp files: never complete by construction (Window B–D).
+    for fn in entries:
+        if ".tmp-" in fn:
             try:
-                os.unlink(path)
+                os.unlink(os.path.join(jdir, fn))
             except OSError:
                 pass
-            dropped += 1
+    journals = [fn for fn in entries if _is_journal_file(fn)]
+    if not journals:
+        return "clean"
+    done = 0
+    blocked = 0
+    blocked_reasons: list[str] = []
+    for fn in journals:
+        path = os.path.join(jdir, fn)
+        state, journal, detail = _read_journal(path)
+        if state == CORRUPT:
+            try:
+                dest = _quarantine_journal(path, jdir)
+            except OSError as exc:
+                dest = f"<quarantine-failed: {exc}>"[:120]
+            logger.warning("recover: corrupt journal %s quarantined to %s (%s)",
+                           fn, dest, detail)
+            blocked += 1
+            blocked_reasons.append(f"{fn}: {detail}"[:160])
             continue
-        if not isinstance(journal.get("plan"), list) or journal.get("completed"):
-            if not isinstance(journal.get("plan"), list):
-                try:
-                    os.unlink(path)
-                except OSError:
-                    pass
-                dropped += 1
+        assert journal is not None  # VALID
+        if journal.get("completed"):
             continue  # completed application record, not pending work
         plan = journal["plan"]
         try:
@@ -722,25 +869,35 @@ def recover(root: str) -> str:
                            [p["path"] for p in plan if isinstance(p, dict)],
                            journal.get("pre", {}), completed=True)
             done += 1
-        except (OSError, ValueError):
-            dropped += 1
-    if done and not dropped:
+        except (OSError, ValueError) as exc:
+            # Forward commit itself failed: preserve evidence, fail closed.
+            try:
+                dest = _quarantine_journal(path, jdir)
+            except OSError as exc2:
+                dest = f"<quarantine-failed: {exc2}>"[:120]
+            logger.warning("recover: forward commit failed for %s "
+                           "(quarantined to %s): %s", fn, dest, exc)
+            blocked += 1
+            blocked_reasons.append(f"{fn}: forward commit failed"[:160])
+    if blocked:
+        first = blocked_reasons[0] if blocked_reasons else "unknown"
+        return f"blocked:{blocked}:{first}"[:256]
+    if done:
         return f"completed:{done}"
-    if dropped and not done:
-        return f"rolled-back:{dropped}"
-    if not done and not dropped:
-        return "clean"
-    return f"completed:{done}+rolled-back:{dropped}"
+    return "clean"
 
 
 def prune_journals(root: str, keep: int = 50) -> int:
-    """Bound journal growth: keep newest application records."""
+    """Bound journal growth: keep newest application records.
+
+    Quarantined corrupt journals (.corrupt-) are evidence, never pruned.
+    """
     jdir = _journal_dir(os.path.abspath(root))
     if not os.path.isdir(jdir):
         return 0
     entries = []
     for fn in os.listdir(jdir):
-        if not fn.endswith(".json"):
+        if not _is_journal_file(fn):
             continue
         try:
             entries.append((os.path.getmtime(os.path.join(jdir, fn)), fn))
@@ -766,11 +923,13 @@ def rollback_changeset(root: str, base: WorkspaceSnapshot, cs: ChangeSet) -> App
     """
     root = os.path.abspath(root)
     path = os.path.join(_journal_dir(root), f"{cs.id}.json")
-    try:
-        with open(path, encoding="utf-8") as fh:
-            journal = json.load(fh)
-    except (OSError, ValueError):
+    state, journal, detail = _read_journal(path)
+    if state == ABSENT:
         return ApplyResult(False, reason="no application record")
+    if state == CORRUPT:
+        # Fail closed without touching the evidence; recover() owns quarantine.
+        return ApplyResult(False, reason=f"journal corrupt; recover first ({detail})"[:160])
+    assert journal is not None  # VALID
     if not journal.get("completed"):
         return ApplyResult(False, reason="application incomplete; recover first")
     pre = journal.get("pre", {})
