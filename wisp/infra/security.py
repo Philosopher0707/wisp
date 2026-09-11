@@ -24,6 +24,7 @@ from wisp.infra.policy_engine import (
     PolicyEngine,
     PriorityRuleEngine,
     Rule,
+    _AUTO_EDIT_DENY_TOOLS,
 )
 
 
@@ -55,6 +56,28 @@ _AUTO_EDIT_BLOCK_TOOLS = frozenset({
     "spawn", "fanout",
 })
 
+# Hard-DENY subset of the AUTO_EDIT block set (13F.1): exec/git writes
+# can never run in AUTO_EDIT, not even with user approval. Delegation
+# primitives (imported split set) are REQUIRE_APPROVAL instead.
+# Single source: policy_engine._AUTO_EDIT_DENY_TOOLS (imported above;
+# referenced as-is by policy_hard_deny below).
+
+
+def policy_hard_deny(tool_name: str, mode: Any) -> str | None:
+    """Mode-level hard DENY reason, or None when the mode permits the tool.
+
+    Mirrors the engine's DENY rules without the trust/hook layers (those
+    are consulted separately): READ_ONLY denies all non-reads; AUTO_EDIT
+    denies the exec/git subset. REQUIRE_APPROVAL tools are NOT denied
+    here — returns None for them.
+    """
+    m = str(getattr(mode, "value", mode) or "auto_edit").lower()
+    if m == "read_only" and tool_name not in _SAFE_READ_TOOLS:
+        return f"READ_ONLY mode blocks {tool_name}"
+    if m == "auto_edit" and tool_name in _AUTO_EDIT_DENY_TOOLS:
+        return f"AUTO_EDIT mode blocks {tool_name}"
+    return None
+
 
 @dataclass(frozen=True)
 class Action:
@@ -72,6 +95,7 @@ class Decision:
     allowed: bool
     reason: str = ""
     modified_args: Optional[dict] = None
+    approval_required: bool = False
 
 
 @dataclass
@@ -176,10 +200,12 @@ class SecurityPolicy:
             self._audit(action, context, hook_result)
             return hook_result
 
-        # Layer 4: Approved
+        # Layer 4: Approved (possibly approval-gated)
         decision = Decision(
             allowed=True,
+            reason=result.reason,
             modified_args=result.modified_args or hook_result.modified_args,
+            approval_required=result.approval_required,
         )
         self._audit(action, context, decision)
         return decision

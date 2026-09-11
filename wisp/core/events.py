@@ -248,6 +248,45 @@ def tool_result(name: str, result: str | dict[str, Any], duration_ms: Optional[f
     return _make_event(TYPE_TOOL_RESULT, payload)
 
 
+# ── Structured denial envelope (13F.1 R2) ──────────────────────────
+# Machine-readable denial statuses. Execution failures keep their
+# existing shapes; only denials/refusals use this envelope so the model
+# can distinguish POLICY_DENIED / USER_DENIED / APPROVAL_TIMEOUT /
+# CANCELLED from ordinary failure.
+DENIAL_POLICY_DENIED = "POLICY_DENIED"
+DENIAL_USER_DENIED = "USER_DENIED"
+DENIAL_APPROVAL_TIMEOUT = "APPROVAL_TIMEOUT"
+DENIAL_CANCELLED = "CANCELLED"
+
+_DENIAL_STATUSES = frozenset({
+    DENIAL_POLICY_DENIED, DENIAL_USER_DENIED,
+    DENIAL_APPROVAL_TIMEOUT, DENIAL_CANCELLED,
+})
+
+
+def denial_result(name: str, status: str, reason: str, *,
+                  duration_ms: float = 0,
+                  tool_call_id: Optional[str] = None) -> AgentEvent:
+    """Build a structured denial tool result.
+
+    The result dict carries status/authorized/executed/retryable/reason
+    (all denials: authorized=False, executed=False, retryable=False)
+    plus a human-readable `data` line; history serialization keeps it
+    intact (dict → JSON) and the shared error predicate treats any
+    non-"ok" status as failure. tool_call_id is forwarded verbatim —
+    never invented here.
+    """
+    if status not in _DENIAL_STATUSES:
+        raise ValueError(f"unknown denial status: {status!r}")
+    return tool_result(
+        name,
+        {"status": status, "authorized": False, "executed": False,
+         "retryable": False, "reason": reason, "data": reason},
+        duration_ms=duration_ms,
+        tool_call_id=tool_call_id,
+    )
+
+
 def content(text: str) -> AgentEvent:
     return _make_event(TYPE_CONTENT, {"text": text})
 

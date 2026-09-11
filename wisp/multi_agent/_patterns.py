@@ -45,17 +45,22 @@ async def run_map_reduce(
         for i, r in enumerate(mapper_results):
             if not r.success and not r.timed_out:
                 contract = mapper_contracts[i]
-                retry_contract = SubagentContract(
-                    **{
-                        **{k: v for k, v in contract.__dict__.items()
-                           if k in SubagentContract.__dataclass_fields__},
-                        "task": (
-                            f"{contract.task}\n\n"
-                            f"IMPORTANT: Previous attempt failed: {r.error or 'unknown'}. "
-                            f"Please try again with a different approach."
-                        ),
-                    }
+                fields = {k: v for k, v in contract.__dict__.items()
+                          if k in SubagentContract.__dataclass_fields__}
+                # G1E §5: inherit CONSUMED budget from the stamped result,
+                # not the pristine contract — the first round may have spent
+                # attempts the contract never saw. Exhausted budget skips
+                # the retry round entirely (no hidden multiplier).
+                used = max(contract.retry_count, r.retry_count or 0)
+                if used >= contract.max_retries:
+                    continue
+                fields["retry_count"] = used + 1
+                fields["task"] = (
+                    f"{contract.task}\n\n"
+                    f"IMPORTANT: Previous attempt failed: {r.error or 'unknown'}. "
+                    f"Please try again with a different approach."
                 )
+                retry_contract = SubagentContract(**fields)
                 retry_contracts.append(retry_contract)
                 retry_indices.append(i)
 

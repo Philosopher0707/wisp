@@ -50,6 +50,20 @@ class ApprovalCancelled(Exception):
         super().__init__(f"User cancelled at the approval prompt for {tool_name or 'tool'}")
 
 
+class ApprovalTimeout(Exception):
+    """The approval prompt lapsed without a verdict (input timeout).
+
+    Also a verdict, not an interruption: callers fail closed with a
+    distinct APPROVAL_TIMEOUT denial so a lapse never reads as an
+    ordinary user deny. Caught alongside ApprovalCancelled at every
+    approval catch site.
+    """
+
+    def __init__(self, tool_name: str = ""):
+        self.tool_name = tool_name
+        super().__init__(f"Approval timed out for {tool_name or 'tool'}")
+
+
 _ANSI_TAIL_RE = None
 
 

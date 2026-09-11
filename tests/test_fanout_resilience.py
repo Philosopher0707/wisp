@@ -35,7 +35,10 @@ class TestTransientRetry:
 
     def test_429_failure_is_retried_and_succeeds(self, tmp_path):
         o = self._orch(tmp_path)
-        contract = SubagentContract(name="f-0-coder", role="coder", task="t")
+        contract = SubagentContract(name="f-0-coder", role="coder", task="t",
+                                    # G1E: transient retries consume the shared
+                                    # logical budget — declared explicitly.
+                                    max_retries=1)
         calls = {"n": 0}
 
         async def flaky_run(c):
@@ -65,7 +68,9 @@ class TestTransientRetry:
 
     def test_retry_cap_respected(self, tmp_path):
         o = self._orch(tmp_path)
-        contract = SubagentContract(name="f-0-coder", role="coder", task="t")
+        contract = SubagentContract(name="f-0-coder", role="coder", task="t",
+                                    # G1E: shared budget 1 + 2 (was implicit).
+                                    max_retries=2)
         calls = {"n": 0}
 
         async def always_429(c):

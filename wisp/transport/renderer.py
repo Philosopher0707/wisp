@@ -27,15 +27,18 @@ from wisp.terminal_width import (
 
 
 def result_is_error(result: Any) -> bool:
-    """Authoritative tool-result failure check (Finding A).
+    """Authoritative tool-result failure check (Finding A + 13F.1 R2).
 
-    success icon <=> this returns False. Parses JSON-string envelopes
-    ({"status": "error", ...}) — not just raw-text prefixes — so slow
-    tools on the spinner path render failures honestly. Markers cover
-    the executor's structured errors and the web tools' bracket tags.
+    success icon <=> this returns False. Any dict/JSON status other than
+    "ok" counts as failure — covering "error" as well as the structured
+    denial statuses (POLICY_DENIED, USER_DENIED, APPROVAL_TIMEOUT,
+    CANCELLED). Parses JSON-string envelopes (not just raw-text
+    prefixes) so slow tools on the spinner path render failures
+    honestly. Markers cover the executor's legacy text errors and the
+    web tools' bracket tags.
     """
     if isinstance(result, dict):
-        return result.get("status") == "error"
+        return result.get("status", "ok") != "ok"
     if isinstance(result, str):
         text = result.strip()
         if text.startswith("{"):
@@ -43,7 +46,7 @@ def result_is_error(result: Any) -> bool:
                 import json as _json
                 parsed = _json.loads(text)
                 if isinstance(parsed, dict):
-                    return parsed.get("status") == "error"
+                    return parsed.get("status", "ok") != "ok"
             except (ValueError, TypeError):
                 pass
         return text.startswith(("Error", "[Error", "[WEB_FETCH_FAILED]",

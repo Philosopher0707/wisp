@@ -117,6 +117,14 @@ def authorize(principal: Principal, tool_name: str, args: dict[str, Any],
     elif mode == "ask_all":
         approval_required = risk != ToolRisk.READ
     else:  # auto_edit and unknown: writes auto, exec/network ask
+        # 13F.1 STEP 6: mode-level hard DENY agrees with the policy
+        # engine (gate) — M2 must never reinterpret a DENY as
+        # "approvable". Single source for the set: policy_engine.
+        from wisp.infra.policy_engine import _AUTO_EDIT_DENY_TOOLS
+        if tool_name in _AUTO_EDIT_DENY_TOOLS:
+            return AuthorizationDecision(
+                allowed=False, controlling_layer="approval",
+                reason=f"AUTO_EDIT mode blocks {tool_name}")
         approval_required = risk in (ToolRisk.EXEC, ToolRisk.NETWORK, ToolRisk.PRIVILEGED)
 
     if approval_required:

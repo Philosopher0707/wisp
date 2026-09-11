@@ -251,6 +251,11 @@ class ApprovalDecision:
     reason: str = ""
     modified_args: Optional[dict[str, Any]] = None
     risk: ToolRisk = ToolRisk.READ
+    # Machine-readable denial kind (13F.1 R2): one of POLICY_DENIED,
+    # USER_DENIED, APPROVAL_TIMEOUT, CANCELLED, or "" when allowed.
+    # Lets refusal construction stamp structured envelopes without
+    # sniffing reason text.
+    denial: str = ""
 
     def to_tuple(self) -> tuple[bool, Optional[str]]:
         """Back-compat with ``ApprovalGate.check() -> (bool, reason|None)``."""

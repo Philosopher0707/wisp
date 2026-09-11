@@ -138,9 +138,12 @@ class OllamaProvider(Provider):
                         break
                     loop.call_soon_threadsafe(queue.put_nowait, event)
                 loop.call_soon_threadsafe(queue.put_nowait, done)
-            except Exception as exc:
+            except BaseException as exc:
                 # Deliver the failure to the consumer instead of letting it
                 # die in the thread excepthook as a clean-looking end.
+                # BaseException: CancelledError/KeyboardInterrupt must still
+                # terminate the queue protocol (consumer re-raises), or the
+                # consumer wedges forever on queue.get() (G1D §13).
                 producer_error.append(exc)
                 with contextlib.suppress(RuntimeError):
                     loop.call_soon_threadsafe(queue.put_nowait, done)

@@ -494,6 +494,17 @@ class GraphExecutor:
         # fail the run). Failed sinks -> FAILED; denied/other-skipped -> CANCELLED.
         failed = [s for s in sinks
                   if sched.statuses.get(s, NodeStatus.PENDING) in FAILED_NODE_STATUSES]
+        # G1C §9 final predicate: success is derived from authoritative
+        # state, not intermediate observation. A sink row carrying timed_out
+        # evidence fails even if its recorded status claims SUCCESS (stale
+        # or foreign rows, e.g. pre-fix timeout releases restored on
+        # resume, must never finalize as success).
+        for s in sinks:
+            if s in failed:
+                continue
+            out = getattr(results.get(s), "output", None)
+            if isinstance(out, dict) and out.get("timed_out") is True:
+                failed.append(s)
         benign = _benign_set(graph, sched, results)
         incomplete = [s for s in sinks
                       if sched.statuses.get(s, NodeStatus.PENDING)
@@ -704,16 +715,35 @@ class GraphExecutor:
         if node.join_timeout_s:
             start = self._join_wait.setdefault(f"{rid}:{node.id}", now)
             if now - start > node.join_timeout_s and branch:
-                # TIMEOUT join: release with whatever settled (partial, explicit).
-                sched.statuses[node.id] = NodeStatus.SUCCESS
-                results[node.id] = NodeResult(node.id, NodeStatus.SUCCESS,
+                # TIMEOUT join (G1C §4): the policy was NOT satisfied —
+                # record TIMEOUT, never SUCCESS (timeout != success).
+                # Partial evidence preserved for operators (§10).
+                # Race rule (§7): the drive is single-threaded; settle_one
+                # drains completions before each join evaluation, so a
+                # completion settled before this observation satisfies the
+                # join, otherwise timeout wins. Scheduler readiness
+                # currently presents only settled branches, making this
+                # defense-in-depth; the final predicate below makes
+                # SUCCESS+timed_out unfinalizable regardless of writer.
+                unsettled = sorted(p for p in preds if p not in branch)
+                sched.statuses[node.id] = NodeStatus.TIMEOUT
+                results[node.id] = NodeResult(node.id, NodeStatus.TIMEOUT,
                                               output={"branches": sorted(branch),
                                                       "successes": sorted(
                                                           _control.collect_successes(branch)),
                                                       "failures": _control.collect_failures(branch),
-                                                      "timed_out": True})
+                                                      "timed_out": True,
+                                                      "settled": sorted(branch),
+                                                      "unsettled": unsettled,
+                                                      "deadline_s": node.join_timeout_s},
+                                              error_code="JOIN_TIMEOUT",
+                                              message=(f"join timed out after "
+                                                       f"{node.join_timeout_s}s with "
+                                                       f"{len(unsettled)} unsettled "
+                                                       f"branch(es)"))
                 self._event(store, rid, "graph.join_released",
-                            {"node_id": node.id, "reason": "timeout: partial release"})
+                            {"node_id": node.id,
+                             "reason": "timeout: partial (not released)"})
                 self._join_wait.pop(f"{rid}:{node.id}", None)
                 return True
         released, reason = _control.evaluate_join(node.join_policy, node.join_param, branch)

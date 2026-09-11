@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
 
 from wisp.core.context_pruner import prune_messages
 from wisp.core.contracts import DEFAULT_PRUNE_POLICY as _DEFAULT_PRUNE_POLICY
+from wisp.core.contracts import ToolRisk, risk_for_tool
 from wisp.core.events import (
     CODE_TURN_TIMEOUT,
     CODE_PROVIDER_STREAM,
@@ -100,6 +101,66 @@ def _flatten_event(ev: AgentEvent | dict[str, Any]) -> dict[str, Any]:
     flat["type"] = str(ev.type)
     flat["timestamp"] = ev.timestamp
     return flat
+
+
+def _denial_display(status: str, tool_name: str, reason: str) -> str:
+    """Human line for a denial envelope (13F.1 §16/§17).
+
+    Machine status stays in `status`; this line renders in the REPL
+    header and the model-visible history content. Distinct prefixes so a
+    policy denial never reads as an ordinary failure.
+    """
+    label = {
+        "POLICY_DENIED": "Policy denied",
+        "USER_DENIED": "User denied",
+        "APPROVAL_TIMEOUT": "Approval timed out",
+        "CANCELLED": "Cancelled",
+    }.get(status, "Blocked")
+    return f"{label}: {tool_name} — {reason}" if tool_name else f"{label}: {reason}"
+
+
+def _ensure_intake_id(tc_event: dict[str, Any]) -> dict[str, Any]:
+    """Stamp one stable identity on a provider tool call lacking it.
+
+    A provider call with no ID is "not yet applicable" (§2), not a loss:
+    nothing authoritative existed to drop. Mint ONCE here at intake and
+    every downstream consumer (assistant block, refusal, _execute_tool →
+    result) shares it, so the pair is self-consistent. This is NOT the
+    forbidden silent repair: the serializer still never invents, nothing
+    is inferred from position/name, and an ID dropped AFTER intake still
+    fails closed at the provenance gate. Without this, the assistant
+    block mints one UUID while results default to "" (live 400 shape).
+    """
+    if not tc_event.get("id"):
+        import uuid as _uuid
+        tc_event["id"] = f"call_{_uuid.uuid4().hex[:8]}"
+    return tc_event
+
+
+def validate_tool_message_provenance(
+    assistant_msg: dict[str, Any], tool_msgs: list[dict[str, Any]]
+) -> str | None:
+    """Check one appended assistant/tool pair before it enters history.
+
+    Returns an explicit violation description, or None when every tool
+    message carries a non-empty ID issued by this assistant block. Pure
+    (no I/O) so the invariant is unit-pinning without a provider.
+    Never repairs: a missing/unknown/wrong ID fails closed at the call
+    site (turn ends with a protocol-integrity error, never a 400).
+    """
+    known = {str(tc.get("id", "")) for tc in assistant_msg.get("tool_calls", []) or []}
+    known.discard("")
+    seen: set[str] = set()
+    for tm in tool_msgs:
+        tid = tm.get("tool_call_id", "")
+        if not tid:
+            return f"tool message has missing/empty tool_call_id (known: {sorted(known)})"
+        if tid not in known:
+            return f"tool message has unknown tool_call_id ({tid!r}; known: {sorted(known)})"
+        if tid in seen:
+            return f"duplicate tool message for tool_call_id ({tid!r})"
+        seen.add(tid)
+    return None
 
 
 @dataclass
@@ -271,6 +332,9 @@ class WispAgentCore:
             # or mid-stream stall). The error is already yielded live below;
             # the finish path must not emit done for this iteration.
             provider_failed = False
+            # G1D: short descriptor of the round failure for the completion
+            # gate refusal + observability (stamped onto tool calls).
+            provider_fail_note = "non-complete"
 
             # ── Pre-flight pruning: condense historical tool payloads
             # Prevents unbounded bloat (30+ tool calls) that stalls
@@ -304,6 +368,8 @@ class WispAgentCore:
                         and normalized.get("status") == "chunk_stall"
                     ):
                         provider_failed = True
+                        detail = normalized.get("message") or normalized.get("detail") or ""
+                        provider_fail_note = str(detail)[:160] or "non-complete"
 
                     # Accumulate partial content for error recovery
                     if normalized.get("type") == "content":
@@ -315,6 +381,10 @@ class WispAgentCore:
                         has_tool_calls = True
                         # Normalize type to singular for downstream consistency
                         normalized["type"] = "tool_call"
+                        # Intake identity: a provider call without an ID gets
+                        # ONE stable ID here; every consumer below (assistant
+                        # block, refusal, _execute_tool → result) shares it.
+                        _ensure_intake_id(normalized)
                         # Extract calls from ToolCallBatch if present
                         if "calls" in normalized and "name" not in normalized:
                             calls = normalized.pop("calls", [])
@@ -332,7 +402,7 @@ class WispAgentCore:
                                     if "index" in func:
                                         single["_index"] = func["index"]
                                     # Process each individually
-                                    tc_event = dict(single)
+                                    tc_event = _ensure_intake_id(dict(single))
                                     # Role restriction: reject before any gating
                                     if _allowed_set is not None and str(single.get("name", "")) not in _allowed_set:
                                         _blocked_name = str(single.get("name", ""))
@@ -346,7 +416,7 @@ class WispAgentCore:
                                             f"for this agent's role{_hint}")
                                         pending_tool_calls.append(tc_event)
                                         tool_results_events_early.append(
-                                            self._refusal_result_event(tc_event))
+                                            self._refusal_result_event(tc_event, session.get("workspace", ".")))
                                         yield _flatten_event(
                                             error_event(
                                                 f"Blocked: tool '{_blocked_name}' is not allowed for this agent's role{_hint}",
@@ -356,17 +426,19 @@ class WispAgentCore:
                                         continue
                                     # Check security BEFORE yielding
                                     gate = self._get_approval_gate()
-                                    allowed, reason = await gate.check(
+                                    _gdec = await gate.check_decision(
                                         tc_event, session, approval_handler=approval_handler
                                     )
-                                    if not allowed:
-                                        tc_event["_blocked"] = reason or "blocked"
+                                    if not _gdec.allowed:
+                                        tc_event["_blocked"] = _gdec.reason or "blocked"
+                                        tc_event["_denial"] = _gdec.denial or "POLICY_DENIED"
+                                        tc_event["_src"] = "gate"
                                         pending_tool_calls.append(tc_event)
                                         tool_results_events_early.append(
-                                            self._refusal_result_event(tc_event))
+                                            self._refusal_result_event(tc_event, session.get("workspace", ".")))
                                         yield _flatten_event(
                                             error_event(
-                                                f"Blocked: {reason}",
+                                                f"Blocked: {_gdec.reason}",
                                                 recoverable=True,
                                             )
                                         )
@@ -382,7 +454,7 @@ class WispAgentCore:
                                                     f"{ext_result.get('reason', 'unknown')}")
                                                 pending_tool_calls.append(tc_event)
                                                 tool_results_events_early.append(
-                                                    self._refusal_result_event(tc_event))
+                                                    self._refusal_result_event(tc_event, session.get("workspace", ".")))
                                                 yield _flatten_event(
                                                     error_event(
                                                         f"Blocked: {ext_result.get('reason', 'by extension')}",
@@ -399,7 +471,7 @@ class WispAgentCore:
                                                 f"extension intercept failed: {e}")
                                             pending_tool_calls.append(tc_event)
                                             tool_results_events_early.append(
-                                                self._refusal_result_event(tc_event))
+                                                self._refusal_result_event(tc_event, session.get("workspace", ".")))
                                             yield _flatten_event(
                                                 error_event(
                                                     f"Extension intercept failed: {e}. Tool call denied.",
@@ -428,7 +500,7 @@ class WispAgentCore:
                                 f"allowed for this agent's role{_hint2}")
                             pending_tool_calls.append(normalized)
                             tool_results_events_early.append(
-                                self._refusal_result_event(normalized))
+                                self._refusal_result_event(normalized, session.get("workspace", ".")))
                             yield _flatten_event(
                                 error_event(
                                     f"Blocked: {normalized['_blocked']}",
@@ -439,20 +511,23 @@ class WispAgentCore:
 
                         # Check security BEFORE yielding
                         gate = self._get_approval_gate()
-                        allowed, reason = await gate.check(normalized, session, approval_handler=approval_handler)
-                        if not allowed:
+                        _gdec = await gate.check_decision(
+                            normalized, session, approval_handler=approval_handler)
+                        if not _gdec.allowed:
                             # Register the refusal as a real tool result so
                             # history stays protocol-consistent: the model
                             # emitted this call and MUST see its outcome,
                             # otherwise it deterministically replays the
                             # identical call forever (live pty repro).
-                            normalized["_blocked"] = reason or "blocked"
+                            normalized["_blocked"] = _gdec.reason or "blocked"
+                            normalized["_denial"] = _gdec.denial or "POLICY_DENIED"
+                            normalized["_src"] = "gate"
                             pending_tool_calls.append(normalized)
                             tool_results_events_early.append(
-                                self._refusal_result_event(normalized))
+                                self._refusal_result_event(normalized, session.get("workspace", ".")))
                             yield _flatten_event(
                                 error_event(
-                                    f"Blocked: {reason}",
+                                    f"Blocked: {_gdec.reason}",
                                     recoverable=True,
                                 )
                             )
@@ -468,7 +543,7 @@ class WispAgentCore:
                                         f"{ext_result.get('reason', 'unknown')}")
                                     pending_tool_calls.append(normalized)
                                     tool_results_events_early.append(
-                                        self._refusal_result_event(normalized))
+                                        self._refusal_result_event(normalized, session.get("workspace", ".")))
                                     yield _flatten_event(
                                         error_event(
                                             f"Blocked: {normalized['_blocked']}",
@@ -484,7 +559,7 @@ class WispAgentCore:
                                     f"extension intercept failed: {e}")
                                 pending_tool_calls.append(normalized)
                                 tool_results_events_early.append(
-                                    self._refusal_result_event(normalized))
+                                    self._refusal_result_event(normalized, session.get("workspace", ".")))
                                 yield _flatten_event(
                                     error_event(
                                         f"Extension intercept failed: {e}. Tool call denied.",
@@ -632,10 +707,22 @@ class WispAgentCore:
                                 early["_yielded"] = True
                                 yield early
                         continue
+                    # G1D: stamp the round state so the completion gate
+                    # (and refusal observability) names the failure.
+                    tc = {**tc,
+                          "_round_complete": not provider_failed,
+                          "_round_state": provider_fail_note
+                          if provider_failed else "complete"}
                     async for result_event in self._execute_tool(
-                        tc, session, approval_handler=approval_handler
+                        tc, session, approval_handler=approval_handler,
                     ):
-                        tool_results_events.append(result_event)
+                        # Provenance boundary: only tool_result events carry
+                        # the originating call ID into history. Approval
+                        # requests, heartbeats, and subagent progress ride
+                        # this same channel for live rendering but must
+                        # never become role:tool messages (their ID is "").
+                        if result_event.get("type") == "tool_result":
+                            tool_results_events.append(result_event)
                         yield result_event
                         # Verification-floor tracking: fold every tool outcome
                         # into the guard (ORDERING preserved — any edit
@@ -675,16 +762,29 @@ class WispAgentCore:
                 assistant_msg["tool_calls"] = tc_blocks
             messages.append(assistant_msg)
 
+            new_tool_msgs: list[dict[str, Any]] = []
             for tr in tool_results_events:
                 content = tr.get("result", tr.get("data", ""))
                 if isinstance(content, dict):
                     content = json.dumps(content)
                 tc_id = tr.get("tool_call_id", "")
-                messages.append({
+                new_tool_msgs.append({
                     "role": "tool",
                     "tool_call_id": tc_id,
                     "content": str(content),
                 })
+            # Upstream provenance gate (§14/15): the provider preflight is
+            # the final defense; this catches the corruption at its origin
+            # with a named error instead of a downstream 400. Never repairs.
+            _prov_violation = validate_tool_message_provenance(
+                assistant_msg, new_tool_msgs)
+            if _prov_violation is not None:
+                yield _flatten_event(error_event(
+                    f"Protocol integrity failure, ending turn: {_prov_violation}",
+                    recoverable=False,
+                ))
+                return
+            messages.extend(new_tool_msgs)
 
             # Tool boundary: surface any steering the user typed mid-turn
             # so the next provider round-trip can change course.
@@ -813,9 +913,14 @@ class WispAgentCore:
                             break
                         loop.call_soon_threadsafe(queue.put_nowait, event)
                     loop.call_soon_threadsafe(queue.put_nowait, done)  # type: ignore[arg-type]
-                except Exception as exc:
+                except BaseException as exc:
                     # Deliver the failure to the consumer instead of letting it
                     # die in the thread excepthook as a clean-looking end.
+                    # BaseException (not just Exception): a provider raising
+                    # CancelledError/KeyboardInterrupt must still terminate
+                    # the queue protocol, or the consumer wedges forever on
+                    # queue.get() (G1D §13). The consumer re-raises, so
+                    # cancellation still propagates — never swallowed.
                     producer_error.append(exc)
                     with contextlib.suppress(RuntimeError):
                         loop.call_soon_threadsafe(queue.put_nowait, done)  # type: ignore[arg-type]
@@ -1560,10 +1665,39 @@ class WispAgentCore:
 
         Schema validation is done here as defense-in-depth.
         ToolExecutor handles permission checks, hooks, and dispatch.
+
+        G1D completion gate (§4): the dispatcher stamps each call with
+        ``_round_complete`` (bool) and ``_round_state`` (descriptor). When
+        the provider round that produced this call ended non-complete
+        (partial/truncated/stalled/error), MUTATING tools (anything but
+        ToolRisk.READ, fail-closed) are refused with an explicit
+        incomplete result — authorization ALLOW is necessary but not
+        sufficient. Read-only tools proceed (existing salvage/validation
+        apply; diagnostics preserved, §19). Direct callers without a stamp
+        default to complete (their args are caller-asserted, not streamed).
         """
         name = event.get("name", "")
         args = event.get("arguments", {})
         workspace = session.get("workspace", ".")
+        round_complete = event.get("_round_complete", True)
+        if not round_complete and risk_for_tool(name) != ToolRisk.READ:
+            salvaged = isinstance(args, dict) and "_raw" in args
+            yield _flatten_event(
+                tool_result_event(
+                    name,
+                    {"status": "error",
+                     "data": (f"[Refused: provider round ended "
+                              f"{event.get('_round_state', 'non-complete')}; "
+                              f"mutating tool '{name}' requires a complete "
+                              f"round (complete ∧ valid ∧ authorized). "
+                              f"{'Salvaged candidate retained, not executed. ' if salvaged else ''}"
+                              f"Candidate preserved for diagnostics; re-issue "
+                              f"after a complete response.]")},
+                    duration_ms=0,
+                    tool_call_id=event.get("id"),
+                )
+            )
+            return
 
         # ── Schema validation (defense-in-depth) ─────────────────
         schema_error = self._validate_tool_args(name, args)
@@ -1600,7 +1734,7 @@ class WispAgentCore:
             # Fallback: no ToolExecutor wired — safe reads only (M2 I2).
             # Anything else is denied: without an executor there is no
             # approval, policy, or audit, so execution would be a bypass.
-            from wisp.core.contracts import ToolRisk, risk_for_tool
+            # (ToolRisk/risk_for_tool now imported at module level.)
             if risk_for_tool(name) != ToolRisk.READ:
                 yield _flatten_event(
                     tool_result_event(
@@ -1884,8 +2018,12 @@ class WispAgentCore:
         # without naming it. Instead of failing the tool call and forcing a
         # retry (which often stalls on large 18k payloads), default the
         # path and salvage _raw payloads produced by truncated streaming.
+        # G1D: salvage produces a CANDIDATE (parse_mode=SALVAGED); only a
+        # complete round may execute it (completion gate in _execute_tool).
         if name == "write_file" and isinstance(args, dict):
             if "_raw" in args and len(args) == 1:
+                logger.info("Salvaged _raw tool args for write_file "
+                            "(parse_mode=SALVAGED, candidate only)")
                 raw = args.get("_raw", "")
                 import json as _json
 
@@ -1965,13 +2103,40 @@ class WispAgentCore:
 
         return memoized
 
-    def _refusal_result_event(self, tc: dict[str, Any]) -> dict[str, Any]:
-        """Synthesize the tool-role refusal for a blocked call."""
-        from wisp.core.events import tool_result
+    def _refusal_result_event(self, tc: dict[str, Any], workspace: str = ".") -> dict[str, Any]:
+        """Synthesize the tool-role refusal for a blocked call.
+
+        Structured envelope (13F.1 R2): the denial kind was stamped as
+        ``_denial`` by the refusing site (gate verdicts carry it;
+        role/extension refusals default to POLICY_DENIED). ID preserved
+        verbatim; never invented here.
+
+        Audit (13F.1 R3, exactly-once): policy-denied GATE refusals are
+        already recorded by SecurityPolicy._audit, so they are skipped
+        here (``_src == "gate"`` + POLICY_DENIED). Every other refusal
+        (user/timeout/cancel verdicts, role/extension blocks) is logged
+        once via AuditLog, best-effort.
+        """
+        from wisp.core.events import denial_result
         reason = str(tc.get("_blocked", "blocked"))
-        ev = tool_result(
-            tc.get("name", ""),
-            f"[Blocked: {reason}]",
+        status = str(tc.get("_denial") or "POLICY_DENIED")
+        name = tc.get("name", "")
+        if not (tc.get("_src") == "gate" and status == "POLICY_DENIED"):
+            try:
+                from pathlib import Path as _Path
+                from wisp.tools.audit import AuditLog as _AuditLog
+                _mode = getattr(getattr(self, "config", None),
+                                "permission_mode", "auto_edit")
+                _mode = getattr(_mode, "value", _mode)
+                _AuditLog(_Path(str(workspace)).resolve() / ".wisp" / "audit.jsonl").log_blocked(
+                    str(name), dict(tc.get("arguments", {}) or {}),
+                    str(workspace), f"{status}: {reason}", str(_mode))
+            except Exception:
+                pass
+        ev = denial_result(
+            name,
+            status,
+            _denial_display(status, name, reason),
             duration_ms=0,
             tool_call_id=tc.get("id"),
         )

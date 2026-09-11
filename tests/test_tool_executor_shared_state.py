@@ -361,6 +361,9 @@ class TestEnginePublishesIdentity:
                 if self.calls == 1:
                     yield {"type": "tool_call", "name": "spawn",
                            "arguments": {"task": "nested", "role": "coder"}}
+                    # G1B completion contract: a complete round carries its
+                    # terminal marker (real adapters always emit one).
+                    yield {"type": "done", "done_reason": "tool_calls"}
                 else:
                     yield {"type": "content", "text": "done"}
 

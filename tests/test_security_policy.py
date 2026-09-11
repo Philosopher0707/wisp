@@ -60,7 +60,9 @@ class TestPermissionModes:
     def test_ask_all_blocks_writes(self, ask_all_policy):
         from wisp.infra.security import Action
         result = ask_all_policy.check(Action("write_file", {"path": "x.py"}), _ctx("/tmp"))
-        assert result.allowed is False
+        # 13F.1: ask_all block set is REQUIRE_APPROVAL (allowed + gated),
+        # not hard DENY — the gate prompts instead of rejecting.
+        assert result.allowed is True and result.approval_required is True
         assert "approval" in result.reason.lower()
 
     def test_ask_all_allows_reads(self, ask_all_policy):

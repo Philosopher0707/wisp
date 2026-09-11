@@ -441,3 +441,392 @@ async def test_retry_attempt_gets_fresh_authoritative_id(tmp_path):
         if orig is not None:
             _reg.TOOL_IMPLS["read_file"] = orig
     assert ids == ["call_try1", "call_try2"]  # distinct, correctly paired
+
+
+# ── Identity provenance forensics (§2/§3): non-result events must never
+# become tool messages. First corruption boundary was stateless._turn_inner
+# appending approval_request/heartbeat/progress events (ID "") to history.
+
+def _history_funnel(all_yielded):
+    """Mirror of the fixed stateless funnel: live yields pass through,
+    only type == tool_result enters history."""
+    return [d for d in all_yielded if d.get("type") == "tool_result"]
+
+
+@pytest.mark.asyncio
+async def test_approval_request_never_becomes_tool_message(tmp_path):
+    """One approved spawn_background yields approval_request (live-only)
+    + tool_result; the funnel keeps exactly the result; the pair
+    validates and serializes (exact live ValueError('') regression)."""
+    from wisp.core.stateless import validate_tool_message_provenance
+    from wisp.providers.openai import OpenAIProvider
+    ex = _executor()
+    ws = str(tmp_path)
+
+    async def fake_dispatch(name, args, ws_):
+        return '{"status":"ok","data":{"agent_id":"agent-1"}}', 5.0
+    ex._execute_tool = fake_dispatch
+
+    async def approve(name, args, reason):
+        return True, None
+
+    yielded = [_flat(e) async for e in ex.execute(
+        "spawn_background", {"description": "d", "prompt": "p"},
+        ws, tool_call_id="call_SPAWN_1", approval_handler=approve)]
+    assert any(d.get("type") == "approval_request" for d in yielded)  # live UI kept
+    hist = _history_funnel(yielded)
+    assert len(hist) == 1 and hist[0].get("tool_call_id") == "call_SPAWN_1"
+    assistant = {"role": "assistant", "content": "", "tool_calls": [
+        {"id": "call_SPAWN_1", "type": "function",
+         "function": {"name": "spawn_background", "arguments": "{}"}}]}
+    tools = [{"role": "tool", "tool_call_id": h.get("tool_call_id", ""), "content": "x"}
+             for h in hist]
+    assert validate_tool_message_provenance(assistant, tools) is None
+    OpenAIProvider(model="t", api_key="sk-test")._build_payload(
+        "sys", [assistant] + tools, None, stream=False)  # must not raise
+
+
+# ── Upstream provenance validator (§14/15) ──
+
+def _pair(cid):
+    a = {"role": "assistant", "content": "", "tool_calls": [
+        {"id": cid, "type": "function",
+         "function": {"name": "read_file", "arguments": "{}"}}]}
+    return a, [{"role": "tool", "tool_call_id": cid, "content": "ok"}]
+
+
+def test_provenance_accepts_valid_pair():
+    from wisp.core.stateless import validate_tool_message_provenance as v
+    a, t = _pair("call_X")
+    assert v(a, t) is None
+
+
+def test_provenance_rejects_missing_id():
+    from wisp.core.stateless import validate_tool_message_provenance as v
+    a, _ = _pair("call_X")
+    assert "missing/empty" in (v(a, [{"role": "tool", "content": "x"}]) or "")
+
+
+def test_provenance_rejects_unknown_id():
+    from wisp.core.stateless import validate_tool_message_provenance as v
+    a, _ = _pair("call_X")
+    assert "unknown" in (
+        v(a, [{"role": "tool", "tool_call_id": "call_FOREIGN", "content": "x"}]) or "")
+
+
+def test_provenance_rejects_wrong_id_crosswire():
+    """Result for call B attached to assistant block for call A."""
+    from wisp.core.stateless import validate_tool_message_provenance as v
+    a, _ = _pair("call_A")
+    _, tb = _pair("call_B")
+    assert "unknown" in (v(a, tb) or "")
+
+
+def test_provenance_rejects_duplicate_id():
+    from wisp.core.stateless import validate_tool_message_provenance as v
+    a, t = _pair("call_X")
+    assert "duplicate" in (v(a, t + t) or "")
+
+
+# ── Multi-turn isolation (§7/req 10) ──
+
+@pytest.mark.asyncio
+async def test_multi_turn_ids_isolated(tmp_path):
+    """Turn 2 cannot inherit Turn 1's ID and vice versa — sequential
+    executions keep distinct, correctly paired identities."""
+    from wisp.core.stateless import validate_tool_message_provenance as v
+    ex = _executor()
+    ws = str(tmp_path)
+
+    async def _ok(name, args, **kw):
+        return '{"status": "ok", "data": "fine"}'
+
+    import wisp.tools.registry as _reg
+    orig = _reg.TOOL_IMPLS.get("read_file")
+    _reg.TOOL_IMPLS["read_file"] = _ok
+    try:
+        pairs = []
+        for cid in ("call_T1", "call_T2"):
+            yielded = [_flat(e) async for e in ex.execute(
+                "read_file", {"path": "x"}, ws, tool_call_id=cid)]
+            hist = _history_funnel(yielded)
+            assert [h.get("tool_call_id") for h in hist] == [cid]
+            a = {"role": "assistant", "content": "", "tool_calls": [
+                {"id": cid, "type": "function",
+                 "function": {"name": "read_file", "arguments": "{}"}}]}
+            t = [{"role": "tool", "tool_call_id": cid, "content": "fine"}]
+            assert v(a, t) is None
+            pairs.append((a, t))
+        # cross-checks fail both ways
+        assert v(pairs[0][0], pairs[1][1]) is not None
+        assert v(pairs[1][0], pairs[0][1]) is not None
+    finally:
+        if orig is not None:
+            _reg.TOOL_IMPLS["read_file"] = orig
+
+
+# ── Subagent identity isolation (§9/req 12) ──
+
+@pytest.mark.asyncio
+async def test_subagent_ids_do_not_leak_into_parent(tmp_path):
+    """Child-core tool traffic keeps child IDs; the parent's spawn result
+    carries only the parent's call ID."""
+    ex = _executor()
+    ws = str(tmp_path)
+    dispatched = []
+
+    async def fake_dispatch(name, args, ws_):
+        dispatched.append((name, dict(args)))
+        return '{"status":"ok","data":{"agent_id":"agent-9"}}', 1.0
+    ex._execute_tool = fake_dispatch
+
+    async def approve(name, args, reason):
+        return True, None
+
+    yielded = [_flat(e) async for e in ex.execute(
+        "spawn_background", {"description": "d", "prompt": "p"},
+        ws, tool_call_id="call_PARENT", approval_handler=approve)]
+    hist = _history_funnel(yielded)
+    assert [h.get("tool_call_id") for h in hist] == ["call_PARENT"]
+    assert all("call_PARENT" not in str(d) for d in dispatched)
+    # a child-local ID must never validate against the parent block
+    from wisp.core.stateless import validate_tool_message_provenance as v
+    parent = {"role": "assistant", "content": "", "tool_calls": [
+        {"id": "call_PARENT", "type": "function",
+         "function": {"name": "spawn_background", "arguments": "{}"}}]}
+    assert v(parent, [{"role": "tool", "tool_call_id": "call_CHILD_1",
+                       "content": "x"}]) is not None
+
+
+# ── Approval forensics: decline/approve/spawn_background (§10/req 17-18) ──
+
+@pytest.mark.asyncio
+async def test_declined_spawn_executes_nothing_and_keeps_id(tmp_path):
+    ex = _executor()
+    ws = str(tmp_path)
+    ran = []
+
+    async def fake_dispatch(name, args, ws_):
+        ran.append(name)
+        return "SHOULD NOT RUN", 0.0
+    ex._execute_tool = fake_dispatch
+
+    async def decline(name, args, reason):
+        return False, None
+
+    yielded = [_flat(e) async for e in ex.execute(
+        "spawn_background", {"description": "d", "prompt": "p"},
+        ws, tool_call_id="call_DECLINED", approval_handler=decline)]
+    hist = _history_funnel(yielded)
+    assert ran == []  # execution = 0, mutation = 0
+    assert len(hist) == 1
+    assert hist[0].get("tool_call_id") == "call_DECLINED"
+    # 13F.1: structured USER_DENIED envelope (was "[Blocked: user declined …]")
+    import json as _json
+    res = hist[0].get("result", "")
+    parsed = _json.loads(res) if isinstance(res, str) else res
+    assert parsed.get("status") == "USER_DENIED"
+    assert parsed.get("executed") is False
+
+
+@pytest.mark.asyncio
+async def test_approved_spawn_requires_actual_approval(tmp_path):
+    """Decline, decline, then approve with independent verdicts: the first
+    two never execute; the third executes exactly once."""
+    ex = _executor()
+    ws = str(tmp_path)
+    ran = []
+
+    async def fake_dispatch(name, args, ws_):
+        ran.append(name)
+        return '{"status":"ok","data":{"agent_id":"agent-7"}}', 1.0
+    ex._execute_tool = fake_dispatch
+
+    verdicts = iter([(False, None), (False, None), (True, None)])
+
+    async def scripted(name, args, reason):
+        return next(verdicts)
+
+    for i, cid in enumerate(("call_D1", "call_D2", "call_A3")):
+        yielded = [_flat(e) async for e in ex.execute(
+            "spawn_background", {"description": "d", "prompt": "p"},
+            ws, tool_call_id=cid, approval_handler=scripted)]
+        hist = _history_funnel(yielded)
+        assert [h.get("tool_call_id") for h in hist] == [cid]
+    assert ran == ["spawn_background"]  # only the approved call executed
+
+
+# ── Approval scope (§11/§13/req 19): pin Y/a/N/d + per-turn memo ──
+
+def test_approval_verdict_mapping():
+    from wisp.cli.approval import prompt_for_approval as m
+    assert m("y") == "approve" and m("Y") == "approve_always"
+    assert m("n") == "reject" and m("N") == "reject_always"
+    assert m("a") == "auto_all" and m("d") == "block_all"
+    assert m("c") == "cancel"
+    assert m("") == "reject" and m("???") == "reject"  # fail-closed
+
+
+def test_approval_session_state_scoping():
+    """Y persists per tool NAME (explicit persistent mode); n is once;
+    a/d flip session policy. y for A authorizes B only via explicit Y/a."""
+    from wisp.approval_state import ApprovalSessionState as S
+    st = S()
+    assert st.should_ask("spawn_background") is True
+    st.allow_tool("spawn_background")  # user pressed Y
+    assert st.should_ask("spawn_background") is False
+    assert st.should_ask("write_file") is True  # other tools still prompt
+    st2 = S()
+    st2.deny_tool("spawn_background")  # user pressed N
+    assert st2.should_ask("spawn_background") is False  # silently denied
+    assert st2.is_allowed("spawn_background") is False
+    st3 = S()
+    st3.set_auto()  # user pressed a
+    assert st3.should_ask("anything") is False
+    assert st3.is_allowed("anything") is True
+    st4 = S()
+    st4.set_block()  # user pressed d
+    assert st4.is_allowed("anything") is False
+
+
+@pytest.mark.asyncio
+async def test_turn_memo_scopes_verdict_to_identical_replay():
+    """Per-turn memo: identical (tool,args) replay reuses the denial
+    without re-prompting; different args prompt again; separate turns
+    (fresh memo) prompt again."""
+    from wisp.core.stateless import WispAgentCore
+    prompts = []
+
+    async def handler(event, args=None, reason=None):
+        prompts.append((event.get("name"), dict(event.get("arguments", {}))))
+        return False
+
+    m1 = WispAgentCore._memoize_handler(handler)
+    await m1({"name": "spawn_background", "arguments": {"prompt": "p"}})
+    await m1({"name": "spawn_background", "arguments": {"prompt": "p"}})
+    assert len(prompts) == 1  # replay served from memo
+    await m1({"name": "spawn_background", "arguments": {"prompt": "other"}})
+    assert len(prompts) == 2  # different invocation prompts again
+    m2 = WispAgentCore._memoize_handler(handler)  # new turn
+    await m2({"name": "spawn_background", "arguments": {"prompt": "p"}})
+    assert len(prompts) == 3
+
+
+# ── Exact live-sequence regression (§18/req 20) ──
+
+@pytest.mark.asyncio
+async def test_exact_live_sequence_no_400(tmp_path):
+    """read, read, failing tool, decline, decline, approve -> next model
+    submission serializes with every ID paired; no missing/unknown IDs."""
+    from wisp.core.stateless import validate_tool_message_provenance as v
+    from wisp.providers.openai import OpenAIProvider
+    ex = _executor()
+    ws = str(tmp_path)
+    (tmp_path / "a.py").write_text("x = 1\n")
+
+    _real_dispatch = ex._execute_tool
+
+    async def fake_dispatch(name, args, ws_):
+        if name == "spawn_background":
+            return '{"status":"ok","data":{"agent_id":"agent-7"}}', 1.0
+        return await _real_dispatch(name, args, ws_)
+    ex._execute_tool = fake_dispatch
+
+    async def _boom(name, args, **kw):
+        from wisp.tools.errors import ToolError
+        raise ToolError("SSL CERTIFICATE_VERIFY_FAILED: tls boom")
+
+    import wisp.tools.registry as _reg
+    orig_search = _reg.TOOL_IMPLS.get("web_search")
+    _reg.TOOL_IMPLS["web_search"] = _boom
+    verdicts = iter([(False, None), (False, None), (True, None)])
+
+    async def scripted(name, args, reason):
+        return next(verdicts)
+
+    plan = [("read_file", {"path": "a.py"}, None),
+            ("read_file", {"path": "a.py"}, None),
+            ("web_search", {"query": "q"}, None),
+            ("spawn_background", {"description": "d", "prompt": "p"}, scripted),
+            ("spawn_background", {"description": "d", "prompt": "p"}, scripted),
+            ("spawn_background", {"description": "d", "prompt": "p"}, scripted)]
+    try:
+        history, assistant_ids = [], []
+        for i, (name, args, ah) in enumerate(plan):
+            cid = f"call_LIVE_{i}"
+            yielded = [_flat(e) async for e in ex.execute(
+                name, args, ws, tool_call_id=cid, approval_handler=ah)]
+            hist = _history_funnel(yielded)
+            assert hist, name  # every call yields exactly one history result
+            assert [h.get("tool_call_id") for h in hist] == [cid], name
+            assistant_ids.append(cid)
+            content = hist[0].get("result", "")
+            history.append({"role": "tool", "tool_call_id": cid, "content": str(content)})
+        assistant = {"role": "assistant", "content": "", "tool_calls": [
+            {"id": cid, "type": "function",
+             "function": {"name": n, "arguments": "{}"}}
+            for cid, (n, _, _) in zip(assistant_ids, plan)]}
+        assert v(assistant, history) is None
+        OpenAIProvider(model="t", api_key="sk-test")._build_payload(
+            "sys", [assistant] + history, None, stream=False)
+    finally:
+        if orig_search is not None:
+            _reg.TOOL_IMPLS["web_search"] = orig_search
+
+
+# ── Intake identity (§4): id-less provider calls get ONE stable ID ──
+
+def test_intake_stamps_stable_id_once():
+    from wisp.core.stateless import _ensure_intake_id
+    tc = {"type": "tool_call", "name": "read_file", "arguments": {}}
+    _ensure_intake_id(tc)
+    first = tc["id"]
+    assert first and isinstance(first, str)
+    _ensure_intake_id(tc)  # never re-minted
+    assert tc["id"] == first
+
+
+def test_intake_preserves_authoritative_id():
+    from wisp.core.stateless import _ensure_intake_id
+    tc = {"type": "tool_call", "name": "read_file", "arguments": {},
+          "id": "call_PROVIDER_1"}
+    _ensure_intake_id(tc)
+    assert tc["id"] == "call_PROVIDER_1"
+
+
+def test_id_less_call_produces_consistent_pair(tmp_path):
+    """End-to-end for an id-less provider call: assistant block and tool
+    result share the intake-minted ID; provenance + preflight pass."""
+    from wisp.core.stateless import _ensure_intake_id, validate_tool_message_provenance as v
+    from wisp.providers.openai import OpenAIProvider
+    ex = _executor()
+    ws = str(tmp_path)
+
+    async def _ok(name, args, **kw):
+        return '{"status": "ok", "data": "fine"}'
+
+    import wisp.tools.registry as _reg
+    orig = _reg.TOOL_IMPLS.get("read_file")
+    _reg.TOOL_IMPLS["read_file"] = _ok
+
+    async def _run():
+        tc = _ensure_intake_id({"type": "tool_call", "name": "read_file",
+                                "arguments": {"path": "x"}})
+        yielded = [_flat(e) async for e in ex.execute(
+            tc["name"], tc["arguments"], ws, tool_call_id=tc.get("id"))]
+        hist = _history_funnel(yielded)
+        assert [h.get("tool_call_id") for h in hist] == [tc["id"]]
+        a = {"role": "assistant", "content": "", "tool_calls": [
+            {"id": tc["id"], "type": "function",
+             "function": {"name": "read_file", "arguments": "{}"}}]}
+        t = [{"role": "tool", "tool_call_id": tc["id"], "content": "fine"}]
+        assert v(a, t) is None
+        OpenAIProvider(model="t", api_key="sk-test")._build_payload(
+            "sys", [a] + t, None, stream=False)
+
+    try:
+        import asyncio
+        asyncio.run(_run())
+    finally:
+        if orig is not None:
+            _reg.TOOL_IMPLS["read_file"] = orig

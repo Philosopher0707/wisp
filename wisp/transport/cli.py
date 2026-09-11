@@ -825,6 +825,7 @@ class CLITransport(Transport):
         """
         from wisp.cli.approval import (
             ApprovalCancelled,
+            ApprovalTimeout,
             normalize_answer,
             prompt_for_approval,
             ApprovalVerdict,
@@ -840,7 +841,7 @@ class CLITransport(Transport):
                     raw = await asyncio.to_thread(_reader)
                     if raw == "":
                         print("No response within 30s — denying (fail-closed).", file=sys.stderr)
-                        return False
+                        raise ApprovalTimeout(tool_name)
                 else:
                     raw = await self._read_approval_answer_with_reminders(is_file_edit=approval_info.is_file_edit)
             except (EOFError, OSError):

@@ -540,7 +540,10 @@ class TestRoleToolRestriction:
             if e.get("type") == "tool_result" and e.get("tool_call_id") == "call_denied_1"
         ]
         assert refusals, f"denied batch call must yield a refusal tool_result: {events}"
-        assert "Blocked" in str(refusals[0].get("result", "")), refusals[0]
+        # 13F.1: structured POLICY_DENIED envelope (was "[Blocked: …]" text)
+        res = refusals[0].get("result", {})
+        assert isinstance(res, dict) and res.get("status") == "POLICY_DENIED", refusals[0]
+        assert res.get("executed") is False
 
         # (b) the denial appears in the turn's message history
         assert len(seen) >= 2, f"expected a second provider round, got {len(seen)}"
@@ -550,7 +553,7 @@ class TestRoleToolRestriction:
             if m.get("role") == "tool" and m.get("tool_call_id") == "call_denied_1"
         ]
         assert tool_msgs, f"denial missing from next-round history: {second_messages}"
-        assert "Blocked" in str(tool_msgs[0].get("content", "")), tool_msgs[0]
+        assert "POLICY_DENIED" in str(tool_msgs[0].get("content", "")), tool_msgs[0]
 
     @pytest.mark.asyncio
     async def test_allowed_tool_still_executes_under_restriction(self, core):

@@ -24,11 +24,13 @@ from collections.abc import Coroutine
 from typing import Any, AsyncIterator, Optional
 
 from wisp.config import WispConfig
+from wisp.core.contracts import ToolRisk, risk_for_tool
 
 from ._runner import SubagentRunner
 from ._worktree_manager import WorktreeManager
 from .roles import ROLE_CONFIGS
 from .task import EventKind, OrchestratorEvent, SubagentContract, SubagentResult
+from .task import MAX_SUBAGENT_RETRIES
 from .telemetry import mask_text
 
 logger = logging.getLogger(__name__)
@@ -850,7 +852,12 @@ class SubagentOrchestrator:
             # ── Timeout retry: one extra round at ×1.5, bounded by the ──
             # parent turn's remaining clock. Slow reasoning models (nemotron
             # ultra) regularly need just a bit more than a role's base budget.
-            if result.timed_out and contract.retry_count == 0:
+            # G1E: consumes shared logical budget AND requires side-effect
+            # safety (re-executing post-mutation work on a shared workspace
+            # would duplicate side effects).
+            if (result.timed_out and self._budget_remaining(contract) > 0
+                    and self._auto_retry_safe(
+                        contract, result, worktree_path is not None)):
                 from wisp.tools.context import get_turn_deadline
 
                 budget = contract.timeout_seconds * 1.5
@@ -863,14 +870,21 @@ class SubagentOrchestrator:
                         "Subagent %s timed out after %.0fs; retrying once with %.0fs",
                         contract.name, contract.timeout_seconds, budget,
                     )
-                    retry_dict = dict(contract.__dict__)
-                    retry_dict["timeout_seconds"] = budget
-                    retry_dict["retry_count"] = 1
-                    return await self.run(SubagentContract(**retry_dict))
+                    await self._emit_retry(contract, contract.retry_count + 1,
+                                           0.0)
+                    return await self.run(self._consume_budget(
+                        contract, timeout_seconds=budget))
+            elif result.timed_out and contract.retry_count > 0:
+                logger.info(
+                    "Subagent %s timed out; retry budget exhausted (%d/%d) — "
+                    "not retrying", contract.name, contract.retry_count,
+                    contract.max_retries)
 
             # ── Schema validation ────────────────────────────────
             if contract.output_schema and result.success:
-                result = await self._validate_output(result, contract)
+                result = await self._validate_output(
+                    result, contract,
+                    isolated_effective=worktree_path is not None)
 
             # ── Post-run bookkeeping ───────────────────────────────────
             # Only successes are cached: replaying a failure/timeout as a
@@ -909,11 +923,17 @@ class SubagentOrchestrator:
                         except Exception as exc:
                             logger.warning("Failed to apply worktree patch for %s: %s", worktree_path, exc)
 
+            # G1E §25: stamp consumed logical budget on the result so callers
+            # observe attempt_number/max without a parallel channel.
+            result.retry_count = contract.retry_count
             return result
         finally:
             await _cleanup_worktree()
 
     _TRANSIENT_MARKERS = ("429", "rate limit", "too many requests", "connection reset")
+
+    #: Authorization-denial marker: denials must never auto-retry (§26).
+    _DENIAL_MARKERS = ("[denied", "denied by", "approval denied", "not authorized")
 
     @staticmethod
     def _is_transient(error: str | None) -> bool:
@@ -923,6 +943,87 @@ class SubagentOrchestrator:
             return False
         lowered = error.lower()
         return any(m in lowered for m in SubagentOrchestrator._TRANSIENT_MARKERS)
+
+    @staticmethod
+    def _is_denial(error: str | None) -> bool:
+        """Authorization denials are terminal for automatic retry."""
+        if not error:
+            return False
+        lowered = error.lower()
+        return any(m in lowered for m in SubagentOrchestrator._DENIAL_MARKERS)
+
+    @staticmethod
+    def _budget_remaining(contract: SubagentContract) -> int:
+        """Shared logical budget: extra executions still allowed (G1E §5)."""
+        return max(0, contract.max_retries - contract.retry_count)
+
+    @staticmethod
+    def _consume_budget(contract: SubagentContract, **overrides) -> SubagentContract:
+        """Reconstruct the contract with one unit of budget consumed (G1E §6).
+
+        Monotonic: the count only grows; the cap is never raised. Children
+        inherit the consumed count — they cannot mint fresh budget.
+        """
+        return SubagentOrchestrator._with_count(
+            contract, contract.retry_count + 1, **overrides)
+
+    @staticmethod
+    def _with_count(contract: SubagentContract, count: int,
+                    **overrides) -> SubagentContract:
+        """Reconstruct the contract with an explicit consumed count."""
+        fields = {k: v for k, v in contract.__dict__.items()
+                  if k in SubagentContract.__dataclass_fields__}
+        fields["retry_count"] = max(0, count)
+        fields.update(overrides)
+        return SubagentContract(**fields)
+
+    def _effective_isolation(self, contract: SubagentContract) -> bool:
+        """Post-hoc isolation verdict for outer retry layers (G1E §21).
+
+        Exact only inside run() (worktree handle in scope); elsewhere the
+        declared flag plus the creation-failure memo is the sound
+        approximation (fallback-to-shared degrades to unsafe).
+        """
+        return bool(contract.worktree_isolated
+                    and self._worktree_unavailable_reason is None)
+
+    def _auto_retry_safe(self, contract: SubagentContract,
+                         result: SubagentResult,
+                         isolated_effective: bool) -> bool:
+        """Whether automatically re-executing this task is side-effect safe.
+
+        Allowed iff: the task's tools are all read-only (cannot mutate),
+        or the attempt ran effectively isolated (fresh worktree per attempt;
+        the patch applies once, on success only), or no mutating tool ran
+        (evidence from the attempt's own tool-call log). Shared-workspace
+        evidence is outcome-blind, so a mutating-capable task that ran a
+        mutating tool there is refused. Unknown tools fail closed (EXEC).
+        """
+        tools = contract.tools or []
+        if tools and all(risk_for_tool(t) == ToolRisk.READ for t in tools):
+            return True
+        if isolated_effective:
+            return True
+        ran = result.tool_calls or []
+        names = [c.get("name", "") for c in ran if isinstance(c, dict)]
+        return not any(risk_for_tool(n) != ToolRisk.READ for n in names)
+        """Whether automatically re-executing this task is side-effect safe.
+
+        Allowed iff: the task's tools are all read-only (cannot mutate),
+        or the attempt ran effectively isolated (fresh worktree per attempt;
+        the patch applies once, on success only), or no mutating tool ran
+        (evidence from the attempt's own tool-call log). Shared-workspace
+        evidence is outcome-blind, so a mutating-capable task that ran a
+        mutating tool there is refused. Unknown tools fail closed (EXEC).
+        """
+        tools = contract.tools or []
+        if tools and all(risk_for_tool(t) == ToolRisk.READ for t in tools):
+            return True
+        if isolated_effective:
+            return True
+        ran = result.tool_calls or []
+        names = [c.get("name", "") for c in ran if isinstance(c, dict)]
+        return not any(risk_for_tool(n) != ToolRisk.READ for n in names)
 
     async def _emit_retry(self, contract: SubagentContract, attempt: int,
                           backoff_s: float) -> None:
@@ -980,20 +1081,47 @@ class SubagentOrchestrator:
                 # Live evidence (2026-08-25): six concurrent children on a
                 # rate-limited cloud endpoint all died on 429 in <3s with
                 # zero retries — run() alone has no transient handling.
-                attempts = 2
-                for attempt in range(attempts + 1):
-                    result = await self.run(contract)
+                # G1E: attempts consume the contract's shared logical budget
+                # (no hidden multiplier); each re-execution requires
+                # side-effect safety. Next count derives from the stamped
+                # result so inner-layer consumption is observed (G1E §6).
+                max_budget = min(contract.max_retries, MAX_SUBAGENT_RETRIES)
+                count = contract.retry_count
+                n = 0
+                while True:
+                    attempt_contract = (
+                        contract if n == 0
+                        else self._with_count(contract, count))
+                    result = await self.run(attempt_contract)
+                    result.retry_count = max(result.retry_count,
+                                             attempt_contract.retry_count)
                     if result.success or not self._is_transient(result.error):
                         return result
-                    if attempt < attempts:
-                        backoff = min(2 ** (attempt + 1), 6)
+                    if self._is_denial(result.error):
                         logger.warning(
-                            "Subagent %s transient failure (attempt %d/%d): %s — retrying in %ds",
-                            contract.name, attempt + 1, attempts + 1,
-                            (result.error or "")[:120], backoff,
-                        )
-                        await self._emit_retry(contract, attempt + 1, backoff)
-                        await asyncio.sleep(backoff)
+                            "Subagent %s denied authorization — not retrying",
+                            contract.name)
+                        return result
+                    if not self._auto_retry_safe(
+                            attempt_contract, result,
+                            self._effective_isolation(attempt_contract)):
+                        logger.warning(
+                            "Subagent %s transient failure but re-execution "
+                            "unsafe (shared-workspace mutations); operator "
+                            "retry required", contract.name)
+                        return result
+                    count = max(count, result.retry_count) + 1
+                    if count > max_budget:
+                        return result
+                    backoff = min(2 ** (n + 1), 6)
+                    n += 1
+                    logger.warning(
+                        "Subagent %s transient failure (attempt %d/%d): %s — retrying in %ds",
+                        contract.name, n, max_budget + 1,
+                        (result.error or "")[:120], backoff,
+                    )
+                    await self._emit_retry(contract, n, backoff)
+                    await asyncio.sleep(backoff)
                 return result
 
         if not contracts:
@@ -1339,12 +1467,14 @@ class SubagentOrchestrator:
         return "\n".join(parts)
 
     async def _validate_output(
-        self, result: SubagentResult, contract: SubagentContract
+        self, result: SubagentResult, contract: SubagentContract,
+        isolated_effective: bool = False,
     ) -> SubagentResult:
         """Validate subagent output against a JSON schema.
 
-        If validation fails and ``auto_retry_parse`` is True, retry once
-        with the validation error injected into the subagent context.
+        Parse repair consumes shared logical budget and requires
+        side-effect safety (G1E §18/§21): re-running a task that already
+        mutated a shared workspace would duplicate side effects.
         """
         if not contract.output_schema:
             return result
@@ -1365,16 +1495,22 @@ class SubagentOrchestrator:
             contract.name, "; ".join(errors)
         )
 
-        if contract.auto_retry_parse and contract.retry_count == 0:
+        if (contract.auto_retry_parse
+                and self._budget_remaining(contract) > 0
+                and self._auto_retry_safe(contract, result,
+                                          isolated_effective)):
             logger.info("Retrying subagent %s with schema feedback", contract.name)
-            retry_dict = {k: v for k, v in contract.__dict__.items()
-                          if k in SubagentContract.__dataclass_fields__}
-            retry_dict["task"] = build_retry_prompt(
-                contract.task, contract.output_schema, result.output, errors
-            )
-            retry_dict["retry_count"] = contract.retry_count + 1
-            retry_contract = SubagentContract(**retry_dict)
-            return await self.run(retry_contract)
+            await self._emit_retry(contract, contract.retry_count + 1, 0.0)
+            return await self.run(self._consume_budget(
+                contract,
+                task=build_retry_prompt(
+                    contract.task, contract.output_schema, result.output,
+                    errors)))
+        if contract.auto_retry_parse and self._budget_remaining(contract) > 0:
+            logger.warning(
+                "Subagent %s schema repair refused: re-execution unsafe "
+                "(shared-workspace mutations); operator retry required",
+                contract.name)
 
         result.error = f"Schema validation failed: {'; '.join(errors)}"
         return result
@@ -1413,15 +1549,32 @@ class SubagentOrchestrator:
     async def _run_with_retry(self, contract: SubagentContract) -> SubagentResult:
         """Run a contract with retry on failure.
 
-        Failed subagents retry with exponential backoff. Timed-out subagents
-        do NOT retry — a timeout means the model is too slow or unreachable,
-        and retrying would block the parent agent for far too long.
+        Failed subagents retry with exponential backoff against the SHARED
+        logical budget (G1E §5): each outer iteration consumes one unit, so
+        nested run()-internal retries cannot multiply past max_retries.
+        Timed-out subagents do NOT retry here — a timeout means the model
+        is too slow or unreachable, and retrying would block the parent
+        agent for far too long. (Timeout recovery lives in run(), once per
+        budget.) Cancelled/denied results never retry. Re-execution
+        requires side-effect safety (§21).
         """
-        max_retries = contract.max_retries
+        max_retries = min(contract.max_retries, MAX_SUBAGENT_RETRIES)
         last_error = ""
-        for attempt in range(max_retries + 1):
+        # count = logical executions consumed so far (starts at the inherited
+        # count). Each iteration runs with `count`; the result comes back
+        # stamped with what run() itself consumed, so the next iteration
+        # continues from result.retry_count + 1 — inner-layer consumption is
+        # observed, never re-minted (G1E §6). Total executions <= 1 + max.
+        count = contract.retry_count
+        n = 0
+        while True:
+            attempt_contract = (
+                contract if n == 0
+                else self._with_count(contract, count))
             try:
-                result = await self.run(contract)
+                result = await self.run(attempt_contract)
+                result.retry_count = max(result.retry_count,
+                                         attempt_contract.retry_count)
                 if result.success:
                     return result
                 last_error = result.error or "subagent failed"
@@ -1435,24 +1588,44 @@ class SubagentOrchestrator:
                 if "timeout" in last_error.lower():
                     logger.warning("Subagent %s timed out — not retrying", contract.name)
                     return result
+                # Don't retry authorization denials or cancellations (§17).
+                if self._is_denial(last_error) or "cancell" in last_error.lower():
+                    logger.warning(
+                        "Subagent %s denied/cancelled — not retrying: %s",
+                        contract.name, last_error[:120])
+                    return result
                 # Don't retry on budget exhaustion
                 if "BUDGET EXHAUSTED" in (result.output or "") or "BUDGET" in (last_error or ""):
                     logger.warning("Subagent %s budget exhausted — not retrying", contract.name)
                     return result
-                if attempt < max_retries:
-                    backoff = 2 ** attempt
+                if not self._auto_retry_safe(
+                        attempt_contract, result,
+                        self._effective_isolation(attempt_contract)):
                     logger.warning(
-                        "Subagent %s failed (attempt %d/%d), retrying in %ds: %s",
-                        contract.name, attempt + 1, max_retries + 1, backoff, last_error,
-                    )
-                    await asyncio.sleep(backoff)
+                        "Subagent %s failed but re-execution unsafe "
+                        "(shared-workspace mutations); operator retry "
+                        "required: %s", contract.name, last_error[:120])
+                    return result
+                count = max(count, result.retry_count) + 1
+                if count > max_retries:
+                    break
+                backoff = 2 ** n
+                n += 1
+                logger.warning(
+                    "Subagent %s failed (attempt %d/%d), retrying in %ds: %s",
+                    contract.name, n, max_retries + 1, backoff, last_error,
+                )
+                await self._emit_retry(attempt_contract, n, backoff)
+                await asyncio.sleep(backoff)
             except Exception as exc:
                 last_error = str(exc)
-                if attempt < max_retries:
-                    backoff = 2 ** attempt
+                count = max(count, 0) + 1
+                if count <= max_retries:
+                    backoff = 2 ** n
+                    n += 1
                     logger.warning(
                         "Subagent %s crashed (attempt %d/%d), retrying in %ds: %s",
-                        contract.name, attempt + 1, max_retries + 1, backoff, last_error,
+                        contract.name, n, max_retries + 1, backoff, last_error,
                     )
                     await asyncio.sleep(backoff)
                 else:

@@ -37,8 +37,14 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 
-def _new_id() -> str:
-    return str(uuid.uuid4())[:8]
+#: Absolute ceiling for SubagentContract.max_retries (G1E §28). A retry
+#: re-executes a whole agent task; unbounded or huge values are an
+#: adversarial multiplier. Callers declare within [0, cap]; anything
+#: outside is clamped fail-closed (garbage coerces to 0 = no retry).
+MAX_SUBAGENT_RETRIES = 5
+
+
+def _new_id() -> str:    return str(uuid.uuid4())[:8]
 
 
 def _now_ts() -> float:
@@ -147,10 +153,16 @@ class SubagentContract:
     """Number of subagents spawned by this agent. Prevents exponential explosion."""
 
     retry_count: int = 0
-    """Number of schema validation retries attempted."""
+    """Logical retry budget CONSUMED by this task (G1E §5). Every
+    subagent-layer re-execution (parallel-guard, timeout, validation,
+    outer retry, pattern retry) reconstructs the contract with +1 and
+    refuses when retry_count >= max_retries. Monotonic: no path resets,
+    reconstructs, or increments the cap to evade the limit."""
 
     max_retries: int = 0
-    """Max execution retries on failure (0 = no retry). Timeouts are not retried."""
+    """Logical retry budget for this task: max EXTRA executions beyond the
+    first (0 = run once, no automatic retry). Clamped to
+    [0, MAX_SUBAGENT_RETRIES] in __post_init__."""
 
     max_memory_mb: int = 2048
     """Maximum memory limit for process subagents (Unix only)."""
@@ -162,9 +174,30 @@ class SubagentContract:
     """SharedContext instance for inter-subagent communication in parallel runs."""
 
     def __post_init__(self):
-        """Normalize backward-compat aliases."""
+        """Normalize backward-compat aliases; clamp retry budget (G1E §28).
+
+        max_retries is strictly typed and bounded: only real numbers
+        coerce (bool/int/float); strings, None, and objects coerce
+        fail-closed to 0 (so "false"/"10" can never mint budget, §28).
+        Negatives clamp to 0, huge values to MAX_SUBAGENT_RETRIES.
+        retry_count floors at 0 (a child must never inherit credit).
+        """
         if self.prompt and not self.task:
             self.task = self.prompt
+        if isinstance(self.max_retries, bool):
+            coerced = int(self.max_retries)
+        elif isinstance(self.max_retries, (int, float)):
+            coerced = int(self.max_retries)
+        else:
+            coerced = 0
+        object.__setattr__(self, "max_retries",
+                           max(0, min(coerced, MAX_SUBAGENT_RETRIES)))
+        used = self.retry_count
+        if isinstance(used, bool):
+            used = int(used)
+        elif not isinstance(used, (int, float)):
+            used = 0
+        object.__setattr__(self, "retry_count", max(0, int(used)))
         if self.system_prompt_extra and self.system_prompt is None:
             # Build a default system prompt from role + extra
             pass  # Will be handled by orchestrator

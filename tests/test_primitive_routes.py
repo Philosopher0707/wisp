@@ -91,8 +91,11 @@ class TestPrimitiveGating:
         events = _run(
             _mk_executor(tmp_path, permission_mode=PermissionMode.READ_ONLY),
             "exec_sandbox", {"command": "echo hi"}, str(tmp_path))
-        # Denied by the layered authority consult the thin branch never had.
-        assert "Denied" in _result_text(events)
+        # 13F.1: structured POLICY_DENIED envelope from the mode
+        # hard-deny pre-check (was "[Denied by … layer]" text).
+        # (_result_text extracts the human line; the envelope status is
+        # asserted in test_13f1_remediation STEP 7/9 coverage.)
+        assert "Policy denied:" in _result_text(events)
 
     def test_ask_all_without_handler_blocks_fs_mutate(self, tmp_path):
         events = _run(

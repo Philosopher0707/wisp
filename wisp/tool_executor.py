@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 from wisp.config import WispConfig
-from wisp.infra.security import PermissionMode
+from wisp.infra.security import PermissionMode, policy_hard_deny
 from wisp.core.events import (
     AgentEvent,
     tool_result as _tool_result_event,
@@ -35,7 +35,7 @@ from wisp.core.events import (
     system as system_event,
 )
 from wisp.auth import authorize, classify_workspace, local_principal
-from wisp.cli.approval import ApprovalCancelled
+from wisp.cli.approval import ApprovalCancelled, ApprovalTimeout
 from wisp.tools.errors import ToolError
 from wisp.tools._utils import check_dangerous_command
 from wisp.tools import context as exec_ctx
@@ -638,6 +638,22 @@ class ToolExecutor:
         func_name = tool_name
         func_args = dict(tool_args) if tool_args else {}
 
+        # ── Policy hard-DENY (13F.1 R1) — before everything, including
+        # approval. A mode-denied tool never prompts and no `y` can run
+        # it: the gate enforces the same rule, this is the defense for
+        # direct-executor callers. REQUIRE_APPROVAL tools pass through
+        # here (None) to the approval path below.
+        _hard_deny = policy_hard_deny(
+            func_name, getattr(self.config, "permission_mode", None))
+        if _hard_deny is not None:
+            from wisp.core.events import denial_result, DENIAL_POLICY_DENIED
+            self._audit_denial(func_name, func_args, workspace, f"Policy denied: {func_name} is not permitted.")
+            yield denial_result(func_name, DENIAL_POLICY_DENIED,
+                                f"Policy denied: {func_name} is not permitted "
+                                f"in {getattr(self.config, 'permission_mode', 'auto_edit')} mode.",
+                                tool_call_id=tool_call_id)
+            return
+
         # ── Layered authority consult (M2 I1) — denials only; approval
         # stays with the existing gate below. Default workspace trust is
         # REVIEW_REQUIRED (no behavior change); quarantine markers deny
@@ -652,8 +668,10 @@ class ToolExecutor:
             effective_policy=self.policy,
         )
         if not _decision.allowed:
-            yield _tool_result_event(
-                func_name,
+            from wisp.core.events import denial_result, DENIAL_POLICY_DENIED
+            self._audit_denial(func_name, func_args, workspace, f"[Denied by {_decision.controlling_layer} layer: {_decision.reason}]")
+            yield denial_result(
+                func_name, DENIAL_POLICY_DENIED,
                 f"[Denied by {_decision.controlling_layer} layer: {_decision.reason}]",
                 tool_call_id=tool_call_id,
             )
@@ -689,6 +707,7 @@ class ToolExecutor:
         # ── Plan mode guard ──
         plan_block_msg = self._check_plan_mode(func_name)
         if plan_block_msg:
+            self._audit_denial(func_name, func_args, workspace, plan_block_msg)
             yield _tool_result_event(func_name, plan_block_msg,
                         tool_call_id=tool_call_id,)
             return
@@ -696,6 +715,7 @@ class ToolExecutor:
         # ── Dangerous command auto-block ──
         danger_block_msg = self._check_dangerous_command(func_name, func_args)
         if danger_block_msg:
+            self._audit_denial(func_name, func_args, workspace, danger_block_msg)
             yield _tool_result_event(func_name, danger_block_msg,
                         tool_call_id=tool_call_id,)
             return
@@ -703,6 +723,7 @@ class ToolExecutor:
         # ── Permission mode guard ──
         perm_block_msg = self._check_permission_mode(func_name)
         if perm_block_msg:
+            self._audit_denial(func_name, func_args, workspace, perm_block_msg)
             yield _tool_result_event(func_name, perm_block_msg,
                         tool_call_id=tool_call_id,)
             return
@@ -724,10 +745,13 @@ class ToolExecutor:
                 not is_full_mode and not getattr(self.config, "auto_approve", False))):
             if not approval_handler:
                 if forced_approval:
-                    yield _tool_result_event(
-                        func_name,
+                    from wisp.core.events import denial_result, DENIAL_POLICY_DENIED
+                    self._audit_denial(func_name, func_args, workspace, f"[Blocked: approval required for {func_name}, no handler]")
+                    yield denial_result(
+                        func_name, DENIAL_POLICY_DENIED,
                         f"[Blocked: {getattr(self.config, 'permission_mode', 'auto_edit')} mode "
                         f"requires approval for {func_name}, but no approval handler is available]",
+                        tool_call_id=tool_call_id,
                     )
                     return
                 # auto_approve=True + no handler + not forced = pass through
@@ -743,19 +767,35 @@ class ToolExecutor:
                     # User verdict, not an interruption: purge the pending
                     # invocation with an explicit outcome so the model sees
                     # a rejection instead of re-emitting the identical call.
+                    from wisp.core.events import denial_result, DENIAL_CANCELLED
                     tool = cancelled.tool_name or func_name
-                    yield _tool_result_event(
-                        func_name,
+                    self._audit_denial(func_name, func_args, workspace, f"[Cancelled by user at approval for {func_name}]")
+                    yield denial_result(
+                        func_name, DENIAL_CANCELLED,
                         f"[Cancelled by user at approval for {tool} — do not retry this call]",
                         tool_call_id=tool_call_id,
                     )
+                    return
+                except ApprovalTimeout as timed_out:
+                    # Approval lapsed: fail closed with a distinct marker.
+                    from wisp.core.events import denial_result, DENIAL_APPROVAL_TIMEOUT
+                    tool = timed_out.tool_name or func_name
+                    self._audit_denial(func_name, func_args, workspace, f"Approval timed out: {func_name} was not approved.")
+                    yield denial_result(
+                        func_name, DENIAL_APPROVAL_TIMEOUT,
+                        f"Approval timed out: {tool} was not approved.",
+                        tool_call_id=tool_call_id)
                     return
                 if modified is not None:
                     func_args.clear()
                     func_args.update(modified)
                 if not approved:
-                    yield _tool_result_event(func_name, f"[Blocked: user declined {func_name}]",
-                        tool_call_id=tool_call_id,)
+                    from wisp.core.events import denial_result, DENIAL_USER_DENIED
+                    self._audit_denial(func_name, func_args, workspace, f"User denied: {func_name} was not approved.")
+                    yield denial_result(
+                        func_name, DENIAL_USER_DENIED,
+                        f"User denied: {func_name} was not approved.",
+                        tool_call_id=tool_call_id)
                     return
         elif needs_approval and getattr(self.config, "auto_approve", False):
             was_auto_approved = True
@@ -1085,6 +1125,30 @@ class ToolExecutor:
         if getattr(self.config, "plan_mode", False) and func_name in _get_write_tools(self.config):
             return f"[Blocked: plan mode — {func_name} requires write access]"
         return None
+
+    def _audit_denial(self, func_name: str, func_args: dict,
+                        workspace: str, reason: str) -> None:
+        """Record one denial audit event (13F.1 R3, exactly-once).
+
+        Mirrors the approval-audit construction (store-aware, path
+        fallback), best-effort. Called once per denial yield in
+        execute(); repeat/breaker/pre-hook flow-control blocks are
+        deliberately not audited here (high-frequency backpressure,
+        not authorization decisions).
+        """
+        try:
+            pm = getattr(self.config, "permission_mode", "auto_edit")
+            mode = pm.value if hasattr(pm, "value") else str(pm)
+        except Exception:
+            mode = "auto_edit"
+        try:
+            if getattr(self, "audit_trail", None) is not None:
+                audit = AuditLog(store=self.audit_trail._store)
+            else:
+                audit = AuditLog(Path(workspace).resolve() / ".wisp" / "audit.jsonl")
+            audit.log_blocked(func_name, dict(func_args), workspace, reason, mode=mode)
+        except Exception:
+            logger.warning("Denial audit write failed for %s", func_name, exc_info=True)
 
     def _check_dangerous_command(self, func_name: str, func_args: dict) -> str | None:
         """Check dangerous bash commands. Returns block message if blocked."""
@@ -1879,6 +1943,10 @@ class ToolExecutor:
                 model=model_override,
                 workspace=workspace,
                 auto_approve=spec.get("auto_approve", False),
+                # G1E §5: explicit logical budget (1 + 2 retries), matching
+                # the spawn path — run_parallel no longer mints implicit
+                # attempts for default-0 contracts.
+                max_retries=int(spec.get("auto_retry", True)) * 2,
             ))
 
         queue = exec_ctx.sub_event_queue.get()

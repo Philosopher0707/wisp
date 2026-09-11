@@ -29,12 +29,18 @@ class RuleEffect(StrEnum):
 
 @dataclass(frozen=True)
 class PolicyDecision:
-    """Immutable decision from a policy evaluation."""
+    """Immutable decision from a policy evaluation.
+
+    Three-state contract (13F.1): ALLOW (allowed, no approval),
+    REQUIRE_APPROVAL (allowed + approval_required — the host must ask),
+    DENY (allowed=False — hard, never overridable by user approval).
+    """
 
     allowed: bool
     reason: str = ""
     modified_args: Optional[dict] = None
     rule_name: str = ""
+    approval_required: bool = False
 
     @classmethod
     def allow(cls, rule_name: str = "", reason: str = "") -> "PolicyDecision":
@@ -43,6 +49,11 @@ class PolicyDecision:
     @classmethod
     def deny(cls, rule_name: str, reason: str) -> "PolicyDecision":
         return cls(allowed=False, reason=reason, rule_name=rule_name)
+
+    @classmethod
+    def require_approval(cls, rule_name: str, reason: str) -> "PolicyDecision":
+        return cls(allowed=True, approval_required=True,
+                   reason=reason, rule_name=rule_name)
 
     @classmethod
     def allow_modified(cls, rule_name: str, modified_args: dict) -> "PolicyDecision":
@@ -149,10 +160,13 @@ class PriorityRuleEngine(PolicyEngine):
                     reason=result.reason,
                     rule_name=result.rule_name or rule.name,
                 )
-
-            if result.modified_args:
-                last_allow = result
-            else:
+            # Fail-closed stickiness (13F.1): a REQUIRE_APPROVAL verdict
+            # is never cleared by a later plain allow (e.g. the catch-all).
+            # Only a DENY (returned above), an arg-modifying allow, or a
+            # newer gated verdict replaces it.
+            if (result.modified_args or result.approval_required
+                    or last_allow is None
+                    or not last_allow.approval_required):
                 last_allow = result
 
         if last_allow is not None:
@@ -217,17 +231,28 @@ class PriorityRuleEngine(PolicyEngine):
         ))
         engine.add_rule(Rule(
             name="mode.ask_all_block",
-            predicate=_make_block_rule(ask_block, "ASK_ALL mode requires approval", "ask_all"),
+            predicate=_make_approval_rule(ask_block, "ASK_ALL mode requires approval for", "ask_all"),
             priority=21,
             description="ASK_ALL mode: blocked tools require approval",
         ))
 
-        # Priority 30: AUTO_EDIT — blocked tools denied, rest allowed
+        # Priority 30: AUTO_EDIT — exec/git writes are hard DENY (never
+        # prompt, never overridable); delegation primitives (spawn/fanout)
+        # are REQUIRE_APPROVAL (13F.1: children are mode-filtered, so the
+        # fanout itself needs an operator's yes, not a ban).
         engine.add_rule(Rule(
             name="mode.auto_edit_block",
-            predicate=_make_block_rule(edit_block, "AUTO_EDIT mode blocks", "auto_edit"),
+            predicate=_make_block_rule(edit_block - _AUTO_EDIT_APPROVAL_TOOLS,
+                                       "AUTO_EDIT mode blocks", "auto_edit"),
             priority=30,
             description="AUTO_EDIT mode: bash and destructive tools blocked",
+        ))
+        engine.add_rule(Rule(
+            name="mode.auto_edit_require_approval",
+            predicate=_make_approval_rule(_AUTO_EDIT_APPROVAL_TOOLS,
+                                          "AUTO_EDIT mode requires approval for", "auto_edit"),
+            priority=31,
+            description="AUTO_EDIT mode: delegation primitives require approval",
         ))
 
         # Priority 1000: catch-all — allow if mode matched, deny otherwise
@@ -256,10 +281,17 @@ _DEFAULT_ASK_ALL_BLOCK = frozenset({
     "spawn", "fanout", "plan_task", "mark_step_done", "update_plan",
 })
 
-_DEFAULT_AUTO_EDIT_BLOCK = frozenset({
+# AUTO_EDIT mode split (13F.1): hard-DENY exec/git writes vs
+# REQUIRE_APPROVAL delegation primitives. A fanout/spawn itself performs
+# no mutation — children are independently mode-filtered
+# (filter_allowed_for_mode) — so it needs an operator's yes, not a ban.
+# Single source for the split; the legacy BLOCK union is derived.
+_AUTO_EDIT_DENY_TOOLS = frozenset({
     "run_bash", "git_branch", "git_commit", "git_push", "gh_pr_create",
-    "spawn", "fanout",
 })
+_AUTO_EDIT_APPROVAL_TOOLS = frozenset({"spawn", "fanout"})
+
+_DEFAULT_AUTO_EDIT_BLOCK = _AUTO_EDIT_DENY_TOOLS | _AUTO_EDIT_APPROVAL_TOOLS
 
 
 def filter_allowed_for_mode(mode: str, tool_names) -> list[str]:
@@ -320,6 +352,26 @@ def _make_block_rule(blocked: frozenset[str], reason_template: str, mode_name: s
         if action.name in blocked:
             return PolicyDecision.deny(
                 "mode.block",
+                f"{reason_template} {action.name}",
+            )
+        return None
+    return predicate
+
+
+def _make_approval_rule(gated: frozenset[str], reason_template: str, mode_name: str) -> RulePredicate:
+    """REQUIRE_APPROVAL rule: the tool may run only after user approval.
+
+    Unlike _make_block_rule, the decision stays allowed=True with
+    approval_required set — the gate prompts instead of rejecting, and a
+    missing/declining handler fails closed. Hard DENY must never route
+    through here.
+    """
+    def predicate(action: Action, ctx: EvalContext) -> Optional[PolicyDecision]:
+        if ctx.permission_mode != mode_name:
+            return None
+        if action.name in gated:
+            return PolicyDecision.require_approval(
+                "mode.require_approval",
                 f"{reason_template} {action.name}",
             )
         return None

@@ -988,6 +988,9 @@ async def test_run_schema_auto_retry(orch):
             task="return json",
             output_schema=schema,
             auto_retry_parse=True,
+            # G1E: repair retries consume the shared logical budget —
+            # declare it explicitly (0 = run once, no automatic retry).
+            max_retries=1,
         )
         result = await orch.run(contract)
 
@@ -1616,7 +1619,10 @@ class TestTimeoutRetry:
              patch.object(o, "_fire_subagent_hook", new=AsyncMock()):
             result = asyncio.run(o.run(
                 SubagentContract(name="r", task="t", timeout_seconds=120,
-                                 worktree_isolated=False)
+                                 worktree_isolated=False,
+                                 # G1E: timeout recovery consumes the shared
+                                 # logical budget — declared explicitly.
+                                 max_retries=1)
             ))
 
         assert result.success

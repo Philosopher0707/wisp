@@ -1069,16 +1069,34 @@ class TestGateKeyReaderRouting:
         assert consumed == [True]
 
     def test_gate_reader_timeout_denies(self):
+        """30s gate timeout fails closed with a DISTINCT timeout verdict
+        (13F.1: ApprovalTimeout, translated to APPROVAL_TIMEOUT denial by
+        the gate/executor — never a silent False)."""
+        import io
+        from unittest.mock import patch
+
+        from wisp.cli.approval import ApprovalTimeout
+
         consumed = []
 
         def fake():
             consumed.append(True)
             return ""
 
-        approved, err = self._approve(self._transport_with_reader(fake))
-        assert approved is False
-        assert consumed == [True]
-        assert "fail-closed" in err
+        buf = io.StringIO()
+        with patch.object(cli_mod.sys, "stderr", buf):
+            try:
+                asyncio.run(self._transport_with_reader(fake).approve({
+                    "name": "write_file",
+                    "arguments": {"path": "a.py", "content": "x"},
+                }))
+            except ApprovalTimeout as t:
+                err = buf.getvalue()
+                assert t.tool_name == "write_file"
+                assert consumed == [True]
+                assert "fail-closed" in err
+            else:
+                raise AssertionError("gate timeout must raise ApprovalTimeout")
 
 
 # ═══════════════════════════════════════════════════════════════════

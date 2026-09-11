@@ -103,7 +103,8 @@ class TestFullPermissionMode:
 
     @pytest.mark.asyncio
     async def test_auto_edit_mode_calls_approval_for_bash(self, tmp_path):
-        """AUTO_EDIT mode: bash should call approval handler."""
+        """13F.1 INVERSION (R1/S2/S3): AUTO_EDIT mode NEVER routes bash
+        through approval — hard DENY, handler unconsulted, no execution."""
         cfg = _mk_config(str(tmp_path), permission_mode=PermissionMode.AUTO_EDIT, auto_approve=False)
         approval_handler = AsyncMock(return_value=(True, None))
         te = ToolExecutor(config=cfg, hook_manager=_make_async_hook_mgr())
@@ -119,8 +120,14 @@ class TestFullPermissionMode:
                 ):
                     events.append(ev)
 
-        # In AUTO_EDIT mode, bash should call approval handler
-        approval_handler.assert_called_once()
+        # Hard DENY: handler never consulted, structured POLICY_DENIED
+        approval_handler.assert_not_called()
+        results = [e for e in events
+                   if getattr(e, "type", None) == "tool_result"
+                   or (isinstance(e, dict) and e.get("type") == "tool_result")]
+        assert len(results) == 1
+        res = results[0].data.get("result", {}) if hasattr(results[0], "data") else results[0].get("result", {})
+        assert isinstance(res, dict) and res.get("status") == "POLICY_DENIED"
 
     @pytest.mark.asyncio
     async def test_auto_edit_mode_skips_approval_for_file_edit(self, tmp_path):

@@ -83,7 +83,8 @@ class TestDeniedCallProtocolIntegrity:
         assert assistant_with_calls, \
             "declined call vanished from history — provider will replay it"
         assert tool_replies, "no tool reply for the declined call"
-        assert any("eclin" in str(m.get("content", "")) or
+        # 13F.1: structured USER_DENIED envelope (was "[Blocked: …declined…]")
+        assert any("USER_DENIED" in str(m.get("content", "")) or
                    "lock" in str(m.get("content", "")).lower()
                    for m in tool_replies)
 

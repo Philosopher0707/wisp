@@ -58,10 +58,11 @@ class TestReadOnlyMode:
         events = await _collect(executor, tool)
         result = _find_result(events)
         assert result is not None, f"Expected a tool_result for {tool}"
-        # Authority vocabulary is "Denied by <layer> layer" (pinned by
-        # test_no_bypass); "Blocked:" belongs to the legacy role gate.
-        assert "Denied" in result.data.get("result", ""), \
+        # 13F.1: structured POLICY_DENIED envelope (executed=false).
+        res = result.data.get("result", {})
+        assert isinstance(res, dict) and res.get("status") == "POLICY_DENIED", \
             f"{tool} should be blocked in read_only mode: {result.data}"
+        assert res.get("executed") is False
 
     @pytest.mark.parametrize("tool", [
         "read_file", "list_files", "search_symbols", "search_codebase",
@@ -106,13 +107,17 @@ class TestAutoEditMode:
         events = await _collect(executor, tool)
         result = _find_result(events)
         assert result is not None, f"Expected a result for {tool}"
-        data = result.data.get("result", "")
-        assert "requires approval" in data or "Blocked" in data, \
-            f"{tool} should require approval in auto_edit: {data}"
+        # 13F.1: bash/git are hard DENY in auto_edit (no prompt even
+        # without a handler) — structured POLICY_DENIED envelope.
+        res = result.data.get("result", {})
+        assert isinstance(res, dict) and res.get("status") == "POLICY_DENIED", \
+            f"{tool} should be hard-denied in auto_edit: {result.data}"
 
     @pytest.mark.asyncio
     async def test_auto_edit_bash_goes_to_approval_handler_when_available(self):
-        """auto_edit routes bash through approval_handler when one is provided."""
+        """13F.1 INVERSION (R1/S3): auto_edit NEVER routes bash through
+        approval — hard DENY means no prompt and no override, even when
+        the user would approve."""
         executor = _make_executor("auto_edit", auto_approve=True)
         handler = AsyncMock(return_value=(True, None))
         events = []
@@ -124,11 +129,15 @@ class TestAutoEditMode:
         ):
             events.append(event)
 
-        # Should have yielded an approval_request
+        # Hard DENY: no approval_request, handler never consulted,
+        # no execution — even though the handler would approve.
         approval_events = [e for e in events if e.type == TYPE_APPROVAL_REQUEST]
-        assert len(approval_events) >= 1, \
-            "Should have yielded approval_request for bash in auto_edit mode"
-        handler.assert_called_once()
+        assert approval_events == []
+        handler.assert_not_called()
+        results = [e for e in events if e.type == TYPE_TOOL_RESULT]
+        assert len(results) == 1
+        res = results[0].data.get("result", {})
+        assert isinstance(res, dict) and res.get("status") == "POLICY_DENIED"
 
 
 # ── ask_all mode ──────────────────────────────────────────────────────
@@ -144,9 +153,11 @@ class TestAskAllMode:
         events = await _collect(executor, tool)
         result = _find_result(events)
         assert result is not None
-        data = result.data.get("result", "")
-        assert "requires approval" in data or "Blocked" in data, \
-            f"{tool} should require approval in ask_all: {data}"
+        # 13F.1: ask_all writes are REQUIRE_APPROVAL; with no handler the
+        # forced-approval path fails closed (structured denial, no prompt).
+        res = result.data.get("result", {})
+        assert isinstance(res, dict) and res.get("executed") is False, \
+            f"{tool} should fail closed in ask_all without handler: {result.data}"
 
     @pytest.mark.asyncio
     async def test_ask_all_routes_to_approval_handler(self):

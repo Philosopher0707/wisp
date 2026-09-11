@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
-from wisp.cli.approval import ApprovalCancelled
+from wisp.cli.approval import ApprovalCancelled, ApprovalTimeout
 from wisp.infra.security import Action, Context
 
 if TYPE_CHECKING:
@@ -60,12 +60,19 @@ class ApprovalGate:
     ) -> "ApprovalDecision":
         """Check if a tool call is allowed, returning an ApprovalDecision.
 
-        Same policy as check(), but the verdict carries the canonical
-        ToolRisk and any modified args. Interactive override via the
-        approval handler flips a denial to an allowance (risk preserved).
-        Fail-closed: security exceptions become denials.
+        Control-plane contract (13F.1): ALLOW executes without prompting;
+        REQUIRE_APPROVAL prompts (approval flips it to an allowance);
+        DENY is hard — it never invokes the handler, so no `y` can
+        override policy. Fail-closed throughout: handler absence,
+        timeout, errors, and cancellation all become denials.
         """
         from wisp.core.contracts import ApprovalDecision, risk_for_tool
+        from wisp.core.events import (
+            DENIAL_APPROVAL_TIMEOUT,
+            DENIAL_CANCELLED,
+            DENIAL_POLICY_DENIED,
+            DENIAL_USER_DENIED,
+        )
 
         tool_name = str(event.get("name", ""))
         if self.security is None:
@@ -80,29 +87,60 @@ class ApprovalGate:
         try:
             decision = self.security.check(action, context)
             if not decision.allowed:
-                handler = approval_handler or self.handler
-                if handler is not None:
-                    try:
-                        approved = await handler(event)
-                        if approved:
-                            return ApprovalDecision(allowed=True, risk=risk_for_tool(tool_name))
-                    except (asyncio.CancelledError, KeyboardInterrupt, GeneratorExit, SystemExit):
-                        # Genuine external cancellation — propagate untouched.
-                        # (Cancellation-first: only these types carry it; the
-                        # handler must never synthesize them from input.)
-                        raise
-                    except ApprovalCancelled as cancelled:
-                        # User verdict, not an interruption: record it as an
-                        # explicit denial so history stays protocol-consistent
-                        # and the model sees an outcome instead of replaying.
-                        return ApprovalDecision(
-                            allowed=False,
-                            reason=f"cancelled by user at approval ({cancelled.tool_name or tool_name})",
-                            risk=risk_for_tool(tool_name),
-                        )
-                    except Exception as e:
-                        logger.exception("Approval handler failed: %s", e)
-                return decision_to_approval_decision(decision, tool_name=tool_name)
+                # Hard DENY: authoritative, no approval prompt (13F.1 R1).
+                verdict = decision_to_approval_decision(decision, tool_name=tool_name)
+                return ApprovalDecision(allowed=False, reason=verdict.reason,
+                                        modified_args=verdict.modified_args,
+                                        risk=verdict.risk,
+                                        denial=DENIAL_POLICY_DENIED)
+            if not decision.approval_required:
+                return ApprovalDecision(allowed=True, risk=risk_for_tool(tool_name))
+            # REQUIRE_APPROVAL: the only path that may consult a human.
+            handler = approval_handler or self.handler
+            if handler is None:
+                return ApprovalDecision(
+                    allowed=False,
+                    reason=f"approval required for {tool_name or 'tool'} "
+                           "but no approval handler is available",
+                    risk=risk_for_tool(tool_name),
+                    denial=DENIAL_POLICY_DENIED,
+                )
+            try:
+                approved = await handler(event)
+                if approved:
+                    return ApprovalDecision(allowed=True, risk=risk_for_tool(tool_name))
+            except (asyncio.CancelledError, KeyboardInterrupt, GeneratorExit, SystemExit):
+                # Genuine external cancellation — propagate untouched.
+                # (Cancellation-first: only these types carry it; the
+                # handler must never synthesize them from input.)
+                raise
+            except ApprovalCancelled as cancelled:
+                # User verdict, not an interruption: record it as an
+                # explicit denial so history stays protocol-consistent
+                # and the model sees an outcome instead of replaying.
+                return ApprovalDecision(
+                    allowed=False,
+                    reason=f"cancelled by user at approval ({cancelled.tool_name or tool_name})",
+                    risk=risk_for_tool(tool_name),
+                    denial=DENIAL_CANCELLED,
+                )
+            except ApprovalTimeout as timed_out:
+                # Approval lapsed without a verdict: fail closed with a
+                # distinct reason so it never reads as an ordinary deny.
+                return ApprovalDecision(
+                    allowed=False,
+                    reason=f"approval timed out for {timed_out.tool_name or tool_name}",
+                    risk=risk_for_tool(tool_name),
+                    denial=DENIAL_APPROVAL_TIMEOUT,
+                )
+            except Exception as e:
+                logger.exception("Approval handler failed: %s", e)
+            return ApprovalDecision(
+                allowed=False,
+                reason=f"not approved: {tool_name or 'tool'} requires approval",
+                risk=risk_for_tool(tool_name),
+                denial=DENIAL_USER_DENIED,
+            )
         except (asyncio.CancelledError, KeyboardInterrupt, GeneratorExit, SystemExit):
             raise
         except ApprovalCancelled as cancelled:
@@ -110,10 +148,13 @@ class ApprovalGate:
                 allowed=False,
                 reason=f"cancelled by user at approval ({cancelled.tool_name or tool_name})",
                 risk=risk_for_tool(tool_name),
+                denial=DENIAL_CANCELLED,
             )
         except Exception as e:
             logger.exception("Security check failed — treating as deny: %s", e)
-            return ApprovalDecision(allowed=False, reason=str(e), risk=risk_for_tool(tool_name))
+            return ApprovalDecision(allowed=False, reason=str(e),
+                                    risk=risk_for_tool(tool_name),
+                                    denial=DENIAL_POLICY_DENIED)
 
         return ApprovalDecision(allowed=True, risk=risk_for_tool(tool_name))
 

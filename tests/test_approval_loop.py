@@ -272,5 +272,7 @@ def test_gate_converts_cancel_to_recorded_denial():
                                 approval_handler=_cancelling)
 
     allowed, reason = asyncio.run(_go())
+    # 13F.1 R1: hard DENY never consults the handler — a cancel verdict
+    # cannot arise where no prompt happened; the policy reason stands.
     assert allowed is False
-    assert "cancelled by user" in (reason or "")
+    assert reason == "needs review"
