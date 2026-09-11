@@ -267,6 +267,10 @@ class WispAgentCore:
             provider_events: list[dict[str, Any]] = []
             partial_content: list[str] = []
             has_tool_calls = False
+            # G1B: the provider round-trip ended non-complete (error event
+            # or mid-stream stall). The error is already yielded live below;
+            # the finish path must not emit done for this iteration.
+            provider_failed = False
 
             # ── Pre-flight pruning: condense historical tool payloads
             # Prevents unbounded bloat (30+ tool calls) that stalls
@@ -289,6 +293,17 @@ class WispAgentCore:
                     # Normalize event
                     normalized = self._normalize_event(event)
                     provider_events.append(normalized)
+
+                    # G1B: provider-reported failure ends the round-trip
+                    # non-complete (mid-stream error, truncation, terminal
+                    # exhaustion). A mid-stream stall notice counts too:
+                    # the stream never reached terminal completion.
+                    ntype = normalized.get("type", "")
+                    if ntype == "error" or (
+                        ntype == "provider_status"
+                        and normalized.get("status") == "chunk_stall"
+                    ):
+                        provider_failed = True
 
                     # Accumulate partial content for error recovery
                     if normalized.get("type") == "content":
@@ -550,6 +565,12 @@ class WispAgentCore:
 
             # ── If no tool calls, the model produced final content ──
             if not has_tool_calls:
+                if provider_failed:
+                    # G1B: the round-trip ended non-complete (error event
+                    # or stall already yielded live). Partial content stays
+                    # for diagnostics, but done=True would be a lie —
+                    # end the turn without it.
+                    return
                 # Verification floor: a turn that changed code but ended with
                 # a failing (or never-run) verification command is NOT
                 # complete. Reject the finish, inject the harness reminder,

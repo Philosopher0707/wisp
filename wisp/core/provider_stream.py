@@ -21,6 +21,7 @@ import random
 from typing import Any, AsyncIterator, Callable, Iterable
 
 from wisp.core.events import (
+    CODE_PROVIDER_STREAM,
     error as error_event,
     provider_status as provider_status_event,
 )
@@ -41,6 +42,24 @@ class _TransientOpenError(Exception):
     def __init__(self, cause: BaseException):
         super().__init__(str(cause))
         self.__cause__ = cause
+
+
+# Normalized terminal markers by provider dialect (G1B §6). A terminal
+# marker ALONE (no content/tool payload before it) is an empty stream, not
+# a meaningful response — adapters emit these unconditionally on clean end,
+# so counting them as meaningful would bless vacuous success.
+TERMINAL_TYPES = frozenset({"done", "complete", "stream_complete"})
+
+
+def _terminal_has_payload(normalized: dict[str, Any]) -> bool:
+    """True if a terminal event carries response content (not a bare marker)."""
+    for key in ("text", "content", "final_content", "tool_calls", "calls"):
+        val = normalized.get(key)
+        if isinstance(val, str) and val:
+            return True
+        if isinstance(val, (list, tuple, dict)) and len(val) > 0:
+            return True
+    return False
 
 
 def _flatten_event(ev: Any) -> dict[str, Any]:
@@ -67,14 +86,22 @@ async def guarded_provider_stream(
     open_stream() must return a FRESH stream each attempt (a consumed
     stream cannot be retried). Transient API errors (429/5xx) and empty
     streams retry; permanent errors surface immediately; a mid-stream
-    stall after partial output ends cleanly WITH a truncation notice —
-    retrying then would duplicate what the consumer already saw.
+    stall after partial output ends WITH a truncation notice — retrying
+    then would duplicate what the consumer already saw.
+
+    Completion contract (G1B): the attempt ends MEANINGFUL only when payload
+    events (content/tool calls) arrived. A bare terminal marker, a stream
+    that ends without its terminal marker (truncated), or a mid-stream
+    transport error after partial output all surface an explicit error —
+    never silent success. No retry is added here: post-output retry would
+    duplicate consumer-visible bytes (retry policy unchanged).
     """
     bookkeeping = set(bookkeeping_types)
     last_transient_status: int | None = None
     last_transient_error: BaseException | None = None
     for attempt in range(1, max_attempts + 1):
         got_meaningful = False
+        saw_terminal = False
         stream_stats: dict[str, Any] | None = None
         api_status: int | None = None
         transient_error: BaseException | None = None
@@ -167,6 +194,18 @@ async def guarded_provider_stream(
                         return  # permanent API error: surface immediately
                     if ntype not in bookkeeping:
                         got_meaningful = True
+                    if ntype in TERMINAL_TYPES:
+                        # Provider-declared terminal marker (§6): ends the
+                        # attempt here. A bare marker carries no payload, so
+                        # it never rescues an empty attempt; post-terminal
+                        # bytes/timeouts cannot retroactively fail a
+                        # completed stream (§10 ordering rule). Markers are
+                        # consumed, not forwarded (previous wire behavior:
+                        # bookkeeping types were never yielded).
+                        saw_terminal = True
+                        if _terminal_has_payload(normalized):
+                            got_meaningful = True
+                        break
                     yield event
             finally:
                 if stalled or not got_meaningful or transient_error is not None:
@@ -199,9 +238,25 @@ async def guarded_provider_stream(
                 raise
 
         if got_meaningful:
-            if stalled:
-                # Mid-stream death after partial output: retrying would
-                # duplicate what the consumer already saw, so surface
+            if transient_error is not None:
+                # Mid-stream transport error after partial output (G1B §8):
+                # the bytes already yielded stay (diagnostics), but the
+                # attempt is explicitly NON-complete — never silent success.
+                # No retry: re-fetching would duplicate consumer-visible
+                # output (retry policy unchanged).
+                yield _flatten_event(error_event(
+                    f"Provider stream failed mid-response "
+                    f"({type(transient_error).__name__}: "
+                    f"{str(transient_error)[:120]}) — output may be "
+                    f"truncated; partial content retained",
+                    recoverable=True,
+                    code=CODE_PROVIDER_STREAM,
+                    hint="transient network error after partial output; "
+                         "retry the request (a fresh attempt starts clean)",
+                ))
+            elif stalled:
+                # Mid-stream silence with the stream still open: retrying
+                # would duplicate what the consumer already saw, so surface
                 # the truncation and end cleanly instead of hanging.
                 yield _flatten_event(provider_status_event(
                     "chunk_stall",
@@ -210,6 +265,18 @@ async def guarded_provider_stream(
                         f"{chunk_deadline_s:.0f}s mid-stream — "
                         "output may be truncated"
                     ),
+                ))
+            elif not saw_terminal:
+                # EOF without the provider's terminal marker (G1B §9):
+                # the socket closed cleanly but the protocol never
+                # completed — truncated, not successful.
+                yield _flatten_event(error_event(
+                    "Provider stream ended without its terminal marker — "
+                    "output may be truncated; partial content retained",
+                    recoverable=True,
+                    code=CODE_PROVIDER_STREAM,
+                    hint="the provider closed the stream before terminal "
+                         "completion; retry the request",
                 ))
             return
 

@@ -244,6 +244,10 @@ class OpenAIProvider(Provider):
             tool_call_accum: dict[int, dict] = {}
             tool_calls_yielded = False
             done_reason = "stop"
+            # G1B §6: terminal condition is an explicit finish chunk or
+            # [DONE] — never bare socket EOF. Without either, the stream
+            # was cut: emit stats but NO done (the guard reports truncated).
+            saw_finish = False
 
             for line in resp.iter_lines():
                 if not line:
@@ -254,6 +258,7 @@ class OpenAIProvider(Provider):
                 sse_lines += 1
                 data_str = line_str[6:]
                 if data_str.strip() == "[DONE]":
+                    saw_finish = True
                     break
                 try:
                     chunk = json.loads(data_str)
@@ -303,6 +308,7 @@ class OpenAIProvider(Provider):
 
                 if finish_reason:
                     done_reason = finish_reason
+                    saw_finish = True
                     # Some providers (NVIDIA NIM, some OpenRouter gateways)
                     # return `stop` even when they streamed tool_calls deltas;
                     # the canonical `tool_calls` finish is ideal but not
@@ -346,7 +352,9 @@ class OpenAIProvider(Provider):
                 "empty_choice_chunks": empty_choice_chunks,
                 "finish_reason": done_reason,
             }
-            yield {"type": "done", "done_reason": done_reason}
+            if saw_finish:
+                yield {"type": "done", "done_reason": done_reason}
+            # else: cut stream — no terminal marker (guard reports truncated).
 
         except GeneratorExit:
             # Consumer went away: turn cancelled, bridge abandoned, or an
