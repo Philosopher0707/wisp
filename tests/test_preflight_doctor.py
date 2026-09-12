@@ -146,17 +146,18 @@ class TestGraphIntegrity:
         result = asyncio.run(_check_graph_integrity())
         assert result.status == CheckStatus.OK, result.message
         assert result.details["roundtrip"] is True
-        assert result.details["nodes"].endswith("/4")
-        assert result.details["breaker_in_source"] is True
+        assert result.details["nodes"].endswith("/7")
+        assert result.details["retry_in_source"] is True
         assert result.details["circuit_breaker"] is True
 
-    def test_initial_state_in_progress(self):
+    def test_initial_state_queued(self):
         result = asyncio.run(_check_graph_integrity())
-        assert "in_progress" in result.details["initial_status"]
+        assert "queued" in result.details["initial_status"]
 
-    def test_max_iterations_configured(self):
+    def test_policy_bounds_configured(self):
         result = asyncio.run(_check_graph_integrity())
-        assert result.details["max_iterations"] > 0
+        assert result.details["max_depth"] > 0
+        assert result.details["max_nodes"] > 0
 
 
 # ── Models & formatters ────────────────────────────────────────────

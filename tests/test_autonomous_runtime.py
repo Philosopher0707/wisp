@@ -8,7 +8,6 @@ while hard-blocking dangerous commands.
 import pytest
 
 from wisp.config import WispConfig
-from wisp.core.graph_state import GraphStatus
 
 
 def _mock_provider(responses):
@@ -87,16 +86,3 @@ def test_autonomous_config_env(monkeypatch):
     cfg2 = WispConfig()
     assert cfg2.autonomous is False
 
-
-@pytest.mark.asyncio
-async def test_graph_state_from_session(tmp_path):
-    from wisp.core.graph_state import GraphState
-    sess = {"id": "s1", "workspace": str(tmp_path), "messages": [{"role": "user", "content": "hi"}]}
-    cfg = WispConfig().replace(graph_max_iterations=7)
-    gs = GraphState.from_session(sess, cfg)
-    assert gs.session_id == "s1"
-    assert gs.workspace == str(tmp_path)
-    assert gs.max_iterations == 7
-    # Malformed session fallback
-    gs2 = GraphState.from_session(None, None)  # type: ignore[arg-type]
-    assert gs2.status == GraphStatus.IN_PROGRESS

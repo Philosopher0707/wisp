@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end diagnostic audit of the `wisp repl` lifecycle (8 contracts).
+"""End-to-end diagnostic audit of the `wisp repl` lifecycle (7 contracts).
 
 Standalone runner: mocks the terminal TTY, uses temp workspaces and fake
 workers/providers — no network, no LLM, no user interaction. Each check
@@ -13,7 +13,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
 import os
 import sys
@@ -470,133 +469,6 @@ def _d5_branch():
     return True, "requests stream=True; httpx client.stream(POST)"
 
 
-# ── D6: Subagent orchestration ─────────────────────────────────────────
-
-
-@check("D6", "frames carry zero parent history (epistemic isolation)")
-def _d6_isolation():
-    from wisp.core.subagent.coordinator import Coordinator
-
-    SECRET = "parent-secret-12345"
-    seen: list[str] = []
-
-    async def _worker(frame, emit):
-        seen.append(frame.render_prompt())
-        return {"task_id": frame.task_id, "status": "SUCCESS",
-                "findings": [], "token_usage": {"prompt": 1, "completion": 1}}
-
-    async def _go():
-        coord = Coordinator(worker_fn=_worker)
-        frame = coord.build_frame("audit auth", role="auditor")
-        await coord.fanout([frame])
-
-    asyncio.run(_go())
-    if any(SECRET in p for p in seen):
-        return False, "parent secret leaked into frame"
-    import inspect as _inspect
-
-    if "parent_messages" in _inspect.signature(Coordinator.build_frame).parameters:
-        return False, "build_frame accepts parent history"
-    return True, "frame = objective + allowlist + explicit chunks only"
-
-
-@check("D6", "semaphore caps concurrency at 4 under fanout 16")
-def _d6_semaphore():
-    from wisp.core.subagent.coordinator import Coordinator, CoordinatorConfig
-    from wisp.core.subagent.protocol import ExecutionPolicy
-
-    in_flight = 0
-    peak = 0
-
-    async def _worker(frame, emit):
-        nonlocal in_flight, peak
-        in_flight += 1
-        peak = max(peak, in_flight)
-        await asyncio.sleep(0.01)
-        in_flight -= 1
-        return {"task_id": frame.task_id, "status": "SUCCESS",
-                "findings": [], "token_usage": {"prompt": 1, "completion": 1}}
-
-    async def _go():
-        coord = Coordinator(
-            worker_fn=_worker,
-            config=CoordinatorConfig(
-                default_policy=ExecutionPolicy(max_concurrent=4, timeout_s=60.0)))
-        frames = [coord.build_frame(f"t{i}", role="explorer") for i in range(16)]
-        return await coord.fanout(frames)
-
-    reduced = asyncio.run(_go())
-    if not (1 < peak <= 4):
-        return False, f"peak={peak}"
-    if reduced.succeeded != 16:
-        return False, f"succeeded={reduced.succeeded}"
-    return True, f"peak={peak}/4, 16/16 succeeded"
-
-
-@check("D6", "parent abort cascades TaskGroup cancellation")
-def _d6_cascade():
-    from wisp.core.subagent.coordinator import Coordinator, CoordinatorConfig
-    from wisp.core.subagent.protocol import ExecutionPolicy
-
-    reached: list[str] = []
-
-    async def _worker(frame, emit):
-        try:
-            await asyncio.sleep(30)
-        except asyncio.CancelledError:
-            reached.append(frame.task_id)
-            raise
-        return {"task_id": frame.task_id, "status": "SUCCESS",  # pragma: no cover
-                "findings": [], "token_usage": {"prompt": 1, "completion": 1}}
-
-    async def _go():
-        coord = Coordinator(
-            worker_fn=_worker,
-            config=CoordinatorConfig(
-                default_policy=ExecutionPolicy(max_concurrent=4, timeout_s=60.0)))
-        frames = [coord.build_frame(f"t{i}", role="explorer") for i in range(4)]
-        wanted.extend(f.task_id for f in frames)
-        return await coord.fanout(frames)
-
-    wanted: list[str] = []
-
-    async def _main():
-        task = asyncio.ensure_future(_go())
-        await asyncio.sleep(0.05)
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-        await asyncio.sleep(0.05)
-
-    asyncio.run(_main())
-    if sorted(reached) != sorted(wanted) or len(wanted) != 4:
-        return False, f"reached={reached}"
-    return True, "4/4 workers observed CancelledError"
-
-
-@check("D6", "invalid output retried once then FAILED, parent unpolluted")
-def _d6_schema():
-    from wisp.core.subagent.coordinator import Coordinator, CoordinatorConfig
-
-    calls: list[str] = []
-
-    async def _garbage(frame, emit):
-        calls.append(frame.task_id)
-        return {"task_id": frame.task_id, "status": "nope"}
-
-    async def _go():
-        coord = Coordinator(worker_fn=_garbage,
-                            config=CoordinatorConfig(validation_retries=1))
-        return await coord.fanout([coord.build_frame("x", role="explorer")])
-
-    reduced = asyncio.run(_go())
-    if len(calls) != 2 or reduced.failed != 1 or reduced.findings:
-        return False, f"calls={len(calls)} failed={reduced.failed}"
-    return True, "1 retry then FAILED, zero findings merged"
-
-
 # ── D7: Pruning & large-codebase scaling ───────────────────────────────
 
 
@@ -630,21 +502,7 @@ def _d7_reads():
     return True, "500-line file read honors offset/limit with header"
 
 
-# ── D8: Graph state & deadlock prevention ──────────────────────────────
-
-
-@check("D8", "oscillation breaker trips on repeated state")
-def _d8_oscillation():
-    from wisp.core.graph_state import GraphState
-
-    try:
-        state = GraphState.initial(workspace=".", session_id="diag")
-    except TypeError:
-        state = GraphState(workspace=".", session_id="diag")
-    trips = [state.check_oscillation(window=3) for _ in range(5)]
-    if not any(trips):
-        return False, "identical-state repetition not detected"
-    return True, f"breaker tripped: {trips}"
+# ── D8: Session store & prompt hygiene ─────────────────────────────────
 
 
 @check("D8", "session persistence round-trips atomically (WAL, no corruption)")

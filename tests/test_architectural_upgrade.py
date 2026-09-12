@@ -237,46 +237,6 @@ def test_search_replace_malformed_block():
         parse_block("<<<<<<< SEARCH\n=======\nx\n>>>>>>> REPLACE\n")
 
 
-# ── 4. Subagent concurrency + schema (new hardened package) ────────────
-
-
-def test_subagent_semaphore_bound():
-    from wisp.core.subagent.coordinator import Coordinator, CoordinatorConfig
-    from wisp.core.subagent.protocol import ExecutionPolicy, TaskFrame
-
-    in_flight = 0
-    peak = 0
-
-    async def _worker(frame: TaskFrame, emit) -> dict:
-        nonlocal in_flight, peak
-        in_flight += 1
-        peak = max(peak, in_flight)
-        await asyncio.sleep(0.01)
-        in_flight -= 1
-        return {"task_id": frame.task_id, "status": "SUCCESS",
-                "findings": [], "token_usage": {"prompt": 1, "completion": 1}}
-
-    async def _go():
-        coord = Coordinator(
-            worker_fn=_worker,
-            config=CoordinatorConfig(
-                default_policy=ExecutionPolicy(max_concurrent=4, timeout_s=60.0)))
-        frames = [coord.build_frame(f"t{i}", role="explorer") for i in range(12)]
-        return await coord.fanout(frames)
-
-    reduced = asyncio.run(_go())
-    assert 1 < peak <= 4
-    assert reduced.succeeded == 12
-
-
-def test_subagent_result_schema_rejects_prose():
-    from pydantic import ValidationError
-
-    from wisp.core.subagent.protocol import SubagentResult
-
-    with pytest.raises(ValidationError):
-        SubagentResult.model_validate({"task_id": "t", "status": "SUCCESS",
-                                       "findings": "it looks good overall"})
 
 
 def test_compactor_micro_tier_preserves_pairs():

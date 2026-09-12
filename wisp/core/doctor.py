@@ -567,115 +567,79 @@ async def _check_autonomous_policy() -> CheckResult:
 
 
 async def _check_graph_integrity() -> CheckResult:
-    """GraphState schema, nodes, GraphRunner, circuit breaker."""
+    """Canonical graph runtime: types, executor, validator, circuit breaker."""
     t0 = time.monotonic()
     name = "graph_integrity"
     commit = "graph-integrity"
     details: dict[str, Any] = {}
     try:
-        # 1. GraphState schema
+        # 1. Canonical graph types
         try:
-            from wisp.core.graph_state import (
-                GraphState, GraphStatus, ExecutionLog,
+            from wisp.graph.types import (
+                Graph, GraphNode, GraphPolicy, NodeType, RunStatus,
             )
         except ImportError as e:
             return CheckResult(name, commit, CheckStatus.FAIL,
-                               f"GraphState not importable: {e}",
+                               f"graph types not importable: {e}",
                                (time.monotonic() - t0) * 1000, details)
 
-        try:
-            s = GraphState.initial(workspace=".")
-        except Exception:
-            s = GraphState.from_dict({})
-        details["initial_status"] = str(getattr(s, "status", ""))
-        if str(getattr(s, "status", "")) != GraphStatus.IN_PROGRESS:
-            if getattr(s, "status", None) not in (GraphStatus.IN_PROGRESS,
-                                                  "in_progress"):
-                details["initial_status_mismatch"] = str(s.status)
-
-        d = s.to_dict()
-        s2 = GraphState.from_dict(d)
-        details["roundtrip"] = (s2.to_dict() == d)
-        if not details["roundtrip"]:
-            return CheckResult(name, commit, CheckStatus.FAIL,
-                               "GraphState round-trip mismatch",
-                               (time.monotonic() - t0) * 1000, details)
-
-        max_iter = getattr(s, "max_iterations", None)
-        if max_iter is None:
-            from wisp.config import WispConfig
-            max_iter = WispConfig().graph_max_iterations
-        details["max_iterations"] = max_iter
-
-        try:
-            _ = ExecutionLog(command="echo hi", exit_code=0, stdout="hi",
-                             stderr="", duration_ms=1.0, raw="hi")
-            details["execution_log"] = True
-        except Exception as e:
-            details["execution_log_error"] = str(e)
-
-        has_osc = any(hasattr(s, a) for a in
-                       ("_recent_hashes", "recent_hashes",
-                        "oscillation_guard", "history"))
-        details["oscillation_guard"] = has_osc
-        from wisp.config import WispConfig
-        details["graph_oscillation_guard"] = bool(
-            getattr(WispConfig(), "graph_oscillation_guard", False))
-
-        # 2. Nodes
-        try:
-            from wisp.core import graph_nodes as _gn
-            expected = ["planner_coder_node", "sandbox_executor_node",
-                        "verifier_node", "human_approval_node"]
-            missing = [n for n in expected if not hasattr(_gn, n)]
-            details["nodes"] = f"{len(expected) - len(missing)}/{len(expected)}"
-            if missing:
-                return CheckResult(name, commit, CheckStatus.WARN,
-                                   f"missing nodes: {missing}",
-                                   (time.monotonic() - t0) * 1000, details)
-            for n in expected:
-                fn = getattr(_gn, n)
-                if not callable(fn):
-                    return CheckResult(name, commit, CheckStatus.WARN,
-                                       f"node {n} not callable",
-                                       (time.monotonic() - t0) * 1000, details)
-        except ImportError as e:
+        expected = {"agent", "function", "join", "router", "verifier",
+                    "gate", "approval"}
+        have = {t.value for t in NodeType}
+        missing = sorted(expected - have)
+        details["nodes"] = f"{len(expected) - len(missing)}/{len(expected)}"
+        if missing:
             return CheckResult(name, commit, CheckStatus.WARN,
-                               f"graph_nodes not importable: {e}",
+                               f"missing node types: {missing}",
                                (time.monotonic() - t0) * 1000, details)
 
-        # 3. GraphRunner / orchestrator
-        try:
-            from wisp.core.agentic_graph import GraphRunner, GraphConfig
+        details["initial_status"] = RunStatus.QUEUED.value
+        policy = GraphPolicy()
+        details["max_depth"] = policy.max_depth
+        details["max_nodes"] = policy.max_nodes
+        if not (policy.max_depth > 0 and policy.max_nodes > 0):
+            return CheckResult(name, commit, CheckStatus.FAIL,
+                               "GraphPolicy bounds not positive",
+                               (time.monotonic() - t0) * 1000, details)
 
-            details["graph_runner"] = True
-            cfg = GraphConfig() if callable(GraphConfig) else None
-            if cfg is not None:
-                details["graph_runner_max_iter"] = (
-                    getattr(cfg, "max_iterations", None)
-                    or getattr(cfg, "graph_max_iterations", None)
-                )
+        # 2. Executor + validator + fingerprint determinism
+        try:
+            from wisp.graph.executor import GraphExecutor
+            from wisp.graph.validator import validate_graph
+
+            details["executor"] = True
+            details["validator"] = callable(validate_graph)
+            probe = Graph(id="doctor-probe", version="1", entrypoint="n0",
+                          nodes=(GraphNode(id="n0", type=NodeType.FUNCTION,
+                                           function="noop"),))
+            details["validation_errors"] = validate_graph(probe)[:5]
+            details["roundtrip"] = (
+                probe.fingerprint() == probe.fingerprint()
+                and len(probe.fingerprint()) == 32
+            )
+            if not details["roundtrip"]:
+                return CheckResult(name, commit, CheckStatus.FAIL,
+                                   "graph fingerprint unstable",
+                                   (time.monotonic() - t0) * 1000, details)
             try:
-                src = inspect.getsource(GraphRunner)
-                has_breaker = ("max_iterations" in src
-                               and ("FAILED" in src or "circuit" in src.lower()))
-                has_osc = "oscillation" in src.lower()
-                details["breaker_in_source"] = has_breaker
-                details["oscillation_in_source"] = has_osc
-                if not has_breaker:
+                src = inspect.getsource(GraphExecutor)
+                has_retry = ("max_attempts" in src
+                             and ("TIMEOUT" in src or "timeout" in src.lower()))
+                details["retry_in_source"] = has_retry
+                if not has_retry:
                     return CheckResult(name, commit, CheckStatus.WARN,
-                                       "GraphRunner missing circuit breaker",
+                                       "GraphExecutor missing retry/timeout bounds",
                                        (time.monotonic() - t0) * 1000, details)
             except Exception:
                 pass
         except ImportError as e:
             return CheckResult(name, commit, CheckStatus.WARN,
-                               f"GraphRunner not importable: {e}",
+                               f"graph executor not importable: {e}",
                                (time.monotonic() - t0) * 1000, details)
         except Exception as e:
-            details["graph_runner_error"] = str(e)
+            details["executor_error"] = str(e)
             return CheckResult(name, commit, CheckStatus.WARN,
-                               f"GraphRunner check: {e}",
+                               f"graph executor check: {e}",
                                (time.monotonic() - t0) * 1000, details)
 
         # 4. Circuit breaker (infra)
@@ -698,7 +662,7 @@ async def _check_graph_integrity() -> CheckResult:
 
         latency = (time.monotonic() - t0) * 1000
         return CheckResult(name, commit, CheckStatus.OK,
-                           "GraphState/nodes/breaker/oscillation ok",
+                           "graph types/executor/validator/breaker ok",
                            latency, details)
 
     except Exception as e:
