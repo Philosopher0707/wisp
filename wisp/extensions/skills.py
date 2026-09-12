@@ -40,10 +40,16 @@ class SkillExtension:
         """Return skill-based tools.
 
         Each skill can be invoked as a tool with its instructions.
+        Advertisement eligibility (13-I0): skills that opted out via an
+        explicit boolean `disable-model-invocation: true` — or any
+        malformed value (fail-closed) — are NOT advertised. This changes
+        visibility only; authorization is untouched.
         """
         tools = []
         for skill in self._skills:
             try:
+                if not getattr(skill, "model_invocable", True):
+                    continue
                 tools.append({
                     "type": "function",
                     "function": {

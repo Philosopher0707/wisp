@@ -71,6 +71,10 @@ class SemanticIndex:
         self._cache_key = None
         self._cache_chunk_ids = []
         self._cache_M = None
+        # Set by search() when the query embedding failed (backend down →
+        # zero vector): lets the caller distinguish UNAVAILABLE from a
+        # genuine negative without changing the search() signature.
+        self.last_search_degraded: Optional[str] = None
         
         import threading
         # threading.Lock is correct here because:
@@ -427,6 +431,82 @@ class SemanticIndex:
         return {"files_indexed": indexed, "chunks": total, "skipped": skipped,
                 "elapsed_ms": round(elapsed * 1000), "total_files": len(files)}
 
+    # ── Index state (13-I-1 search integrity) ────────────────────────
+
+    # States. Only READY (and EMPTY_NO_FILES, a trivially valid negative)
+    # may produce a plain "nothing found" answer; every other state must
+    # be surfaced explicitly so an unusable index never masquerades as a
+    # genuine negative.
+    STATE_READY = "READY"
+    STATE_EMPTY_NO_FILES = "EMPTY_NO_FILES"
+    STATE_MISSING = "MISSING"
+    STATE_EMPTY = "EMPTY"
+    STATE_CORRUPT = "CORRUPT"
+    STATE_STALE = "STALE"
+
+    # mtime tolerance for the staleness heuristic (filesystems + copy
+    # granularity; hash comparison would require re-reading every file).
+    _MTIME_TOLERANCE_S = 1.0
+
+    def index_state(self) -> tuple[str, str]:
+        """Classify index usability WITHOUT touching embeddings.
+
+        Returns (state, detail). Cheap: one directory walk + a few DB
+        reads + os.stat per discoverable file. Never raises — unexpected
+        failures report CORRUPT (fail-closed toward honesty).
+        """
+        try:
+            if not Path(self._db_path).exists():
+                n = len(self.discover_files())
+                if n == 0:
+                    return (self.STATE_EMPTY_NO_FILES,
+                            "workspace has no indexable files")
+                return (self.STATE_MISSING,
+                        f"no index found ({n} indexable files present)")
+            n_chunks = self.conn.execute(
+                "SELECT COUNT(*) FROM chunks").fetchone()[0]
+            if not n_chunks:
+                n = len(self.discover_files())
+                if n == 0:
+                    return (self.STATE_EMPTY_NO_FILES,
+                            "workspace has no indexable files")
+                return (self.STATE_EMPTY,
+                        f"index holds 0 chunks for {n} indexable files")
+            rows = {r[0]: r[1] for r in self.conn.execute(
+                "SELECT path, mtime FROM files").fetchall()}
+            try:
+                on_disk = {str(p.relative_to(self.workspace))
+                           for p in self.discover_files()}
+            except Exception:
+                on_disk = set(rows)
+            unindexed = sorted(on_disk - set(rows))
+            removed = sorted(set(rows) - on_disk)
+            changed: list[str] = []
+            for rel in sorted(on_disk & set(rows)):
+                try:
+                    if abs((self.workspace / rel).stat().st_mtime
+                           - float(rows[rel])) > self._MTIME_TOLERANCE_S:
+                        changed.append(rel)
+                except OSError:
+                    changed.append(rel)
+                if len(changed) >= 10:
+                    break
+            if unindexed or removed or changed:
+                parts = []
+                if unindexed:
+                    parts.append(f"{len(unindexed)} unindexed "
+                                 f"({', '.join(unindexed[:3])}"
+                                 f"{'…' if len(unindexed) > 3 else ''})")
+                if changed:
+                    parts.append(f"{len(changed)} changed")
+                if removed:
+                    parts.append(f"{len(removed)} deleted")
+                return (self.STATE_STALE, "; ".join(parts))
+            return (self.STATE_READY,
+                    f"{n_chunks} chunks across {len(rows)} files")
+        except Exception as exc:
+            return (self.STATE_CORRUPT, f"index unreadable: {exc}")
+
     # ── Search ───────────────────────────────────────────────────────
 
     def search(self, query: str, top_k: int = 5) -> list[SearchResult]:
@@ -436,12 +516,18 @@ class SemanticIndex:
         """
         import numpy as np
 
+        self.last_search_degraded = None
         embeddings = self._embed([query])
         if not embeddings or not embeddings[0]:
+            self.last_search_degraded = "embedding-backend-unavailable"
             return []
 
         query_vec = np.array(embeddings[0], dtype=np.float64)
         if np.allclose(query_vec, 0.0):
+            # _embed returns zero vectors exactly when the backend failed
+            # (it never raises) — an empty result here is UNAVAILABLE,
+            # never a genuine negative.
+            self.last_search_degraded = "embedding-backend-unavailable"
             return []
 
         # Load all embeddings as a single numpy matrix or use the cached matrix

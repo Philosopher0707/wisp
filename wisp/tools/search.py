@@ -52,8 +52,32 @@ def tool_search_codebase(query: str, top_k: int = 5, workspace: str = ".") -> st
     try:
         from wisp.semantic_index import SemanticIndex
         index = SemanticIndex(workspace)
+        # 13-I-1: gate on index usability FIRST. The bare "nothing found"
+        # sentence below is reserved for a search actually performed
+        # against a usable index — every other state is reported
+        # explicitly so it can never read as a genuine negative.
+        state, detail = index.index_state()
+        if state == SemanticIndex.STATE_EMPTY_NO_FILES:
+            return (f"No semantically relevant code found for: {query} "
+                    f"(workspace has no indexable files)")
+        if state in (SemanticIndex.STATE_MISSING, SemanticIndex.STATE_EMPTY):
+            return (f"Semantic search unavailable: {detail}. "
+                    f"Build the index, or use search_symbols / direct reads "
+                    f"instead — this is NOT a finding that no code exists.")
+        if state == SemanticIndex.STATE_CORRUPT:
+            return (f"Semantic search unavailable: index database corrupt "
+                    f"({detail}). Rebuild the index, or use search_symbols / "
+                    f"direct reads instead.")
+        if state == SemanticIndex.STATE_STALE:
+            return (f"Semantic search unavailable: index is stale ({detail}). "
+                    f"Rebuild the index, or use search_symbols / direct "
+                    f"reads instead — results would miss recent code.")
         results = index.search(query, top_k=top_k)
         if not results:
+            if index.last_search_degraded:
+                return (f"Semantic search unavailable: embedding backend "
+                        f"unreachable ({index.last_search_degraded}). "
+                        f"Use search_symbols / direct reads instead.")
             return f"No semantically relevant code found for: {query}"
         lines = [f"Semantic search results for '{query}':"]
         for i, r in enumerate(results, 1):

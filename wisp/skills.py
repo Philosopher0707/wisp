@@ -38,15 +38,61 @@ GLOBAL_SKILL_DIRS = [
 class Skill:
     """A parsed Warp-compatible skill from a SKILL.md file."""
 
-    def __init__(self, name: str, description: str, instructions: str, triggers: list[str], file_path: Path):
+    def __init__(self, name: str, description: str, instructions: str, triggers: list[str], file_path: Path,
+                 model_invocable: bool = True):
         self.name = name
         self.description = description
         self.instructions = instructions
         self.triggers = triggers  # trigger phrases for auto-detection
         self.file_path = file_path
+        # Advertisement eligibility (13-I0): False hides the skill from
+        # model-visible tool advertisement. Authorization is untouched —
+        # this never grants anything, only withholds advertisement.
+        self.model_invocable = model_invocable
 
     def __repr__(self):
         return f"Skill(name='{self.name}', desc='{self.description[:50]}')"
+
+
+# ── disable-model-invocation contract (13-I0) ─────────────────────
+# Exactly four states; never truthiness. The contract applies to the
+# PARSED Python value (PyYAML coerces yes/no/on/off to bool — that is
+# the parser's business; we only classify what we receive).
+VISIBILITY_ABSENT = "ABSENT"      # field absent → existing default
+VISIBILITY_ENABLED = "ENABLED"    # boolean False → model-invocable
+VISIBILITY_DISABLED = "DISABLED"  # boolean True → hidden
+VISIBILITY_INVALID = "INVALID"    # anything else → hidden, fail closed
+
+_DISABLE_FIELD = "disable-model-invocation"
+_ABSENT = object()
+
+
+def resolve_invocation_visibility(raw: object, *, skill_name: str = "",
+                                  file_path: object = None) -> str:
+    """Classify a parsed `disable-model-invocation` value.
+
+    Actual booleans only: `type(v) is bool` (isinstance would admit
+    ints, since bool subclasses int). Every non-bool — including the
+    strings "true"/"false", ints, null, collections — is INVALID and
+    therefore hidden. Logs a diagnostic for INVALID (existing logger
+    channel; name/path/field only, never skill contents).
+    """
+    if raw is _ABSENT:
+        return VISIBILITY_ABSENT
+    if type(raw) is bool:
+        return VISIBILITY_DISABLED if raw else VISIBILITY_ENABLED
+    logger.warning(
+        "Skill %r (%s): malformed %r value %r — model invocation "
+        "disabled (fail-closed). Expected boolean true/false or absence.",
+        skill_name or "?", str(file_path or "?"), _DISABLE_FIELD, raw,
+    )
+    return VISIBILITY_INVALID
+
+
+def is_model_advertisable(state: str) -> bool:
+    """ABSENT keeps the existing default (advertised); only an explicit
+    boolean true — or any malformed value — hides the skill."""
+    return state in (VISIBILITY_ABSENT, VISIBILITY_ENABLED)
 
 
 def parse_skill(file_path: Path) -> Optional[Skill]:
@@ -96,6 +142,11 @@ def parse_skill(file_path: Path) -> Optional[Skill]:
     if not name:
         return None
 
+    # 13-I0: resolve advertisement eligibility at the parsing boundary.
+    visibility = resolve_invocation_visibility(
+        meta.get(_DISABLE_FIELD, _ABSENT),
+        skill_name=str(name), file_path=file_path)
+
     # NOTE: Skills are parsed without a regex blacklist. The prompt assembler
     # treats them as *suggestions*, not mandates, and appends a safety footer.
     # Tool-level guards (dangerous-command blocking, permission mode, hooks)
@@ -107,6 +158,7 @@ def parse_skill(file_path: Path) -> Optional[Skill]:
         instructions=instructions,
         triggers=triggers,
         file_path=file_path,
+        model_invocable=is_model_advertisable(visibility),
     )
 
 
