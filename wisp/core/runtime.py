@@ -409,6 +409,16 @@ class AgentRuntime:
             # budget notice). Persisted in the finally block so
             # resume/replay sees exactly what the model saw (issue #2B).
             injected_context: list[dict[str, Any]] = []
+            # Terminal-evidence tracking (13-H5): repository completion
+            # derives from the observed terminal outcome below, never from
+            # bare generator exhaustion. A fatal error is an error event
+            # with recoverable falsy; recoverable mid-turn diagnostics
+            # (denials, recovered transients) do not poison a later clean
+            # done — otherwise the crash-recovery replay branch would wipe
+            # live tool history on the next turn.
+            saw_done = False
+            saw_fatal_error = False
+            terminal_error_message: str | None = None
             turn_succeeded = False
 
             try:
@@ -459,8 +469,18 @@ class AgentRuntime:
                             _note = _d.get("text") if isinstance(_d, dict) else None
                         if isinstance(_note, str) and _note.strip():
                             injected_context.append(steering_message(_note))
+                    elif etype == "done":
+                        saw_done = True
+                    elif etype == "error":
+                        if not event.get("recoverable", True):
+                            saw_fatal_error = True
+                        terminal_error_message = str(
+                            event.get("message") or "turn failed")
 
-                turn_succeeded = True
+                # 13-H5: completion derives from terminal evidence — a done
+                # with no fatal error. Bare exhaustion, partial output, or
+                # fatal diagnostics never count as success.
+                turn_succeeded = saw_done and not saw_fatal_error
 
             except Exception as exc:
                 logger.exception("Turn failed for session %s", sid)
@@ -554,6 +574,7 @@ class AgentRuntime:
                 await asyncio.to_thread(
                     self._persist_turn_state,
                     session, sid, prompt, turn_succeeded, seq_num,
+                    terminal_error_message,
                 )
 
                 # Cache result for idempotency (1h TTL)
@@ -580,18 +601,27 @@ class AgentRuntime:
         prompt: str,
         turn_succeeded: bool,
         seq_num: int,
+        terminal_error: str | None = None,
     ) -> None:
         """Run on a worker thread at turn end: DONE event + memory fold +
         full session save. Groups the blocking SQLite/JSONL writes that
         used to run inline on the asyncio loop."""
-        # Persist DONE event to session event log
-        if self.session_repo is not None and turn_succeeded:
+        # Repository completion mirrors the observed terminal outcome
+        # (13-H5): DONE only on success; the terminal error row on failure
+        # so history stays append-only and recovery can see it. Never both.
+        if self.session_repo is not None:
             try:
                 from wisp.core.session import SessionEvent
-                self.session_repo.append_event(
-                    sid,
-                    SessionEvent.done(seq_num, self.telemetry.turns_total),
-                )
+                if turn_succeeded:
+                    self.session_repo.append_event(
+                        sid,
+                        SessionEvent.done(seq_num, self.telemetry.turns_total),
+                    )
+                elif terminal_error:
+                    self.session_repo.append_event(
+                        sid,
+                        SessionEvent.error(seq_num, terminal_error),
+                    )
             except Exception:
                 pass
 

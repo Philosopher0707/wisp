@@ -788,7 +788,10 @@ def _runtime(provider, tmp_path, ws_files=None):
 
 
 class TestSuccessHonesty:
-    def test_silent_end_recorded_complete(self, tmp_path, monkeypatch):
+    def test_silent_end_recorded_incomplete(self, tmp_path, monkeypatch):
+        # H5 compatibility: the H3 closure error is terminal classification,
+        # and the derived completion predicate (runtime.py) no longer writes
+        # repo-DONE for it. The H1/H2-era repo-complete finding is superseded.
         monkeypatch.setenv("WISP_STREAM_ATTEMPTS", "1")
         runtime, ws = _runtime(_DictProvider(
             [_think_then_hang("craft final")]), tmp_path)
@@ -799,16 +802,9 @@ class TestSuccessHonesty:
             return [ev async for ev in runtime.run_turn(session, prompt="go")]
 
         evs = asyncio.run(_main())
-        # H3 closure: the failure is classified at the event layer (the stall
-        # notice is provider_status, so the closure is the single error) …
         assert "done" not in _types(evs)
-        assert _types(evs).count("error") == 1
-        assert "reasoning" in evs[-1].get("message", "")
-        assert "no final answer" in evs[-1].get("message", "")
-        # … while the run is still recorded repo-complete (crash-recovery
-        # semantics: processing finished; answer delivery is NOT implied).
-        # Full turn_succeeded redefinition is deferred to H4 (replay risk).
-        assert runtime.session_repo.was_last_turn_complete("n-silent") is True
+        assert _types(evs).count("error") == 1  # H3 closure
+        assert runtime.session_repo.was_last_turn_complete("n-silent") is False
         assert any(m.get("role") == "user" for m in session["messages"])
 
     def test_clean_end_recorded_complete(self, tmp_path):
