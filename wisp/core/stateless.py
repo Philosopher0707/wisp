@@ -642,9 +642,27 @@ class WispAgentCore:
             if not has_tool_calls:
                 if provider_failed:
                     # G1B: the round-trip ended non-complete (error event
-                    # or stall already yielded live). Partial content stays
-                    # for diagnostics, but done=True would be a lie —
-                    # end the turn without it.
+                    # or stall already yielded live). done=True would be a
+                    # lie — but a silent end would be invisible (13-H1):
+                    # close the turn with one terminal error classification
+                    # naming the missing answer. Partial content already
+                    # streamed live stays for diagnostics.
+                    if partial_content:
+                        outcome = ("partial response streamed above is retained "
+                                   "but incomplete")
+                    elif any(e.get("type") == "thinking" for e in provider_events):
+                        outcome = ("reasoning streamed above is retained "
+                                   "but incomplete")
+                    else:
+                        outcome = "no usable output was produced"
+                    yield _flatten_event(error_event(
+                        f"Incomplete provider round ({provider_fail_note}) — "
+                        f"{outcome}; no final answer was produced",
+                        recoverable=True,
+                        code=CODE_PROVIDER_STREAM,
+                        hint="retry the request (a fresh attempt starts clean)",
+                        context=[f"round: incomplete ({provider_fail_note})"],
+                    ))
                     return
                 # Verification floor: a turn that changed code but ended with
                 # a failing (or never-run) verification command is NOT
