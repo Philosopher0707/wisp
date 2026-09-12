@@ -110,7 +110,7 @@ class TestVerificationLoop:
     async def test_edit_then_finish_is_nudged_not_done(self, core, session):
         # edit → try to finish → nudged → try again → nudged (bounded 2) → done
         _scripted_core(core, [
-            [_tool_call("edit_file", {"path": "a.py"}, 0), {"type": "done"}],
+            [_tool_call("edit_file", {"path": "a.py", "old_text": "x", "new_text": "y"}, 0), {"type": "done"}],
             [{"type": "token", "text": "done!", "phase": "content"}, {"type": "done"}],
         ])
         _mock_execute(core, {"edit_file": "wrote a.py"})
@@ -125,7 +125,7 @@ class TestVerificationLoop:
     @pytest.mark.asyncio
     async def test_edit_then_bash_exit0_finishes_clean(self, core, session):
         _scripted_core(core, [
-            [_tool_call("edit_file", {"path": "a.py"}, 0), {"type": "done"}],
+            [_tool_call("edit_file", {"path": "a.py", "old_text": "x", "new_text": "y"}, 0), {"type": "done"}],
             [_tool_call("run_bash", {"command": "pytest"}, 1), {"type": "done"}],
             [{"type": "token", "text": "verified!", "phase": "content"}, {"type": "done"}],
         ])
@@ -140,7 +140,7 @@ class TestVerificationLoop:
         # Verification ran BEFORE the code change — it must not count.
         _scripted_core(core, [
             [_tool_call("run_bash", {"command": "pytest"}, 0), {"type": "done"}],
-            [_tool_call("edit_file", {"path": "a.py"}, 1), {"type": "done"}],
+            [_tool_call("edit_file", {"path": "a.py", "old_text": "x", "new_text": "y"}, 1), {"type": "done"}],
             [{"type": "token", "text": "done!", "phase": "content"}, {"type": "done"}],
         ])
         _mock_execute(core, {"run_bash": BASH_OK, "edit_file": "wrote a.py"})
@@ -153,9 +153,9 @@ class TestVerificationLoop:
         # edit → verify ok → edit AGAIN → try to finish: the second edit
         # invalidated the passing run, so a nudge is required.
         _scripted_core(core, [
-            [_tool_call("edit_file", {"path": "a.py"}, 0), {"type": "done"}],
+            [_tool_call("edit_file", {"path": "a.py", "old_text": "x", "new_text": "y"}, 0), {"type": "done"}],
             [_tool_call("run_bash", {"command": "pytest"}, 1), {"type": "done"}],
-            [_tool_call("edit_file", {"path": "b.py"}, 2), {"type": "done"}],
+            [_tool_call("edit_file", {"path": "b.py", "old_text": "x", "new_text": "y"}, 2), {"type": "done"}],
             [{"type": "token", "text": "done!", "phase": "content"}, {"type": "done"}],
         ])
         _mock_execute(core, {"edit_file": "wrote", "run_bash": BASH_OK})
@@ -166,7 +166,7 @@ class TestVerificationLoop:
     @pytest.mark.asyncio
     async def test_failing_bash_nudge_names_the_failure(self, core, session):
         _scripted_core(core, [
-            [_tool_call("edit_file", {"path": "a.py"}, 0), {"type": "done"}],
+            [_tool_call("edit_file", {"path": "a.py", "old_text": "x", "new_text": "y"}, 0), {"type": "done"}],
             [_tool_call("run_bash", {"command": "pytest"}, 1), {"type": "done"}],
             [{"type": "token", "text": "should be fine", "phase": "content"}, {"type": "done"}],
         ])
@@ -191,7 +191,7 @@ class TestVerificationLoop:
             config=config,
         )
         _scripted_core(core, [
-            [_tool_call("edit_file", {"path": "a.py"}, 0), {"type": "done"}],
+            [_tool_call("edit_file", {"path": "a.py", "old_text": "x", "new_text": "y"}, 0), {"type": "done"}],
             [{"type": "token", "text": "done!", "phase": "content"}, {"type": "done"}],
         ])
         _mock_execute(core, {"edit_file": "wrote a.py"})

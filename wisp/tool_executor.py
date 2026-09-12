@@ -1554,7 +1554,10 @@ class ToolExecutor:
                 worktree_isolated=worktree,
                 model=model_override,
                 workspace=workspace,
-                auto_approve=func_args.get("auto_approve", False),
+                # 13-J1: child approval posture is host-owned. The key is
+                # not in any tool schema; a model-sent value must never
+                # escalate a child past the approval posture.
+                auto_approve=False,
                 output_format=output_format,
                 output_schema=output_schema,
                 max_tokens=max_tokens,
@@ -1656,7 +1659,9 @@ class ToolExecutor:
             worktree_isolated=func_args.get("worktree_isolated", False),
             model=func_args.get("model") or role_cfg.model,
             workspace=workspace,
-            auto_approve=func_args.get("auto_approve", False),
+            # 13-J1: host-owned, see _spawn (no schema-declared key may
+            # change child approval posture).
+            auto_approve=False,
             output_format=func_args.get("output_format", "text"),
             output_schema=func_args.get("output_schema"),
             max_tokens=func_args.get("max_tokens"),
@@ -1873,7 +1878,22 @@ class ToolExecutor:
                 "metadata": {},
             }, ensure_ascii=False)
 
-        max_concurrent = int(func_args.get("max_concurrent", 4))
+        try:
+            max_concurrent = int(func_args.get("max_concurrent", 4))
+        except (TypeError, ValueError):
+            return json.dumps({
+                "status": "error",
+                "tool": "fanout",
+                "data": "max_concurrent must be an integer >= 1",
+                "metadata": {},
+            }, ensure_ascii=False)
+        if max_concurrent < 1:
+            return json.dumps({
+                "status": "error",
+                "tool": "fanout",
+                "data": "max_concurrent must be an integer >= 1",
+                "metadata": {},
+            }, ensure_ascii=False)
 
         try:
             from wisp.multi_agent.roles import ROLE_CONFIGS
@@ -1885,6 +1905,38 @@ class ToolExecutor:
                 "data": f"Failed to import multi_agent modules: {e}",
                 "metadata": {},
             }, ensure_ascii=False)
+
+        # 13-J1 host caps (reject before launch; model cannot raise these).
+        try:
+            branch_cap = int(getattr(
+                self.config, "max_subagent_branching", 3))
+        except (TypeError, ValueError):
+            branch_cap = 3
+        if len(tasks_spec) > branch_cap:
+            return json.dumps({
+                "status": "error",
+                "tool": "fanout",
+                "data": (f"fanout supports at most {branch_cap} tasks "
+                         f"(host max_subagent_branching); got "
+                         f"{len(tasks_spec)}"),
+                "metadata": {},
+            }, ensure_ascii=False)
+        try:
+            max_depth = int(getattr(self.config, "max_subagent_depth", 2))
+        except (TypeError, ValueError):
+            max_depth = 2
+        if _exec_depth(self.config) + 1 >= max_depth:
+            return json.dumps({
+                "status": "error",
+                "tool": "fanout",
+                "data": ("subagent depth limit exceeded "
+                         f"(depth {_exec_depth(self.config) + 1} >= max "
+                         f"{max_depth}): no workers launched"),
+                "metadata": {},
+            }, ensure_ascii=False)
+        # Extra concurrency slots beyond the task count are unusable;
+        # clamp instead of rejecting (both values individually legal).
+        max_concurrent = max(1, min(max_concurrent, len(tasks_spec)))
 
         contracts = []
         for i, spec in enumerate(tasks_spec):
@@ -1942,7 +1994,9 @@ class ToolExecutor:
                 worktree_isolated=worktree,
                 model=model_override,
                 workspace=workspace,
-                auto_approve=spec.get("auto_approve", False),
+                # 13-J1: host-owned, see _spawn. Fanout tasks cannot set
+                # this (additionalProperties:false rejects the key).
+                auto_approve=False,
                 # G1E §5: explicit logical budget (1 + 2 retries), matching
                 # the spawn path — run_parallel no longer mints implicit
                 # attempts for default-0 contracts.

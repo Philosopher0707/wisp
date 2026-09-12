@@ -193,11 +193,15 @@ def _call(name, args):
 
 @pytest.mark.asyncio
 async def test_f_denial_then_read_continues(tmp_path):
-    """The observed run: fanout blocked, model continues with reads."""
+    """The observed run: fanout blocked, model continues with reads.
+    13-J1: the call is structurally VALID (proper task objects) so it
+    reaches approval and is declined -> USER_DENIED; malformed calls
+    now die earlier as SCHEMA_INVALID (covered by a4/J1 suites)."""
     from wisp.providers.mock import MockProvider
     provider = MockProvider(
         responses=["", "", "analysis complete"],
-        tool_calls=[[ _call("fanout", {"tasks": ["a", "b", "c"]}) ],
+        tool_calls=[[ _call("fanout", {"tasks": [
+            {"task": "survey CLI"}, {"task": "survey core"}]}) ],
                     [ _call("read_file", {"path": "main.rs"}) ]],
     )
     prompts = []

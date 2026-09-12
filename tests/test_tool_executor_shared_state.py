@@ -256,7 +256,9 @@ class TestAgentIdentity:
         # BackgroundAgentManager around the fake orchestrator.
         ex.background_agents = object()
 
-        tok = exec_ctx.agent_depth.set(2)
+        # 13-J1: depth token 0 → children depth 1 < max 2 → launch proceeds
+        # and stamps depth from the executing agent (not the root config).
+        tok = exec_ctx.agent_depth.set(0)
         try:
             await ex._fanout(
                 {"tasks": [
@@ -269,7 +271,45 @@ class TestAgentIdentity:
             exec_ctx.agent_depth.reset(tok)
 
         assert len(captured) == 2
-        assert [c._subagent_depth for c in captured] == [3, 3]
+        assert [c._subagent_depth for c in captured] == [1, 1]
+
+    @pytest.mark.asyncio
+    async def test_fanout_depth_refused_before_launch(self):
+        # 13-J1 §10: at-limit depth refuses with zero launches (previously
+        # contracts were built then refused late by the orchestrator).
+        from wisp.multi_agent.task import SubagentResult
+
+        captured: list[Any] = []
+
+        class FakeOrch:
+            async def run_parallel(self, contracts, max_concurrent=4):
+                captured.extend(contracts)
+                return [
+                    SubagentResult(task_id=c.name, success=True, output="ok",
+                                   elapsed_seconds=0.1)
+                    for c in contracts
+                ]
+
+        ex = ToolExecutor.__new__(ToolExecutor)
+        ex.config = WispConfig()
+        ex.subagent_orchestrator = FakeOrch()
+        ex.background_agents = object()
+
+        tok = exec_ctx.agent_depth.set(2)
+        try:
+            out = await ex._fanout(
+                {"tasks": [
+                    {"task": "one", "role": "coder"},
+                    {"task": "two", "role": "researcher"},
+                ], "mode": "blocking"},
+                "/tmp",
+            )
+        finally:
+            exec_ctx.agent_depth.reset(tok)
+
+        import json
+        assert json.loads(out)["status"] == "error"
+        assert captured == []
 
 
 # ═══════════════════════════════════════════════════════════════════

@@ -103,10 +103,11 @@ async def test_a2_loop_terminates_at_max_iterations(tmp_path):
 
 @pytest.mark.asyncio
 async def test_a3_policy_precedes_schema_validation(tmp_path):
-    """Ordering proof: an argless PROHIBITED call yields POLICY_DENIED
-    (policy pre-check runs before schema validation), while an argless
-    ALLOWED call yields a schema error. The live schema error therefore
-    came from a different call/layer than the run_bash denials."""
+    """Ordering proof, 13-J1 order: a structurally INVALID prohibited
+    call yields SCHEMA_INVALID (validation runs before policy/approval),
+    while a structurally VALID prohibited call still yields POLICY_DENIED.
+    Renamed intent: schema precedes policy; policy layer intact and
+    distinguishable. (Pre-J1 name asserted the old order.)"""
     provider = MockProvider(
         responses=["", "", "", "done"],
         tool_calls=[[ _call("run_bash", {}) ],
@@ -120,9 +121,11 @@ async def test_a3_policy_precedes_schema_validation(tmp_path):
     results = _tool_results(events)
     assert len(results) == 3
     first = _parse_result(results[0])
-    assert isinstance(first, dict) and first.get("status") == "POLICY_DENIED"
+    assert isinstance(first, dict) and first.get("status") == "SCHEMA_INVALID"
     second = _parse_result(results[1])
-    assert isinstance(second, dict) and second.get("status") == "error"
+    # 13-J1: structurally invalid write_file is refused pre-approval with
+    # the machine-readable denial envelope (not the legacy "error" shape).
+    assert isinstance(second, dict) and second.get("status") == "SCHEMA_INVALID"
     assert "Failed validating" in json.dumps(second) or "Schema" in json.dumps(second)
     third = _parse_result(results[2])
     assert third.get("status") == "POLICY_DENIED"
@@ -155,8 +158,9 @@ async def test_a4_repetition_generic_across_denied_tools(tmp_path):
         got[r.get("name")] = parsed.get("status") if isinstance(parsed, dict) else parsed
     assert got.get("git_push") == "POLICY_DENIED"
     assert got.get("run_bash") == "POLICY_DENIED"
-    # fanout is REQUIRE_APPROVAL + declined -> USER_DENIED (not policy)
-    assert got.get("fanout") == "USER_DENIED"
+    # fanout with empty tasks is structurally invalid (minItems 1, 13-J1)
+    # so it is refused pre-approval as SCHEMA_INVALID, not USER_DENIED.
+    assert got.get("fanout") == "SCHEMA_INVALID"
 
 
 # ── A5: run_bash stays advertised in AUTO_EDIT (visibility proof) ──

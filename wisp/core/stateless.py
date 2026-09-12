@@ -424,6 +424,32 @@ class WispAgentCore:
                                             )
                                         )
                                         continue
+                                    # Structural validation BEFORE approval
+                                    # (13-J1): an invalid proposal must never
+                                    # reach the human prompt. Dry-run: the
+                                    # write_file salvage below must not mutate
+                                    # the reviewed event (approval sees what
+                                    # was proposed; salvage markers survive
+                                    # for downstream refusal text). Mirrors
+                                    # the role-block shape so history/audit
+                                    # stay protocol-consistent.
+                                    _schema_error = self._validate_tool_args(
+                                        str(single.get("name", "")),
+                                        single.get("arguments", {}),
+                                        _dry_run=True)
+                                    if _schema_error:
+                                        tc_event["_blocked"] = _schema_error
+                                        tc_event["_denial"] = "SCHEMA_INVALID"
+                                        pending_tool_calls.append(tc_event)
+                                        tool_results_events_early.append(
+                                            self._refusal_result_event(tc_event, session.get("workspace", ".")))
+                                        yield _flatten_event(
+                                            error_event(
+                                                f"Blocked: {_schema_error}",
+                                                recoverable=True,
+                                            )
+                                        )
+                                        continue
                                     # Check security BEFORE yielding
                                     gate = self._get_approval_gate()
                                     _gdec = await gate.check_decision(
@@ -504,6 +530,27 @@ class WispAgentCore:
                             yield _flatten_event(
                                 error_event(
                                     f"Blocked: {normalized['_blocked']}",
+                                    recoverable=True,
+                                )
+                            )
+                            continue
+
+                        # Structural validation BEFORE approval (13-J1):
+                        # same contract as the batch path above (dry-run:
+                        # no event mutation, salvage markers preserved).
+                        _schema_error2 = self._validate_tool_args(
+                            str(normalized.get("name", "")),
+                            normalized.get("arguments", {}),
+                            _dry_run=True)
+                        if _schema_error2:
+                            normalized["_blocked"] = _schema_error2
+                            normalized["_denial"] = "SCHEMA_INVALID"
+                            pending_tool_calls.append(normalized)
+                            tool_results_events_early.append(
+                                self._refusal_result_event(normalized, session.get("workspace", ".")))
+                            yield _flatten_event(
+                                error_event(
+                                    f"Blocked: {_schema_error2}",
                                     recoverable=True,
                                 )
                             )
@@ -2013,13 +2060,24 @@ class WispAgentCore:
 
         return result
 
-    def _validate_tool_args(self, name: str, args: dict[str, Any]) -> Optional[str]:
+    def _validate_tool_args(self, name: str, args: dict[str, Any], _dry_run: bool = False) -> Optional[str]:
         """Validate tool arguments against the registered JSON schema.
 
         Returns an error message string if validation fails, or None
         if the tool is not found or validation succeeds.
+
+        With ``_dry_run=True`` validation operates on a deep copy: the
+        write_file salvage/path-defaulting below must not mutate the
+        event under review, or Gate1 approval would see host-mutated
+        args and downstream gates would lose the salvage markers they
+        key their refusal text on. _execute_tool keeps the mutating
+        call (salvaged args must flow into execution).
         """
         from wisp.tools.registry import TOOL_SCHEMAS
+
+        if _dry_run and isinstance(args, dict):
+            import copy
+            args = copy.deepcopy(args)
 
         # Find the schema for this tool
         schema = None
