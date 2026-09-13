@@ -1,8 +1,15 @@
 # Long-Horizon Task Execution: Design Specification
 
-**Status:** Draft  
-**Author:** Wisp Architecture Team  
+**Status:** Draft
+**Author:** Wisp Architecture Team
 **Date:** 2025-01-15
+
+> **Status note (2026-09):** this is a pre-implementation draft. Its
+> long-horizon subset shipped as `wisp/task/` (M6: lifecycle, plan review,
+> profiles) — see `docs/LONG_HORIZON_TASKS.md` for the as-built companion.
+> The standalone `wisp/long_horizon/` package proposed in §"File layout"
+> was never created; do not treat the remaining sections as current
+> architecture without verifying against the tree.
 
 ---
 
