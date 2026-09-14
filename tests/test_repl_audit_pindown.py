@@ -143,18 +143,22 @@ async def test_pty_caps_output_provider_side_noop_does_not(tmp_path):
 
 # ── Env scrub gaps (verified live incl. real child env) ───────────────────
 
-def test_credential_free_env_strips_token_like_keeps_docker_host_like():
+def test_credential_free_env_strips_infra_control_keys():
     from wisp.tools._utils_env import credential_free_env
 
     os.environ["PIN_WISP_TOKEN"] = "secret"
     os.environ["PIN_MY_DOCKER_HOST"] = "tcp://evil:2375"
+    os.environ["DOCKER_HOST"] = "tcp://evil:2375"
+    os.environ["OLLAMA_HOST"] = "http://evil:11434"
     try:
         env, _ = credential_free_env()
         assert "PIN_WISP_TOKEN" not in env
-        assert env.get("PIN_MY_DOCKER_HOST") == "tcp://evil:2375"  # BUG: leak shape
+        assert "DOCKER_HOST" not in env  # daemon control plane must not leak
+        assert "OLLAMA_HOST" not in env
+        assert "PIN_MY_DOCKER_HOST" not in env
     finally:
-        del os.environ["PIN_WISP_TOKEN"]
-        del os.environ["PIN_MY_DOCKER_HOST"]
+        for k in ("PIN_WISP_TOKEN", "PIN_MY_DOCKER_HOST", "DOCKER_HOST", "OLLAMA_HOST"):
+            os.environ.pop(k, None)
 
 
 @pytest.mark.asyncio
@@ -166,7 +170,7 @@ async def test_pty_child_env_leaks_nonmatching_keys(tmp_path):
     try:
         _, out, _ = await PtySandbox(str(tmp_path)).run("env | sort", cwd="", timeout=10)
         assert "PIN_CHILD_TOKEN_X" not in out
-        assert "PIN_CHILD_DOCKER_HOST_X" in out  # BUG: deny-list gap is live
+        assert "PIN_CHILD_DOCKER_HOST_X" not in out
     finally:
         del os.environ["PIN_CHILD_TOKEN_X"]
         del os.environ["PIN_CHILD_DOCKER_HOST_X"]

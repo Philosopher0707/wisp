@@ -53,8 +53,11 @@ _ALWAYS_STRIPPED_ENV_KEYS: frozenset[str] = frozenset({
 })
 
 # Normalized (underscores removed, lowercased) substring match.
+# `docker`/`ollama` cover the daemon control plane (DOCKER_HOST,
+# DOCKER_CERT_PATH, DOCKER_TLS_VERIFY, OLLAMA_HOST, …): a child that can
+# reach the Docker socket escapes every other sandbox control.
 _CREDENTIAL_ENV_PATTERN = re.compile(
-    r"(apikey|token|secret|passw|credential|privatekey|accesskey|signingkey|ssh)"
+    r"(apikey|token|secret|passw|credential|privatekey|accesskey|signingkey|ssh|docker|ollama)"
 )
 
 
