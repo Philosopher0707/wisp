@@ -553,3 +553,9 @@ def test_lsp_py_uses_running_interpreter(tmp_path, monkeypatch):
     lsp_mod.tool_lsp_diagnostics("a.py", str(tmp_path))
     assert seen["cmd"][0] == sys.executable  # not ambient python3 (version skew)
     assert seen["cmd"][1:3] == ["-m", "py_compile"]
+
+
+def test_prompt_warns_about_bare_python3():
+    from wisp.context_assembler import DEFAULT_BASE_SYSTEM
+
+    assert "python3" in DEFAULT_BASE_SYSTEM  # model habit must meet sandbox reality
