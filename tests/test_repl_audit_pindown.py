@@ -242,8 +242,20 @@ def test_verification_run_tests_does_not_release_gate():
     assert g.rejection() is None  # no mutation → may finish
     g.note_tool_result("write_file", "x", {})
     assert g.rejection() is not None
-    g.note_tool_result("run_tests", "passed", {})
-    assert g.rejection() is not None  # run_tests not in _VERIFY_TOOLS
+    # Vacuous run_tests (0 collected) is NOT evidence …
+    g.note_tool_result("run_tests",
+                       "## Test Results (0/0 passed)\n- Failed: 0, Errors: 0, Skipped: 0", {})
+    assert g.rejection() is not None
+    # … but a real green run is (auto_edit blocks run_bash, so this is the
+    # only way those turns can ever verify instead of floor-surrendering).
+    g.note_tool_result("run_tests",
+                       "## Test Results (3/3 passed)\n- Failed: 0, Errors: 0, Skipped: 0", {})
+    assert g.rejection() is None
+    g2 = VerificationFloorGuard()
+    g2.note_tool_result("write_file", "x", {})
+    g2.note_tool_result("run_tests",
+                        "## Test Results (1/2 passed)\n- Failed: 1, Errors: 0, Skipped: 0", {})
+    assert g2.rejection() is not None  # red suite never verifies
     g2 = VerificationFloorGuard()
     g2.note_tool_result("write_file", "x", {})
     g2.note_tool_result("run_bash", _format_bash_output(0, "ok", ""), {})

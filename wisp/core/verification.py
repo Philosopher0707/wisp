@@ -16,6 +16,7 @@ whole policy is unit-testable without a core.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,19 @@ _MUTATING_TOOLS = frozenset({"write_file", "edit_file", "edit_file_multi", "fs_m
 # Tool names whose exit status counts as verification evidence.
 _VERIFY_TOOLS = frozenset({"run_bash", "exec_sandbox"})
 
+# run_tests summary shape (test_runner.format_for_llm). A vacuous
+# 0/0 run is NOT evidence — otherwise auto_edit turns (run_bash blocked)
+# could "verify" without executing a single test.
+_TEST_RESULTS_RE = re.compile(r"## Test Results \((\d+)/(\d+) passed\)")
+
+
+def _run_tests_is_evidence(result_text: str) -> bool:
+    """True when result_text reports a real green suite (≥1 collected, 0 failed)."""
+    m = _TEST_RESULTS_RE.search(result_text or "")
+    if not m or int(m.group(2)) < 1:
+        return False
+    return "- Failed: 0, Errors: 0" in result_text
+
 
 @dataclass
 class VerificationFloorGuard:
@@ -90,6 +104,12 @@ class VerificationFloorGuard:
             self.verify_ok_after_edit = None  # prior evidence is stale now
         elif name in _VERIFY_TOOLS:
             self.verify_ok_after_edit = not result_text.startswith("[exit code:")
+        elif name == "run_tests":
+            if _run_tests_is_evidence(result_text):
+                self.verify_ok_after_edit = True
+            # A red or vacuous suite leaves prior evidence untouched:
+            # absence of proof is not proof of breakage (a later green run
+            # still counts), but it never manufactures verification.
 
     def rejection(self) -> str | None:
         """HARNESS REJECTION text when finishing now is premature, else None.
