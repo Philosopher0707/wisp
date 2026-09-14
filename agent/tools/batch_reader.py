@@ -602,6 +602,45 @@ def tool_read_files_batch(
     )
 
 
+class BatchReaderExtension:
+    """Expose the batch reader without mutating Wisp's global registry."""
+
+    name = "batch_reader"
+
+    def start(self) -> None:
+        return None
+
+    def stop(self) -> None:
+        return None
+
+    def intercept(self, event: dict[str, Any]) -> dict[str, str]:
+        return {"action": "allow"}
+
+    def tools(self) -> list[dict[str, Any]]:
+        return [TOOL_SCHEMA]
+
+    def call_tool(
+        self, name: str, args: dict[str, Any], workspace: str
+    ) -> dict[str, Any] | None:
+        if name != "read_files_batch":
+            return None
+        try:
+            data = tool_read_files_batch(workspace=workspace, **args)
+        except ToolError as exc:
+            return {
+                "status": "error",
+                "tool": name,
+                "data": str(exc),
+                "metadata": {},
+            }
+        return {
+            "status": "ok",
+            "tool": name,
+            "data": data,
+            "metadata": {},
+        }
+
+
 # ── Auditable file discovery ─────────────────────────────────────────
 
 def list_auditable_files(

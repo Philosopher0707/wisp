@@ -56,14 +56,6 @@ class CompositionRoot:
             _install_sink()
         except Exception:
             pass
-        # BatchReader: ensure read_files_batch is in tool registry (02af5d0)
-        try:
-            from agent.tools.batch_reader import register_with_wisp_registry as _reg_batch  # type: ignore
-
-            _reg_batch()
-        except Exception:
-            pass
-
         # Structured logging (before any services log)
         log_format = getattr(self.config, "log_format", None) or "text"
         if log_format == "json":
@@ -108,6 +100,7 @@ class CompositionRoot:
         from wisp.mcp import MCPManager
         from wisp.file_lock import FileLock
         from wisp.infra.hook_types import InterceptHookManager, ToolHookManager
+        from agent.tools.batch_reader import BatchReaderExtension  # type: ignore
         workspace = getattr(self.config, "workspace", ".")
         wsp = Path(workspace).resolve()
 
@@ -122,6 +115,7 @@ class CompositionRoot:
         self.extensions.register(HookExtension(manager=self._intercept_hook_manager))
         self.extensions.register(MCPExtension(workspace=str(workspace), manager=self._mcp_manager))
         self.extensions.register(SkillExtension(workspace=str(workspace)))
+        self.extensions.register(BatchReaderExtension())
 
         # Ensure .wisp dir exists for persistence
         (wsp / ".wisp").mkdir(parents=True, exist_ok=True)
