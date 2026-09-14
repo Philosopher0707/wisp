@@ -559,3 +559,13 @@ def test_prompt_warns_about_bare_python3():
     from wisp.context_assembler import DEFAULT_BASE_SYSTEM
 
     assert "python3" in DEFAULT_BASE_SYSTEM  # model habit must meet sandbox reality
+
+
+def test_doctor_reports_shell_binaries():
+    import asyncio
+
+    from wisp.core.doctor import _check_path_environment
+
+    result = asyncio.run(_check_path_environment())
+    assert "bash_version" in result.details  # major.minor at least
+    assert "python_executable" in result.details

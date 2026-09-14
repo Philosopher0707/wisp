@@ -247,6 +247,33 @@ async def _check_path_environment() -> CheckResult:
                                f"run dirs check: {e}",
                                (time.monotonic() - t0) * 1000, details)
 
+        # 4. Shell + interpreter binaries the agent depends on.
+        try:
+            import shutil
+            import subprocess
+            import sys
+
+            bash_path = shutil.which("bash")
+            details["bash_path"] = bash_path or ""
+            if bash_path:
+                try:
+                    proc = subprocess.run(
+                        [bash_path, "--version"], capture_output=True,
+                        text=True, timeout=5,
+                    )
+                    first = (proc.stdout or "").splitlines()
+                    details["bash_version"] = first[0].strip() if first else "unknown"
+                except Exception:
+                    details["bash_version"] = "unknown"
+            else:
+                details["bash_version"] = "missing"
+                return CheckResult(name, commit, CheckStatus.WARN,
+                                   "bash not found in PATH: run_bash cannot execute",
+                                   (time.monotonic() - t0) * 1000, details)
+            details["python_executable"] = sys.executable or ""
+        except Exception as e:
+            details["shell_binaries_error"] = str(e)
+
         latency = (time.monotonic() - t0) * 1000
         return CheckResult(name, commit, CheckStatus.OK,
                            f"safe_getcwd={cwd!r} workspace writable, run dirs ok",
