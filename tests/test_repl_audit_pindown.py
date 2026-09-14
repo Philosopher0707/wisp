@@ -135,6 +135,17 @@ async def test_pty_timeout_returns_partial_stdout(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_noop_timeout_returns_partial_stdout(tmp_path):
+    from wisp.sandbox import NoopSandbox
+
+    n = NoopSandbox(str(tmp_path))
+    rc, out, err = await n.run("echo hi; sleep 5", cwd="", timeout=1)
+    assert rc == -1
+    assert "hi" in out  # D2: every tier keeps partial output on timeout
+    assert "timed out" in err.lower()
+
+
+@pytest.mark.asyncio
 async def test_pty_caps_output_provider_side_noop_does_not(tmp_path):
     from wisp.sandbox import NoopSandbox
     from wisp.sandbox.router import PtySandbox

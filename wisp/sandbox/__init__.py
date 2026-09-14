@@ -13,6 +13,7 @@ import os
 import shutil
 import signal
 import subprocess
+from typing import Any
 
 
 async def _kill_process_group(process) -> None:
@@ -254,16 +255,42 @@ class NoopSandbox(SandboxProvider):
                 env=env,
                 start_new_session=True,
             )
-            try:
-                stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                    process.communicate(), timeout=timeout
-                )
-            except asyncio.TimeoutError:
-                await _kill_process_group(process)
-                return (-1, "", f"Command timed out after {timeout}s")
+            # Incremental readers (not communicate()): asyncio drops whatever
+            # communicate() had buffered when wait_for times out, so partial
+            # output would be lost. Readers own their buffers; EOF after the
+            # kill releases them, so the timeout path keeps partial output
+            # exactly like the PTY tier (D2).
+            stdout_chunks: list[bytes] = []
+            stderr_chunks: list[bytes] = []
 
-            stdout = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
-            stderr = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""
+            async def _drain(stream: Any, chunks: list[bytes]) -> None:
+                try:
+                    while True:
+                        data = await stream.read(65536)
+                        if not data:
+                            break
+                        chunks.append(data)
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+            readers = [
+                asyncio.ensure_future(_drain(process.stdout, stdout_chunks)),
+                asyncio.ensure_future(_drain(process.stderr, stderr_chunks)),
+            ]
+            timed_out = False
+            try:
+                await asyncio.wait_for(process.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                timed_out = True
+                await _kill_process_group(process)
+            finally:
+                await asyncio.gather(*readers)
+            stdout = b"".join(stdout_chunks).decode("utf-8", errors="replace")
+            stderr = b"".join(stderr_chunks).decode("utf-8", errors="replace")
+            if timed_out:
+                timeout_msg = f"Command timed out after {timeout}s"
+                stderr = f"{stderr}\n{timeout_msg}" if stderr else timeout_msg
+                return (-1, stdout, stderr)
             return (process.returncode or 0, stdout, stderr)
         except Exception as e:
             return (-1, "", str(e))
