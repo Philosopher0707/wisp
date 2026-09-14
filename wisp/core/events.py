@@ -283,7 +283,9 @@ def denial_result(name: str, status: str, reason: str, *,
     return tool_result(
         name,
         {"status": status, "authorized": False, "executed": False,
-         "retryable": False, "reason": reason, "data": reason},
+         "retryable": False, "reason": reason, "data": reason,
+         "hint": "Denial is final for these arguments: do not retry the "
+                 "identical call, and do not claim you ran the tool."},
         duration_ms=duration_ms,
         tool_call_id=tool_call_id,
     )
@@ -405,6 +407,7 @@ __all__ = [
     "thinking",
     "tool_call",
     "tool_result",
+    "denial_result",
     "content",
     "error",
     "done",
