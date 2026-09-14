@@ -337,6 +337,10 @@ def _persist_env(update: dict[str, str]) -> None:
             env_update[ev] = v
     if not env_update:
         return
+    # Secrets (*KEY vars) never touch the workspace .env — that file lives
+    # in the repo and gets committed, screenshared, and backed up. Keys
+    # persist via config.json (persist()) and the global ~/.config .env.
+    ws_update = {k: v for k, v in env_update.items() if "KEY" not in k}
     # Workspace .env (project-local, so `taki baar baar change na karna pade`)
     # Prefer the explicit workspace from the update (when /provider was called
     # from a REPL with a non-default workspace), then WISP_WORKSPACE env,
@@ -357,7 +361,8 @@ def _persist_env(update: dict[str, str]) -> None:
             except Exception:
                 ws = ""
         ws_env = pathlib.Path(ws).resolve() / ".env"
-        _upsert_env_file(ws_env, env_update)
+        if ws_update:
+            _upsert_env_file(ws_env, ws_update)
     except Exception:
         pass
     # Global fallback

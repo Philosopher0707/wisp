@@ -298,7 +298,7 @@ class TestPersistEnvHelpers:
         assert hints["path"].__module__ == "pathlib"
 
     def test_persist_env_writes_both_env_files(self, tmp_path, monkeypatch):
-        """End-to-end: workspace .env and global .env get the mapped keys."""
+        """End-to-end: workspace .env gets prefs, global .env gets prefs+keys."""
         from wisp import provider_select as psmod
 
         home = tmp_path / "home"
@@ -307,6 +307,8 @@ class TestPersistEnvHelpers:
         monkeypatch.setenv("WISP_WORKSPACE", str(tmp_path))
         monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
         psmod._persist_env({"api_key": "sk-test-123", "provider": "openai"})
-        assert "WISP_API_KEY=sk-test-123" in (tmp_path / ".env").read_text()
+        ws_text = (tmp_path / ".env").read_text()
+        assert "WISP_PROVIDER=openai" in ws_text
+        assert "sk-test-123" not in ws_text  # secrets never touch the committable file
         global_env = home / ".config" / "wisp" / ".env"
         assert "WISP_API_KEY=sk-test-123" in global_env.read_text()
