@@ -61,6 +61,10 @@ Deterministic, durable multi-agent execution in `wisp/graph/` — the graph owns
 
 ## Quick Start
 
+> **Platform:** POSIX only (macOS/Linux). Windows is unsupported: sandboxing,
+> PTY handling, process-group cleanup, and hook execution assume a POSIX
+> environment, and several paths fail closed (or leak children) elsewhere.
+
 ```bash
 # Install
 git clone https://github.com/your-username/wisp.git && cd wisp

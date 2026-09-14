@@ -21,7 +21,7 @@ One JSON object per file:
   "name": "no-rm-rf",
   "event": "pre_tool_use",
   "matcher": "run_bash",
-  "command": "grep -q 'rm -rf /' <<< \"$WISP_TOOL_ARGS\" && exit 2 || exit 0",
+  "command": "printf '%s' \"$WISP_TOOL_ARGS\" | grep -q 'rm -rf /' && exit 2 || exit 0",
   "timeout_seconds": 5,
   "enabled": true
 }
@@ -31,7 +31,7 @@ One JSON object per file:
 |---|---|
 | `event` | `pre_tool_use`, `pre_bash`, `pre_file_write`, `post_tool_use`, `post_bash` |
 | `matcher` | Regex matched against the tool name (empty = all tools) |
-| `command` | Shell command to run (see contract below) |
+| `command` | Shell command to run (see contract below). Executes under `/bin/sh` — keep it POSIX (`[[`, `<()`, `<<<` will die on dash) |
 | `timeout_seconds` | Kill + block after N seconds (default 5) |
 | `enabled` | `false` skips without deleting the file |
 
