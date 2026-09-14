@@ -263,6 +263,7 @@ class TestNamespaceAlignment:
                     "asyncio", "concurrent.futures", "importlib.util",
                     "inspect", "logging", "os", "tempfile", "time",
                     "dataclasses", "enum", "pathlib", "typing", "__future__",
+                    "shutil", "subprocess", "sys",
                 }, f"unexpected top-level import: {node.names[0].name}"
             elif isinstance(node, ast.ImportFrom):
                 mod = node.module or ""

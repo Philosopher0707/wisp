@@ -31,6 +31,9 @@ import asyncio
 import inspect
 import logging
 import os
+import shutil
+import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -249,10 +252,6 @@ async def _check_path_environment() -> CheckResult:
 
         # 4. Shell + interpreter binaries the agent depends on.
         try:
-            import shutil
-            import subprocess
-            import sys
-
             bash_path = shutil.which("bash")
             details["bash_path"] = bash_path or ""
             if bash_path:
