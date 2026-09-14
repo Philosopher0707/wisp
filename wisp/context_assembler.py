@@ -500,6 +500,7 @@ class ContextAssembler:
         included: list[tuple[str, str]] = []
         current_tokens = 0
         last_truncate_label: str = ""
+        dropped_labels: list[str] = []
 
         for label, priority, content in sorted_sections:
             size = self._estimate_tokens(content)
@@ -528,16 +529,20 @@ class ContextAssembler:
                     )
                     included.append((label, truncated))
                     current_tokens = self._estimate_tokens(truncated)
+                else:
+                    dropped_labels.append(label)
                 last_truncate_label = label
             else:
                 logger.debug("ContextAssembler: dropped %s (%d tokens) to fit budget", label, size)
+                dropped_labels.append(label)
 
         included_strings = [str(content) for _, content in included]
         system = "\n\n".join(included_strings)
         if last_truncate_label:
+            omitted = "".join(f"\n- {label} (omitted)" for label in dropped_labels)
             system += (
                 "\n\n[NOTE: Some sections were truncated or omitted "
-                "to fit the context window budget.]"
+                f"to fit the context window budget.{omitted}]"
             )
         current_tokens = self._estimate_tokens(system)
         return system, current_tokens

@@ -377,7 +377,7 @@ async def test_guarded_stream_retries_empty_then_errors():
 
 # ── Context budget: lowest-priority dropped with generic note only ────────
 
-def test_context_assembler_drops_low_priority_with_generic_note():
+def test_context_assembler_names_dropped_sections():
     from wisp.context_assembler import PromptContext
     from wisp.context_assembler import ContextAssembler
 
@@ -385,7 +385,7 @@ def test_context_assembler_drops_low_priority_with_generic_note():
     ctx = PromptContext(workspace="/tmp", context_files=big, max_tokens=10)
     out = ContextAssembler().build(ctx)
     assert big[:20] not in out
-    assert "NOTE" in out  # generic note; no per-section omission list (lossy)
+    assert "context_files" in out  # fixed S9: omission list, not a generic NOTE
 
 
 def test_stateless_prompt_path_omits_dead_context_fields():

@@ -52,7 +52,8 @@ class TestFitSections:
         sections = [("critical", 0, huge), ("optional", 3, "opt " * 10)]
         prompt, used = assembler._fit_sections(sections, max_tokens=20)
         # Optional (p=3) is dropped.  Critical (p=0) is truncated but present.
-        assert "optional" not in prompt
+        assert "opt opt" not in prompt  # dropped content is gone …
+        assert "- optional (omitted)" in prompt  # … but the drop is disclosed
         assert "word word" in prompt  # some content survives
         assert "[SECTION TRUNCATED" in prompt  # label appears in truncation notice
         assert used <= 100  # notice header + truncation adds many tokens
