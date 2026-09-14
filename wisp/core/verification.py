@@ -57,6 +57,18 @@ def compose_nudge(reason: str) -> str:
         "UNVERIFIED instead of claiming success."
     )
 
+
+# Short pointer for an identical repeat block (no new tool outcome since
+# the last nudge). Deliberately NOT the full compose_nudge text: re-appending
+# the invariant + rejection verbatim doubles context for zero new signal.
+# Keeps the "Verification loop" marker so existing nudge filters still count
+# it as an intervention.
+SHORT_REPEAT_NUDGE = (
+    "[SYSTEM] Verification loop (repeat): same block as above — "
+    "run the tests/linter and only then summarize. If you genuinely "
+    "cannot verify, say the work is UNVERIFIED instead of claiming success."
+)
+
 # Tool names that mutate code (legacy 42-tool surface + thin primitives).
 _MUTATING_TOOLS = frozenset({"write_file", "edit_file", "edit_file_multi", "fs_mutate"})
 # Tool names whose exit status counts as verification evidence.
@@ -89,6 +101,11 @@ class VerificationFloorGuard:
     turns_used: int = 0
     # (tool, args-digest) trail for auto-skill capture on RESOLVED.
     steps: list[tuple[str, dict[str, str]]] = field(default_factory=list)
+    # Dedupe key of the last blocked state + consecutive identical repeats.
+    # A repeat means zero new tool outcomes since the last nudge, so the
+    # full text would be a verbatim duplicate.
+    last_block_key: tuple[bool, bool | None, int] | None = None
+    repeat_count: int = 0
 
     def note_tool_result(self, name: str, result_text: str,
                          args: dict[str, str] | None = None) -> None:
@@ -114,19 +131,35 @@ class VerificationFloorGuard:
     def rejection(self) -> str | None:
         """HARNESS REJECTION text when finishing now is premature, else None.
 
-        Finishing is allowed when nothing was mutated, when exit-0 evidence
-        postdates the last mutation, or when the grind floor is exhausted
-        (min turns AND max nudges both spent — surrender must stay possible).
+        A mutated turn is blocked until verification succeeds. The guard gives
+        the model a bounded number of self-correction nudges; once that budget is
+        spent, it allows the turn to finish honestly rather than looping forever.
+
+        Identical repeats (no new tool outcome since the last nudge) return
+        SHORT_REPEAT_NUDGE without consuming budget the first time, then None
+        to break the spin — a verbatim full nudge twice carries zero new signal.
         """
         if not self.enabled or not self.wrote_code:
             return None
         if self.verify_ok_after_edit is True:
+            self.last_block_key = None
+            self.repeat_count = 0
             return None
         if self.turns_used >= self.min_turns and self.nudges_used >= self.max_nudges:
             logger.info("Verification floor exhausted (%d turns, %d nudges) — "
                         "allowing unverified finish", self.turns_used, self.nudges_used)
             return None
+        key = (self.wrote_code, self.verify_ok_after_edit, self.turns_used)
+        if key == self.last_block_key:
+            if self.repeat_count >= 1:
+                logger.info("Verification repeat with no new evidence — "
+                            "allowing unverified finish")
+                return None
+            self.repeat_count += 1
+            return SHORT_REPEAT_NUDGE
         self.nudges_used += 1
+        self.last_block_key = key
+        self.repeat_count = 0
         return HARNESS_REJECTION
 
     def resolved(self) -> bool:
@@ -141,3 +174,5 @@ class VerificationFloorGuard:
         self.nudges_used = 0
         self.turns_used = 0
         self.steps.clear()
+        self.last_block_key = None
+        self.repeat_count = 0

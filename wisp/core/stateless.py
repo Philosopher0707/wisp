@@ -312,7 +312,11 @@ class WispAgentCore:
         # Verification floor (harness > model on completion calls): the
         # guard owns wrote_code / exit-0-evidence / grind-budget state so
         # _turn_inner never re-derives the invariant inline.
-        from wisp.core.verification import VerificationFloorGuard, compose_nudge
+        from wisp.core.verification import (
+            SHORT_REPEAT_NUDGE,
+            VerificationFloorGuard,
+            compose_nudge,
+        )
 
         verification_enabled = True
         if self.config is not None:
@@ -718,20 +722,26 @@ class WispAgentCore:
                 # always finish (floor exhaustion surrenders honestly).
                 rejection = guard.rejection()
                 if rejection is not None:
-                    if guard.verify_ok_after_edit is False:
-                        reason = (
-                            "the most recent verification command FAILED "
-                            "(non-zero exit status)"
-                        )
+                    if rejection == SHORT_REPEAT_NUDGE:
+                        # Identical repeat: no new tool outcome since the last
+                        # nudge, so reuse the short pointer instead of a
+                        # verbatim full nudge (and no extra budget was spent).
+                        nudge = rejection
                     else:
-                        reason = (
-                            "no verification command (tests/linter) has been "
-                            "run since your code changes"
-                        )
-                    # Nudge text derives from the invariant's home module
-                    # (verification.compose_nudge) so the intervention can
-                    # never drift from the gate (GH#27).
-                    nudge = compose_nudge(reason)
+                        if guard.verify_ok_after_edit is False:
+                            reason = (
+                                "the most recent verification command FAILED "
+                                "(non-zero exit status)"
+                            )
+                        else:
+                            reason = (
+                                "no verification command (tests/linter) has been "
+                                "run since your code changes"
+                            )
+                        # Nudge text derives from the invariant's home module
+                        # (verification.compose_nudge) so the intervention can
+                        # never drift from the gate (GH#27).
+                        nudge = compose_nudge(reason)
                     messages.append(nudge_message(nudge))
                     yield _flatten_event(system(nudge, level="warning"))
                     continue

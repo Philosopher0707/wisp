@@ -79,6 +79,37 @@ class TestVerificationFloorGuard:
         g.note_tool_result("write_file", "ok", {"path": "a.py"})
         assert g.rejection() is None
 
+    def test_identical_repeat_is_short_no_budget_burn(self) -> None:
+        from wisp.core.verification import SHORT_REPEAT_NUDGE
+
+        g = _guard()
+        g.note_tool_result("write_file", "ok", {"path": "a.py"})
+        assert g.rejection() == HARNESS_REJECTION
+        assert g.nudges_used == 1
+        assert g.rejection() == SHORT_REPEAT_NUDGE
+        assert g.nudges_used == 1  # repeat must not consume budget
+
+    def test_second_repeat_allows_finish_to_break_spin(self) -> None:
+        from wisp.core.verification import SHORT_REPEAT_NUDGE
+
+        g = _guard()
+        g.note_tool_result("write_file", "ok", {"path": "a.py"})
+        assert g.rejection() == HARNESS_REJECTION
+        assert g.rejection() == SHORT_REPEAT_NUDGE
+        assert g.rejection() is None  # no new evidence: surrender honestly
+        assert g.resolved() is False
+
+    def test_new_tool_outcome_resets_to_full_nudge(self) -> None:
+        from wisp.core.verification import SHORT_REPEAT_NUDGE
+
+        g = _guard()
+        g.note_tool_result("write_file", "ok", {"path": "a.py"})
+        assert g.rejection() == HARNESS_REJECTION
+        assert g.rejection() == SHORT_REPEAT_NUDGE
+        g.note_tool_result("run_bash", "[exit code: 1]\nFAILED", {"command": "pytest"})
+        assert g.rejection() == HARNESS_REJECTION
+        assert g.nudges_used == 2
+
     def test_trail_records_digested_steps(self) -> None:
         g = _guard()
         g.note_tool_result("write_file", "ok", {"path": "a.py", "content": "x" * 500})

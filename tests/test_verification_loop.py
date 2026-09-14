@@ -200,3 +200,20 @@ class TestVerificationLoop:
         assert not _nudges(events)
         assert any(e.get("type") == "done" for e in events)
         assert core.provider.call_count == 2  # no extra round-trips
+
+    @pytest.mark.asyncio
+    async def test_repeat_finish_is_short_not_verbatim_duplicate(self, core, session):
+        # edit → finish → finish with zero new tool calls: second nudge must
+        # be the short pointer, never a verbatim full repeat.
+        _scripted_core(core, [
+            [_tool_call("edit_file", {"path": "a.py", "old_text": "x", "new_text": "y"}, 0), {"type": "done"}],
+            [{"type": "token", "text": "done!", "phase": "content"}, {"type": "done"}],
+        ])
+        _mock_execute(core, {"edit_file": "wrote a.py"})
+
+        events = await _collect(core, session)
+        nudges = _nudges(events)
+        assert len(nudges) == 2
+        first, second = (n.get("message", "") for n in nudges)
+        assert first != second, "repeat nudge must not duplicate full text"
+        assert "(repeat)" in second
