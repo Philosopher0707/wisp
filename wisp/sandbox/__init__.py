@@ -283,8 +283,17 @@ class NoopSandbox(SandboxProvider):
             except asyncio.TimeoutError:
                 timed_out = True
                 await _kill_process_group(process)
+            except asyncio.CancelledError:
+                # External cancellation (task.cancel()): the timeout path
+                # kills the process group, but cancellation took this branch
+                # instead — same cleanup, otherwise sleep grandchildren leak
+                # and the test suite waits out the full sleep duration.
+                await _kill_process_group(process)
+                for r in readers:
+                    r.cancel()
+                raise
             finally:
-                await asyncio.gather(*readers)
+                await asyncio.gather(*readers, return_exceptions=True)
             stdout = b"".join(stdout_chunks).decode("utf-8", errors="replace")
             stderr = b"".join(stderr_chunks).decode("utf-8", errors="replace")
             if timed_out:

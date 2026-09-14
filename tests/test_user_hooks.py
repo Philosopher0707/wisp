@@ -11,9 +11,27 @@ import asyncio
 import json
 from pathlib import Path
 
+import pytest
+
 from wisp.config import WispConfig
 from wisp.infra.hook_types import ToolHookManager
 from wisp.tool_executor import ToolExecutor
+
+
+@pytest.fixture(autouse=True)
+def _force_host_sandbox(monkeypatch):
+    """Hermetic: run_bash E2E asserts on host paths (touch {marker}).
+
+    With Docker available the tool executes inside the container where
+    absolute host paths don't exist — warn/block tests then fail (or
+    false-pass) for the wrong reason. Force the host provider here;
+    Docker path mapping is a separate concern.
+    """
+    monkeypatch.setenv("WISP_SANDBOX", "off")
+    from wisp import sandbox as sandbox_mod
+    sandbox_mod.reset_sandbox()
+    yield
+    sandbox_mod.reset_sandbox()
 
 
 def _mgr(ws: Path, *hooks: dict) -> ToolHookManager:

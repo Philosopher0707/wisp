@@ -229,7 +229,9 @@ class TestToolRunBash:
             tool_run_bash("x" * 17000, str(temp_workspace))
 
     def test_output_truncated(self, temp_workspace):
-        result = tool_run_bash("python3 -c \"print('a'*60000)\"", str(temp_workspace))
+        # coreutils-only (no python3): the ubuntu:22.04 sandbox image has
+        # no interpreter, so a python3 one-liner exits 127 there.
+        result = tool_run_bash("yes a | head -c 60000", str(temp_workspace))
         assert "[output truncated]" in result
         assert len(result) <= 50100  # 50K max + overhead
 

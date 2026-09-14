@@ -8,6 +8,21 @@ import pytest
 from wisp.tools.bash import async_tool_run_bash
 
 
+@pytest.fixture(autouse=True)
+def _force_host_sandbox(monkeypatch):
+    """Hermetic: termination pins host process-group cleanup.
+
+    With Docker available the command runs in the container and host `ps`
+    can't see the marker either way — the test would pass/fail for the
+    wrong reason. Force the host provider; Docker exec cleanup is separate.
+    """
+    monkeypatch.setenv("WISP_SANDBOX", "off")
+    from wisp import sandbox as sandbox_mod
+    sandbox_mod.reset_sandbox()
+    yield
+    sandbox_mod.reset_sandbox()
+
+
 class TestBashTermination:
     """Verify that canceling tool_run_bash cleans up the process group and grandchildren."""
 

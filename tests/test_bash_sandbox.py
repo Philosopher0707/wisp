@@ -63,6 +63,10 @@ async def test_fallback_runs_host_and_warns(tmp_path, monkeypatch, caplog) -> No
     """No provider (real get_sandbox, no Docker here): host runs + loud log."""
     from wisp import sandbox as sandbox_mod
 
+    # Hermetic: the suite runs on hosts WITH Docker (OrbStack), where the
+    # real get_sandbox picks Docker and no host warning fires. Force the
+    # fallback this test actually pins.
+    monkeypatch.setenv("WISP_SANDBOX", "off")
     sandbox_mod.reset_sandbox()
     try:
         with caplog.at_level(logging.WARNING, logger="wisp.tools.bash"):
