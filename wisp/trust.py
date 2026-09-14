@@ -23,11 +23,15 @@ class WorkspaceTrustManager:
         workspace: Path | str,
         *,
         trust_file: Path | str | None = None,
+        allow_auto: bool = True,
     ) -> bool:
         """Check if the given workspace is trusted by the user.
         
         Uses a shared advisory read lock so multiple processes can
         read the trust file concurrently without races.
+        allow_auto=False ignores the `.wisp`-existence shortcut and only
+        honors an explicit trust-file entry — use it before executing
+        anything from the workspace (e.g. MCP auto-connect).
         """
         if os.environ.get("WISP_TRUST_ALL_WORKSPACES") == "true":
             return True
@@ -36,7 +40,7 @@ class WorkspaceTrustManager:
 
         # Auto-trust workspaces that already contain Wisp configuration
         # — the user has already chosen to work here.
-        if (Path(workspace_path) / ".wisp").exists():
+        if allow_auto and (Path(workspace_path) / ".wisp").exists():
             return True
         dst = Path(trust_file) if trust_file else cls.TRUST_FILE
         if not dst.exists():

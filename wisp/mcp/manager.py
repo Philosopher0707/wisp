@@ -84,6 +84,7 @@ class MCPServerConfig:
     timeout_seconds: int = 30
     headers: Optional[dict[str, str]] = None
     disabled_tools: Optional[list[str]] = None  # tools to exclude
+    source: str = ""  # which file declared this server ("workspace"|"" global)
 
 
 @dataclass
@@ -811,6 +812,21 @@ class MCPManager:
                     "Skipping always_load server '%s': disabled", config.name
                 )
                 continue
+            # Auto-exec is the RCE path: a cloned repo ships .wisp/mcp.json
+            # and .wisp's existence auto-trusts. Workspace-file servers need
+            # an EXPLICIT trust-file entry; on-demand and global servers are
+            # unaffected (execution still goes through tool approval).
+            if config.source == "workspace":
+                from wisp.trust import WorkspaceTrustManager
+
+                if not WorkspaceTrustManager.is_workspace_trusted(
+                        self.workspace, allow_auto=False):
+                    logger.warning(
+                        "Skipping always_load server '%s': workspace %s is not "
+                        "explicitly trusted (clone-and-run protection)",
+                        config.name, self.workspace,
+                    )
+                    continue
 
             # Skip if already connected
             existing = self._get_server_by_name(config.name)
@@ -1169,6 +1185,8 @@ class MCPManager:
                         timeout_seconds=s.get("timeout_seconds", s.get("timeoutSeconds", 30)),
                         headers=s.get("headers"),
                         disabled_tools=s.get("disabled_tools", s.get("disabledTools")),
+                        source=("workspace" if cfg_path == Path(self.workspace) / ".wisp" / "mcp.json"
+                                else ""),
                     )
                     configs.append(config)
 
