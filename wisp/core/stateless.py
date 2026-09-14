@@ -1707,21 +1707,37 @@ class WispAgentCore:
             seen.add(name)
             entries.append((name, first))
 
-        ext_count = 0
+        extension_names: set[str] = set()
         if self.extensions is not None:
             try:
                 for schema in self.extensions.tools() or []:
                     fn = schema.get("function", {}) if isinstance(schema, dict) else {}
-                    name, first = _describe(fn)
-                    if not name or name in seen:
-                        continue
-                    if allowed_set is not None and name not in allowed_set:
-                        continue
-                    seen.add(name)
-                    entries.append((name, first))
-                    ext_count += 1
+                    name, _ = _describe(fn)
+                    if name:
+                        extension_names.add(name)
             except Exception as e:
                 logger.warning("Failed to list extension tools: %s", e)
+
+        # _get_tool_schemas() already includes extensions. Count only unique
+        # extension names that survived the built-in precedence and filters.
+        from wisp.tools.registry import TOOL_SCHEMAS
+
+        if self.config is not None and getattr(self.config, "thin_tools", False) is True:
+            from wisp.tools.primitives import PRIMITIVE_SCHEMAS
+
+            builtin_names = {
+                str(schema.get("function", {}).get("name", "") or "")
+                for schema in PRIMITIVE_SCHEMAS
+            }
+        else:
+            builtin_names = {
+                str(schema.get("function", {}).get("name", "") or "")
+                for schema in TOOL_SCHEMAS
+            }
+        advertised_names = {name for name, _ in entries}
+        ext_count = len(
+            (extension_names - builtin_names) & advertised_names
+        )
 
         lines = ["## Tools available"]
         lines.extend(f"- {n}: {d}" for n, d in entries)
