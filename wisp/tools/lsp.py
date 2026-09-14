@@ -5,6 +5,7 @@ and symbol listing via language servers.
 """
 
 import logging
+import sys
 
 from wisp.tools._utils import (
     _resolve_path,
@@ -36,7 +37,7 @@ def tool_lsp_diagnostics(path: str, workspace: str = ".") -> str:
     ext = full_path.suffix.lower()
 
     linters = {
-        ".py": ["python3", "-m", "py_compile"],
+        ".py": [sys.executable, "-m", "py_compile"],
         ".ts": ["npx", "tsc", "--noEmit"],
         ".tsx": ["npx", "tsc", "--noEmit"],
         ".js": ["npx", "eslint"],

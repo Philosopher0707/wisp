@@ -531,3 +531,25 @@ def test_subagent_request_stays_single_agent(tmp_path):
         str(tmp_path), None)
     d = decide_strategy(ctx)
     assert d.strategy == SINGLE_AGENT  # no graph node role may spawn; routing it there always fails
+
+
+# ── Environment assumptions ─────────────────────────────────────────────
+
+def test_lsp_py_uses_running_interpreter(tmp_path, monkeypatch):
+    import sys
+
+    from wisp.tools import lsp as lsp_mod
+
+    seen = {}
+
+    class _R:
+        stdout = ""
+        stderr = ""
+        returncode = 0
+
+    monkeypatch.setattr("subprocess.run",
+                        lambda cmd, **kw: seen.update(cmd=cmd) or _R())
+    (tmp_path / "a.py").write_text("x = 1\n")
+    lsp_mod.tool_lsp_diagnostics("a.py", str(tmp_path))
+    assert seen["cmd"][0] == sys.executable  # not ambient python3 (version skew)
+    assert seen["cmd"][1:3] == ["-m", "py_compile"]
