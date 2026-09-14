@@ -12,6 +12,7 @@ import contextvars
 import logging
 import os
 import re
+import shlex
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Optional
@@ -91,9 +92,15 @@ def check_dangerous_command(command: str) -> Optional[str]:
 
     # rm family — anchored to command position: split on shell separators
     # so `echo rm -rf /` (prints text, deletes nothing) is not blocked
-    # while `cd /tmp; rm -rf /` still is. Quoting is ignored (heuristic).
+    # while `cd /tmp; rm -rf /` still is. The head word is lexed with shlex
+    # so quoting (`"rm" -rf /`) cannot move the command out of position.
     for _segment in re.split(r'[;&|\n]+', cmd_lower):
-        _words = _segment.strip().split()
+        try:
+            _words = shlex.split(_segment, posix=True)
+        except ValueError:
+            _words = _segment.strip().split()
+        while len(_words) > 1 and re.match(r'^[A-Za-z_]\w*=', _words[0]):
+            _words.pop(0)  # leading VAR=x assignments are not the command
         if not _words or _words[0] != 'rm':
             continue
         for t in _words[1:]:
@@ -101,7 +108,7 @@ def check_dangerous_command(command: str) -> Optional[str]:
                 if '--no-preserve-root' in _words:
                     return "recursive deletion of root filesystem"
                 if re.search(r'\brm\s+(-[a-zA-Z]*r|--recursive).*?\s*/\s*$',
-                             _segment.strip()):
+                             ' '.join(_words)):
                     return "recursive deletion of root"
                 return "recursive deletion"
             if t == '--recursive':
