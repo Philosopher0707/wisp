@@ -600,3 +600,27 @@ def test_garbage_env_blocks_startup(monkeypatch):
     with pytest.raises(SystemExit) as exc:
         entry_mod.run_mode("cli", prompt="hi")
     assert exc.value.code == 2
+
+
+def test_corrupt_config_file_blocks_startup(tmp_path, monkeypatch):
+    import pytest
+
+    import wisp.config as cfg_mod
+    from wisp import entry as entry_mod
+
+    bad = tmp_path / "config.json"
+    bad.write_text("{broken")
+    monkeypatch.setattr(cfg_mod, "get_config_path", lambda: bad)
+    assert "corrupt" in (entry_mod.check_config_file() or "")
+    with pytest.raises(SystemExit) as exc:
+        entry_mod.run_mode("cli", prompt="hi")
+    assert exc.value.code == 2
+
+
+def test_missing_config_file_does_not_block(tmp_path, monkeypatch):
+    import wisp.config as cfg_mod
+    from wisp import entry as entry_mod
+
+    monkeypatch.setattr(cfg_mod, "get_config_path",
+                        lambda: tmp_path / "no-such-config.json")
+    assert entry_mod.check_config_file() is None

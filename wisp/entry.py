@@ -85,6 +85,38 @@ def validate_env_config() -> list[str]:
     return bad
 
 
+def check_config_file() -> str | None:
+    """Corrupt config file signal, or None when absent/healthy.
+
+    load_config() swallows JSON errors into {} (silent downgrade of every
+    persisted setting). This boundary re-reads the same path so startup
+    can refuse loudly instead. Missing file = first boot, never an error.
+    """
+    import json
+
+    try:
+        from wisp import config as cfg_mod
+    except Exception:
+        return None
+    try:
+        path = cfg_mod.get_config_path()
+    except Exception:
+        return None
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        return f"Cannot read config file {path}: {exc}"
+    try:
+        loaded = json.loads(text)
+    except ValueError as exc:
+        return f"Config file {path} is corrupt ({exc}); refusing to boot on defaults"
+    if not isinstance(loaded, dict):
+        return f"Config file {path} must hold a JSON object; refusing to boot on defaults"
+    return None
+
+
 def run_mode(mode: str, prompt: str | None = None, **kwargs) -> None:
     """Run Wisp in the specified mode.
 
@@ -102,6 +134,11 @@ def run_mode(mode: str, prompt: str | None = None, **kwargs) -> None:
         print(error(f"Invalid configuration environment: {', '.join(bad_env)}. "
                     f"Unset or fix {( 'it' if len(bad_env) == 1 else 'them' )} and retry."),
               file=sys.stderr)
+        raise SystemExit(2)
+
+    config_problem = check_config_file()
+    if config_problem:
+        print(error(f"Invalid configuration: {config_problem}."), file=sys.stderr)
         raise SystemExit(2)
 
     config = WispConfig()
