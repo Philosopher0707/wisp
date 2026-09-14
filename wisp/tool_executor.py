@@ -1217,7 +1217,6 @@ class ToolExecutor:
             }
             result = json.dumps(structured, ensure_ascii=False)
         except ToolError as e:
-            tb = traceback.format_exc()
             logger.error(
                 "Tool %s raised ToolError: %s", func_name, str(e)
             )
@@ -1225,7 +1224,6 @@ class ToolExecutor:
                 "status": "error",
                 "tool": func_name,
                 "data": f"ToolError: {e}",
-                "traceback": tb,
                 "metadata": _build_tool_metadata(func_name, func_args, ""),
             }
             result = json.dumps(structured, ensure_ascii=False)
@@ -1241,7 +1239,6 @@ class ToolExecutor:
                 "status": "error",
                 "tool": func_name,
                 "data": f"Unexpected error: {e}",
-                "traceback": tb,
                 "metadata": _build_tool_metadata(func_name, func_args, ""),
             }
             result = json.dumps(structured, ensure_ascii=False)
@@ -1333,13 +1330,11 @@ class ToolExecutor:
                 }
                 result = json.dumps(structured, ensure_ascii=False)
             except ToolError as e:
-                tb = traceback.format_exc()
                 logger.error("Tool %s raised ToolError: %s", func_name, str(e))
                 structured = {
                     "status": "error",
                     "tool": func_name,
                     "data": f"ToolError: {e}",
-                    "traceback": tb,
                     "metadata": _build_tool_metadata(func_name, func_args, ""),
                 }
                 result = json.dumps(structured, ensure_ascii=False)
@@ -1355,7 +1350,6 @@ class ToolExecutor:
                     "status": "error",
                     "tool": func_name,
                     "data": f"Unexpected error: {e}",
-                    "traceback": tb,
                     "metadata": _build_tool_metadata(func_name, func_args, ""),
                 }
                 result = json.dumps(structured, ensure_ascii=False)
@@ -1485,7 +1479,6 @@ class ToolExecutor:
                 "status": "error",
                 "tool": func_name,
                 "data": f"MCP error: {e}",
-                "traceback": tb,
             }, ensure_ascii=False)
 
     async def _spawn(self, func_args: dict, workspace: str) -> str:
@@ -1614,7 +1607,7 @@ class ToolExecutor:
                     "elapsed_seconds": 0,
                     "role": role,
                 },
-                "metadata": {"traceback": tb},
+                "metadata": {},
             }, ensure_ascii=False)
 
     # ── Background subagent tools ─────────────────────────────────────
@@ -2082,7 +2075,7 @@ class ToolExecutor:
                     "error": str(e),
                     "total_elapsed_seconds": 0,
                 },
-                "metadata": {"traceback": tb},
+                "metadata": {},
             }, ensure_ascii=False)
 
         result_items = []

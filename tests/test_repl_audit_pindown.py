@@ -290,7 +290,7 @@ def test_empty_args_schemas_accept_truncated_stream_shape():
 
 
 @pytest.mark.asyncio
-async def test_executor_unknown_tool_embeds_traceback():
+async def test_executor_unknown_tool_hides_traceback():
     import json as _json
 
     from wisp.config import WispConfig
@@ -302,7 +302,7 @@ async def test_executor_unknown_tool_embeds_traceback():
         d = ev.to_dict() if hasattr(ev, "to_dict") else ev
         seen = _json.dumps(d, default=str)
     assert "Unknown tool" in seen
-    assert "traceback" in seen  # BUG: model-visible traceback; registry strips it
+    assert "traceback" not in seen  # fixed S4: tracebacks stay in logs, not the model
 
 
 # ── Intake ID, provenance, denial export (verified live) ──────────────────
