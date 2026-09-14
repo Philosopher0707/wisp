@@ -77,13 +77,17 @@ async def async_tool_run_bash(command: str, workspace: str, timeout: int = 60) -
     # first so the tool contract (ToolError shapes) never changes.
     sandbox = get_sandbox(str(cwd))
     provider_name = getattr(sandbox, "name", "host") or "host"
-    if provider_name in _HOST_PROVIDER_NAMES:
+    if provider_name in _HOST_PROVIDER_NAMES and getattr(sandbox, "reason", "") != "explicit":
         logger.warning(
             "run_bash UNCONFINED: no sandbox provider — executing on host: %.100s",
             redact(command),
         )
     else:
-        logger.info("run_bash sandboxed via %s: %.100s", provider_name, redact(command))
+        logger.info(
+            "run_bash on %s: %.100s",
+            "explicit host" if provider_name in _HOST_PROVIDER_NAMES else f"sandboxed via {provider_name}",
+            redact(command),
+        )
 
     start_time = time.time()
     try:

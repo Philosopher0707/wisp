@@ -1,0 +1,91 @@
+"""Host-vs-sandbox fallback warnings: deterministic expectations.
+
+Contract (independent of whether the test host has Docker):
+  WISP_SANDBOX=off          → Noop(explicit)  + info,    never a warning
+  auto + Docker available   → Docker          + info,    never a warning
+  auto + Docker unavailable → Noop(fallback)  + 1 warning naming the cause
+Tool layer: the UNCONFINED warning fires only for fallback-host, never for
+an explicit host choice and never for a real sandbox. Docker availability
+is faked; no test here touches a daemon.
+"""
+
+import logging
+
+import pytest
+
+
+def _no_docker(monkeypatch):
+    from wisp.sandbox import DockerSandbox
+
+    monkeypatch.setattr(DockerSandbox, "is_available", lambda self: False)
+
+
+def _yes_docker(monkeypatch):
+    from wisp.sandbox import DockerSandbox
+
+    monkeypatch.setattr(DockerSandbox, "is_available", lambda self: True)
+
+
+@pytest.mark.asyncio
+async def test_explicit_off_is_info_not_warning(tmp_path, monkeypatch, caplog):
+    from wisp.tools import bash as bash_mod
+    from wisp import sandbox as sandbox_mod
+
+    monkeypatch.setenv("WISP_SANDBOX", "off")
+    sandbox_mod.reset_sandbox()
+    try:
+        with caplog.at_level(logging.INFO, logger="wisp.tools.bash"):
+            out = await bash_mod.async_tool_run_bash("echo hi", str(tmp_path))
+        assert "hi" in out
+        warns = [r for r in caplog.records if r.levelno >= logging.WARNING
+                 and "UNCONFINED" in r.message]
+        assert warns == []
+    finally:
+        sandbox_mod.reset_sandbox()
+
+
+@pytest.mark.asyncio
+async def test_fallback_host_warns_at_tool_layer(tmp_path, monkeypatch, caplog):
+    from wisp.tools import bash as bash_mod
+    from wisp import sandbox as sandbox_mod
+
+    monkeypatch.delenv("WISP_SANDBOX", raising=False)
+    _no_docker(monkeypatch)
+    sandbox_mod.reset_sandbox()
+    try:
+        with caplog.at_level(logging.INFO, logger="wisp.tools.bash"):
+            out = await bash_mod.async_tool_run_bash("echo hi", str(tmp_path))
+        assert "hi" in out
+        warns = [r for r in caplog.records if r.levelno >= logging.WARNING
+                 and "UNCONFINED" in r.message]
+        assert len(warns) == 1
+    finally:
+        sandbox_mod.reset_sandbox()
+
+
+def test_decision_matrix(tmp_path, monkeypatch, caplog):
+    from wisp import sandbox as sandbox_mod
+
+    cases = [
+        # (env, docker_available, provider_type, warns_expected)
+        ("off", False, "NoopSandbox", False),
+        ("off", True, "NoopSandbox", False),
+        ("unset", True, "DockerSandbox", False),
+        ("unset", False, "NoopSandbox", True),
+    ]
+    for env_mode, docker_ok, want_type, want_warn in cases:
+        if env_mode == "unset":
+            monkeypatch.delenv("WISP_SANDBOX", raising=False)
+        else:
+            monkeypatch.setenv("WISP_SANDBOX", env_mode)
+        (_yes_docker if docker_ok else _no_docker)(monkeypatch)
+        sandbox_mod.reset_sandbox()
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="wisp.sandbox"):
+            s = sandbox_mod.get_sandbox(str(tmp_path))
+        assert type(s).__name__ == want_type, (env_mode, docker_ok)
+        assert getattr(s, "reason", "fallback") == (
+            "explicit" if env_mode == "off" else "fallback")
+        warns = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert (len(warns) == 1) == want_warn, (env_mode, docker_ok)
+        sandbox_mod.reset_sandbox()

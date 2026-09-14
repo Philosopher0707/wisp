@@ -262,13 +262,24 @@ class TestScenarioBSandboxAndServerAuth:
     @pytest.mark.asyncio
     async def test_unconfined_fallback_is_loud(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """No Docker here → host runs, but a WARNING must say so."""
         from wisp.tools import bash as bash_mod
 
-        with caplog.at_level(logging.WARNING, logger="wisp.tools.bash"):
-            out = await bash_mod.async_tool_run_bash(
-                "echo fallback-hi", str(tmp_path))
+        # Hermetic: fake the daemon away however the host looks, so this
+        # pins the fallback branch itself instead of ambient Docker.
+        from wisp import sandbox as sandbox_mod
+        from wisp.sandbox import DockerSandbox
+        monkeypatch.delenv("WISP_SANDBOX", raising=False)
+        monkeypatch.setattr(DockerSandbox, "is_available", lambda self: False)
+        sandbox_mod.reset_sandbox()
+        try:
+            with caplog.at_level(logging.WARNING, logger="wisp.tools.bash"):
+                out = await bash_mod.async_tool_run_bash(
+                    "echo fallback-hi", str(tmp_path))
+        finally:
+            sandbox_mod.reset_sandbox()
         assert "fallback-hi" in out
         assert any("UNCONFINED" in r.message or
                    ("host" in r.message.lower()

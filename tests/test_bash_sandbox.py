@@ -60,13 +60,15 @@ async def test_provider_timeout_maps_to_tool_error(tmp_path, monkeypatch) -> Non
 
 @pytest.mark.asyncio
 async def test_fallback_runs_host_and_warns(tmp_path, monkeypatch, caplog) -> None:
-    """No provider (real get_sandbox, no Docker here): host runs + loud log."""
+    """No Docker (real get_sandbox, daemon faked away): host runs + loud log."""
     from wisp import sandbox as sandbox_mod
+    from wisp.sandbox import DockerSandbox
 
-    # Hermetic: the suite runs on hosts WITH Docker (OrbStack), where the
-    # real get_sandbox picks Docker and no host warning fires. Force the
-    # fallback this test actually pins.
-    monkeypatch.setenv("WISP_SANDBOX", "off")
+    # Hermetic: fake the daemon away however the host looks, so this pins
+    # the fallback branch itself. (Forcing WISP_SANDBOX=off would pin the
+    # explicit-host branch, which is info-level by contract.)
+    monkeypatch.delenv("WISP_SANDBOX", raising=False)
+    monkeypatch.setattr(DockerSandbox, "is_available", lambda self: False)
     sandbox_mod.reset_sandbox()
     try:
         with caplog.at_level(logging.WARNING, logger="wisp.tools.bash"):
@@ -74,8 +76,7 @@ async def test_fallback_runs_host_and_warns(tmp_path, monkeypatch, caplog) -> No
     finally:
         sandbox_mod.reset_sandbox()
     assert "fallback-hi" in out
-    assert any("host" in r.message.lower() and "sandbox" in r.message.lower()
-               for r in caplog.records), \
+    assert any("UNCONFINED" in r.message for r in caplog.records), \
         "unconfined execution must be logged loudly, never silent"
 
 

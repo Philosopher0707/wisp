@@ -224,8 +224,12 @@ class NoopSandbox(SandboxProvider):
     Always available — acts as the fallback when Docker is not installed.
     """
 
-    def __init__(self, workspace: str):
+    def __init__(self, workspace: str, *, reason: str = "fallback"):
         self.workspace = os.path.abspath(workspace)
+        # Why host execution: "explicit" (operator chose WISP_SANDBOX=off)
+        # or "fallback" (no sandbox available). The tool layer warns only
+        # on fallback — an explicit choice must not scream per call.
+        self.reason = reason
 
     @property
     def name(self) -> str:
@@ -351,7 +355,7 @@ def get_sandbox(workspace: str | None = None) -> SandboxProvider:
     if os.environ.get("WISP_SANDBOX", "auto").strip().lower() in (
         "off", "0", "false", "no", "host", "noop",
     ):
-        _app_sandbox = NoopSandbox(ws_abs)
+        _app_sandbox = NoopSandbox(ws_abs, reason="explicit")
         logger.info("Sandbox: host (explicitly disabled via WISP_SANDBOX=off)")
         return _app_sandbox
 
