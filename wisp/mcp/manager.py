@@ -502,21 +502,27 @@ def _warn_strict_env_pending(server: MCPServer) -> None:
 
 def _connect_stdio(server: MCPServer):
     """Connect to a stdio-based MCP server by spawning its process."""
-    from wisp.tools._utils_env import minimal_process_env, strict_env_enabled
+    from wisp.tools._utils_env import (
+        credential_free_env,
+        minimal_process_env,
+        strict_env_enabled,
+    )
 
     if strict_env_enabled():
         # Least privilege: minimal runtime + explicit per-server config.
         # Ambient secrets (API keys, cloud tokens, agent sockets) never
         # reach the child implicitly.
         env: dict[str, str] | None = minimal_process_env(server.config.env)
-    elif server.config.env:
-        full_env = dict(subprocess.os.environ)
-        full_env.update(server.config.env)
-        env = full_env
-        _warn_strict_env_pending(server)
     else:
-        env = None
-        _warn_strict_env_pending(server)
+        # Default: usable POSIX env, but ambient CREDENTIALS never leak
+        # implicitly (C2b). Explicit per-server config still wins.
+        scrubbed, _stripped = credential_free_env(dict(subprocess.os.environ))
+        if server.config.env:
+            scrubbed.update(server.config.env)
+            _warn_strict_env_pending(server)
+        else:
+            _warn_strict_env_pending(server)
+        env = scrubbed
 
     server.process = subprocess.Popen(
         [server.config.command] + server.config.args,

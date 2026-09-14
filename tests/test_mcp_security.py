@@ -316,13 +316,15 @@ class TestStrictChildEnv:
         assert "WISP_API_KEY" not in env or "WISP_API_KEY" not in os.environ
         assert "PATH" in env, "minimal runtime must stay usable"
 
-    def test_legacy_default_preserved_without_flag(self, monkeypatch):
+    def test_default_scrubs_secrets_keeps_plain_vars(self, monkeypatch):
         monkeypatch.delenv("WISP_STRICT_ENV", raising=False)
         monkeypatch.setenv("WISP_REPRO_MARKER_SECRET", "s3cr3t")
+        monkeypatch.setenv("WISP_REPRO_MARKER_PLAIN", "plain")
         captured = self._connect_capture(monkeypatch, {"CUSTOM": "1"})
         env = captured.get("env") or {}
-        assert env.get("WISP_REPRO_MARKER_SECRET") == "s3cr3t"
-        assert env.get("CUSTOM") == "1"
+        assert "WISP_REPRO_MARKER_SECRET" not in env  # C2b: no implicit secret inheritance
+        assert env.get("WISP_REPRO_MARKER_PLAIN") == "plain"  # non-secrets still flow
+        assert env.get("CUSTOM") == "1"  # explicit server env still wins
 
     def test_migration_warning_fires_once_without_values(self, monkeypatch, caplog):
         import wisp.mcp.manager as mgrmod
