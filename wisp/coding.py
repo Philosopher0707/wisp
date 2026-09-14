@@ -124,6 +124,12 @@ def decide_strategy(ctx: TaskContext, policy: Any = None) -> StrategyDecision:
     if _is_question(ctx.objective):
         return StrategyDecision(SINGLE_AGENT, ("interrogative: explain, don't execute",))
     lowered = ctx.objective.lower()
+    # Explicit orchestration requests stay single-agent: no graph node role
+    # may call spawn/fanout/subagent tools, so routing them to a graph
+    # always dies at the role gate. The parent loop owns the full surface.
+    if "subagent" in lowered or "background agent" in lowered:
+        return StrategyDecision(
+            SINGLE_AGENT, ("explicit subagent request: graph workers lack spawn tools",))
     # First file is free (single-file tasks stay single-agent); additional
     # files each add evidence of multi-scope work.
     score = max(0, min(len(ctx.facts), 3) - 1) * 2

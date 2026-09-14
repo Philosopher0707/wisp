@@ -498,3 +498,16 @@ def test_graph_template_inherits_caller_provider_config(tmp_path, monkeypatch):
     config = WispConfig().replace(provider="mock", model="mock-t")
     out = run_coding_template("simple", ctx, emit=None, config=config)
     assert out.get("status") == "succeeded", out
+
+
+def test_subagent_request_stays_single_agent(tmp_path):
+    from wisp.coding import SINGLE_AGENT, decide_strategy, task_context_from_prompt
+
+    (tmp_path / "probe.py").write_text('print("hi")\n')
+    ctx = task_context_from_prompt(
+        "Launch two background subagents in parallel: agent A lists all files "
+        "in the workspace and reports them back; agent B reads probe.py and "
+        "reports its exact contents.",
+        str(tmp_path), None)
+    d = decide_strategy(ctx)
+    assert d.strategy == SINGLE_AGENT  # no graph node role may spawn; routing it there always fails
