@@ -16,6 +16,7 @@ warnings.filterwarnings("ignore", category=SyntaxWarning)
 
 import asyncio
 import logging
+import os
 import signal
 import sys
 from collections import deque
@@ -46,6 +47,44 @@ def _run_async(coro, loop: asyncio.AbstractEventLoop):
     return loop.run_until_complete(coro)
 
 
+def validate_env_config() -> list[str]:
+    """WISP_* env vars that cannot parse per SETTINGS_SCHEMA. Names only.
+
+    Pure (no I/O, no construction) so startup can fail loud before
+    WispConfig() dies with a raw traceback. config.py owns the schema and
+    the clamping; this only pre-flights the raw casts (float/int/enum
+    membership) that crash construction. Values never appear in output.
+    """
+    try:
+        from wisp.config import SETTINGS_SCHEMA
+    except Exception:
+        return []
+    try:
+        from wisp.infra.security import PermissionMode
+    except Exception:
+        PermissionMode = None  # type: ignore[assignment, misc]
+    bad: list[str] = []
+    for key, schema in SETTINGS_SCHEMA.items():
+        if not isinstance(schema, dict):
+            continue
+        env_var = schema.get("env_var")
+        if not env_var or env_var not in os.environ:
+            continue
+        raw = os.environ[env_var]
+        want = schema.get("type")
+        types = tuple(want) if isinstance(want, (list, tuple)) else (want,)
+        try:
+            if key == "permission_mode" and PermissionMode is not None:
+                PermissionMode(raw)
+            elif float in types:
+                float(raw)
+            elif int in types:
+                int(raw)
+        except (ValueError, TypeError):
+            bad.append(env_var)
+    return bad
+
+
 def run_mode(mode: str, prompt: str | None = None, **kwargs) -> None:
     """Run Wisp in the specified mode.
 
@@ -57,6 +96,13 @@ def run_mode(mode: str, prompt: str | None = None, **kwargs) -> None:
         # Server creates its own CompositionRoot in lifespan
         _run_server(**kwargs)
         return
+
+    bad_env = validate_env_config()
+    if bad_env:
+        print(error(f"Invalid configuration environment: {', '.join(bad_env)}. "
+                    f"Unset or fix {( 'it' if len(bad_env) == 1 else 'them' )} and retry."),
+              file=sys.stderr)
+        raise SystemExit(2)
 
     config = WispConfig()
 

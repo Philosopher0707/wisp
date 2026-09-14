@@ -581,3 +581,22 @@ def test_dead_daemon_with_model_is_unreachable_not_ok():
                           model="llama3.2:3b", api_key="")
     res = resolve_selection(cfg)
     assert res.status == "unreachable", res  # fail fast, no mid-turn retries
+
+
+def test_garbage_env_names_the_var_not_a_traceback(monkeypatch):
+    from wisp.entry import validate_env_config
+
+    monkeypatch.setenv("WISP_TEMPERATURE", "abc")
+    bad = validate_env_config()
+    assert bad == ["WISP_TEMPERATURE"]  # names only — values may be secrets
+
+
+def test_garbage_env_blocks_startup(monkeypatch):
+    import pytest
+
+    from wisp import entry as entry_mod
+
+    monkeypatch.setenv("WISP_MAX_TOKENS", "lots")
+    with pytest.raises(SystemExit) as exc:
+        entry_mod.run_mode("cli", prompt="hi")
+    assert exc.value.code == 2
