@@ -63,23 +63,31 @@ def test_wisp_sandbox_variants_force_noop(tmp_path):
 
 
 # ── CWD containment ───────────────────────────────────────────────────────
-# BUG (verified live): cwd="../.." escapes the workspace — PtySandbox and
-# NoopSandbox both os.path.join(workspace, cwd) with no containment check,
-# and DockerSandbox ran `pwd` → `/` for cwd="../..".
+# Fixed S2: providers fail closed when cwd escapes the workspace.
 
 @pytest.mark.asyncio
-async def test_cwd_traversal_escapes_workspace_documents_bug(tmp_path):
+async def test_sandbox_cwd_contained_all_host_tiers(tmp_path):
+    from wisp.sandbox import NoopSandbox
     from wisp.sandbox.router import PtySandbox
 
     ws = tmp_path / "ws"
     ws.mkdir()
-    p = PtySandbox(str(ws))
-    rc, out, _ = await p.run("pwd", cwd="../..", timeout=10)
-    assert rc == 0
-    ran_in = os.path.realpath(out.strip())
-    home = os.path.realpath(str(ws))
-    assert ran_in != home and not ran_in.startswith(home + os.sep), (
-        f"cwd stayed inside (fix landed? update pin): {ran_in}")
+    for prov in (PtySandbox(str(ws)), NoopSandbox(str(ws))):
+        for evil in ("../..", "/etc", "../../.."):
+            rc, _out, err = await prov.run("pwd", cwd=evil, timeout=10)
+            assert rc == -1, f"{type(prov).__name__} ran outside workspace with cwd={evil!r}"
+            assert "escapes" in err
+        rc, _out, _ = await prov.run("pwd", cwd="", timeout=10)
+        assert rc == 0
+
+
+def test_resolve_sandbox_cwd_pure():
+    from wisp.sandbox import resolve_sandbox_cwd
+
+    assert resolve_sandbox_cwd("/ws", "") == "/ws"
+    assert resolve_sandbox_cwd("/ws", "sub") == "/ws/sub"
+    assert resolve_sandbox_cwd("/ws", "../..") is None
+    assert resolve_sandbox_cwd("/ws", "/etc") is None
 
 
 # ── PTY vs host output contract ───────────────────────────────────────────

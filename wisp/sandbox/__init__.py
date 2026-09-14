@@ -44,6 +44,24 @@ async def _kill_process_group(process) -> None:
 
 logger = logging.getLogger(__name__)
 
+
+def resolve_sandbox_cwd(workspace: str, cwd: str) -> str | None:
+    """Contained workdir for a provider run, or None when it escapes.
+
+    Never raises: unresolvable paths fail closed at the call site with
+    (-1, "", "cwd escapes workspace").
+    """
+    try:
+        base = os.path.realpath(workspace)
+        if not cwd:
+            return base
+        cand = os.path.realpath(os.path.join(base, cwd))
+        if cand == base or cand.startswith(base + os.sep):
+            return cand
+        return None
+    except Exception:
+        return None
+
 # ── Abstract base ─────────────────────────────────────────────────────
 
 class SandboxProvider(abc.ABC):
@@ -144,7 +162,11 @@ class DockerSandbox(SandboxProvider):
         # Container setup blocks for up to ~40s (rm -f + run -d); on the
         # event loop that froze every connection during cold start.
         await asyncio.to_thread(self._ensure_container)
-        workdir = os.path.join("/workspace", cwd) if cwd else "/workspace"
+        resolved = resolve_sandbox_cwd(self.workspace, cwd)
+        if resolved is None:
+            return (-1, "", f"cwd escapes workspace: {cwd!r}")
+        rel = os.path.relpath(resolved, os.path.realpath(self.workspace))
+        workdir = "/workspace" if rel == "." else "/workspace/" + rel.replace(os.sep, "/")
         exec_cmd = [
             "docker", "exec", "-w", workdir, self.container_name,
             "bash", "-c", command,
@@ -220,7 +242,9 @@ class NoopSandbox(SandboxProvider):
         # credential env vars even when running unconfined on the host.
         from wisp.tools._utils_env import credential_free_env
         env, _stripped = credential_free_env()
-        workdir = os.path.join(self.workspace, cwd) if cwd else self.workspace
+        workdir = resolve_sandbox_cwd(self.workspace, cwd)
+        if workdir is None:
+            return (-1, "", f"cwd escapes workspace: {cwd!r}")
         try:
             process = await asyncio.create_subprocess_exec(
                 "bash", "-c", command,

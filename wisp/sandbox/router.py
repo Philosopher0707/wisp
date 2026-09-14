@@ -24,7 +24,7 @@ import subprocess
 import time
 from typing import Sequence
 
-from wisp.sandbox import DockerSandbox, NoopSandbox, SandboxProvider
+from wisp.sandbox import DockerSandbox, NoopSandbox, SandboxProvider, resolve_sandbox_cwd
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +91,9 @@ class PtySandbox(SandboxProvider):
         if danger:
             return (-1, "", f"Dangerous command blocked: {danger}")
         env, _stripped = credential_free_env()
-        workdir = os.path.join(self.workspace, cwd) if cwd else self.workspace
+        workdir = resolve_sandbox_cwd(self.workspace, cwd)
+        if workdir is None:
+            return (-1, "", f"cwd escapes workspace: {cwd!r}")
         try:
             master, slave = pty.openpty()
         except OSError as exc:
