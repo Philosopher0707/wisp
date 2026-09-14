@@ -132,13 +132,41 @@ class ProviderFactory:
                 local.__dict__["api_key"] = resolved_key
         except Exception:
             pass
+        base_url = self._validate_api_base(
+            getattr(local, "api_base", "") or spec.get("default_base", ""), name)
+        if spec.get("default_base") and base_url != spec["default_base"]:
+            logger.warning("Provider %s using non-default api_base %s", name, base_url)
         return self.create(
             name,
             config=local,
-            base_url=getattr(local, "api_base", "") or spec.get("default_base", ""),
+            base_url=base_url,
             model=getattr(local, "model", "") or "",
             api_key=resolved_key,
         )
+
+    def _validate_api_base(self, base_url: str, name: str) -> str:
+        """Fail-closed endpoint check for key-bearing providers.
+
+        Empty passes through (provider falls back to its default base).
+        Non-empty must be http(s) with a hostname; plaintext http is
+        loopback-only unless WISP_ALLOW_INSECURE_BASE=true — a remote
+        http listener otherwise receives the Bearer key in cleartext.
+        """
+        import urllib.parse
+
+        if not base_url:
+            return ""
+        parsed = urllib.parse.urlparse(base_url)
+        hostname = (parsed.hostname or "").lower()
+        if parsed.scheme not in ("http", "https") or not hostname:
+            raise ValueError(f"Invalid api_base for provider '{name}': {base_url!r}")
+        if parsed.scheme == "http" and hostname not in ("localhost", "127.0.0.1", "::1"):
+            if os.environ.get("WISP_ALLOW_INSECURE_BASE", "").strip().lower() not in (
+                    "1", "true", "on", "yes"):
+                raise ValueError(
+                    f"Refusing plaintext http api_base for provider '{name}': "
+                    f"{base_url!r} (use https, loopback, or WISP_ALLOW_INSECURE_BASE=true)")
+        return base_url
 
     def _validate_ollama_url(self, url: str) -> str:
         """Validate Ollama URL to prevent SSRF.
