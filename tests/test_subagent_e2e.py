@@ -108,12 +108,16 @@ class _UnreachableProvider:
 
     def __init__(self):
         self._stream_response = None
+        self.health_checks = 0
+        self.stream_calls = 0
 
     def generate_stream_events(self, **kwargs):
+        self.stream_calls += 1
         yield {"type": "error", "message": "Connection refused"}
         yield {"type": "done", "done_reason": "error"}
 
     def generate_stream_events_async(self, **kwargs):
+        self.stream_calls += 1
         return self._async_gen(**kwargs)
 
     async def _async_gen(self, **kwargs):
@@ -121,6 +125,7 @@ class _UnreachableProvider:
         yield {"type": "done", "done_reason": "error"}
 
     def health_check(self):
+        self.health_checks += 1
         return {"status": "unhealthy", "error": "Connection refused"}
 
     def list_models(self):
@@ -200,12 +205,12 @@ class TestSubagentEndToEnd:
         assert result.tool_calls[0]["name"] == "list_files"
 
     @pytest.mark.asyncio
-    async def test_unreachable_provider_fails_fast(self, tmp_path):
-        """When the provider is unreachable, the subagent should fail fast."""
-        cfg = WispConfig()
-        cfg = cfg.replace(workspace=str(tmp_path), model="mock-model", auto_approve=True)
+    async def test_unreachable_provider_fails_fast(self, config, tmp_path):
+        """An unhealthy provider is probed, then its stream failure is surfaced."""
+        cfg = config
         orch = SubagentOrchestrator(config=cfg, workspace=tmp_path)
-        orch._runner._provider_cache["ollama:mock-model"] = _UnreachableProvider()
+        provider = _UnreachableProvider()
+        orch._runner._provider_cache["ollama:mock-model"] = provider
 
         contract = SubagentContract(
             name="doomed-agent",
@@ -217,9 +222,12 @@ class TestSubagentEndToEnd:
         )
         result = await orch.run(contract)
 
-        # The health check should catch this before the timeout
+        # Health is advisory; the actual stream is still attempted.
         assert result.success is False
-        assert result.elapsed_seconds < 5.0  # Should fail fast
+        assert result.error == "Connection refused"
+        assert provider.health_checks == 1
+        assert provider.stream_calls == 1
+        assert result.elapsed_seconds < 5.0
 
     @pytest.mark.asyncio
     async def test_subagent_result_is_cached(self, orchestrator):

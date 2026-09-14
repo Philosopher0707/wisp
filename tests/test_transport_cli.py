@@ -299,14 +299,16 @@ class TestBannerPolish:
         t.config = None
         return t
 
-    def test_banner_shortens_uuid_and_tildes_home(self):
+    def test_banner_shortens_uuid_and_tildes_home(self, isolated_wisp_env):
         import io
+        from pathlib import Path
 
         t = self._transport()
         out = io.StringIO()
+        workspace = Path.home() / "Documents" / "wisp"
         t.print_banner(out, {
             "id": "17052f74-2824-465a-a81f-1e9d6921f240",
-            "workspace": "/Users/philosopher/Documents/wisp",
+            "workspace": str(workspace),
             "messages": [],
         }, "nemotron")
         text = out.getvalue()
@@ -322,14 +324,16 @@ class TestBannerPolish:
         t.print_banner(out, {"id": "abc12345", "workspace": "/tmp", "messages": []}, "m")
         assert "/help" in out.getvalue()
 
-    def test_continuation_banner_also_tidy(self):
+    def test_continuation_banner_also_tidy(self, isolated_wisp_env):
         import io
+        from pathlib import Path
 
         t = self._transport()
         out = io.StringIO()
+        workspace = Path.home() / "Documents" / "wisp"
         t.print_continuation_banner(out, {
             "id": "17052f74-2824-465a-a81f-1e9d6921f240",
-            "workspace": "/Users/philosopher/Documents/wisp",
+            "workspace": str(workspace),
             "messages": [{"role": "user", "content": "hi"}],
             "title": "",
         }, "nemotron")

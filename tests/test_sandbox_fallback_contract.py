@@ -48,9 +48,11 @@ async def test_explicit_off_is_info_not_warning(tmp_path, monkeypatch, caplog):
 async def test_fallback_host_warns_at_tool_layer(tmp_path, monkeypatch, caplog):
     from wisp.tools import bash as bash_mod
     from wisp import sandbox as sandbox_mod
+    from wisp.sandbox.router import reset_router
 
     monkeypatch.delenv("WISP_SANDBOX", raising=False)
     _no_docker(monkeypatch)
+    reset_router()
     sandbox_mod.reset_sandbox()
     try:
         with caplog.at_level(logging.INFO, logger="wisp.tools.bash"):
@@ -61,6 +63,7 @@ async def test_fallback_host_warns_at_tool_layer(tmp_path, monkeypatch, caplog):
         assert len(warns) == 1
     finally:
         sandbox_mod.reset_sandbox()
+        reset_router()
 
 
 def test_decision_matrix(tmp_path, monkeypatch, caplog):

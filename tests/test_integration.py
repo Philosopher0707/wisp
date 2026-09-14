@@ -19,6 +19,8 @@ enforce security boundaries.
 """
 
 import json
+import shlex
+import sys
 import pytest
 
 from wisp.tools import (
@@ -38,6 +40,17 @@ def parse_tool_result(raw: str) -> dict:
     assert "data" in data
     assert "metadata" in data
     return data
+
+
+@pytest.fixture
+def _force_host_sandbox(monkeypatch):
+    """Run host-interpreter workflow commands outside Docker."""
+    from wisp import sandbox as sandbox_mod
+
+    monkeypatch.setenv("WISP_SANDBOX", "off")
+    sandbox_mod.reset_sandbox()
+    yield
+    sandbox_mod.reset_sandbox()
 
 
 # ── Integration: read_file ───────────────────────────────────────────
@@ -536,7 +549,7 @@ class TestIntegrationSecurity:
 # ── Integration: Full Workflow ───────────────────────────────────────
 
 class TestIntegrationFullWorkflow:
-    def test_create_read_edit_delete_workflow(self, temp_workspace):
+    def test_create_read_edit_delete_workflow(self, temp_workspace, _force_host_sandbox):
         """Simulate a realistic agent workflow: create, read, edit, list, bash."""
         # 1. Write a file
         raw = execute_tool("write_file", {
@@ -573,8 +586,9 @@ class TestIntegrationFullWorkflow:
         assert "app.py" in result["data"]
 
         # 6. Run it
-        raw = execute_tool("run_bash", {"command": "python3 app.py"}, str(temp_workspace),
-                             _skip_authorize=True)
+        command = f"{shlex.quote(sys.executable)} app.py"
+        raw = execute_tool("run_bash", {"command": command}, str(temp_workspace),
+                           _skip_authorize=True)
         result = parse_tool_result(raw)
         assert result["status"] == "ok"
         assert "hello world" in result["data"]

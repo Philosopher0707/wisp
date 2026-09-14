@@ -1803,6 +1803,7 @@ class TestFirstTokenDeadline:
 
         contract = SubagentContract(
             name="r", task="t", timeout_seconds=60,
+            max_retries=1,
             worktree_isolated=False,
         )
         with patch("wisp.core.engine.WispAgentCore", _RevivingCore), \
