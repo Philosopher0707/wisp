@@ -13,6 +13,7 @@ import time
 import pytest
 
 from wisp.sandbox import DockerSandbox
+from wisp.sandbox.router import SandboxRouter
 
 
 @pytest.mark.asyncio
@@ -76,3 +77,158 @@ def test_diagnostics_route_wraps_probe_in_to_thread():
     assert "await asyncio.to_thread(sandbox.is_available)" in text, (
         "sandbox probe back on the event loop"
     )
+
+
+@pytest.mark.asyncio
+async def test_workspace_routers_have_isolated_docker_lifecycle(
+    tmp_path, monkeypatch
+):
+    workspace_a = tmp_path / "workspace-a"
+    workspace_b = tmp_path / "workspace-b"
+    workspace_a.mkdir()
+    workspace_b.mkdir()
+    router_a = SandboxRouter(str(workspace_a))
+    router_b = SandboxRouter(str(workspace_a))
+    docker_a = router_a.tiers[0]
+    docker_b = router_b.tiers[0]
+    assert isinstance(docker_a, DockerSandbox)
+    assert isinstance(docker_b, DockerSandbox)
+
+    assert docker_a.container_name != docker_b.container_name
+    assert DockerSandbox(str(workspace_b)).container_name != docker_a.container_name
+    assert "/" not in docker_a.container_name
+    assert "\\" not in docker_a.container_name
+    assert "/" not in docker_b.container_name
+    assert "\\" not in docker_b.container_name
+
+    docker_commands: list[list[str]] = []
+    exec_commands: list[list[str]] = []
+
+    def _fake_run(cmd, **kwargs):
+        docker_commands.append(list(cmd))
+        return type("Result", (), {"returncode": 0, "stdout": "cid\n",
+                                   "stderr": ""})()
+
+    monkeypatch.setattr("wisp.sandbox.subprocess.run", _fake_run)
+    docker_a._available = True
+    docker_b._available = True
+
+    async def _fake_exec(*cmd, **kwargs):
+        exec_commands.append(list(cmd))
+
+        class Process:
+            returncode = 0
+
+            async def communicate(self):
+                return b"out", b""
+
+            def kill(self):
+                pass
+
+            async def wait(self):
+                pass
+
+        return Process()
+
+    monkeypatch.setattr(
+        "wisp.sandbox.asyncio.create_subprocess_exec", _fake_exec
+    )
+
+    assert await docker_a.run("echo a") == (0, "out", "")
+    assert await docker_b.run("echo b") == (0, "out", "")
+    assert docker_a._container_ready is True
+    assert docker_b._container_ready is True
+    assert ["docker", "run", "-d", "--name", docker_a.container_name] == (
+        docker_commands[1][:5]
+    )
+    assert ["docker", "run", "-d", "--name", docker_b.container_name] == (
+        docker_commands[3][:5]
+    )
+    assert exec_commands[0][4] == docker_a.container_name
+    assert exec_commands[1][4] == docker_b.container_name
+
+    docker_a.cleanup()
+    assert docker_a._container_ready is False
+    assert docker_b._container_ready is True
+    assert docker_commands[-1] == [
+        "docker", "rm", "-f", docker_a.container_name
+    ]
+
+
+def test_cleanup_removes_partial_start_container(tmp_path, monkeypatch):
+    sandbox = DockerSandbox(str(tmp_path))
+    sandbox._available = True
+    docker_commands: list[list[str]] = []
+
+    def _fake_run(cmd, **kwargs):
+        docker_commands.append(list(cmd))
+        if cmd[:3] == ["docker", "run", "-d"]:
+            return type(
+                "Result",
+                (),
+                {"returncode": 1, "stdout": "", "stderr": "daemon failed"},
+            )()
+        return type(
+            "Result", (), {"returncode": 0, "stdout": "", "stderr": ""}
+        )()
+
+    monkeypatch.setattr("wisp.sandbox.subprocess.run", _fake_run)
+
+    with pytest.raises(RuntimeError, match="container start failed"):
+        sandbox._ensure_container()
+
+    assert sandbox._container_ready is False
+    sandbox.cleanup()
+    assert docker_commands[-1] == [
+        "docker", "rm", "-f", sandbox.container_name
+    ]
+
+
+def test_cleanup_handles_removal_failure(tmp_path, monkeypatch, caplog):
+    sandbox = DockerSandbox(str(tmp_path))
+    sandbox._container_ready = False
+    docker_commands: list[list[str]] = []
+
+    def _fake_run(cmd, **kwargs):
+        docker_commands.append(list(cmd))
+        return type(
+            "Result",
+            (),
+            {"returncode": 1, "stdout": "", "stderr": "daemon unavailable"},
+        )()
+
+    monkeypatch.setattr("wisp.sandbox.subprocess.run", _fake_run)
+
+    with caplog.at_level("WARNING", logger="wisp.sandbox"):
+        sandbox.cleanup()
+
+    assert sandbox._container_ready is False
+    assert docker_commands == [["docker", "rm", "-f", sandbox.container_name]]
+    assert "Failed to remove Docker container" in caplog.text
+
+
+def test_cleanup_ignores_missing_container(tmp_path, monkeypatch, caplog):
+    sandbox = DockerSandbox(str(tmp_path))
+    sandbox._container_ready = True
+
+    def _fake_run(cmd, **kwargs):
+        return type(
+            "Result",
+            (),
+            {
+                "returncode": 1,
+                "stdout": b"",
+                "stderr": (
+                    b"Error response from daemon: "
+                    b"No such container: " + sandbox.container_name.encode()
+                ),
+            },
+        )()
+
+    monkeypatch.setattr("wisp.sandbox.subprocess.run", _fake_run)
+
+    with caplog.at_level("WARNING", logger="wisp.sandbox"):
+        sandbox.cleanup()
+
+    assert sandbox._container_ready is False
+    assert "Failed to remove Docker container" not in caplog.text

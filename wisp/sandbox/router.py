@@ -257,6 +257,21 @@ class SandboxRouter:
 _routers: dict[str, SandboxRouter] = {}
 
 
+def _cleanup_router(router: SandboxRouter) -> None:
+    """Release resources owned by the providers in a discarded router."""
+    cleaned: set[int] = set()
+    for tier in router.tiers:
+        cleanup = getattr(tier, "cleanup", None)
+        if not callable(cleanup) or id(tier) in cleaned:
+            continue
+        cleaned.add(id(tier))
+        try:
+            cleanup()
+        except Exception:
+            logger.warning("Failed to clean up sandbox tier %s", tier.name,
+                           exc_info=True)
+
+
 def get_router(workspace: str | None = None) -> SandboxRouter:
     """Process-global router per resolved workspace (mirrors get_sandbox)."""
     if workspace:
@@ -271,6 +286,17 @@ def get_router(workspace: str | None = None) -> SandboxRouter:
     return router
 
 
-def reset_router() -> None:
-    """Drop cached routers (tests)."""
-    _routers.clear()
+def reset_router(workspace: str | None = None) -> None:
+    """Drop cached routers (tests), optionally for one workspace."""
+    if workspace:
+        from wisp.config import safe_getcwd
+        key = os.path.abspath(workspace or safe_getcwd())
+        router = _routers.get(key)
+        discarded = [(key, router)] if router is not None else []
+    else:
+        discarded = list(_routers.items())
+    for _, router in discarded:
+        _cleanup_router(router)
+    for key, router in discarded:
+        if _routers.get(key) is router:
+            _routers.pop(key, None)

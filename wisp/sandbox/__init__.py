@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import hashlib
 import logging
 import os
 import shutil
 import signal
 import subprocess
 from typing import Any
+from uuid import uuid4
 
 
 async def _kill_process_group(process) -> None:
@@ -105,7 +107,11 @@ class DockerSandbox(SandboxProvider):
         self.image = image
         self.memory = memory
         self.cpus = cpus
-        self.container_name = f"wisp-sandbox-{os.getpid()}"
+        workspace_id = hashlib.sha256(
+            self.workspace.encode("utf-8", errors="surrogateescape")
+        ).hexdigest()
+        instance_id = uuid4().hex
+        self.container_name = f"wisp-sandbox-{workspace_id}-{instance_id}"
         self._available: bool | None = None
         self._container_ready = False
 
@@ -205,15 +211,35 @@ class DockerSandbox(SandboxProvider):
             f.write(content)
 
     def cleanup(self) -> None:
-        if not self._container_ready:
-            return
         try:
-            subprocess.run(["docker", "rm", "-f", self.container_name],
-                           capture_output=True, timeout=10)
-            logger.info("Docker sandbox container %s removed", self.container_name)
+            result = subprocess.run(
+                ["docker", "rm", "-f", self.container_name],
+                capture_output=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                logger.info(
+                    "Docker sandbox container %s removed", self.container_name
+                )
+            else:
+                output_parts = []
+                for stream in (result.stderr, result.stdout):
+                    if isinstance(stream, bytes):
+                        stream = stream.decode("utf-8", errors="replace")
+                    if stream:
+                        output_parts.append(str(stream))
+                output = "\n".join(output_parts)
+                if "no such container" in output.lower():
+                    return
+                logger.warning(
+                    "Failed to remove Docker container %s (exit status %s)",
+                    self.container_name,
+                    result.returncode,
+                )
         except Exception as e:
             logger.warning("Failed to remove Docker container: %s", e)
-        self._container_ready = False
+        finally:
+            self._container_ready = False
 
 
 # ── Noop (host) sandbox ────────────────────────────────────────────────
@@ -371,8 +397,13 @@ def get_sandbox(workspace: str | None = None) -> SandboxProvider:
 
 
 def reset_sandbox() -> None:
-    """Reset the global sandbox singleton (for testing)."""
+    """Reset process-global sandbox state (for testing)."""
     global _app_sandbox
-    if _app_sandbox and hasattr(_app_sandbox, "cleanup"):
-        _app_sandbox.cleanup()
-    _app_sandbox = None
+    sandbox = _app_sandbox
+
+    try:
+        cleanup = getattr(sandbox, "cleanup", None)
+        if callable(cleanup):
+            cleanup()
+    finally:
+        _app_sandbox = None

@@ -89,3 +89,57 @@ def test_decision_matrix(tmp_path, monkeypatch, caplog):
         warns = [r for r in caplog.records if r.levelno >= logging.WARNING]
         assert (len(warns) == 1) == want_warn, (env_mode, docker_ok)
         sandbox_mod.reset_sandbox()
+
+
+def test_reset_sandbox_does_not_touch_router_cache(tmp_path, monkeypatch):
+    from wisp import sandbox as sandbox_mod
+    from wisp.sandbox.router import get_router, reset_router
+
+    class CleanupTier:
+        name = "cleanup"
+
+        def __init__(self):
+            self.cleaned = 0
+
+        def cleanup(self):
+            self.cleaned += 1
+
+    reset_router()
+    monkeypatch.setenv("WISP_SANDBOX", "off")
+    first = get_router(str(tmp_path))
+    tier = CleanupTier()
+    first.tiers = [tier]
+    sandbox_mod.get_sandbox(str(tmp_path))
+
+    sandbox_mod.reset_sandbox()
+
+    assert get_router(str(tmp_path)) is first
+    assert tier.cleaned == 0
+    reset_router()
+
+
+def test_reset_router_cleans_discarded_tiers(tmp_path):
+    from wisp.sandbox.router import get_router, reset_router
+
+    class CleanupTier:
+        name = "cleanup"
+
+        def __init__(self):
+            self.cleaned = 0
+
+        def is_available(self):
+            return True
+
+        def cleanup(self):
+            assert get_router(str(tmp_path)) is router
+            self.cleaned += 1
+
+    router = get_router(str(tmp_path))
+    tier = CleanupTier()
+    router.tiers = [tier]
+
+    reset_router(str(tmp_path))
+
+    assert tier.cleaned == 1
+    assert get_router(str(tmp_path)) is not router
+    reset_router()
