@@ -141,3 +141,31 @@ class TestServerMain:
         assert "/ws/agent" in paths
         assert "/api/search" in paths
         assert "/api/diagnostics" in paths
+
+
+class TestRouteAuthCoverage:
+    """C3a: every tool-capable REST route carries verify_api_key (fail closed)."""
+
+    def _assert_auth(self, module_name: str) -> None:
+        import importlib
+
+        from wisp.server.deps import verify_api_key
+
+        mod = importlib.import_module(f"wisp.server.routes.{module_name}")
+        for route in mod.router.routes:
+            deps = [getattr(d, "dependency", None) for d in
+                    getattr(route, "dependencies", [])]
+            assert verify_api_key in deps, (
+                f"{module_name}:{getattr(route, 'path', '?')} lacks verify_api_key")
+
+    def test_workspace_routes_require_auth(self):
+        self._assert_auth("workspace")
+
+    def test_files_routes_require_auth(self):
+        self._assert_auth("files")
+
+    def test_bash_routes_require_auth(self):
+        self._assert_auth("bash")
+
+    def test_background_routes_require_auth(self):
+        self._assert_auth("background")

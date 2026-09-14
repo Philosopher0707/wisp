@@ -27,7 +27,7 @@ class WorkspaceRequest(BaseModel):
     path: str = Field(..., min_length=1, max_length=1000)
 
 
-@router.get("/api/workspace")
+@router.get("/api/workspace", dependencies=[Depends(verify_api_key)])
 async def get_workspace():
     return {"path": str(WORKSPACE_ROOT)}
 
