@@ -58,6 +58,14 @@ def _pty_preexec() -> None:
             pass
 
 
+def _clean_pty_output(raw: bytes) -> str:
+    """Decode pty bytes to model text: UTF-8, no ANSI, LF newlines."""
+    from wisp.tools._utils import _ANSI_RE
+
+    text = _ANSI_RE.sub("", raw.decode("utf-8", errors="replace"))
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 class PtySandbox(SandboxProvider):
     """Local isolated PTY: middle tier between Docker and raw host exec.
 
@@ -84,7 +92,7 @@ class PtySandbox(SandboxProvider):
         return await _asyncio.to_thread(self._run_sync, command, cwd, timeout)
 
     def _run_sync(self, command: str, cwd: str, timeout: int) -> tuple[int, str, str]:
-        from wisp.tools._utils import _ANSI_RE, _MAX_BASH_OUTPUT, check_dangerous_command
+        from wisp.tools._utils import _MAX_BASH_OUTPUT, check_dangerous_command
         from wisp.tools._utils_env import credential_free_env
 
         danger = check_dangerous_command(command)
@@ -120,7 +128,7 @@ class PtySandbox(SandboxProvider):
                     except (ProcessLookupError, PermissionError):
                         pass
                     proc.wait(timeout=5)
-                    return (-1, b"".join(chunks).decode("utf-8", errors="replace"),
+                    return (-1, _clean_pty_output(b"".join(chunks)),
                             f"Command timed out after {timeout}s")
                 exited = proc.poll() is not None
                 ready, _, _ = select.select([master], [], [], min(remaining, 0.2))
@@ -143,11 +151,12 @@ class PtySandbox(SandboxProvider):
                     ready2, _, _ = select.select([master], [], [], 0.05)
                     if not ready2:
                         break
-            out = _ANSI_RE.sub("", b"".join(chunks).decode("utf-8", errors="replace"))
+            out = _clean_pty_output(b"".join(chunks))
             if len(out) > _MAX_BASH_OUTPUT:
                 out = out[:_MAX_BASH_OUTPUT] + "\n... [output truncated]"
             # NOTE: pty merges stderr into stdout by construction.
-            return (proc.returncode or 0, out or "(no output)", "")
+            # Empty stays empty: "(no output)" is the formatter's job.
+            return (proc.returncode or 0, out, "")
         except Exception as exc:
             return (-1, "", str(exc))
         finally:

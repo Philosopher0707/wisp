@@ -95,26 +95,26 @@ def test_resolve_sandbox_cwd_pure():
 # partial stdout on timeout, and caps at the provider; Noop/Docker do none.
 
 @pytest.mark.asyncio
-async def test_pty_empty_output_preformatted_vs_noop(tmp_path):
+async def test_pty_empty_output_raw_vs_noop(tmp_path):
     from wisp.sandbox import NoopSandbox
     from wisp.sandbox.router import PtySandbox
 
     p, n = PtySandbox(str(tmp_path)), NoopSandbox(str(tmp_path))
     _, p_out, _ = await p.run("true", cwd="", timeout=10)
     _, n_out, _ = await n.run("true", cwd="", timeout=10)
-    assert p_out == "(no output)"  # BUG: provider-layer formatting leaks up
+    assert p_out == ""  # fixed S7: no provider-layer preformatting
     assert n_out == ""
 
 
 @pytest.mark.asyncio
-async def test_pty_crlf_vs_noop_lf(tmp_path):
+async def test_pty_lf_newlines_like_noop(tmp_path):
     from wisp.sandbox import NoopSandbox
     from wisp.sandbox.router import PtySandbox
 
     p, n = PtySandbox(str(tmp_path)), NoopSandbox(str(tmp_path))
     _, p_out, _ = await p.run("echo hi", cwd="", timeout=10)
     _, n_out, _ = await n.run("echo hi", cwd="", timeout=10)
-    assert p_out == "hi\r\n"  # BUG: CRLF vs LF differs by tier
+    assert p_out == "hi\n"  # fixed S7: CRLF normalized at the provider boundary
     assert n_out == "hi\n"
 
 
