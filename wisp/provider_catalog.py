@@ -141,6 +141,27 @@ def _ollama_base(cfg: Any) -> str:
     return str(getattr(cfg, "ollama_url", "") or "http://localhost:11434")
 
 
+def _is_base_reachable(provider: str, cfg: Any, timeout: float = 2.0) -> bool:
+    """True when the provider endpoint answers TCP at all (any HTTP status).
+
+    Only consulted when the model listing came back empty, to separate a
+    dead daemon (fail fast) from a live daemon with an unlisted model
+    (serve leniently). Never raises; a missing requests lib counts as
+    reachable so offline-but-valid setups are not punished twice.
+    """
+    if (provider or "").strip().lower() != "ollama":
+        return True
+    try:
+        import requests
+    except Exception:
+        return True
+    try:
+        requests.get(_ollama_base(cfg), timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
 def _authed_get(url: str, cfg: Any, timeout: float = 5.0) -> list[str]:
     """GET a JSON model catalog; returns [] on any failure. Never raises."""
     try:
@@ -292,6 +313,14 @@ def resolve_selection(cfg: Any) -> Resolution:
         from wisp.provider_select import is_strict_provider
 
         if not is_strict_provider(provider):
+            if model and not _is_base_reachable(provider, cfg):
+                return Resolution(
+                    provider=provider, model=model, status="unreachable",
+                    detail=f"Provider '{provider}' is not reachable — connection "
+                           f"refused. Start the daemon (or fix the endpoint) "
+                           f"before serving '{model}'.",
+                    alternatives=[],
+                )
             return Resolution(
                 provider=provider, model=model, status="ok",
                 detail="Model could not be verified against a live listing "

@@ -569,3 +569,15 @@ def test_doctor_reports_shell_binaries():
     result = asyncio.run(_check_path_environment())
     assert "bash_version" in result.details  # major.minor at least
     assert "python_executable" in result.details
+
+
+def test_dead_daemon_with_model_is_unreachable_not_ok():
+    from types import SimpleNamespace
+
+    from wisp.provider_catalog import resolve_selection
+
+    # Nothing listens on port 9 (discard): daemon provably down.
+    cfg = SimpleNamespace(provider="ollama", ollama_url="http://127.0.0.1:9",
+                          model="llama3.2:3b", api_key="")
+    res = resolve_selection(cfg)
+    assert res.status == "unreachable", res  # fail fast, no mid-turn retries
