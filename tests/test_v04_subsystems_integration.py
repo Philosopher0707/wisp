@@ -446,6 +446,16 @@ def _result_text(events: list[Any]) -> str:
 
 
 class TestScenarioDHookInterception:
+    @pytest.fixture(autouse=True)
+    def _force_host_sandbox(self, monkeypatch: pytest.MonkeyPatch):
+        """Keep hook interception assertions on the test host filesystem."""
+        from wisp import sandbox as sandbox_mod
+
+        monkeypatch.setenv("WISP_SANDBOX", "off")
+        sandbox_mod.reset_sandbox()
+        yield
+        sandbox_mod.reset_sandbox()
+
     def test_pre_hook_block_stops_tool(self, tmp_path: Path) -> None:
         from wisp.tool_executor import ToolExecutor
 
