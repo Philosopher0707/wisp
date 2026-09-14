@@ -9,10 +9,10 @@ import os
 import shutil
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from wisp.server.deps import verify_api_key
+from wisp.server.deps import require_tool_allowed, verify_api_key
 from wisp.server.routes.workspace import WORKSPACE_ROOT
 
 logger = logging.getLogger(__name__)
@@ -118,7 +118,8 @@ async def file_tree():
 
 
 @router.post("/api/files", dependencies=[Depends(verify_api_key)])
-async def create_file(path: str, req: FileWriteRequest):
+async def create_file(path: str, req: FileWriteRequest, request: Request):
+    require_tool_allowed(request, "write_file", {"path": path}, str(WORKSPACE_ROOT))
     target = _resolve_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(req.content, encoding="utf-8")
@@ -126,7 +127,8 @@ async def create_file(path: str, req: FileWriteRequest):
 
 
 @router.post("/api/files/edit", dependencies=[Depends(verify_api_key)])
-async def edit_file(path: str, req: FileEditRequest):
+async def edit_file(path: str, req: FileEditRequest, request: Request):
+    require_tool_allowed(request, "edit_file", {"path": path}, str(WORKSPACE_ROOT))
     target = _resolve_path(path)
     if not target.exists():
         raise HTTPException(status_code=404, detail="File not found")
@@ -139,7 +141,9 @@ async def edit_file(path: str, req: FileEditRequest):
 
 
 @router.post("/api/files/binary", dependencies=[Depends(verify_api_key)])
-async def write_binary_file(path: str, req: FileBinaryRequest):
+async def write_binary_file(path: str, req: FileBinaryRequest, request: Request):
+    require_tool_allowed(request, "write_file", {"path": path, "op": "binary"},
+                         str(WORKSPACE_ROOT))
     target = _resolve_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     data = base64.b64decode(req.content_base64)
@@ -148,7 +152,10 @@ async def write_binary_file(path: str, req: FileBinaryRequest):
 
 
 @router.post("/api/files/rename", dependencies=[Depends(verify_api_key)])
-async def rename_file(path: str, req: FileRenameRequest):
+async def rename_file(path: str, req: FileRenameRequest, request: Request):
+    require_tool_allowed(request, "edit_file",
+                         {"path": path, "op": "rename", "new_path": req.new_path},
+                         str(WORKSPACE_ROOT))
     source = _resolve_path(path)
     dest = _resolve_path(req.new_path)
     if not source.exists():
@@ -161,7 +168,9 @@ async def rename_file(path: str, req: FileRenameRequest):
 
 
 @router.delete("/api/files", dependencies=[Depends(verify_api_key)])
-async def delete_file(path: str):
+async def delete_file(path: str, request: Request):
+    require_tool_allowed(request, "edit_file", {"path": path, "op": "delete"},
+                         str(WORKSPACE_ROOT))
     target = _resolve_path(path)
     if not target.exists():
         raise HTTPException(status_code=404, detail="Not found")

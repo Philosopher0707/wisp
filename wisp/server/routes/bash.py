@@ -9,10 +9,10 @@ import re
 import subprocess
 import time
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from wisp.server.deps import verify_api_key, RATE_LIMITER
+from wisp.server.deps import require_tool_allowed, verify_api_key, RATE_LIMITER
 from wisp.server.routes.workspace import WORKSPACE_ROOT
 from wisp.server.routes.files import _resolve_path
 
@@ -28,9 +28,12 @@ class BashRequest(BaseModel):
 
 
 @router.post("/api/bash", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
-async def run_bash(req: BashRequest):
+async def run_bash(req: BashRequest, request: Request):
     """Run a bash command inside the workspace. Restricted for safety."""
     from wisp.tools import check_dangerous_command
+
+    require_tool_allowed(request, "run_bash", {"command": req.command},
+                         str(WORKSPACE_ROOT))
 
     if not req.command or not isinstance(req.command, str):
         raise HTTPException(status_code=400, detail="Command must be a non-empty string")

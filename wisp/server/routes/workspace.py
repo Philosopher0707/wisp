@@ -68,5 +68,6 @@ async def set_workspace(req: WorkspaceRequest, request: Request):
     if root is not None:
         root.config = root.config.replace(workspace=str(new_root))
         root.runtime.invalidate_core_cache()
-    logger.info("Workspace changed to %s", WORKSPACE_ROOT)
+    logger.warning("Workspace changed to %s (client %s)", WORKSPACE_ROOT,
+                   request.client.host if request.client else "?")
     return {"path": str(WORKSPACE_ROOT)}

@@ -360,6 +360,52 @@ class _LazyRateLimiterProxy:
 _auth = _LazyAuthProxy()
 RATE_LIMITER = _LazyRateLimiterProxy()
 
+
+# ── REST tool policy gate (C3b) ──────────────────────────────────────
+
+def request_policy(request: Request):
+    """Policy for REST tool execution: the server root's configured mode.
+
+    Falls back to a default policy when the route is mounted without a
+    composition root (tests, embeddings). Never raises.
+    """
+    from wisp.infra.security import SecurityPolicy
+
+    try:
+        state = getattr(getattr(request, "app", None), "state", None)
+        mode = getattr(getattr(getattr(state, "root", None), "config", None),
+                       "permission_mode", None)
+        if mode is not None:
+            return SecurityPolicy(permission_mode=mode)
+    except Exception:
+        pass
+    return SecurityPolicy()
+
+
+def require_tool_allowed(request: Request, action_name: str, args: dict,
+                         workspace: str | Path) -> None:
+    """Fail-closed policy gate for REST tool execution. Raises 403.
+
+    REST has no human to approve, so approval-required verdicts deny —
+    same as ApprovalGate with no handler. Call BEFORE any side effect.
+    """
+    from wisp.infra.security import Action, Context
+
+    policy = request_policy(request)
+    decision = policy.check(
+        Action(name=action_name, args=dict(args or {})),
+        Context(workspace=Path(workspace)),
+    )
+    logger.info("rest_tool_gate action=%s allowed=%s approval_required=%s reason=%s",
+                action_name, decision.allowed, decision.approval_required,
+                (decision.reason or "")[:200])
+    if not decision.allowed or decision.approval_required:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Blocked by server policy ({decision.reason or action_name}); "
+                   f"no approver is present over REST",
+        )
+
 # Lazy exports for API_KEY compatibility
 API_KEY = _auth
 
