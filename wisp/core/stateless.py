@@ -276,6 +276,15 @@ class WispAgentCore:
 
             tools = [t for t in tools if _schema_name(t) in allowed_set]
 
+        # 13-I2 capability partition: host-owned visibility filter over
+        # provider-bound schemas. Flag OFF (default) preserves the exact
+        # legacy surface; rollback needs no code change.
+        if self.config is not None and getattr(
+                self.config, "capability_filtering", False) is True:
+            from wisp.capability_filter import filter_schemas_for_mode
+            tools = filter_schemas_for_mode(
+                tools, getattr(self.config, "permission_mode", "auto_edit"))
+
         max_iterations = getattr(self.config, "max_iterations", 30)
 
         try:
@@ -1146,6 +1155,19 @@ class WispAgentCore:
         if isinstance(allowed, (list, tuple, set)) and "all" not in {str(a).lower() for a in allowed}:
             allowed_set = {str(a) for a in allowed}
             allowed_hash = hashlib.sha256(",".join(sorted(allowed_set)).encode()).hexdigest()[:8]
+        # 13-I2: intersect the menu's allowlist with the mode partition so
+        # the prompt never advertises schemas the provider never receives
+        # (same hallucination seed the role filter above was built to kill).
+        if self.config is not None and getattr(
+                self.config, "capability_filtering", False) is True:
+            from wisp.capability_filter import visible_tool_names
+            menu_set = visible_tool_names(
+                allowed_set,
+                getattr(self.config, "permission_mode", "auto_edit"), True)
+            if menu_set is not None:
+                allowed_set = menu_set
+                allowed_hash = hashlib.sha256(
+                    ",".join(sorted(allowed_set)).encode()).hexdigest()[:8]
         # Thin-harness posture changes the tools menu — part of the key,
         # or a thin turn reuses a 42-tool prompt from the cache.
         thin = "thin" if (self.config is not None

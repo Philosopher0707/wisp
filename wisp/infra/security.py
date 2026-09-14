@@ -107,16 +107,26 @@ class SecurityPolicy:
     """
 
     permission_mode: PermissionMode = PermissionMode.AUTO_EDIT
+    autonomous: bool = False
     trusted_workspaces: frozenset[Path] = field(default_factory=frozenset)
     hooks: list[Callable] = field(default_factory=list)
     _engine: PolicyEngine | None = field(default=None, repr=False)
     _audit_trail: Any = field(default=None, repr=False)
     _audit_log: list[dict] = field(default_factory=list, repr=False)  # fallback when no trail
 
+    @property
+    def effective_permission_mode(self) -> PermissionMode:
+        """Autonomous mode relaxes AUTO_EDIT for safe tools while keeping the
+        underlying configured mode visible for reporting and debugging.
+        """
+        if self.autonomous and self.permission_mode == PermissionMode.AUTO_EDIT:
+            return PermissionMode.FULL
+        return self.permission_mode
+
     def __post_init__(self):
         if self._engine is None:
             self._engine = PriorityRuleEngine.with_builtin_rules(
-                permission_mode=str(self.permission_mode),
+                permission_mode=str(self.effective_permission_mode),
                 safe_read_tools=_SAFE_READ_TOOLS,
                 ask_all_block_tools=_ASK_ALL_BLOCK_TOOLS,
                 auto_edit_block_tools=_AUTO_EDIT_BLOCK_TOOLS,
@@ -133,6 +143,7 @@ class SecurityPolicy:
     def with_trusted_workspaces(self, workspaces: set[Path]) -> "SecurityPolicy":
         return SecurityPolicy(
             permission_mode=self.permission_mode,
+            autonomous=self.autonomous,
             trusted_workspaces=frozenset(workspaces),
             hooks=list(self.hooks),
             _engine=self._engine,
@@ -145,6 +156,7 @@ class SecurityPolicy:
         new_hooks.append(hook)
         return SecurityPolicy(
             permission_mode=self.permission_mode,
+            autonomous=self.autonomous,
             trusted_workspaces=self.trusted_workspaces,
             hooks=new_hooks,
             _engine=self._engine,
@@ -156,10 +168,11 @@ class SecurityPolicy:
         """Return a new policy with a different permission mode."""
         return SecurityPolicy(
             permission_mode=mode,
+            autonomous=self.autonomous,
             trusted_workspaces=self.trusted_workspaces,
             hooks=list(self.hooks),
             _engine=PriorityRuleEngine.with_builtin_rules(
-                permission_mode=str(mode),
+                permission_mode=str(PermissionMode.FULL if self.autonomous and mode == PermissionMode.AUTO_EDIT else mode),
                 safe_read_tools=_SAFE_READ_TOOLS,
                 ask_all_block_tools=_ASK_ALL_BLOCK_TOOLS,
                 auto_edit_block_tools=_AUTO_EDIT_BLOCK_TOOLS,
@@ -185,7 +198,7 @@ class SecurityPolicy:
         engine_action = EngineAction(name=action.name, args=dict(action.args))
         engine_ctx = EvalContext(
             workspace=context.workspace,
-            permission_mode=str(self.permission_mode),
+            permission_mode=str(self.effective_permission_mode),
         )
         result = self.engine.evaluate(engine_action, engine_ctx)
 

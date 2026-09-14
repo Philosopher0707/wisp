@@ -652,19 +652,34 @@ class ToolExecutor:
         func_name = tool_name
         func_args = dict(tool_args) if tool_args else {}
 
+        # Dangerous commands are blocked before any mode/approval logic so
+        # autonomous mode cannot accidentally escalate them. The regular
+        # post-authorization guard is retained for the same contract, but this
+        # early return is the real fail-closed boundary.
+        danger_block_msg = self._check_dangerous_command(func_name, func_args)
+        if danger_block_msg:
+            self._audit_denial(func_name, func_args, workspace, danger_block_msg)
+            yield _tool_result_event(func_name, danger_block_msg,
+                        tool_call_id=tool_call_id,)
+            return
+
         # ── Policy hard-DENY (13F.1 R1) — before everything, including
         # approval. A mode-denied tool never prompts and no `y` can run
         # it: the gate enforces the same rule, this is the defense for
         # direct-executor callers. REQUIRE_APPROVAL tools pass through
         # here (None) to the approval path below.
-        _hard_deny = policy_hard_deny(
-            func_name, getattr(self.config, "permission_mode", None))
+        configured_mode = getattr(self.config, "permission_mode", PermissionMode.AUTO_EDIT)
+        effective_mode = configured_mode
+        if bool(getattr(self.config, "autonomous", False)):
+            effective_mode = PermissionMode.FULL
+
+        _hard_deny = policy_hard_deny(func_name, effective_mode)
         if _hard_deny is not None:
             from wisp.core.events import denial_result, DENIAL_POLICY_DENIED
             self._audit_denial(func_name, func_args, workspace, f"Policy denied: {func_name} is not permitted.")
             yield denial_result(func_name, DENIAL_POLICY_DENIED,
                                 f"Policy denied: {func_name} is not permitted "
-                                f"in {getattr(self.config, 'permission_mode', 'auto_edit')} mode.",
+                                f"in {getattr(effective_mode, 'value', effective_mode)} mode.",
                                 tool_call_id=tool_call_id)
             return
 
@@ -673,7 +688,7 @@ class ToolExecutor:
         # REVIEW_REQUIRED (no behavior change); quarantine markers deny
         # non-read tools even in FULL mode.
         _profile = getattr(self.config, "profile", None) or "default"
-        _pm = getattr(self.config, "permission_mode", PermissionMode.AUTO_EDIT)
+        _pm = effective_mode
         _decision = authorize(
             local_principal(workspace=workspace, profile=str(_profile)),
             func_name, func_args,

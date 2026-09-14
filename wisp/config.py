@@ -103,6 +103,12 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Permission level: full | ask_all | auto_edit | read_only",
         "env_var": "WISP_PERMISSION_MODE",
     },
+    "capability_filtering": {
+        "type": bool,
+        "default": False,
+        "description": "Filter provider-bound tool schemas by permission_mode (READ_ONLY sees the safe surface only). Visibility only; authorization unchanged. Rollback: set false for the exact legacy surface.",
+        "env_var": "WISP_CAPABILITY_FILTERING",
+    },
     "show_thinking": {
         "type": bool,
         "default": True,
@@ -541,6 +547,7 @@ class WispConfig:
 
     # ── Modes & permissions ───────────────────────────────────────
     permission_mode: PermissionMode | str
+    capability_filtering: bool
     plan_mode: bool
     plan_context: Optional[str]
 
@@ -665,6 +672,13 @@ class WispConfig:
         # Permissions: full (all allowed) | ask_all (ask for writes) | auto_edit (ask for bash only) | read_only (no writes)
         object.__setattr__(self, "permission_mode",
             PermissionMode(get_setting("permission_mode", PermissionMode.AUTO_EDIT.value))
+        )
+        # Capability filtering (13-I2): host-owned visibility partition.
+        # OFF preserves the exact legacy provider surface; ON filters
+        # provider-bound schemas by permission_mode. Authorization untouched.
+        # Conservative default OFF — rollout is explicit and reversible.
+        object.__setattr__(self, "capability_filtering",
+            _parse_bool(get_setting("capability_filtering", "false"), False)
         )
         # Plan mode: agent plans only, no tool execution
         object.__setattr__(self, "plan_mode",
@@ -999,6 +1013,7 @@ class WispConfig:
             str(self.ollama_url),
             str(self.api_base or ""),
             str(self.permission_mode.value if hasattr(self.permission_mode, "value") else self.permission_mode),
+            str(self.capability_filtering),
             str(self.show_thinking),
             str(self.workspace or ""),
         ]

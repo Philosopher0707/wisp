@@ -72,6 +72,18 @@ class TestContextAssemblerBuild:
         )
         assert "User prefers tabs" in result
 
+    def test_memory_survives_large_skill_context(self):
+        from wisp.context_assembler import ContextAssembler
+        assembler = ContextAssembler()
+        large_skill_block = "## Skills\n" + ("- item\n" * 15000)
+        result = assembler.build(
+            workspace="/tmp",
+            default_system="You are Wisp.",
+            skills_block=large_skill_block,
+            memory_block="## Memory\nUser prefers tabs",
+        )
+        assert "User prefers tabs" in result
+
     def test_build_with_git_context(self):
         from wisp.context_assembler import ContextAssembler
         assembler = ContextAssembler()

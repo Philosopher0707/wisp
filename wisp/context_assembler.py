@@ -509,7 +509,40 @@ class ContextAssembler:
             if projected <= max_tokens:
                 included.append((label, content))
                 current_tokens = projected
-            elif priority == 0:
+                continue
+
+            # Cross-session memory is essential continuity for the next turn.
+            # It must survive budget pressure even when skills/role guidance are
+            # trimmed, so keep a truncated memory block rather than silently
+            # dropping the user's remembered preferences.
+            if label == "memory_block":
+                remaining = max_tokens - current_tokens
+                if remaining <= 0:
+                    logger.debug("ContextAssembler: dropped %s (%d tokens) to fit budget", label, size)
+                    dropped_labels.append(label)
+                    continue
+                try:
+                    import tiktoken
+                    enc = tiktoken.get_encoding("cl100k_base")
+                    truncated_text = enc.decode(enc.encode(content)[:remaining])
+                except Exception:
+                    max_chars = remaining * 3
+                    truncated_text = content[:max_chars]
+
+                if truncated_text.count("```") % 2 != 0:
+                    truncated_text += "\n```\n[Code block truncated]"
+
+                truncated = (
+                    f"[SECTION TRUNCATED: {label} exceeded token budget "
+                    f"({size} tokens > {remaining} remaining)]\n"
+                    + truncated_text
+                )
+                included.append((label, truncated))
+                current_tokens = self._estimate_tokens(truncated)
+                last_truncate_label = label
+                continue
+
+            if priority == 0:
                 remaining = max_tokens - current_tokens
                 if remaining > 0:
                     try:

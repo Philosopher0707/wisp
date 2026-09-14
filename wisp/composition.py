@@ -79,6 +79,7 @@ class CompositionRoot:
         self.audit_trail = ImmutableAuditTrail(self.store)
         self.security = SecurityPolicy(
             permission_mode=self.config.permission_mode,
+            autonomous=bool(getattr(self.config, "autonomous", False)),
             _audit_trail=self.audit_trail,
         )
         self.extensions = ExtensionHost()
