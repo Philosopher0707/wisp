@@ -19,6 +19,11 @@ from wisp.provider_select import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_provider_environment(isolated_wisp_env):
+    """Keep provider construction independent of persisted user settings."""
+
+
 # ── parse_target ─────────────────────────────────────────────────────
 
 

@@ -126,7 +126,8 @@ def test_resolve_unreachable_listing_is_notice_not_lie():
     from wisp.provider_catalog import resolve_selection
 
     cfg = SimpleNamespace(provider="ollama", model="some/model", ollama_url="http://x")
-    with patch("wisp.provider_catalog.list_models", return_value=[]):
+    with patch("wisp.provider_catalog.list_models", return_value=[]), \
+            patch("wisp.provider_catalog._is_base_reachable", return_value=True):
         r = resolve_selection(cfg)
     assert r.status == "ok"
     assert "not be verified" in r.detail

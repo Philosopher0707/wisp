@@ -21,11 +21,13 @@ os.environ.setdefault("TERM", "xterm")
 
 @pytest.fixture
 def isolated_wisp_env(monkeypatch, tmp_path):
-    """Strip WISP_* env vars and hide the user config file.
+    """Strip provider env vars and hide user config/home state.
 
     Machine setups (e.g. WISP_PROVIDER=nvidia plus
     ~/.config/wisp/config.json) leak into tests that assert *default*
-    behavior, making them fail on one machine and pass on another.
+    behavior, making them fail on one machine and pass on another. Provider
+    API-key and endpoint variables are included because provider selection
+    resolves them outside the WISP_* namespace.
     Opt in where hermeticity matters:
 
         def test_defaults_are_sane(self, isolated_wisp_env):
@@ -35,8 +37,18 @@ def isolated_wisp_env(monkeypatch, tmp_path):
 
     import wisp.config as cfg_mod
 
-    for var in [k for k in os.environ if k.startswith("WISP_")]:
+    provider_env = {
+        "OPENAI_API_KEY",
+        "OPENAI_API_BASE",
+        "NVIDIA_API_KEY",
+        "OPENROUTER_API_KEY",
+        "OPENROUTER_SITE_URL",
+        "OPENROUTER_APP_TITLE",
+    }
+    for var in [k for k in os.environ
+                if k.startswith("WISP_") or k in provider_env]:
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(
         cfg_mod, "get_config_path", lambda: tmp_path / "missing-config.json"
     )

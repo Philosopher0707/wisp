@@ -14,6 +14,11 @@ from wisp.multi_agent import SubagentOrchestrator, SubagentContract, SubagentRes
 from wisp.multi_agent.task import EventKind
 
 
+@pytest.fixture(autouse=True)
+def _isolate_subagent_environment(isolated_wisp_env):
+    """Keep child configs independent of persisted provider settings."""
+
+
 class FakeStatelessCore:
     """Minimal fake stateless core for testing SubagentOrchestrator."""
 
