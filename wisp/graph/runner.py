@@ -107,12 +107,13 @@ def _nonneg_f(v: Any) -> float:
 
 
 def default_executor(workspace: str = ".", max_concurrency: int = 8,
-                     store: Any = None, emit: Any = None) -> Any:
+                     store: Any = None, emit: Any = None, config: Any = None) -> Any:
     """Stock executor: SubagentOrchestrator runner + reference functions.
 
     Single construction point shared by CLI `graph run/resume/execute` and
     the SDK, so planner-approved graphs execute through the same governed
-    runner as manually authored ones.
+    runner as manually authored ones. *config* (a WispConfig) is the
+    workers' provider/identity; None keeps the legacy default config.
     """
     from wisp.graph.executor import GraphExecutor
     from wisp.graph.reference import default_functions
@@ -120,7 +121,9 @@ def default_executor(workspace: str = ".", max_concurrency: int = 8,
                        store=store, emit=emit or (lambda e: None))
     try:
         from wisp.multi_agent import SubagentOrchestrator
-        ex._runner = SubagentNodeRunner(SubagentOrchestrator(), workspace)
+        ex._runner = SubagentNodeRunner(
+            SubagentOrchestrator(config=config) if config is not None
+            else SubagentOrchestrator(), workspace)
     except Exception:
         pass
     for name, fn in default_functions().items():

@@ -478,3 +478,23 @@ async def test_runtime_flat_tool_call_touches_files(tmp_path):
     async for _ in rt.run_turn(session, "read a"):
         pass
     assert "a.txt" in rt._touched_files.get("pin-sess2", set())
+
+
+# ── Graph path: template arity + provider inheritance ─────────────────────
+# (The arity crash and the default-config provider crash both died here;
+# the mock-config test below covers the shared path end to end.)
+
+
+def test_graph_template_inherits_caller_provider_config(tmp_path, monkeypatch):
+    from wisp.coding import run_coding_template, task_context_from_prompt
+    from wisp.config import WispConfig
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "probe.py").write_text('print("hi")\n')
+    prompt = "list the files in the workspace and read probe.py"
+    ctx = task_context_from_prompt(prompt, str(tmp_path), None)
+    # Graph children must run on the caller's provider, never on a default
+    # WispConfig() (which can point at an unconfigured/broken endpoint).
+    config = WispConfig().replace(provider="mock", model="mock-t")
+    out = run_coding_template("simple", ctx, emit=None, config=config)
+    assert out.get("status") == "succeeded", out

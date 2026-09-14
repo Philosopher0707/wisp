@@ -205,14 +205,20 @@ def repo_context(workspace: str, query: str = "", files: tuple[str, ...] = (),
 # ── control API (11B): REPL drives graphs through Graph API only ──────
 
 def run_coding_template(template: str, ctx: TaskContext,
-                        emit: Any = None, max_concurrency: int = 8) -> dict:
-    """Compile → optimize → execute a host-authored coding template. Blocking."""
+                        emit: Any = None, max_concurrency: int = 8,
+                        config: Any = None) -> dict:
+    """Compile → optimize → execute a host-authored coding template. Blocking.
+
+    *config* (a WispConfig) becomes the graph children's provider/identity —
+    without it workers fall back to default-constructed config, which can
+    point at an unconfigured endpoint.
+    """
     from wisp.graph.coding_graphs import TEMPLATE_RUN_INPUTS, build_template
     from wisp.graph.planner import compile_optimized
     from wisp.graph.runner import default_executor
     ir = build_template(template, ctx)
-    graph, diags, meta = compile_optimized(ir, None)
-    ex = default_executor(ctx.workspace, max_concurrency, emit=emit)
+    graph, diags, meta, _narrowed = compile_optimized(ir, None)
+    ex = default_executor(ctx.workspace, max_concurrency, emit=emit, config=config)
     run_inputs = {"objective": ctx.objective, "files": list(ctx.facts)}
     run_inputs.update(TEMPLATE_RUN_INPUTS.get(template, {}))
     result = asyncio.run(ex.run(graph, run_inputs))
@@ -365,7 +371,10 @@ def _run_graph_turn(runner: Any, ctx: TaskContext, decision: StrategyDecision,
             _emit_line(out, f"  {line}")
 
     try:
-        final = run_coding_template(template, ctx, emit=emit)
+        cfg = getattr(runner, "config", None)
+        from wisp.config import WispConfig
+        live_config = cfg if isinstance(cfg, WispConfig) else None
+        final = run_coding_template(template, ctx, emit=emit, config=live_config)
     except Exception as exc:
         _emit_line(out, f"graph run failed: {exc}")
         return True
