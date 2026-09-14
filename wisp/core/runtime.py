@@ -127,6 +127,20 @@ def _serialize_tool_exchanges(
 
 
 
+def _ev_get(event: dict[str, Any], key: str, default: Any = None) -> Any:
+    """Read an event field across flat and canonical ({type, data}) shapes.
+
+    Flat (engine wire shape) wins on conflict; mirrors the `_field` reader
+    used at persist time so intake and persistence never disagree.
+    """
+    if key in event:
+        return event[key]
+    data = event.get("data")
+    if isinstance(data, dict) and key in data:
+        return data[key]
+    return default
+
+
 def _evict_session_state_maps(maps: list[dict[str, Any]], cap: int,
                                 access: dict[str, float],
                                 skip: set[str] | None = None) -> None:
@@ -438,11 +452,13 @@ class AgentRuntime:
 
                     etype = event.get("type")
                     if etype == "content":
-                        assistant_content.append(event.get("text", ""))
+                        assistant_content.append(_ev_get(event, "text", ""))
                     elif etype == "tool_call":
                         tool_calls.append(event)
                         tool_sequence.append(("call", event))
-                        self._note_touched_file(sid, event.get("data") or {})
+                        _data = event.get("data")
+                        self._note_touched_file(
+                            sid, _data if isinstance(_data, dict) else event)
                     elif etype == "tool_result":
                         tool_results.append(event)
                         tool_sequence.append(("reply", event))
@@ -472,10 +488,10 @@ class AgentRuntime:
                     elif etype == "done":
                         saw_done = True
                     elif etype == "error":
-                        if not event.get("recoverable", True):
+                        if not _ev_get(event, "recoverable", True):
                             saw_fatal_error = True
                         terminal_error_message = str(
-                            event.get("message") or "turn failed")
+                            _ev_get(event, "message") or "turn failed")
 
                 # 13-H5: completion derives from terminal evidence — a done
                 # with no fatal error. Bare exhaustion, partial output, or

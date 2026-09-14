@@ -419,3 +419,62 @@ def test_cli_input_line_stringio_edges():
         assert _input_line("> ") == "hello"
     finally:
         sys.stdin = old
+
+
+# ── Runtime intake: flat + canonical shapes (fixed S10) ───────────────────
+
+def test_ev_get_reads_both_event_shapes():
+    from wisp.core.runtime import _ev_get
+
+    assert _ev_get({"type": "content", "text": "hi"}, "text") == "hi"
+    assert _ev_get({"type": "content", "data": {"text": "hi"}}, "text") == "hi"
+    assert _ev_get({"type": "error", "data": {"recoverable": False}}, "recoverable") is False
+    assert _ev_get({"type": "x"}, "missing", "dflt") == "dflt"
+
+
+def _pin_runtime(core, tmp_path):
+    from wisp.core.runtime import AgentRuntime
+    from wisp.infra.extensions import ExtensionHost
+    from wisp.infra.security import PermissionMode, SecurityPolicy
+    from wisp.infra.store import UnifiedStore
+    from wisp.infra.telemetry import Telemetry
+
+    return AgentRuntime(
+        store=UnifiedStore(tmp_path / "pin.db"),
+        security=SecurityPolicy(permission_mode=PermissionMode.FULL),
+        extensions=ExtensionHost(),
+        telemetry=Telemetry(),
+        core_factory=lambda: core,
+    )
+
+
+@pytest.mark.asyncio
+async def test_runtime_tracks_canonical_content(tmp_path):
+    class _CanonicalCore:
+        async def turn(self, session, prompt, approval_handler=None, steering_drain=None):
+            yield {"type": "content", "data": {"text": "hello-canonical"}}
+            yield {"type": "done"}
+
+    rt = _pin_runtime(_CanonicalCore(), tmp_path)
+    session = await rt.get_or_create_session("pin-sess", "m", str(tmp_path))
+    async for _ in rt.run_turn(session, "hi"):
+        pass
+    assert any("hello-canonical" in str(m.get("content", ""))
+               for m in session["messages"]), session["messages"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_flat_tool_call_touches_files(tmp_path):
+    class _FlatCore:
+        async def turn(self, session, prompt, approval_handler=None, steering_drain=None):
+            yield {"type": "tool_call", "id": "call_1", "name": "read_file",
+                   "arguments": {"path": "a.txt"}}
+            yield {"type": "tool_result", "name": "read_file", "tool_call_id": "call_1",
+                   "result": "contents"}
+            yield {"type": "done"}
+
+    rt = _pin_runtime(_FlatCore(), tmp_path)
+    session = await rt.get_or_create_session("pin-sess2", "m", str(tmp_path))
+    async for _ in rt.run_turn(session, "read a"):
+        pass
+    assert "a.txt" in rt._touched_files.get("pin-sess2", set())
