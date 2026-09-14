@@ -89,11 +89,20 @@ def check_dangerous_command(command: str) -> Optional[str]:
     if re.search(r'\bsu\s+-[\w]*c\b', cmd_lower):
         return "privilege escalation (su -c)"
 
-    # rm with recursive flag (-r, -R, --recursive)
-    tokens = cmd_lower.split()
-    if tokens and tokens[0] == 'rm':
-        for t in tokens[1:]:
+    # rm family — anchored to command position: split on shell separators
+    # so `echo rm -rf /` (prints text, deletes nothing) is not blocked
+    # while `cd /tmp; rm -rf /` still is. Quoting is ignored (heuristic).
+    for _segment in re.split(r'[;&|\n]+', cmd_lower):
+        _words = _segment.strip().split()
+        if not _words or _words[0] != 'rm':
+            continue
+        for t in _words[1:]:
             if t.startswith('-') and 'r' in t:
+                if '--no-preserve-root' in _words:
+                    return "recursive deletion of root filesystem"
+                if re.search(r'\brm\s+(-[a-zA-Z]*r|--recursive).*?\s*/\s*$',
+                             _segment.strip()):
+                    return "recursive deletion of root"
                 return "recursive deletion"
             if t == '--recursive':
                 return "recursive deletion"
@@ -154,11 +163,7 @@ def check_dangerous_command(command: str) -> Optional[str]:
     if re.search(r'\b(curl|wget)\b.*\|\s*(sh|bash|zsh|python3?|perl|ruby|node)\b', cmd_lower):
         return "remote code execution (pipe to interpreter)"
 
-    # rm of root filesystem
-    if re.search(r'\brm\s+.*--no-preserve-root', cmd_lower):
-        return "recursive deletion of root filesystem"
-    if re.search(r'\brm\s+(-[a-zA-Z]*r|--recursive).*?\s*/\s*$', cmd_lower):
-        return "recursive deletion of root"
+    # (rm-of-root rules live in the anchored rm-family loop above.)
 
     # fork bomb heuristic
     if re.search(r'\(\)\s*\{[^}]*\|[^}]*&[^}]*\}', cmd_lower):
@@ -193,6 +198,8 @@ def check_dangerous_command(command: str) -> Optional[str]:
     # find with -exec rm / -ok rm / -execdir rm
     if re.search(r'\bfind\b', cmd_lower) and re.search(r'-exec(dir)?\s+\b(rm|mv|cp|chmod|chown|dd)\b', cmd_lower):
         return "dangerous find -exec"
+    if re.search(r'\bfind\b', cmd_lower) and re.search(r'(^|\s)-delete\b', cmd_lower):
+        return "dangerous find -delete"
 
     # awk with system() or exec
     if re.search(r'\bawk\b', cmd_lower) and re.search(r'\b(system|exec)\s*\(', cmd_lower):
