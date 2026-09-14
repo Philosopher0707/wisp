@@ -192,16 +192,18 @@ def test_danger_heuristic_anchored():
 
 # ── Risk model vs write-set drift (verified live) ─────────────────────────
 
-def test_risk_write_classification_drift():
+def test_write_set_covers_all_non_read_risk():
     import wisp.tool_executor as te
-    from wisp.core.contracts import risk_for_tool
+    from wisp.core.contracts import TOOL_RISK_TABLE, ToolRisk
 
-    write_set = te._DEFAULT_WRITE_TOOLS
-    assert str(risk_for_tool("remember")) == "ToolRisk.WRITE"
-    assert "remember" not in write_set  # BUG?: WRITE-risk tool skips approval/plan gates
-    for name in ("subagent_list", "run_tests", "rewind"):
-        assert str(risk_for_tool(name)) == "ToolRisk.EXEC"
-        assert name not in write_set  # BUG?: EXEC-risk tools outside the write set
+    resolved = te._get_write_tools(None)
+    for name, risk in TOOL_RISK_TABLE.items():
+        if risk is ToolRisk.READ:
+            assert name not in resolved, f"READ tool {name} over-gated"
+        else:
+            assert name in resolved, f"non-READ tool {name} escapes approval/plan gates"
+    assert "rewind" in resolved  # EXEC by fail-closed default, restores files
+    assert "git_checkpoint" not in resolved  # snapshots stay read-classified by intent
 
 
 # ── Dispatcher: unknown never reaches the LLM ─────────────────────────────

@@ -169,6 +169,9 @@ _DEFAULT_WRITE_TOOLS: set[str] = {
 # override can leave the run_bash / write_file equivalents ungated.
 _THIN_WRITE_TOOLS: set[str] = {"exec_sandbox", "fs_mutate"}
 
+# Gated although the risk table names no row for them (fail-closed EXEC).
+_ALWAYS_GATED_TOOLS: frozenset[str] = frozenset({"rewind"})
+
 # Pure, network-bound tools worth memoizing against model loops.
 _REPEAT_GUARD_TOOLS: frozenset[str] = frozenset({"web_fetch", "web_search"})
 _REPEAT_TTL_SECONDS = 600.0
@@ -199,14 +202,25 @@ _SUBAGENT_TOOLS: frozenset[str] = frozenset({
 def _get_write_tools(config: Any = None) -> set[str]:
     """Resolve write-classification tools from config (env: WISP_WRITE_TOOLS).
 
-    Thin-harness names are always unioned in: exec_sandbox / fs_mutate are
-    the gated path's equivalents of run_bash + write_file/edit_file, so no
-    user config (or config default) may accidentally leave them ungated
-    (GH#25). git_checkpoint stays read-classified, matching rewind.
+    Union rule (no drift by construction): every non-READ row of the risk
+    table is gated, so a new EXEC/WRITE tool can never silently skip
+    approval / plan-mode / read-only. Thin-harness names are always unioned
+    in (GH#25), and "rewind" is always gated (EXEC by fail-closed default;
+    it restores files). git_checkpoint stays read-classified by intent.
     """
     if config is not None and hasattr(config, "write_tools") and config.write_tools:
-        return set(config.write_tools) | _THIN_WRITE_TOOLS
-    return set(_DEFAULT_WRITE_TOOLS) | _THIN_WRITE_TOOLS
+        base = set(config.write_tools)
+    else:
+        base = set(_DEFAULT_WRITE_TOOLS)
+    base |= _THIN_WRITE_TOOLS | _ALWAYS_GATED_TOOLS | _non_read_table_tools()
+    return base
+
+
+def _non_read_table_tools() -> set[str]:
+    """Names the risk table classifies above READ (lazy import: this module
+    must not import wisp.core at load; precedent: _execute_tool)."""
+    from wisp.core.contracts import TOOL_RISK_TABLE, ToolRisk
+    return {name for name, risk in TOOL_RISK_TABLE.items() if risk is not ToolRisk.READ}
 
 
 def _should_block_hook(hook_results: list) -> bool:
