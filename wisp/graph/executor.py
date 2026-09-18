@@ -241,6 +241,25 @@ class GraphExecutor:
             except Exception:
                 pass
 
+    def _forget_run(self, run_id: str) -> None:
+        """Drop per-run bookkeeping once the run is terminal.
+
+        `_cancelled`, `_approvals`, and `_join_wait_reason` are keyed by run id
+        and were never reclaimed, so a long-lived executor accumulated an entry
+        for every run it had ever executed — a slow leak in a process that
+        serves many runs. `_join_wait` is popped on release/timeout; its
+        `_reason` companion was not.
+
+        Called after the terminal status is written, so the drive loop has
+        already consumed `_cancelled` for in-flight cancellation.
+        """
+        self._cancelled.discard(run_id)
+        self._approvals.pop(run_id, None)
+        prefix = f"{run_id}:"
+        for mapping in (self._join_wait, self._join_wait_reason):
+            for key in [k for k in mapping if k.startswith(prefix)]:
+                mapping.pop(key, None)
+
     # ── drive loop ──
     async def _drive(self, graph: Graph, rid: str, inputs: dict[str, Any],
                      store: GraphStore, sched: SchedulerState,
@@ -525,6 +544,9 @@ class GraphExecutor:
         self._event(store, rid,
                     "graph.completed" if status == RunStatus.SUCCEEDED else "graph.failed",
                     {"sinks": sinks, "failed": failed, "audit_hash": audit_hash})
+        # Terminal: reclaim this run's bookkeeping so a long-lived executor
+        # does not accumulate state for every run it has ever executed.
+        self._forget_run(rid)
         return _final(graph, rid, status, results, "", started)
 
     # ── node execution (no model logic here; runner owns it) ──

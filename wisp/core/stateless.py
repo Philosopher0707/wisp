@@ -21,7 +21,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional, TypeVar, cast
 
 from wisp.core.context_pruner import prune_messages
 from wisp.core.contracts import DEFAULT_PRUNE_POLICY as _DEFAULT_PRUNE_POLICY
@@ -79,14 +79,22 @@ _SYSTEM_PROMPT_CACHE: _BoundedPromptCache = _BoundedPromptCache(maxsize=64)
 # a short TTL so the expensive I/O happens at most once per period while
 # staying near-fresh. (memory_block is cheap — in-memory cache — and must
 # stay live, so it is deliberately NOT memoized.)
-_CONTEXT_TTL: dict[str, tuple[float, object]] = {}
+_CONTEXT_TTL: dict[str, tuple[float, str, object]] = {}
+
+_T = TypeVar("_T")
 
 
-def _ttl_get(kind: str, key: str, builder, ttl: float):
+def _ttl_get(kind: str, key: str, builder: Callable[[], _T], ttl: float) -> _T:
+    """Memoize one context section per `kind`, valid while `key` is unchanged.
+
+    Keyed by `kind` (a fixed literal, three call sites) rather than by
+    workspace, so the cache is bounded to three entries. A mismatched `key`
+    rebuilds; a race costs a cache miss, never a wrong-workspace value.
+    """
     now = time.monotonic()
     ent = _CONTEXT_TTL.get(kind)
     if ent is not None and ent[1] == key and now - ent[0] < ttl:
-        return ent[2]
+        return cast(_T, ent[2])
     value = builder()
     _CONTEXT_TTL[kind] = (now, key, value)
     return value
@@ -356,7 +364,11 @@ class WispAgentCore:
             # list_files to status/diff, enforce 8KB/200KB ceilings.
             _pruned_for_provider: list[dict[str, Any]] | None = None
             try:
-                _pruned_for_provider = prune_messages(messages, _DEFAULT_PRUNE_POLICY)
+                # return_stats defaults to False, so the list arm is the
+                # only reachable one here; cast records that contract.
+                _pruned_for_provider = cast(
+                    list[dict[str, Any]],
+                    prune_messages(messages, _DEFAULT_PRUNE_POLICY))
             except Exception:
                 logger.debug("Context pruning failed — sending raw messages", exc_info=True)
                 _pruned_for_provider = None
@@ -904,7 +916,9 @@ class WispAgentCore:
             # Prune before final wrap-up as well — same payload bloat risk
             _wrap_messages: list[dict[str, Any]] | None = None
             try:
-                _wrap_messages = prune_messages(messages, _DEFAULT_PRUNE_POLICY)
+                _wrap_messages = cast(
+                    list[dict[str, Any]],
+                    prune_messages(messages, _DEFAULT_PRUNE_POLICY))
             except Exception:
                 _wrap_messages = None
             async for ev in self._stream_events_async(system_prompt, _wrap_messages if _wrap_messages is not None else messages, None):
@@ -949,7 +963,8 @@ class WispAgentCore:
         # Even if caller forgot to prune, we prune here to enforce write
         # timeout budget (60s) and prevent payload stalling.
         try:
-            messages = prune_messages(messages, _DEFAULT_PRUNE_POLICY)
+            messages = cast(list[dict[str, Any]],
+                            prune_messages(messages, _DEFAULT_PRUNE_POLICY))
         except Exception:
             logger.debug("Pruning in _stream_events_async failed", exc_info=True)
 
@@ -1172,8 +1187,8 @@ class WispAgentCore:
         # or a thin turn reuses a 42-tool prompt from the cache.
         thin = "thin" if (self.config is not None
                           and getattr(self.config, "thin_tools", False) is True) else ""
-        cache_key = (ws, context_mt, prompt_variant, allowed_hash, thin)  # type: ignore[assignment]
-        static_prompt = _SYSTEM_PROMPT_CACHE.get(cache_key)
+        cache_key = (ws, context_mt, prompt_variant, allowed_hash, thin)
+        static_prompt: str | None = _SYSTEM_PROMPT_CACHE.get(cache_key)
 
         if static_prompt is None:
             # For subagents, skip heavy context building (repo map, lint, module

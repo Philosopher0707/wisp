@@ -97,6 +97,11 @@ class SubagentTelemetryBuffer:
         self._seq = itertools.count()
         self._lock = threading.Lock()
         self._events: dict[str, deque[TeleEvent]] = {}
+        # Running UTF-8 size per ring, maintained incrementally. Recomputing
+        # the sum on every append (and on every eviction step) was O(n) per
+        # event -> O(n^2) amortised, on a structure that is written on every
+        # subagent lifecycle event.
+        self._ring_bytes: dict[str, int] = {}
         self._agents: dict[str, AgentSnapshot] = {}
 
     def register(self, agent_id: str, label: str = "", role: str = "") -> AgentSnapshot:
@@ -121,15 +126,17 @@ class SubagentTelemetryBuffer:
         if len(clipped) > MAX_EVENT_CHARS:
             clipped = clipped[:MAX_EVENT_CHARS] + f"…[{len(text)} chars total]"
         event = TeleEvent(next(self._seq), time.monotonic(), agent_id, kind, clipped)
+        size = len(clipped.encode("utf-8", "replace"))
         with self._lock:
             buf = self._events.setdefault(agent_id, deque())
             buf.append(event)
+            total = self._ring_bytes.get(agent_id, 0) + size
             snap = self._agents.get(agent_id)
             if snap is None:
                 snap = AgentSnapshot(agent_id=agent_id)
                 self._agents[agent_id] = snap
             snap.events += 1
-            snap.bytes += len(clipped.encode("utf-8", "replace"))
+            snap.bytes += size
             if kind == "tool_call":
                 snap.tool_calls += 1
             if kind == "settled":
@@ -139,10 +146,14 @@ class SubagentTelemetryBuffer:
                 else:
                     snap.status = "settled-ok" if "ok" in lowered else "settled-fail"
                 snap.ended_at = event.t
-            while len(buf) > self._max_events or sum(
-                len(e.text) for e in buf
-            ) > self._max_bytes:
-                buf.popleft()
+            # Evict oldest-first past either bound. `total` is the running
+            # UTF-8 size, so the byte bound is measured in BYTES — the same
+            # unit as `snap.bytes` and as the `_max_bytes` name. It previously
+            # counted characters, letting a non-ASCII ring hold up to ~4x the
+            # intended byte budget.
+            while buf and (len(buf) > self._max_events or total > self._max_bytes):
+                total -= len(buf.popleft().text.encode("utf-8", "replace"))
+            self._ring_bytes[agent_id] = total
         return event
 
     def snapshot(self, agent_id: str) -> AgentSnapshot | None:
@@ -155,6 +166,7 @@ class SubagentTelemetryBuffer:
         with self._lock:
             self._agents.pop(agent_id, None)
             self._events.pop(agent_id, None)
+            self._ring_bytes.pop(agent_id, None)
 
     def agents(self) -> list[str]:
         """Registered worker ids, in registration order."""

@@ -6,7 +6,7 @@ Guidance for AI coding agents working in the Wisp codebase.
 
 1. **Read the architecture layers** — know which layer your change belongs in before coding
 2. **Follow existing patterns** — new transports extend `Transport` ABC, new tools add schemas to `registry.py`, CLI rendering uses pure functions from `renderer.py`
-3. **Test first** — all new code needs tests. Transport tests use `_MockRuntime` + `_MockIO`. Core tests use mock providers with real `WispAgentCore`
+3. **Test first** — all new code needs tests. Transport tests use a locally-defined `_MockRuntime` plus `StringIO`-based stdin/stdout. Core tests use `MockProvider` (the canonical test double) with a real `WispAgentCore`
 4. **Mode-aware output** — anything rendered to terminal must handle all 4 output modes (unicode, ascii, accessible, minimal). Use `BoxChars`, `OutputMode`, and `display_width()`
 5. **Stateless core** — `WispAgentCore` has no mutable state. Session state lives in `AgentRuntime`. Tools are pure functions
 
@@ -31,7 +31,7 @@ Guidance for AI coding agents working in the Wisp codebase.
 | `wisp/tool_executor.py` | Tool call lifecycle | `ToolExecutor`: approval gating, pre/post hooks, dangerous-command blocking, metrics; named tools dispatch via `_SPECIAL_TOOL_ROUTES` table (uniform `(executor, func_args, workspace)` adapters), then MCP / run_bash / generic-pool branches |
 | `wisp/tools/orchestration.py` | Orchestration pattern tools | `vote`, `map_reduce`, `chain`, `dag` behind `OrchestrationDeps(orchestrator, build_contract, tool_error)` — free functions, executor methods are one-line delegates |
 | `wisp/tools/subagent_tools.py` | Background-subagent lifecycle tools | `wait`/`list_agents`/`result`/`send`/`cancel` behind `SubagentDeps(resolve_manager, tool_error)`; wait clamps to the parent turn deadline |
-| `wisp/multi_agent/` | Subagent system | `SubagentOrchestrator`, `SubagentRunner`, `WorktreeManager`, `DelegationAnalyzer` |
+| `wisp/multi_agent/` | Subagent system | `SubagentOrchestrator`, `SubagentRunner`, `WorktreeManager`, `BackgroundAgentManager`, `SubagentTelemetryBuffer` |
 | `wisp/multi_agent/background.py` | Background agent registry | `BackgroundAgentManager`: launch/send/cancel, lifecycle pub-sub (`agent_started/progress/settled`); publishes all lifecycle + chained TASK_* events into `telemetry` rings; `prune()` drops rings |
 | `wisp/multi_agent/telemetry.py` | Per-agent telemetry rings | `SubagentTelemetryBuffer`: dual-bounded (events + bytes) per-worker rings, replay (`transcript`) + cursor poll, settle-status mapping; `mask_text()` producer-boundary secret masking |
 | `wisp/tools/checkpoints.py` | File checkpoints | `CheckpointStore` (bounded per-workspace snapshots), `snapshot_before_mutation()`, `tool_rewind` (list/restore, rewindable rewind); auto-hooked in write/edit/edit_multi with drop-on-failed-mutation |
@@ -87,7 +87,7 @@ pytest tests/test_websocket.py tests/test_transport_headless.py -v
 # Core + runtime tests
 pytest tests/test_core_stateless.py tests/test_runtime_concurrent.py tests/test_provider_integration.py -v
 
-# Full suite (310 test files, ~4,200 tests — foreign-session WIP files excluded below)
+# Full suite (~357 test files, ~5,400 test functions — foreign-session WIP files excluded below)
 python -m pytest tests/test_*.py -v
 
 # CLI surface E2E (hermetic HOME + mock provider, PTY repl/tui, 7+ groups)
@@ -109,7 +109,7 @@ python3 -m pytest tests/test_contracts_*.py tests/test_auth_*.py tests/test_runs
 
 ## File conventions
 
-- Tests mirror source paths: `wisp/transport/progress.py` → `tests/test_progress.py`
+- Tests live in a flat `tests/` tree (plus `tests/reliability/` and `tests/security/`). Naming follows the module under test (`wisp/transport/progress.py` → `tests/test_progress.py`) but paths do NOT mirror source layout
 - New modules go in `wisp/` subpackage, not flat
 - Transport modules: one class per file, shared utilities in `renderer.py`
 - No `__init__.py` changes needed for internal transport modules used only by `cli.py`

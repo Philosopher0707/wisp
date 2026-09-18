@@ -1,8 +1,11 @@
 """Run record + lifecycle state machine (M3 durable runtime).
 
-The 8-state machine extends the M1a produced vocabulary (`RunStatus`):
-running→RUNNING, completed→SUCCEEDED, failed→FAILED, cancelled→CANCELLED.
-Terminal states are immutable — enforced here and in SQLiteRunStore.
+This module is the canonical authority for run state. The 8-state machine
+extends the M1a produced vocabulary: running->RUNNING, completed->SUCCEEDED,
+failed->FAILED, cancelled->CANCELLED. That translation is executable —
+see `LEGACY_STATE_ALIASES` and `coerce_state()` — so no subsystem needs to
+re-derive it. Terminal states are immutable — enforced here and in
+SQLiteRunStore.
 """
 from __future__ import annotations
 import time
@@ -37,8 +40,48 @@ LEGAL_TRANSITIONS: dict[RunState, tuple[RunState, ...]] = {
 }
 
 
+# Every non-canonical run-state vocabulary in the codebase, mapped into the
+# canonical 8-state machine. This dict is the ONE place that knows the
+# translation: the M1a produced vocabulary (background agents) and the pre-M3
+# `pending` both live here, and every subsystem with a local vocabulary adapts
+# through coerce_state() rather than re-deriving the mapping.
+#
+# Producers keep emitting their existing wire strings — this is an adapter,
+# not a rename. See PHASE_CANONICAL_CONTRACT_FREEZE.md (C1).
+LEGACY_STATE_ALIASES: dict[str, RunState] = {
+    "pending": RunState.QUEUED,           # pre-M3
+    "completed": RunState.SUCCEEDED,      # M1a produced vocabulary
+}
+
+
+def coerce_state(value: RunState | str) -> RunState:
+    """Map any known run-state value to the canonical `RunState`.
+
+    Accepts canonical values directly and falls back to
+    `LEGACY_STATE_ALIASES` for produced/legacy vocabularies. Unknown values
+    raise — fail loud, so drift in a producer becomes visible instead of
+    being silently mis-classified as non-terminal.
+    """
+    if isinstance(value, RunState):
+        return value
+    try:
+        return RunState(value)
+    except ValueError:
+        pass
+    try:
+        return LEGACY_STATE_ALIASES[value]
+    except KeyError:
+        raise ValueError(f"unknown run status: {value!r}") from None
+
+
+def is_terminal(state: RunState | str) -> bool:
+    """True when `state` is a canonical terminal state."""
+    return coerce_state(state) in TERMINAL_STATES
+
+
 def is_legal(from_state: RunState | str, to_state: RunState | str) -> bool:
-    return RunState(to_state) in LEGAL_TRANSITIONS[RunState(from_state)]
+    return (coerce_state(to_state)
+            in LEGAL_TRANSITIONS[coerce_state(from_state)])
 
 
 @dataclass(frozen=True)
@@ -79,7 +122,7 @@ class RunRecord:
         return cls(run_id=d["run_id"], prompt=d.get("prompt", ""),
                    model=d.get("model", "unknown"),
                    workspace=d.get("workspace", "."),
-                   status=RunState(d.get("status", "queued")),
+                   status=coerce_state(d.get("status", "queued")),
                    created_at=d.get("created_at", 0.0),
                    started_at=d.get("started_at"),
                    finished_at=d.get("finished_at"),

@@ -1,5 +1,22 @@
 # WISP ARCHITECTURE HEALTH
 
+> **SUPERSEDED — read with caution.** This document was verified against an
+> earlier revision and **two of its headline findings no longer hold**:
+>
+> - **P1-1** names legacy `core/agentic_graph.py::GraphRunner` as a divergence
+>   risk. **That file does not exist**; `core/subagent/` is empty. The legacy
+>   strata has since been removed.
+> - **P1-2** names an 8-module cycle
+>   `arena ↔ background_agent ↔ entry ↔ server.main ↔ routes{arena,diff,review,runs}`
+>   as the top teardown risk. An independent Tarjan SCC run over 366 modules /
+>   841 edges **does not reproduce it**. The actual cycle set is different.
+>
+> Also stale: the LOC and test counts, and the claim that tests mirror source
+> paths. For the current, evidence-backed model see
+> `REPOSITORY_INTELLIGENCE_REPORT.md`, `FINDINGS_ADJUDICATION.md`, and
+> `PHASE_FINDINGS_REMEDIATION_REPORT.md`.
+
+
 ## Scorecard (0–10, evidence-backed)
 
 | Dimension | Score | Evidence |

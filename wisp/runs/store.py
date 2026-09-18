@@ -15,26 +15,10 @@ from wisp.runs.record import RunRecord, RunState, is_legal
 
 logger = logging.getLogger(__name__)
 
-# Legacy produced-vocabulary values (pre-M3 rows) mapped into the 8-state
-# machine on read. Unknown values surface as ValueError — fail loud, not
-# silent, so drift is visible.
-_LEGACY_STATUS_IN = {
-    "pending": RunState.QUEUED,
-    "running": RunState.RUNNING,
-    "completed": RunState.SUCCEEDED,
-    "failed": RunState.FAILED,
-    "cancelled": RunState.CANCELLED,
-}
-
-
-def _coerce_status(value: str) -> RunState:
-    try:
-        return RunState(value)
-    except ValueError:
-        pass
-    if value in _LEGACY_STATUS_IN:
-        return _LEGACY_STATUS_IN[value]
-    raise ValueError(f"unknown run status: {value!r}")
+# Legacy produced-vocabulary values (pre-M3 rows) are translated by the
+# canonical adapter in wisp.runs.record — this module must not re-derive the
+# mapping. Unknown values still surface as ValueError (fail loud, not silent,
+# so drift is visible); that property lives in coerce_state().
 
 
 class RunStore(abc.ABC):
@@ -93,7 +77,7 @@ class SQLiteRunStore(RunStore):
         row = self._store.bg_get(run_id)
         if row is None:
             return None
-        return RunRecord.from_dict({**row, "status": _coerce_status(row["status"]).value,
+        return RunRecord.from_dict({**row, "status": row["status"],
                                     "lease_owner": row.get("lease_owner", "") or "",
                                     "lease_expires": row.get("lease_expires", 0.0) or 0.0,
                                     "idempotency_key": row.get("idempotency_key", "") or ""})

@@ -37,6 +37,11 @@ wisp = "wisp.__main__:main"
 include = ["wisp*"]
 
 [tool.pytest.ini_options]
+# Restrict collection to the test tree. wisp/test_distill.py and
+# wisp/test_runner.py are PRODUCTION modules (traceback distiller, test
+# runner) whose names match pytest's default test_*.py glob; without this,
+# a bare `pytest` from the repo root collects them.
+testpaths = ["tests"]
 filterwarnings = [
     "ignore:coroutine '_run_single_prompt' was never awaited:RuntimeWarning",
 ]

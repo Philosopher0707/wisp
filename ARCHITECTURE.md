@@ -348,7 +348,7 @@ class _MockProvider:
 core = WispAgentCore(provider=_MockProvider(), ...)
 ```
 
-### Transport Tests (`_MockRuntime` + `_MockIO`)
+### Transport Tests (`_MockRuntime` + `StringIO`)
 
 ```python
 # StringIO-based stdin/stdout
@@ -478,7 +478,8 @@ wisp/
 │   ├── _patterns.py
 │   ├── task.py
 │   ├── roles.py
-│   ├── delegation.py
+│   ├── background.py        # BackgroundAgentManager
+│   ├── telemetry.py         # SubagentTelemetryBuffer
 │   └── ...
 ├── infra/
 │   ├── __init__.py

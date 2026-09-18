@@ -86,20 +86,21 @@ def _is_test_execution(ev: dict[str, Any]) -> bool:
 
 
 def _is_error_result(result: Any) -> bool:
-    import json
+    """Delegate to the canonical tool-result failure predicate.
 
-    if isinstance(result, dict):
-        return result.get("status") == "error"
-    if isinstance(result, str):
-        if result.startswith(("Error", "[Error", "[Blocked")):
-            return True
-        try:
-            parsed = json.loads(result)
-            if isinstance(parsed, dict):
-                return parsed.get("status") == "error"
-        except (json.JSONDecodeError, TypeError):
-            pass
-    return False
+    This previously tested `status == "error"`, which missed the structured
+    denial statuses (POLICY_DENIED, USER_DENIED, APPROVAL_TIMEOUT,
+    CANCELLED). `TurnStats.tool_health` is derived from `tool_errors`, so a
+    turn whose every tool call was denied reported tool_health == 1.0 — a
+    perfect tool-health score for a turn that accomplished nothing. That is a
+    scoring-integrity defect, not merely duplicated semantics.
+
+    `wisp.transport.renderer.result_is_error` is the canonical predicate
+    (dict/JSON envelope status != "ok", covering denials, plus the legacy text
+    markers). The CLI already delegates to it; this now does too.
+    """
+    from wisp.transport.renderer import result_is_error
+    return result_is_error(result)
 
 
 @dataclass

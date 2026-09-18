@@ -98,13 +98,20 @@ def _list_models_impl(name: str, cfg: Any) -> list[str]:
         if live:
             return sorted(live)
         # API unreachable or unauthenticated (no key) — fall back to the
-        # provider's known catalog so unknown_model can still be detected
-        # instead of returning "ok, could not be verified" and then 404ing
-        # at chat time. This is the same list NVIDIAProvider advertises.
+        # provider's OWN public model list so unknown_model can still be
+        # detected instead of returning "ok, could not be verified" and then
+        # 404ing at chat time.
+        #
+        # Duck-typed on the public `available_models` property, reached through
+        # the factory. Importing NVIDIAProvider directly (as this did) inverted
+        # the dependency: a shared module naming a concrete implementation, and
+        # reaching into its PRIVATE _MODEL_CONTEXT.
         try:
-            from wisp.providers.nvidia import NVIDIAProvider
+            from wisp.provider_select import build_provider
 
-            return sorted(NVIDIAProvider._MODEL_CONTEXT.keys())
+            provider = build_provider("nvidia")
+            static = getattr(provider, "available_models", None) or []
+            return sorted(str(m) for m in static)
         except Exception:
             return []
     return []

@@ -17,6 +17,8 @@ import subprocess
 from typing import Any
 from uuid import uuid4
 
+from wisp.pathsec import resolve_contained
+
 
 async def _kill_process_group(process) -> None:
     """SIGTERM then SIGKILL to the whole process group (never just the pid).
@@ -51,17 +53,15 @@ logger = logging.getLogger(__name__)
 def resolve_sandbox_cwd(workspace: str, cwd: str) -> str | None:
     """Contained workdir for a provider run, or None when it escapes.
 
-    Never raises: unresolvable paths fail closed at the call site with
-    (-1, "", "cwd escapes workspace").
+    Containment semantics live in `wisp.pathsec.resolve_contained` — the single
+    authority; this wrapper must not re-derive the realpath/prefix comparison.
+    Never raises: unresolvable or escaping paths fail closed with None.
     """
     try:
         base = os.path.realpath(workspace)
         if not cwd:
             return base
-        cand = os.path.realpath(os.path.join(base, cwd))
-        if cand == base or cand.startswith(base + os.sep):
-            return cand
-        return None
+        return resolve_contained(workspace, cwd)
     except Exception:
         return None
 

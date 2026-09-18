@@ -1,5 +1,21 @@
 # WISP CODEBASE CENSUS
 
+> **SUPERSEDED — counts and several findings are stale.** Verified against the
+> current tree:
+>
+> - LOC / file counts have moved (the census predates later phases).
+> - The "two parallel graph runtimes" claim (§10, and P1-1 in the health
+>   report) is obsolete: `core/agentic_graph.py` **does not exist**.
+> - The claimed 8-module arena/server cycle is **not reproducible**.
+> - `multi_agent/delegation.py` and `DelegationAnalyzer` (referenced in the
+>   module map) were **deleted** in `11fc949`.
+>
+> Structural observations that still hold: authority containment via
+> `ToolExecutor` → `authorize()`, 0 bare excepts, and the graph/governance test
+> fortresses. For current numbers see `REPOSITORY_INTELLIGENCE_REPORT.md` §2–3
+> and `repository_manifest.json`.
+
+
 ## Executive summary (answers §29.1–15)
 
 1. **Total LOC:** core Python project = **112,173 code lines** (cloc; 836 files). pygount cross-check: 101,140 (delta = docstring accounting, documented below). Full repo incl. satellites ≈ 330K cloc-code, dominated by vendored/JS builds (see exclusions).

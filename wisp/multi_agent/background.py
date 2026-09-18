@@ -75,13 +75,10 @@ class BackgroundAgentManager:
     conversation thread (see :meth:`send`).
     """
 
-    # Manager status vocabulary mapped into the M3 RunState machine.
-    _STATUS_TO_RUN_STATE = {
-        STATUS_RUNNING: "running",
-        STATUS_COMPLETED: "succeeded",
-        STATUS_FAILED: "failed",
-        STATUS_CANCELLED: "cancelled",
-    }
+    # Manager status vocabulary is mapped into the canonical run state by
+    # wisp.runs.record.coerce_state() — the single authority for that
+    # translation. Do not re-derive the mapping here: a local copy is how
+    # "completed" and "succeeded" drifted apart in the first place.
 
     def __init__(
         self,
@@ -191,8 +188,8 @@ class BackgroundAgentManager:
         if self._run_store is None:
             return
         try:
-            from wisp.runs.record import RunRecord, RunState
-            target = RunState(self._STATUS_TO_RUN_STATE[entry.status])
+            from wisp.runs.record import RunRecord, RunState, coerce_state
+            target = coerce_state(entry.status)
             rec = self._run_store.get(entry.id)
             if rec is None:
                 self._run_store.create(RunRecord(
@@ -244,26 +241,39 @@ class BackgroundAgentManager:
 
     # ── Launch ────────────────────────────────────────────────────────
 
-    async def launch(self, contract: Any, label: str = "") -> dict[str, Any]:
-        """Start a contract in the background. Returns a launch snapshot."""
-        self._counter += 1
-        agent_id = f"bg-{uuid.uuid4().hex[:8]}"
+    def _admit(self, agent_id: str) -> str | None:
+        """Refusal reason when the running bound is reached, else None.
+
+        The ONE admission rule for every entry point into the running set.
+        `launch()` and `send()` must both consult it: a bound enforced at one
+        entry point and assumed at another is not a bound (send() previously
+        spawned unconditionally, so resuming N finished agents exceeded
+        `max_running`).
+        """
         if self._scheduler is not None:
             # Durable admission (M3 J2): store counts replace the
             # in-memory head-count so limits survive restarts.
             admitted = self._scheduler.admit(agent_id)
-            if not admitted.allowed:
-                return {"ok": False, "error": admitted.reason}
-        else:
-            running = [e for e in self._entries.values() if e.status == STATUS_RUNNING]
-            if len(running) >= self._max_running:
-                return {
-                    "ok": False,
-                    "error": (
-                        f"Background agent limit reached ({self._max_running} running). "
-                        "Collect or cancel existing agents first."
-                    ),
-                }
+            return None if admitted.allowed else admitted.reason
+        running = [e for e in self._entries.values() if e.status == STATUS_RUNNING]
+        if len(running) >= self._max_running:
+            return (f"Background agent limit reached ({self._max_running} running). "
+                    "Collect or cancel existing agents first.")
+        return None
+
+    async def launch(self, contract: Any, label: str = "") -> dict[str, Any]:
+        """Start a contract in the background. Returns a launch snapshot."""
+        # Enforce the declared retention cap at the growth point. `prune()`
+        # existed but nothing called it, so `_entries` and its telemetry rings
+        # grew for the life of the process — `max_finished` was a constant
+        # that documented an intent rather than a bound. Only FINISHED entries
+        # are dropped, so this never affects admission or a live worker.
+        self.prune()
+        self._counter += 1
+        agent_id = f"bg-{uuid.uuid4().hex[:8]}"
+        refusal = self._admit(agent_id)
+        if refusal is not None:
+            return {"ok": False, "error": refusal}
         entry = BackgroundAgentEntry(
             id=agent_id,
             label=label or f"{getattr(contract, 'role', 'generalist')}-{self._counter}",
@@ -378,6 +388,10 @@ class BackgroundAgentManager:
             if entry.finished_at is None:
                 entry.finished_at = time.monotonic()
             self._persist_status(entry)
+            # Enforce the retention cap at the settle point too, so the
+            # declared bound holds immediately rather than only on the next
+            # launch. Runs on every exit path (including the cancel re-raise).
+            self.prune()
 
         summary = ""
         files: list[str] = []
@@ -490,6 +504,13 @@ class BackgroundAgentManager:
                 "error": "No storable session from the previous run — cannot continue this agent.",
             }
 
+        # A continuation is a new run of the same agent id, so it must clear
+        # the same admission bar as launch(). Without this, resuming N
+        # finished agents ran N concurrently past the configured bound.
+        refusal = self._admit(agent_id)
+        if refusal is not None:
+            return {"ok": False, "error": refusal}
+
         original = entry.contract
         self._counter += 1
         contract = dc_replace(
@@ -598,6 +619,10 @@ class BackgroundAgentManager:
             if entry.status not in _TERMINAL or entry.notified:
                 continue
             entry.notified = True
+            # Presentation label for the notification line only — never a state
+            # value. Deliberately NOT routed through coerce_state(): these are
+            # display marks, and changing them would alter user-visible output
+            # without changing any state semantics.
             mark = {
                 STATUS_COMPLETED: "completed",
                 STATUS_FAILED: "FAILED",

@@ -32,8 +32,8 @@ logger = logging.getLogger(__name__)
 
 def _serialize_tool_exchanges(
     session: dict[str, Any],
-    exchanges: list[dict[str, list]],
-    field_reader,
+    exchanges: list[dict[str, list[Any]]],
+    field_reader: Callable[[dict[str, Any], str], Any],
 ) -> None:
     """Append protocol-consistent assistant/tool messages for one turn.
 
@@ -534,8 +534,8 @@ class AgentRuntime:
                     # An exchange closes once its replies catch up to its
                     # calls; max(...,1) also closes reply-only groups left
                     # by gate-refused calls (they stream no call event).
-                    exchanges: list[dict[str, list]] = []
-                    cur: dict[str, list] = {"calls": [], "replies": []}
+                    exchanges: list[dict[str, list[Any]]] = []
+                    cur: dict[str, list[Any]] = {"calls": [], "replies": []}
 
                     def _close_exchange() -> None:
                         if cur["calls"] or cur["replies"]:

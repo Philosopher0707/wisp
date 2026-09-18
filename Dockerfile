@@ -11,7 +11,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy project files
-COPY pyproject.toml setup.py ./
+# pyproject.toml is the single source of packaging metadata (PEP 621);
+# setup.py was a redundant duplicate that disagreed on python_requires.
+COPY pyproject.toml README.md ./
 COPY wisp/ ./wisp/
 
 # Install Python dependencies

@@ -88,6 +88,34 @@ def _run_tests_is_evidence(result_text: str) -> bool:
     return "- Failed: 0, Errors: 0" in result_text
 
 
+# The shell-result success encoding, owned jointly by this gate and
+# wisp/tools/bash.py::_format_bash_output. CONTRACT: that formatter emits
+# "[exit code: N]" ONLY when the exit code is non-zero, so the absence of the
+# prefix is itself the success signal. Both sides are pinned together by
+# tests/test_verification_contract.py — changing the formatter without
+# changing this gate would silently invert verification.
+_VERIFY_FAILURE_PREFIX = "[exit code:"
+
+
+def _verify_result_is_success(result_text: str) -> bool:
+    """True when a verify-tool result is evidence that the command succeeded.
+
+    Absence of the failure prefix means exit 0. When the prefix *is* present
+    we parse the code: a literal "[exit code: 0]" can only have come from the
+    command's own stdout (the formatter never emits it for a zero exit), so it
+    counts as success. Any other code is a genuine failure.
+
+    Parsing rather than prefix-matching closes a false negative where a
+    successful command whose stdout began with the literal marker was read as
+    a failed verification.
+    """
+    text = result_text or ""
+    if not text.startswith(_VERIFY_FAILURE_PREFIX):
+        return True
+    tail = text[len(_VERIFY_FAILURE_PREFIX):]
+    return tail.split("]", 1)[0].strip() == "0"
+
+
 @dataclass
 class VerificationFloorGuard:
     """Per-turn completion gate. One instance per turn, single-threaded use."""
@@ -120,7 +148,7 @@ class VerificationFloorGuard:
             self.wrote_code = True
             self.verify_ok_after_edit = None  # prior evidence is stale now
         elif name in _VERIFY_TOOLS:
-            self.verify_ok_after_edit = not result_text.startswith("[exit code:")
+            self.verify_ok_after_edit = _verify_result_is_success(result_text)
         elif name == "run_tests":
             if _run_tests_is_evidence(result_text):
                 self.verify_ok_after_edit = True

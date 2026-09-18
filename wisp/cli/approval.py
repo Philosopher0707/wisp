@@ -15,8 +15,14 @@ from typing import Any, Optional
 
 
 from wisp.colors import bold, dim, error, success, warning
+from wisp.exceptions import ApprovalCancelled, ApprovalTimeout
 from wisp.terminal_width import status_symbols, is_accessible
 from wisp.ui.diff_viewer import compute_diff_stats, render_diff_string
+
+__all__ = [
+    "ApprovalCancelled",
+    "ApprovalTimeout",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -32,36 +38,6 @@ class ApprovalVerdict(str):
     AUTO_ALL = "auto_all"
     BLOCK_ALL = "block_all"
     CANCEL = "cancel"
-
-
-class ApprovalCancelled(Exception):
-    """The user chose 'cancel' at an approval prompt.
-
-    Deliberately NOT a CancelledError/KeyboardInterrupt: it is a *verdict*,
-    not an external interruption. Callers convert it to a recorded denial
-    ("cancelled by user") so history stays protocol-consistent. Genuine
-    task cancellation (SIGINT) still arrives as CancelledError and must
-    propagate untouched — see the explicit re-raise guards at every
-    approval catch site.
-    """
-
-    def __init__(self, tool_name: str = ""):
-        self.tool_name = tool_name
-        super().__init__(f"User cancelled at the approval prompt for {tool_name or 'tool'}")
-
-
-class ApprovalTimeout(Exception):
-    """The approval prompt lapsed without a verdict (input timeout).
-
-    Also a verdict, not an interruption: callers fail closed with a
-    distinct APPROVAL_TIMEOUT denial so a lapse never reads as an
-    ordinary user deny. Caught alongside ApprovalCancelled at every
-    approval catch site.
-    """
-
-    def __init__(self, tool_name: str = ""):
-        self.tool_name = tool_name
-        super().__init__(f"Approval timed out for {tool_name or 'tool'}")
 
 
 _ANSI_TAIL_RE = None

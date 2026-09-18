@@ -33,7 +33,7 @@ wisp/infra/        Security, telemetry, extensions, store
 - **Events**: `AgentEvent` dataclass (frozen) with factory functions in `wisp/core/events.py`. Events flow: `engine.turn()` → `transport.send()` → `transport._render_event()`
 - **Transports** implement `Transport` ABC (`base.py`): `send()`, `recv()`, `approve()`, `start()`, `stop()`
 - **CLI rendering** uses mode-aware pure functions from `renderer.py` — all 4 output modes (unicode/ascii/accessible/minimal) handled via `BoxChars` and `OutputMode`
-- **Testing**: pytest with `_MockRuntime` + `_MockIO` (StringIO-based) for transport tests. Stateless core tests use real `WispAgentCore` with mock providers
+- **Testing**: pytest with a locally-defined `_MockRuntime` + `StringIO` (for transport tests). Stateless core tests use a real `WispAgentCore` with `MockProvider`
 - **Config**: `WispConfig` dataclass in `wisp/config.py`. Resolution: env vars > config file > defaults
 - **No comments** explaining WHAT code does — well-named identifiers handle that. Only WHY comments for non-obvious constraints
 

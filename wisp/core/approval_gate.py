@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
-from wisp.cli.approval import ApprovalCancelled, ApprovalTimeout
+from wisp.exceptions import ApprovalCancelled, ApprovalTimeout
 from wisp.infra.security import Action, Context
 
 if TYPE_CHECKING:

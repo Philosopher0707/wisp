@@ -12,6 +12,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from wisp.pathsec import resolve_contained
 from wisp.server.deps import require_tool_allowed, verify_api_key
 from wisp.server.routes.workspace import WORKSPACE_ROOT
 
@@ -38,28 +39,18 @@ class FileRenameRequest(BaseModel):
 
 
 def _resolve_path(path: str) -> Path:
-    """Resolve a path relative to WORKSPACE_ROOT, with security boundary enforcement."""
-    real_ws = os.path.realpath(str(WORKSPACE_ROOT))
-    target = WORKSPACE_ROOT / path
-    # Do NOT resolve symlinks — check the literal path first, then resolve
-    # to catch traversal attempts while preserving symlink safety.
-    real_target = os.path.realpath(str(target))
+    """Resolve a path relative to WORKSPACE_ROOT, with security boundary enforcement.
 
-    if real_target == real_ws:
-        return Path(real_target)
-
-    prefix = real_ws if real_ws.endswith(os.sep) else real_ws + os.sep
-    if not real_target.startswith(prefix):
-        raise HTTPException(status_code=400, detail="Path traversal blocked")
-
-    # Extra safety: reject paths containing .. that escape the workspace
+    Containment semantics live in `wisp.pathsec.resolve_contained` — the single
+    authority. This wrapper only maps ValueError onto the HTTP error type; it
+    must not re-derive the realpath/prefix comparison (a local copy is how this
+    route previously diverged from the canonical helper by accepting control
+    characters in paths).
+    """
     try:
-        resolved = target.resolve(strict=False)
-        resolved.relative_to(WORKSPACE_ROOT.resolve())
+        return Path(resolve_contained(str(WORKSPACE_ROOT), path))
     except ValueError:
         raise HTTPException(status_code=400, detail="Path traversal blocked")
-
-    return Path(real_target)
 
 
 @router.get("/api/files", dependencies=[Depends(verify_api_key)])

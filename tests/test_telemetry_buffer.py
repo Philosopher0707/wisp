@@ -186,6 +186,26 @@ class TestTelemetryWiring:
         await mgr.result(first["agent_id"], wait_seconds=5.0)
         second = await mgr.launch(_contract())
         await mgr.result(second["agent_id"], wait_seconds=5.0)
-        assert mgr.prune() == 1
+        # Retention is enforced automatically (at launch and on settle), so the
+        # cap is already satisfied by the time we look. An explicit prune() is
+        # now idempotent rather than the thing that does the work.
+        assert mgr.prune() == 0
         assert mgr.telemetry.snapshot(first["agent_id"]) is None
         assert mgr.telemetry.snapshot(second["agent_id"]) is not None
+
+    @pytest.mark.asyncio
+    async def test_retention_is_enforced_without_an_explicit_prune(self) -> None:
+        """The cap must hold even if nobody calls prune()."""
+        mgr = BackgroundAgentManager(FakeOrchestrator(), max_finished=1)
+        ids = []
+        for _ in range(4):
+            snap = await mgr.launch(_contract())
+            await mgr.result(snap["agent_id"], wait_seconds=5.0)
+            ids.append(snap["agent_id"])
+
+        # Only the newest finished entry survives; the rest were reclaimed
+        # automatically, telemetry rings included.
+        assert mgr.telemetry.snapshot(ids[-1]) is not None
+        for old in ids[:-1]:
+            assert mgr.telemetry.snapshot(old) is None
+        assert set(mgr.telemetry.agents()) <= set(mgr._entries)

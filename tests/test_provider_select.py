@@ -208,9 +208,36 @@ class TestProviderCommand:
         assert "→ ollama" in out or "→" in out and "ollama" in out
 
     def test_switch_requires_key_when_missing(self, capsys, no_persist, monkeypatch):
+        """No key + user enters nothing -> provider unchanged.
+
+        `getpass` is mocked explicitly. Previously this test relied on the
+        absence of a TTY so that getpass raised, which made it pass in CI and
+        hang forever on a developer machine (no completion, no failure).
+        """
         from wisp import commands as C
         monkeypatch.delenv("WISP_API_KEY", raising=False)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setattr("getpass.getpass", lambda *a, **k: "")
+        agent = CmdAgent(provider="ollama")
+        C.cmd_provider(agent, "openai")
+        out = capsys.readouterr().out
+        assert "API key" in out
+        assert agent.config.provider == "ollama"  # unchanged
+
+    def test_switch_requires_key_when_prompt_unavailable(self, capsys, no_persist, monkeypatch):
+        """No key + no TTY (getpass raises) -> provider unchanged, no hang.
+
+        Pins the non-interactive path explicitly instead of depending on the
+        runner's environment to produce it.
+        """
+        from wisp import commands as C
+        monkeypatch.delenv("WISP_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+        def _no_tty(*a, **k):
+            raise EOFError("no tty")
+
+        monkeypatch.setattr("getpass.getpass", _no_tty)
         agent = CmdAgent(provider="ollama")
         C.cmd_provider(agent, "openai")
         out = capsys.readouterr().out

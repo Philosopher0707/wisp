@@ -1,0 +1,172 @@
+{
+  "schema": "wisp.repository-manifest/1",
+  "generated_at": "2026-09-18",
+  "method": "read-only reconnaissance; AST import graph (Tarjan SCC), pytest collection, ruff/mypy, git history",
+  "confidence_legend": {
+    "HIGH": "directly observed in code or command output",
+    "MEDIUM": "inferred from multiple consistent observations",
+    "LOW": "single weak signal; needs confirmation"
+  },
+  "identity": {
+    "name": "wisp",
+    "version": "0.1.0",
+    "kind": "local-first CLI coding agent with enterprise governance",
+    "license": "MIT",
+    "entry_point": "wisp = wisp.__main__:main",
+    "primary_language": "Python",
+    "requires_python": ">=3.11",
+    "platform": "POSIX only (macOS/Linux); Windows unsupported",
+    "repo_root": "/Users/philosopher/Documents/wisp",
+    "git": {
+      "branch": "main",
+      "head": "5ea0ed9",
+      "commits": 1021,
+      "first_commit": "2026-04-30",
+      "last_commit": "2026-09-14",
+      "dirty": true,
+      "uncommitted_tracked": ["wisp/core/graph/__init__.py"],
+      "untracked_count": 30
+    }
+  },
+  "languages": {
+    "production": { "python": "~99%", "evidence": "wisp/ = 366 .py files, 83,799 raw lines" },
+    "satellites": ["TypeScript", "JavaScript", "Kotlin", "Shell", "YAML", "TOML"],
+    "generated_present": ["graphify-out/*.json", "android/app/build", "wisp/graphify-out/cache/*.json"]
+  },
+  "frameworks": [
+    { "name": "FastAPI", "role": "HTTP control plane", "files": 30 },
+    { "name": "uvicorn", "role": "ASGI server" },
+    { "name": "Textual", "role": "TUI", "files": 33 },
+    { "name": "pydantic", "role": "validation", "files": 23 },
+    { "name": "websockets", "role": "live transport" },
+    { "name": "SQLite (stdlib)", "role": "persistence" },
+    { "name": "cryptography (Ed25519)", "role": "policy signing" }
+  ],
+  "build_system": {
+    "backend": "setuptools>=68 (pyproject.toml)",
+    "legacy_duplicate": "setup.py (python_requires disagrees: >=3.10 vs >=3.11)",
+    "lockfile": "uv.lock (65 resolved packages)",
+    "direct_dependencies": 14,
+    "dev_dependencies": 5,
+    "unused_or_uncertain_dependencies": [
+      { "name": "tiktoken", "status": "declared; 4 files reference the name", "confidence": "MEDIUM" }
+    ]
+  },
+  "packages": [
+    { "path": "wisp", "type": "python-package", "files": 366, "raw_lines": 83799, "purpose": "the entire product", "public": true },
+    { "path": "tests", "type": "test-suite", "test_files": 376, "test_functions": 5263, "collected": 5845 },
+    { "path": "scripts", "type": "operator-scripts", "files": 8 },
+    { "path": "docs", "type": "documentation", "files": 95, "format": "markdown" },
+    { "path": "examples", "type": "sdk-examples", "files": ["sdk_basic.py", "custom_transport.py", "webhook_server.py"] },
+    { "path": "graphs", "type": "declarative-graph-specs", "files": ["repo-audit.yaml"] },
+    { "path": "benchmarks", "type": "empty", "note": "only __pycache__; real benchmark code lives in wisp/benchmark/" },
+    { "path": "wisp-desktop", "type": "electron-app", "language": "TypeScript/React", "maturity": "most mature satellite; has own CI" },
+    { "path": "wisp-ts", "type": "orphan", "language": "TypeScript", "tracked": false, "note": "only dist/ + node_modules; deleted in 8a6276e" },
+    { "path": "vscode-extension", "type": "vscode-extension", "language": "TypeScript", "maturity": "functional, no CI" },
+    { "path": "android", "type": "android-app", "language": "Kotlin/Compose", "maturity": "experimental; built in CI" },
+    { "path": "warp-integration", "type": "integration-artifacts", "note": "patch + Warp skill; not a program" },
+    { "path": "agent", "type": "orphan", "language": "Python", "note": "fully independent; zero imports either direction with wisp" }
+  ],
+  "subsystems": [
+    { "path": "wisp/core", "files": 37, "raw_lines": 10431, "purpose": "stateless turn engine, runtime, events, provider stream, verification, compaction, session", "risk": "CRITICAL", "confidence": "HIGH" },
+    { "path": "wisp/multi_agent", "files": 17, "raw_lines": 6793, "purpose": "subagent orchestration, background agents, telemetry rings, worktrees, DAG", "risk": "HIGH", "confidence": "HIGH" },
+    { "path": "wisp/graph", "files": 22, "raw_lines": 5600, "purpose": "durable governed graph execution engine", "risk": "HIGH", "confidence": "HIGH" },
+    { "path": "wisp/tools", "files": 21, "raw_lines": 4859, "purpose": "42 tool schemas + implementations, checkpoints, primitives", "risk": "HIGH", "confidence": "HIGH" },
+    { "path": "wisp/transport", "files": 14, "raw_lines": 4721, "purpose": "Transport ABC + CLI/WS/Headless/TUI/File/Multi/Metrics", "risk": "MEDIUM", "confidence": "HIGH" },
+    { "path": "wisp/server", "files": 32, "raw_lines": 3723, "purpose": "FastAPI control plane, 27 routers, auth, rate limiting", "risk": "HIGH", "confidence": "HIGH" },
+    { "path": "wisp/infra", "files": 12, "raw_lines": 3515, "purpose": "UnifiedStore, security policy, audit, extensions, telemetry, hooks", "risk": "CRITICAL", "confidence": "HIGH" },
+    { "path": "wisp/cli", "files": 12, "raw_lines": 3170, "purpose": "dispatcher, repl runner, ui blocks/guard/pager", "risk": "MEDIUM", "confidence": "HIGH" },
+    { "path": "wisp/repl", "files": 11, "raw_lines": 2164, "purpose": "legacy slash-command registry", "risk": "LOW", "confidence": "HIGH" },
+    { "path": "wisp/tui", "files": 41, "raw_lines": 2016, "purpose": "Textual app + screens", "risk": "LOW", "confidence": "HIGH" },
+    { "path": "wisp/providers", "files": 9, "raw_lines": 1711, "purpose": "Provider ABC + factory + ollama/openai/nvidia/openrouter/mock", "risk": "HIGH", "confidence": "HIGH" },
+    { "path": "wisp/mcp", "files": 2, "raw_lines": 1304, "purpose": "MCP manager (stdio + http), trust gating", "risk": "MEDIUM", "confidence": "HIGH" },
+    { "path": "wisp/sandbox", "files": 2, "raw_lines": 711, "purpose": "Docker/Pty/Noop confinement router", "risk": "HIGH", "confidence": "HIGH" },
+    { "path": "wisp/policy", "files": 5, "raw_lines": 603, "purpose": "Ed25519 policy bundles, narrow-only merge", "risk": "HIGH", "confidence": "HIGH" },
+    { "path": "wisp/task", "files": 5, "raw_lines": 494, "purpose": "task lifecycle, plan review, profiles", "risk": "MEDIUM", "confidence": "HIGH" },
+    { "path": "wisp/auth", "files": 6, "raw_lines": 475, "purpose": "Principal, authorize() layers, workspace trust, secrets", "risk": "CRITICAL", "confidence": "HIGH" },
+    { "path": "wisp/contracts", "files": 7, "raw_lines": 464, "purpose": "versioned wire envelopes", "risk": "LOW", "confidence": "HIGH" },
+    { "path": "wisp/release", "files": 6, "raw_lines": 459, "purpose": "SBOM, license audit, lock verify, diagnostics", "risk": "LOW", "confidence": "HIGH" },
+    { "path": "wisp/runs", "files": 6, "raw_lines": 453, "purpose": "durable run records, SQLiteRunStore, Scheduler", "risk": "MEDIUM", "confidence": "HIGH" },
+    { "path": "wisp/trace", "files": 6, "raw_lines": 345, "purpose": "span store, evidence export, OTLP", "risk": "LOW", "confidence": "HIGH" },
+    { "path": "wisp/eval", "files": 3, "raw_lines": 118, "purpose": "eval scenarios + metrics", "risk": "LOW", "confidence": "HIGH" }
+  ],
+  "entry_points": [
+    { "kind": "cli", "symbol": "wisp.__main__:main", "file": "wisp/__main__.py", "line": 1132, "dispatch_table_line": 1399, "subcommands": 31 },
+    { "kind": "cli-runner", "symbol": "wisp.entry:run_mode", "file": "wisp/entry.py", "line": 120 },
+    { "kind": "sdk", "symbol": "wisp.sdk:Wisp.run", "file": "wisp/sdk.py", "line": 78 },
+    { "kind": "headless", "symbol": "wisp.headless:run_headless", "file": "wisp/headless.py", "line": 31 },
+    { "kind": "http", "symbol": "wisp.server.main:main", "file": "wisp/server/main.py", "line": 200, "routes": 70, "routers": 27 },
+    { "kind": "websocket", "symbol": "/ws/agent", "file": "wisp/server/routes/agents.py", "line": 67 },
+    { "kind": "jsonrpc", "symbol": "WispAppServer.handle_request", "file": "wisp/app_server.py", "line": 18, "exposed_at": "POST /api/jsonrpc" },
+    { "kind": "acp", "symbol": "wisp.acp_adapter:main", "file": "wisp/acp_adapter.py", "line": 397, "protocol": "Agent Client Protocol 2025-03-26" },
+    { "kind": "tui", "symbol": "wisp.entry:_run_tui", "file": "wisp/entry.py", "line": 824 },
+    { "kind": "graph", "symbol": "wisp.graph.api:run_graph", "file": "wisp/graph/api.py" }
+  ],
+  "invariants": [
+    { "rule": "Model-initiated tool calls route through ToolExecutor.execute -> authorize()", "enforcement": "single delegation point in stateless._execute_tool", "violations": "none found on the model path", "confidence": "HIGH" },
+    { "rule": "All side effects route through the executor", "enforcement": "by convention", "violations": "server routes /api/git/commit, POST /api/hooks, POST /api/context mutate without authorize()", "confidence": "HIGH" },
+    { "rule": "Validator output is advisory; authorize() is the law", "enforcement": "graph runner passes data not authority", "violations": "none found", "confidence": "HIGH" },
+    { "rule": "Configuration is immutable after construction", "enforcement": "WispConfig.replace() returns a new instance; fingerprint() keys core cache", "violations": "config read from env at multiple construction sites", "confidence": "MEDIUM" },
+    { "rule": "Subagent event channels are task-local, never instance-scoped", "enforcement": "ContextVar sub_event_queue in tool_executor", "violations": "none found", "confidence": "HIGH" },
+    { "rule": "Hook-controlled directories are unwritable by agent tools", "enforcement": "pathsec guard + authorize L4 + deny-list", "violations": "bypassed at the REST boundary (POST /api/hooks)", "confidence": "HIGH" },
+    { "rule": "A turn that mutates code must observe exit-0 verification before completing", "enforcement": "VerificationFloorGuard", "violations": "heuristic: any non-'[exit code:' result counts as verified", "confidence": "MEDIUM" },
+    { "rule": "Graph resume never repeats a successful node", "enforcement": "fingerprint pin + node_run replay", "violations": "none found", "confidence": "HIGH" }
+  ],
+  "orphans": {
+    "truly_unreferenced_modules": ["wisp.core.speculative", "wisp.multi_agent.resource_budget", "wisp.cli.commands.doctor", "wisp.cli.commands.model", "wisp.mcp_servers", "wisp.tui.css", "wisp.tui.themes", "wisp.tui.widgets.tools"],
+    "test_only_references": ["wisp.coding", "wisp.core.graph", "wisp.core.context.repomap"],
+    "note": "wisp/tui/* and wisp/mcp_servers/* may load dynamically (CSS_PATH / process spawn); verify before deletion"
+  },
+  "cycles": {
+    "count": 7,
+    "method": "AST absolute+relative wisp.* imports, Tarjan SCC over 366 modules / 841 edges",
+    "sccs": [
+      ["wisp.repl.commands", "wisp.repl.commands.agents", "wisp.repl.commands.core", "wisp.repl.commands.doctor", "wisp.repl.commands.files", "wisp.repl.commands.provider", "wisp.repl.commands.session_cmds", "wisp.repl.commands.skills"],
+      ["wisp.cli.ui.guard", "wisp.transport", "wisp.transport.cli"],
+      ["wisp.server", "wisp.server.main", "wisp.server.routes.jsonrpc"],
+      ["wisp.provider_catalog", "wisp.provider_select"],
+      ["wisp.transport.tui", "wisp.tui.screens.workspace"],
+      ["wisp.core.doctor", "wisp.core.runtime"],
+      ["wisp.cli.dispatcher", "wisp.graph.cli"]
+    ],
+    "note": "The previously documented 8-module arena/server cycle was NOT reproduced in the current tree."
+  },
+  "fan_in_top": [["wisp.config", 42], ["wisp.server.deps", 27], ["wisp.server.routes.workspace", 20], ["wisp.colors", 18], ["wisp.graph.types", 17], ["wisp.core.events", 16], ["wisp.tools._utils", 15], ["wisp.infra.security", 13], ["wisp.auth.secrets", 11], ["wisp.infra.store", 11]],
+  "fan_out_top": [["wisp.server.main", 31], ["wisp.core.stateless", 29], ["wisp.__main__", 28], ["wisp.composition", 24], ["wisp.tui.screens.workspace", 23], ["wisp.tool_executor", 22], ["wisp.entry", 22], ["wisp.tools.registry", 16]],
+  "ci_verdict": {
+    "workflow": ".github/workflows/ci.yml",
+    "steps": ["pytest -m \"not live\" --tb=short -p no:cacheprovider", "ruff check wisp/ && ruff check tests/", "mypy", "python -m compileall -q wisp/"],
+    "assessment": "compileall passes. ruff and pytest failures observed locally come from UNTRACKED files absent in a CI checkout, so they do not gate CI. mypy errors are in TRACKED files (wisp/core/runtime.py, wisp/core/stateless.py), so the mypy gate is expected to fail in CI (subject to mypy version drift).",
+    "phase2_upgrade": "CONFIRMED at the locked toolchain version: mypy 2.3.1 (the uv.lock pin, which CI's unpinned mypy>=1.10 resolves to) produces the IDENTICAL 16 errors and exit 1. The mypy CI gate fails. Root cause: wisp/core/stateless.py and wisp/core/runtime.py are in the [tool.mypy].files gate list (pyproject.toml:65) but were never annotated; the ratchet was applied to the gate ahead of the code.",
+    "confidence": "HIGH"
+  },
+  "phase2_verification": {
+    "method": "each Phase 1 open question driven to a falsifiable test; no files in wisp/ or tests/ modified",
+    "corrections_to_phase1": [
+      { "claim": "_CONTEXT_TTL is unbounded", "verdict": "WRONG - bounded to 3 keys", "evidence": "_ttl_get keys the dict by `kind`; only 3 literals passed (stateless.py:1445,1542,1654). No cross-workspace leak: the stored key is compared before serving." },
+      { "claim": "verification gate satisfiable by a malformed result", "verdict": "WRONG - gate is sound", "evidence": "_format_bash_output emits '[exit code: N]' only on non-zero exit (bash.py:39-40). Real formatter into real guard: exit0 -> verify_ok True/resolved True; exit1 -> False/False." },
+      { "claim": "tiktoken may be unused", "verdict": "WRONG - it is used", "evidence": "lazy imports in infra/token_counter.py:113, context_assembler.py:525,549, core/context_pruner.py:129. Phase 1 grep was broken by BSD grep --include ordering." }
+    ],
+    "confirmed": [
+      { "finding": "mypy CI gate fails", "evidence": "mypy 2.3.1 exit 1, 16 errors in core/runtime.py + core/stateless.py" },
+      { "finding": "hang is one named test", "evidence": "tests/test_provider_select.py::TestProviderCommand::test_switch_requires_key_when_missing (line 210) - no getpass mock; hangs on a TTY, passes without one" },
+      { "finding": "BackgroundAgentManager.send() bypasses admission", "evidence": "launch() gates at background.py:255-263; send() spawns asyncio.create_task at :513 with no check" },
+      { "finding": "containment implementations diverge", "evidence": "6 impls x 12 adversarial inputs: canonical pathsec + 3 aliases reject control characters; server/routes/files._resolve_path and sandbox.resolve_sandbox_cwd accept them" },
+      { "finding": "local .venv missing 4 declared dependencies", "evidence": "aiohttp, tiktoken, prompt_toolkit, cryptography absent from .venv but declared in pyproject.toml:13-28 and pinned in uv.lock" },
+      { "finding": "all 25 test failures are environmental", "evidence": "22 from missing cryptography (all pass with it supplied); 3 from ambient HTTP_PROXY leaking into the hermetic child (all 38 pass with proxies unset)" }
+    ],
+    "still_open": [
+      "Whether the .venv drift exists on the maintainer's machine or only this checkout",
+      "Whether --no-auth loopback + approved run_bash is in scope for the threat model (policy question)",
+      "Whether the graph validator O(N*E) contract section matters at scale (no independent profiling done)"
+    ]
+  },
+  "evidence_runs": [
+    { "cmd": "python -m pytest tests/ --collect-only -q", "result": "5845 tests collected, 3 collection errors (test_auto_delegate_defense, test_delegation_research_only, test_input_and_interrupts)" },
+    { "cmd": "ruff check wisp/", "result": "1 error (F401 unused import in untracked wisp/multi_agent/_circuit_breaker.py)" },
+    { "cmd": "ruff check tests/", "result": "19 errors (concentrated in untracked WIP test files)" },
+    { "cmd": "mypy (strict, 8-file gate)", "result": "16 errors in 2 files (wisp/core/runtime.py, wisp/core/stateless.py); exit 1" },
+    { "cmd": "python -m compileall -q wisp/", "result": "exit 0" },
+    { "cmd": "pytest tests/reliability/test_13h2_determinism.py", "result": "39 passed in 26.7s (with PYTHONPATH cleared)" }
+  ]
+}

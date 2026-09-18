@@ -192,7 +192,10 @@ class WorkspaceScreen(Screen):
             title_bar.session_label = self.session_id or "new session"
         except Exception:
             pass  # DOM not composed yet (install_screen phase)
-        self._ws_task = asyncio.create_task(self._start_ws())
+        # Owned, not bare: `_owned.cancel_all()` runs on unmount, and the
+        # done-callback logs failures. A bare create_task here was never read
+        # or cancelled, so a failure in _start_ws vanished silently.
+        self._owned.spawn(self._start_ws(), name="start-ws")
 
     def on_unmount(self) -> None:
         owned = getattr(self, "_owned", None)
@@ -386,7 +389,6 @@ class WorkspaceScreen(Screen):
                 )
 
     def on_input_bar_submitted(self, event: InputBar.Submitted) -> None:
-        import asyncio
         chat = self.query_one("#chat-pane", MessageList)
 
         async def _mount_user() -> None:
@@ -415,8 +417,8 @@ class WorkspaceScreen(Screen):
                 self.query_one("#perf-metrics", PerformanceMetrics).message_count += 1
             except Exception:
                 pass
-            self._local_task = asyncio.create_task(
-                self._run_local_turn(event.text)
+            self._local_task = self._owned.spawn(
+                self._run_local_turn(event.text), name="local-turn"
             )
             return
 

@@ -1007,23 +1007,6 @@ class SubagentOrchestrator:
         ran = result.tool_calls or []
         names = [c.get("name", "") for c in ran if isinstance(c, dict)]
         return not any(risk_for_tool(n) != ToolRisk.READ for n in names)
-        """Whether automatically re-executing this task is side-effect safe.
-
-        Allowed iff: the task's tools are all read-only (cannot mutate),
-        or the attempt ran effectively isolated (fresh worktree per attempt;
-        the patch applies once, on success only), or no mutating tool ran
-        (evidence from the attempt's own tool-call log). Shared-workspace
-        evidence is outcome-blind, so a mutating-capable task that ran a
-        mutating tool there is refused. Unknown tools fail closed (EXEC).
-        """
-        tools = contract.tools or []
-        if tools and all(risk_for_tool(t) == ToolRisk.READ for t in tools):
-            return True
-        if isolated_effective:
-            return True
-        ran = result.tool_calls or []
-        names = [c.get("name", "") for c in ran if isinstance(c, dict)]
-        return not any(risk_for_tool(n) != ToolRisk.READ for n in names)
 
     async def _emit_retry(self, contract: SubagentContract, attempt: int,
                           backoff_s: float) -> None:

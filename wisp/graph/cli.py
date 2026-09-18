@@ -20,6 +20,7 @@ from wisp.graph.reference import REFERENCE_YAML, coding_agent_graph
 from wisp.graph.store import GraphStore
 from wisp.graph.trace import quality_metrics, render_ascii, render_dot, render_json
 from wisp.graph.validator import validate_graph
+from wisp.pathsec import resolve_contained
 
 USAGE = ("Usage: wisp graph <verb> [args]\n"
          "\n"
@@ -50,8 +51,13 @@ def _load_graph(name: str):
     base = os.path.abspath("graphs")
     for cand in (f"{name}.yaml", f"{name}.yml"):
         # Contained lookup: names cannot traverse out of ./graphs/.
-        path = os.path.realpath(os.path.join(base, cand))
-        if path != base and path.startswith(base + os.sep) and os.path.isfile(path):
+        # Semantics live in wisp.pathsec (the single authority) — a local
+        # realpath+prefix copy here previously accepted control characters.
+        try:
+            path = resolve_contained(base, cand)
+        except ValueError:
+            continue
+        if os.path.isfile(path):
             if os.path.getsize(path) > MAX_YAML_BYTES:
                 raise ValueError("graph file too large")
             with open(path) as fh:

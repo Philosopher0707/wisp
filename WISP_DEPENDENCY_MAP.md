@@ -1,5 +1,22 @@
 # WISP DEPENDENCY MAP
 
+> **SUPERSEDED — the cycle list below is stale.** An independent Tarjan SCC run
+> over the current tree (366 modules / 841 edges) does not reproduce cycle #5
+> (the 8-module `arena ↔ background_agent ↔ entry ↔ server.main ↔ routes{…}`
+> chain). The actual cycle set is:
+>
+> 1. `repl.commands` + its submodules (a registry pattern — arguably benign)
+> 2. `cli.ui.guard ↔ transport ↔ transport.cli`
+> 3. `server ↔ server.main ↔ server.routes.jsonrpc`
+> 4. `provider_catalog ↔ provider_select`
+> 5. `transport.tui ↔ tui.screens.workspace`
+> 6. `core.doctor ↔ core.runtime`
+> 7. `cli.dispatcher ↔ graph.cli`
+>
+> The fan-in / fan-out tables remain broadly accurate. For the current model see
+> `REPOSITORY_INTELLIGENCE_REPORT.md` §5.
+
+
 ## Layers (derived, top-down)
 
 ```
