@@ -25,11 +25,12 @@
 | P2 — introduce the proposal boundary | `COMPLETE` | `PHASE_P2_REPORT.md` |
 | P3 — independent verification | `COMPLETE — stage 3a only` | `PHASE_P3_REPORT.md` |
 | P4 — task graph from durable state | `COMPLETE` (item 5 deferred) | `PHASE_P4_REPORT.md` |
-| P5 — runtime graph mutation | `READY TO START` | — |
-| P6–P9 | `NOT STARTED` | — |
+| P5 — runtime graph mutation | `COMPLETE` (item 5 deferred) | `PHASE_P5_REPORT.md` |
+| P6 — recovery ladder | `READY TO START` | — |
+| P7–P9 | `NOT STARTED` | — |
 
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings log F1–F17, change log).
-**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (ADR-0001 … ADR-0020).
+**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (ADR-0001 … ADR-0023).
 
 ### 0.0.4 The migration's central finding
 
@@ -55,7 +56,7 @@ ratchet failures look like P0 regressions. **Snapshot the files you are about to
 the repo first, then compare against those copies.** Finding F12.
 
 Every phase was verified by `diff -q` of the full-suite failure set before and after:
-**131 (HEAD) → 128 (P0) → 128 (P1) → 128 (P2) → 128 (P3) → 128 (P4). Zero new failures.**
+**131 (HEAD) → 128 for P0, P1, P2, P3, P4 and P5. Zero new failures at every step.**
 
 ---
 
@@ -762,6 +763,7 @@ that work, and makes unrelated failures look like yours. Finding F12.
 | **M7** | `change_tracker.py` not yet wired into evidence (P3 plan item 7) | **OPEN** — deferred with 3b. |
 | **M8** | `multi_agent/dag.py` not yet retired into `wisp/graph/` (P4 plan item 5) | **OPEN — deferred deliberately.** It is on the live `fanout` path, and `test_13j1_fanout_contract_repair.py` is already red for environmental reasons, so a regression caused by the retirement would be indistinguishable from one already there. Needs a green fanout suite first. |
 | **M9** | **The message list is not yet a projection of the graph** (P4's stated risk mitigation) | **OPEN** — P5 work. P4 *enables* it by journalling both from one log; it does not implement it. |
+| **M11** | **The graph does not drive execution** | **OPEN** — P5's item 5, deferred. The turn loop executes tools directly; the graph is a record, not a driver. Making it drive is a change of control and must land **with** M9. |
 | **M10** | The materialized graph is a **lower bound** on iterations | **OPEN — by design.** The runtime materializes one node per closed tool exchange + one terminal node; iteration boundaries are not observable from the event stream, and inventing nodes would be a fabricated record. |
 
 **Committed.** Phase 10 and migration P0–P3a are committed (§3). The remaining uncommitted files are
@@ -811,6 +813,7 @@ the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_P2_REPORT.md` | Introduce the proposal boundary |
 | `PHASE_P3_REPORT.md` | Independent verification (stage 3a) |
 | `PHASE_P4_REPORT.md` | Materialize a task graph from durable state |
+| `PHASE_P5_REPORT.md` | Runtime graph mutation |
 
 **Guards added by the migration:**
 
@@ -825,6 +828,7 @@ the user's pre-existing WIP (§8) plus foreign-session test files.
 | `tests/test_gate_order_corpus.py` | **RED-first** corpus: every gate outcome byte-identical (write it before touching a gate) |
 | `tests/test_acceptance_verdict.py` | the verdict algebra; the floor guard is retained, not replaced; stage 3a does not gate |
 | `tests/test_task_graph_materialization.py` | readiness is **stored**, not recomputed; one transition API (AST, in-module and tree-wide); the graph is a projection of the log |
+| `tests/test_graph_mutation.py` | the extended vocabulary is a superset (ratchet); expansion is acyclic by construction; invalidation cascades; supersession retains history; the growth budget is **enforced**; insertion order does not change the graph |
 
 
 **Executable guards added across the engagement** (these are the real deliverable — a canonicalization without one is not a canonicalization):

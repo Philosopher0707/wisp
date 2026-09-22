@@ -40,7 +40,7 @@ Guidance for AI coding agents working in the Wisp codebase.
 | `wisp/tools/primitives.py` | Thin harness surface | `exec_sandbox` / `fs_mutate` / `git_checkpoint` (pydantic args, delegate to bash/filesystem/checkpoints); `PRIMITIVE_SCHEMAS`; core opts in via `thin_tools` config (schemas + prompt menu + dispatcher) |
 | `wisp/core/verification.py` | Completion gate | `VerificationFloorGuard`: blocks finish until exit-0 postdates last mutation or grind floor (`min_turns` + nudges) exhausts; `HARNESS_REJECTION` text; `resolved()` triggers auto-capture. **Also projects itself onto the acceptance model** via `floor_guard_criteria/evidence/verdict()` — read-only; the guard's own behaviour is unchanged |
 | `wisp/core/acceptance.py` | Acceptance verdicts (P3, stage 3a) | `Verdict` (`PASS`/`FAIL`/`INCONCLUSIVE`), `CriterionKind`, `AcceptanceCriteria`, `Evidence` (content-addressed, with `producer` + `observations`), `CompletionVerdict`, `evaluate()`, `invalidate()`, `route_for()`. **Records; does not gate** — routing is *derived* from the verdict so the graph vocabulary stays an output, not a competitor |
-| `wisp/core/task_graph.py` | Materialized task graph (P4) | `TaskNode` / `TaskGraph` (with **stored** `ready`), `NodeTransition`, `LEGAL_NODE_TRANSITIONS`, `build_turn_graph()`, `materialize()`, `apply_transition()` (**the only write path** — AST-pinned), `replay_transitions()`, `divergences()`. Reuses `wisp/graph/`'s `NodeType`/`NodeStatus`; journals through `UnifiedStore`, so the graph is a **projection of the log** (ADR-0019) |
+| `wisp/core/task_graph.py` | Materialized task graph (P4) + runtime mutation (P5) | `TaskNode` / `TaskGraph` (with **stored** `ready`), `TaskNodeState` (14 states — a **superset** of `NodeStatus`), `NodeTransition`, `LEGAL_NODE_TRANSITIONS`, `build_turn_graph()`, `materialize()`, `apply_transition()`, `replay_transitions()`, `divergences()`. P5 adds `create_node()` / `expand()` / `invalidate()` (transitive cascade) / `supersede()` + an enforced `GraphGrowthBudget`. **Every mutation is a pure function** — a mutated-in-place graph cannot be replayed. Journals through `UnifiedStore`, so the graph is a **projection of the log** (ADRs 0019–0023) |
 | `wisp/core/action_key.py` | Durable idempotency (P1) | `action_key(tool, args)` — sha256 over canonical sorted JSON; JSON-string and dict args hash alike, unserializable args degrade to `repr` rather than raising. Stamped on `TOOL_CALL` (intent) and its `TOOL_RESULT` (resolution) so "dispatched but never resolved" is queryable via `Session.unresolved_actions()` |
 | `wisp/core/proposal.py` | Proposal boundary (P2) | `build_proposal()` → `contracts.tool.ToolRequest`, `build_outcome()` → `ToolResult`, `is_refusal()`. **Records, never decides** — status derivation delegates to `core.events.classify_result()`. Produces a proposal per dispatched call and an outcome per proposal, rejections included; journaled as audit-only `PROPOSAL`/`OUTCOME` events |
 | `wisp/benchmark/` | Benchmark + predictions | `run_task` (isolated ws, git-baseline/diff patch capture), `BenchResult.model_patch`, `run_bench --predictions PATH` (SWE-bench `{instance_id,model_patch,model_name}` JSONL), injectable core factory |
@@ -84,6 +84,14 @@ Three rules that are easy to get wrong:
 - **Durable writes are best-effort.** A turn that ran correctly must never be reported as failed
   because a journal or span write failed. The loss is visible as a gap in the session's sequence
   numbers. See `WISP_ARCHITECTURE_DECISIONS.md` ADR-0004.
+
+### The graph does not drive execution
+
+`wisp/core/task_graph.py` can create, expand, invalidate and supersede nodes — but **nothing on the live
+turn path calls those functions yet**. The turn loop executes tools directly, and the graph is a
+*record* of that work, not its driver. Making it drive execution is a change of **control** (the point
+at which the message list stops being authoritative), and it is tracked as migration item M11. Do not
+assume the graph is authoritative — it is not.
 
 ### Stage 3a of the verification gate does NOT gate
 
@@ -146,12 +154,12 @@ python3 -m pytest tests/test_contracts_*.py tests/test_auth_*.py tests/test_runs
   tests/test_policy_*.py tests/test_trace_*.py tests/test_eval_*.py \
   tests/test_task_*.py tests/test_release_*.py tests/test_no_bypass.py -q
 
-# Durable record + proposal boundary + verdicts + task graph (migration P0-P4)
+# Durable record + proposal boundary + verdicts + task graph (migration P0-P5)
 python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_incremental.py \
   tests/test_action_idempotency_key.py tests/test_proposal_boundary_records.py \
   tests/test_proposal_boundary_no_bypass.py tests/test_verdict_layer_recorded.py \
   tests/test_gate_order_corpus.py tests/test_acceptance_verdict.py \
-  tests/test_task_graph_materialization.py -q
+  tests/test_task_graph_materialization.py tests/test_graph_mutation.py -q
 ```
 
 ### Reachability is mandatory for new durable code

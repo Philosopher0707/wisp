@@ -598,6 +598,92 @@ load-bearing — not globally.
 
 ---
 
+## ADR-0021 — The extended node vocabulary is a superset, and Layer B's `NodeStatus` is untouched
+
+**Status:** ACCEPTED
+**Phase:** P5
+**Context:** P5 asks for seven new node states and notes that `SKIPPED` conflates
+*"predecessor failed"* with *"dead branch"* — a real ambiguity. The plan names `graph/types.py` as the place
+to add them.
+
+**Two pieces of evidence made editing `NodeStatus` the wrong move:**
+
+1. **`graph/scheduler.py::is_finished` lists terminal statuses *explicitly*.** A new terminal state
+   there would make `is_finished` return `False` forever — a run that never completes. `_final`,
+   the join policies and the retry semantics in `graph/executor.py` (1149 lines) carry the same
+   hazard.
+2. **The plan's own safety net for that change does not exist.** P5's completion criteria require
+   `test_graph_fuzz.py`, `test_graph_races.py` and `test_graph_resume.py` to pass — **none of the three
+   is in the repository.** And Layer B's executor has **zero** references from `core/runtime.py` or
+   `core/stateless.py`: it is not on the live turn path at all.
+
+**Decision:** Define `TaskNodeState` as a strict **superset** of `NodeStatus` in
+`wisp/core/task_graph.py`, with every shared value an identical string, and leave `NodeStatus` alone.
+
+**Precedent:** this is exactly the shape P0 verified for `RunState` (8) ⊃ `RunStatus` (7), which needed
+no coercion shim (ADR-0003). ADR-0003's own recommendation was to promote that relationship to a
+ratchet; `test_task_node_state_is_a_superset_of_node_status` does so here.
+
+**Consequence:** The states are added where the live loop's graph lives. `coerce_node_state()` accepts
+both vocabularies, so a P4 graph persisted with `NodeStatus` values still loads. Layer B is untouched
+until its safety net is real.
+
+**Reversal condition:** When `test_graph_fuzz.py`, `test_graph_races.py` and `test_graph_resume.py`
+exist, adding the states to `NodeStatus` becomes a bounded change and the superset can be collapsed.
+
+---
+
+## ADR-0022 — `TERMINAL` means settled, not final
+
+**Status:** ACCEPTED
+**Phase:** P5
+**Context:** P4's `TERMINAL_NODE_STATUSES` was documented as *"terminal states have no outgoing edges"*
+and asserted as such. P5 requires that a settled node can still be **invalidated** — a stale `SUCCESS`
+is precisely what invalidation exists to demote. So `SUCCESS` must have an outgoing edge, and the old
+equation breaks.
+
+**Decision:** Split the concept in two:
+
+| Name | Means | Contains |
+|---|---|---|
+| `TERMINAL_NODE_STATES` | **settled** — releases downstream work | success, failure, timeout, cancelled, skipped, invalidated, superseded |
+| `FINAL_NODE_STATES` | **no outgoing edges** — history, not rewritten | invalidated, superseded |
+
+**Rationale:** One word was carrying two meanings, and P5 is what forced them apart. Keeping the
+conflation would have made either invalidation impossible or readiness wrong.
+
+**Consequence:** `test_terminal_states_have_no_outgoing_edges` was rewritten against
+`FINAL_NODE_STATES`, and a new test asserts that a settled node *can* be invalidated.
+
+**Reversal condition:** None.
+
+---
+
+## ADR-0023 — A node with no incoming edges is ready
+
+**Status:** ACCEPTED
+**Phase:** P5
+**Context:** `graph/scheduler.py:41` leaves a non-entrypoint root with no incoming edges **pending**,
+calling it a *"dead definition"*. That is correct for a **compiled** graph, where a root with no edges
+is a mistake.
+
+P5 introduces `create_node(graph, node, deps=[])` — a **runtime-created independent root**, which is
+intentional: a parallel task. Under the compiled-graph rule it would stay pending forever.
+
+The first implementation tried to refuse it at creation time. That was wrong: it rejected a legitimate
+request to avoid a footgun the rule itself created.
+
+**Decision:** `_compute_ready` treats any `PENDING` node with no incoming edges as ready, entrypoint or
+not. The divergence from `graph/scheduler.py:41` is deliberate and documented in the function.
+
+**Consequence:** `create_node(..., deps=[])` produces a runnable parallel task rather than a node that
+hangs. `expand()` is unaffected (its caller supplies edges explicitly).
+
+**Reversal condition:** If a future phase needs to distinguish "compiled root" from "runtime root", the
+distinction belongs on the node (a `origin` field), not in the readiness rule.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -622,3 +708,6 @@ load-bearing — not globally.
 | 0018 | The engine publishes its guard; the runtime only reads it | P3 | ACCEPTED |
 | 0019 | The task graph journals through `UnifiedStore`, not `GraphStore` | P4 | ACCEPTED |
 | 0020 | `PENDING` may settle directly; terminal states stay frozen | P4 | ACCEPTED |
+| 0021 | The extended node vocabulary is a superset; Layer B's `NodeStatus` is untouched | P5 | ACCEPTED |
+| 0022 | `TERMINAL` means settled, not final | P5 | ACCEPTED |
+| 0023 | A node with no incoming edges is ready | P5 | ACCEPTED |

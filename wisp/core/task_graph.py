@@ -28,9 +28,77 @@ between the graph and the scheduler becomes visible instead of silent.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from enum import StrEnum
 from typing import Any, Iterable
 
 from wisp.graph.types import NodeStatus, NodeType
+
+
+class TaskNodeState(StrEnum):
+    """The node state vocabulary, EXTENDED (migration P5).
+
+    A strict **superset** of `graph/types.py::NodeStatus` — every `NodeStatus`
+    value appears here with the identical string. That shape is deliberate and
+    has precedent in this repo: `RunState` (8) ⊃ `RunStatus` (7) was verified in
+    P0 and needed no coercion shim (ADR-0003). The superset is pinned by
+    `test_task_node_state_is_a_superset_of_node_status`.
+
+    **Why a superset rather than editing `NodeStatus`.** P5 asks for seven new
+    states, and `SKIPPED` conflates "predecessor failed" with "dead branch" —
+    a real ambiguity worth resolving. But `NodeStatus` is consumed by
+    `graph/executor.py` (1149 lines with join policies, terminality checks and
+    retry semantics) and by `graph/scheduler.py::is_finished`, which lists
+    terminal statuses **explicitly**. A new terminal state there would make
+    `is_finished` return False forever — a run that never completes.
+
+    The plan's own safety net for that change (`test_graph_fuzz.py`,
+    `test_graph_races.py`, `test_graph_resume.py`) **does not exist in the
+    repository**, and Layer B's executor has **zero** references from
+    `core/runtime.py` or `core/stateless.py` — it is not on the live turn path.
+    So the states are added where the live loop's graph lives, and Layer B is
+    left alone until its safety net is real.
+    """
+
+    # ── the NodeStatus values, unchanged ──
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCESS = "success"
+    FAILURE = "failure"
+    TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
+    SKIPPED = "skipped"
+    # ── P5 additions (WISP_GRAPH_DOMAIN_MODEL.md §4) ──
+    WAITING = "waiting"            # parked on an external condition
+    BLOCKED = "blocked"            # cannot proceed; distinct from SKIPPED
+    OBSERVED = "observed"          # acted, outcome recorded, not yet judged
+    VERIFYING = "verifying"        # handed to an independent verifier
+    INCONCLUSIVE = "inconclusive"  # verification could not decide
+    INVALIDATED = "invalidated"    # a dependency changed under it
+    SUPERSEDED = "superseded"      # replaced by a new node; retained for history
+
+
+def coerce_node_state(value: TaskNodeState | NodeStatus | str) -> TaskNodeState:
+    """Map any known node-state value to `TaskNodeState`.
+
+    Accepts `NodeStatus` directly (the superset means this always succeeds) and
+    raises on anything unknown — fail loud, so a producer that invents a state
+    becomes visible rather than being silently treated as non-terminal. Same
+    discipline as `runs/record.py::coerce_state`.
+
+    NOTE the `.value` branch. `graph/types.py::NodeStatus` is a `str, Enum`,
+    **not** a `StrEnum`, so `str(NodeStatus.SUCCESS)` is `"NodeStatus.SUCCESS"`
+    — not `"success"`. Calling `str()` on it would reject every `NodeStatus`
+    member, which is exactly what happened the first time this ran. `StrEnum`
+    members are handled by the same branch.
+    """
+    if isinstance(value, TaskNodeState):
+        return value
+    raw = getattr(value, "value", value)
+    try:
+        return TaskNodeState(str(raw))
+    except ValueError:
+        raise ValueError(f"unknown node state: {value!r}") from None
+
 
 #: The node state machine. `apply_transition` refuses anything not listed here,
 #: so an illegal move is a loud error rather than a status that quietly means
@@ -44,29 +112,87 @@ from wisp.graph.types import NodeStatus, NodeType
 #: write a transition that never happened. What the machine still catches is the
 #: error class that matters — anything leaving a TERMINAL state, and a stale
 #: `from_status`.
-LEGAL_NODE_TRANSITIONS: dict[NodeStatus, tuple[NodeStatus, ...]] = {
-    NodeStatus.PENDING: (NodeStatus.RUNNING, NodeStatus.SUCCESS,
-                         NodeStatus.FAILURE, NodeStatus.TIMEOUT,
-                         NodeStatus.SKIPPED, NodeStatus.CANCELLED),
-    NodeStatus.RUNNING: (NodeStatus.SUCCESS, NodeStatus.FAILURE,
-                         NodeStatus.TIMEOUT, NodeStatus.CANCELLED,
-                         NodeStatus.SKIPPED),
-    NodeStatus.SUCCESS: (),
-    NodeStatus.FAILURE: (),
-    NodeStatus.TIMEOUT: (),
-    NodeStatus.CANCELLED: (),
-    NodeStatus.SKIPPED: (),
+LEGAL_NODE_TRANSITIONS: dict[TaskNodeState, tuple[TaskNodeState, ...]] = {
+    TaskNodeState.PENDING: (
+        TaskNodeState.RUNNING, TaskNodeState.WAITING, TaskNodeState.BLOCKED,
+        TaskNodeState.SUCCESS, TaskNodeState.FAILURE, TaskNodeState.TIMEOUT,
+        TaskNodeState.SKIPPED, TaskNodeState.CANCELLED,
+        TaskNodeState.SUPERSEDED, TaskNodeState.INVALIDATED,
+    ),
+    TaskNodeState.RUNNING: (
+        TaskNodeState.SUCCESS, TaskNodeState.FAILURE, TaskNodeState.TIMEOUT,
+        TaskNodeState.CANCELLED, TaskNodeState.SKIPPED,
+        TaskNodeState.OBSERVED, TaskNodeState.BLOCKED,
+        TaskNodeState.INVALIDATED, TaskNodeState.SUPERSEDED,
+    ),
+    # P5: the observe → verify → judge leg, and the recovery exits from it.
+    TaskNodeState.WAITING: (
+        TaskNodeState.RUNNING, TaskNodeState.BLOCKED, TaskNodeState.TIMEOUT,
+        TaskNodeState.CANCELLED, TaskNodeState.INVALIDATED,
+        TaskNodeState.SUPERSEDED,
+    ),
+    TaskNodeState.OBSERVED: (
+        TaskNodeState.VERIFYING, TaskNodeState.SUCCESS, TaskNodeState.FAILURE,
+        TaskNodeState.INVALIDATED, TaskNodeState.SUPERSEDED,
+    ),
+    TaskNodeState.VERIFYING: (
+        TaskNodeState.SUCCESS, TaskNodeState.FAILURE,
+        TaskNodeState.INCONCLUSIVE, TaskNodeState.INVALIDATED,
+        TaskNodeState.SUPERSEDED,
+    ),
+    # BLOCKED and INCONCLUSIVE are RESUMABLE — that is the point of separating
+    # them from FAILURE. A blocked node is not a failed one, and an
+    # undecidable verdict is not a rejection.
+    TaskNodeState.BLOCKED: (
+        TaskNodeState.RUNNING, TaskNodeState.PENDING,
+        TaskNodeState.CANCELLED, TaskNodeState.INVALIDATED,
+        TaskNodeState.SUPERSEDED,
+    ),
+    TaskNodeState.INCONCLUSIVE: (
+        TaskNodeState.RUNNING, TaskNodeState.VERIFYING,
+        TaskNodeState.CANCELLED, TaskNodeState.INVALIDATED,
+        TaskNodeState.SUPERSEDED,
+    ),
+    TaskNodeState.SUCCESS: (TaskNodeState.INVALIDATED,
+                            TaskNodeState.SUPERSEDED),
+    TaskNodeState.FAILURE: (TaskNodeState.INVALIDATED,
+                            TaskNodeState.SUPERSEDED),
+    TaskNodeState.TIMEOUT: (TaskNodeState.INVALIDATED,
+                            TaskNodeState.SUPERSEDED),
+    TaskNodeState.SKIPPED: (TaskNodeState.INVALIDATED,
+                            TaskNodeState.SUPERSEDED),
+    TaskNodeState.CANCELLED: (TaskNodeState.INVALIDATED,
+                              TaskNodeState.SUPERSEDED),
+    # INVALIDATED and SUPERSEDED are final: a node that was invalidated or
+    # replaced is history, and history is not rewritten.
+    TaskNodeState.INVALIDATED: (),
+    TaskNodeState.SUPERSEDED: (),
 }
 
-TERMINAL_NODE_STATUSES = frozenset({
-    NodeStatus.SUCCESS, NodeStatus.FAILURE, NodeStatus.TIMEOUT,
-    NodeStatus.CANCELLED, NodeStatus.SKIPPED,
+#: States a node can be in and still be considered settled for the purpose of
+#: releasing downstream work. NOTE this is NOT the same as "has no outgoing
+#: edges": P5 requires that a settled node can still be INVALIDATED (a stale
+#: success is the thing invalidation exists to demote), so SUCCESS and FAILURE
+#: have outgoing edges. `FINAL_NODE_STATES` below is the no-outgoing-edge set.
+TERMINAL_NODE_STATES = frozenset({
+    TaskNodeState.SUCCESS, TaskNodeState.FAILURE, TaskNodeState.TIMEOUT,
+    TaskNodeState.CANCELLED, TaskNodeState.SKIPPED,
+    TaskNodeState.INVALIDATED, TaskNodeState.SUPERSEDED,
+})
+
+#: Retained under the old name for callers that only care about the settled set.
+TERMINAL_NODE_STATUSES = TERMINAL_NODE_STATES
+
+#: States with no outgoing edges — history, which is not rewritten.
+FINAL_NODE_STATES = frozenset({
+    TaskNodeState.INVALIDATED, TaskNodeState.SUPERSEDED,
 })
 
 
-def is_legal_node_transition(from_status: NodeStatus | str,
-                             to_status: NodeStatus | str) -> bool:
-    return NodeStatus(to_status) in LEGAL_NODE_TRANSITIONS[NodeStatus(from_status)]
+def is_legal_node_transition(from_status: TaskNodeState | str,
+                             to_status: TaskNodeState | str) -> bool:
+    return coerce_node_state(to_status) in \
+        LEGAL_NODE_TRANSITIONS[coerce_node_state(from_status)]
 
 
 @dataclass(frozen=True)
@@ -80,26 +206,47 @@ class TaskNode:
     node_id: str
     kind: NodeType = NodeType.AGENT
     iteration: int = 0
-    status: NodeStatus = NodeStatus.PENDING
+    status: TaskNodeState = TaskNodeState.PENDING
     ready: bool = False
     deps: tuple[str, ...] = ()
     detail: str = ""
+    #: Set when this node was replaced by another (migration P5). The node is
+    #: RETAINED with a pointer rather than deleted — replay needs the history,
+    #: and a task is never mutated into a different task.
+    superseded_by: str = ""
+
+    def __post_init__(self) -> None:
+        """Coerce `status` to `TaskNodeState` on construction.
+
+        Without this, a caller passing `NodeStatus.PENDING` stores a
+        `NodeStatus` — and `NodeStatus` is a `str, Enum`, not a `StrEnum`, so
+        `node.status is TaskNodeState.PENDING` is **False** for the same
+        semantic value. Identity comparisons then silently fail: a node reads
+        as non-pending, readiness is skipped, and `apply_transition` reports a
+        stale transition for a node nobody touched.
+
+        Coercing at the boundary means the rest of the module can compare with
+        `is` safely.
+        """
+        if not isinstance(self.status, TaskNodeState):
+            object.__setattr__(self, "status", coerce_node_state(self.status))
 
     def to_dict(self) -> dict[str, Any]:
         return {"node_id": self.node_id, "kind": self.kind.value,
                 "iteration": self.iteration, "status": self.status.value,
                 "ready": self.ready, "deps": list(self.deps),
-                "detail": self.detail}
+                "detail": self.detail, "superseded_by": self.superseded_by}
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "TaskNode":
         return cls(node_id=d["node_id"],
                    kind=NodeType(d.get("kind", "agent")),
                    iteration=int(d.get("iteration", 0)),
-                   status=NodeStatus(d.get("status", "pending")),
+                   status=coerce_node_state(d.get("status", "pending")),
                    ready=bool(d.get("ready", False)),
                    deps=tuple(d.get("deps") or ()),
-                   detail=d.get("detail", ""))
+                   detail=d.get("detail", ""),
+                   superseded_by=d.get("superseded_by", ""))
 
 
 @dataclass(frozen=True)
@@ -113,8 +260,8 @@ class NodeTransition:
 
     run_id: str
     node_id: str
-    from_status: NodeStatus
-    to_status: NodeStatus
+    from_status: TaskNodeState
+    to_status: TaskNodeState
     seq: int = 0
     reason: str = ""
 
@@ -127,8 +274,8 @@ class NodeTransition:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "NodeTransition":
         return cls(run_id=d["run_id"], node_id=d["node_id"],
-                   from_status=NodeStatus(d["from_status"]),
-                   to_status=NodeStatus(d["to_status"]),
+                   from_status=coerce_node_state(d["from_status"]),
+                   to_status=coerce_node_state(d["to_status"]),
                    seq=int(d.get("seq", 0)), reason=d.get("reason", ""))
 
 
@@ -195,7 +342,15 @@ def build_turn_graph(run_id: str, iterations: int) -> TaskGraph:
 
 
 def _compute_ready(graph: TaskGraph) -> set[str]:
-    """Derive readiness. Used ONLY to materialize it, never at read time."""
+    """Derive readiness. Used ONLY to materialize it, never at read time.
+
+    A node with no incoming edges is READY, entrypoint or not. This deliberately
+    differs from `graph/scheduler.py:41`, which leaves a non-entry root pending
+    as a "dead definition" — correct for a *compiled* graph, where a root with no
+    edges is a mistake. P5 introduces runtime-created independent roots, where it
+    is intentional: `create_node(graph, node, deps=[])` asks for a parallel task,
+    and parking it forever would be the footgun rather than the safeguard.
+    """
     statuses = {n.node_id: n.status for n in graph.nodes}
     incoming: dict[str, list[str]] = {n.node_id: [] for n in graph.nodes}
     for src, dst in graph.edges:
@@ -203,15 +358,13 @@ def _compute_ready(graph: TaskGraph) -> set[str]:
             incoming[dst].append(src)
     ready: set[str] = set()
     for n in graph.nodes:
-        if n.status is not NodeStatus.PENDING:
-            continue
-        if n.node_id == graph.entrypoint:
-            ready.add(n.node_id)
+        if n.status is not TaskNodeState.PENDING:
             continue
         preds = incoming[n.node_id]
         if not preds:
+            ready.add(n.node_id)      # a root: entrypoint, or a runtime-created
             continue
-        if all(statuses.get(p) in TERMINAL_NODE_STATUSES for p in preds):
+        if all(statuses.get(p) in TERMINAL_NODE_STATES for p in preds):
             ready.add(n.node_id)
     return ready
 
@@ -242,17 +395,16 @@ def apply_transition(graph: TaskGraph,
     node = graph.node(transition.node_id)
     if node is None:
         raise ValueError(f"unknown node: {transition.node_id}")
-    if node.status is not transition.from_status:
+    _to = coerce_node_state(transition.to_status)
+    _from = coerce_node_state(transition.from_status)
+    if node.status is not _from:
         raise ValueError(
             f"stale transition: {transition.node_id} is {node.status.value}, "
-            f"not {transition.from_status.value}")
-    if not is_legal_node_transition(transition.from_status,
-                                    transition.to_status):
+            f"not {_from.value}")
+    if not is_legal_node_transition(_from, _to):
         raise ValueError(
-            f"illegal node transition: {transition.from_status.value} -> "
-            f"{transition.to_status.value}")
-    return materialize(graph.with_node(
-        replace(node, status=transition.to_status)))
+            f"illegal node transition: {_from.value} -> {_to.value}")
+    return materialize(graph.with_node(replace(node, status=_to)))
 
 
 def replay_transitions(graph: TaskGraph,
@@ -280,3 +432,254 @@ def divergences(graph: TaskGraph) -> list[str]:
     derived = _compute_ready(graph)
     return sorted(
         n.node_id for n in graph.nodes if n.ready != (n.node_id in derived))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Runtime graph mutation (migration P5)
+#
+# "This is the phase that creates the Persistent Graph Loop property."
+#
+# Every function here is PURE: it returns a new `TaskGraph` and never mutates
+# its input. That is not stylistic. `graph/types.py` is built on frozen
+# dataclasses precisely so history is preserved, and P5's fourth item requires
+# that a task is NEVER mutated into a different task — a replan creates a NEW
+# node and marks the old SUPERSEDED with a pointer. Immutability is what makes
+# replay possible: a mutated-in-place graph cannot be reconstructed from a log.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class GrowthBudgetExceeded(RuntimeError):
+    """Raised when an expansion would exceed the graph-growth budget.
+
+    The audit found graph growth **unbounded** (there was no replanning to
+    bound). A non-terminating expansion is the plan's first named risk for P5,
+    so the budget is mandatory rather than optional — a bound that is not
+    enforced is a comment.
+    """
+
+
+@dataclass(frozen=True)
+class GraphGrowthBudget:
+    """A hard ceiling on the number of nodes a run may materialize."""
+
+    max_nodes: int = 64
+    max_edges: int = 256
+
+    def check(self, graph: "TaskGraph", adding_nodes: int = 0,
+              adding_edges: int = 0) -> None:
+        if len(graph.nodes) + adding_nodes > self.max_nodes:
+            raise GrowthBudgetExceeded(
+                f"node budget exceeded: {len(graph.nodes)} + {adding_nodes} "
+                f"> {self.max_nodes}")
+        if len(graph.edges) + adding_edges > self.max_edges:
+            raise GrowthBudgetExceeded(
+                f"edge budget exceeded: {len(graph.edges)} + {adding_edges} "
+                f"> {self.max_edges}")
+
+
+def _reachable(edges: Iterable[tuple[str, str]], start: str) -> set[str]:
+    """Every node reachable from `start` by following edges forward."""
+    adj: dict[str, list[str]] = {}
+    for src, dst in edges:
+        adj.setdefault(src, []).append(dst)
+    seen: set[str] = set()
+    stack = [start]
+    while stack:
+        cur = stack.pop()
+        for nxt in adj.get(cur, ()):
+            if nxt not in seen:
+                seen.add(nxt)
+                stack.append(nxt)
+    return seen
+
+
+def _find_cycle(nodes: Iterable[str],
+                edges: Iterable[tuple[str, str]]) -> list[str] | None:
+    """Return a cycle as a node-id path, or None. Iterative, deterministic.
+
+    Deterministic by construction: neighbours are visited in sorted order, so
+    the same graph always yields the same cycle (or none). The plan's
+    `test_graph_expand_acyclic` requires that expansion cannot create a cycle,
+    and a non-deterministic detector would make the failure unreproducible.
+    """
+    adj: dict[str, list[str]] = {}
+    for src, dst in edges:
+        adj.setdefault(src, []).append(dst)
+    for k in adj:
+        adj[k].sort()
+
+    WHITE, GREY, BLACK = 0, 1, 2
+    colour: dict[str, int] = {n: WHITE for n in nodes}
+    for root in sorted(colour):
+        if colour[root] != WHITE:
+            continue
+        path: list[str] = []
+        stack: list[tuple[str, int]] = [(root, 0)]
+        while stack:
+            node, i = stack.pop()
+            if i == 0:
+                colour[node] = GREY
+                path.append(node)
+            nxts = adj.get(node, ())
+            if i < len(nxts):
+                stack.append((node, i + 1))
+                nxt = nxts[i]
+                if colour.get(nxt, WHITE) == GREY:
+                    return path[path.index(nxt):] + [nxt]
+                if colour.get(nxt, WHITE) == WHITE:
+                    stack.append((nxt, 0))
+            else:
+                colour[node] = BLACK
+                if path and path[-1] == node:
+                    path.pop()
+    return None
+
+
+def create_node(graph: "TaskGraph", node: "TaskNode",
+                deps: Iterable[str] = (),
+                budget: "GraphGrowthBudget | None" = None) -> "TaskGraph":
+    """Add one node mid-run (`NodeCreate`, WISP_PROPOSAL_PROTOCOL §3.1).
+
+    Refuses a duplicate id, an unknown dependency, and a budget overrun. An
+    unknown dependency is refused rather than silently dropped: a node whose
+    declared prerequisite does not exist can never become ready, and silently
+    accepting it would produce a node that hangs forever with no diagnostic.
+    """
+    budget = budget or GraphGrowthBudget()
+    budget.check(graph, adding_nodes=1, adding_edges=len(tuple(deps)))
+    if graph.node(node.node_id) is not None:
+        raise ValueError(f"duplicate node id: {node.node_id}")
+    deps = tuple(deps)
+    known = {n.node_id for n in graph.nodes}
+    unknown = [d for d in deps if d not in known]
+    if unknown:
+        raise ValueError(f"unknown dependency: {sorted(unknown)}")
+    new_edges = tuple((d, node.node_id) for d in deps)
+    cycle = _find_cycle(known | {node.node_id}, tuple(graph.edges) + new_edges)
+    if cycle:
+        raise ValueError(f"edge would create a cycle: {cycle}")
+    return materialize(replace(
+        graph,
+        entrypoint=graph.entrypoint or node.node_id,
+        nodes=tuple(graph.nodes) + (replace(node, deps=deps),),
+        edges=tuple(graph.edges) + new_edges,
+    ))
+
+
+def expand(graph: "TaskGraph",
+           nodes: Iterable["TaskNode"],
+           edges: Iterable[tuple[str, str]] = (),
+           budget: "GraphGrowthBudget | None" = None) -> "TaskGraph":
+    """Grow the graph by several nodes and edges (`GraphExpand`, §3.3).
+
+    **Acyclic by construction.** The candidate topology is checked before it is
+    adopted, so an expansion that would introduce a cycle is refused with the
+    cycle named. A cyclic graph is not merely wrong — the scheduler would
+    deadlock on it, and a deadlock is indistinguishable from slowness.
+    """
+    budget = budget or GraphGrowthBudget()
+    nodes = tuple(nodes)
+    edges = tuple(edges)
+    budget.check(graph, adding_nodes=len(nodes), adding_edges=len(edges))
+    existing = {n.node_id for n in graph.nodes}
+    for n in nodes:
+        if n.node_id in existing:
+            raise ValueError(f"duplicate node id: {n.node_id}")
+    candidate_nodes = existing | {n.node_id for n in nodes}
+    all_edges = tuple(graph.edges) + edges
+    for src, dst in all_edges:
+        if src not in candidate_nodes or dst not in candidate_nodes:
+            raise ValueError(f"edge references an unknown node: {src} -> {dst}")
+    cycle = _find_cycle(candidate_nodes, all_edges)
+    if cycle:
+        raise ValueError(f"expansion would create a cycle: {cycle}")
+    return materialize(replace(
+        graph,
+        entrypoint=graph.entrypoint or (nodes[0].node_id if nodes else ""),
+        nodes=tuple(graph.nodes) + nodes,
+        edges=all_edges,
+    ))
+
+
+def invalidate(graph: "TaskGraph", node_id: str, *,
+               reason: str = "",
+               budget: "GraphGrowthBudget | None" = None) -> "TaskGraph":
+    """Invalidate a node and **cascade** to everything that depends on it
+    (`GraphInvalidate`, §3.4).
+
+    The cascade is transitive: invalidating `a` invalidates every node
+    reachable from it, because a conclusion drawn from an invalidated premise
+    is itself invalid. A node already settled `SUCCESS` is demoted to
+    `INVALIDATED` — a stale success is exactly what this exists to prevent.
+
+    Returns the new graph; the caller journals one `NodeTransition` per changed
+    node, so the cascade is visible in the log rather than implied by it.
+    """
+    budget = budget or GraphGrowthBudget()
+    if graph.node(node_id) is None:
+        raise ValueError(f"unknown node: {node_id}")
+    doomed = {node_id} | _reachable(graph.edges, node_id)
+    out = graph
+    for nid in sorted(doomed):
+        node = out.node(nid)
+        if node is None or node.status in (TaskNodeState.INVALIDATED,
+                                           TaskNodeState.SUPERSEDED):
+            continue
+        out = materialize(out.with_node(replace(
+            node, status=TaskNodeState.INVALIDATED,
+            detail=reason or node.detail)))
+    return out
+
+
+def supersede(graph: "TaskGraph", old_id: str, new_node: "TaskNode",
+              *, reason: str = "",
+              budget: "GraphGrowthBudget | None" = None) -> "TaskGraph":
+    """Replace a node with a NEW one, retaining the old (P5 item 4).
+
+    *"A task is never mutated into a different task. A replan creates a new
+    node and marks the old SUPERSEDED with a pointer."*
+
+    So the old node is **kept**, with `superseded_by` set and its status moved
+    to `SUPERSEDED`; the new node takes over its dependencies and inherits the
+    dependents that pointed at it. Both directions of the pointer are written,
+    which is what makes the history navigable rather than merely present.
+
+    Raises if the new node would introduce a cycle — a replan that reconnects
+    a dependency to something downstream of it is a real mistake, not a
+    topology to accept.
+    """
+    budget = budget or GraphGrowthBudget()
+    old = graph.node(old_id)
+    if old is None:
+        raise ValueError(f"unknown node: {old_id}")
+    budget.check(graph, adding_nodes=1, adding_edges=len(old.deps) + 1)
+    if graph.node(new_node.node_id) is not None:
+        raise ValueError(f"duplicate node id: {new_node.node_id}")
+
+    # Rewire BOTH directions. Incoming edges (those pointing AT the old node)
+    # move to the replacement, and the old node's own outgoing edges (its
+    # dependents) now originate from the replacement. Rewiring only one
+    # direction leaves the dependents hanging off a superseded node — they
+    # would never see the replanned work, which is the whole point of
+    # replanning.
+    kept_edges: list[tuple[str, str]] = []
+    for src, dst in graph.edges:
+        if dst == old_id:
+            continue                      # replaced by the inherited edges
+        kept_edges.append((new_node.node_id if src == old_id else src, dst))
+    inherited = tuple((d, new_node.node_id) for d in old.deps)
+    candidate_edges = tuple(kept_edges) + inherited
+    candidate_nodes = {n.node_id for n in graph.nodes} | {new_node.node_id}
+    cycle = _find_cycle(candidate_nodes, candidate_edges)
+    if cycle:
+        raise ValueError(f"supersession would create a cycle: {cycle}")
+
+    new = replace(new_node, deps=tuple(old.deps))
+    out = replace(graph,
+                  nodes=tuple(graph.nodes) + (new,),
+                  edges=candidate_edges)
+    out = out.with_node(replace(old, status=TaskNodeState.SUPERSEDED,
+                                ready=False,
+                                superseded_by=new_node.node_id,
+                                detail=reason or old.detail))
+    return materialize(out)

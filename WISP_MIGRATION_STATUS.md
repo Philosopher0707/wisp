@@ -37,7 +37,8 @@
 | **P2** | Introduce the proposal boundary | P1 ✅ | `COMPLETE` | `PHASE_P2_REPORT.md` |
 | **P3** | Independent verification | P2 ✅ | `COMPLETE — stage 3a` (3b is a separate, measured decision) | `PHASE_P3_REPORT.md` |
 | **P4** | Task graph from durable state | P3 ✅ | `COMPLETE` (item 5 deferred) | `PHASE_P4_REPORT.md` |
-| **P5** | Runtime graph mutation | P4 ✅ | `READY TO START` | — |
+| **P5** | Runtime graph mutation | P4 ✅ | `COMPLETE` (item 5 deferred) | `PHASE_P5_REPORT.md` |
+| **P6** | Recovery ladder | P5 ✅ | `READY TO START` | — |
 | **P2** | Introduce the proposal boundary | P1 | `NOT STARTED` | — |
 | **P3** | Independent verification | P2 | `NOT STARTED` | — |
 | **P4** | Task graph from durable state | P2 | `NOT STARTED` | — |
@@ -285,7 +286,152 @@ records them in dedicated lists and never touches `messages` — pinned by `Test
 
 ---
 
-## 5. Findings log (migration-wide)
+## 5. P3 — Independent Verification (stage 3a)
+
+### 5.1 Objective
+
+Make "this succeeded" a **verdict against criteria backed by evidence**, produced by a component that
+is not the one that acted.
+
+### 5.2 The finding that shapes the design
+
+The plan says to generalize the nearest existing analogue. Both existing verdict vocabularies were
+examined and **neither can express the required verdict**:
+
+| Existing | Why it cannot |
+|---|---|
+| `VerificationFloorGuard.resolved()` | a boolean; cannot say "I could not tell", and it is the **actor's own** bookkeeping |
+| `VerificationResult.decision` (`graph/verifier.py:19`) | `("ALLOW","REJECT","RETRY","ESCALATE")` — a **router's** vocabulary; every value presumes a verdict was reached |
+
+So the verdict vocabulary is new and total (`PASS`/`FAIL`/`INCONCLUSIVE`) and routing is **derived**
+(`route_for()`), keeping the graph vocabulary as an output rather than a competitor. `INCONCLUSIVE`
+routes to `RETRY`, never `ALLOW`.
+
+### 5.3 Item-by-item status
+
+| # | Plan item | Status | Evidence |
+|---|---|---|---|
+| 1 | `AcceptanceCriteria` (DETERMINISTIC / ARTIFACT / SEMANTIC, `required`) | `COMPLETE` | `wisp/core/acceptance.py` |
+| 2 | `VerificationRequest` / `VerificationResult` with `INCONCLUSIVE` | `COMPLETE` | `CompletionVerdict` + `route_for()` |
+| 3 | `Evidence` with provenance, generalizing `GraphArtifact` | `COMPLETE` | `Evidence` (content-addressed, `producer`, `observations`) |
+| 4 | Retain and demote `VerificationFloorGuard`; keep invalidate-on-mutation | `COMPLETE` | `floor_guard_criteria/evidence/verdict()`; `TestFloorGuardRetained` (8) |
+| 5 | Structural independence (L1/L2) | `PARTIAL` | `evaluate()` takes no transcript (pinned); evidence names its producer; a second model (L3) is not implemented — the plan makes it preferred, not required |
+| 6 | Completion rule requires non-invalidated evidence | `NOT DONE` | **that is stage 3b** — the plan's staging; `turn_succeeded` is unchanged (pinned) |
+| 7 | Wire `change_tracker.py` into evidence | `NOT DONE` | deferred with 3b |
+
+### 5.4 Completion criteria
+
+- [x] `INCONCLUSIVE` is a reachable, tested outcome
+- [x] A synthetic false-success scenario is blocked
+- [ ] The measured `INCONCLUSIVE` rate at 3b is reported before enabling — **not measured**; requires a working tool path (F8)
+- [~] `test_verification_loop.py` and `test_verification_contract.py` pass unchanged — contract passes, loop has 5 **pre-existing** failures
+- [x] **Zero new failures** (confirmed by rerun)
+- [x] Rollback by one flag, default **off**
+- [ ] `ruff` / `mypy` — not installed
+
+### 5.5 Stage 3a does not gate
+
+`turn_succeeded` still derives from terminal evidence alone (13-H5), and the floor guard still owns the
+completion invariant. The verdict is recorded and **nothing consumes it** — pinned by
+`TestStage3aDoesNotGate`. ADR-0016.
+
+---
+
+## 6. P4 — Materialize a Task Graph from Durable State
+
+### 6.1 Objective
+
+Turn a turn's durable state into an explicit, inspectable task graph, without yet allowing it to change
+during execution.
+
+### 6.2 Reconnaissance result
+
+The plan's third item names the crux and the repository confirms it: `graph/scheduler.py::ready_nodes`
+is a **pure function of `(graph, state)`** with no persistence anywhere — readiness was recomputed on
+every pass and stored nowhere. Materializing it is what makes the graph persistent state rather than a
+recomputation.
+
+### 6.3 Item-by-item status
+
+| # | Plan item | Status | Evidence |
+|---|---|---|---|
+| 1 | Reuse `wisp/graph/`'s types, validator, store and scheduler | `PARTIAL` | types + legality reused unchanged; **the STORE is not** — it opens its own SQLite DB, and a second DB would fragment the durable record (ADR-0019) |
+| 2 | Map each turn's work to `GraphNode`s, one `AGENT` node per iteration | `COMPLETE` | `build_turn_graph()`; the runtime materializes one node per **closed tool exchange** + one terminal node, and says so — iteration boundaries are not observable, so the count is a lower bound |
+| 3 | Materialize `READY` rather than recomputing it | `COMPLETE` | `ready` is a stored field; `divergences()` detects staleness; `apply_transition` re-materializes |
+| 4 | `NodeTransition` as the only write path for node state | `COMPLETE` | AST-pinned in-module **and** tree-wide |
+| 5 | Retire `multi_agent/dag.py` into `wisp/graph/` | `NOT DONE` | **deferred** — §7.4 |
+
+### 6.4 Item 5 deferred, with reason
+
+`dag.py` is on the **live `fanout` path**. Retiring it means re-plumbing `fanout` onto `wisp/graph/`'s
+executor — a change to a working, load-bearing path whose own regression suite
+(`test_13j1_fanout_contract_repair.py`, 13 failures) is **already red for environmental reasons**. Doing
+it now would make a regression the migration caused indistinguishable from one that was already there.
+Recorded as item **M8**, not silently dropped.
+
+### 6.5 Completion criteria
+
+- [x] A turn's work is fully represented as persisted graph rows
+- [x] One transition API; the structural test proves no bypass
+- [x] `test_graph_engine.py`, `test_graph_invariants.py`, `test_canonical_execution_state.py` pass
+- [x] **Zero new failures** — failure set identical to P3's
+- [x] Rollback by one flag, default **off**
+- [x] New code reachable (RULE 11) — end-to-end persistence test drives a real turn
+- [ ] `ruff` / `mypy` — not installed
+
+---
+
+## 7. P5 — Runtime Graph Mutation
+
+### 7.1 Objective
+
+**This is the phase that creates the Persistent Graph Loop property** — the graph changes during
+execution.
+
+### 7.2 Reconnaissance result — the plan's target was wrong, with unusually strong evidence
+
+The plan names Layer B (`graph/types.py`, `executor.py`, `scheduler.py`, `validator.py`, `planner.py`).
+Three facts made that the wrong move:
+
+| Evidence | Consequence |
+|---|---|
+| `graph/scheduler.py::is_finished` lists terminal statuses **explicitly** | a new terminal state makes it return `False` forever — a run that never completes |
+| `test_graph_fuzz.py` / `test_graph_races.py` / `test_graph_resume.py` **do not exist** | the plan's own safety net for that change is absent (F19) |
+| Layer B's executor has **zero** references from `core/runtime.py` / `core/stateless.py` | mutating it would not create the property for the live loop |
+
+### 7.3 Item-by-item status
+
+| # | Plan item | Status | Evidence |
+|---|---|---|---|
+| 1 | Add the 7 missing states | `COMPLETE — superset` | `TaskNodeState` (14), pinned as a ratchet; `SKIPPED` no longer conflates two meanings (ADR-0021) |
+| 2 | `NodeCreate` + `GraphExpand` | `COMPLETE` | `create_node()`, `expand()` — acyclic by construction |
+| 3 | `GraphInvalidate` with cascade | `COMPLETE` | `invalidate()` — transitive; demotes stale `SUCCESS` |
+| 4 | Preserve immutability; replan creates a NEW node | `COMPLETE` | `supersede()` — old node retained as `SUPERSEDED` with a pointer; both edge directions rewired |
+| 5 | Extend the executor to accept a mid-run node | `NOT DONE` | **deferred** — §7.5 |
+| 6 | Graph-growth budget | `COMPLETE` | `GraphGrowthBudget`, enforced on every mutation; the plan's named risk (non-terminating expansion) terminates |
+
+### 7.4 Completion criteria
+
+- [x] A node can be created, executed, invalidated and superseded during a run
+- [x] Cascading invalidation is correct and tested
+- [x] Determinism holds across insertion orderings
+- [x] Growth is bounded and the bound is enforced
+- [~] `test_graph_fuzz.py`, `test_graph_races.py`, `test_graph_resume.py` pass — **the three files do not exist** (F19)
+- [x] **Zero new failures** — failure set identical to P4's
+- [x] Rollback structurally — every mutation is a pure function, nothing on by default
+- [ ] `ruff` / `mypy` — not installed
+
+### 7.5 Item 5 deferred — with reason
+
+The live turn path has **no graph-driven executor to extend**: the turn loop executes tools directly,
+and the P4 graph is a *record* of that work, not its driver. Making the graph drive execution is a
+change of **control**, not an added capability — the point at which the message list stops being
+authoritative, which P4's rollback contract preserves. It should land **with** M9 (message list as a
+projection of the graph) rather than before it. Recorded as item **M11**.
+
+---
+
+## 8. Findings log (migration-wide)
 
 | # | Finding | Phase | Resolution |
 |---|---|---|---|
@@ -306,106 +452,15 @@ records them in dedicated lists and never touches `messages` — pinned by `Test
 | **F15** | **A `read_only` denial is decided by the policy-engine gate, which runs BEFORE the `authorize()` consult** — so it names no controlling layer. Undocumented before P2; surfaced by writing the gate-order corpus RED-first. Relevant to the deferred proposal-boundary work: an outcome must be recorded even for denials that never reach `authorize()` | P2 | Pinned in the corpus with an explanatory comment (ADR-0014) |
 | **F16** | `contracts/tool.py`'s `ToolRequest`/`ToolResult` were **producer-less and consumer-less** (only the re-export and their own test referenced them). `contracts/policy.py`'s `PolicyDecisionEnvelope` still is. `CanonicalEvent` IS wired (`transport/renderer.py`, `contracts/adapters.py`) | P2 | **Fixed for tool** (`wisp/core/proposal.py`); `PolicyDecisionEnvelope` still unwired |
 | **F17** | **`tests/test_speculative_search.py::TestOracle::test_smallest_diff_wins_ties_broken_by_speed` is flaky under the full suite.** It asserts a diff-size ranking, passes 5/5 in isolation and 3/3 at file level, has zero coupling to the P3 surface, and **appeared once in a 129-failure run and was absent from an immediate rerun of the identical code**. Confirmed flaky rather than a regression by re-running the same tree | P3 | Logged; **not** caused by P3. The suite's failure count varies by ±1 run-to-run because of it |
+| **F19** | **Three tests P5's completion criteria require do not exist**: `test_graph_fuzz.py`, `test_graph_races.py`, `test_graph_resume.py`. They are the plan's own safety net for changing Layer B's node vocabulary, and their absence is why that change was not made (ADR-0021) | P5 | Verified absent; recorded |
 | **F18** | `graph/scheduler.py::ready_nodes` recomputed readiness on every pass and stored nothing — so the graph was a *view*, never state, and a divergence between it and any consumer would be silent | P4 | Fixed (ADR-0019/0020) |
 
 ---
 
-## 6. P3 — Independent Verification (stage 3a)
-
-### 6.1 Objective
-
-Make "this succeeded" a **verdict against criteria backed by evidence**, produced by a component that
-is not the one that acted.
-
-### 6.2 The finding that shapes the design
-
-The plan says to generalize the nearest existing analogue. Both existing verdict vocabularies were
-examined and **neither can express the required verdict**:
-
-| Existing | Why it cannot |
-|---|---|
-| `VerificationFloorGuard.resolved()` | a boolean; cannot say "I could not tell", and it is the **actor's own** bookkeeping |
-| `VerificationResult.decision` (`graph/verifier.py:19`) | `("ALLOW","REJECT","RETRY","ESCALATE")` — a **router's** vocabulary; every value presumes a verdict was reached |
-
-So the verdict vocabulary is new and total (`PASS`/`FAIL`/`INCONCLUSIVE`) and routing is **derived**
-(`route_for()`), keeping the graph vocabulary as an output rather than a competitor. `INCONCLUSIVE`
-routes to `RETRY`, never `ALLOW`.
-
-### 6.3 Item-by-item status
-
-| # | Plan item | Status | Evidence |
-|---|---|---|---|
-| 1 | `AcceptanceCriteria` (DETERMINISTIC / ARTIFACT / SEMANTIC, `required`) | `COMPLETE` | `wisp/core/acceptance.py` |
-| 2 | `VerificationRequest` / `VerificationResult` with `INCONCLUSIVE` | `COMPLETE` | `CompletionVerdict` + `route_for()` |
-| 3 | `Evidence` with provenance, generalizing `GraphArtifact` | `COMPLETE` | `Evidence` (content-addressed, `producer`, `observations`) |
-| 4 | Retain and demote `VerificationFloorGuard`; keep invalidate-on-mutation | `COMPLETE` | `floor_guard_criteria/evidence/verdict()`; `TestFloorGuardRetained` (8) |
-| 5 | Structural independence (L1/L2) | `PARTIAL` | `evaluate()` takes no transcript (pinned); evidence names its producer; a second model (L3) is not implemented — the plan makes it preferred, not required |
-| 6 | Completion rule requires non-invalidated evidence | `NOT DONE` | **that is stage 3b** — the plan's staging; `turn_succeeded` is unchanged (pinned) |
-| 7 | Wire `change_tracker.py` into evidence | `NOT DONE` | deferred with 3b |
-
-### 6.4 Completion criteria
-
-- [x] `INCONCLUSIVE` is a reachable, tested outcome
-- [x] A synthetic false-success scenario is blocked
-- [ ] The measured `INCONCLUSIVE` rate at 3b is reported before enabling — **not measured**; requires a working tool path (F8)
-- [~] `test_verification_loop.py` and `test_verification_contract.py` pass unchanged — contract passes, loop has 5 **pre-existing** failures
-- [x] **Zero new failures** (confirmed by rerun)
-- [x] Rollback by one flag, default **off**
-- [ ] `ruff` / `mypy` — not installed
-
-### 6.5 Stage 3a does not gate
-
-`turn_succeeded` still derives from terminal evidence alone (13-H5), and the floor guard still owns the
-completion invariant. The verdict is recorded and **nothing consumes it** — pinned by
-`TestStage3aDoesNotGate`. ADR-0016.
-
 ---
 
-## 7. P4 — Materialize a Task Graph from Durable State
+## 9. Change log
 
-### 7.1 Objective
-
-Turn a turn's durable state into an explicit, inspectable task graph, without yet allowing it to change
-during execution.
-
-### 7.2 Reconnaissance result
-
-The plan's third item names the crux and the repository confirms it: `graph/scheduler.py::ready_nodes`
-is a **pure function of `(graph, state)`** with no persistence anywhere — readiness was recomputed on
-every pass and stored nowhere. Materializing it is what makes the graph persistent state rather than a
-recomputation.
-
-### 7.3 Item-by-item status
-
-| # | Plan item | Status | Evidence |
-|---|---|---|---|
-| 1 | Reuse `wisp/graph/`'s types, validator, store and scheduler | `PARTIAL` | types + legality reused unchanged; **the STORE is not** — it opens its own SQLite DB, and a second DB would fragment the durable record (ADR-0019) |
-| 2 | Map each turn's work to `GraphNode`s, one `AGENT` node per iteration | `COMPLETE` | `build_turn_graph()`; the runtime materializes one node per **closed tool exchange** + one terminal node, and says so — iteration boundaries are not observable, so the count is a lower bound |
-| 3 | Materialize `READY` rather than recomputing it | `COMPLETE` | `ready` is a stored field; `divergences()` detects staleness; `apply_transition` re-materializes |
-| 4 | `NodeTransition` as the only write path for node state | `COMPLETE` | AST-pinned in-module **and** tree-wide |
-| 5 | Retire `multi_agent/dag.py` into `wisp/graph/` | `NOT DONE` | **deferred** — §7.4 |
-
-### 7.4 Item 5 deferred, with reason
-
-`dag.py` is on the **live `fanout` path**. Retiring it means re-plumbing `fanout` onto `wisp/graph/`'s
-executor — a change to a working, load-bearing path whose own regression suite
-(`test_13j1_fanout_contract_repair.py`, 13 failures) is **already red for environmental reasons**. Doing
-it now would make a regression the migration caused indistinguishable from one that was already there.
-Recorded as item **M8**, not silently dropped.
-
-### 7.5 Completion criteria
-
-- [x] A turn's work is fully represented as persisted graph rows
-- [x] One transition API; the structural test proves no bypass
-- [x] `test_graph_engine.py`, `test_graph_invariants.py`, `test_canonical_execution_state.py` pass
-- [x] **Zero new failures** — failure set identical to P3's
-- [x] Rollback by one flag, default **off**
-- [x] New code reachable (RULE 11) — end-to-end persistence test drives a real turn
-- [ ] `ruff` / `mypy` — not installed
-
----
-
-## 8. Change log
 
 
 
@@ -435,8 +490,12 @@ Recorded as item **M8**, not silently dropped.
 | 2026-09-22 | P4 | `TASK_GRAPH` + `NODE_TRANSITION` journal events (audit-only) + `Session.rebuild_task_graph()` | projection tests |
 | 2026-09-22 | P4 | `task_graph` flag defaults **off** — the message list remains authoritative (the plan's rollback contract) | flag test |
 | 2026-09-22 | P4 | **Regression verified: 128 → 128, failure set identical to P3. 0 new.** Report: `PHASE_P4_REPORT.md` | full suite, `diff -q` |
+| 2026-09-22 | P5 | Extended node vocabulary (`TaskNodeState`, 14 states) as a **superset** of `NodeStatus`; Layer B untouched | 14 tests |
+| 2026-09-22 | P5 | `create_node` / `expand` / `invalidate` (transitive cascade) / `supersede` (both edge directions) + enforced growth budget | 42 tests |
+| 2026-09-22 | P5 | Three bugs found in my own implementation: `str, Enum` ≠ `StrEnum`; `TaskNode` did not coerce its status; `supersede` rewired one direction | caught by the new tests |
+| 2026-09-22 | P5 | **Regression verified: 128 → 128, failure set identical to P4. 0 new.** Report: `PHASE_P5_REPORT.md` | full suite, `diff -q` |
 
-### 8.1 Regression summary
+### 9.1 Regression summary
 
 | Run | Failures + errors |
 |---|---|

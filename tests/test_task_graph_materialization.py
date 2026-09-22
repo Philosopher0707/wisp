@@ -240,12 +240,14 @@ class TestReadyMaterialized:
 
 class TestSingleTransitionApi:
     def test_apply_transition_is_the_only_status_writer(self):
-        """AST: inside `core/task_graph.py`, `status` is only ever set via
-        `replace(node, status=...)` inside `apply_transition`. A second write
-        site would be the ~30-mutation problem the audit found, rebuilt."""
+        """AST: inside `core/task_graph.py`, `status` is only ever written by
+        the CONTROLLER — `apply_transition` plus the P5 mutation functions
+        (`invalidate`, `supersede`). A write site outside that set would be the
+        ~30-mutation problem the audit found, rebuilt."""
         tree = ast.parse((REPO / "wisp" / "core" / "task_graph.py")
                          .read_text(encoding="utf-8"))
-        writers: list[str] = []
+        controller = {"apply_transition", "invalidate", "supersede"}
+        writers: set[str] = set()
         for fn in ast.walk(tree):
             if not isinstance(fn, ast.FunctionDef):
                 continue
@@ -254,9 +256,26 @@ class TestSingleTransitionApi:
                         and isinstance(node.func, ast.Name)
                         and node.func.id == "replace"
                         and any(k.arg == "status" for k in node.keywords)):
-                    writers.append(fn.name)
-        assert set(writers) <= {"apply_transition"}, (
-            f"status is written outside apply_transition: {sorted(set(writers))}")
+                    writers.add(fn.name)
+        assert writers <= controller, (
+            f"status is written outside the controller: {sorted(writers - controller)}")
+
+    def test_the_controller_has_exactly_three_writers(self):
+        """Pinning the arity too: a NEW writer appearing is a change to the
+        write-path contract and should be a conscious one."""
+        tree = ast.parse((REPO / "wisp" / "core" / "task_graph.py")
+                         .read_text(encoding="utf-8"))
+        writers: set[str] = set()
+        for fn in ast.walk(tree):
+            if not isinstance(fn, ast.FunctionDef):
+                continue
+            for node in ast.walk(fn):
+                if (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Name)
+                        and node.func.id == "replace"
+                        and any(k.arg == "status" for k in node.keywords)):
+                    writers.add(fn.name)
+        assert writers == {"apply_transition", "invalidate", "supersede"}, writers
 
     def test_no_module_outside_task_graph_writes_node_status(self):
         """No other module constructs a `TaskNode` with a status, which would
@@ -297,15 +316,25 @@ class TestSingleTransitionApi:
                 from_status=NodeStatus.PENDING, to_status=NodeStatus.RUNNING))
 
     def test_terminal_states_have_no_outgoing_edges(self):
-        for st in TERMINAL_NODE_STATUSES:
+        """Renamed concept under P5. "Settled for scheduling" is NOT "has no
+        outgoing edges": a settled node can still be INVALIDATED (a stale
+        success is what invalidation exists to demote). `FINAL_NODE_STATES` is
+        the no-outgoing-edge set."""
+        from wisp.core.task_graph import FINAL_NODE_STATES
+        for st in FINAL_NODE_STATES:
             assert LEGAL_NODE_TRANSITIONS[st] == ()
 
+    def test_a_settled_node_can_still_be_invalidated(self):
+        assert LEGAL_NODE_TRANSITIONS[NodeStatus.SUCCESS]
+
     def test_every_status_appears_in_the_machine(self):
-        assert set(LEGAL_NODE_TRANSITIONS) == set(NodeStatus)
+        from wisp.core.task_graph import TaskNodeState
+        assert set(LEGAL_NODE_TRANSITIONS) == set(TaskNodeState)
 
     def test_legality_helper_agrees_with_the_table(self):
+        from wisp.core.task_graph import TaskNodeState
         for frm, allowed in LEGAL_NODE_TRANSITIONS.items():
-            for to in NodeStatus:
+            for to in TaskNodeState:
                 assert is_legal_node_transition(frm, to) == (to in allowed)
 
     def test_apply_transition_does_not_mutate_the_input(self):
