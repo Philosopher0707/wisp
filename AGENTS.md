@@ -143,11 +143,11 @@ python3 -m pytest tests/test_contracts_*.py tests/test_auth_*.py tests/test_runs
   tests/test_policy_*.py tests/test_trace_*.py tests/test_eval_*.py \
   tests/test_task_*.py tests/test_release_*.py tests/test_no_bypass.py -q
 
-# Durable record + proposal boundary (migration P0-P2)
+# Durable record + proposal boundary + acceptance verdicts (migration P0-P3a)
 python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_incremental.py \
   tests/test_action_idempotency_key.py tests/test_proposal_boundary_records.py \
   tests/test_proposal_boundary_no_bypass.py tests/test_verdict_layer_recorded.py \
-  tests/test_gate_order_corpus.py -q
+  tests/test_gate_order_corpus.py tests/test_acceptance_verdict.py -q
 ```
 
 ### Reachability is mandatory for new durable code
