@@ -539,6 +539,65 @@ through the return channel instead of publishing it.
 
 ---
 
+## ADR-0019 — The task graph journals through `UnifiedStore`, not `GraphStore`
+
+**Status:** ACCEPTED
+**Phase:** P4
+**Context:** P4 says to *"reuse `wisp/graph/`'s types, validator, store and scheduler."* The types and
+legality rules are reused unchanged. The **store** is not, and the reason is structural:
+`GraphStore.__init__` opens **its own SQLite database** (`graph/store.py:112-120`, `_conn()` at
+`:122-129`), separate from `UnifiedStore`.
+
+**Decision:** Reuse `wisp/graph/`'s **types** (`NodeType`, `NodeStatus`) and its **legality discipline**
+(the `LEGAL_TRANSITIONS` shape from `runs/record.py`), but journal the graph through `UnifiedStore` as
+`TASK_GRAPH` + `NODE_TRANSITION` session events.
+
+**Rationale — two reasons, one of them the plan's own risk note:**
+
+1. A second SQLite database would fragment the durable record that P0-P3 spent four phases
+   consolidating into one append-only journal. "Which file holds the truth about this turn?" should
+   have one answer.
+2. P4's stated risk is *"divergence between the graph and the message list."* The plan's own mitigation
+   is to make the message list a **projection of the graph** (`WISP_TARGET_ARCHITECTURE.md` C6). A graph
+   that replays from the same journal as the transcript is what makes that possible; a graph in a
+   separate database could not be projected from, only joined to.
+
+**Consequence:** `Session.rebuild_task_graph()` reconstructs the graph from the log alone, so the
+persisted graph is a **cache** and the journal is the truth. Pinned by
+`test_session_rebuilds_its_graph_from_the_log`.
+
+**Reversal condition:** If the graph ever needs to be queried independently of a session — cross-session
+analytics, for instance — `GraphStore` becomes the right home, and the projection property is lost
+deliberately rather than accidentally.
+
+---
+
+## ADR-0020 — `PENDING` may settle directly; terminal states stay frozen
+
+**Status:** ACCEPTED
+**Phase:** P4
+**Context:** The first `LEGAL_NODE_TRANSITIONS` allowed only
+`PENDING → RUNNING | SKIPPED | CANCELLED`. Materializing a graph **retroactively** from a completed
+turn immediately failed with `illegal node transition: pending -> success`.
+
+**Decision:** Allow `PENDING` to settle directly (`→ SUCCESS | FAILURE | TIMEOUT`), in addition to via
+`RUNNING`. Terminal states keep **no** outgoing edges.
+
+**Rationale:** This is not laxity. A graph materialized from a turn that already finished has no
+observed `RUNNING` step to record, and a node whose work was instantaneous has none either. Refusing
+the settlement would force a caller to write a transition that never happened — manufacturing history
+to satisfy a state machine. The errors the machine still catches are the ones that matter: anything
+leaving a **terminal** state, an unknown node, and a stale `from_status`.
+
+**Consequence:** `success -> running` is still refused (pinned by
+`test_illegal_transition_is_refused`); `pending -> success` is permitted.
+
+**Reversal condition:** If a future phase needs to distinguish "ran and succeeded" from "settled
+without running", add an explicit `RUNNING` requirement for the node kinds where that distinction is
+load-bearing — not globally.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -561,3 +620,5 @@ through the return channel instead of publishing it.
 | 0016 | P3 ships in two stages, and stage 3a does not gate | P3 | ACCEPTED |
 | 0017 | The floor criterion is an implication, not a predicate | P3 | ACCEPTED |
 | 0018 | The engine publishes its guard; the runtime only reads it | P3 | ACCEPTED |
+| 0019 | The task graph journals through `UnifiedStore`, not `GraphStore` | P4 | ACCEPTED |
+| 0020 | `PENDING` may settle directly; terminal states stay frozen | P4 | ACCEPTED |

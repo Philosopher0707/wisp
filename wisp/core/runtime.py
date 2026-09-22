@@ -658,6 +658,13 @@ class AgentRuntime:
             verdict_recording = bool(
                 getattr(getattr(self, "config", None), "record_verdict", False)
                 and self.session_repo is not None)
+            # Migration P4: materialize the turn as a task graph. Defaults OFF
+            # for the same reason as `record_verdict` — it adds records to the
+            # log of every existing caller — and because the message list
+            # remains authoritative, which is the plan's rollback contract.
+            task_graph_recording = bool(
+                getattr(getattr(self, "config", None), "task_graph", False)
+                and self.session_repo is not None)
             # Provider-visible injections the core appended to its LOCAL
             # messages mid-turn (verification nudges, steering notes,
             # budget notice). Persisted in the finally block so
@@ -852,6 +859,62 @@ class AgentRuntime:
                         journal_events.append(SessionEvent.assistant_message(
                             0, "".join(assistant_content)))
 
+                # Migration P4 — materialize the turn as a task graph.
+                #
+                # RECORDED, not enforced: the message list remains
+                # authoritative, exactly as the plan's rollback strategy
+                # requires. The graph is built from what the turn OBSERVABLY
+                # did — one node per closed tool exchange, plus a terminal
+                # node for the final assistant output.
+                #
+                # It is deliberately a faithful record of observable work
+                # units rather than a claim about the model's internal loop
+                # count: a content-only iteration leaves no exchange, so the
+                # node count is a lower bound on iterations and is described
+                # as one. Inventing nodes for iterations nobody observed would
+                # be the graph equivalent of a fabricated success.
+                if task_graph_recording and journal_fidelity:
+                    try:
+                        from wisp.core.session import SessionEvent
+                        from wisp.core.task_graph import (
+                            NodeStatus, NodeTransition, apply_transition,
+                            build_turn_graph, materialize,
+                        )
+                        _exchanges = _group_exchanges(tool_sequence)
+                        _work_units = len(_exchanges) + 1  # + the final output
+                        _graph = materialize(build_turn_graph(sid, _work_units))
+                        journal_events.append(SessionEvent.task_graph_event(
+                            0, _graph.to_dict()))
+                        _seq = 0
+                        for _i in range(_work_units):
+                            _seq += 1
+                            _to = (NodeStatus.SUCCESS if turn_succeeded
+                                   else NodeStatus.FAILURE)
+                            _node = _graph.node(f"turn:{_i}")
+                            if _node is None or _node.status is _to:
+                                continue
+                            _graph = apply_transition(_graph, NodeTransition(
+                                run_id=sid, node_id=f"turn:{_i}",
+                                from_status=_node.status, to_status=_to,
+                                seq=_seq,
+                                reason=("settled at turn end"
+                                        if turn_succeeded
+                                        else "turn did not succeed"),
+                            ))
+                            journal_events.append(
+                                SessionEvent.node_transition_event(
+                                    0, NodeTransition(
+                                        run_id=sid, node_id=f"turn:{_i}",
+                                        from_status=NodeStatus.PENDING,
+                                        to_status=_to, seq=_seq,
+                                        reason=("settled at turn end"
+                                                if turn_succeeded
+                                                else "turn did not succeed"),
+                                    ).to_dict()))
+                    except Exception:
+                        logger.debug("task graph materialization failed",
+                                     exc_info=True)
+
                 # Migration P3 (stage 3a) — RECORD the completion verdict.
                 #
                 # Recorded, not enforced. The completion rule is unchanged:
@@ -898,7 +961,8 @@ class AgentRuntime:
                 # BEFORE the terminal event, so the log stays gap-free and
                 # strictly increasing. Dropped entirely when the repository is
                 # absent or both writers are off.
-                if (journal_fidelity or proposal_boundary or verdict_recording) \
+                if (journal_fidelity or proposal_boundary or verdict_recording
+                        or task_graph_recording) \
                         and journal_events and self.session_repo is not None:
                     from dataclasses import replace as _replace_event
                     stamped: list[Any] = []

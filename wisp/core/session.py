@@ -33,6 +33,12 @@ class SessionEventType(StrEnum):
     # like PROPOSAL/OUTCOME: it reports what verification concluded without
     # becoming part of the transcript.
     VERDICT = "verdict"
+    # Migration P4 — the materialized task graph and its transitions.
+    # AUDIT-ONLY. `TASK_GRAPH` records the structure; `NODE_TRANSITION`
+    # records every node state change, so the graph is a PROJECTION of the
+    # journal and can be rebuilt by replay rather than trusted as a cache.
+    TASK_GRAPH = "task_graph"
+    NODE_TRANSITION = "node_transition"
     COMPACTED = "compacted"
     ERROR = "error"
     DONE = "done"
@@ -132,6 +138,22 @@ class SessionEvent:
         return cls(SessionEventType.VERDICT, seq, {"verdict": verdict})
 
     @classmethod
+    def task_graph_event(cls, seq: int, graph: dict) -> SessionEvent:
+        """The materialized task graph's STRUCTURE (migration P4).
+
+        Structure only. Node state arrives as `NODE_TRANSITION` events, so the
+        graph is rebuilt by replay and the persisted copy is a cache — never a
+        second truth that could drift from the log.
+        """
+        return cls(SessionEventType.TASK_GRAPH, seq, {"graph": graph})
+
+    @classmethod
+    def node_transition_event(cls, seq: int, transition: dict) -> SessionEvent:
+        """One node state change — the ONLY write path for node state (P4)."""
+        return cls(SessionEventType.NODE_TRANSITION, seq,
+                   {"transition": transition})
+
+    @classmethod
     def compacted(cls, seq: int, before_count: int, after_count: int, summary: str = "") -> SessionEvent:
         return cls(SessionEventType.COMPACTED, seq, {"before_count": before_count, "after_count": after_count, "summary": summary})
 
@@ -178,6 +200,28 @@ class Session:
     outcomes: list[dict] = field(default_factory=list)
     # Recorded completion verdicts (migration P3, stage 3a). Audit-only.
     verdicts: list[dict] = field(default_factory=list)
+    # The materialized task graph (migration P4). `task_graph` is the
+    # structure; `node_transitions` is the ordered state log it replays from.
+    # Audit-only — never contributes to `messages`.
+    task_graph: dict = field(default_factory=dict)
+    node_transitions: list[dict] = field(default_factory=list)
+
+    def rebuild_task_graph(self) -> dict:
+        """Rebuild the graph by replaying its transitions (migration P4).
+
+        Demonstrates the projection property: the persisted graph is a cache,
+        and this reconstructs the same graph from the log alone.
+        """
+        from wisp.core.task_graph import (
+            NodeTransition, replay_transitions, TaskGraph,
+        )
+
+        if not self.task_graph:
+            return {}
+        graph = TaskGraph.from_dict(self.task_graph)
+        transitions = [NodeTransition.from_dict(t)
+                       for t in self.node_transitions]
+        return replay_transitions(graph, transitions).to_dict()
 
     def unresolved_actions(self) -> list[dict]:
         """Actions dispatched but never resolved (migration P1).
@@ -282,6 +326,19 @@ class Session:
                     **dict(event.payload.get("verdict") or {}),
                 })
 
+            case SessionEventType.TASK_GRAPH:
+                # Audit-only (migration P4). Structure, not state.
+                self.task_graph = dict(event.payload.get("graph") or {})
+
+            case SessionEventType.NODE_TRANSITION:
+                # Audit-only. The ordered transition log the graph replays
+                # from; `task_graph` above is a cache of the same truth.
+                self.node_transitions.append({
+                    "sequence_num": event.sequence_num,
+                    "timestamp": event.timestamp,
+                    **dict(event.payload.get("transition") or {}),
+                })
+
             case SessionEventType.COMPACTED:                self.compaction_history.append({
                     "before_count": event.payload["before_count"],
                     "after_count": event.payload["after_count"],
@@ -320,6 +377,8 @@ class Session:
         self.proposals.clear()
         self.outcomes.clear()
         self.verdicts.clear()
+        self.task_graph = {}
+        self.node_transitions.clear()
         self.sequence_num = 0
         self.turn_count = 0
         self.unknown_events = 0

@@ -36,7 +36,8 @@
 | **P1** | Journal turn transitions | P0 ✅ | `COMPLETE` (item 3 deferred to P2) | `PHASE_P1_REPORT.md` |
 | **P2** | Introduce the proposal boundary | P1 ✅ | `COMPLETE` | `PHASE_P2_REPORT.md` |
 | **P3** | Independent verification | P2 ✅ | `COMPLETE — stage 3a` (3b is a separate, measured decision) | `PHASE_P3_REPORT.md` |
-| **P4** | Task graph from durable state | P2 ✅ | `READY TO START` (3b measurement outstanding) | — |
+| **P4** | Task graph from durable state | P3 ✅ | `COMPLETE` (item 5 deferred) | `PHASE_P4_REPORT.md` |
+| **P5** | Runtime graph mutation | P4 ✅ | `READY TO START` | — |
 | **P2** | Introduce the proposal boundary | P1 | `NOT STARTED` | — |
 | **P3** | Independent verification | P2 | `NOT STARTED` | — |
 | **P4** | Task graph from durable state | P2 | `NOT STARTED` | — |
@@ -305,6 +306,7 @@ records them in dedicated lists and never touches `messages` — pinned by `Test
 | **F15** | **A `read_only` denial is decided by the policy-engine gate, which runs BEFORE the `authorize()` consult** — so it names no controlling layer. Undocumented before P2; surfaced by writing the gate-order corpus RED-first. Relevant to the deferred proposal-boundary work: an outcome must be recorded even for denials that never reach `authorize()` | P2 | Pinned in the corpus with an explanatory comment (ADR-0014) |
 | **F16** | `contracts/tool.py`'s `ToolRequest`/`ToolResult` were **producer-less and consumer-less** (only the re-export and their own test referenced them). `contracts/policy.py`'s `PolicyDecisionEnvelope` still is. `CanonicalEvent` IS wired (`transport/renderer.py`, `contracts/adapters.py`) | P2 | **Fixed for tool** (`wisp/core/proposal.py`); `PolicyDecisionEnvelope` still unwired |
 | **F17** | **`tests/test_speculative_search.py::TestOracle::test_smallest_diff_wins_ties_broken_by_speed` is flaky under the full suite.** It asserts a diff-size ranking, passes 5/5 in isolation and 3/3 at file level, has zero coupling to the P3 surface, and **appeared once in a 129-failure run and was absent from an immediate rerun of the identical code**. Confirmed flaky rather than a regression by re-running the same tree | P3 | Logged; **not** caused by P3. The suite's failure count varies by ±1 run-to-run because of it |
+| **F18** | `graph/scheduler.py::ready_nodes` recomputed readiness on every pass and stored nothing — so the graph was a *view*, never state, and a divergence between it and any consumer would be silent | P4 | Fixed (ADR-0019/0020) |
 
 ---
 
@@ -359,7 +361,52 @@ completion invariant. The verdict is recorded and **nothing consumes it** — pi
 
 ---
 
-## 7. Change log
+## 7. P4 — Materialize a Task Graph from Durable State
+
+### 7.1 Objective
+
+Turn a turn's durable state into an explicit, inspectable task graph, without yet allowing it to change
+during execution.
+
+### 7.2 Reconnaissance result
+
+The plan's third item names the crux and the repository confirms it: `graph/scheduler.py::ready_nodes`
+is a **pure function of `(graph, state)`** with no persistence anywhere — readiness was recomputed on
+every pass and stored nowhere. Materializing it is what makes the graph persistent state rather than a
+recomputation.
+
+### 7.3 Item-by-item status
+
+| # | Plan item | Status | Evidence |
+|---|---|---|---|
+| 1 | Reuse `wisp/graph/`'s types, validator, store and scheduler | `PARTIAL` | types + legality reused unchanged; **the STORE is not** — it opens its own SQLite DB, and a second DB would fragment the durable record (ADR-0019) |
+| 2 | Map each turn's work to `GraphNode`s, one `AGENT` node per iteration | `COMPLETE` | `build_turn_graph()`; the runtime materializes one node per **closed tool exchange** + one terminal node, and says so — iteration boundaries are not observable, so the count is a lower bound |
+| 3 | Materialize `READY` rather than recomputing it | `COMPLETE` | `ready` is a stored field; `divergences()` detects staleness; `apply_transition` re-materializes |
+| 4 | `NodeTransition` as the only write path for node state | `COMPLETE` | AST-pinned in-module **and** tree-wide |
+| 5 | Retire `multi_agent/dag.py` into `wisp/graph/` | `NOT DONE` | **deferred** — §7.4 |
+
+### 7.4 Item 5 deferred, with reason
+
+`dag.py` is on the **live `fanout` path**. Retiring it means re-plumbing `fanout` onto `wisp/graph/`'s
+executor — a change to a working, load-bearing path whose own regression suite
+(`test_13j1_fanout_contract_repair.py`, 13 failures) is **already red for environmental reasons**. Doing
+it now would make a regression the migration caused indistinguishable from one that was already there.
+Recorded as item **M8**, not silently dropped.
+
+### 7.5 Completion criteria
+
+- [x] A turn's work is fully represented as persisted graph rows
+- [x] One transition API; the structural test proves no bypass
+- [x] `test_graph_engine.py`, `test_graph_invariants.py`, `test_canonical_execution_state.py` pass
+- [x] **Zero new failures** — failure set identical to P3's
+- [x] Rollback by one flag, default **off**
+- [x] New code reachable (RULE 11) — end-to-end persistence test drives a real turn
+- [ ] `ruff` / `mypy` — not installed
+
+---
+
+## 8. Change log
+
 
 
 | Date | Phase | Change | Tests |
@@ -384,8 +431,12 @@ completion invariant. The verdict is recorded and **nothing consumes it** — pi
 | 2026-09-22 | P3 | Stage 3a: `wisp/core/acceptance.py` (criteria, evidence, verdicts) + retain-and-demote projection of the floor guard; `VERDICT` recorded, **not** gated | 60 tests |
 | 2026-09-22 | P3 | `record_verdict` defaults **off** — unlike P0–P2, it would add a record to every existing caller's log | flag test |
 | 2026-09-22 | P3 | **Regression verified: 0 new.** A first run read 129; an immediate rerun of the identical tree read 128, proving the `+1` flaky (F17) | full suite, twice, `diff -q` |
+| 2026-09-22 | P4 | `wisp/core/task_graph.py`: materialized readiness, one validated transition API, journal projection | 35 tests |
+| 2026-09-22 | P4 | `TASK_GRAPH` + `NODE_TRANSITION` journal events (audit-only) + `Session.rebuild_task_graph()` | projection tests |
+| 2026-09-22 | P4 | `task_graph` flag defaults **off** — the message list remains authoritative (the plan's rollback contract) | flag test |
+| 2026-09-22 | P4 | **Regression verified: 128 → 128, failure set identical to P3. 0 new.** Report: `PHASE_P4_REPORT.md` | full suite, `diff -q` |
 
-### 7.1 Regression summary
+### 8.1 Regression summary
 
 | Run | Failures + errors |
 |---|---|

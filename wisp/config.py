@@ -328,6 +328,17 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "env_var": "WISP_RECORD_VERDICT",
     },
+    "task_graph": {
+        "type": bool,
+        "default": False,
+        "description": (
+            "Migration P4 rollback flag: materialize each turn as a task graph "
+            "of AGENT nodes with persisted readiness, recorded as TASK_GRAPH + "
+            "NODE_TRANSITION events. Off -> the message list remains "
+            "authoritative and no graph is recorded. Defaults OFF."
+        ),
+        "env_var": "WISP_TASK_GRAPH",
+    },
     "tool_pool_size": {
         "type": int,
         "default": 8,
@@ -621,6 +632,7 @@ class WispConfig:
     turn_journal: bool
     proposal_boundary: bool
     record_verdict: bool
+    task_graph: bool
 
     # ── Modes & permissions ───────────────────────────────────────
     permission_mode: PermissionMode | str
@@ -899,6 +911,9 @@ class WispConfig:
         )
         object.__setattr__(self, "record_verdict",
             _parse_bool(get_setting("record_verdict", "false"), False)
+        )
+        object.__setattr__(self, "task_graph",
+            _parse_bool(get_setting("task_graph", "false"), False)
         )
 
     def load_context_files(self) -> str:
