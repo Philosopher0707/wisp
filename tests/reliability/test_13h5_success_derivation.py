@@ -192,7 +192,12 @@ class TestSuccessStillComplete:
         evs = _run_turn(runtime, _session(ws, "s1"))
         assert _types(evs).count("done") == 1
         assert repo.was_last_turn_complete("s1") is True
-        assert _repo_types(repo, "s1") == ["user_message", "done"]
+        # Migration P0: the assistant turn body is journaled as well, so the
+        # log is replayable. The §9 intent below is unchanged — success still
+        # writes exactly one DONE, and DONE is still the terminal row.
+        assert _repo_types(repo, "s1") == [
+            "user_message", "assistant_message", "done"]
+        assert _repo_types(repo, "s1").count("done") == 1
 
     def test_s2_tool_turn_clean_finish(self, tmp_path):
         runtime, repo, ws = _runtime(_DictProvider([
@@ -322,13 +327,18 @@ class TestResumeAfterFailure:
         evs1 = _run_turn(runtime, session, prompt="first")
         assert "done" not in _types(evs1)
         assert repo.was_last_turn_complete("rs") is False
-        # resume: recovery replays persisted prompts (tool history shed),
-        # then the new turn executes and completes.
         had_exchanges = any(m.get("role") == "tool" for m in session["messages"])
         assert had_exchanges
         evs2 = _run_turn(runtime, session, prompt="second")
         assert _types(evs2).count("done") == 1
-        assert all(m.get("role") != "tool" for m in session["messages"])
+        # Migration P0 changed this deliberately. Recovery used to shed tool
+        # history, because the event log carried no assistant/tool rows and
+        # `load_session()` could only return the user messages — replay
+        # overwrote the live transcript with a user-only list. Now that the
+        # turn body is journaled, recovery restores it, and the replayed
+        # transcript stays provider-valid (every tool_calls block is followed
+        # by a reply for each id).
+        assert any(m.get("role") == "tool" for m in session["messages"])
         assert [m.get("content") for m in session["messages"]
                 if m.get("role") == "user"] == ["first", "second"]
 

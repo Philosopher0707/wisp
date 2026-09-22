@@ -265,6 +265,57 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Fully autonomous coding agent — auto-approves safe writes/bash without human prompts (Cursor/Aider mode). Dangerous commands still blocked. (Legacy GraphRunner reference removed in 12.5A; canonical runtime is wisp/graph.)",
         "env_var": "WISP_AUTONOMOUS",
     },
+    "durable_runs": {
+        "type": bool,
+        "default": True,
+        "description": (
+            "Migration P0 rollback flag: persist a durable RunRecord per turn and "
+            "give BackgroundAgentManager its SQLiteRunStore (durable admission, "
+            "leases, idempotency, crash recovery). Off restores the pre-migration "
+            "in-memory-only behavior exactly."
+        ),
+        "env_var": "WISP_DURABLE_RUNS",
+    },
+    "session_event_fidelity": {
+        "type": bool,
+        "default": True,
+        "description": (
+            "Migration P0 rollback flag: journal assistant_message / tool_call / "
+            "tool_result events into the append-only session event log so replay "
+            "can reconstruct a turn. Off writes only user_message / error / done, "
+            "as before."
+        ),
+        "env_var": "WISP_SESSION_EVENT_FIDELITY",
+    },
+    "turn_spans": {
+        "type": bool,
+        "default": True,
+        "description": (
+            "Migration P0 rollback flag: emit a trace span per turn and per tool "
+            "call into the SQLite trace store. Off emits no spans, as before."
+        ),
+        "env_var": "WISP_TURN_SPANS",
+    },
+    "turn_journal": {
+        "type": bool,
+        "default": True,
+        "description": (
+            "Migration P1 rollback flag: journal each tool exchange the moment "
+            "it closes, so a crash mid-turn leaves the completed exchanges on "
+            "disk. Off writes the whole turn body once at turn end, as before."
+        ),
+        "env_var": "WISP_TURN_JOURNAL",
+    },
+    "proposal_boundary": {
+        "type": bool,
+        "default": True,
+        "description": (
+            "Migration P2 rollback flag: record a ToolRequest proposal and a "
+            "ToolResult outcome for every tool call, including rejections. "
+            "Off → no proposal/outcome records, as before."
+        ),
+        "env_var": "WISP_PROPOSAL_BOUNDARY",
+    },
     "tool_pool_size": {
         "type": int,
         "default": 8,
@@ -545,6 +596,19 @@ class WispConfig:
     autonomous: bool
     chars_per_token: int
 
+    # ── Durable runtime layer (migration P0) ──────────────────────
+    # Each flag gates one independent concern so a partial rollback is
+    # possible; all default ON because every write is additive and
+    # best-effort (see WISP_ARCHITECTURE_DECISIONS.md ADR-0002/0004).
+    # Consumers read these with getattr(config, name, True) so test
+    # doubles predating the flags keep working — the same convention
+    # `thin_tools` uses (core/stateless.py:1189).
+    durable_runs: bool
+    session_event_fidelity: bool
+    turn_spans: bool
+    turn_journal: bool
+    proposal_boundary: bool
+
     # ── Modes & permissions ───────────────────────────────────────
     permission_mode: PermissionMode | str
     capability_filtering: bool
@@ -801,6 +865,24 @@ class WispConfig:
         )
         object.__setattr__(self, "autonomous",
             _parse_bool(get_setting("autonomous", "false"), False)
+        )
+        # ── Durable runtime layer (migration P0) ──────────────────
+        # Off → exactly the pre-migration behavior (no durable rows
+        # written, no spans emitted, no tool events journaled).
+        object.__setattr__(self, "durable_runs",
+            _parse_bool(get_setting("durable_runs", "true"), True)
+        )
+        object.__setattr__(self, "session_event_fidelity",
+            _parse_bool(get_setting("session_event_fidelity", "true"), True)
+        )
+        object.__setattr__(self, "turn_spans",
+            _parse_bool(get_setting("turn_spans", "true"), True)
+        )
+        object.__setattr__(self, "turn_journal",
+            _parse_bool(get_setting("turn_journal", "true"), True)
+        )
+        object.__setattr__(self, "proposal_boundary",
+            _parse_bool(get_setting("proposal_boundary", "true"), True)
         )
 
     def load_context_files(self) -> str:

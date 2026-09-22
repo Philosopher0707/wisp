@@ -39,8 +39,23 @@ class SessionRepository:
         )
 
     def append_events(self, session_id: str, events: list[SessionEvent]) -> None:
-        """Persist multiple events in a single transaction."""
-        with self._store.transaction() as conn:
+        """Persist multiple events in a single transaction.
+
+        Atomic on purpose: a partially-written turn body is worse than an
+        absent one, because a reader cannot tell truncation from a short
+        turn. Either every event in the batch lands or none does.
+
+        NOTE on the transaction contract: `UnifiedStore.transaction()` yields
+        the STORE, not the connection (see `infra/store.py:317-327`). The
+        connection must therefore be taken separately; executing on the store
+        itself raises AttributeError. This method previously did the latter
+        and had never been called, so the defect was invisible until P0
+        started using it.
+        """
+        if not events:
+            return
+        conn = self._store._get_conn()
+        with self._store.transaction():
             for ev in events:
                 conn.execute(
                     """INSERT INTO session_events (session_id, sequence_num, event_type, payload, created_at)

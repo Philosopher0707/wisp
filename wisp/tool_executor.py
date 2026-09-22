@@ -29,6 +29,7 @@ from wisp.config import WispConfig
 from wisp.infra.security import PermissionMode, policy_hard_deny
 from wisp.core.events import (
     AgentEvent,
+    is_error_outcome,
     tool_result as _tool_result_event,
     approval_request as _approval_request_event,
     subagent as _subagent_event,
@@ -426,6 +427,7 @@ class ToolExecutor:
         background_agents: Any | None = None,
         extensions: Any | None = None,
         policy: Any = None,
+        run_store: Any = None,
     ):
         self.config = config
         self.extensions = extensions
@@ -465,6 +467,11 @@ class ToolExecutor:
         self.subagent_orchestrator = subagent_orchestrator
         self.audit_trail = audit_trail
         self.background_agents = background_agents
+        # Durable run registry (migration P0). The composition root owns
+        # construction and injects the one instance; direct ToolExecutor
+        # users get None and keep the in-memory-only behavior. Consulted
+        # only by the lazy background-manager fallback below.
+        self.run_store = run_store
         from wisp.skill_capture import get_capture
         self.skill_capture = get_capture()
         # key -> (monotonic_ts, cached_result_str, hit_count).
@@ -556,19 +563,33 @@ class ToolExecutor:
 
         Only call for calls that actually dispatched: short-circuits
         (repeat guard, breaker block) must neither trip nor reset it.
+
+        Classification goes through the canonical outcome classifier rather
+        than substring-matching the envelope. The previous checks —
+        `'"status": "error"' not in result_str[:200]` and
+        `'"status": "ok"' in result_str[:300]` — were sensitive to JSON
+        whitespace and to truncation, and saw only the structured envelope:
+        a plain-text error such as "Error: ..." was read as a success and
+        silently reset the breaker.
+
+        Behaviour delta (deliberate): a `web_fetch` that returns a generic
+        error envelope now counts toward the breaker. Previously it did
+        neither — not a failure, not a reset — so the breaker under-triggered
+        on exactly the failures it exists to catch.
         """
         key = self._fetch_breaker_key()
+        failed = is_error_outcome(result_str)
         if func_name == "web_fetch":
-            if any(m in result_str for m in _FETCH_FAIL_MARKERS):
+            if any(m in result_str for m in _FETCH_FAIL_MARKERS) or failed:
                 ts, count = self._fetch_breaker.get(key, (0.0, 0))
                 now = time.monotonic()
                 count = count + 1 if now - ts <= _FETCH_BREAK_TTL_S else 1
                 self._fetch_breaker[key] = (now, count)
                 self._purge_fetch_breaker()
-            elif '"status": "error"' not in result_str[:200]:
+            else:
                 self._fetch_breaker.pop(key, None)
         elif func_name == "web_search":
-            if '"status": "ok"' in result_str[:300]:
+            if not failed:
                 # New leads: the agent has fresh URLs worth fetching.
                 self._fetch_breaker.pop(key, None)
 
@@ -705,6 +726,16 @@ class ToolExecutor:
                 tool_call_id=tool_call_id,
             )
             return
+
+        # Migration P2 — the proposal boundary's verdict record.
+        #
+        # This is the ONLY insertion P2 makes into the gate chain, and it adds
+        # a *record*, never a decision: no gate is re-ordered, re-implemented,
+        # or consulted twice (see tests/test_gate_order_corpus.py, written
+        # before this change, which pins every gate outcome byte-for-byte).
+        # Recording happens here — after the allow/deny fork — so each call
+        # yields exactly one verdict row, on one path or the other.
+        self._audit_authorization(func_name, func_args, workspace, _decision)
 
         # ── Repeat-call guard for network-bound tools ──
         # Live evidence: a looping model re-fetched one URL for minutes,
@@ -1154,6 +1185,56 @@ class ToolExecutor:
         if getattr(self.config, "plan_mode", False) and func_name in _get_write_tools(self.config):
             return f"[Blocked: plan mode — {func_name} requires write access]"
         return None
+
+    def _audit_authorization(self, func_name: str, func_args: dict,
+                             workspace: str, decision: Any) -> None:
+        """Record the layered authority's verdict (migration P2).
+
+        Before P2 the `AuthorizationDecision` was consumed **only on the deny
+        path**, where its `controlling_layer` was interpolated into a denial
+        message (`tool_executor.py:722`). An *allowed* call therefore left no
+        record that authority had been consulted, let alone which layer
+        permitted it — `allow` and `approval` were indistinguishable from
+        "no gate ran".
+
+        Writes through `ImmutableAuditTrail.record_decision`, the purpose-built
+        decision recorder that `AuditLog` already maps onto
+        (`tools/audit.py:142`), so both paths converge on one hash-chained
+        sink. The layer is stored **structurally** in the `args_summary`
+        envelope as well as in the human-readable `reason`, which keeps the
+        record queryable without a schema change — adding a column would
+        invalidate the hash chain for every pre-existing row.
+
+        Best-effort, like `_audit_denial`: an observability record must never
+        fail a tool call (ADR-0004).
+        """
+        try:
+            trail = getattr(self, "audit_trail", None)
+            if trail is None:
+                return
+            layer = str(getattr(decision, "controlling_layer", "") or "")
+            summary = json.dumps({
+                "decision": "authorized",
+                "layer": layer,
+                "approval_required": bool(
+                    getattr(decision, "approval_required", False)),
+                "obligations": list(getattr(decision, "obligations", ()) or ()),
+                "args_keys": sorted(str(k) for k in (func_args or {})),
+            }, ensure_ascii=False)
+            trail.record_decision(
+                action=func_name,
+                tool_name=func_name,
+                workspace=workspace,
+                allowed=True,
+                # Symmetric with the deny format so one query covers both
+                # outcomes: "[Denied by X layer: ...]" / "[Allowed by X layer: ...]".
+                reason=f"[Allowed by {layer} layer: "
+                       f"{getattr(decision, 'reason', '')}]",
+                args_summary=summary,
+            )
+        except Exception:
+            logger.warning("Authorization audit write failed for %s",
+                           func_name, exc_info=True)
 
     def _audit_denial(self, func_name: str, func_args: dict,
                         workspace: str, reason: str) -> None:
@@ -1643,12 +1724,19 @@ class ToolExecutor:
 
     def _get_background_manager(self) -> Any | None:
         """Resolve the background manager, creating one lazily when only an
-        orchestrator was wired (direct ToolExecutor users, tests)."""
+        orchestrator was wired (direct ToolExecutor users, tests).
+
+        Migration P0: the lazily-created manager inherits this executor's
+        `run_store`, so a fallback-created manager persists exactly like a
+        composition-root-created one instead of silently degrading to
+        in-memory (the defect this phase exists to close).
+        """
         if self.background_agents is None:
             if self.subagent_orchestrator is None:
                 return None
             from wisp.multi_agent.background import BackgroundAgentManager
-            self.background_agents = BackgroundAgentManager(self.subagent_orchestrator)
+            self.background_agents = BackgroundAgentManager(
+                self.subagent_orchestrator, run_store=self.run_store)
         return self.background_agents
 
     def _build_contract(self, func_args: dict, workspace: str, name: str) -> tuple[Any | None, str]:
@@ -2177,12 +2265,17 @@ class ToolExecutor:
         return "\n".join(feedback_parts) if feedback_parts else ""
 
     def _record_metrics(self, func_name: str, duration_ms: float, result: str | dict) -> None:
-        """Record tool execution metrics."""
+        """Record tool execution metrics.
+
+        Success is decided by the canonical outcome classifier, not by a local
+        test. The previous check was `'"status": "ok"' in result` for strings,
+        which is false for every successful *plain-text* result — the shape
+        most tools return (read_file, run_bash, git_diff) — and for compact
+        JSON (`{"status":"ok"}` without spaces). Those were counted as tool
+        errors, deflating the derived success rate in wisp/metrics.py.
+        """
         if not self.metrics:
             return
-        ok = (
-            (isinstance(result, str) and '"status": "ok"' in result)
-            or (isinstance(result, dict) and result.get("status") == "ok")
-        )
+        ok = not is_error_outcome(result)
         if hasattr(self.metrics, "record_tool"):
             self.metrics.record_tool(func_name, duration_ms, success=ok)

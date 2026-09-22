@@ -8,10 +8,13 @@ Session state is derived by replaying an append-only event log. This gives us:
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class SessionEventType(StrEnum):
@@ -19,6 +22,13 @@ class SessionEventType(StrEnum):
     ASSISTANT_MESSAGE = "assistant_message"
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
+    # Migration P2 — the proposal boundary. Both are AUDIT-ONLY: they record
+    # what was proposed and what validation did with it, and deliberately do
+    # NOT contribute to `messages`. The transcript is built from
+    # ASSISTANT_MESSAGE(tool_calls=...) + TOOL_RESULT, and adding a second
+    # path into it would duplicate every tool reply on replay.
+    PROPOSAL = "proposal"
+    OUTCOME = "outcome"
     COMPACTED = "compacted"
     ERROR = "error"
     DONE = "done"
@@ -42,12 +52,70 @@ class SessionEvent:
         return cls(SessionEventType.ASSISTANT_MESSAGE, seq, {"content": content, "tool_calls": tool_calls or []})
 
     @classmethod
-    def tool_call_event(cls, seq: int, name: str, args: dict) -> SessionEvent:
-        return cls(SessionEventType.TOOL_CALL, seq, {"name": name, "arguments": args})
+    def tool_call_event(cls, seq: int, name: str, args: dict,
+                        action_key: str = "") -> SessionEvent:
+        """A tool invocation. Written BEFORE dispatch (migration P1).
+
+        `action_key` is the canonical digest of (tool, arguments) — see
+        `wisp.core.action_key`. Paired with the same key on the matching
+        `TOOL_RESULT`, it makes "dispatched but never resolved" a queryable
+        property of the log rather than an inference.
+        """
+        payload: dict[str, Any] = {"name": name, "arguments": args}
+        if action_key:
+            payload["action_key"] = action_key
+        return cls(SessionEventType.TOOL_CALL, seq, payload)
 
     @classmethod
-    def tool_result_event(cls, seq: int, name: str, result: str, duration_ms: float = 0.0) -> SessionEvent:
-        return cls(SessionEventType.TOOL_RESULT, seq, {"name": name, "result": result, "duration_ms": duration_ms})
+    def tool_result_event(cls, seq: int, name: str, result: str,
+                          duration_ms: float = 0.0,
+                          tool_call_id: str = "",
+                          synthesized: bool = False,
+                          action_key: str = "") -> SessionEvent:
+        """A tool reply.
+
+        `tool_call_id` is what pairs this reply to its call. It is optional
+        only for backward compatibility with pre-migration events: the live
+        transcript pairs by id (see `_serialize_tool_exchanges`, GH#6), so a
+        replay that cannot see the id cannot reproduce the pairing. New
+        writers always supply it.
+
+        `synthesized=True` marks the placeholder reply written for a call
+        that was interrupted before it returned. It is journaled so replay
+        reproduces the transcript exactly, but the flag keeps the record
+        honest: this result was never produced by the tool.
+
+        `action_key` mirrors the call's key so a resolved action is provable.
+        """
+        payload: dict[str, Any] = {
+            "name": name, "result": result, "duration_ms": duration_ms,
+        }
+        if tool_call_id:
+            payload["tool_call_id"] = tool_call_id
+        if synthesized:
+            payload["synthesized"] = True
+        if action_key:
+            payload["action_key"] = action_key
+        return cls(SessionEventType.TOOL_RESULT, seq, payload)
+
+    @classmethod
+    def proposal_event(cls, seq: int, request: dict) -> SessionEvent:
+        """A `ToolRequest` proposal, recorded BEFORE dispatch (migration P2).
+
+        Carries the wire form of `contracts/tool.py::ToolRequest`, including
+        the P1 idempotency key, so the proposal is joinable to its outcome.
+        """
+        return cls(SessionEventType.PROPOSAL, seq, {"request": request})
+
+    @classmethod
+    def outcome_event(cls, seq: int, result: dict) -> SessionEvent:
+        """A `ToolResult` outcome for a proposal — including rejections.
+
+        A rejection is a first-class observable event, not an absence: the
+        whole point of the boundary is that validation's disposition is
+        recorded even when nothing executed.
+        """
+        return cls(SessionEventType.OUTCOME, seq, {"result": result})
 
     @classmethod
     def compacted(cls, seq: int, before_count: int, after_count: int, summary: str = "") -> SessionEvent:
@@ -75,6 +143,42 @@ class Session:
     turn_count: int = 0
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
+    # Fine-grained tool-call audit trail (migration P0). Kept SEPARATE from
+    # `messages` on purpose: the provider protocol requires exactly one
+    # assistant message carrying all of an iteration's tool_calls blocks,
+    # immediately followed by that iteration's replies. Emitting a message
+    # per TOOL_CALL would corrupt that ordering. `messages` is rebuilt from
+    # ASSISTANT_MESSAGE(tool_calls=...) + TOOL_RESULT; this list is the
+    # per-call record used for audit and for later graph reasoning.
+    tool_calls: list[dict] = field(default_factory=list)
+    # Replay fidelity canary (ADR-0005): counts events this build does not
+    # understand. Non-zero means the log carries data replay discarded.
+    unknown_events: int = 0
+    # Dispatched-but-unresolved actions, keyed by canonical action key
+    # (migration P1). Insertion-ordered; see `unresolved_actions()`.
+    _unresolved_actions: dict[str, dict] = field(default_factory=dict)
+    # The proposal boundary (migration P2). Audit-only records of what was
+    # proposed and how validation disposed of it. Never contributes to
+    # `messages`; see the PROPOSAL/OUTCOME cases in `apply`.
+    proposals: list[dict] = field(default_factory=list)
+    outcomes: list[dict] = field(default_factory=list)
+
+    def unresolved_actions(self) -> list[dict]:
+        """Actions dispatched but never resolved (migration P1).
+
+        A key present on a `TOOL_CALL` and absent from every `TOOL_RESULT` is
+        an action whose outcome is unknown: the process died between the
+        journaled intent and the journaled result, so the side effect may or
+        may not have landed. Recovery must surface these rather than silently
+        repeating them — repeating is how a crash turns one edit into two.
+
+        Results flagged `synthesized` do NOT count as resolution: a
+        placeholder records that we never learned the outcome, which is
+        exactly the state this method reports.
+
+        Insertion-ordered, so the report follows dispatch order.
+        """
+        return list(self._unresolved_actions.values())
 
     def apply(self, event: SessionEvent) -> None:
         """Apply a single event to mutate session state."""
@@ -92,11 +196,65 @@ class Session:
                     msg["tool_calls"] = event.payload["tool_calls"]
                 self.messages.append(msg)
 
+            case SessionEventType.TOOL_CALL:
+                # Audit-only: records the invocation without touching
+                # `messages` (see the `tool_calls` field docstring above).
+                self.tool_calls.append({
+                    "name": event.payload.get("name", ""),
+                    "arguments": event.payload.get("arguments", {}),
+                    "sequence_num": event.sequence_num,
+                    "timestamp": event.timestamp,
+                })
+                # Durable intent (migration P1): remember the dispatch so a
+                # log that ends without its result can report the action as
+                # unresolved rather than letting recovery repeat it blindly.
+                _akey = event.payload.get("action_key")
+                if _akey:
+                    self._unresolved_actions[_akey] = {
+                        "action_key": _akey,
+                        "name": event.payload.get("name", ""),
+                        "arguments": event.payload.get("arguments", {}),
+                        "sequence_num": event.sequence_num,
+                    }
+
             case SessionEventType.TOOL_RESULT:
-                self.messages.append({
+                reply: dict[str, Any] = {
                     "role": "tool",
                     "content": event.payload["result"],
                     "name": event.payload["name"],
+                }
+                # Pairing id, when the writer supplied one. Without it the
+                # replayed transcript cannot be matched to its call by id,
+                # which is the only pairing the provider protocol accepts.
+                if event.payload.get("tool_call_id"):
+                    reply["tool_call_id"] = event.payload["tool_call_id"]
+                self.messages.append(reply)
+                # Resolution (migration P1): only a REAL result resolves the
+                # action. A `synthesized` placeholder means we never learned
+                # the outcome, so the action stays unresolved on purpose.
+                _akey = event.payload.get("action_key")
+                if _akey and not event.payload.get("synthesized"):
+                    self._unresolved_actions.pop(_akey, None)
+
+            case SessionEventType.PROPOSAL:
+                # Audit-only (migration P2). Deliberately does NOT append to
+                # `messages`: the transcript is rebuilt from
+                # ASSISTANT_MESSAGE + TOOL_RESULT, and a second path in would
+                # duplicate every tool reply on replay.
+                self.proposals.append({
+                    "sequence_num": event.sequence_num,
+                    "timestamp": event.timestamp,
+                    **dict(event.payload.get("request") or {}),
+                })
+
+            case SessionEventType.OUTCOME:
+                # Audit-only, same reason. This is where a REJECTION becomes
+                # visible: a denial produces an outcome with no matching
+                # execution, and previously left no first-class record.
+                self.outcomes.append({
+                    "sequence_num": event.sequence_num,
+                    "timestamp": event.timestamp,
+                    **dict(event.payload.get("result") or {}),
                 })
 
             case SessionEventType.COMPACTED:
@@ -116,12 +274,30 @@ class Session:
             case SessionEventType.DONE:
                 pass  # terminal event, no state change
 
+            case _:
+                # Fail loud, not silent (ADR-0005). A `match` with no
+                # wildcard turns an unrecognized event into a no-op, which
+                # is exactly how an append-only log loses data without
+                # anyone noticing. The count is the observable signal.
+                self.unknown_events += 1
+                logger.warning(
+                    "Session %s: unknown event type %r at seq %s was not "
+                    "applied — replay is incomplete (unknown_events=%d)",
+                    self.session_id, event.event_type, event.sequence_num,
+                    self.unknown_events,
+                )
+
     def replay(self, events: list[SessionEvent]) -> None:
         """Replay a sequence of events from scratch."""
         self.messages.clear()
         self.compaction_history.clear()
+        self.tool_calls.clear()
+        self._unresolved_actions.clear()
+        self.proposals.clear()
+        self.outcomes.clear()
         self.sequence_num = 0
         self.turn_count = 0
+        self.unknown_events = 0
         for ev in sorted(events, key=lambda e: e.sequence_num):
             self.apply(ev)
 

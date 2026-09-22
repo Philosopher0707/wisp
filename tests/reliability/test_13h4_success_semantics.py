@@ -168,7 +168,15 @@ class TestOutcomeMatrix:
             tmp_path, _DictProvider([_content_only("answer")]), "a")
         assert _types(evs).count("done") == 1
         assert repo.was_last_turn_complete("a") is True
-        assert _repo_types(repo, "a") == ["user_message", "done"]
+        # Migration P0: the log now also journals the assistant turn body, so
+        # replay can reconstruct the turn. Before P0 it held only
+        # user_message/error/done and `load_session()` returned a
+        # user-message-only transcript.
+        assert _repo_types(repo, "a") == [
+            "user_message", "assistant_message", "done"]
+        assistant = [e for e in repo.load_events("a")
+                     if str(e.event_type) == "assistant_message"]
+        assert assistant[0].payload["content"] == "answer"
 
     def test_b_h3_failure_repo_incomplete_derived(self, tmp_path, monkeypatch):
         # H5 compatibility: terminal error now derives repo-incomplete, and
@@ -300,8 +308,10 @@ class TestOutcomeMatrix:
         assert _types(evs2).count("done") == 1  # … attempt 2 succeeded
         assert prov.calls == 2  # retry is a NEW provider round, never suppressed
         # H5 compatibility: attempt 1 stays ERROR-marked (was DONE pre-fix).
+        # Migration P0: attempt 2's assistant turn body is journaled too.
         assert _repo_types(repo, "j") == [
-            "user_message", "error", "user_message", "done"]
+            "user_message", "error", "user_message", "assistant_message",
+            "done"]
         errs = [e for e in repo.load_events("j")
                 if str(e.event_type) == "error"]
         dones = [e for e in repo.load_events("j")
@@ -422,10 +432,15 @@ class TestResumeAndReplay:
         assert _types(evs).count("done") == 1
 
     def test_replay_log_distinguishes_failure(self, tmp_path, monkeypatch):
-        # H5 compatibility: the log now records the failure as an ERROR row,
-        # so fail-then-success reads [user, error, user, done]. Attempt ids
-        # still absent; tool results still absent: deterministic replay
-        # remains NOT ESTABLISHED, but failure is no longer DONE-shaped.
+        # H5 compatibility: the log records the failure as an ERROR row, so
+        # fail-then-success reads [user, error, user, assistant, done].
+        # Failure is no longer DONE-shaped.
+        #
+        # Migration P0 closes the gap this docstring used to record
+        # ("tool results still absent: deterministic replay remains NOT
+        # ESTABLISHED"): the assistant body and tool events are now
+        # journaled, so replay reconstructs the turn. The assertion below
+        # checks that directly rather than asserting absence.
         monkeypatch.setenv("WISP_STREAM_ATTEMPTS", "1")
         prov = _DictProvider([_think_then_hang("x"), _content_only("ok")])
         runtime, repo, ws = _runtime(prov, tmp_path)
@@ -434,9 +449,16 @@ class TestResumeAndReplay:
         _run_turn(runtime, session, prompt="second")
         log = repo.load_events("rp")
         assert [str(e.event_type) for e in log] == [
-            "user_message", "error", "user_message", "done"]
+            "user_message", "error", "user_message", "assistant_message",
+            "done"]
         assert not any("success" in e.payload or "outcome" in e.payload
                        for e in log)
+        # Deterministic replay: the replayed transcript matches the live one.
+        replayed = repo.load_session("rp")
+        assert replayed is not None
+        assert replayed.unknown_events == 0
+        assert [(m["role"], m.get("content", "")) for m in replayed.messages] == \
+               [(m["role"], m.get("content", "")) for m in session["messages"]]
 
 
 # ── §12. Retry (G1E boundary: turn-level retry = new turn) ────────────
@@ -523,7 +545,8 @@ class TestResurrectionAndIdentity:
         after = [(str(e.event_type), e.sequence_num) for e in repo.load_events("t56")]
         assert after[:len(before)] == before  # old rows untouched …
         assert [t for t, _ in after] == [
-            "user_message", "error", "user_message", "done"]  # failed stays failed
+            "user_message", "error", "user_message", "assistant_message",
+            "done"]  # failed stays failed
 
 
 # ── §17. Adversarial combinations ─────────────────────────────────────

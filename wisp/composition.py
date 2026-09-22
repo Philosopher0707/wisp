@@ -76,6 +76,14 @@ class CompositionRoot:
         )
         self.extensions = ExtensionHost()
         self.telemetry = Telemetry()
+        # Durable run registry (migration P0). Built here — before its two
+        # consumers (ToolExecutor's lazy background-manager fallback and the
+        # BackgroundAgentManager below) — so exactly one instance exists per
+        # root and the rollback flag has a single decision point.
+        self.run_store = self._create_run_store()
+        # Durable span sink (migration P0). Same construction doctrine as the
+        # run store: owned here, one instance per root, gated by one flag.
+        self.trace_store = self._create_trace_store()
 
         # Configure shared thread pool (before any async work starts)
         import asyncio
@@ -139,6 +147,7 @@ class CompositionRoot:
             lsp_manager=self._lsp_manager,
             subagent_orchestrator=None,
             extensions=self.extensions,
+            run_store=self.run_store,
         )
 
         # Create Compactor for LLM-powered summarization
@@ -163,6 +172,7 @@ class CompositionRoot:
             orchestrator=None,
             session_repo=session_repo,
             config=self.config,
+            trace_store=self.trace_store,
         )
 
         # Create subagent orchestrator with tool_executor wired at construction time
@@ -188,8 +198,18 @@ class CompositionRoot:
 
         # Background agents share the orchestrator's execution path; the
         # manager only tracks lifecycle and continuation between turns.
+        #
+        # Migration P0: the manager has always accepted a `run_store` and
+        # fully implements durable persistence (create/transition/lease),
+        # durable admission via Scheduler, and crash recovery — but both
+        # production construction sites passed no store, so every
+        # `_persist_*` returned early at background.py:165-166,188-189 and
+        # the Scheduler was never built. The durable layer was complete,
+        # tested, and unreachable. Wire it here, at the composition root,
+        # which is the single place that owns service construction.
         from wisp.multi_agent.background import BackgroundAgentManager
-        self.background_agents = BackgroundAgentManager(self.subagent_orchestrator)
+        self.background_agents = BackgroundAgentManager(
+            self.subagent_orchestrator, run_store=self.run_store)
         self.tool_executor.background_agents = self.background_agents
         # Reachable from slash commands via runtime.orchestrator.
         self.subagent_orchestrator.background_agents = self.background_agents
@@ -210,6 +230,50 @@ class CompositionRoot:
         self._registry.register(self.store)
         self._registry.register(self.extensions)
         self._registry.register(self.telemetry)
+
+    def _create_run_store(self) -> Any:
+        """Build the durable run registry (migration P0), or None when the
+        rollback flag is off.
+
+        Returns None under `durable_runs=False`, which restores the
+        pre-migration behavior exactly: `BackgroundAgentManager` keeps its
+        in-memory registry and never writes `background_runs` rows.
+
+        Failure to build the store is non-fatal — a durable-observability
+        feature must never prevent the agent from starting. Mirrors the
+        best-effort posture the manager itself uses for writes
+        (WISP_ARCHITECTURE_DECISIONS.md ADR-0004).
+        """
+        if not getattr(self.config, "durable_runs", True):
+            return None
+        try:
+            from wisp.runs.store import SQLiteRunStore
+            return SQLiteRunStore(self.store)
+        except Exception:
+            logger.warning(
+                "Durable run store unavailable — background runs will not "
+                "persist (durable_runs=True).", exc_info=True)
+            return None
+
+    def _create_trace_store(self) -> Any:
+        """Build the durable span sink (migration P0), or None when the
+        rollback flag is off.
+
+        Before P0, `SQLiteTraceStore` was constructed only by
+        `wisp/trace/cli.py` — a read-only viewer — so `trace_spans` was
+        always empty and `infra/tracing.new_span()` had no caller anywhere
+        in the tree. Same best-effort posture as the run store (ADR-0004).
+        """
+        if not getattr(self.config, "turn_spans", True):
+            return None
+        try:
+            from wisp.trace.store import SQLiteTraceStore
+            return SQLiteTraceStore(self.store)
+        except Exception:
+            logger.warning(
+                "Trace span store unavailable — no spans will be recorded "
+                "(turn_spans=True).", exc_info=True)
+            return None
 
     def _create_core(self) -> WispAgentCore:
         """Factory for creating stateless core instances.
