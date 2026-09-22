@@ -482,7 +482,12 @@ dissolved under execution, four of them mine.
 The migration's own files are committed. What is still uncommitted is the **user's pre-existing WIP**
 (§8) plus foreign-session test files — none of it the migration's.
 
-### Phase 10's production changes (now committed in `744d081`/`385e552`)
+### Phase 10's production changes — MOSTLY still uncommitted
+
+⚠️ **Correction.** The migration commits touched only the files the migration needed. Phase 10's other
+production changes are **still uncommitted** in the working tree — including `wisp/auth/decision.py`
+(L4), `wisp/multi_agent/_runner.py` (F1), `wisp/multi_agent/subagent_orchestrator.py`, `README.md`,
+`docs/SECURITY.md` and `tests/conftest.py`. Do not assume the table below is committed.
 
 | File | Change |
 |---|---|
