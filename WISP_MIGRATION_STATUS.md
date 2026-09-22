@@ -11,7 +11,20 @@
 | Decision log | `WISP_ARCHITECTURE_DECISIONS.md` |
 | Execution mode | Continuous self-directed implementation |
 
-**Status vocabulary:** `NOT STARTED` · `IN PROGRESS` · `COMPLETE` · `BLOCKED` · `SUPERSEDED`
+### Commits
+
+| Commit | Scope |
+|---|---|
+| `cfe6f0f` | `docs:` audit (9 documents), migration plan, ledger, decision log, P0–P2 reports — 14 files |
+| `744d081` | `feat:` P0 + P1 + P2 implementation and tests — 17 files, 119 new tests |
+
+> **Scope caveat on `744d081`.** `wisp/config.py`, `wisp/composition.py`,
+> `wisp/core/runtime.py` and `wisp/tool_executor.py` already carried uncommitted changes from before
+> this work. They are included because they are interleaved with this work in the same hunks, and the
+> commit body says so explicitly. Separating them would require reverse-engineering changes this
+> migration did not make.
+
+**Status vocabulary:** `NOT STARTED` · `IN PROGRESS` · `COMPLETE` · `BLOCKED` · `PARTIAL` · `SUPERSEDED`
 
 ---
 
