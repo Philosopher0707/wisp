@@ -343,6 +343,28 @@ class WispAgentCore:
             min_turns=int(getattr(self.config, "grind_min_turns", 5) or 5)
             if self.config is not None else 5,
         )
+        # Migration P3 (stage 3a): publish this turn's guard so the runtime can
+        # RECORD a completion verdict against it.
+        #
+        # A DELIBERATE, NARROW EXCEPTION to "the core has no mutable state"
+        # (AGENTS.md). The reasoning, and its limits:
+        #
+        #   - It is not SESSION state. It is a per-turn handle, overwritten at
+        #     the start of every turn and read only by the runtime that just
+        #     ran that turn. Session state still lives in AgentRuntime.
+        #   - It is race-free in practice: cores are cached per (session,
+        #     fingerprint), so two sessions never share one, and concurrent
+        #     turns on the SAME session are serialized by the session lock.
+        #   - The alternative was worse. The runtime cannot reach the guard
+        #     any other way, and re-deriving `wrote_code` /
+        #     `verify_ok_after_edit` from observed tool events would be a
+        #     SECOND implementation of the floor rule — a second authority for
+        #     "was this verified", which is the defect class this migration
+        #     exists to remove.
+        #
+        # Nothing here changes the guard's behaviour; the completion invariant
+        # is still the guard's alone.
+        self._last_guard = guard
         for iteration in range(max_iterations):
             pending_tool_calls: list[dict[str, Any]] = []
             tool_results_events_early: list[dict[str, Any]] = []

@@ -38,7 +38,8 @@ Guidance for AI coding agents working in the Wisp codebase.
 | `wisp/tui/screens/subagents.py` | Worker monitor screen | `SubagentMonitorScreen` (roster + live transcript, `]`/`[` cycle — never Tab — `c` cancel, `q`/`Ctrl+O`/`Esc` exit) + `SubagentMonitorApp` standalone host for the REPL bridge |
 | `wisp/sandbox/` | Command confinement | Package (`__init__` = providers); `router.py`: `SandboxRouter` (Docker → `PtySandbox` → `NoopSandbox`, TTL-cached decision, silent failover) + `get_router()`; legacy `get_sandbox()` unchanged |
 | `wisp/tools/primitives.py` | Thin harness surface | `exec_sandbox` / `fs_mutate` / `git_checkpoint` (pydantic args, delegate to bash/filesystem/checkpoints); `PRIMITIVE_SCHEMAS`; core opts in via `thin_tools` config (schemas + prompt menu + dispatcher) |
-| `wisp/core/verification.py` | Completion gate | `VerificationFloorGuard`: blocks finish until exit-0 postdates last mutation or grind floor (`min_turns` + nudges) exhausts; `HARNESS_REJECTION` text; `resolved()` triggers auto-capture |
+| `wisp/core/verification.py` | Completion gate | `VerificationFloorGuard`: blocks finish until exit-0 postdates last mutation or grind floor (`min_turns` + nudges) exhausts; `HARNESS_REJECTION` text; `resolved()` triggers auto-capture. **Also projects itself onto the acceptance model** via `floor_guard_criteria/evidence/verdict()` — read-only; the guard's own behaviour is unchanged |
+| `wisp/core/acceptance.py` | Acceptance verdicts (P3, stage 3a) | `Verdict` (`PASS`/`FAIL`/`INCONCLUSIVE`), `CriterionKind`, `AcceptanceCriteria`, `Evidence` (content-addressed, with `producer` + `observations`), `CompletionVerdict`, `evaluate()`, `invalidate()`, `route_for()`. **Records; does not gate** — routing is *derived* from the verdict so the graph vocabulary stays an output, not a competitor |
 | `wisp/core/action_key.py` | Durable idempotency (P1) | `action_key(tool, args)` — sha256 over canonical sorted JSON; JSON-string and dict args hash alike, unserializable args degrade to `repr` rather than raising. Stamped on `TOOL_CALL` (intent) and its `TOOL_RESULT` (resolution) so "dispatched but never resolved" is queryable via `Session.unresolved_actions()` |
 | `wisp/core/proposal.py` | Proposal boundary (P2) | `build_proposal()` → `contracts.tool.ToolRequest`, `build_outcome()` → `ToolResult`, `is_refusal()`. **Records, never decides** — status derivation delegates to `core.events.classify_result()`. Produces a proposal per dispatched call and an outcome per proposal, rejections included; journaled as audit-only `PROPOSAL`/`OUTCOME` events |
 | `wisp/benchmark/` | Benchmark + predictions | `run_task` (isolated ws, git-baseline/diff patch capture), `BenchResult.model_patch`, `run_bench --predictions PATH` (SWE-bench `{instance_id,model_patch,model_name}` JSONL), injectable core factory |
@@ -68,6 +69,7 @@ independent flags. Each is read with `getattr(config, name, True)` — the `thin
 | `turn_journal` | `WISP_TURN_JOURNAL` | incremental journaling of each exchange as it closes |
 | `turn_spans` | `WISP_TURN_SPANS` | turn + tool-call span emission |
 | `proposal_boundary` | `WISP_PROPOSAL_BOUNDARY` | `PROPOSAL` / `OUTCOME` records |
+| `record_verdict` | `WISP_RECORD_VERDICT` | acceptance verdict (`VERDICT` event). **Defaults `false`** — unlike the others it adds a record to every existing caller's log |
 
 Three rules that are easy to get wrong:
 
@@ -79,6 +81,14 @@ Three rules that are easy to get wrong:
 - **Durable writes are best-effort.** A turn that ran correctly must never be reported as failed
   because a journal or span write failed. The loss is visible as a gap in the session's sequence
   numbers. See `WISP_ARCHITECTURE_DECISIONS.md` ADR-0004.
+
+### Stage 3a of the verification gate does NOT gate
+
+`core/acceptance.py` computes a `CompletionVerdict` and the runtime **records** it. Nothing on the
+completion path consumes it: `turn_succeeded` still derives from terminal evidence alone, and
+`VerificationFloorGuard` still owns the completion invariant. Enabling the gate is **stage 3b**, a
+separate decision taken on a measured `INCONCLUSIVE` rate — the plan rates P3 the highest-risk phase in
+the migration precisely because it changes completion semantics. ADR-0016.
 
 ## Common patterns
 

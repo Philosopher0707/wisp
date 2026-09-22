@@ -316,6 +316,18 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "env_var": "WISP_PROPOSAL_BOUNDARY",
     },
+    "record_verdict": {
+        "type": bool,
+        "default": False,
+        "description": (
+            "Migration P3 stage 3a: record a completion verdict (PASS / FAIL / "
+            "INCONCLUSIVE) against acceptance criteria at turn end. RECORDS "
+            "only — the completion rule is unchanged. Defaults OFF because, "
+            "unlike the other durable-record flags, it adds a record to the "
+            "log of every existing caller."
+        ),
+        "env_var": "WISP_RECORD_VERDICT",
+    },
     "tool_pool_size": {
         "type": int,
         "default": 8,
@@ -608,6 +620,7 @@ class WispConfig:
     turn_spans: bool
     turn_journal: bool
     proposal_boundary: bool
+    record_verdict: bool
 
     # ── Modes & permissions ───────────────────────────────────────
     permission_mode: PermissionMode | str
@@ -883,6 +896,9 @@ class WispConfig:
         )
         object.__setattr__(self, "proposal_boundary",
             _parse_bool(get_setting("proposal_boundary", "true"), True)
+        )
+        object.__setattr__(self, "record_verdict",
+            _parse_bool(get_setting("record_verdict", "false"), False)
         )
 
     def load_context_files(self) -> str:

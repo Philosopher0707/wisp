@@ -35,7 +35,8 @@
 | **P0** | Wire the orphaned durable layer | — | `COMPLETE` (item 6 deferred to P1) | `PHASE_P0_REPORT.md` |
 | **P1** | Journal turn transitions | P0 ✅ | `COMPLETE` (item 3 deferred to P2) | `PHASE_P1_REPORT.md` |
 | **P2** | Introduce the proposal boundary | P1 ✅ | `COMPLETE` | `PHASE_P2_REPORT.md` |
-| **P3** | Independent verification | P2 ✅ | `READY TO START` | — |
+| **P3** | Independent verification | P2 ✅ | `COMPLETE — stage 3a` (3b is a separate, measured decision) | `PHASE_P3_REPORT.md` |
+| **P4** | Task graph from durable state | P2 ✅ | `READY TO START` (3b measurement outstanding) | — |
 | **P2** | Introduce the proposal boundary | P1 | `NOT STARTED` | — |
 | **P3** | Independent verification | P2 | `NOT STARTED` | — |
 | **P4** | Task graph from durable state | P2 | `NOT STARTED` | — |
@@ -96,22 +97,6 @@ primitive the durable layer needs: `bg_create` (586), `bg_get` (603), `bg_update
 | 5 | Handle `TOOL_CALL` in `Session.apply` | `COMPLETE` | `session.py` `TOOL_CALL` case + audit trail + `case _:` guard |
 | 6 | A normal turn creates a `RunRecord` row | `DEFERRED to P1` | see §2.7 |
 
-### 2.7 Item 6 — deferred, with reason
-
-Plan item 6 asked that a **normal turn** create a `RunRecord` row. Reconnaissance showed this
-overlaps P1 ("Journal turn transitions") almost entirely: a turn-level run record is only meaningful
-once turn transitions are journaled, and P1 owns that. Implementing it in P0 would mean P0 writing
-transition rows that P1 then redefines.
-
-**What P0 does deliver for item 6:** the *mechanism* is now reachable — `SQLiteRunStore` is
-constructed by the composition root, injected into both `BackgroundAgentManager` sites, and proven
-end-to-end to write `background_runs` + `run_transitions` rows (see
-`test_manager_persists_a_run_row_end_to_end`). Background runs are durable today.
-
-**What remains for P1:** applying the same lifecycle to foreground turns. Recorded as a P1
-prerequisite rather than silently dropped — the P0 completion criteria in the migration plan are
-therefore met in part, and this is stated rather than glossed.
-
 ### 2.4 Rollback flags
 
 Every P0 change is gated by one flag. Off → byte-for-byte today's behavior.
@@ -157,6 +142,22 @@ already exists as a ratchet.
 - [x] A reachability test exists for each wired path (RULE 11) — 29 tests.
 - [x] **Zero new failures** in the full suite; no existing test weakened.
 - [ ] `ruff` clean; `mypy` exit 0 — **not run**; neither tool is installed in this venv.
+
+### 2.7 Item 6 — deferred, with reason
+
+Plan item 6 asked that a **normal turn** create a `RunRecord` row. Reconnaissance showed this
+overlaps P1 ("Journal turn transitions") almost entirely: a turn-level run record is only meaningful
+once turn transitions are journaled, and P1 owns that. Implementing it in P0 would mean P0 writing
+transition rows that P1 then redefines.
+
+**What P0 does deliver for item 6:** the *mechanism* is now reachable — `SQLiteRunStore` is
+constructed by the composition root, injected into both `BackgroundAgentManager` sites, and proven
+end-to-end to write `background_runs` + `run_transitions` rows (see
+`test_manager_persists_a_run_row_end_to_end`). Background runs are durable today.
+
+**What remains for P1:** applying the same lifecycle to foreground turns. Recorded as a P1
+prerequisite rather than silently dropped — the P0 completion criteria in the migration plan are
+therefore met in part, and this is stated rather than glossed.
 
 ---
 
@@ -214,14 +215,14 @@ than papering over it.
 
 ---
 
-## 5. P2 — Introduce the Proposal Boundary
+## 4. P2 — Introduce the Proposal Boundary
 
-### 5.1 Objective
+### 4.1 Objective
 
 Make reasoning produce **proposals** that validation disposes, instead of model output reaching
 effects directly.
 
-### 5.2 Reconnaissance result — the plan's claim narrowed (4th time)
+### 4.2 Reconnaissance result — the plan's claim narrowed (4th time)
 
 The plan said `controlling_layer` "is **discarded**". Evidence: it is *not* discarded — it is
 interpolated into denial prose at `tool_executor.py:722,725` and `tools/registry.py:948`. The sharper,
@@ -230,7 +231,7 @@ no trace at all.** The audit trail's allow-side writers (`log_auto_approved`, `l
 fire on the **approval** path (`tool_executor.py:942,947`), not the authority path — so `allow`,
 `approval`, and "no gate ran" were mutually indistinguishable.
 
-### 5.3 Item-by-item status
+### 4.3 Item-by-item status
 
 | # | Plan item | Status | Evidence |
 |---|---|---|---|
@@ -240,14 +241,14 @@ fire on the **approval** path (`tool_executor.py:942,947`), not the authority pa
 | 4 | Do not re-implement any gate | `HONORED` | one insertion after the fork; 7-case corpus byte-identical |
 | 5 | Emit a `ProposalOutcome` for every proposal, including rejections | `COMPLETE` | `build_outcome()` → `OUTCOME` event; a refusal is first-class |
 
-### 5.4 The safety net earned its place
+### 4.4 The safety net earned its place
 
 Writing `test_gate_order_corpus.py` **before** the change (as the plan requires) surfaced an
 undocumented ordering fact: **a `read_only` denial is decided by the policy-engine gate, which runs
 before the `authorize()` consult — so it names no controlling layer.** Pinned with an explanatory
 comment. ADR-0014.
 
-### 5.5 The inversion was not performed — deliberately (ADR-0015)
+### 4.5 The inversion was not performed — deliberately (ADR-0015)
 
 P2's objective reads two ways: (1) **invert** — insert a proposal stage between the model and the
 gates; or (2) **record** — the gates already *are* validation, so make their disposition observable.
@@ -256,7 +257,7 @@ The plan leans (1) and lists `core/stateless.py` as affected, but the gates run 
 would sit *before* validation with no way to observe it. The migration's own constraint settles it:
 *"The proposal layer adds a record, not a decision procedure."* P2 implements (2).
 
-### 5.6 Two real bugs caught by the new tests (both mine)
+### 4.6 Two real bugs caught by the new tests (both mine)
 
 1. `_closed_exchange_events` **hardcoded `journal=True`**, so the incremental writer ignored its own
    flag and wrote transcript events with `session_event_fidelity` off — breaking the one-flag-per-
@@ -265,7 +266,7 @@ would sit *before* validation with no way to observe it. The migration's own con
    `UnboundLocalError` on every tool-using turn. Fixed by reading all three durable-record flags at
    **one** site: a flag read in two places is a flag that can disagree with itself.
 
-### 5.7 Completion criteria
+### 4.7 Completion criteria
 
 - [x] Every tool effect has a recorded proposal with a verdict and a layer
 - [x] Gate order and outcomes provably unchanged on the corpus
@@ -275,7 +276,7 @@ would sit *before* validation with no way to observe it. The migration's own con
 - [x] New code reachable (RULE 11) — both call edges AST-pinned
 - [ ] `ruff` / `mypy` — not installed
 
-### 5.8 Records are audit-only
+### 4.8 Records are audit-only
 
 The transcript is rebuilt from `ASSISTANT_MESSAGE(tool_calls=…)` + `TOOL_RESULT`. If `PROPOSAL` or
 `OUTCOME` also appended to `messages`, **replay would duplicate every tool reply**. `Session.apply`
@@ -283,7 +284,7 @@ records them in dedicated lists and never touches `messages` — pinned by `Test
 
 ---
 
-## 6. Findings log (migration-wide)
+## 5. Findings log (migration-wide)
 
 | # | Finding | Phase | Resolution |
 |---|---|---|---|
@@ -298,15 +299,68 @@ records them in dedicated lists and never touches `messages` — pinned by `Test
 | F9 | `_persist_turn_state`'s 6-parameter signature is a pinned contract: `test_13h5_success_derivation.py::TestFlagCompatibility` wraps it positionally to observe `turn_succeeded`. Widening it breaks that guard | P0 | Respected — journaling moved to a separate method instead |
 | F10 | `test_13h2_determinism.py` has 6 pre-existing failures at baseline (`TokenBatch` has no `.get`, and a `0 == 6` signal-count assert). Unrelated to P0 | — | Pre-existing; logged |
 | F11 | `tests/test_api_key_security.py` fails at **collection** (starlette `TestClient` needs `httpx`, also missing) | — | Pre-existing; environment gap |
-| **F12** | **Baseline comparison methodology.** The working tree carried 33 pre-existing modified tracked files at P0 start. Stashing only the six files P0 touched reverts them to **HEAD**, which discards the pre-existing uncommitted Phase-10 work in those same files (e.g. `tool_executor.py::_note_fetch_outcome` delegates to `is_error_outcome` in the working tree but substring-matches in HEAD). A HEAD-based "baseline" therefore reports three ratchet failures that are artifacts of the stash, not regressions. The true baseline is *working tree minus P0*, which this ledger cannot reconstruct after the fact | P0 | Recorded; every regression delta explained individually in `PHASE_P0_REPORT.md` §5.3 |
+| **F12** | **Baseline comparison methodology.** The working tree carried 33 pre-existing modified tracked files at P0 start. Stashing only the six files P0 touched reverts them to **HEAD**, which discards the pre-existing uncommitted Phase-10 work in those same files (e.g. `tool_executor.py::_note_fetch_outcome` delegates to `is_error_outcome` in the working tree but substring-matches in HEAD). A HEAD-based "baseline" therefore reports three ratchet failures that are artifacts of the stash, not regressions. The true baseline is *working tree minus P0*, which this ledger cannot reconstruct after the fact | P0 | Recorded; every regression delta explained individually in `PHASE_P0_REPORT.md` §4.3 |
 | **F13** | **P0's first journaling implementation had a real correctness bug.** A tool call with no reply journaled no `TOOL_RESULT`, so replay rebuilt an assistant `tool_calls` block with **no following tool message** — a transcript strict providers reject. Caught by `test_13h4`/`test_13h5`. Fixed: the placeholder reply is now journaled with a `synthesized: True` flag, so replay stays provider-valid while the record stays honest | P0 | Fixed; guarded by `test_interrupted_turn_replays_into_a_provider_valid_transcript` |
 | **F14** | **The layered authorization verdict was recorded only for denials, and only as prose.** `controlling_layer` is interpolated into denial messages (`tool_executor.py:722,725`; `tools/registry.py:948`). The audit trail's allow-side writers fire on the **approval** path (`tool_executor.py:942,947`), not the authority path — so `allow`, `approval`, and "no gate ran" were mutually indistinguishable. The plan's claim that the field "is discarded" was itself imprecise | P2 | Fixed for both paths (ADR-0013) |
 | **F15** | **A `read_only` denial is decided by the policy-engine gate, which runs BEFORE the `authorize()` consult** — so it names no controlling layer. Undocumented before P2; surfaced by writing the gate-order corpus RED-first. Relevant to the deferred proposal-boundary work: an outcome must be recorded even for denials that never reach `authorize()` | P2 | Pinned in the corpus with an explanatory comment (ADR-0014) |
 | **F16** | `contracts/tool.py`'s `ToolRequest`/`ToolResult` were **producer-less and consumer-less** (only the re-export and their own test referenced them). `contracts/policy.py`'s `PolicyDecisionEnvelope` still is. `CanonicalEvent` IS wired (`transport/renderer.py`, `contracts/adapters.py`) | P2 | **Fixed for tool** (`wisp/core/proposal.py`); `PolicyDecisionEnvelope` still unwired |
+| **F17** | **`tests/test_speculative_search.py::TestOracle::test_smallest_diff_wins_ties_broken_by_speed` is flaky under the full suite.** It asserts a diff-size ranking, passes 5/5 in isolation and 3/3 at file level, has zero coupling to the P3 surface, and **appeared once in a 129-failure run and was absent from an immediate rerun of the identical code**. Confirmed flaky rather than a regression by re-running the same tree | P3 | Logged; **not** caused by P3. The suite's failure count varies by ±1 run-to-run because of it |
 
 ---
 
-## 4. Change log
+## 6. P3 — Independent Verification (stage 3a)
+
+### 6.1 Objective
+
+Make "this succeeded" a **verdict against criteria backed by evidence**, produced by a component that
+is not the one that acted.
+
+### 6.2 The finding that shapes the design
+
+The plan says to generalize the nearest existing analogue. Both existing verdict vocabularies were
+examined and **neither can express the required verdict**:
+
+| Existing | Why it cannot |
+|---|---|
+| `VerificationFloorGuard.resolved()` | a boolean; cannot say "I could not tell", and it is the **actor's own** bookkeeping |
+| `VerificationResult.decision` (`graph/verifier.py:19`) | `("ALLOW","REJECT","RETRY","ESCALATE")` — a **router's** vocabulary; every value presumes a verdict was reached |
+
+So the verdict vocabulary is new and total (`PASS`/`FAIL`/`INCONCLUSIVE`) and routing is **derived**
+(`route_for()`), keeping the graph vocabulary as an output rather than a competitor. `INCONCLUSIVE`
+routes to `RETRY`, never `ALLOW`.
+
+### 6.3 Item-by-item status
+
+| # | Plan item | Status | Evidence |
+|---|---|---|---|
+| 1 | `AcceptanceCriteria` (DETERMINISTIC / ARTIFACT / SEMANTIC, `required`) | `COMPLETE` | `wisp/core/acceptance.py` |
+| 2 | `VerificationRequest` / `VerificationResult` with `INCONCLUSIVE` | `COMPLETE` | `CompletionVerdict` + `route_for()` |
+| 3 | `Evidence` with provenance, generalizing `GraphArtifact` | `COMPLETE` | `Evidence` (content-addressed, `producer`, `observations`) |
+| 4 | Retain and demote `VerificationFloorGuard`; keep invalidate-on-mutation | `COMPLETE` | `floor_guard_criteria/evidence/verdict()`; `TestFloorGuardRetained` (8) |
+| 5 | Structural independence (L1/L2) | `PARTIAL` | `evaluate()` takes no transcript (pinned); evidence names its producer; a second model (L3) is not implemented — the plan makes it preferred, not required |
+| 6 | Completion rule requires non-invalidated evidence | `NOT DONE` | **that is stage 3b** — the plan's staging; `turn_succeeded` is unchanged (pinned) |
+| 7 | Wire `change_tracker.py` into evidence | `NOT DONE` | deferred with 3b |
+
+### 6.4 Completion criteria
+
+- [x] `INCONCLUSIVE` is a reachable, tested outcome
+- [x] A synthetic false-success scenario is blocked
+- [ ] The measured `INCONCLUSIVE` rate at 3b is reported before enabling — **not measured**; requires a working tool path (F8)
+- [~] `test_verification_loop.py` and `test_verification_contract.py` pass unchanged — contract passes, loop has 5 **pre-existing** failures
+- [x] **Zero new failures** (confirmed by rerun)
+- [x] Rollback by one flag, default **off**
+- [ ] `ruff` / `mypy` — not installed
+
+### 6.5 Stage 3a does not gate
+
+`turn_succeeded` still derives from terminal evidence alone (13-H5), and the floor guard still owns the
+completion invariant. The verdict is recorded and **nothing consumes it** — pinned by
+`TestStage3aDoesNotGate`. ADR-0016.
+
+---
+
+## 7. Change log
+
 
 | Date | Phase | Change | Tests |
 |---|---|---|---|
@@ -327,8 +381,11 @@ records them in dedicated lists and never touches `messages` — pinned by `Test
 | 2026-09-22 | P2 | Completed items 1/2/5: `wisp/core/proposal.py` produces `ToolRequest`/`ToolResult`; journaled as audit-only `PROPOSAL`/`OUTCOME` events | 27 tests |
 | 2026-09-22 | P2 | Two real bugs caught by the new tests: hardcoded `journal=True` in `_closed_exchange_events`; `journal_fidelity` read in the `finally` but used in the stream loop | flag-independence tests |
 | 2026-09-22 | P2 | **Regression verified: 128 → 128, failure set byte-identical. 0 new.** Report: `PHASE_P2_REPORT.md` | full suite, `diff -q` |
+| 2026-09-22 | P3 | Stage 3a: `wisp/core/acceptance.py` (criteria, evidence, verdicts) + retain-and-demote projection of the floor guard; `VERDICT` recorded, **not** gated | 60 tests |
+| 2026-09-22 | P3 | `record_verdict` defaults **off** — unlike P0–P2, it would add a record to every existing caller's log | flag test |
+| 2026-09-22 | P3 | **Regression verified: 0 new.** A first run read 129; an immediate rerun of the identical tree read 128, proving the `+1` flaky (F17) | full suite, twice, `diff -q` |
 
-### 4.1 Regression summary
+### 7.1 Regression summary
 
 | Run | Failures + errors |
 |---|---|
@@ -337,4 +394,4 @@ records them in dedicated lists and never touches `messages` — pinned by `Test
 | **P0 final** | **128 (0 new)** |
 
 Remaining 128 are pre-existing/environmental (missing `jsonschema` and `httpx` dominate). The true
-baseline (*working tree minus P0*) could not be reconstructed — see F12 and `PHASE_P0_REPORT.md` §5.4.
+baseline (*working tree minus P0*) could not be reconstructed — see F12 and `PHASE_P0_REPORT.md` §4.4.

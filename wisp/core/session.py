@@ -29,6 +29,10 @@ class SessionEventType(StrEnum):
     # path into it would duplicate every tool reply on replay.
     PROPOSAL = "proposal"
     OUTCOME = "outcome"
+    # Migration P3 (stage 3a) — the recorded completion verdict. AUDIT-ONLY,
+    # like PROPOSAL/OUTCOME: it reports what verification concluded without
+    # becoming part of the transcript.
+    VERDICT = "verdict"
     COMPACTED = "compacted"
     ERROR = "error"
     DONE = "done"
@@ -118,6 +122,16 @@ class SessionEvent:
         return cls(SessionEventType.OUTCOME, seq, {"result": result})
 
     @classmethod
+    def verdict_event(cls, seq: int, verdict: dict) -> SessionEvent:
+        """The recorded completion verdict (migration P3, stage 3a).
+
+        Recorded, not enforced: nothing on the completion path consumes this
+        yet. Stage 3a exists to measure what the gate *would* say before
+        letting it say it, because P3 changes completion semantics.
+        """
+        return cls(SessionEventType.VERDICT, seq, {"verdict": verdict})
+
+    @classmethod
     def compacted(cls, seq: int, before_count: int, after_count: int, summary: str = "") -> SessionEvent:
         return cls(SessionEventType.COMPACTED, seq, {"before_count": before_count, "after_count": after_count, "summary": summary})
 
@@ -162,6 +176,8 @@ class Session:
     # `messages`; see the PROPOSAL/OUTCOME cases in `apply`.
     proposals: list[dict] = field(default_factory=list)
     outcomes: list[dict] = field(default_factory=list)
+    # Recorded completion verdicts (migration P3, stage 3a). Audit-only.
+    verdicts: list[dict] = field(default_factory=list)
 
     def unresolved_actions(self) -> list[dict]:
         """Actions dispatched but never resolved (migration P1).
@@ -257,8 +273,16 @@ class Session:
                     **dict(event.payload.get("result") or {}),
                 })
 
-            case SessionEventType.COMPACTED:
-                self.compaction_history.append({
+            case SessionEventType.VERDICT:
+                # Audit-only (migration P3 3a). The completion verdict is
+                # recorded so the 3b gate can be justified by measurement.
+                self.verdicts.append({
+                    "sequence_num": event.sequence_num,
+                    "timestamp": event.timestamp,
+                    **dict(event.payload.get("verdict") or {}),
+                })
+
+            case SessionEventType.COMPACTED:                self.compaction_history.append({
                     "before_count": event.payload["before_count"],
                     "after_count": event.payload["after_count"],
                     "summary": event.payload.get("summary", ""),
@@ -295,6 +319,7 @@ class Session:
         self._unresolved_actions.clear()
         self.proposals.clear()
         self.outcomes.clear()
+        self.verdicts.clear()
         self.sequence_num = 0
         self.turn_count = 0
         self.unknown_events = 0

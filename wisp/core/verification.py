@@ -204,3 +204,98 @@ class VerificationFloorGuard:
         self.steps.clear()
         self.last_block_key = None
         self.repeat_count = 0
+
+
+# ── Projection onto the acceptance model (migration P3, stage 3a) ───────
+#
+# RETAIN AND DEMOTE. The guard above keeps its exact behaviour — it is
+# already correct, and `resolved()`'s cheap boolean stays the completion
+# check during stage 3a. What follows is a READ-ONLY projection of its state
+# onto `core/acceptance.py`, so the floor check becomes ONE deterministic
+# criterion among whatever else a caller declares, rather than the whole
+# completion rule.
+#
+# Nothing here mutates the guard, and nothing here is consulted by the
+# completion path yet. That is the point of 3a: measure what the gate would
+# say before letting it say it (ADR-0016).
+
+FLOOR_CRITERION_ID = "floor:verification"
+
+
+def floor_guard_criteria(guard: "VerificationFloorGuard") -> list:
+    """The floor guard expressed as a single DETERMINISTIC criterion.
+
+    Returns an empty list when the guard is disabled — a disabled guard
+    asserts nothing, and inventing a criterion for it would manufacture a
+    requirement the caller did not declare.
+    """
+    from wisp.core.acceptance import AcceptanceCriteria, CriterionKind
+
+    if not guard.enabled:
+        return []
+    return [AcceptanceCriteria(
+        criteria_id=FLOOR_CRITERION_ID,
+        description=("a verification command exited 0 after the last mutation "
+                     "(or the grind floor was spent)"),
+        kind=CriterionKind.DETERMINISTIC,
+        required=True,
+        # The criterion is an IMPLICATION — "if you mutated code, verification
+        # must postdate it" — so it is vacuously satisfied when nothing was
+        # mutated. Written as `resolved()` alone it would report FAIL for a
+        # turn that changed nothing, which is a claim the evidence does not
+        # support and which the guard itself never makes (`rejection()`
+        # returns None when `wrote_code` is False).
+        #
+        # A turn that mutated nothing therefore passes this check and then
+        # fails to produce evidence for it, landing on INCONCLUSIVE — which
+        # is the honest answer: there was nothing to verify.
+        check=lambda _payloads: (not guard.wrote_code) or guard.resolved(),
+    )]
+
+
+def floor_guard_evidence(guard: "VerificationFloorGuard") -> list:
+    """Evidence for the floor criterion, derived from the guard's own state.
+
+    The producer is the guard itself, which is deliberate and honest: this
+    evidence establishes that the *actor's* bookkeeping says the work was
+    verified. It is exactly the evidence that structural independence (L1/L2)
+    says is not sufficient on its own — an independent verifier must not rely
+    on the actor's own record. Recording it with an accurate producer is what
+    lets a later stage tell the two apart.
+
+    No evidence is emitted when the turn mutated nothing: there is no claim
+    to support, and a vacuous evidence record would satisfy a criterion
+    without establishing anything.
+    """
+    from wisp.core.acceptance import Evidence, CriterionKind, content_digest
+
+    if not guard.enabled or not guard.wrote_code:
+        return []
+    payload = {
+        "wrote_code": guard.wrote_code,
+        "verify_ok_after_edit": guard.verify_ok_after_edit,
+        "turns_used": guard.turns_used,
+        "nudges_used": guard.nudges_used,
+    }
+    return [Evidence(
+        evidence_id=f"{FLOOR_CRITERION_ID}:{content_digest(payload)[:16]}",
+        criteria_id=FLOOR_CRITERION_ID,
+        producer="verification_floor_guard",
+        kind=CriterionKind.DETERMINISTIC,
+        content_hash=content_digest(payload),
+        observations=tuple(
+            f"{k}={v}" for k, v in sorted(payload.items())
+        ),
+        metadata={"self_reported": True},
+    )]
+
+
+def floor_guard_verdict(guard: "VerificationFloorGuard"):
+    """The recorded completion verdict implied by the guard's state.
+
+    Stage 3a: computed and returned, consumed by nothing on the completion
+    path. Callers record it; the gate is unchanged.
+    """
+    from wisp.core.acceptance import evaluate
+
+    return evaluate(floor_guard_criteria(guard), floor_guard_evidence(guard))

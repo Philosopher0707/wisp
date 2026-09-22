@@ -441,6 +441,104 @@ plan-level veto), that is a real inversion and needs its own phase with its own 
 
 ---
 
+## ADR-0016 — P3 ships in two stages, and stage 3a does not gate
+
+**Status:** ACCEPTED
+**Phase:** P3
+**Context:** P3 changes the **completion semantics of the product**. A stricter
+gate can make previously-"successful" turns report `INCONCLUSIVE`. The plan rates it *"High — the
+highest in the plan"* and prescribes shipping in two stages: **3a** introduces criteria and evidence
+and *records* the verdict without gating; **3b** enables the gate behind a flag after a measurement
+period showing how many turns become `INCONCLUSIVE`.
+
+**Decision:** Implement 3a exactly as staged. `core/acceptance.py` computes a
+`CompletionVerdict` (`PASS` / `FAIL` / `INCONCLUSIVE`) and the runtime records it as an audit-only
+`VERDICT` session event — **and nothing on the completion path consumes it.**
+
+`turn_succeeded` still derives from terminal evidence alone (13-H5), and
+`VerificationFloorGuard` still owns the completion invariant. Pinned by
+`TestStage3aDoesNotGate::test_completion_rule_is_unchanged`.
+
+**Why the verdict vocabulary is new rather than reused.** Both existing vocabularies were examined and
+neither can express the required verdict:
+
+| Existing | Why it cannot |
+|---|---|
+| `VerificationFloorGuard.resolved()` | a boolean: `wrote_code and verify_ok_after_edit is True`. It cannot say "I could not tell", and it is the *actor's* own bookkeeping |
+| `VerificationResult.decision` (`graph/verifier.py:19`) | `("ALLOW","REJECT","RETRY","ESCALATE")` — a **router's** vocabulary; every value presumes a verdict was reached |
+
+Routing is therefore **derived** from the verdict (`route_for()`), keeping the graph vocabulary as an
+output rather than a competitor: one authority for "what is true", another for "what to do about it".
+`INCONCLUSIVE` routes to `RETRY`, never `ALLOW` — the whole point of distinguishing it is that it must
+not be mistaken for success.
+
+**Consequence:** The gate can be justified by a measured `INCONCLUSIVE` rate instead of a guess.
+
+**Reversal condition:** 3b is a separate decision, taken on the measurement.
+
+---
+
+## ADR-0017 — The floor criterion is an implication, not a predicate
+
+**Status:** ACCEPTED
+**Phase:** P3
+**Context:** Demoting `VerificationFloorGuard` to one deterministic criterion, the obvious projection
+is `check=lambda _: guard.resolved()`. That reports **FAIL** for a turn that mutated nothing —
+`resolved()` requires `wrote_code` — which is a claim the evidence does not support and which the
+guard itself never makes: `rejection()` returns `None` when `wrote_code` is `False`.
+
+**Decision:** Express the criterion as the implication it actually is:
+`check=lambda _: (not guard.wrote_code) or guard.resolved()`.
+
+**Consequence:** A turn that mutated nothing passes the check and then produces no evidence for it,
+landing on **`INCONCLUSIVE`** — the honest answer, since there was nothing to verify. The four cases
+are now distinct and each is pinned:
+
+| Turn | Verdict |
+|---|---|
+| mutated nothing | `INCONCLUSIVE` (criterion vacuously holds, no evidence exists) |
+| mutated, unverified | `FAIL` (deterministic check fails) |
+| mutated, verified | `PASS` |
+| mutated again after verifying | `FAIL` (the guard's invalidate-on-mutation rule) |
+
+**Reversal condition:** None. A vacuous criterion is satisfied, not failed.
+
+---
+
+## ADR-0018 — The engine publishes its guard; the runtime only reads it
+
+**Status:** ACCEPTED
+**Phase:** P3
+**Context:** Stage 3a must record a verdict against the floor guard, but the guard lives in
+`core/stateless.py::_turn_inner` while the journal is written by `core/runtime.py`. `AGENTS.md` states
+*"Stateless core — `WispAgentCore` has no mutable state."*
+
+Three options:
+
+| Option | Problem |
+|---|---|
+| Runtime re-derives `wrote_code` / `verify_ok_after_edit` from observed tool events | A **second implementation of the floor rule** — a second authority for "was this verified", the defect class this migration exists to remove |
+| Engine yields the verdict as a new event type | Changes the event stream every transport consumes, for an audit record |
+| Engine publishes the guard; runtime reads it | A narrow exception to the stateless rule |
+
+**Decision:** Publish the guard (`self._last_guard = guard`) and have the runtime read it via
+`getattr(core, "_last_guard", None)`. The exception is narrow and its limits are documented at the
+assignment:
+
+- It is **not session state** — a per-turn handle, overwritten each turn, read only by the runtime
+  that just ran that turn.
+- It is **race-free in practice**: cores are cached per (session, fingerprint), so sessions never
+  share one, and concurrent turns on the *same* session are serialized by the session lock.
+- It keeps **one** floor implementation.
+
+**Consequence:** The acceptance model is reachable (RULE 11) without a second floor rule and without
+touching the event stream.
+
+**Reversal condition:** If a future phase needs the verdict per-node rather than per-turn, pass it
+through the return channel instead of publishing it.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -460,3 +558,6 @@ plan-level veto), that is a real inversion and needs its own phase with its own 
 | 0013 | The verdict record rides in the existing hash-chained sink, in a structured envelope | P2 | ACCEPTED |
 | 0014 | The safety net for a gate-touching change is written RED-first | P2 | ACCEPTED |
 | 0015 | The proposal boundary records; it does not decide | P2 | ACCEPTED |
+| 0016 | P3 ships in two stages, and stage 3a does not gate | P3 | ACCEPTED |
+| 0017 | The floor criterion is an implication, not a predicate | P3 | ACCEPTED |
+| 0018 | The engine publishes its guard; the runtime only reads it | P3 | ACCEPTED |

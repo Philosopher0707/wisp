@@ -652,6 +652,12 @@ class AgentRuntime:
             proposal_boundary = bool(
                 getattr(getattr(self, "config", None), "proposal_boundary", True)
                 and self.session_repo is not None)
+            # Migration P3 stage 3a: record the completion verdict. Defaults
+            # OFF — unlike the P0-P2 flags, this one adds a record to the log
+            # of every existing caller, so it is opt-in until 3b measures it.
+            verdict_recording = bool(
+                getattr(getattr(self, "config", None), "record_verdict", False)
+                and self.session_repo is not None)
             # Provider-visible injections the core appended to its LOCAL
             # messages mid-turn (verification nudges, steering notes,
             # budget notice). Persisted in the finally block so
@@ -846,6 +852,35 @@ class AgentRuntime:
                         journal_events.append(SessionEvent.assistant_message(
                             0, "".join(assistant_content)))
 
+                # Migration P3 (stage 3a) — RECORD the completion verdict.
+                #
+                # Recorded, not enforced. The completion rule is unchanged:
+                # `turn_succeeded` still derives from terminal evidence (13-H5)
+                # and the floor guard still decides nudges. What is new is that
+                # the verdict is *written down*, so stage 3b can be justified by
+                # a measured INCONCLUSIVE rate instead of a guess — which is the
+                # staging the plan prescribes for the highest-risk phase.
+                #
+                # `record_verdict` is read once, here, and defaults OFF: an
+                # audit record must not appear in a caller's log because it was
+                # not asked for.
+                #
+                # The guard lives on the CORE, not here — it is the engine that
+                # owns the completion invariant. Reading it via getattr keeps
+                # ONE floor implementation (a second one here would be a second
+                # authority for "was this verified"), and keeps this to a read.
+                if verdict_recording:
+                    _guard = getattr(core, "_last_guard", None)
+                    if _guard is not None:
+                        try:
+                            from wisp.core.session import SessionEvent
+                            from wisp.core.verification import floor_guard_verdict
+                            journal_events.append(SessionEvent.verdict_event(
+                                0, floor_guard_verdict(_guard).to_dict()))
+                        except Exception:
+                            logger.debug("verdict recording failed",
+                                         exc_info=True)
+
                 # Transcript unification (issue #2, part B): record the
                 # injected context above so the persisted transcript shows
                 # the model exactly what it saw mid-turn.
@@ -863,8 +898,8 @@ class AgentRuntime:
                 # BEFORE the terminal event, so the log stays gap-free and
                 # strictly increasing. Dropped entirely when the repository is
                 # absent or both writers are off.
-                if (journal_fidelity or proposal_boundary) and journal_events \
-                        and self.session_repo is not None:
+                if (journal_fidelity or proposal_boundary or verdict_recording) \
+                        and journal_events and self.session_repo is not None:
                     from dataclasses import replace as _replace_event
                     stamped: list[Any] = []
                     for _ev in journal_events:
