@@ -38,7 +38,8 @@
 | **P3** | Independent verification | P2 ✅ | `COMPLETE — stage 3a` (3b is a separate, measured decision) | `PHASE_P3_REPORT.md` |
 | **P4** | Task graph from durable state | P3 ✅ | `COMPLETE` (item 5 deferred) | `PHASE_P4_REPORT.md` |
 | **P5** | Runtime graph mutation | P4 ✅ | `COMPLETE` (item 5 deferred) | `PHASE_P5_REPORT.md` |
-| **P6** | Recovery ladder | P5 ✅ | `READY TO START` | — |
+| **P6** | Recovery ladder | P5 ✅ | `COMPLETE` (live-loop wiring deferred) | `PHASE_P6_REPORT.md` |
+| **P7** | Stagnation detection | P1 ✅ P5 ✅ | `READY TO START` | — |
 | **P2** | Introduce the proposal boundary | P1 | `NOT STARTED` | — |
 | **P3** | Independent verification | P2 | `NOT STARTED` | — |
 | **P4** | Task graph from durable state | P2 | `NOT STARTED` | — |
@@ -459,7 +460,58 @@ projection of the graph) rather than before it. Recorded as item **M11**.
 
 ---
 
+## 8. P6 — Recovery Ladder
+
+### 8.1 Objective
+
+Replace ad-hoc recovery with an explicit, budgeted, evidence-bearing ladder.
+
+### 8.2 What was actually wrong
+
+| Concern | Before | After |
+|---|---|---|
+| Failure vocabulary | `NodeFailure.failure_code: str = "ERROR"` — a **free string**; six of ten classes existed nowhere | `FailureClass` (10, closed), count-pinned |
+| Rollback | `runs/compensation.py` says *"No tool wiring"*; `reversibility()`/`rollback_preview()`/`EditRecord` had **zero** production callers (verified by grep) | `plan_rollback()` is that caller |
+| Escalation | a blocking call — cannot survive a restart, no async channel | `HumanIntervention`, durable and resumable |
+| Budgets | the audit found **five unordered termination modes**, no object answering "how much is left" | `BudgetGovernor.snapshot()` |
+
+### 8.3 Item-by-item status
+
+| # | Plan item | Status | Evidence |
+|---|---|---|---|
+| 1 | Closed failure taxonomy (10 classes) | `COMPLETE` | `FailureClass`; `classify_failure()` delegates to `classify_result()` |
+| 2 | The 7-rung ladder with legal/forbidden tables | `COMPLETE` | `LEGAL_RUNGS` + total `FORBIDDEN_RUNGS` + `RecoveryLadder` |
+| 3 | Wire the durable rollback path | `COMPLETE` | `plan_rollback()` consults the compensation declarations (ADR-0025) |
+| 4 | Escalation as durable state | `COMPLETE` | `HumanIntervention`; `ESCALATION` journal event; resumable |
+| 5 | Recovery budgets + `BudgetGovernor` | `COMPLETE` | `snapshot()` reports the new budgets and the pre-existing ones |
+
+### 8.4 The denial rule, made structural (ADR-0024)
+
+Phase 10 **removed** `_DENIAL_MARKERS` because all five canonical denial statuses matched **nothing**.
+A prose guard that matches nothing is worse than no guard — it reads as protection. P6 enforces the
+rule by **class**: the vocabulary is imported (never re-listed), `FORBIDDEN_RUNGS[SECURITY]` forbids
+every rung but escalation, denial **outranks every other signal**, and a test is parametrized over the
+canonical status set. An AST test asserts no literal `"POLICY_DENIED"` appears in `recovery.py`.
+
+### 8.5 Completion criteria
+
+- [x] All seven rungs reachable and tested
+- [x] Denials never retry (the Phase 10 defect class does not reappear)
+- [~] Rollback survives a crash — **the escalation does** (journaled + replayable); a true restart test needs M3
+- [x] Escalation is resumable and carries its audit trail
+- [x] **Zero new failures** — failure set identical to P5's
+- [ ] `ruff` / `mypy` — not installed
+
+### 8.6 The live turn loop was not rewired (ADR-0026)
+
+P6 ships the ladder as a complete, tested **mechanism**. The live recovery path is unchanged: rewiring
+it alters behaviour on the **failure** path — the least-covered path — and the plan names the risk as
+*"ordering and budget interaction"*, exactly what a live rewiring disturbs. Recorded as item **M12**.
+
+---
+
 ## 9. Change log
+
 
 
 
@@ -494,6 +546,10 @@ projection of the graph) rather than before it. Recorded as item **M11**.
 | 2026-09-22 | P5 | `create_node` / `expand` / `invalidate` (transitive cascade) / `supersede` (both edge directions) + enforced growth budget | 42 tests |
 | 2026-09-22 | P5 | Three bugs found in my own implementation: `str, Enum` ≠ `StrEnum`; `TaskNode` did not coerce its status; `supersede` rewired one direction | caught by the new tests |
 | 2026-09-22 | P5 | **Regression verified: 128 → 128, failure set identical to P4. 0 new.** Report: `PHASE_P5_REPORT.md` | full suite, `diff -q` |
+| 2026-09-22 | P6 | `wisp/core/recovery.py`: closed 10-class taxonomy, 7-rung ladder with legal/forbidden tables, budgets + `BudgetGovernor` | 69 tests |
+| 2026-09-22 | P6 | **Wired the compensation declarations** — `plan_rollback()` consults `reversibility()`/`rollback_preview()`, their first production caller; an unsafe rollback **escalates** | 12 tests |
+| 2026-09-22 | P6 | The denial rule is enforced **by class** over the canonical vocabulary (Phase 10 removed a prose guard that matched nothing) | AST-pinned |
+| 2026-09-22 | P6 | **Regression verified: 128 → 128, failure set identical to P5. 0 new.** Report: `PHASE_P6_REPORT.md` | full suite, `diff -q` |
 
 ### 9.1 Regression summary
 

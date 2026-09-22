@@ -684,6 +684,85 @@ distinction belongs on the node (a `origin` field), not in the readiness rule.
 
 ---
 
+## ADR-0024 — The denial rule is enforced by CLASS, not by matching statuses
+
+**Status:** ACCEPTED
+**Phase:** P6
+**Context:** Denials must never auto-retry. This is not a new rule — `graph/subagent_orchestrator.py`
+comments it, and **Phase 10 removed `_DENIAL_MARKERS`** precisely because it failed to enforce it: all
+five canonical denial statuses matched **nothing** (`CONTEXT.md:456`). A prose-matching guard that
+matches nothing is worse than no guard, because it reads as protection.
+
+**Decision:** Make the rule structural.
+
+- `classify_failure()` maps every denial status onto `FailureClass.SECURITY`, and **imports** the denial
+  vocabulary from `core/events.py` rather than re-listing it. A local copy is the exact defect that was
+  removed.
+- `FORBIDDEN_RUNGS[SECURITY]` forbids every rung except escalation, so `is_legal_rung()` returns
+  `False` for `RETRY` **by class**.
+- Precedence is explicit: **denial outranks every other signal**, so a denied call that also looked
+  transient is still `SECURITY` and the no-retry rule cannot leak.
+- A test is parametrized over the **canonical** status set, so it cannot drift from the vocabulary it
+  is supposed to cover.
+
+**Consequence:** The rule is enforced by the type system and the taxonomy rather than by wording. An
+AST test asserts no string literal `"POLICY_DENIED"` appears in `recovery.py`.
+
+**Reversal condition:** None. Prose matching for security decisions is never correct.
+
+---
+
+## ADR-0025 — An unsafe rollback escalates instead of proceeding
+
+**Status:** ACCEPTED
+**Phase:** P6
+**Context:** `runs/compensation.py` declares per-tool reversibility and its docstring says
+*"No tool wiring"* — nothing called `reversibility()` or `rollback_preview()` until P6. Wiring it
+raises an immediate question: what should the Rollback rung do for a tool declared `irreversible` (a
+published `git push`) or `unknown` (any undeclared tool)?
+
+**Decision:** **Escalate.** `plan_rollback()` refuses anything not declared `reversible`, and
+`RecoveryLadder.decide()` converts that refusal into an escalation rather than proceeding.
+
+**Rationale:** A recovery that makes things worse is the worst outcome available — worse than stopping,
+because it destroys the evidence that would explain the original failure. Assuming an undeclared tool is
+compensable is the specific assumption that produces that outcome. Refusal is the safe default.
+
+**Consequence:** The compensation declarations finally have a production caller, and the failure mode
+they were written to prevent is now structurally impossible rather than merely discouraged. Pinned by
+`test_an_unsafe_rollback_escalates_instead` and `test_an_unknown_tool_is_refused`.
+
+**Reversal condition:** If a tool is later proven compensable, declare it in `_REVERSIBILITY` — the
+table is the single place that decides.
+
+---
+
+## ADR-0026 — The recovery ladder is a mechanism; the turn loop does not consult it yet
+
+**Status:** ACCEPTED
+**Phase:** P6
+**Context:** P6's objective is to *"replace ad-hoc recovery with an explicit, budgeted, evidence-bearing
+ladder."* The mechanisms exist independently today (stream attempts, transient retry, repair nudges,
+the grind floor, cycle iterations) and the plan's rollback is a flag: off → today's mechanisms.
+
+**Decision:** Ship the ladder as a complete, tested **mechanism** — taxonomy, rung table, budgets,
+decisions, durable escalation, and the compensation wiring — and **do not** rewire the live turn loop's
+recovery behaviour in this phase.
+
+**Rationale:** Same reasoning as P5's item 5 (ADR not needed there — recorded as item M11). Rewiring the
+turn loop's recovery changes behaviour on the *failure* path, which is the hardest path to test and the
+one with the least existing coverage. The plan rates P6 "Medium" and names the risk as *"ordering and
+budget interaction"* — precisely the things a live rewiring would disturb.
+
+**Consequence:** `classify_failure()`, `plan_rollback()` and the ladder are reachable and tested, but
+nothing on the live turn path calls the ladder. Recorded as item **M12**. Stated plainly in
+`PHASE_P6_REPORT.md` §5 rather than implied.
+
+**Reversal condition:** When the failure path has coverage comparable to the success path, wire the
+ladder behind `WISP_RECOVERY_LADDER` and measure.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -711,3 +790,6 @@ distinction belongs on the node (a `origin` field), not in the readiness rule.
 | 0021 | The extended node vocabulary is a superset; Layer B's `NodeStatus` is untouched | P5 | ACCEPTED |
 | 0022 | `TERMINAL` means settled, not final | P5 | ACCEPTED |
 | 0023 | A node with no incoming edges is ready | P5 | ACCEPTED |
+| 0024 | The denial rule is enforced by CLASS, not by matching statuses | P6 | ACCEPTED |
+| 0025 | An unsafe rollback escalates instead of proceeding | P6 | ACCEPTED |
+| 0026 | The recovery ladder is a mechanism; the turn loop does not consult it yet | P6 | ACCEPTED |

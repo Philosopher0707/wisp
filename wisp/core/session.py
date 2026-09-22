@@ -39,6 +39,12 @@ class SessionEventType(StrEnum):
     # journal and can be rebuilt by replay rather than trusted as a cache.
     TASK_GRAPH = "task_graph"
     NODE_TRANSITION = "node_transition"
+    # Migration P6 — the recovery ladder. AUDIT-ONLY. `RECOVERY` records one
+    # rung decision; `ESCALATION` records a `HumanIntervention`, which is
+    # durable STATE rather than a blocking call, so a run can be parked and
+    # resumed when an answer arrives.
+    RECOVERY = "recovery"
+    ESCALATION = "escalation"
     COMPACTED = "compacted"
     ERROR = "error"
     DONE = "done"
@@ -154,6 +160,21 @@ class SessionEvent:
                    {"transition": transition})
 
     @classmethod
+    def recovery_event(cls, seq: int, decision: dict) -> SessionEvent:
+        """One rung decision (migration P6). Audit-only."""
+        return cls(SessionEventType.RECOVERY, seq, {"decision": decision})
+
+    @classmethod
+    def escalation_event(cls, seq: int, intervention: dict) -> SessionEvent:
+        """A `HumanIntervention` (migration P6). Audit-only.
+
+        Durable state, not a blocking call: the run can be parked here and
+        resumed when an answer arrives, which a blocking call cannot express.
+        """
+        return cls(SessionEventType.ESCALATION, seq,
+                   {"intervention": intervention})
+
+    @classmethod
     def compacted(cls, seq: int, before_count: int, after_count: int, summary: str = "") -> SessionEvent:
         return cls(SessionEventType.COMPACTED, seq, {"before_count": before_count, "after_count": after_count, "summary": summary})
 
@@ -205,6 +226,9 @@ class Session:
     # Audit-only — never contributes to `messages`.
     task_graph: dict = field(default_factory=dict)
     node_transitions: list[dict] = field(default_factory=list)
+    # The recovery ladder (migration P6). Audit-only.
+    recovery: list[dict] = field(default_factory=list)
+    escalation: dict = field(default_factory=dict)
 
     def rebuild_task_graph(self) -> dict:
         """Rebuild the graph by replaying its transitions (migration P4).
@@ -339,6 +363,19 @@ class Session:
                     **dict(event.payload.get("transition") or {}),
                 })
 
+            case SessionEventType.RECOVERY:
+                # Audit-only (migration P6).
+                self.recovery.append({
+                    "sequence_num": event.sequence_num,
+                    "timestamp": event.timestamp,
+                    **dict(event.payload.get("decision") or {}),
+                })
+
+            case SessionEventType.ESCALATION:
+                # Audit-only. Overwrites: a session has one live escalation,
+                # and the full history travels inside it.
+                self.escalation = dict(event.payload.get("intervention") or {})
+
             case SessionEventType.COMPACTED:                self.compaction_history.append({
                     "before_count": event.payload["before_count"],
                     "after_count": event.payload["after_count"],
@@ -379,6 +416,8 @@ class Session:
         self.verdicts.clear()
         self.task_graph = {}
         self.node_transitions.clear()
+        self.recovery.clear()
+        self.escalation = {}
         self.sequence_num = 0
         self.turn_count = 0
         self.unknown_events = 0
