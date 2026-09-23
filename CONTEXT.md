@@ -549,6 +549,7 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `b39c120` | `docs:` complete the commit table and stop over-claiming it |
 | `e52333f` | `feat(m9):` the execution view is faithful; the graph is a shape, not a payload — 11 tests |
 | `bed9f7e` | `feat(m15):` a subagent authorizes as a narrowed child — 22 tests |
+| `e502391` | `fix(m14):` classify prompt sections, and close a live T1 violation — 32 tests |
 | `1229b87` | `docs(m16):` correct the commit counts and complete this table |
 | `ed9fee6` | `docs:` stop quoting a commit count that goes stale on every commit |
 
