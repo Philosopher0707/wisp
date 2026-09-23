@@ -503,8 +503,8 @@ dissolved under execution, four of them mine.
 ## 3. Commits
 
 `83b10af` was the Phase 9/10 baseline. Every commit on top of it, all on `main`.
-**This table is the authority for the count** — verify with `git log 83b10af..HEAD`, rather than
-trusting a number written in prose that goes stale on the next commit:
+**This table narrates the phase commits; `git log 83b10af..HEAD` is the authority for the exact
+list.** A count written in prose goes stale on the next commit, so none is quoted:
 
 | Commit | Scope |
 |---|---|
@@ -529,6 +529,8 @@ trusting a number written in prose that goes stale on the next commit:
 | `0b1f4e8` | `docs(m16):` pin the commit hash and repair the handoff docs |
 | `7cff74f` | `docs(m16):` ledger rows; keep agent workspace data untracked (+ `.gitignore`) |
 | `73c2bbc` | `docs(m16):` record the third occurrence of the flaky test F17 |
+| `1229b87` | `docs(m16):` correct the commit counts and complete this table |
+| `ed9fee6` | `docs:` stop quoting a commit count that goes stale on every commit |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
