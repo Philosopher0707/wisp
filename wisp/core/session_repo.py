@@ -10,7 +10,13 @@ import json
 import logging
 from typing import Optional
 
-from wisp.core.session import Session, SessionEvent, SessionEventType
+from wisp.core.session import (
+    JOURNAL_ONLY_RECORDS,
+    Session,
+    SessionEvent,
+    SessionEventType,
+    empty_journal_records,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +142,7 @@ class SessionRepository:
 
         Journal-first because the journal is the append-only record and carries
         everything the blob does — plus the audit records (proposals, outcomes,
-        verdicts, the task graph, recovery) the blob never had.
+        verdicts, the task graph, recovery, escalation) the blob never had.
 
         Falls back to the blob when the journal yields no **turn body**, which
         is the case for **every session written before P0**: the turn body was
@@ -144,39 +150,66 @@ class SessionRepository:
         marker. Reconstructing from that alone would silently truncate a
         session's history to one message.
 
+        **The fallback is not total (ADR-0028).** Choosing the blob settles which
+        *transcript* to trust; it says nothing about the journal-only records,
+        which are independent of the transcript's validity. A gapped journal
+        whose escalation survived still has that escalation, and M4's fallback
+        used to throw it away with the transcript — losing the state of a parked
+        run while reporting the loss only as `_gap`. So the journal-only records
+        are salvaged onto **both** paths, under `_journal`.
+
         Returns a dict shaped like `UnifiedStore.load_session`, or `None` when
-        neither source has the session.
+        neither source has the session. `_source` names the path that answered;
+        `_gap` is True when the journal is missing events, which means any
+        journal-only record absent from `_journal` is **unrecoverable**.
         """
         source = self.reconstruction_source(session_id)
         if source == "none":
             return None
 
         blob = self._store.load_session(session_id) or {}
+        replayed = self.load_session(session_id)
+        # Read once, used by both paths: the journal-only records are a property
+        # of the journal, not of which transcript won.
+        records = (replayed.journal_records() if replayed is not None
+                   else empty_journal_records())
 
-        if source == "journal":
-            replayed = self.load_session(session_id)
-            if replayed is not None:
-                return {
-                    "id": replayed.session_id,
-                    "model": replayed.model or blob.get("model", ""),
-                    "workspace": replayed.workspace or blob.get("workspace", ""),
-                    # `title` is a blob-only field; the journal never carried it.
-                    "title": blob.get("title", ""),
-                    "messages": list(replayed.messages),
-                    "compaction_history": list(replayed.compaction_history),
-                    "created_at": replayed.created_at or blob.get("created_at", 0.0),
-                    "updated_at": replayed.updated_at or blob.get("updated_at", 0.0),
-                    # Provenance, so a caller can tell which path answered.
-                    "_source": "journal",
-                    "_gap": False,
-                }
+        if source == "journal" and replayed is not None:
+            return {
+                "id": replayed.session_id,
+                "model": replayed.model or blob.get("model", ""),
+                "workspace": replayed.workspace or blob.get("workspace", ""),
+                # `title` is a blob-only field; the journal never carried it.
+                "title": blob.get("title", ""),
+                "messages": list(replayed.messages),
+                "compaction_history": list(replayed.compaction_history),
+                "created_at": replayed.created_at or blob.get("created_at", 0.0),
+                "updated_at": replayed.updated_at or blob.get("updated_at", 0.0),
+                # Provenance, so a caller can tell which path answered.
+                "_source": "journal",
+                "_gap": False,
+                "_journal": records,
+                # Present on both paths with the same meaning, so a caller reads
+                # it unconditionally. Empty here: a contiguous journal lost
+                # nothing, so nothing is at risk.
+                "_journal_records_at_risk": [],
+            }
 
         if not blob:
             return None
         # The blob carries no sequence, so a gap cannot be asserted of it. It is
         # reported as False rather than unknown because the blob is a whole-
         # session snapshot: it is either present and complete, or absent.
-        return {**blob, "_source": "blob", "_gap": False}
+        gap = bool(replayed.gap_detected) if replayed is not None else False
+        return {
+            **blob,
+            "_source": "blob",
+            "_gap": gap,
+            "_journal": records,
+            # Named explicitly, because `_gap` alone understates it: the lost
+            # event may have BEEN one of these, and nothing can recover it.
+            "_journal_records_at_risk": list(JOURNAL_ONLY_RECORDS) if gap else [],
+        }
 
     def reconstruction_source(self, session_id: str) -> str:
         """`journal` | `blob` | `none` — the migration check.

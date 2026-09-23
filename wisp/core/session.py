@@ -12,7 +12,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import Any, Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,67 @@ class SessionEventType(StrEnum):
     COMPACTED = "compacted"
     ERROR = "error"
     DONE = "done"
+
+
+#: Event kinds whose loss is a **correctness** precondition rather than an
+#: observability one (ADR-0028).
+#:
+#: ADR-0004 made every durable write best-effort, on the rule that a turn must
+#: never be broken by a failed write. That rule is right for a *record of what
+#: happened* and wrong for a *state transition*: if the write that establishes a
+#: state is lost, continuing as though it landed is not best-effort — it is a
+#: false record.
+#:
+#: `ESCALATION` is the only such kind, and ADR-0027's classification already
+#: carved it out. A `HumanIntervention` is not a description of a parked run; it
+#: **is** the parked run's state, and `resumable` reads it to decide whether to
+#: resume. The other audit kinds (`PROPOSAL`/`OUTCOME`, `VERDICT`,
+#: `TASK_GRAPH`/`NODE_TRANSITION`, `RECOVERY`) are records *about* a turn whose
+#: own behaviour is unaffected by their loss, so best-effort stands for them.
+STATE_BEARING_EVENT_TYPES: frozenset[SessionEventType] = frozenset({
+    SessionEventType.ESCALATION,
+})
+
+#: The records a replayed `Session` carries that `UnifiedStore.load_session`
+#: (the blob) does **not** (ADR-0028). One authority, because two places need
+#: the same list: `reconstruct()` salvages them on the blob path, and the tests
+#: assert the blob genuinely lacks each one.
+JOURNAL_ONLY_RECORDS: tuple[str, ...] = (
+    "proposals", "outcomes", "verdicts", "task_graph", "node_transitions",
+    "recovery", "escalation",
+)
+
+
+#: The value shape of each `JOURNAL_ONLY_RECORDS` entry. Here, beside the name
+#: list, so an empty template is built from one authority rather than restating
+#: the keys and their types at every call site.
+JOURNAL_ONLY_SHAPES: dict[str, type] = {
+    "proposals": list,
+    "outcomes": list,
+    "verdicts": list,
+    "task_graph": dict,
+    "node_transitions": list,
+    "recovery": list,
+    "escalation": dict,
+}
+
+
+def empty_journal_records() -> dict:
+    """The shape `Session.journal_records()` returns, holding nothing.
+
+    Used when a session cannot be replayed at all, so a caller reads `_journal`
+    unconditionally instead of branching on whether the journal was available.
+    """
+    return {name: JOURNAL_ONLY_SHAPES[name]() for name in JOURNAL_ONLY_RECORDS}
+
+
+def is_state_bearing(events: "Iterable[SessionEvent]") -> bool:
+    """True when any event's loss would leave a state transition unrecorded.
+
+    The single authority for the question, so the runtime's write policy and
+    the read-side salvage cannot disagree about which records are special.
+    """
+    return any(e.event_type in STATE_BEARING_EVENT_TYPES for e in events)
 
 
 @dataclass(frozen=True)
@@ -234,6 +295,35 @@ class Session:
     # The recovery ladder (migration P6). Audit-only.
     recovery: list[dict] = field(default_factory=list)
     escalation: dict = field(default_factory=dict)
+
+    def journal_records(self) -> dict:
+        """The records the journal carries and the blob does not (ADR-0028).
+
+        One accessor rather than seven, because both reconstruction paths need
+        the same set and a caller should not have to know which of them a given
+        source happens to supply. The keys are `JOURNAL_ONLY_RECORDS`.
+
+        Values are copies: a caller that mutates the result must not be able to
+        reach back into the session's state.
+        """
+        return {
+            "proposals": list(self.proposals),
+            "outcomes": list(self.outcomes),
+            "verdicts": list(self.verdicts),
+            "task_graph": dict(self.task_graph),
+            "node_transitions": list(self.node_transitions),
+            "recovery": list(self.recovery),
+            "escalation": dict(self.escalation),
+        }
+
+    @property
+    def has_escalation(self) -> bool:
+        """True when a live `HumanIntervention` was replayed (ADR-0028).
+
+        The escalation's presence is the question a resume asks, so it gets a
+        name instead of callers reaching into the dict.
+        """
+        return bool(self.escalation)
 
     def rebuild_task_graph(self) -> dict:
         """Rebuild the graph by replaying its transitions (migration P4).

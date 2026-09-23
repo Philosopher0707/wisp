@@ -13,15 +13,22 @@
 
 ### Commits
 
+**17 commits** on top of `83b10af`. The full table is in `CONTEXT.md` §3; the first three and the two
+most recent are listed here for orientation.
+
 | Commit | Scope |
 |---|---|
 | `cfe6f0f` | `docs:` audit (9 documents), migration plan, ledger, decision log, P0–P2 reports — 14 files |
 | `744d081` | `feat:` P0 + P1 + P2 implementation and tests — 17 files, 119 new tests |
+| … | one commit per phase thereafter — see `CONTEXT.md` §3 |
+| `02c756c` | `feat(m4):` revisit ADR-0004 — and close a live defect it led to — 24 tests |
+| `d80f582` | `docs:` compaction handoff — refresh `CONTEXT.md`, add the workspace `MEMORY.md` |
 
-> **Scope caveat on `744d081`.** `wisp/config.py`, `wisp/composition.py`,
-> `wisp/core/runtime.py` and `wisp/tool_executor.py` already carried uncommitted changes from before
-> this work. They are included because they are interleaved with this work in the same hunks, and the
-> commit body says so explicitly. Separating them would require reverse-engineering changes this
+> **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
+> `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
+> `wisp/auth/__init__.py`, `wisp/multi_agent/task.py` and `AGENTS.md` already carried uncommitted changes
+> from before this work. They are included because they are interleaved with it in the same hunks, and
+> the commit bodies say so explicitly. Separating them would require reverse-engineering changes this
 > migration did not make.
 
 **Status vocabulary:** `NOT STARTED` · `IN PROGRESS` · `COMPLETE` · `BLOCKED` · `PARTIAL` · `SUPERSEDED`
@@ -42,16 +49,14 @@
 | **P7** | Stagnation detection | P1 ✅ P5 ✅ | `COMPLETE` (live-loop wiring deferred) | `PHASE_P7_REPORT.md` |
 | **P8** | Context as a first-class subsystem | P1 ✅ P4 ✅ | `PARTIAL` — trust boundary complete; items 3–6 deferred | `PHASE_P8_REPORT.md` |
 | **P9** | Structured delegation | P2 ✅ P5 ✅ | `PARTIAL` — two wiring fixes landed; five structural items deferred | `PHASE_P9_REPORT.md` |
-| **P2** | Introduce the proposal boundary | P1 | `NOT STARTED` | — |
-| **P3** | Independent verification | P2 | `NOT STARTED` | — |
-| **P4** | Task graph from durable state | P2 | `NOT STARTED` | — |
-| **P5** | Runtime graph mutation | P4 | `NOT STARTED` | — |
-| **P6** | Recovery ladder | P5 | `NOT STARTED` | — |
-| **P7** | Stagnation detection | P5 | `NOT STARTED` | — |
-| **P8** | Context trust boundary | — (independent) | `NOT STARTED` | — |
-| **P9** | Structured delegation | P2 | `NOT STARTED` | — |
+| **M2** | Journal-first reconstruction | P1 | `COMPLETE` (consumer adoption asserted) | `PHASE_M2_REPORT.md` |
+| **M3** | Killpoint integration | P1 | `COMPLETE` (one window) | `PHASE_M3_REPORT.md` |
+| **M4** | ADR-0004 revisited | M2 | `COMPLETE` — **found a live defect** | `PHASE_M4_REPORT.md` |
+| **M16** | The escalation is state, not audit | M4 | `COMPLETE` — **found a live read-side defect** | `PHASE_M16_REPORT.md` |
 
 Critical path: **P0 → P1 → P2 → P4 → P5 → P6**. P8 is independent and may start at any time.
+The `M` rows are the plan's **deferred prerequisites**, worked after the phases. **M9 remains open** —
+see §12 and `CONTEXT.md` §0.
 
 ---
 
@@ -431,35 +436,6 @@ and the P4 graph is a *record* of that work, not its driver. Making the graph dr
 change of **control**, not an added capability — the point at which the message list stops being
 authoritative, which P4's rollback contract preserves. It should land **with** M9 (message list as a
 projection of the graph) rather than before it. Recorded as item **M11**.
-
----
-
-## 8. Findings log (migration-wide)
-
-| # | Finding | Phase | Resolution |
-|---|---|---|---|
-| F1 | `test_canonical_execution_state.py` already exists — audit implied the ratchet was missing | P0 | Corrected; no work |
-| F2 | `RunStatus` ⊂ `RunState` — audit claimed divergence requiring a shim | P0 | Corrected; no shim needed (ADR-0003) |
-| F3 | `Session.apply` has no `TOOL_CALL` case **and** no wildcard — unknown event types are silently dropped rather than failing loud | P0 | Fixed (P0.3, ADR-0005) |
-| F4 | The append-only session event log contains only `user_message` / `error` / `done`. It cannot reconstruct a turn, yet `load_session()` is the documented crash-recovery replay source (`runtime.py:371`) | P0 | Fixed (P0.2) |
-| F5 | `runtime.py` carried a stale comment `# Cache result for idempotency (1h TTL)` with **no code beneath it** — the idempotency cache the durable layer provides (`idem_get`/`idem_put`) is unclaimed | P0 | **Resolved in P1** — comment removed; idempotency implemented at the action level instead (ADR-0010) |
-| F6 | Two disjoint decision models coexist: `auth/decision.authorize()` (6 layers) and `infra/security.SecurityPolicy.check()` (4 layers) | — | Pre-existing; out of P0 scope |
-| **F7** | **`SessionRepository.append_events` was dead code that could not work.** It did `with self._store.transaction() as conn: conn.execute(...)`, but `UnifiedStore.transaction()` yields the **store**, not a connection (`infra/store.py:317-327`) — so it raised `AttributeError: 'UnifiedStore' object has no attribute 'execute'` on every call. Nothing called it, so the defect was invisible until P0 needed it | P0 | Fixed in `session_repo.py` |
-| **F8** | **Six declared dependencies are missing from the venv**: `jsonschema`, `numpy`, `aiohttp`, `tiktoken`, `prompt_toolkit`, `cryptography` (all listed in `pyproject.toml`). Because `_validate_tool_args` imports `jsonschema` inside a `try` and converts the `ModuleNotFoundError` into a validation-failure string (`stateless.py:2186-2199`), **every tool call in this environment is refused as `SCHEMA_INVALID` before it can execute** — a missing dependency silently degrades into a total tool outage | P0 | **NOT FIXED — environment gap.** Cannot install: no network (SSL cert verification fails). Blocks any end-to-end tool-execution test |
-| F9 | `_persist_turn_state`'s 6-parameter signature is a pinned contract: `test_13h5_success_derivation.py::TestFlagCompatibility` wraps it positionally to observe `turn_succeeded`. Widening it breaks that guard | P0 | Respected — journaling moved to a separate method instead |
-| F10 | `test_13h2_determinism.py` has 6 pre-existing failures at baseline (`TokenBatch` has no `.get`, and a `0 == 6` signal-count assert). Unrelated to P0 | — | Pre-existing; logged |
-| F11 | `tests/test_api_key_security.py` fails at **collection** (starlette `TestClient` needs `httpx`, also missing) | — | Pre-existing; environment gap |
-| **F12** | **Baseline comparison methodology.** The working tree carried 33 pre-existing modified tracked files at P0 start. Stashing only the six files P0 touched reverts them to **HEAD**, which discards the pre-existing uncommitted Phase-10 work in those same files (e.g. `tool_executor.py::_note_fetch_outcome` delegates to `is_error_outcome` in the working tree but substring-matches in HEAD). A HEAD-based "baseline" therefore reports three ratchet failures that are artifacts of the stash, not regressions. The true baseline is *working tree minus P0*, which this ledger cannot reconstruct after the fact | P0 | Recorded; every regression delta explained individually in `PHASE_P0_REPORT.md` §4.3 |
-| **F13** | **P0's first journaling implementation had a real correctness bug.** A tool call with no reply journaled no `TOOL_RESULT`, so replay rebuilt an assistant `tool_calls` block with **no following tool message** — a transcript strict providers reject. Caught by `test_13h4`/`test_13h5`. Fixed: the placeholder reply is now journaled with a `synthesized: True` flag, so replay stays provider-valid while the record stays honest | P0 | Fixed; guarded by `test_interrupted_turn_replays_into_a_provider_valid_transcript` |
-| **F14** | **The layered authorization verdict was recorded only for denials, and only as prose.** `controlling_layer` is interpolated into denial messages (`tool_executor.py:722,725`; `tools/registry.py:948`). The audit trail's allow-side writers fire on the **approval** path (`tool_executor.py:942,947`), not the authority path — so `allow`, `approval`, and "no gate ran" were mutually indistinguishable. The plan's claim that the field "is discarded" was itself imprecise | P2 | Fixed for both paths (ADR-0013) |
-| **F15** | **A `read_only` denial is decided by the policy-engine gate, which runs BEFORE the `authorize()` consult** — so it names no controlling layer. Undocumented before P2; surfaced by writing the gate-order corpus RED-first. Relevant to the deferred proposal-boundary work: an outcome must be recorded even for denials that never reach `authorize()` | P2 | Pinned in the corpus with an explanatory comment (ADR-0014) |
-| **F16** | `contracts/tool.py`'s `ToolRequest`/`ToolResult` were **producer-less and consumer-less** (only the re-export and their own test referenced them). `contracts/policy.py`'s `PolicyDecisionEnvelope` still is. `CanonicalEvent` IS wired (`transport/renderer.py`, `contracts/adapters.py`) | P2 | **Fixed for tool** (`wisp/core/proposal.py`); `PolicyDecisionEnvelope` still unwired |
-| **F17** | **`tests/test_speculative_search.py::TestOracle::test_smallest_diff_wins_ties_broken_by_speed` is flaky under the full suite.** It asserts a diff-size ranking, passes 5/5 in isolation and 3/3 at file level, has zero coupling to the P3 surface, and **appeared once in a 129-failure run and was absent from an immediate rerun of the identical code**. Confirmed flaky rather than a regression by re-running the same tree | P3 | Logged; **not** caused by P3. The suite's failure count varies by ±1 run-to-run because of it |
-| **F22** | **`SubagentContract` had no `metadata` field, and the orchestrator *reads* it.** `subagent_orchestrator.py:1316` is `if not task.metadata:` — a read — so the first time a DAG node declared a budget the orchestrator raised `AttributeError`. The plan described this as the budget being "never seen"; it is a latent crash. Phase 10's F1 reappearing in a second location | P9 | Fixed: `metadata` field added |\n| **F23** | **`multi_agent/_circuit_breaker.py` is a duplicate authority.** Imported by exactly one file — a foreign-session WIP test that does not collect — while a second, wired breaker lives at `infra/circuit_breaker.py` | P9 | Documented; **not deleted** (the user's untracked WIP) |\n| **F21** | **`_fit_sections` records truncation as PROSE, not as structured data.** The plan claimed "no record at all"; evidence shows a `dropped_labels` accumulator rendered into the prompt as `[NOTE: … (omitted)]`. Prose cannot be asserted on, counted or alerted on — the same distinction as F7 (`controlling_layer`) | P8 | Fixed: `Context.dropped` is structured |\n| **F20** | **The full-suite failure set is NOT stable.** Two consecutive runs on identical code read 129 and 130. `test_cli_surface_e2e.py::…test_print_blackhole_server_falls_back` appears in one and not the other (it depends on a network timeout). Separately, `test_sandbox_fallback_contract.py::test_fallback_host_warns_at_tool_layer` fails in the full run but passes 5/5 in isolation (CONTEXT.md §7 documents it as order-dependent). **A single-run count is not a baseline** | P7 | Method fixed: the baseline is now the **intersection of two runs**, stored in the repo |
-| **F19** | **Three tests P5's completion criteria require do not exist**: `test_graph_fuzz.py`, `test_graph_races.py`, `test_graph_resume.py`. They are the plan's own safety net for changing Layer B's node vocabulary, and their absence is why that change was not made (ADR-0021) | P5 | Verified absent; recorded |
-| **F18** | `graph/scheduler.py::ready_nodes` recomputed readiness on every pass and stored nothing — so the graph was a *view*, never state, and a divergence between it and any consumer would be silent | P4 | Fixed (ADR-0019/0020) |
-
----
 
 ---
 
@@ -858,9 +834,9 @@ safe, and all-at-once is a cross-cutting change across five surfaces with no sha
 
 ---
 
-## 15. M3 — Killpoint Integration for the Session Journal
+## 14. M3 — Killpoint Integration for the Session Journal
 
-### 15.1 What was actually missing
+### 14.1 What was actually missing
 
 The killpoint harness is substantial (368 lines) and does real work: spawn a child, wait on a `READY`
 barrier, send **`SIGKILL`**, run the recovery path, record a JSONL result. It has four kill points —
@@ -872,7 +848,7 @@ unknown"* — had never been exercised against a real process death.
 
 So the gap was not a missing harness. It was a **missing kill point in an existing harness**.
 
-### 15.2 The new kill point
+### 14.2 The new kill point
 
 `test_kp_session_midtool_then_killed` kills the child in the window P1's design is about — **between a
 journaled `TOOL_CALL` and its `TOOL_RESULT`**:
@@ -897,7 +873,7 @@ resolution that was simply not looked for.
 have landed. Recovery must *surface* that rather than silently repeating the call, because repeating is
 how one crash turns one edit into two.
 
-### 15.3 Verification
+### 14.3 Verification
 
 ```
 tests/reliability/test_killpoints.py .....   5 passed in 4.57s
@@ -907,7 +883,7 @@ Not vacuous: `_wait_ready` blocks until the child writes `READY.json`, and the a
 `info["session"] == "kp-journal"` requires that payload — so the child ran, reached the barrier, and was
 killed. The assertions are about post-kill state.
 
-### 15.4 Completion criteria
+### 14.4 Completion criteria
 
 - [x] The harness drives the journal under a real SIGKILL
 - [x] The detection primitive is exercised, not only unit-tested
@@ -915,7 +891,7 @@ killed. The assertions are about post-kill state.
 - [x] No regression — test-only change; the file's 5 points pass and it was **not** in the baseline
 - [ ] `ruff` / `mypy` — not installed
 
-### 15.5 Honest limits
+### 14.5 Honest limits
 
 - **One window.** `TOOL_CALL` journaled / `TOOL_RESULT` missing is the window `unresolved_actions()` was
   built for and the one most worth killing in. Other journal windows — mid-`assistant_message`,
@@ -926,9 +902,9 @@ killed. The assertions are about post-kill state.
 
 ---
 
-## 16. M4 — Durability as a Correctness Precondition
+## 15. M4 — Durability as a Correctness Precondition
 
-### 16.1 What it is
+### 15.1 What it is
 
 ADR-0004 declared every durable write best-effort and stated its own reversal condition: *"Once a phase
 requires durable state as a **correctness** precondition … must become fail-loud. **Revisit at P2.**"*
@@ -936,7 +912,7 @@ P2 landed, and so did P3–P6 — but **the decisive change was M2**, which prom
 secondary to primary. That is what turns a permitted silent write failure into a **silently truncated
 session**.
 
-### 16.2 Revisiting the ADR found a live defect
+### 15.2 Revisiting the ADR found a live defect
 
 With a `TOOL_RESULT` write lost (seqs `0, 1, 3`):
 
@@ -949,7 +925,7 @@ With a `TOOL_RESULT` write lost (seqs `0, 1, 3`):
 A strict provider rejects that shape. The failure mode M2 was designed to avoid — returning a *worse*
 session than the blob — arrived by a **second route**, and nothing reported it.
 
-### 16.3 The decision (ADR-0027)
+### 15.3 The decision (ADR-0027)
 
 **Do not make the writes fail-loud.** ADR-0004's core concern stands: a turn must not die because a disk
 write failed. Instead make the **invariant checkable**: `Session.gap_detected` (the sequence is
@@ -967,12 +943,12 @@ is that signal, and unlike a counter it is a **property of the record itself**.
 | `TASK_GRAPH` / `NODE_TRANSITION` | graph↔transcript divergence | best-effort, canary |
 | `RECOVERY` / `ESCALATION` | resumability — the escalation *is* the state | best-effort, canary; item **M16** |
 
-### 16.4 A bug my own test caught
+### 15.4 A bug my own test caught
 
 `_seen_sequences` was first assigned in `replay()` only, so a **directly-constructed `Session`** raised
 `AttributeError` on `gap_detected`. `test_an_empty_session_is_not_a_gap` caught it; it is now a field.
 
-### 16.5 Completion criteria
+### 15.5 Completion criteria
 
 - [x] ADR-0004's reversal condition addressed — **ADR-0027**, cross-referenced from ADR-0004
 - [x] The records classified by what their loss costs
@@ -981,7 +957,7 @@ is that signal, and unlike a counter it is a **property of the record itself**.
 - [x] **Zero new failures** — 129, byte-identical in both directions
 - [ ] `ruff` / `mypy` — not installed
 
-### 16.6 Honest limits
+### 15.6 Honest limits
 
 - **The write is still best-effort.** M4 makes loss *detectable*, not impossible. A caller that never
   consults `gap_detected` is no better off — which is why `reconstruction_source()` consults it.
@@ -991,7 +967,123 @@ is that signal, and unlike a counter it is a **property of the record itself**.
 
 ---
 
-## 17. Change log
+## 16. M16 — The Escalation Is State, Not Audit
+
+### 16.1 What M16 was
+
+ADR-0027 classified every durable record by what its loss costs and left one row explicitly unresolved:
+
+> `RECOVERY` / `ESCALATION` (P6) — resumability, the escalation *is* the state — best-effort, canary;
+> **open item M16**
+
+So the stated scope was narrow: decide whether the escalation's **write** should stop being best-effort.
+Revisiting it found the policy wrong in **both** directions, and the **read** side — which nobody had
+questioned — was the worse of the two.
+
+### 16.2 The read side was a live defect
+
+M4 made `reconstruction_source()` refuse a gapped journal and fall back to the blob. That answers *which
+transcript do I trust*; M4's implementation treated it as also answering *which records survived*. Those
+are independent — the journal-only records do not depend on the transcript's validity.
+
+Verified with a gapped journal whose escalation had survived:
+
+| Observation | Before M16 |
+|---|---|
+| the escalation in the journal | **present** — `esc-2`, with its full ladder history |
+| `gap_detected` | **True** — M4 detected the loss correctly |
+| `reconstruction_source()` | `"blob"` |
+| the escalation in the result | **absent** — the blob has no `escalation` key |
+
+So the fallback added to *stop* a worse session being returned **silently discarded the state of a parked
+run**, reported only as `_gap`. A resume reading it cannot tell why the run stopped, or whether to
+resume at all.
+
+### 16.3 The decision (ADR-0028)
+
+Neither change makes a write fail-loud in general. **ADR-0004 stands.**
+
+1. **The fallback salvages rather than discards** — `reconstruct()` carries the journal-only records
+   under `_journal` on **both** paths, and names what a gap endangers in `_journal_records_at_risk`.
+2. **A state-bearing batch is not swallowed** — `is_state_bearing()` is the single authority;
+   `_journal_turn_events` re-raises when a batch contains one, stays best-effort otherwise.
+
+`ESCALATION` alone is state-bearing because a `HumanIntervention` **is** the parked run's state, not a
+description of it. `RECOVERY` rows stay best-effort specifically because the full ladder history travels
+*inside* the intervention, so their loss is redundant rather than load-bearing.
+
+### 16.4 Item status
+
+| # | Concern | Status | Evidence |
+|---|---|---|---|
+| 1 | The escalation's loss classified | `COMPLETE` | ADR-0028 supersedes ADR-0027's row |
+| 2 | The read side salvages | `COMPLETE` | `reconstruct()` → `_journal` on both paths |
+| 3 | The write side is not swallowed | `COMPLETE` | `_journal_turn_events` re-raises for a state-bearing batch |
+| 4 | One authority for "which records are special" | `COMPLETE` | `STATE_BEARING_EVENT_TYPES`; AST-pinned that `runtime.py` never names the kind |
+| 5 | The carve-out cannot widen | `COMPLETE` | a test parametrized over **every** other event kind |
+
+### 16.5 Completion criteria
+
+- [x] The escalation's durability policy decided and recorded — **ADR-0028**
+- [x] The read-side defect reproduced, fixed, and pinned — `TestTheFallbackNoLongerDiscards`
+- [x] The write policy tested through a **production entry point** (`_journal_turn_events`)
+- [x] M2's pre-P0 hazard and M4's gap rule both still hold — asserted in the same file
+- [x] **Zero new failures** — 129, byte-identical in both directions
+- [x] Neighbouring suites re-run explicitly — 232 pass
+- [ ] `ruff` / `mypy` — not installed
+
+### 16.6 Honest limits
+
+- **Nothing writes an escalation yet.** M12 is still open, so the write policy is correct-but-
+  unexercised in production. It is tested by injecting a failing store through
+  `_journal_turn_events` — a production entry point. The policy exists **now** so M12 cannot wire it
+  wrong.
+- **`_journal_records_at_risk` names the whole set, not the lost one.** When the journal has a gap,
+  nothing can say *which* event was lost — that is what a lost event means. Naming all seven is the
+  honest report.
+- **The blob still carries no journal-only record.** Adding them would create a second copy that can
+  disagree with the journal, which is the problem the migration exists to remove.
+- **The escalation's *answer* path is untouched** — ADR-0028's reversal condition names it.
+
+---
+
+## 17. Findings log (migration-wide)
+
+| # | Finding | Phase | Resolution |
+|---|---|---|---|
+| F1 | `test_canonical_execution_state.py` already exists — audit implied the ratchet was missing | P0 | Corrected; no work |
+| F2 | `RunStatus` ⊂ `RunState` — audit claimed divergence requiring a shim | P0 | Corrected; no shim needed (ADR-0003) |
+| F3 | `Session.apply` has no `TOOL_CALL` case **and** no wildcard — unknown event types are silently dropped rather than failing loud | P0 | Fixed (P0.3, ADR-0005) |
+| F4 | The append-only session event log contains only `user_message` / `error` / `done`. It cannot reconstruct a turn, yet `load_session()` is the documented crash-recovery replay source (`runtime.py:371`) | P0 | Fixed (P0.2) |
+| F5 | `runtime.py` carried a stale comment `# Cache result for idempotency (1h TTL)` with **no code beneath it** — the idempotency cache the durable layer provides (`idem_get`/`idem_put`) is unclaimed | P0 | **Resolved in P1** — comment removed; idempotency implemented at the action level instead (ADR-0010) |
+| F6 | Two disjoint decision models coexist: `auth/decision.authorize()` (6 layers) and `infra/security.SecurityPolicy.check()` (4 layers) | — | Pre-existing; out of P0 scope |
+| **F7** | **`SessionRepository.append_events` was dead code that could not work.** It did `with self._store.transaction() as conn: conn.execute(...)`, but `UnifiedStore.transaction()` yields the **store**, not a connection (`infra/store.py:317-327`) — so it raised `AttributeError: 'UnifiedStore' object has no attribute 'execute'` on every call. Nothing called it, so the defect was invisible until P0 needed it | P0 | Fixed in `session_repo.py` |
+| **F8** | **Six declared dependencies are missing from the venv**: `jsonschema`, `numpy`, `aiohttp`, `tiktoken`, `prompt_toolkit`, `cryptography` (all listed in `pyproject.toml`). Because `_validate_tool_args` imports `jsonschema` inside a `try` and converts the `ModuleNotFoundError` into a validation-failure string (`stateless.py:2186-2199`), **every tool call in this environment is refused as `SCHEMA_INVALID` before it can execute** — a missing dependency silently degrades into a total tool outage | P0 | **NOT FIXED — environment gap.** Cannot install: no network (SSL cert verification fails). Blocks any end-to-end tool-execution test |
+| F9 | `_persist_turn_state`'s 6-parameter signature is a pinned contract: `test_13h5_success_derivation.py::TestFlagCompatibility` wraps it positionally to observe `turn_succeeded`. Widening it breaks that guard | P0 | Respected — journaling moved to a separate method instead |
+| F10 | `test_13h2_determinism.py` has 6 pre-existing failures at baseline (`TokenBatch` has no `.get`, and a `0 == 6` signal-count assert). Unrelated to P0 | — | Pre-existing; logged |
+| F11 | `tests/test_api_key_security.py` fails at **collection** (starlette `TestClient` needs `httpx`, also missing) | — | Pre-existing; environment gap |
+| **F12** | **Baseline comparison methodology.** The working tree carried 33 pre-existing modified tracked files at P0 start. Stashing only the six files P0 touched reverts them to **HEAD**, which discards the pre-existing uncommitted Phase-10 work in those same files (e.g. `tool_executor.py::_note_fetch_outcome` delegates to `is_error_outcome` in the working tree but substring-matches in HEAD). A HEAD-based "baseline" therefore reports three ratchet failures that are artifacts of the stash, not regressions. The true baseline is *working tree minus P0*, which this ledger cannot reconstruct after the fact | P0 | Recorded; every regression delta explained individually in `PHASE_P0_REPORT.md` §4.3 |
+| **F13** | **P0's first journaling implementation had a real correctness bug.** A tool call with no reply journaled no `TOOL_RESULT`, so replay rebuilt an assistant `tool_calls` block with **no following tool message** — a transcript strict providers reject. Caught by `test_13h4`/`test_13h5`. Fixed: the placeholder reply is now journaled with a `synthesized: True` flag, so replay stays provider-valid while the record stays honest | P0 | Fixed; guarded by `test_interrupted_turn_replays_into_a_provider_valid_transcript` |
+| **F14** | **The layered authorization verdict was recorded only for denials, and only as prose.** `controlling_layer` is interpolated into denial messages (`tool_executor.py:722,725`; `tools/registry.py:948`). The audit trail's allow-side writers fire on the **approval** path (`tool_executor.py:942,947`), not the authority path — so `allow`, `approval`, and "no gate ran" were mutually indistinguishable. The plan's claim that the field "is discarded" was itself imprecise | P2 | Fixed for both paths (ADR-0013) |
+| **F15** | **A `read_only` denial is decided by the policy-engine gate, which runs BEFORE the `authorize()` consult** — so it names no controlling layer. Undocumented before P2; surfaced by writing the gate-order corpus RED-first. Relevant to the deferred proposal-boundary work: an outcome must be recorded even for denials that never reach `authorize()` | P2 | Pinned in the corpus with an explanatory comment (ADR-0014) |
+| **F16** | `contracts/tool.py`'s `ToolRequest`/`ToolResult` were **producer-less and consumer-less** (only the re-export and their own test referenced them). `contracts/policy.py`'s `PolicyDecisionEnvelope` still is. `CanonicalEvent` IS wired (`transport/renderer.py`, `contracts/adapters.py`) | P2 | **Fixed for tool** (`wisp/core/proposal.py`); `PolicyDecisionEnvelope` still unwired |
+| **F17** | **`tests/test_speculative_search.py::TestOracle::test_smallest_diff_wins_ties_broken_by_speed` is flaky under the full suite.** It asserts a diff-size ranking, passes 5/5 in isolation and 3/3 at file level, has zero coupling to the P3 surface, and **appeared once in a 129-failure run and was absent from an immediate rerun of the identical code**. Confirmed flaky rather than a regression by re-running the same tree | P3 | Logged; **not** caused by P3. The suite's failure count varies by ±1 run-to-run because of it |
+| **F18** | `graph/scheduler.py::ready_nodes` recomputed readiness on every pass and stored nothing — so the graph was a *view*, never state, and a divergence between it and any consumer would be silent | P4 | Fixed (ADR-0019/0020) |
+| **F19** | **Three tests P5's completion criteria require do not exist**: `test_graph_fuzz.py`, `test_graph_races.py`, `test_graph_resume.py`. They are the plan's own safety net for changing Layer B's node vocabulary, and their absence is why that change was not made (ADR-0021) | P5 | Verified absent; recorded |
+| **F20** | **The full-suite failure set is NOT stable.** Two consecutive runs on identical code read 129 and 130. `test_cli_surface_e2e.py::…test_print_blackhole_server_falls_back` appears in one and not the other (it depends on a network timeout). Separately, `test_sandbox_fallback_contract.py::test_fallback_host_warns_at_tool_layer` fails in the full run but passes 5/5 in isolation (CONTEXT.md §7 documents it as order-dependent). **A single-run count is not a baseline** | P7 | Method fixed: the baseline is now the **intersection of two runs**, stored in the repo |
+| **F21** | **`_fit_sections` records truncation as PROSE, not as structured data.** The plan claimed "no record at all"; evidence shows a `dropped_labels` accumulator rendered into the prompt as `[NOTE: … (omitted)]`. Prose cannot be asserted on, counted or alerted on — the same distinction as F7 (`controlling_layer`) | P8 | Fixed: `Context.dropped` is structured |
+| **F22** | **`SubagentContract` had no `metadata` field, and the orchestrator *reads* it.** `subagent_orchestrator.py:1316` is `if not task.metadata:` — a read — so the first time a DAG node declared a budget the orchestrator raised `AttributeError`. The plan described this as the budget being "never seen"; it is a latent crash. Phase 10's F1 reappearing in a second location | P9 | Fixed: `metadata` field added |
+| **F23** | **`multi_agent/_circuit_breaker.py` is a duplicate authority.** Imported by exactly one file — a foreign-session WIP test that does not collect — while a second, wired breaker lives at `infra/circuit_breaker.py` | P9 | Documented; **not deleted** (the user's untracked WIP) |
+| **F24** | **M4's blob fallback discarded a surviving escalation.** `reconstruction_source()` refuses a gapped journal and returns the blob — which answers *which transcript to trust* and says nothing about the journal-only records. A gapped journal whose escalation had survived still had it, and the fallback threw it away: the blob carries no `escalation` key, so a parked run lost the record of why it was parked, reported only as `_gap`. The failure mode M2 guarded against, arriving from M4 | M16 | Fixed (ADR-0028); `reconstruct()` salvages on both paths |
+
+The findings are numbered in discovery order and sorted here for reference. Each one is a claim in a
+plan document or an audit that **repository evidence contradicted** — the migration's recurring result
+is that the mechanisms mostly existed and what was missing was callers.
+
+---
+
+## 18. Change log
+
 
 
 
@@ -1054,13 +1146,16 @@ is that signal, and unlike a counter it is a **property of the record itself**.
 | 2026-09-23 | M2 | Consumer adoption **not** done, and **asserted** by a tripwire test | `PHASE_M2_REPORT.md` §13.6 |
 | 2026-09-23 | M2 | **Regression: 129, byte-identical in both directions.** The methods are additive (no caller), so the result is confirmation rather than the argument | full suite, stable baseline |
 | 2026-09-23 | M3 | **Session-journal kill point added** — `test_kp_session_midtool_then_killed` SIGKILLs between a journaled `TOOL_CALL` and its `TOOL_RESULT`, then proves `unresolved_actions()` reports it | 1 test; the file's 4 existing points still pass |
-| 2026-09-23 | M3 | The gap was a **missing kill point in an existing harness**, not a missing harness — all four existing points target Layer B / the workspace | `PHASE_M3_REPORT.md` §15.1 |
+| 2026-09-23 | M3 | The gap was a **missing kill point in an existing harness**, not a missing harness — all four existing points target Layer B / the workspace | `PHASE_M3_REPORT.md` §14.1 |
 | 2026-09-23 | M3 | **Regression: 129, byte-identical in both directions.** Test-only change; `test_killpoints.py` is not in the baseline's failure set | full suite, stable baseline |
 | 2026-09-23 | M4 | **ADR-0004 revisited → ADR-0027.** Revisiting it found a **live defect**: M2's journal-first returned a provider-invalid transcript when a permitted write was lost | 24 tests |
 | 2026-09-23 | M4 | `Session.gap_detected` + `reconstruction_source()` refuses a gapped journal + `_gap` on the result | `TestTheGapHole`, `TestTheInvariantHolds` |
 | 2026-09-23 | M4 | **Regression: 129, byte-identical in both directions.** Two production files in the session path; changes additive plus one condition | full suite, stable baseline |
+| 2026-09-23 | M16 | **ADR-0028.** Revisiting the escalation's durability found a **live read-side defect**: M4's fallback discarded a surviving escalation | 40 tests |
+| 2026-09-23 | M16 | `reconstruct()` carries `_journal` + `_journal_records_at_risk` on both paths; `_journal_turn_events` re-raises for a state-bearing batch | `PHASE_M16_REPORT.md` |
+| 2026-09-23 | M16 | **Regression: 129, byte-identical in both directions.** Three production files touched; changes additive plus one branch | full suite, stable baseline |
 
-### 10.1 Regression summary
+### 18.1 Regression summary
 
 | Run | Failures + errors |
 |---|---|

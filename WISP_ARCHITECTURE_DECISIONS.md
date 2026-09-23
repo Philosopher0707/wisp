@@ -819,10 +819,79 @@ classification, for the record:
 | `PROPOSAL` / `OUTCOME` (P2) | the authorization audit — compliance, not correctness | best-effort, canary |
 | `VERDICT` (P3) | stage-3a measurement (nothing consumes it until 3b) | best-effort, canary |
 | `TASK_GRAPH` / `NODE_TRANSITION` (P4) | graph↔transcript divergence | best-effort, canary |
-| `RECOVERY` / `ESCALATION` (P6) | resumability — the escalation *is* the state | best-effort, canary; open item M16 |
+| `RECOVERY` / `ESCALATION` (P6) | resumability — the escalation *is* the state | ~~best-effort, canary; open item M16~~ → **REACHED: ADR-0028.** The write is fail-loud and the read salvages rather than discards |
 
 **Reversal condition:** If a future phase makes an *audit* record a legal obligation rather than a
 diagnostic, that path needs fail-loud — and it will be a specific path, not the whole layer.
+
+---
+
+## ADR-0028 — A state-bearing record is not best-effort, in either direction
+
+**Status:** ACCEPTED
+**Phase:** M16
+**Supersedes:** the `RECOVERY` / `ESCALATION` row of ADR-0027's classification
+
+**Context.** ADR-0027 classified every durable record by what its loss costs, and left one row
+explicitly unresolved:
+
+> `RECOVERY` / `ESCALATION` (P6) — resumability, the escalation *is* the state — best-effort, canary;
+> **open item M16**
+
+Revisiting it found the policy wrong in **both** directions, and the **read** side was the worse of the
+two.
+
+**The read side — a live defect.** M4 made `reconstruction_source()` refuse a gapped journal and fall
+back to the blob. That settles which *transcript* to trust, and says nothing about the journal-only
+records, which are independent of the transcript's validity. Verified with a gapped journal whose
+escalation had survived:
+
+| Observation | Before M16 |
+|---|---|
+| the escalation in the journal | **present** (`esc-2`) |
+| `gap_detected` | **True** — M4 detected the loss |
+| `reconstruction_source()` | `"blob"` |
+| the escalation in the result | **absent** — the blob has no `escalation` key |
+
+So M4's fallback — added to *stop* a worse session being returned — silently discarded the state of a
+parked run, and reported it only as `_gap`. A resume reading that result cannot tell why the run
+stopped, or whether it should resume at all.
+
+**The write side.** `AgentRuntime._journal_turn_events` swallowed every failure, on ADR-0004's rule that
+a turn must never be broken by a failed write. That rule is right for a *record of what happened*,
+whose loss is observable as a gap in the sequence. It is wrong for a **state transition**: if the write
+that establishes the state is lost, continuing as though it landed is not a lost observation but a
+**false record**.
+
+**Decision.** Neither change makes a write fail-loud in general; ADR-0004 stands. Two targeted changes:
+
+1. **The fallback salvages rather than discards.** `reconstruct()` carries the journal-only records under
+   `_journal` on **both** paths, and names what a gap endangers in `_journal_records_at_risk`. Which
+   *transcript* to trust and which *records* survived are two questions, and the code now treats them as
+   two.
+2. **A state-bearing batch is not swallowed.** `is_state_bearing(events)` is the single authority for
+   which records are special; `_journal_turn_events` re-raises when a batch contains one, and stays
+   best-effort otherwise.
+
+**Why `ESCALATION` alone.** `HumanIntervention` is not a description of a parked run — it **is** the
+parked run's state, and `resumable` reads it to decide whether to resume. `PROPOSAL`/`OUTCOME`,
+`VERDICT`, `TASK_GRAPH`/`NODE_TRANSITION` and `RECOVERY` are records *about* a turn whose own behaviour
+is unaffected by their loss. The set is pinned by a test parametrized over **every** other kind, so the
+carve-out cannot widen by accident.
+
+**Why a raise is safe here.** It is not silent. Inside the stream loop the turn's own handler turns it
+into a recoverable error event the transport sees; on the turn-end path (a `finally`) it reaches the
+caller of `run_turn`. Either way a caller learns the escalation was not durable — which is what it needs
+to retry or tell an operator directly. And the turn is already stopping when an escalation is produced,
+so this cannot abort work in progress.
+
+**Consequence:** the escalation is durable in the sense that matters — a written escalation is readable,
+and an unwritten one is reported. The `RECOVERY` rows stay best-effort, because the full ladder history
+travels inside the intervention, so their loss is redundant rather than load-bearing.
+
+**Reversal condition:** If escalation becomes answerable only through the journal (i.e. an operator
+answers via an event rather than through the transport), the *answer* path inherits this ADR's
+treatment and needs its own analysis.
 
 ---
 
@@ -857,3 +926,4 @@ diagnostic, that path needs fail-loud — and it will be a specific path, not th
 | 0025 | An unsafe rollback escalates instead of proceeding | P6 | ACCEPTED |
 | 0026 | The recovery ladder is a mechanism; the turn loop does not consult it yet | P6 | ACCEPTED |
 | 0027 | Best-effort durability, revisited: the journal's *contiguity* is the precondition | M4 | ACCEPTED (supersedes ADR-0004's reversal condition) |
+| 0028 | A state-bearing record is not best-effort, in either direction | M16 | ACCEPTED (supersedes ADR-0027's `ESCALATION` row) |

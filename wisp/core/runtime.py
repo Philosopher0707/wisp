@@ -1032,16 +1032,36 @@ class AgentRuntime:
         """Write this turn's assistant/tool events in one transaction.
 
         Runs on a worker thread (see the caller) because it is a blocking
-        SQLite write. Best-effort by design: a turn that ran correctly must
-        not be reported as failed because journaling failed — the loss is
-        observable as a gap in the session's sequence numbers, which is the
-        honest signal (ADR-0004).
+        SQLite write.
+
+        **Best-effort, except for a state-bearing event (ADR-0028).** ADR-0004's
+        rule — a turn that ran correctly must not be reported as failed because
+        journaling failed — is right for a *record of what happened*, whose loss
+        is observable as a gap in the session's sequence numbers. It is wrong for
+        a *state transition*: `ESCALATION` is the record that a run parked itself
+        and why, and a resume reads it to decide whether to resume. Swallowing
+        that write would let the turn continue as though the park had been
+        recorded, which is not a lost observation but a **false record** — so it
+        propagates instead.
+
+        A raise is not silent. Inside the stream loop the turn's own handler
+        turns it into a recoverable error event the transport sees; on the
+        turn-end path (a `finally`) it reaches the caller of `run_turn`. Either
+        way a caller learns the escalation was not durable, which is exactly what
+        it needs to retry or tell an operator directly.
         """
         if self.session_repo is None or not events:
             return
+        from wisp.core.session import is_state_bearing
         try:
             self.session_repo.append_events(sid, events)
         except Exception:
+            if is_state_bearing(events):
+                logger.error(
+                    "Session %s: failed to journal a STATE-BEARING event "
+                    "(%d event(s)); propagating — the state transition was "
+                    "not recorded", sid, len(events), exc_info=True)
+                raise
             logger.warning(
                 "Session %s: failed to journal %d turn event(s)",
                 sid, len(events), exc_info=True)

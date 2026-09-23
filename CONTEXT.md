@@ -13,8 +13,8 @@
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is `02c756c`** · 16 commits on top of the Phase 10 baseline `83b10af` · branch `main`.
-**517 migration tests pass.** The full-suite failure set is **129, byte-identical** to the stable
+**HEAD is the M16 commit** · 17 commits on top of the Phase 10 baseline `83b10af` · branch `main`.
+**557 migration tests pass.** The full-suite failure set is **129, byte-identical** to the stable
 baseline (see §11).
 
 | Phase | Status | Report |
@@ -32,9 +32,15 @@ baseline (see §11).
 | **M2** — journal-first reconstruction | `COMPLETE` (consumer adoption asserted) | `PHASE_M2_REPORT.md` |
 | **M3** — killpoint integration | `COMPLETE` (one window) | `PHASE_M3_REPORT.md` |
 | **M4** — ADR-0004 revisited | `COMPLETE` — **found a live defect** | `PHASE_M4_REPORT.md` |
+| **M16** — the escalation is state, not audit | `COMPLETE` — **found a live read-side defect** | `PHASE_M16_REPORT.md` |
 
-**Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings F1–F23, change log).
-**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0027**).
+**Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F24**, change log).
+**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0028**).
+
+**The durability track is closed.** M2 (journal-first reconstruction), M3 (a real-SIGKILL kill point),
+M4 (durability as a correctness precondition) and M16 (the escalation is state, not audit) are all
+complete — and **M4 and M16 each found a live defect while closing it**, which is what revisiting a
+decision is for. What remains is the *authority* track, below.
 
 ### 0.0.1 What is actually delivered, and what is not
 
@@ -71,7 +77,6 @@ It needs its own session.
 | Item | Nature |
 |---|---|
 | **M1** | P3 stage 3b (enable the acceptance gate) — **blocked on a working tool path** (`jsonschema`) |
-| **M16** | the `ESCALATION` record's loss — the one row in ADR-0027's classification where "best-effort" is arguably wrong |
 | **M8** | retire `multi_agent/dag.py` — needs a **green** fanout suite first |
 | **M5** | foreground-turn `RunRecord` lifecycle |
 | **M6** | `PolicyDecisionEnvelope` is still producer-less and consumer-less |
@@ -101,8 +106,10 @@ only the touched files reverts them to **HEAD**, discarding that work — which 
 ratchet failures look like P0 regressions. **Snapshot the files you are about to edit to a path outside
 the repo first, then compare against those copies.** Finding F12.
 
-Every phase was verified by `diff -q` of the full-suite failure set before and after:
-**131 (HEAD) → 128 for P0, P1, P2, P3, P4, P5 and P6. Zero new failures at every step.**
+Every phase was verified against the **stable baseline** (the intersection of two runs — a single-run
+count is not a baseline; see §7 and §11):
+**129, failure set byte-identical in both directions, for P8, P9, M2, M3, M4 and M16.**
+P0–P6 predate the method fix and were verified against single runs.
 
 ---
 
@@ -792,7 +799,7 @@ env -u PYTHONPATH .venv/bin/python -m pytest \
   tests/test_recovery_ladder.py tests/test_stagnation_detection.py \
   tests/test_context_trust.py tests/test_structured_delegation.py \
   tests/test_session_reconstruction.py tests/test_durability_preconditions.py \
-  tests/reliability/test_killpoints.py -q
+  tests/test_escalation_durability.py tests/reliability/test_killpoints.py -q
 ```
 
 ### The regression method — read this before changing anything
@@ -929,6 +936,7 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_M2_REPORT.md` | Journal-first reconstruction with blob fallback |
 | `PHASE_M3_REPORT.md` | Killpoint integration for the session journal |
 | `PHASE_M4_REPORT.md` | Durability as a correctness precondition (ADR-0027) |
+| `PHASE_M16_REPORT.md` | The escalation is state, not audit (ADR-0028) |
 | `PHASE_M2_REPORT.md` | Journal-first reconstruction with blob fallback |
 | `PHASE_M3_REPORT.md` | Killpoint integration for the session journal |
 | `PHASE_M4_REPORT.md` | Durability as a correctness precondition (ADR-0027) |
@@ -947,6 +955,7 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `tests/test_acceptance_verdict.py` | the verdict algebra; the floor guard is retained, not replaced; stage 3a does not gate |
 | `tests/test_task_graph_materialization.py` | readiness is **stored**, not recomputed; one transition API (AST, in-module and tree-wide); the graph is a projection of the log |
 | `tests/test_graph_mutation.py` | the extended vocabulary is a superset (ratchet); expansion is acyclic by construction; invalidation cascades; supersession retains history; the growth budget is **enforced**; insertion order does not change the graph |
+| `tests/test_escalation_durability.py` | a surviving escalation is **not** discarded by the blob fallback; the write policy is best-effort for a turn body and **fail-loud for a state-bearing batch**; the carve-out cannot widen |
 | `tests/test_durability_preconditions.py` | a **gapped** journal is a provider-invalid transcript and is refused; contiguity semantics; **a real turn satisfies the invariant** (or the check would reject every session) |
 | `tests/test_session_reconstruction.py` | a pre-P0 session is **not truncated** (the hazard); the journal carries the audit records the blob never had; both paths are shape-compatible with the blob; **a tripwire asserting the five consumers are still un-migrated** |
 | `tests/test_durability_preconditions.py` | a **gapped** journal is a provider-invalid transcript and is refused; contiguity semantics; **a real turn satisfies the invariant** |

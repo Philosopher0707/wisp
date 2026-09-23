@@ -103,13 +103,30 @@ blob in **two** cases, and both matter:
    provider-invalid transcript. ADR-0027.
 
 `reconstruction_source(sid)` returns `journal` | `blob` | `none` — use it to see which path answered.
-`reconstruct()` also reports `_source` and `_gap` on the result.
+`reconstruct()` also reports `_source`, `_gap`, `_journal` and `_journal_records_at_risk`.
+
+**`_journal` is populated on BOTH paths.** Which *transcript* to trust and which *records* survived are
+independent questions, and the fallback used to answer only the first — silently discarding a surviving
+escalation because the blob has no `escalation` key. `_journal` carries the journal-only records
+(`JOURNAL_ONLY_RECORDS`) on either path; `_journal_records_at_risk` names what a gap endangers.
+`Session.journal_records()` is the accessor; `Session.has_escalation` is the named question.
 
 ### The recovery ladder is not consulted by the turn loop
 
 `wisp/core/recovery.py` is complete and tested, but the live turn path's recovery behaviour is
 **unchanged** — nothing on it calls the ladder. Do not assume failures are being classified or that
 recovery is budgeted in production; it is not yet (item M12).
+
+### A state-bearing record is not best-effort
+
+`STATE_BEARING_EVENT_TYPES` (currently `{ESCALATION}`) names the records whose loss is a **correctness**
+precondition rather than an observability one. `AgentRuntime._journal_turn_events` swallows a failed
+write for everything else — ADR-0004's rule, because the loss shows up as a gap — but **re-raises** when a
+batch contains one. The escalation *is* the parked run's state; continuing as though the write landed is
+a false record, not a lost observation. ADR-0028.
+
+If you add a kind to that set, add an ADR first. The set is pinned by a test parametrized over every other
+event kind, so widening it fails the suite rather than passing quietly.
 
 ### The graph does not drive execution
 
@@ -180,14 +197,16 @@ python3 -m pytest tests/test_contracts_*.py tests/test_auth_*.py tests/test_runs
   tests/test_policy_*.py tests/test_trace_*.py tests/test_eval_*.py \
   tests/test_task_*.py tests/test_release_*.py tests/test_no_bypass.py -q
 
-# Durable record + proposal boundary + verdicts + task graph (migration P0-P9)
+# Durable record + proposal boundary + verdicts + task graph (migration P0-P9 + M2/M3/M4/M16)
 python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_incremental.py \
   tests/test_action_idempotency_key.py tests/test_proposal_boundary_records.py \
   tests/test_proposal_boundary_no_bypass.py tests/test_verdict_layer_recorded.py \
   tests/test_gate_order_corpus.py tests/test_acceptance_verdict.py \
   tests/test_task_graph_materialization.py tests/test_graph_mutation.py \
   tests/test_recovery_ladder.py tests/test_stagnation_detection.py \
-  tests/test_context_trust.py tests/test_structured_delegation.py -q
+  tests/test_context_trust.py tests/test_structured_delegation.py \
+  tests/test_session_reconstruction.py tests/test_durability_preconditions.py \
+  tests/test_escalation_durability.py -q
 ```
 
 ### Reachability is mandatory for new durable code
