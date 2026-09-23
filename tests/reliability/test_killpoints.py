@@ -170,6 +170,36 @@ def _wait_temp(jdir: Path, timeout_s: float = 30.0) -> str | None:
     return None
 
 
+# ── M3 (migration): the SESSION JOURNAL kill point ──────────────────────
+# The harness above kills at Layer B / workspace boundaries. None of them
+# exercises the session journal P0/P1 built, so `unresolved_actions()` — the
+# primitive whose whole purpose is to report "dispatched, outcome unknown" —
+# was never driven by a real SIGKILL. This is that kill point.
+_KP_SESSION_MIDTOOL = _CHILD_PRELUDE + """
+import pathlib
+from wisp.core.action_key import action_key
+from wisp.core.session import SessionEvent
+from wisp.core.session_repo import SessionRepository
+from wisp.infra.store import UnifiedStore
+
+store = UnifiedStore(db_path=str(pathlib.Path(WS) / ".wisp" / "wisp.db"))
+repo = SessionRepository(store)
+sid = "kp-journal"
+akey = action_key("write_file", {"path": "a.txt"})
+repo.append_events(sid, [
+    SessionEvent.user_message(1, "go"),
+    SessionEvent.assistant_message(2, "", [
+        {"id": "c1", "type": "function",
+         "function": {"name": "write_file", "arguments": "{}"}}]),
+    # The INTENT is journaled here ...
+    SessionEvent.tool_call_event(3, "write_file", {"path": "a.txt"},
+                                 action_key=akey),
+])
+_ready(session=sid, action_key=akey)
+time.sleep(3600)  # ... and the process dies before the RESOLUTION is written
+"""
+
+
 def test_kp_journal_temp_inflight_then_killed():
     """SIGKILL while a journal temp file exists: orphan temp must be swept;
     recovery sees ABSENT-or-previous-complete — never a torn journal."""
@@ -227,6 +257,58 @@ def test_kp_journal_temp_inflight_then_killed():
     finally:
         if proc.poll() is None:
             proc.kill()
+
+
+def test_kp_session_midtool_then_killed():
+    """SIGKILL between a journaled TOOL_CALL and its TOOL_RESULT (migration M3).
+
+    The action's outcome is genuinely unknown: the side effect may or may not
+    have landed. Recovery must SURFACE that rather than silently repeating the
+    call — repeating is how one crash turns one edit into two.
+
+    Asserts the three things the journal exists to make answerable after a
+    crash: the ambiguity is reported, the turn is known-incomplete, and the
+    journal is still replayable (no torn record).
+    """
+    ws, home, ready = _fresh_env()
+    proc = _spawn(_KP_SESSION_MIDTOOL, ws, home, ready)
+    try:
+        info = _wait_ready(ready)
+        assert info.get("session") == "kp-journal"
+        rc = _kill(proc)
+
+        from wisp.core.session_repo import SessionRepository
+        from wisp.infra.store import UnifiedStore
+
+        store = UnifiedStore(db_path=str(ws / ".wisp" / "wisp.db"))
+        repo = SessionRepository(store)
+
+        # 1. The journal survived the kill and still replays.
+        session = repo.load_session("kp-journal")
+        assert session is not None, "the journal was lost to the SIGKILL"
+        assert session.unknown_events == 0, "the record was torn"
+
+        # 2. The ambiguity is REPORTED — the primitive fires under a real kill.
+        unresolved = session.unresolved_actions()
+        assert len(unresolved) == 1, (
+            f"expected exactly one unresolved action, got {unresolved}")
+        assert unresolved[0]["action_key"] == info["action_key"]
+
+        # 3. The turn is known-incomplete, so a resume can tell.
+        assert not repo.was_last_turn_complete("kp-journal")
+
+        # 4. The intent is recorded, and NO resolution exists — which is what
+        #    makes the report above correct rather than a guess.
+        kinds = [str(e.event_type) for e in repo.load_events("kp-journal")]
+        assert "tool_call" in kinds
+        assert "tool_result" not in kinds
+
+        _record(point="session_midtool", rc=rc,
+                unresolved=len(unresolved), replayable=True)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
 
 
 def test_kp_graph_midrun_then_killed():

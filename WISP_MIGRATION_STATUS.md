@@ -858,7 +858,76 @@ safe, and all-at-once is a cross-cutting change across five surfaces with no sha
 
 ---
 
-## 14. Change log
+## 15. M3 — Killpoint Integration for the Session Journal
+
+### 15.1 What was actually missing
+
+The killpoint harness is substantial (368 lines) and does real work: spawn a child, wait on a `READY`
+barrier, send **`SIGKILL`**, run the recovery path, record a JSONL result. It has four kill points —
+`journal_temp_inflight`, `workspace_midapply`, `graph_midrun`, `store_midtransition`.
+
+**Every one targets Layer B or the workspace.** None touches the **session journal** P0 and P1 built, so
+`unresolved_actions()` — the primitive whose entire purpose is to report *"dispatched, outcome
+unknown"* — had never been exercised against a real process death.
+
+So the gap was not a missing harness. It was a **missing kill point in an existing harness**.
+
+### 15.2 The new kill point
+
+`test_kp_session_midtool_then_killed` kills the child in the window P1's design is about — **between a
+journaled `TOOL_CALL` and its `TOOL_RESULT`**:
+
+```
+child:  user_message → assistant_message(tool_calls) → TOOL_CALL   ← intent journaled
+        ...READY... then SIGKILL ...                               ← dies here
+        (TOOL_RESULT is never written)                             ← resolution missing
+```
+
+| # | Assertion | Why it matters |
+|---|---|---|
+| 1 | the journal **replays**, `unknown_events == 0` | the record survived **un-torn** |
+| 2 | `unresolved_actions()` reports exactly one, with the matching `action_key` | the ambiguity is **surfaced**, not inferred |
+| 3 | `was_last_turn_complete()` is `False` | a resume can tell the turn did not finish |
+| 4 | `tool_call` present, **`tool_result` absent** | the report is **correct**, not a guess |
+
+Assertion 4 is what makes 2 meaningful: without it, one unresolved action would be consistent with a
+resolution that was simply not looked for.
+
+**Why it matters beyond the test:** the outcome is genuinely unknown — the side effect may or may not
+have landed. Recovery must *surface* that rather than silently repeating the call, because repeating is
+how one crash turns one edit into two.
+
+### 15.3 Verification
+
+```
+tests/reliability/test_killpoints.py .....   5 passed in 4.57s
+```
+
+Not vacuous: `_wait_ready` blocks until the child writes `READY.json`, and the assertion
+`info["session"] == "kp-journal"` requires that payload — so the child ran, reached the barrier, and was
+killed. The assertions are about post-kill state.
+
+### 15.4 Completion criteria
+
+- [x] The harness drives the journal under a real SIGKILL
+- [x] The detection primitive is exercised, not only unit-tested
+- [x] The journal is proven un-torn after the kill
+- [x] No regression — test-only change; the file's 5 points pass and it was **not** in the baseline
+- [ ] `ruff` / `mypy` — not installed
+
+### 15.5 Honest limits
+
+- **One window.** `TOOL_CALL` journaled / `TOOL_RESULT` missing is the window `unresolved_actions()` was
+  built for and the one most worth killing in. Other journal windows — mid-`assistant_message`,
+  mid-compaction, mid-`append_events` batch — are not covered.
+- **The child writes the events directly** rather than driving a real turn to the barrier. A real turn
+  cannot reach a barrier *between* a tool call and its result without a hook the engine does not expose.
+  So this tests the **journal contract**, which is what P1 built — not the engine's dispatch path.
+
+---
+
+## 16. Change log
+
 
 
 
@@ -918,6 +987,9 @@ safe, and all-at-once is a cross-cutting change across five surfaces with no sha
 | 2026-09-23 | M2 | The pre-P0 predicate: `any(role != "user")`, **not** `messages` being non-empty. The first implementation used the obvious test and its own pre-P0 test caught it | `PHASE_M2_REPORT.md` §13.2 |
 | 2026-09-23 | M2 | Consumer adoption **not** done, and **asserted** by a tripwire test | `PHASE_M2_REPORT.md` §13.6 |
 | 2026-09-23 | M2 | **Regression: 129, byte-identical in both directions.** The methods are additive (no caller), so the result is confirmation rather than the argument | full suite, stable baseline |
+| 2026-09-23 | M3 | **Session-journal kill point added** — `test_kp_session_midtool_then_killed` SIGKILLs between a journaled `TOOL_CALL` and its `TOOL_RESULT`, then proves `unresolved_actions()` reports it | 1 test; the file's 4 existing points still pass |
+| 2026-09-23 | M3 | The gap was a **missing kill point in an existing harness**, not a missing harness — all four existing points target Layer B / the workspace | `PHASE_M3_REPORT.md` §15.1 |
+| 2026-09-23 | M3 | **Regression: 129, byte-identical in both directions.** Test-only change; `test_killpoints.py` is not in the baseline's failure set | full suite, stable baseline |
 
 ### 10.1 Regression summary
 

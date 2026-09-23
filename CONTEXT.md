@@ -17,10 +17,14 @@
 baseline `83b10af`. See §3 for the commit list.
 
 **The plan is fully traversed.** P0–P7 and P9 delivered their mechanisms; P3 shipped stage 3a only; P8
-is `PARTIAL`. **M2 is complete** — journal-first reconstruction with blob fallback (`PHASE_M2_REPORT.md`). **M9 is
-now the sole keystone**: M11–M15 are five instances of the same change ("make the live turn loop use
-the mechanism"), and M9 is what makes it safe to make once rather than five times. See
-`PHASE_P9_REPORT.md` §8.
+is `PARTIAL`. **M2 and M3 are complete** — journal-first reconstruction with blob fallback, and a real-SIGKILL kill
+point for the session journal (`PHASE_M2_REPORT.md`, `PHASE_M3_REPORT.md`). The **durability story P0/P1
+set out is closed end to end**: the journal is written incrementally, replayed journal-first, and proven
+against a real crash in the window that matters.
+
+**M9 is now the sole keystone** — the *authority* story. M11–M15 are five instances of one change
+("make the live turn loop use the mechanism"), and M9 is what makes it safe to make once rather than
+five times. See `PHASE_P9_REPORT.md` §8.
 
 **The Persistent Graph Loop migration is underway** — `WISP_MIGRATION_PLAN.md` defines phases P0–P9.
 
@@ -841,6 +845,7 @@ the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_P8_REPORT.md` | Context as a first-class subsystem |
 | `PHASE_P9_REPORT.md` | Structured delegation — **and the migration's closing summary (§8)** |
 | `PHASE_M2_REPORT.md` | Journal-first reconstruction with blob fallback |
+| `PHASE_M3_REPORT.md` | Killpoint integration for the session journal |
 
 **Guards added by the migration:**
 
