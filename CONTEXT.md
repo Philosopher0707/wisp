@@ -13,7 +13,7 @@
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is `a055b39`** · 18 commits on top of the Phase 10 baseline `83b10af` · branch `main`.
+**HEAD is `73c2bbc`** · 21 commits on top of the Phase 10 baseline `83b10af` · branch `main`.
 **557 migration tests pass.** The full-suite failure set is **129, byte-identical** to the stable
 baseline (see §11).
 
@@ -501,7 +501,7 @@ dissolved under execution, four of them mine.
 
 ## 3. Commits
 
-`83b10af` was the Phase 9/10 baseline. **18 commits** sit on top of it, all on `main`:
+`83b10af` was the Phase 9/10 baseline. **21 commits** sit on top of it, all on `main`:
 
 | Commit | Scope |
 |---|---|
@@ -523,6 +523,9 @@ dissolved under execution, four of them mine.
 | `02c756c` | `feat(m4):` revisit ADR-0004 — and close a live defect it led to — 24 tests |
 | `d80f582` | `docs:` compaction handoff — refresh `CONTEXT.md`, add the workspace `MEMORY.md` |
 | `a055b39` | `feat(m16):` the escalation is state, not audit — 40 tests, and **found a live read-side defect** |
+| `0b1f4e8` | `docs(m16):` pin the commit hash and repair the handoff docs |
+| `7cff74f` | `docs(m16):` ledger rows; keep agent workspace data untracked (+ `.gitignore`) |
+| `73c2bbc` | `docs(m16):` record the third occurrence of the flaky test F17 |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
