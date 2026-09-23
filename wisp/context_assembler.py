@@ -32,6 +32,90 @@ from pathlib import Path
 
 from wisp.core.verification import INVARIANT_STATEMENT
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Section trust classification (migration M14)
+#
+# P8 built the trust boundary (`wisp/core/context_trust.py`) and shipped it with
+# no production caller, so nothing classified the sections this module assembles.
+# Classifying them found a live T1 violation: `context_files` — the content of
+# workspace files — was appended at priority -1, i.e. BEFORE the system prompt.
+# A repository containing "IGNORE ALL PREVIOUS INSTRUCTIONS" put that text ahead
+# of the rules that forbid it.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+#: Priorities at or below this carry **instructions**, so only trusted content
+#: may sit there (T1 in `WISP_CONTEXT_ARCHITECTURE.md`). The assembler's own
+#: tiers are -1=prepend, 0=critical, 1=important, 2=contextual, 3=optional.
+INSTRUCTION_PRIORITY = 0
+
+#: The trust tag of every section this module can append, by section name.
+#:
+#: **Classify conservatively: if a section's content can originate in the
+#: workspace, it is `REPOSITORY`.** That is why `git_context` is untrusted — a
+#: commit message is text an author wrote — and why `memory_block` is, since
+#: memory is workspace-scoped.
+#:
+#: Total by test: `test_every_appended_section_is_classified` reads the
+#: `sections.append((...))` calls by AST and fails on a name missing here, so a
+#: new section cannot arrive without someone answering "may repository content
+#: sit there?".
+SECTION_TRUST: dict[str, "TrustTag"] = {}   # populated below, after the import
+
+
+def _build_section_trust() -> dict:
+    from wisp.core.context_trust import TrustTag
+    return {
+        # ── Instruction position: trusted only ──────────────────────────
+        "default_system": TrustTag.SYSTEM,      # the built-in prompt
+        "workspace": TrustTag.SYSTEM,           # generated from the path
+        # ── Operator-authored ───────────────────────────────────────────
+        "active_plan": TrustTag.OPERATOR,
+        "plan_mode": TrustTag.OPERATOR,
+        "plan_context": TrustTag.OPERATOR,
+        "role_extra": TrustTag.OPERATOR,        # the operator's role prompt
+        # ── Repository-derived: untrusted ───────────────────────────────
+        "context_files": TrustTag.REPOSITORY,   # CLAUDE.md, .wisp/rules.md
+        "skills_block": TrustTag.REPOSITORY,    # skill instructions come from files
+        "mandatory_skill": TrustTag.REPOSITORY,
+        "memory_block": TrustTag.REPOSITORY,    # workspace-scoped memory files
+        "project_context": TrustTag.REPOSITORY,  # detected from workspace files
+        "code_index_summary": TrustTag.REPOSITORY,
+        "git_context": TrustTag.REPOSITORY,     # commit messages are authored text
+        "repo_map": TrustTag.REPOSITORY,
+        # ── Conversation-derived: includes tool output ──────────────────
+        "recent_summaries": TrustTag.TOOL_OUTPUT,
+    }
+
+
+SECTION_TRUST.update(_build_section_trust())
+
+
+def section_trust(name: str):
+    """The tag for a section, or `None` if nobody classified it."""
+    return SECTION_TRUST.get(name)
+
+
+def untrusted_sections_in_instruction_position(sections) -> list[str]:
+    """T1, as a predicate over `(name, priority, text)` sections.
+
+    Returns the names of sections that carry **untrusted** content at a priority
+    that carries instructions. Empty means the prompt is well-formed.
+
+    **Fails closed**: a section nobody classified counts as untrusted, because
+    "unclassified" has no answer to "may repository content sit here?" and
+    assuming safety is the wrong default for a trust boundary.
+    """
+    from wisp.core.context_trust import TRUSTED_TAGS
+    offenders: list[str] = []
+    for name, priority, _text in sections:
+        if priority > INSTRUCTION_PRIORITY:
+            continue
+        tag = SECTION_TRUST.get(name)
+        if tag is None or tag not in TRUSTED_TAGS:
+            offenders.append(name)
+    return offenders
+
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -390,7 +474,13 @@ class ContextAssembler:
         # Priority tiers: -1=prepend 0=critical, 1=important, 2=contextual, 3=optional
 
         if ctx.context_files:
-            sections.append(("context_files", -1, ctx.context_files))
+            # Migration M14: was priority -1, i.e. BEFORE `default_system` — so
+            # the content of a workspace file (`CLAUDE.md`, `.wisp/rules.md`)
+            # occupied instruction position. It is `REPOSITORY`, so T1 forbids
+            # that. Moved to the important tier: still near the top, no longer
+            # ahead of the rules. This is a MOVE, not a demotion to the tail —
+            # `test_context_files_stays_high_priority` pins it.
+            sections.append(("context_files", 1, ctx.context_files))
 
         sections.append(("default_system", 0, ctx.default_system or self.default_system))
         sections.append(("workspace",      0, f"## Workspace\nYou are working in: {ws_abs}"))

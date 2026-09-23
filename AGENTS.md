@@ -124,6 +124,25 @@ add it to the live path too — or assert the invariant and watch it fail.
 **unchanged** — nothing on it calls the ladder. Do not assume failures are being classified or that
 recovery is budgeted in production; it is not yet (item M12).
 
+### Every prompt section is classified, and T1 holds
+
+`SECTION_TRUST` in `wisp/context_assembler.py` is the **one table** saying which trust tag each system-
+prompt section carries; `INSTRUCTION_PRIORITY = 0` names the tiers that carry instructions.
+
+**Classify conservatively: if a section's content can originate in the workspace, it is `REPOSITORY`.**
+That is why `git_context` is untrusted — a commit message is text an author wrote and it reaches the
+prompt — and why `memory_block` is, since memory is workspace-scoped.
+
+**Adding a section means adding a tag.** `test_every_appended_section_is_classified` reads the
+`sections.append((...))` calls by AST and fails on a name missing from the table. That is not
+bureaucracy: classifying the sections found a **live T1 violation** — `context_files` (the content of
+`CLAUDE.md` / `.wisp/rules.md`) sat at priority −1, *ahead of* the system prompt, unfenced. A repository
+whose `CLAUDE.md` carried an instruction put it before the rules that forbid it. ADR-0031.
+
+`untrusted_sections_in_instruction_position(sections)` is T1 as a predicate, and it **fails closed**: an
+unclassified section counts as untrusted. **T2 fencing is not done** — untrusted sections are positioned
+correctly but not delimited.
+
 ### A subagent authorizes as a narrowed child, and the identity travels with the call
 
 `SubagentRunner._child_principal()` derives a child principal from the parent's own identity (via
@@ -243,7 +262,7 @@ python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_
   tests/test_context_trust.py tests/test_structured_delegation.py \
   tests/test_session_reconstruction.py tests/test_durability_preconditions.py \
   tests/test_escalation_durability.py tests/test_execution_view_projection.py \
-  tests/test_child_principal_wired.py -q
+  tests/test_child_principal_wired.py tests/test_prompt_section_trust.py -q
 ```
 
 ### Reachability is mandatory for new durable code

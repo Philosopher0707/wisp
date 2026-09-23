@@ -57,6 +57,7 @@ most recent are listed here for orientation.
 | **M16** | The escalation is state, not audit | M4 | `COMPLETE` — **found a live read-side defect** | `PHASE_M16_REPORT.md` |
 | **M9** | The execution view | P1, P4 | `COMPLETE` — **the claim was the wrong target**; closed as faithfulness | `PHASE_M9_REPORT.md` |
 | **M15** | A subagent authorizes as a narrowed child | P9 | `COMPLETE` — **the obvious fix was a pool leak** | `PHASE_M15_REPORT.md` |
+| **M14** | Prompt sections classified (T1) | P8 | `COMPLETE` — **found a live T1 violation** | `PHASE_M14_REPORT.md` |
 
 Critical path: **P0 → P1 → P2 → P4 → P5 → P6**. P8 is independent and may start at any time.
 The `M` rows are the plan's **deferred prerequisites**, worked after the phases. **M9 remains open** —
@@ -1229,7 +1230,80 @@ what happened: the P9 report is updated and the tripwire is replaced by its inve
 
 ---
 
-## 19. Findings log (migration-wide)
+## 19. M14 — Prompt Sections Are Classified, and T1 Holds
+
+### 19.1 What was wrong
+
+P8 built the trust boundary (`TrustTag`, T1–T4, fencing, a structured `dropped` list) and shipped it
+**tagging-only, with no production caller**. Verified: `wisp/core/context_trust.py` is imported by **its
+own test and nothing else**, and no code anywhere constructs a `ContextItem`. A written-but-unwired
+control — the pattern `docs/audit-2026-08-24.md` names as dominant.
+
+### 19.2 T1 was violated, live (F27)
+
+`config.load_context_files()` reads **workspace files** (`CLAUDE.md`, `.wisp/rules.md`,
+`~/.config/wisp/CLAUDE.md`) and `ContextAssembler` appended their content at priority **−1** — *before*
+`default_system`. Reproduced:
+
+| Observation | Before M14 |
+|---|---|
+| a workspace file containing `IGNORE ALL PREVIOUS INSTRUCTIONS…` | appears at offset **23** |
+| `## SYSTEM RULES` | appears at offset **84** |
+| fenced or labelled? | **no** |
+
+A repository whose `CLAUDE.md` carries an instruction placed it **ahead of the rules that forbid it** —
+and the boundary that would have caught it had no caller. That is why this phase is a security fix
+rather than a wiring exercise.
+
+### 19.3 The decision (ADR-0031)
+
+1. **`SECTION_TRUST`** — one table classifying every section, by name; `INSTRUCTION_PRIORITY = 0` names
+   the tiers that carry instructions.
+2. **`untrusted_sections_in_instruction_position()`** — T1 as a predicate, **failing closed**: an
+   unclassified section counts as untrusted.
+3. **`context_files` moves −1 → 1** — out of instruction position, still near the top. A **move, not a
+   demotion**.
+4. **The classification is total and AST-ratcheted** — a new section cannot arrive unclassified.
+
+Classified conservatively: if a section's content can originate in the workspace it is `REPOSITORY` —
+which is why **`git_context`** is untrusted (a commit message is text an author wrote and it reaches the
+prompt) and why `memory_block` is. `recent_summaries` is `TOOL_OUTPUT`, because the least-trusted
+contributor decides.
+
+### 19.4 Completion criteria
+
+- [x] Every appended section is classified — AST-ratcheted
+- [x] The live T1 violation is fixed, with a RED-first test
+- [x] The predicate fails **closed**
+- [x] The fix is a move, not a reshuffle — every other section's relative order asserted
+- [x] `context_files` still reaches the prompt and stays high priority
+- [x] **Zero new failures** — 129, byte-identical in both directions
+- [ ] `ruff` / `mypy` — not installed
+- [ ] **T2 fencing** — deliberately deferred (§19.5)
+
+### 19.5 Why T2 is not in this phase
+
+Fencing changes more of the prompt for every turn. The staging used throughout applies — record first,
+then enforce — and the classification is the **precondition**: you cannot fence what you have not
+classified. Stated as a limit rather than as completeness: the prompt is well-formed by **T1** (position)
+but **not yet T2**-conformant (untrusted content is not delimited). The mechanism exists and is tested in
+`context_trust`.
+
+### 19.6 Honest limits
+
+- **T2 is not done** — untrusted sections are positioned correctly but not delimited.
+- **The classification is a judgement, written down.** A reviewer could argue `memory_block` is
+  operator-authored; the tags are in one table with the reasoning, so the argument is visible.
+- **The predicate is not enforced at runtime.** The assembler is correct by construction and the
+  invariant is asserted by tests; nothing raises on the hot path. Enforcement is a larger decision.
+- **The prompt changed and its behavioural effect is unmeasured.** Content identical, order changed, no
+  evaluation run.
+- **Only the system prompt is covered.** Repository text also reaches the model as `role: "tool"`
+  messages, which this phase does not touch.
+
+---
+
+## 20. Findings log (migration-wide)
 
 | # | Finding | Phase | Resolution |
 |---|---|---|---|
@@ -1259,6 +1333,7 @@ what happened: the P9 report is updated and the tripwire is replaced by its inve
 | **F24** | **M4's blob fallback discarded a surviving escalation.** `reconstruction_source()` refuses a gapped journal and returns the blob — which answers *which transcript to trust* and says nothing about the journal-only records. A gapped journal whose escalation had survived still had it, and the fallback threw it away: the blob carries no `escalation` key, so a parked run lost the record of why it was parked, reported only as `_gap`. The failure mode M2 guarded against, arriving from M4 | M16 | Fixed (ADR-0028); `reconstruct()` salvages on both paths |
 | **F25** | **The replayed transcript was not the live transcript.** `Session.apply` added a `name` key to every tool reply that `_exchange_parts` never sets, while `runtime.py` states the invariant *"the log has to reproduce `messages` exactly"*. The journal and the blob therefore disagreed on the same session, and `context_pruner` branched on the difference | M9 | Fixed (ADR-0029); equality is now asserted on a real turn |
 | **F26** | **The obvious fix for the subagent-authority gap would have leaked thread pools.** `ToolExecutor.__init__` creates two `ThreadPoolExecutor`s whose shutdown the composition root owns; a per-child executor (the natural way to give a child its own `principal`) would create two pools per subagent that nothing closes, and `fanout` spawns many | M15 | Avoided: the principal travels with the call; ratcheted by `test_the_runner_does_not_construct_a_tool_executor` |
+| **F27** | **A live T1 violation: workspace-file content sat before the system prompt.** `load_context_files()` reads `CLAUDE.md` / `.wisp/rules.md`, and `ContextAssembler` appended them at priority −1 — *ahead of* `default_system`. A repository whose `CLAUDE.md` carries an instruction placed it before the rules that forbid it, unfenced. The boundary that would have caught it (P8) had no production caller | M14 | Fixed (ADR-0031): classified and moved to the important tier |
 
 The findings are numbered in discovery order and sorted here for reference. Each one is a claim in a
 plan document or an audit that **repository evidence contradicted** — the migration's recurring result
@@ -1266,7 +1341,7 @@ is that the mechanisms mostly existed and what was missing was callers.
 
 ---
 
-## 20. Change log
+## 21. Change log
 
 
 
@@ -1347,8 +1422,12 @@ is that the mechanisms mostly existed and what was missing was callers.
 | 2026-09-23 | M15 | **F26 — the obvious fix leaks.** A per-child `ToolExecutor` would create two `ThreadPoolExecutor`s per subagent that nothing closes | ratchet test |
 | 2026-09-23 | M15 | The P9 tripwire **fired** with its written message; `PHASE_P9_REPORT.md` §7 updated and the tripwire replaced by its inverse | `TestReachability` |
 | 2026-09-23 | M15 | **Regression: 129, byte-identical in both directions.** Four production files, two on the live subagent path | full suite, stable baseline |
+| 2026-09-23 | M14 | **ADR-0031.** `SECTION_TRUST` classifies every prompt section; `context_files` moves out of instruction position | 32 tests |
+| 2026-09-23 | M14 | **F27 — a live T1 violation**: workspace-file content (`CLAUDE.md`) was placed *before* the system prompt, unfenced | RED-first test |
+| 2026-09-23 | M14 | The classification is **AST-ratcheted**: a section appended without a tag fails the suite | `test_every_appended_section_is_classified` |
+| 2026-09-23 | M14 | **Regression: 129, byte-identical in both directions.** The prompt changed; one pre-existing test updated, not weakened | full suite, stable baseline |
 
-### 20.1 Regression summary
+### 21.1 Regression summary
 
 | Run | Failures + errors |
 |---|---|

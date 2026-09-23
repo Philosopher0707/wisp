@@ -115,17 +115,33 @@ class TestContextAssemblerBuild:
         assert "Codebase Map" in result
 
     def test_build_with_context_files(self):
+        """Context files reach the prompt, after the system prompt.
+
+        This used to assert `result.startswith("# Rules")` — that context files
+        were "prepended before everything (priority -1)". That was a description
+        of the implementation, and the implementation was a **T1 violation**:
+        `load_context_files()` reads workspace files, so a repository's
+        `CLAUDE.md` sat *ahead of* the system prompt in instruction position.
+        Migration M14 moved it to the important tier (ADR-0031).
+
+        The requirement — the content is present, and early — is unchanged and
+        now asserted as a *relative* position, which is strictly more than the
+        old assertion covered.
+        """
         from wisp.context_assembler import ContextAssembler
         assembler = ContextAssembler()
         result = assembler.build(
             workspace="/tmp",
             default_system="You are Wisp.",
             context_files="# Rules\nBe concise",
+            repo_map="## Codebase Map\n- src/",
         )
-        # Context files are prepended before everything (priority -1)
-        assert result.startswith("# Rules")
         assert "Be concise" in result
         assert "You are Wisp." in result
+        # Trusted instructions come first; the workspace-derived section follows
+        # them but still precedes the optional context tail.
+        assert result.find("You are Wisp.") < result.find("# Rules")
+        assert result.find("# Rules") < result.find("Codebase Map")
 
     def test_build_with_skill_instructions_not_override(self):
         """Skill instructions should be present but NOT claim to override

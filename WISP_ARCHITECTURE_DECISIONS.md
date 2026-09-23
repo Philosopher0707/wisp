@@ -1037,6 +1037,66 @@ reason for existing is lost and the leak returns.
 
 ---
 
+## ADR-0031 — Prompt sections are classified, and untrusted content is not in instruction position
+
+**Status:** ACCEPTED
+**Phase:** M14
+**Closes:** P8's deferred item 1 ("trust tags on every context item")
+
+**Context.** P8 built the trust boundary — `wisp/core/context_trust.py` with `TrustTag`, the T1–T4 rules,
+fencing, and a structured `dropped` list — and shipped it **tagging-only, with no production caller**.
+`context_trust` was imported by its own test and nothing else; no code anywhere built a `ContextItem`.
+
+So the boundary was a *written-but-unwired control*, the pattern `docs/audit-2026-08-24.md` names as
+dominant in this codebase. Classifying the sections found the reason that matters:
+
+**T1 was violated, live.** `config.load_context_files()` reads workspace files — `CLAUDE.md`,
+`.wisp/rules.md`, `~/.config/wisp/CLAUDE.md` — and `ContextAssembler` appended their content at priority
+**−1**, i.e. *before* `default_system`. Verified:
+
+| Observation | Before M14 |
+|---|---|
+| a workspace file containing `IGNORE ALL PREVIOUS INSTRUCTIONS…` | appears at **offset 23** |
+| `## SYSTEM RULES` | appears at **offset 84** |
+| fenced or labelled? | **no** — `"<<UNTRUSTED" not in prompt` |
+
+A repository whose `CLAUDE.md` contains an instruction put that instruction **ahead of the rules that
+forbid it**. T1 exists for exactly this, and the boundary that would have caught it had no caller.
+
+**Decision.**
+
+1. **`SECTION_TRUST`** — one table classifying every section the assembler can append, by name.
+   `INSTRUCTION_PRIORITY = 0` names the tiers that carry instructions.
+2. **`untrusted_sections_in_instruction_position(sections)`** — T1 as a predicate. **It fails closed**:
+   a section nobody classified counts as untrusted, because "unclassified" has no answer to *"may
+   repository content sit here?"* and assuming safety is the wrong default for a trust boundary.
+3. **`context_files` moves from priority −1 to 1** — out of instruction position, still near the top.
+   This is the T1 fix and it is a **move, not a demotion**: the operator's conventions stay high priority.
+4. **The classification is total, and enforced as such.** `test_every_appended_section_is_classified`
+   reads the `sections.append((...))` calls by AST and fails on a name missing from `SECTION_TRUST`, so a
+   new section cannot arrive without someone answering the trust question.
+
+**Classify conservatively: if a section's content can originate in the workspace, it is `REPOSITORY`.**
+That is why `git_context` is untrusted — a commit message is text an author wrote and it reaches the
+prompt — and why `memory_block` is, since memory is workspace-scoped. `recent_summaries` is
+`TOOL_OUTPUT`, because compaction summaries are built from a conversation that includes tool output, and
+the least-trusted contributor decides.
+
+**Why not fence as well (T2).** Fencing changes more of the prompt for every turn, and the staging this
+migration has used throughout applies: record first, then enforce. The classification is the
+**precondition** for fencing — you cannot fence what you have not classified — so T2 is left as a
+separate, observable change rather than bundled with a security fix that needed to land.
+
+**Consequence:** the prompt is well-formed by T1, and the property is assertable rather than assumed. A
+new section, or a section moved into an instruction tier, now fails a test instead of shipping.
+
+**Reversal condition:** If a section is deliberately given instruction position despite being untrusted
+— for example an operator-authored file that is *intended* to carry instructions — then it needs a tag
+that says so and a rule for how it was authenticated. Widening `TRUSTED_TAGS` to make the check pass is
+not that; it is the defect this ADR closes.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -1071,3 +1131,4 @@ reason for existing is lost and the leak returns.
 | 0028 | A state-bearing record is not best-effort, in either direction | M16 | ACCEPTED (supersedes ADR-0027's `ESCALATION` row) |
 | 0029 | The graph is a shape, not a payload; the transcript projects from the journal | M9 | ACCEPTED (supersedes the M9 statement) |
 | 0030 | A subagent's identity travels with the call, not the executor | M15 | ACCEPTED |
+| 0031 | Prompt sections are classified; untrusted content is not in instruction position | M14 | ACCEPTED |
