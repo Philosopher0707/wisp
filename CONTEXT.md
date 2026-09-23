@@ -546,6 +546,8 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `73c2bbc` | `docs(m16):` record the third occurrence of the flaky test F17 |
 | `e52333f` | `feat(m9):` the execution view is faithful; the graph is a shape, not a payload — 11 tests |
 | `b39c120` | `docs:` complete the commit table and stop over-claiming it |
+| `e52333f` | `feat(m9):` the execution view is faithful; the graph is a shape, not a payload — 11 tests |
+| `bed9f7e` | `feat(m15):` a subagent authorizes as a narrowed child — 22 tests |
 | `1229b87` | `docs(m16):` correct the commit counts and complete this table |
 | `ed9fee6` | `docs:` stop quoting a commit count that goes stale on every commit |
 
