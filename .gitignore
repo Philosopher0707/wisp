@@ -92,6 +92,11 @@ workspace/
 # Subsystem verification & agent runtime logs
 .agent/
 
+# Agent workspace data (session logs, the stable failure baseline, curated notes).
+# Not project source: nothing under wisp/ imports it, and the migration docs describe
+# it as untracked working memory — see CONTEXT.md and .workbuddy-ai/memory/README.md.
+.workbuddy-ai/
+
 # Git worktrees (isolated implementation workspaces)
 .worktrees/
 

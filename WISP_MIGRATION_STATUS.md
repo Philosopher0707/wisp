@@ -23,6 +23,8 @@ most recent are listed here for orientation.
 | … | one commit per phase thereafter — see `CONTEXT.md` §3 |
 | `02c756c` | `feat(m4):` revisit ADR-0004 — and close a live defect it led to — 24 tests |
 | `d80f582` | `docs:` compaction handoff — refresh `CONTEXT.md`, add the workspace `MEMORY.md` |
+| `a055b39` | `feat(m16):` the escalation is state, not audit — 40 tests |
+| `d80f582` | `docs:` compaction handoff — refresh `CONTEXT.md`, add the workspace `MEMORY.md` |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
