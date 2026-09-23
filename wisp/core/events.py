@@ -266,6 +266,166 @@ _DENIAL_STATUSES = frozenset({
 })
 
 
+# ── Canonical outcome classification ────────────────────────────────
+# ONE authority for "what kind of outcome is this?". Consumers classify
+# through here rather than re-deriving predicates — a second classifier is
+# what let benchmark error accounting miss every structured denial.
+#
+# The taxonomy exists because a binary error/not-error answer is not enough:
+# a POLICY_DENIED result is a failure that must NOT be retried, while a
+# transient ERROR may be. Callers needing that distinction read the class,
+# not the message text.
+
+
+class OutcomeClass(StrEnum):
+    """What a tool result represents. Exactly one applies."""
+
+    SUCCESS = "success"
+    ERROR = "error"                   # execution failure
+    DENIAL = "denial"                 # the user declined
+    POLICY_DENIAL = "policy_denial"   # policy/authority refused
+    TIMEOUT = "timeout"               # approval or execution lapsed
+    CANCELLATION = "cancellation"     # cancelled by user or caller
+    INVALID = "invalid"               # schema/argument rejection
+    UNKNOWN = "unknown"               # an unrecognised non-"ok" status
+
+
+#: The tool-result envelope's status vocabulary, mapped to its class.
+#: Every status `denial_result()` can emit appears here; "ok" is the only
+#: success. Any other non-"ok" status is UNKNOWN — still a failure.
+OUTCOME_BY_STATUS: dict[str, OutcomeClass] = {
+    "ok": OutcomeClass.SUCCESS,
+    "error": OutcomeClass.ERROR,
+    DENIAL_POLICY_DENIED: OutcomeClass.POLICY_DENIAL,
+    DENIAL_USER_DENIED: OutcomeClass.DENIAL,
+    DENIAL_APPROVAL_TIMEOUT: OutcomeClass.TIMEOUT,
+    DENIAL_CANCELLED: OutcomeClass.CANCELLATION,
+    DENIAL_SCHEMA_INVALID: OutcomeClass.INVALID,
+}
+
+#: Classes that are terminal for automatic retry. A denial is a *verdict*,
+#: not a blip, so re-issuing it is never right (§26).
+TERMINAL_OUTCOME_CLASSES = frozenset({
+    OutcomeClass.DENIAL,
+    OutcomeClass.POLICY_DENIAL,
+    OutcomeClass.TIMEOUT,
+    OutcomeClass.CANCELLATION,
+    OutcomeClass.INVALID,
+})
+
+#: Legacy text prefixes that predate the structured envelope, each mapped to
+#: a class so a text-only result classifies as precisely as a structured one.
+_ERROR_TEXT_MARKERS: tuple[tuple[str, OutcomeClass], ...] = (
+    ("[Denied", OutcomeClass.DENIAL),
+    ("[Blocked", OutcomeClass.POLICY_DENIAL),
+    ("[Cancelled", OutcomeClass.CANCELLATION),
+    ("Error", OutcomeClass.ERROR),
+    ("[Error", OutcomeClass.ERROR),
+    ("[WEB_FETCH_FAILED]", OutcomeClass.ERROR),
+    ("[WEB_FETCH_BLOCKED]", OutcomeClass.POLICY_DENIAL),
+    ("ToolError:", OutcomeClass.ERROR),
+    ("Unexpected error:", OutcomeClass.ERROR),
+)
+
+#: Prose phrasings of a denial. These predate the taxonomy and are kept as a
+#: fallback — but they are checked *after* the canonical status tokens,
+#: because none of them match "POLICY_DENIED".
+_PROSE_DENIAL_MARKERS: tuple[str, ...] = (
+    "[denied", "denied by", "approval denied", "not authorized",
+)
+
+
+#: Prefixes that mark an **engine-level refusal** (migration M12). The engine
+#: refuses a tool call before dispatch — role restriction, schema, gate,
+#: extension — and emits the refusal as an `error` event whose text begins with
+#: one of these. They are denials by construction.
+#:
+#: **A prefix, not a substring.** `_PROSE_DENIAL_MARKERS` are substrings and
+#: deliberately stay that way; these are matched with `startswith`, so
+#: "the write was not blocked: it succeeded" is not read as a refusal.
+#:
+#: Why this is here and not in the caller: `is_denial_text` is the ONE authority
+#: for "is this text a denial". F15 was the prose markers matching nothing real;
+#: this is the same defect from the other side — the canonical statuses matched,
+#: and the *engine's own* marker was missing, so every engine refusal was
+#: invisible to denial detection and got retried.
+_ENGINE_DENIAL_PREFIXES: tuple[str, ...] = (
+    "blocked:",
+    "extension intercept failed:",
+)
+
+
+def classify_status(status: str) -> OutcomeClass:
+    """Classify a result-envelope status value."""
+    if status in OUTCOME_BY_STATUS:
+        return OUTCOME_BY_STATUS[status]
+    return OutcomeClass.SUCCESS if status == "ok" else OutcomeClass.UNKNOWN
+
+
+def classify_text(text: str) -> OutcomeClass:
+    """Classify a free-text result/error string.
+
+    Parses a JSON envelope when the text is one (slow tools surface as JSON
+    strings), then falls back to the legacy prefix markers.
+    """
+    stripped = (text or "").strip()
+    if stripped.startswith("{"):
+        try:
+            import json as _json
+            parsed = _json.loads(stripped)
+            if isinstance(parsed, dict):
+                return classify_status(str(parsed.get("status", "ok")))
+        except (ValueError, TypeError):
+            pass
+    for prefix, cls in _ERROR_TEXT_MARKERS:
+        if stripped.startswith(prefix):
+            return cls
+    return OutcomeClass.SUCCESS
+
+
+def classify_result(result: Any) -> OutcomeClass:
+    """The single authority for what a tool result represents."""
+    if isinstance(result, dict):
+        return classify_status(str(result.get("status", "ok")))
+    if isinstance(result, str):
+        return classify_text(result)
+    return OutcomeClass.SUCCESS
+
+
+def is_error_outcome(result: Any) -> bool:
+    """True when `result` is not a success. The binary view of the taxonomy."""
+    return classify_result(result) is not OutcomeClass.SUCCESS
+
+
+def is_terminal_outcome(result: Any) -> bool:
+    """True when the outcome is a verdict that must never be auto-retried."""
+    return classify_result(result) in TERMINAL_OUTCOME_CLASSES
+
+
+def is_denial_text(text: str | None) -> bool:
+    """True when free text names a denial — structured status or prose.
+
+    The canonical status tokens are checked FIRST. The prose markers predate
+    the taxonomy and none of them match a structured status such as
+    "POLICY_DENIED", so a structured denial arriving as text was previously
+    invisible to denial detection.
+    """
+    if not text:
+        return False
+    upper = text.upper()
+    if any(status in upper for status in _DENIAL_STATUSES):
+        return True
+    lowered = text.lower()
+    if any(lowered.startswith(p) for p in _ENGINE_DENIAL_PREFIXES):
+        return True
+    return any(m in lowered for m in _PROSE_DENIAL_MARKERS)
+
+
+def is_denial_outcome(result: Any) -> bool:
+    """True when an envelope result is a denial/refusal of any kind."""
+    return classify_result(result) in TERMINAL_OUTCOME_CLASSES
+
+
 def denial_result(name: str, status: str, reason: str, *,
                   duration_ms: float = 0,
                   tool_call_id: Optional[str] = None) -> AgentEvent:

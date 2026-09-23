@@ -28,6 +28,10 @@ from enum import IntEnum, StrEnum
 from typing import Any, ClassVar, Iterable
 
 from wisp.core.events import (
+    CODE_ITERATION_BUDGET,
+    CODE_PROVIDER_STREAM,
+    CODE_TOOL_TIMEOUT,
+    CODE_TURN_TIMEOUT,
     DENIAL_APPROVAL_TIMEOUT,
     DENIAL_CANCELLED,
     DENIAL_POLICY_DENIED,
@@ -35,6 +39,7 @@ from wisp.core.events import (
     DENIAL_USER_DENIED,
     OutcomeClass,
     classify_result,
+    is_denial_text,
 )
 
 
@@ -137,6 +142,81 @@ DENIAL_STATUSES = frozenset({
     DENIAL_POLICY_DENIED, DENIAL_USER_DENIED, DENIAL_APPROVAL_TIMEOUT,
     DENIAL_CANCELLED, DENIAL_SCHEMA_INVALID,
 })
+
+
+#: Transport markers that mean "try again shortly" — throttling and dropped
+#: connections. The canonical set (migration M12); `SubagentOrchestrator`
+#: aliases this rather than keeping its own list, so the retry loop and the
+#: taxonomy cannot disagree about what is transient.
+TRANSIENT_MARKERS: tuple[str, ...] = (
+    "429", "rate limit", "too many requests", "connection reset",
+)
+
+#: The failure class for each engine error code (`core/events.py`). **Total by
+#: test**: `test_every_error_code_has_a_classification` enumerates the codes and
+#: fails on one missing here, so a new code cannot silently take the default.
+#:
+#: `CODE_TURN_TIMEOUT` and `CODE_PROVIDER_STREAM` are `ENVIRONMENT`, not
+#: `TRANSIENT`. Retrying a turn that timed out because the model is too slow is
+#: the orchestrator's own documented refusal ("the model is too slow or
+#: unreachable — not retrying"), and `ENVIRONMENT` routes to `DIAGNOSTIC` for
+#: exactly that reason. `CODE_ITERATION_BUDGET` is the agent's own loop, so it is
+#: `IMPLEMENTATION` and routes to `REPAIR`/replan.
+CODE_FAILURE_CLASS: dict[str, FailureClass] = {
+    CODE_TURN_TIMEOUT: FailureClass.ENVIRONMENT,
+    CODE_PROVIDER_STREAM: FailureClass.ENVIRONMENT,
+    CODE_TOOL_TIMEOUT: FailureClass.ENVIRONMENT,
+    CODE_ITERATION_BUDGET: FailureClass.IMPLEMENTATION,
+}
+
+
+def is_transient_text(text: str | None) -> bool:
+    """True when free text names a retryable transport condition."""
+    if not text:
+        return False
+    lowered = text.lower()
+    return any(m in lowered for m in TRANSIENT_MARKERS)
+
+
+def classify_failure_signal(message: str | None = None, recoverable: bool = False,
+                            code: str | None = None) -> FailureClass:
+    """Map the **runtime's** failure signal onto the closed taxonomy (M12).
+
+    The runtime observes failures as an `error` event carrying
+    `(message, recoverable, code)`. The taxonomy accepts a `result` (which goes
+    through `classify_result`) or semantic flags — neither of which is that — so
+    until this adapter existed the ladder could not be driven from a real
+    failure at all.
+
+    Precedence is deliberate and mirrors `classify_failure`:
+
+    1. **A refusal outranks everything** — `is_denial_text(message)`, the ONE
+       authority for "is this text a denial". P6's rule: a denied call that also
+       looked transient is still `SECURITY`, or the no-retry rule leaks.
+    2. **A cancellation is an authorization outcome** — same recovery answer,
+       `SECURITY`.
+    3. **An engine error code** — the closed vocabulary, most specific.
+    4. **Transport markers** — throttling and dropped connections.
+    5. **`recoverable`** — the engine's own signal that the failure was not
+       fatal, which is the bounded-retry case.
+    6. Otherwise `IMPLEMENTATION` — the agent's own failure, the conservative
+       default. **Not** `SECURITY`: an unrecognised failure must not silently
+       acquire the strongest prohibition.
+
+    This is the bridge, not a second classifier: it decides *which* taxonomy
+    entry applies, never re-derives what an outcome means.
+    """
+    if is_denial_text(message):
+        return FailureClass.SECURITY
+    if message and "cancell" in message.lower():
+        return FailureClass.SECURITY
+    if code is not None and code in CODE_FAILURE_CLASS:
+        return CODE_FAILURE_CLASS[code]
+    if is_transient_text(message):
+        return FailureClass.TRANSIENT
+    if recoverable:
+        return FailureClass.TRANSIENT
+    return FailureClass.IMPLEMENTATION
 
 
 def classify_failure(result: Any = None, *, repeated: bool = False,

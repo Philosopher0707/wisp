@@ -124,6 +124,22 @@ add it to the live path too — or assert the invariant and watch it fail.
 **unchanged** — nothing on it calls the ladder. Do not assume failures are being classified or that
 recovery is budgeted in production; it is not yet (item M12).
 
+### A failure is classified through one adapter, and a refusal is never retried
+
+`classify_failure_signal(message, recoverable, code)` (`core/recovery.py`) bridges the runtime's `error`
+event to the P6 taxonomy. Precedence: **refusal → cancellation → error code → transport markers →
+`recoverable` → `IMPLEMENTATION`**. The default is `IMPLEMENTATION`, deliberately not `SECURITY` —
+`SECURITY`'s only legal rung is escalation, so defaulting to it would escalate every novel failure.
+
+**The engine's refusals are denials, and the predicate knows it.** The engine emits pre-dispatch refusals
+as `Blocked: …`; `_ENGINE_DENIAL_PREFIXES` (a **prefix** match, so *"not blocked:"* is not a refusal)
+covers them. Before M12 none matched, so the orchestrator's retry loop — which says *"Don't retry
+authorization denials"* — **retried them**. `CODE_FAILURE_CLASS` is total by test, so a new error code
+cannot silently take the default.
+
+**Watch the name:** `OutcomeClass.TIMEOUT` is reachable only from `APPROVAL_TIMEOUT`, a *denial* status —
+it does **not** mean a turn timeout. `CODE_TURN_TIMEOUT` is `ENVIRONMENT`, not `TRANSIENT`. ADR-0032.
+
 ### Every prompt section is classified, and T1 holds
 
 `SECTION_TRUST` in `wisp/context_assembler.py` is the **one table** saying which trust tag each system-
@@ -262,7 +278,8 @@ python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_
   tests/test_context_trust.py tests/test_structured_delegation.py \
   tests/test_session_reconstruction.py tests/test_durability_preconditions.py \
   tests/test_escalation_durability.py tests/test_execution_view_projection.py \
-  tests/test_child_principal_wired.py tests/test_prompt_section_trust.py -q
+  tests/test_child_principal_wired.py tests/test_prompt_section_trust.py \
+  tests/test_failure_signal_classification.py -q
 ```
 
 ### Reachability is mandatory for new durable code

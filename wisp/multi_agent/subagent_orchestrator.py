@@ -930,15 +930,22 @@ class SubagentOrchestrator:
         finally:
             await _cleanup_worktree()
 
-    _TRANSIENT_MARKERS = ("429", "rate limit", "too many requests", "connection reset")
-
-    #: Authorization-denial marker: denials must never auto-retry (§26).
-    _DENIAL_MARKERS = ("[denied", "denied by", "approval denied", "not authorized")
+    #: Migration M12: the canonical set, aliased rather than re-listed. The
+    #: retry loop and the failure taxonomy must agree about what is transient —
+    #: two lists would drift, and this file has already been the site of one
+    #: such defect: Phase 10 removed a prose-only denial marker list here
+    #: because every entry in it matched nothing real.
+    from wisp.core.recovery import TRANSIENT_MARKERS as _TRANSIENT_MARKERS
 
     @staticmethod
     def _is_transient(error: str | None) -> bool:
         """Provider throttling/connection blips are worth a bounded retry;
-        path-not-found and budget errors are not."""
+        path-not-found and budget errors are not.
+
+        A different axis from outcome classification: an ERROR can be
+        transient or permanent, so this keys on transport markers rather
+        than on the status taxonomy.
+        """
         if not error:
             return False
         lowered = error.lower()
@@ -946,11 +953,15 @@ class SubagentOrchestrator:
 
     @staticmethod
     def _is_denial(error: str | None) -> bool:
-        """Authorization denials are terminal for automatic retry."""
-        if not error:
-            return False
-        lowered = error.lower()
-        return any(m in lowered for m in SubagentOrchestrator._DENIAL_MARKERS)
+        """Authorization denials are terminal for automatic retry (§26).
+
+        Delegates to the canonical detector, which consults the status
+        taxonomy *before* the prose markers. The markers that used to live
+        here never matched a structured status such as "POLICY_DENIED", so a
+        structured denial arriving as text was invisible to this check.
+        """
+        from wisp.core.events import is_denial_text
+        return is_denial_text(error)
 
     @staticmethod
     def _budget_remaining(contract: SubagentContract) -> int:

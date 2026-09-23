@@ -1097,6 +1097,84 @@ not that; it is the defect this ADR closes.
 
 ---
 
+## ADR-0032 — The failure path reaches the taxonomy through an adapter, and the engine's refusals are denials
+
+**Status:** ACCEPTED
+**Phase:** M12
+**Supersedes:** ADR-0026's placement of the gap (the ladder's absence is a *missing bridge*, not a missing wiring)
+
+**Context.** ADR-0026 deferred M12 with a reason: *"rewiring [the failure path] alters behaviour on the
+failure path — the least-covered path — and the plan names the risk as 'ordering and budget
+interaction'."* Reconnaissance found the gap is not where that ADR put it. The ladder cannot be consulted
+because **nothing bridges the runtime's failure signals to the taxonomy**:
+
+| Side | Has |
+|---|---|
+| the runtime | `(message, recoverable, code)` on an `error` event |
+| the taxonomy | a `result` (→ `classify_result`) **or** semantic flags |
+
+Neither of those is the other. Driving the taxonomy from real failures for the first time found two
+defects.
+
+**Finding 1 — the engine's own refusals were invisible to the denial predicate.** The engine refuses a
+tool call before dispatch (role restriction, schema, gate, extension) and emits the refusal as an `error`
+event whose text begins `Blocked: …`. `is_denial_text` checks the five canonical statuses and four prose
+markers — `('[denied', 'denied by', 'approval denied', 'not authorized')` — and **none of them matches
+`Blocked:`**. Verified: `is_denial_text` returns `False` for all six engine refusal shapes.
+
+The cost is concrete. The orchestrator's retry loop says
+
+```python
+# Don't retry authorization denials or cancellations (§17).
+if self._is_denial(last_error) or "cancell" in last_error.lower():
+```
+
+and `_is_denial` delegates to `is_denial_text`. So it **retries them**, up to `max_retries`, on a call
+that will be refused identically. The ladder forbids retrying a `SECURITY` failure; the orchestrator's own
+loop did it because it could not see the refusal.
+
+This is F15's shape from the other side. F15: the prose markers matched nothing real, so structured
+denials were invisible. Now the statuses are checked, and the **engine's** marker was missing.
+
+**Finding 2 — `OutcomeClass.TIMEOUT` does not mean a turn timeout.** It is reachable only from
+`APPROVAL_TIMEOUT`, a *denial* status, which is why `classify_failure` maps it to `SECURITY`. The name
+invites a caller to route the engine's turn timeout (`CODE_TURN_TIMEOUT`) through it and get a security
+failure that forbids retry. Pinned by `test_a_turn_timeout_is_not_a_security_failure`.
+
+**Decision.**
+
+1. **`_ENGINE_DENIAL_PREFIXES` in `core/events.py`** — `("blocked:", "extension intercept failed:")`,
+   matched with `startswith`. In the canonical module, not the caller: `is_denial_text` is the ONE
+   authority for "is this text a denial", and a second matcher is what F15 was.
+2. **A prefix, not a substring.** `_PROSE_DENIAL_MARKERS` stay substrings; these do not, so *"the write
+   was not blocked: it succeeded"* is not read as a refusal.
+3. **`classify_failure_signal(message, recoverable, code)`** in `core/recovery.py` — the adapter. It
+   decides *which* taxonomy entry applies and never re-derives what an outcome means. Precedence mirrors
+   `classify_failure`: refusal → cancellation → error code → transport markers → `recoverable` →
+   `IMPLEMENTATION`.
+4. **`CODE_FAILURE_CLASS`** — the class for each engine error code, **total by test** so a new code cannot
+   silently take the default.
+5. **`TRANSIENT_MARKERS` moves to `core/recovery.py`**, and `SubagentOrchestrator._TRANSIENT_MARKERS`
+   aliases it. The retry loop and the taxonomy must agree about what is transient; two lists would drift.
+
+**The default is `IMPLEMENTATION`, deliberately not `SECURITY`.** An unrecognised failure must not
+silently acquire the strongest prohibition — `SECURITY`'s only legal rung is escalation, so defaulting to
+it would escalate every novel failure to a human.
+
+**Why `CODE_TURN_TIMEOUT` is `ENVIRONMENT` and not `TRANSIENT`.** Retrying a turn that timed out because
+the model is too slow is the orchestrator's own documented refusal (*"the model is too slow or
+unreachable — not retrying"*), and `ENVIRONMENT` routes to `DIAGNOSTIC` for exactly that reason.
+
+**Consequence:** the ladder can now be driven from a real failure, and the retry loop stops retrying
+engine refusals. The *enforcement* of the ladder's decision remains deferred — this phase makes the
+failure classifiable and the refusal visible, which is the precondition the previous ADR assumed existed.
+
+**Reversal condition:** If a refusal shape appears that is *not* a denial (a `Blocked:` message the agent
+may legitimately retry), it belongs in `_KNOWN_NON_REFUSALS` with a reason — not by removing the prefix
+rule, which would make every engine refusal invisible again.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -1132,3 +1210,4 @@ not that; it is the defect this ADR closes.
 | 0029 | The graph is a shape, not a payload; the transcript projects from the journal | M9 | ACCEPTED (supersedes the M9 statement) |
 | 0030 | A subagent's identity travels with the call, not the executor | M15 | ACCEPTED |
 | 0031 | Prompt sections are classified; untrusted content is not in instruction position | M14 | ACCEPTED |
+| 0032 | The failure path reaches the taxonomy through an adapter; engine refusals are denials | M12 | ACCEPTED |

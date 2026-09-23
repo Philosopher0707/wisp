@@ -37,9 +37,10 @@ baseline (see §11).
 | **M9** — the execution view | `COMPLETE` — **the claim was the wrong target** | `PHASE_M9_REPORT.md` |
 | **M15** — a subagent authorizes as a narrowed child | `COMPLETE` — **the obvious fix was a pool leak** | `PHASE_M15_REPORT.md` |
 | **M14** — prompt sections classified (T1) | `COMPLETE` — **found a live T1 violation** | `PHASE_M14_REPORT.md` |
+| **M12** — the failure path reaches the taxonomy | `COMPLETE` — **found the engine's refusals invisible** | `PHASE_M12_REPORT.md` |
 
-**Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F27**, change log).
-**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0031**).
+**Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F28**, change log).
+**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0032**).
 
 **The durability track is closed.** M2 (journal-first reconstruction), M3 (a real-SIGKILL kill point),
 M4 (durability as a correctness precondition) and M16 (the escalation is state, not audit) are all
@@ -79,7 +80,7 @@ reproduce `messages` exactly"*. The journal and the blob therefore disagreed on 
 | Item | What it actually needs |
 |---|---|
 | **M11** | **node identity** — the graph's nodes are `turn:0…turn:n-1`, an index, not a reference to their work unit. This is the real precondition, and M9 *redefines* M11 rather than unblocking it |
-| **M12** | nothing from M9 — a hook on the failure path so the ladder is consulted |
+| **M12** | ✅ **DONE** — nothing from M9 was needed. `classify_failure_signal()` bridges the runtime's failure signals to the taxonomy, and **engine refusals are now recognised as denials** (they were being retried). Ladder *enforcement* stays deferred (ADR-0032) |
 | **M13** | meaningful progress signals, which depend on M11 |
 | **M14** | ✅ **DONE** — nothing from M9 was needed. The prompt sections are now classified and the **live T1 violation** (workspace-file content ahead of the system prompt) is fixed (ADR-0031) |
 | **M15** | ✅ **DONE** — nothing from M9 was needed. The spawn site now passes a `child_principal`; the identity travels with the **call**, because a per-child executor would leak two thread pools each (ADR-0030) |
@@ -832,7 +833,7 @@ env -u PYTHONPATH .venv/bin/python -m pytest \
   tests/test_session_reconstruction.py tests/test_durability_preconditions.py \
   tests/test_escalation_durability.py tests/test_execution_view_projection.py \
   tests/test_child_principal_wired.py tests/test_prompt_section_trust.py \
-  tests/reliability/test_killpoints.py -q
+  tests/test_failure_signal_classification.py tests/reliability/test_killpoints.py -q
 ```
 
 ### The regression method — read this before changing anything
@@ -899,7 +900,7 @@ the files to a path **outside the repo** first, then compare.
 |---|---|---|
 | **M9** | The execution view | ✅ **COMPLETE** — ADR-0029. **The strong reading was the wrong target** (the graph carries no payload), and the projection that exists was **not faithful** (now fixed and asserted). |
 | **M11** | The graph does not drive execution | **OPEN** — the turn loop executes tools directly; the graph is a record, not a driver. **Precondition is node identity**, not M9: nodes are `turn:0…n-1`, an index. ADR-0029. |
-| **M12** | The recovery ladder is not consulted by the turn loop | **OPEN** — P6 shipped the ladder as a mechanism. ADR-0026. |
+| **M12** | The failure path | ✅ **COMPLETE** — ADR-0032. The ladder can be driven from a real failure now, and engine refusals are denials (F28: they were being retried). Enforcement deferred. |
 | **M13** | The stagnation detector is not constructed by the turn loop | **OPEN** — P7 uses the trap and reads the flag; nothing builds a detector. |
 | **M14** | The context trust boundary | ✅ **COMPLETE** — ADR-0031. **Found a live T1 violation**: workspace-file content (`CLAUDE.md`) sat *before* the system prompt, unfenced. T2 fencing remains, deliberately staged. |
 | **M15** | The subagent spawn site | ✅ **COMPLETE** — ADR-0030. The P9 tripwire fired and was replaced by its inverse; `execute(principal=…)` carries the child identity per call. |
@@ -973,6 +974,7 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_M9_REPORT.md` | The execution view: faithful, and a shape not a payload (ADR-0029) |
 | `PHASE_M15_REPORT.md` | A subagent authorizes as a narrowed child (ADR-0030) |
 | `PHASE_M14_REPORT.md` | Prompt sections are classified, and T1 holds (ADR-0031) |
+| `PHASE_M12_REPORT.md` | The failure path reaches the taxonomy (ADR-0032) |
 
 **Guards added by the migration:**
 
@@ -988,6 +990,7 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `tests/test_acceptance_verdict.py` | the verdict algebra; the floor guard is retained, not replaced; stage 3a does not gate |
 | `tests/test_task_graph_materialization.py` | readiness is **stored**, not recomputed; one transition API (AST, in-module and tree-wide); the graph is a projection of the log |
 | `tests/test_graph_mutation.py` | the extended vocabulary is a superset (ratchet); expansion is acyclic by construction; invalidation cascades; supersession retains history; the growth budget is **enforced**; insertion order does not change the graph |
+| `tests/test_failure_signal_classification.py` | **engine refusals are denials** (they were retried); the runtime→taxonomy adapter is total; every error code has a class; the `TIMEOUT` naming trap |
 | `tests/test_prompt_section_trust.py` | every prompt section is classified (AST-ratcheted); **no untrusted section is in instruction position**; the predicate fails closed; the fix is a move, not a reshuffle |
 | `tests/test_child_principal_wired.py` | a child is **denied at the authorization layer** for a tool its contract excludes; the identity travels with the **call** (ratchet: no per-child executor); **both** child paths stamp it; the parent is resolved by the shared rule |
 | `tests/test_execution_view_projection.py` | a real turn's live transcript equals its replay; a tool reply carries only the protocol keys; `TaskNode` may not gain transcript payload (ratchet); the graph's nodes are a count, not an identity |

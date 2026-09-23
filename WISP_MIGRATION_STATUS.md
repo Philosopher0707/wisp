@@ -58,6 +58,7 @@ most recent are listed here for orientation.
 | **M9** | The execution view | P1, P4 | `COMPLETE` — **the claim was the wrong target**; closed as faithfulness | `PHASE_M9_REPORT.md` |
 | **M15** | A subagent authorizes as a narrowed child | P9 | `COMPLETE` — **the obvious fix was a pool leak** | `PHASE_M15_REPORT.md` |
 | **M14** | Prompt sections classified (T1) | P8 | `COMPLETE` — **found a live T1 violation** | `PHASE_M14_REPORT.md` |
+| **M12** | The failure path reaches the taxonomy | P6 | `COMPLETE` — **found the engine's refusals invisible** | `PHASE_M12_REPORT.md` |
 
 Critical path: **P0 → P1 → P2 → P4 → P5 → P6**. P8 is independent and may start at any time.
 The `M` rows are the plan's **deferred prerequisites**, worked after the phases. **M9 remains open** —
@@ -1303,7 +1304,89 @@ but **not yet T2**-conformant (untrusted content is not delimited). The mechanis
 
 ---
 
-## 20. Findings log (migration-wide)
+## 20. M12 — The Failure Path Reaches the Taxonomy
+
+### 20.1 The gap was not where ADR-0026 put it
+
+ADR-0026 deferred M12 because rewiring *"alters behaviour on the failure path — the least-covered path"*.
+Reconnaissance found the ladder **cannot be consulted**: nothing bridges the runtime's failure signals to
+the taxonomy.
+
+| Side | Has |
+|---|---|
+| the runtime | `(message, recoverable, code)` on an `error` event |
+| the taxonomy | a `result` (→ `classify_result`) **or** semantic flags |
+
+`classify_failure` has **no `denial` parameter** — denial is detected only via a *result*. So driving the
+taxonomy from real failures for the first time was the work, and it found two defects.
+
+### 20.2 Finding 1 — the engine's refusals were invisible (F28)
+
+The engine refuses a tool call before dispatch and emits the refusal as an `error` event beginning
+`Blocked: …`. `is_denial_text` checks the five canonical statuses and four prose markers
+(`'[denied'`, `'denied by'`, `'approval denied'`, `'not authorized'`) — **none matches `Blocked:`**.
+Verified: `False` for all six engine refusal shapes, `True` for all five canonical statuses.
+
+**The cost is concrete.** The orchestrator's retry loop says *"Don't retry authorization denials or
+cancellations"* and calls `_is_denial` → `is_denial_text`. So it **retried them**, up to `max_retries`, on
+a call that would be refused identically. The ladder forbids retrying a `SECURITY` failure; the
+orchestrator's own loop did it because it could not see the refusal.
+
+**F15's shape from the other side.** F15: the prose markers matched nothing real. Now: the statuses are
+checked and the **engine's own marker** is missing.
+
+### 20.3 Finding 2 — the `TIMEOUT` naming trap
+
+`OutcomeClass.TIMEOUT` is reachable only from `APPROVAL_TIMEOUT`, a *denial* status — which is why the
+taxonomy maps it to `SECURITY`. I first read that as a bug; checking the vocabulary showed the mapping is
+**correct** and the *name* is the hazard. Pinned by a test.
+
+### 20.4 The decision (ADR-0032)
+
+1. `_ENGINE_DENIAL_PREFIXES` in `core/events.py`, matched with `startswith` — in the canonical module,
+   because a second matcher is what F15 was.
+2. A **prefix**, not a substring, so *"the write was not blocked: it succeeded"* is not a refusal.
+3. `classify_failure_signal(message, recoverable, code)` — the adapter. Precedence: refusal →
+   cancellation → error code → transport markers → `recoverable` → `IMPLEMENTATION`.
+4. `CODE_FAILURE_CLASS` — total by test.
+5. `TRANSIENT_MARKERS` moves to `core/recovery.py`; the orchestrator aliases it.
+
+**The default is `IMPLEMENTATION`, deliberately not `SECURITY`** — `SECURITY`'s only legal rung is
+escalation, so defaulting to it would escalate every novel failure to a human.
+
+### 20.5 Completion criteria
+
+- [x] The bridge exists; engine refusals are recognised as denials — **RED-first**
+- [x] The adapter is total over the real failure shapes, and ratcheted
+- [x] Every engine error code has a classification — **ratcheted**
+- [x] The turn-timeout naming trap is pinned
+- [x] The transient vocabulary has one authority
+- [x] **Zero new failures** — 129, byte-identical in both directions
+- [ ] `ruff` / `mypy` — not installed
+- [ ] **Ladder enforcement** — deliberately deferred (§20.6)
+
+### 20.6 Ladder enforcement is deferred
+
+This phase makes a failure *classifiable* and a refusal *visible* — the precondition ADR-0026 assumed
+existed. Acting on the decision (re-running a turn on a `RETRY` rung, parking it on `HUMAN`) changes the
+turn loop's control flow, which is the risk ADR-0026 correctly named. What is now in place: the class is
+computable from a real failure, the legal rungs per class are a table, `RecoveryLadder.decide()` is
+tested, and the budgets exist.
+
+### 20.7 Honest limits
+
+- **The adapter is a judgement, written down** — one function with the reasoning beside it.
+- **`_KNOWN_NON_REFUSALS` lives in the test**, not beside `_ENGINE_DENIAL_PREFIXES`. It forces a decision
+  on each new engine failure prefix, but the placement is not ideal.
+- **The denial fix's effect is not measured end to end.** No subagent run was driven to observe the retry
+  loop declining to retry. The claim rests on the predicate answering `True` for the exact expression the
+  loop evaluates.
+- **`CODE_TOOL_TIMEOUT` is classified but never emitted** — another orphan, recorded rather than removed.
+- **Nothing consumes the recorded class yet.**
+
+---
+
+## 21. Findings log (migration-wide)
 
 | # | Finding | Phase | Resolution |
 |---|---|---|---|
@@ -1334,6 +1417,7 @@ but **not yet T2**-conformant (untrusted content is not delimited). The mechanis
 | **F25** | **The replayed transcript was not the live transcript.** `Session.apply` added a `name` key to every tool reply that `_exchange_parts` never sets, while `runtime.py` states the invariant *"the log has to reproduce `messages` exactly"*. The journal and the blob therefore disagreed on the same session, and `context_pruner` branched on the difference | M9 | Fixed (ADR-0029); equality is now asserted on a real turn |
 | **F26** | **The obvious fix for the subagent-authority gap would have leaked thread pools.** `ToolExecutor.__init__` creates two `ThreadPoolExecutor`s whose shutdown the composition root owns; a per-child executor (the natural way to give a child its own `principal`) would create two pools per subagent that nothing closes, and `fanout` spawns many | M15 | Avoided: the principal travels with the call; ratcheted by `test_the_runner_does_not_construct_a_tool_executor` |
 | **F27** | **A live T1 violation: workspace-file content sat before the system prompt.** `load_context_files()` reads `CLAUDE.md` / `.wisp/rules.md`, and `ContextAssembler` appended them at priority −1 — *ahead of* `default_system`. A repository whose `CLAUDE.md` carries an instruction placed it before the rules that forbid it, unfenced. The boundary that would have caught it (P8) had no production caller | M14 | Fixed (ADR-0031): classified and moved to the important tier |
+| **F28** | **The engine's own refusals were invisible to the denial predicate.** The engine emits pre-dispatch refusals as `Blocked: …` error events; `is_denial_text` checked the five canonical statuses and four prose markers and none matched. So the orchestrator's retry loop — which says *"Don't retry authorization denials"* — **retried them**, up to `max_retries`, on a call that would be refused identically | M12 | Fixed (ADR-0032): `_ENGINE_DENIAL_PREFIXES` |
 
 The findings are numbered in discovery order and sorted here for reference. Each one is a claim in a
 plan document or an audit that **repository evidence contradicted** — the migration's recurring result
@@ -1341,7 +1425,7 @@ is that the mechanisms mostly existed and what was missing was callers.
 
 ---
 
-## 21. Change log
+## 22. Change log
 
 
 
@@ -1426,8 +1510,13 @@ is that the mechanisms mostly existed and what was missing was callers.
 | 2026-09-23 | M14 | **F27 — a live T1 violation**: workspace-file content (`CLAUDE.md`) was placed *before* the system prompt, unfenced | RED-first test |
 | 2026-09-23 | M14 | The classification is **AST-ratcheted**: a section appended without a tag fails the suite | `test_every_appended_section_is_classified` |
 | 2026-09-23 | M14 | **Regression: 129, byte-identical in both directions.** The prompt changed; one pre-existing test updated, not weakened | full suite, stable baseline |
+| 2026-09-23 | M12 | **ADR-0032.** `classify_failure_signal()` bridges the runtime's `(message, recoverable, code)` to the taxonomy | 33 tests |
+| 2026-09-23 | M12 | **F28 — the engine's refusals were invisible**: `Blocked: …` matched none of the prose markers, so the retry loop retried them | RED-first test |
+| 2026-09-23 | M12 | `_ENGINE_DENIAL_PREFIXES` (prefix, not substring) + `CODE_FAILURE_CLASS` (total by test) + `TRANSIENT_MARKERS` unified | ratchets |
+| 2026-09-23 | M12 | A P10 guard was a whole-file grep that matched its own documentation; made AST-based with a non-vacuity test | `test_the_denial_marker_guard_is_not_vacuous` |
+| 2026-09-23 | M12 | **Regression: 129, byte-identical in both directions.** A predicate the retry path consults changed | full suite, stable baseline |
 
-### 21.1 Regression summary
+### 22.1 Regression summary
 
 | Run | Failures + errors |
 |---|---|
