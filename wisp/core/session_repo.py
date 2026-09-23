@@ -168,11 +168,15 @@ class SessionRepository:
                     "updated_at": replayed.updated_at or blob.get("updated_at", 0.0),
                     # Provenance, so a caller can tell which path answered.
                     "_source": "journal",
+                    "_gap": False,
                 }
 
         if not blob:
             return None
-        return {**blob, "_source": "blob"}
+        # The blob carries no sequence, so a gap cannot be asserted of it. It is
+        # reported as False rather than unknown because the blob is a whole-
+        # session snapshot: it is either present and complete, or absent.
+        return {**blob, "_source": "blob", "_gap": False}
 
     def reconstruction_source(self, session_id: str) -> str:
         """`journal` | `blob` | `none` — the migration check.
@@ -181,15 +185,22 @@ class SessionRepository:
         **turn body** — an assistant or tool message — not merely the user
         message and DONE marker a pre-P0 session has.
 
-        The predicate is `any(role != "user")`, not `messages` being non-empty.
-        A pre-P0 session replays to `[user]`, which IS non-empty, so the obvious
-        test picks the journal and returns a session truncated to one message —
-        the exact hazard this method exists to avoid. Verified the hard way: the
-        first implementation used `if replayed.messages:` and failed its own
-        pre-P0 test.
+        Two conditions, both necessary:
+
+        1. **A turn body exists** — `any(role != "user")`, not `messages` being
+           non-empty. A pre-P0 session replays to `[user]`, which IS non-empty,
+           so the obvious test picks the journal and returns a session truncated
+           to one message. Verified the hard way: the first implementation used
+           `if replayed.messages:` and failed its own pre-P0 test.
+        2. **The sequence has no gap** (M4). ADR-0004 permits a durable write to
+           fail silently, so the journal can legitimately be missing an event —
+           and a lost `TOOL_RESULT` yields an assistant `tool_calls` block with
+           no reply, i.e. a **provider-invalid transcript that reports no
+           error**. Without this condition, journal-first would return that
+           truncated session and look authoritative doing it.
         """
         replayed = self.load_session(session_id)
-        if replayed is not None and any(
+        if replayed is not None and not replayed.gap_detected and any(
                 str(m.get("role")) != "user" for m in replayed.messages):
             return "journal"
         if self._store.load_session(session_id) is not None:

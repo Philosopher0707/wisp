@@ -107,6 +107,10 @@ never fatal. The canary is the honest signal; a non-zero count means state is be
 proposal boundary is the likely candidate), silent best-effort is no longer acceptable for that path
 and must become fail-loud. Revisit at P2.
 
+> **REACHED — see ADR-0027 (M4).** P2 landed, but the decisive change was **M2**, which promoted the
+> journal from secondary to primary. The resolution is not fail-loud writes; it is a checkable
+> invariant (`Session.gap_detected`) that makes silent loss detectable at the read.
+
 ---
 
 ## ADR-0005 — Fail loud on unknown session event types during replay
@@ -763,6 +767,65 @@ ladder behind `WISP_RECOVERY_LADDER` and measure.
 
 ---
 
+## ADR-0027 — Best-effort durability, revisited: the journal's *contiguity* is the precondition
+
+**Status:** ACCEPTED — **supersedes the reversal condition of ADR-0004**
+**Phase:** M4
+**Context:** ADR-0004 made every durable write best-effort and stated its own reversal condition:
+
+> *"Once a phase requires durable state as a **correctness** precondition (P2's proposal boundary is the
+> likely candidate), silent best-effort is no longer acceptable for that path and must become fail-loud.
+> Revisit at P2."*
+
+P2 landed, and so did P3–P6. But **the decisive change was M2**, and it was not the one ADR-0004
+anticipated. M2 promoted the journal from *secondary* to *primary* by making reconstruction
+journal-first. That is what turns a permitted silent write failure from a lost observation into a
+**silently truncated session**.
+
+**The hole, verified.** With a `TOOL_RESULT` write lost (seq 2 absent, seqs `0, 1, 3`):
+
+| Observation | Before M4 |
+|---|---|
+| replayed messages | `["user", "assistant", "assistant"]` — an assistant `tool_calls` block with **no tool reply** |
+| `unknown_events` | **0** — it counts unrecognised event *kinds*, not missing ones |
+| `reconstruction_source()` | **`"journal"`** — journal-first returns the broken transcript, authoritatively |
+
+A strict provider rejects that message shape. So the failure mode M2 was designed to avoid — returning a
+*worse* session than the blob — arrived by a second route, and nothing reported it.
+
+**Decision.** Do **not** make the writes fail-loud. ADR-0004's core concern stands: a turn must not die
+because a disk write failed, and making the journal fatal would convert an observability feature into an
+outage — the exact outcome ADR-0004 was written to prevent.
+
+Instead, make the **invariant checkable**:
+
+1. `Session.gap_detected` — the journal's sequence is **contiguous** (`_journal_turn_events` stamps in
+   order with no holes). A hole therefore means a write was lost. Contiguity is measured from the
+   minimum present, so applying a single event is not a gap.
+2. `reconstruction_source()` refuses a gapped journal and falls back to the blob.
+3. `reconstruct()` reports `_gap` on the result.
+
+**Why this is the right shape.** ADR-0004's own precedent is `persist_skipped_total` — a *canary*, not a
+crash. The problem was never that the write could fail; it was that **nothing downstream could tell**.
+`gap_detected` is that signal, and unlike a counter it is a property of the record itself, so it travels
+with the data and cannot be forgotten by a caller that never read the counter.
+
+**Consequence:** silent loss is still permitted at the write, and is now **detectable at the read**. The
+classification, for the record:
+
+| Record | Loss costs | Policy |
+|---|---|---|
+| Turn body (`ASSISTANT_MESSAGE` / `TOOL_CALL` / `TOOL_RESULT`) | the session — it is now the primary record | best-effort **write**, gap-checked **read** |
+| `PROPOSAL` / `OUTCOME` (P2) | the authorization audit — compliance, not correctness | best-effort, canary |
+| `VERDICT` (P3) | stage-3a measurement (nothing consumes it until 3b) | best-effort, canary |
+| `TASK_GRAPH` / `NODE_TRANSITION` (P4) | graph↔transcript divergence | best-effort, canary |
+| `RECOVERY` / `ESCALATION` (P6) | resumability — the escalation *is* the state | best-effort, canary; open item M16 |
+
+**Reversal condition:** If a future phase makes an *audit* record a legal obligation rather than a
+diagnostic, that path needs fail-loud — and it will be a specific path, not the whole layer.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -793,3 +856,4 @@ ladder behind `WISP_RECOVERY_LADDER` and measure.
 | 0024 | The denial rule is enforced by CLASS, not by matching statuses | P6 | ACCEPTED |
 | 0025 | An unsafe rollback escalates instead of proceeding | P6 | ACCEPTED |
 | 0026 | The recovery ladder is a mechanism; the turn loop does not consult it yet | P6 | ACCEPTED |
+| 0027 | Best-effort durability, revisited: the journal's *contiguity* is the precondition | M4 | ACCEPTED (supersedes ADR-0004's reversal condition) |

@@ -926,7 +926,73 @@ killed. The assertions are about post-kill state.
 
 ---
 
-## 16. Change log
+## 16. M4 — Durability as a Correctness Precondition
+
+### 16.1 What it is
+
+ADR-0004 declared every durable write best-effort and stated its own reversal condition: *"Once a phase
+requires durable state as a **correctness** precondition … must become fail-loud. **Revisit at P2.**"*
+P2 landed, and so did P3–P6 — but **the decisive change was M2**, which promoted the journal from
+secondary to primary. That is what turns a permitted silent write failure into a **silently truncated
+session**.
+
+### 16.2 Revisiting the ADR found a live defect
+
+With a `TOOL_RESULT` write lost (seqs `0, 1, 3`):
+
+| Observation | Before M4 |
+|---|---|
+| replayed messages | `["user", "assistant", "assistant"]` — an assistant `tool_calls` block with **no tool reply** |
+| `unknown_events` | **0** — it counts unrecognised event *kinds*, not missing ones |
+| `reconstruction_source()` | **`"journal"`** — journal-first returns the broken transcript, authoritatively |
+
+A strict provider rejects that shape. The failure mode M2 was designed to avoid — returning a *worse*
+session than the blob — arrived by a **second route**, and nothing reported it.
+
+### 16.3 The decision (ADR-0027)
+
+**Do not make the writes fail-loud.** ADR-0004's core concern stands: a turn must not die because a disk
+write failed. Instead make the **invariant checkable**: `Session.gap_detected` (the sequence is
+contiguous), `reconstruction_source()` refuses a gapped journal, `reconstruct()` reports `_gap`.
+
+**Why this shape:** ADR-0004's own precedent is `persist_skipped_total` — a *canary*, not a crash. The
+problem was never that a write could fail; it was that **nothing downstream could tell**. `gap_detected`
+is that signal, and unlike a counter it is a **property of the record itself**.
+
+| Record | Loss costs | Policy |
+|---|---|---|
+| Turn body | the session — now the primary record | best-effort **write**, gap-checked **read** |
+| `PROPOSAL` / `OUTCOME` | the authorization audit — compliance, not correctness | best-effort, canary |
+| `VERDICT` | stage-3a measurement | best-effort, canary |
+| `TASK_GRAPH` / `NODE_TRANSITION` | graph↔transcript divergence | best-effort, canary |
+| `RECOVERY` / `ESCALATION` | resumability — the escalation *is* the state | best-effort, canary; item **M16** |
+
+### 16.4 A bug my own test caught
+
+`_seen_sequences` was first assigned in `replay()` only, so a **directly-constructed `Session`** raised
+`AttributeError` on `gap_detected`. `test_an_empty_session_is_not_a_gap` caught it; it is now a field.
+
+### 16.5 Completion criteria
+
+- [x] ADR-0004's reversal condition addressed — **ADR-0027**, cross-referenced from ADR-0004
+- [x] The records classified by what their loss costs
+- [x] The hole closed **and** pinned — `TestTheGapHole`
+- [x] The check does not reject real sessions — `TestTheInvariantHolds`
+- [x] **Zero new failures** — 129, byte-identical in both directions
+- [ ] `ruff` / `mypy` — not installed
+
+### 16.6 Honest limits
+
+- **The write is still best-effort.** M4 makes loss *detectable*, not impossible. A caller that never
+  consults `gap_detected` is no better off — which is why `reconstruction_source()` consults it.
+- **The `ESCALATION` record's loss is not fully addressed** — item **M16**.
+- **Contiguity assumes a single writer per session.** The session lock serializes writers today, so it
+  holds — but it is now load-bearing.
+
+---
+
+## 17. Change log
+
 
 
 
@@ -990,6 +1056,9 @@ killed. The assertions are about post-kill state.
 | 2026-09-23 | M3 | **Session-journal kill point added** — `test_kp_session_midtool_then_killed` SIGKILLs between a journaled `TOOL_CALL` and its `TOOL_RESULT`, then proves `unresolved_actions()` reports it | 1 test; the file's 4 existing points still pass |
 | 2026-09-23 | M3 | The gap was a **missing kill point in an existing harness**, not a missing harness — all four existing points target Layer B / the workspace | `PHASE_M3_REPORT.md` §15.1 |
 | 2026-09-23 | M3 | **Regression: 129, byte-identical in both directions.** Test-only change; `test_killpoints.py` is not in the baseline's failure set | full suite, stable baseline |
+| 2026-09-23 | M4 | **ADR-0004 revisited → ADR-0027.** Revisiting it found a **live defect**: M2's journal-first returned a provider-invalid transcript when a permitted write was lost | 24 tests |
+| 2026-09-23 | M4 | `Session.gap_detected` + `reconstruction_source()` refuses a gapped journal + `_gap` on the result | `TestTheGapHole`, `TestTheInvariantHolds` |
+| 2026-09-23 | M4 | **Regression: 129, byte-identical in both directions.** Two production files in the session path; changes additive plus one condition | full suite, stable baseline |
 
 ### 10.1 Regression summary
 

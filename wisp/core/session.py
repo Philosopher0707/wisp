@@ -214,6 +214,11 @@ class Session:
     # Dispatched-but-unresolved actions, keyed by canonical action key
     # (migration P1). Insertion-ordered; see `unresolved_actions()`.
     _unresolved_actions: dict[str, dict] = field(default_factory=dict)
+    # Migration M4: every sequence number applied, so a GAP is detectable.
+    # A FIELD, not something `replay` sets: a directly-constructed `Session`
+    # must answer `gap_detected` too, and the first version raised
+    # AttributeError for exactly that case.
+    _seen_sequences: set[int] = field(default_factory=set)
     # The proposal boundary (migration P2). Audit-only records of what was
     # proposed and how validation disposed of it. Never contributes to
     # `messages`; see the PROPOSAL/OUTCOME cases in `apply`.
@@ -247,6 +252,24 @@ class Session:
                        for t in self.node_transitions]
         return replay_transitions(graph, transitions).to_dict()
 
+    @property
+    def gap_detected(self) -> bool:
+        """True when the journal is missing events (migration M4).
+
+        The journal's invariant is a **contiguous** sequence: `_journal_turn_events`
+        stamps events in order with no holes. A hole therefore means a durable
+        write was lost — which ADR-0004 explicitly permits, and which nothing
+        used to notice.
+
+        Contiguity is measured from the minimum present, not from zero, so
+        applying a single event (as tests and `append_events` callers do) is not
+        a gap. `[1, 2, 4]` is; `[1, 2, 3]` and `[0, 1, 2]` are not.
+        """
+        if not self._seen_sequences:
+            return False
+        seqs = sorted(self._seen_sequences)
+        return seqs != list(range(seqs[0], seqs[0] + len(seqs)))
+
     def unresolved_actions(self) -> list[dict]:
         """Actions dispatched but never resolved (migration P1).
 
@@ -266,6 +289,7 @@ class Session:
 
     def apply(self, event: SessionEvent) -> None:
         """Apply a single event to mutate session state."""
+        self._seen_sequences.add(int(event.sequence_num))
         self.sequence_num = max(self.sequence_num, event.sequence_num)
         self.updated_at = event.timestamp
 
@@ -421,6 +445,13 @@ class Session:
         self.sequence_num = 0
         self.turn_count = 0
         self.unknown_events = 0
+        # Migration M4: clear the sequence set so a second replay does not
+        # inherit the first's numbers. ADR-0004 permits a durable write to fail
+        # silently (best-effort), so the journal can legitimately be missing an
+        # event — and before M4 nothing noticed: replay applies what exists, and
+        # a lost TOOL_RESULT yields an assistant tool_calls block with no reply,
+        # i.e. a provider-invalid transcript that reports no error.
+        self._seen_sequences.clear()
         for ev in sorted(events, key=lambda e: e.sequence_num):
             self.apply(ev)
 

@@ -17,10 +17,11 @@
 baseline `83b10af`. See §3 for the commit list.
 
 **The plan is fully traversed.** P0–P7 and P9 delivered their mechanisms; P3 shipped stage 3a only; P8
-is `PARTIAL`. **M2 and M3 are complete** — journal-first reconstruction with blob fallback, and a real-SIGKILL kill
-point for the session journal (`PHASE_M2_REPORT.md`, `PHASE_M3_REPORT.md`). The **durability story P0/P1
-set out is closed end to end**: the journal is written incrementally, replayed journal-first, and proven
-against a real crash in the window that matters.
+is `PARTIAL`. **M2, M3 and M4 are complete** — journal-first reconstruction, a real-SIGKILL kill point, and a
+revisited durability policy (`PHASE_M2_REPORT.md`, `PHASE_M3_REPORT.md`, `PHASE_M4_REPORT.md`). The
+**durability story P0/P1 set out is closed end to end**: written incrementally, replayed journal-first,
+proven against a real crash — and **M4 found a live defect while closing it**, which is what revisiting
+a decision is for.
 
 **M9 is now the sole keystone** — the *authority* story. M11–M15 are five instances of one change
 ("make the live turn loop use the mechanism"), and M9 is what makes it safe to make once rather than
@@ -42,7 +43,7 @@ five times. See `PHASE_P9_REPORT.md` §8.
 | P9 — structured delegation | `PARTIAL` — two wiring fixes landed; five structural items deferred | `PHASE_P9_REPORT.md` |
 
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings log F1–F17, change log).
-**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (ADR-0001 … ADR-0026).
+**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (ADR-0001 … ADR-0027).
 
 ### 0.0.4 The migration's central finding
 
@@ -846,6 +847,7 @@ the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_P9_REPORT.md` | Structured delegation — **and the migration's closing summary (§8)** |
 | `PHASE_M2_REPORT.md` | Journal-first reconstruction with blob fallback |
 | `PHASE_M3_REPORT.md` | Killpoint integration for the session journal |
+| `PHASE_M4_REPORT.md` | Durability as a correctness precondition (ADR-0027) |
 
 **Guards added by the migration:**
 
@@ -861,6 +863,7 @@ the user's pre-existing WIP (§8) plus foreign-session test files.
 | `tests/test_acceptance_verdict.py` | the verdict algebra; the floor guard is retained, not replaced; stage 3a does not gate |
 | `tests/test_task_graph_materialization.py` | readiness is **stored**, not recomputed; one transition API (AST, in-module and tree-wide); the graph is a projection of the log |
 | `tests/test_graph_mutation.py` | the extended vocabulary is a superset (ratchet); expansion is acyclic by construction; invalidation cascades; supersession retains history; the growth budget is **enforced**; insertion order does not change the graph |
+| `tests/test_durability_preconditions.py` | a **gapped** journal is a provider-invalid transcript and is refused; contiguity semantics; **a real turn satisfies the invariant** (or the check would reject every session) |
 | `tests/test_session_reconstruction.py` | a pre-P0 session is **not truncated** (the hazard); the journal carries the audit records the blob never had; both paths are shape-compatible with the blob; **a tripwire asserting the five consumers are still un-migrated** |
 | `tests/test_structured_delegation.py` | a child gets exactly its declared tools; widening is refused; `["all"]` against an unbounded parent is refused rather than guessed; the executor authorizes as the principal it was given; **a tripwire asserting the spawn site is still unwired** |
 | `tests/test_context_trust.py` | every item is tagged; T1–T4 enforced structurally; assembly is deterministic and order-independent; truncation is recorded **as data**; an injection payload cannot escape its fence |
