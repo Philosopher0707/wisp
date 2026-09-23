@@ -551,6 +551,7 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `e52333f` | `feat(m9):` the execution view is faithful; the graph is a shape, not a payload — 11 tests |
 | `bed9f7e` | `feat(m15):` a subagent authorizes as a narrowed child — 22 tests |
 | `e502391` | `fix(m14):` classify prompt sections, and close a live T1 violation — 32 tests |
+| `43015ea` | `fix(m12):` bridge the failure path to the taxonomy; engine refusals are denials — 33 tests |
 | `1229b87` | `docs(m16):` correct the commit counts and complete this table |
 | `ed9fee6` | `docs:` stop quoting a commit count that goes stale on every commit |
 
