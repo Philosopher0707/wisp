@@ -13,7 +13,7 @@
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is the M16 commit** · 17 commits on top of the Phase 10 baseline `83b10af` · branch `main`.
+**HEAD is `a055b39`** · 18 commits on top of the Phase 10 baseline `83b10af` · branch `main`.
 **557 migration tests pass.** The full-suite failure set is **129, byte-identical** to the stable
 baseline (see §11).
 
@@ -501,7 +501,7 @@ dissolved under execution, four of them mine.
 
 ## 3. Commits
 
-`83b10af` was the Phase 9/10 baseline. **16 commits** sit on top of it, all on `main`:
+`83b10af` was the Phase 9/10 baseline. **18 commits** sit on top of it, all on `main`:
 
 | Commit | Scope |
 |---|---|
@@ -521,6 +521,8 @@ dissolved under execution, four of them mine.
 | `8e891e8` | `feat(m2):` journal-first reconstruction with blob fallback — 19 tests |
 | `2c5bbbb` | `test(m3):` drive `unresolved_actions()` under a real SIGKILL |
 | `02c756c` | `feat(m4):` revisit ADR-0004 — and close a live defect it led to — 24 tests |
+| `d80f582` | `docs:` compaction handoff — refresh `CONTEXT.md`, add the workspace `MEMORY.md` |
+| `a055b39` | `feat(m16):` the escalation is state, not audit — 40 tests, and **found a live read-side defect** |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
@@ -921,8 +923,8 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `WISP_CONTEXT_ARCHITECTURE.md` | Trust tags, `ContextRequest` → `Context`, graph context |
 | `WISP_SUBAGENT_ARCHITECTURE.md` | Structured delegation, transactional effects, one-graph |
 | `WISP_MIGRATION_PLAN.md` | **The plan of record** — phases P0–P9 with prerequisites, tests, risk, rollback |
-| `WISP_MIGRATION_STATUS.md` | **The ledger** — phase status, findings F1–F17, change log, regression summary |
-| `WISP_ARCHITECTURE_DECISIONS.md` | **ADR-0001 … ADR-0018** |
+| `WISP_MIGRATION_STATUS.md` | **The ledger** — phase status, findings **F1–F24**, change log, regression summary |
+| `WISP_ARCHITECTURE_DECISIONS.md` | **ADR-0001 … ADR-0028** |
 | `PHASE_P0_REPORT.md` | Wire the orphaned durable layer |
 | `PHASE_P1_REPORT.md` | Journal turn transitions |
 | `PHASE_P2_REPORT.md` | Introduce the proposal boundary |
@@ -937,9 +939,6 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_M3_REPORT.md` | Killpoint integration for the session journal |
 | `PHASE_M4_REPORT.md` | Durability as a correctness precondition (ADR-0027) |
 | `PHASE_M16_REPORT.md` | The escalation is state, not audit (ADR-0028) |
-| `PHASE_M2_REPORT.md` | Journal-first reconstruction with blob fallback |
-| `PHASE_M3_REPORT.md` | Killpoint integration for the session journal |
-| `PHASE_M4_REPORT.md` | Durability as a correctness precondition (ADR-0027) |
 
 **Guards added by the migration:**
 
