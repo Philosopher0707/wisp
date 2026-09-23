@@ -597,9 +597,12 @@ That also settles the collection-order hypothesis: adding the file changes nothi
 **deleted between sessions**, so the P6 set no longer exists to diff against. P7 is **proven** to
 contribute nothing; the 129-vs-128 difference lies outside P7.
 
-**Method fix:** the baseline now lives **in the repo** and is the **intersection of two runs** rather
-than one run's output — a test failing in both is real, one appearing in only one is flaky. See
-`.workbuddy-ai/memory/README.md`.
+**Method fix:** the baseline is now the **intersection of two runs** rather than one run's output — a
+test failing in both is real, one appearing in only one is flaky.
+
+> **Where it lives:** `.workbuddy-ai/memory/baseline-failures-stable.txt`. That path is **agent
+> workspace data, not repo source** — `.workbuddy-ai/` is untracked and nothing under `wisp/` imports
+> it, so it will not appear in `git log`. Documented in `.workbuddy-ai/memory/README.md`.
 
 ### 9.8 The live loop was not wired (item M13)
 
