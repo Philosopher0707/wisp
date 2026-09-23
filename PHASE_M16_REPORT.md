@@ -168,6 +168,36 @@ Verified against the **stable baseline** (`.workbuddy-ai/memory/baseline-failure
 | New vs the stable baseline | **none** (`comm -13` empty) |
 | Absent vs the stable baseline | **none** (`comm -23` empty) |
 
+### 7.1 A post-commit confirmation run read 130 — and it is F17
+
+Re-running the suite after the phase was committed (the tree had changed only in documentation since
+the clean run) read **130**, with exactly one "new" failure:
+
+```
+FAILED tests/test_speculative_search.py::TestOracle::test_smallest_diff_wins_ties_broken_by_speed
+```
+
+That is **F17** — the flaky test documented in `WISP_MIGRATION_STATUS.md`, `CONTEXT.md` §7 and
+`.workbuddy-ai/memory/README.md`, now seen for the third time. Established rather than assumed:
+
+| Check | Result |
+|---|---|
+| in `baseline-failures-stable.txt`? | **no** — correctly absent; it fails in one run, not both |
+| isolation run, 5× | **5/5 pass** |
+| does it read a file changed since the clean run? | **no** |
+| do the doc-reading tests still assert? | **yes** — `test_doc_drift.py` 12 passed, **no skips** |
+
+The last row is the one that mattered to check. Six test files name a changed document, and
+`test_doc_drift.py` has a `pytest.skip` path (`"AGENTS.md no longer states a test-file count"`) that a
+careless doc edit could have converted an assertion into. It did not: the regex requires a three-digit
+count and the test passes without skipping. Two of the six name a doc only in a docstring, and
+`test_boot_context.py` writes its own `AGENTS.md` into a temp workspace.
+
+So the `+1` is not attributable to this phase, and this is the method working as designed rather than
+failing: a single run's count is not a baseline, and the stable set is the intersection of two.
+
+### 7.2 What was changed
+
 This phase modified **three production files** in the session and runtime paths. The changes are:
 
 - **additive to the returned shape** (`_journal`, `_journal_records_at_risk` on both paths) — every
