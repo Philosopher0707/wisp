@@ -40,6 +40,7 @@ Guidance for AI coding agents working in the Wisp codebase.
 | `wisp/tools/primitives.py` | Thin harness surface | `exec_sandbox` / `fs_mutate` / `git_checkpoint` (pydantic args, delegate to bash/filesystem/checkpoints); `PRIMITIVE_SCHEMAS`; core opts in via `thin_tools` config (schemas + prompt menu + dispatcher) |
 | `wisp/core/verification.py` | Completion gate | `VerificationFloorGuard`: blocks finish until exit-0 postdates last mutation or grind floor (`min_turns` + nudges) exhausts; `HARNESS_REJECTION` text; `resolved()` triggers auto-capture. **Also projects itself onto the acceptance model** via `floor_guard_criteria/evidence/verdict()` — read-only; the guard's own behaviour is unchanged |
 | `wisp/core/acceptance.py` | Acceptance verdicts (P3, stage 3a) | `Verdict` (`PASS`/`FAIL`/`INCONCLUSIVE`), `CriterionKind`, `AcceptanceCriteria`, `Evidence` (content-addressed, with `producer` + `observations`), `CompletionVerdict`, `evaluate()`, `invalidate()`, `route_for()`. **Records; does not gate** — routing is *derived* from the verdict so the graph vocabulary stays an output, not a competitor |
+| `wisp/core/context_trust.py` | Context trust boundary (P8) | `TrustTag` (SYSTEM/OPERATOR/REPOSITORY/TOOL_OUTPUT/EXTERNAL), `Influence`, `may_influence()` (**the single authority** for T3), `ContextItem` (tag + **required** `Provenance`), `assemble()` → `Context` with a **structured** `dropped` list. T1–T4 enforced structurally; untrusted content is always fenced as `<<UNTRUSTED:TAG source=…>>`. **Defaults to tagging-only**; nothing on the live path produces tagged items yet (M14) |
 | `wisp/core/stagnation.py` | Stagnation detection (P7) | `ProgressSignal` (criteria satisfied / failing set / artifact hashes / completed nodes — the four inputs that already existed and were unconnected), `StagnationDetector` (**reuses** `core/graph/loop.py::OscillationTrap` — AST-pinned that it does not define its own), `route_to_recovery()`, `may_report_goal_met()`. Reads `config.graph_oscillation_guard`, which was **never read before P7**. **The turn loop does not construct one yet** (M13) |
 | `wisp/core/recovery.py` | Recovery ladder (P6) | `FailureClass` (closed, 10), `RecoveryRung` (7), `LEGAL_RUNGS` / total `FORBIDDEN_RUNGS`, `classify_failure()` (delegates to `classify_result`), `BudgetGovernor`, `RecoveryLadder`, `HumanIntervention` (durable, resumable), `plan_rollback()` — the first caller of `runs/compensation.py`'s declarations. **Denials never retry, by class** (ADR-0024). **The turn loop does not consult it yet** (M12) |
 | `wisp/core/task_graph.py` | Materialized task graph (P4) + runtime mutation (P5) | `TaskNode` / `TaskGraph` (with **stored** `ready`), `TaskNodeState` (14 states — a **superset** of `NodeStatus`), `NodeTransition`, `LEGAL_NODE_TRANSITIONS`, `build_turn_graph()`, `materialize()`, `apply_transition()`, `replay_transitions()`, `divergences()`. P5 adds `create_node()` / `expand()` / `invalidate()` (transitive cascade) / `supersede()` + an enforced `GraphGrowthBudget`. **Every mutation is a pure function** — a mutated-in-place graph cannot be replayed. Journals through `UnifiedStore`, so the graph is a **projection of the log** (ADRs 0019–0023) |
@@ -162,13 +163,14 @@ python3 -m pytest tests/test_contracts_*.py tests/test_auth_*.py tests/test_runs
   tests/test_policy_*.py tests/test_trace_*.py tests/test_eval_*.py \
   tests/test_task_*.py tests/test_release_*.py tests/test_no_bypass.py -q
 
-# Durable record + proposal boundary + verdicts + task graph (migration P0-P7)
+# Durable record + proposal boundary + verdicts + task graph (migration P0-P8)
 python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_incremental.py \
   tests/test_action_idempotency_key.py tests/test_proposal_boundary_records.py \
   tests/test_proposal_boundary_no_bypass.py tests/test_verdict_layer_recorded.py \
   tests/test_gate_order_corpus.py tests/test_acceptance_verdict.py \
   tests/test_task_graph_materialization.py tests/test_graph_mutation.py \
-  tests/test_recovery_ladder.py tests/test_stagnation_detection.py -q
+  tests/test_recovery_ladder.py tests/test_stagnation_detection.py \
+  tests/test_context_trust.py -q
 ```
 
 ### Reachability is mandatory for new durable code

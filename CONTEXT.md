@@ -32,7 +32,7 @@ migration keeps finding.
 | P5 — runtime graph mutation | `COMPLETE` (item 5 deferred) | `PHASE_P5_REPORT.md` |
 | P6 — recovery ladder | `COMPLETE` (live-loop wiring deferred) | `PHASE_P6_REPORT.md` |
 | P7 — stagnation detection | `COMPLETE` (live-loop wiring deferred) | `PHASE_P7_REPORT.md` |
-| P8 — context as a first-class subsystem | `READY TO START` | — |
+| P8 — context as a first-class subsystem | `PARTIAL` — trust boundary complete; items 3–6 deferred | `PHASE_P8_REPORT.md` |
 | P9 | `NOT STARTED` | — |
 
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings log F1–F17, change log).
@@ -779,6 +779,7 @@ that work, and makes unrelated failures look like yours. Finding F12.
 | **M7** | `change_tracker.py` not yet wired into evidence (P3 plan item 7) | **OPEN** — deferred with 3b. |
 | **M8** | `multi_agent/dag.py` not yet retired into `wisp/graph/` (P4 plan item 5) | **OPEN — deferred deliberately.** It is on the live `fanout` path, and `test_13j1_fanout_contract_repair.py` is already red for environmental reasons, so a regression caused by the retirement would be indistinguishable from one already there. Needs a green fanout suite first. |
 | **M9** | **The message list is not yet a projection of the graph** (P4's stated risk mitigation) | **OPEN** — P5 work. P4 *enables* it by journalling both from one log; it does not implement it. |
+| **M14** | **The context trust boundary has no production caller** | **OPEN** — `ContextAssembler` does not construct `ContextItem`s, so no context is actually tagged in production. Shares M9/M2 as prerequisite with M11–M13. |
 | **M13** | **The stagnation detector is not constructed by the turn loop** | **OPEN** — P7 uses the trap and reads the flag; nothing on the live path builds a detector. Shares M9/M2 as prerequisite with M11 and M12. |
 | **M12** | **The recovery ladder is not consulted by the turn loop** | **OPEN** — P6 shipped the ladder as a mechanism; live recovery behaviour is unchanged. Rewiring it alters the least-covered path. ADR-0026. |
 | **M11** | **The graph does not drive execution** | **OPEN** — P5's item 5, deferred. The turn loop executes tools directly; the graph is a record, not a driver. Making it drive is a change of control and must land **with** M9. |
@@ -834,6 +835,7 @@ the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_P5_REPORT.md` | Runtime graph mutation |
 | `PHASE_P6_REPORT.md` | Recovery ladder |
 | `PHASE_P7_REPORT.md` | Stagnation detection |
+| `PHASE_P8_REPORT.md` | Context as a first-class subsystem |
 
 **Guards added by the migration:**
 
@@ -849,6 +851,7 @@ the user's pre-existing WIP (§8) plus foreign-session test files.
 | `tests/test_acceptance_verdict.py` | the verdict algebra; the floor guard is retained, not replaced; stage 3a does not gate |
 | `tests/test_task_graph_materialization.py` | readiness is **stored**, not recomputed; one transition API (AST, in-module and tree-wide); the graph is a projection of the log |
 | `tests/test_graph_mutation.py` | the extended vocabulary is a superset (ratchet); expansion is acyclic by construction; invalidation cascades; supersession retains history; the growth budget is **enforced**; insertion order does not change the graph |
+| `tests/test_context_trust.py` | every item is tagged; T1–T4 enforced structurally; assembly is deterministic and order-independent; truncation is recorded **as data**; an injection payload cannot escape its fence |
 | `tests/test_stagnation_detection.py` | the detector **reuses** `OscillationTrap` (AST-pinned); a productive task is never flagged; stagnation routes to a **replan, not a retry**; a stagnated goal cannot report `GOAL_MET`; `graph_oscillation_guard` is finally read |
 | `tests/test_recovery_ladder.py` | the taxonomy is closed at 10; **denials never retry** (by class, over the canonical vocabulary); escalation is terminal and resumable; an unsafe rollback escalates; every rung cites evidence; budgets are enforced |
 
