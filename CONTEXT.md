@@ -13,7 +13,8 @@
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is `73c2bbc`** · 21 commits on top of the Phase 10 baseline `83b10af` · branch `main`.
+**HEAD is `1229b87`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
+on top of it and is the authority for the count.
 **557 migration tests pass.** The full-suite failure set is **129, byte-identical** to the stable
 baseline (see §11).
 
@@ -501,7 +502,9 @@ dissolved under execution, four of them mine.
 
 ## 3. Commits
 
-`83b10af` was the Phase 9/10 baseline. **21 commits** sit on top of it, all on `main`:
+`83b10af` was the Phase 9/10 baseline. Every commit on top of it, all on `main`.
+**This table is the authority for the count** — verify with `git log 83b10af..HEAD`, rather than
+trusting a number written in prose that goes stale on the next commit:
 
 | Commit | Scope |
 |---|---|
