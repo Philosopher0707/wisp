@@ -89,6 +89,22 @@ Three rules that are easy to get wrong:
   because a journal or span write failed. The loss is visible as a gap in the session's sequence
   numbers. See `WISP_ARCHITECTURE_DECISIONS.md` ADR-0004.
 
+### Reading a session: journal-first, with two fallbacks
+
+`SessionRepository.reconstruct(sid)` is the journal-first reader, shape-compatible with
+`UnifiedStore.load_session` (which five consumers still use — a tripwire asserts it). It falls back to the
+blob in **two** cases, and both matter:
+
+1. **No turn body in the journal** — every pre-P0 session. Replaying one yields `[{role: "user"}]`, which
+   is a *non-empty* list, so the obvious check `if replayed.messages:` truncates the session to one
+   message.
+2. **A gap in the sequence** (`Session.gap_detected`) — ADR-0004 permits a durable write to fail
+   silently, and a lost `TOOL_RESULT` yields an assistant `tool_calls` block with **no reply**, i.e. a
+   provider-invalid transcript. ADR-0027.
+
+`reconstruction_source(sid)` returns `journal` | `blob` | `none` — use it to see which path answered.
+`reconstruct()` also reports `_source` and `_gap` on the result.
+
 ### The recovery ladder is not consulted by the turn loop
 
 `wisp/core/recovery.py` is complete and tested, but the live turn path's recovery behaviour is

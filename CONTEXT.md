@@ -11,39 +11,72 @@
 
 ---
 
-## 0. STATUS — Persistent Graph Loop migration: **all nine phases delivered**
+## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**Phase 10 and migration P0–P9 are committed.** `HEAD` is **`3d39ff3`**+, on top of the Phase 10
-baseline `83b10af`. See §3 for the commit list.
-
-**The plan is fully traversed.** P0–P7 and P9 delivered their mechanisms; P3 shipped stage 3a only; P8
-is `PARTIAL`. **M2, M3 and M4 are complete** — journal-first reconstruction, a real-SIGKILL kill point, and a
-revisited durability policy (`PHASE_M2_REPORT.md`, `PHASE_M3_REPORT.md`, `PHASE_M4_REPORT.md`). The
-**durability story P0/P1 set out is closed end to end**: written incrementally, replayed journal-first,
-proven against a real crash — and **M4 found a live defect while closing it**, which is what revisiting
-a decision is for.
-
-**M9 is now the sole keystone** — the *authority* story. M11–M15 are five instances of one change
-("make the live turn loop use the mechanism"), and M9 is what makes it safe to make once rather than
-five times. See `PHASE_P9_REPORT.md` §8.
-
-**The Persistent Graph Loop migration is underway** — `WISP_MIGRATION_PLAN.md` defines phases P0–P9.
+**HEAD is `02c756c`** · 16 commits on top of the Phase 10 baseline `83b10af` · branch `main`.
+**517 migration tests pass.** The full-suite failure set is **129, byte-identical** to the stable
+baseline (see §11).
 
 | Phase | Status | Report |
 |---|---|---|
 | P0 — wire the orphaned durable layer | `COMPLETE` | `PHASE_P0_REPORT.md` |
 | P1 — journal turn transitions | `COMPLETE` | `PHASE_P1_REPORT.md` |
-| P2 — introduce the proposal boundary | `COMPLETE` | `PHASE_P2_REPORT.md` |
-| P3 — independent verification | `COMPLETE — stage 3a only` | `PHASE_P3_REPORT.md` |
+| P2 — the proposal boundary | `COMPLETE` | `PHASE_P2_REPORT.md` |
+| P3 — independent verification | `COMPLETE` — **stage 3a only** | `PHASE_P3_REPORT.md` |
 | P4 — task graph from durable state | `COMPLETE` (item 5 deferred) | `PHASE_P4_REPORT.md` |
 | P5 — runtime graph mutation | `COMPLETE` (item 5 deferred) | `PHASE_P5_REPORT.md` |
 | P6 — recovery ladder | `COMPLETE` (live-loop wiring deferred) | `PHASE_P6_REPORT.md` |
 | P7 — stagnation detection | `COMPLETE` (live-loop wiring deferred) | `PHASE_P7_REPORT.md` |
-| P8 — context as a first-class subsystem | `PARTIAL` — trust boundary complete; items 3–6 deferred | `PHASE_P8_REPORT.md` |
-| P9 — structured delegation | `PARTIAL` — two wiring fixes landed; five structural items deferred | `PHASE_P9_REPORT.md` |
+| P8 — context as a first-class subsystem | **`PARTIAL`** — trust boundary complete; items 3–6 deferred | `PHASE_P8_REPORT.md` |
+| P9 — structured delegation | **`PARTIAL`** — two wiring fixes; five structural items deferred | `PHASE_P9_REPORT.md` |
+| **M2** — journal-first reconstruction | `COMPLETE` (consumer adoption asserted) | `PHASE_M2_REPORT.md` |
+| **M3** — killpoint integration | `COMPLETE` (one window) | `PHASE_M3_REPORT.md` |
+| **M4** — ADR-0004 revisited | `COMPLETE` — **found a live defect** | `PHASE_M4_REPORT.md` |
 
-**Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings log F1–F17, change log).
-**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (ADR-0001 … ADR-0027).
+**Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings F1–F23, change log).
+**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0027**).
+
+### 0.0.1 What is actually delivered, and what is not
+
+The migration built **eight mechanisms**, each tested and reachable from its package:
+
+`core/proposal.py` · `core/acceptance.py` · `core/task_graph.py` · `core/recovery.py` ·
+`core/stagnation.py` · `core/context_trust.py` · `auth/principal.child_principal()` ·
+`SessionRepository.reconstruct()`
+
+**None is driven by the live turn loop.** That is the honest summary, and it is not the same thing as a
+working Persistent Graph Loop. The plan's own objective — *"the graph changes during execution"* — is met
+at the **mechanism** level and not at the **integration** level.
+
+### 0.0.2 The single remaining keystone: **M9**
+
+**M9 — the message list as a projection of the graph.** Five items are blocked on it, and they are all
+the *same* change ("make the live turn loop use the mechanism"):
+
+| Item | What it needs |
+|---|---|
+| **M11** | the graph drives execution instead of merely recording it |
+| **M12** | the recovery ladder is consulted on the failure path |
+| **M13** | the stagnation detector is constructed per turn |
+| **M14** | context items are tagged in production |
+| **M15** | the subagent spawn site passes a `child_principal` |
+
+M9 is what makes that change safe to make **once** rather than five times. **M9 was deliberately not
+attempted in this session**: it inverts the dependency between the message list and the graph, it is a
+change of *control* on the least-observable path, and a half-finished inversion would be worse than none.
+It needs its own session.
+
+### 0.0.3 Also open
+
+| Item | Nature |
+|---|---|
+| **M1** | P3 stage 3b (enable the acceptance gate) — **blocked on a working tool path** (`jsonschema`) |
+| **M16** | the `ESCALATION` record's loss — the one row in ADR-0027's classification where "best-effort" is arguably wrong |
+| **M8** | retire `multi_agent/dag.py` — needs a **green** fanout suite first |
+| **M5** | foreground-turn `RunRecord` lifecycle |
+| **M6** | `PolicyDecisionEnvelope` is still producer-less and consumer-less |
+| **M7** | `change_tracker.py` not wired into evidence |
+| **M10** | the materialized graph is a lower bound on iterations — **by design** |
 
 ### 0.0.4 The migration's central finding
 
@@ -461,25 +494,33 @@ dissolved under execution, four of them mine.
 
 ## 3. Commits
 
-`83b10af` was the Phase 9/10 baseline. Four commits sit on top of it:
+`83b10af` was the Phase 9/10 baseline. **16 commits** sit on top of it, all on `main`:
 
 | Commit | Scope |
 |---|---|
-| `cfe6f0f` | `docs:` the Persistent Graph Loop audit (9 documents), migration plan, ledger, decision log, P0–P2 reports — 14 files |
-| `744d081` | `feat:` P0 + P1 + P2 implementation and tests — 17 files, 119 new tests |
+| `cfe6f0f` | `docs:` the Persistent Graph Loop audit (9 documents), migration plan, ledger, ADRs, P0–P2 reports — 14 files |
+| `744d081` | `feat:` P0 + P1 + P2 implementation and tests — 17 files, 119 tests |
 | `385e552` | `docs:` P0–P2 wiring recorded in `AGENTS.md` + the ledger |
-| `b17a927` | `feat(p3):` acceptance criteria, evidence, verdicts (stage 3a) — 11 files, 60 new tests |
-| `98bb8f9` | `docs:` hand off the migration in `CONTEXT.md` — path, status, environment, open items |
-| `e56fc6e` | `feat(p4):` materialize a task graph from durable state — 35 new tests |
-| `e2da7f0` | `feat(p5):` runtime graph mutation — 49 new tests |
+| `b17a927` | `feat(p3):` acceptance criteria, evidence, verdicts (stage 3a) — 60 tests |
+| `98bb8f9` | `docs:` hand off the migration in `CONTEXT.md` |
+| `e56fc6e` | `feat(p4):` materialize a task graph from durable state — 35 tests |
+| `e2da7f0` | `feat(p5):` runtime graph mutation — 49 tests |
 | `e47118a` | `docs:` correct `CONTEXT.md` — Phase 10's other changes are **not** committed |
-| `e133a95` | `feat(p6):` recovery ladder — 69 new tests |
+| `e133a95` | `feat(p6):` recovery ladder — 69 tests |
+| `3d39ff3` | `feat(p7):` stagnation detection — 44 tests |
+| `8dcd372` | `docs(p7):` the baseline failure set is agent workspace data, not repo source |
+| `e003814` | `feat(p8):` the context trust boundary — 54 tests |
+| `e3e87d8` | `feat(p9):` wire the delegation authority; fix a latent `AttributeError` — 25 tests |
+| `8e891e8` | `feat(m2):` journal-first reconstruction with blob fallback — 19 tests |
+| `2c5bbbb` | `test(m3):` drive `unresolved_actions()` under a real SIGKILL |
+| `02c756c` | `feat(m4):` revisit ADR-0004 — and close a live defect it led to — 24 tests |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
-> `wisp/tool_executor.py` and `AGENTS.md` carried **pre-existing uncommitted work** from before the
-> migration. It is included in `744d081`/`385e552` because it is interleaved with the migration's
-> changes in the same hunks; both commit bodies say so. It could not be separated without
-> reverse-engineering changes the migration did not make.
+> `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
+> `wisp/auth/__init__.py`, `wisp/multi_agent/task.py` and `AGENTS.md` carried **pre-existing uncommitted
+> work** from before the migration. It is included because it is interleaved with the migration's changes
+> in the same hunks; the commit bodies say so. It could not be separated without reverse-engineering
+> changes the migration did not make.
 
 ### What `83b10af` itself contained (Phase 9/10)
 
@@ -615,25 +656,34 @@ This is the **fifth** instance of the §10 pattern: a conclusion drawn from *rea
 
 **Measured on the full `tests/` tree with `--continue-on-collection-errors`:**
 
-| Run | Failures + errors |
-|---|---|
-| `83b10af` (HEAD) | **131** |
-| after P0 / P1 / P2 / P3 | **128** — failure sets `diff -q`-identical |
+| Run | Count | Note |
+|---|---|---|
+| `83b10af` (baseline) | **131** | |
+| P0 – P6 (single runs each) | **128** | consistent across four measurements |
+| P7 run 1 / run 2 | 129 / **130** | identical code — **the count is NOT stable** |
+| P7 without its own test file | **129** | failure set byte-identical to run 1 → **P7 contributes zero** |
+| P8, P9, M2, M3, M4 | **129** | each byte-identical to the stable baseline in **both** directions |
 
-Phase 10's much smaller figure (7 failed / 5 errors, §0) was measured with foreign-WIP files
-`--ignore`d; the numbers above are the full tree and are the ones to compare against.
+**The stable set is 129** — the intersection of two runs. A single run's count is not a baseline; see
+§11 for the method.
 
-**The residual 128 are dominated by two missing dependencies:** `jsonschema` (every tool-executing test
-— `test_tools.py`, `test_salvage_gate.py`, `test_verification_loop.py`, `test_core_stateless.py`,
+Phase 10's much smaller figure (7 failed / 5 errors) was measured with foreign-WIP files `--ignore`d.
+The numbers above are the full tree and are the ones to compare against.
+
+**The residual 129 are dominated by two missing dependencies:** `jsonschema` (every tool-executing test —
+`test_tools.py`, `test_salvage_gate.py`, `test_verification_loop.py`, `test_core_stateless.py`,
 `test_policy_modes.py`, `test_runtime_tool_history.py`, `test_no_bypass.py`, …) and `httpx` (11 starlette
-`TestClient` files, including `test_server_background_routes.py`). Plus `test_13j1_fanout_contract_repair.py`
-(13), `test_policy_cli.py` (5), `test_13h2_determinism.py` (6, scripted-stream timing).
+`TestClient` files, including `test_server_background_routes.py`). Plus
+`test_13j1_fanout_contract_repair.py` (13), `test_policy_cli.py` (5), `test_13h2_determinism.py` (6,
+scripted-stream timing), and the 17 collection `ERROR`s from foreign-session WIP files.
 
-**One known-flaky test — the count varies ±1 run-to-run because of it:**
+**Three known flaky / order-dependent tests — the count moves ±1 because of them:**
 
-| Flaky test | Evidence |
-|---|---|
-| `tests/test_speculative_search.py::TestOracle::test_smallest_diff_wins_ties_broken_by_speed` | Passes 5/5 in isolation and 3/3 at file level; appeared once in a 129-failure run and was **absent from an immediate rerun of the identical tree**. Zero coupling to the migration. Finding F17. |
+| Test | Behaviour | Finding |
+|---|---|---|
+| `tests/test_cli_surface_e2e.py::TestGroup3Headless::test_print_blackhole_server_falls_back` | depends on a **network timeout**; appears in one run, not the next | F20 |
+| `tests/test_sandbox_fallback_contract.py::test_fallback_host_warns_at_tool_layer` | fails in the full run, **passes 5/5 in isolation** | §7 (Phase 10) |
+| `tests/test_speculative_search.py::TestOracle::test_smallest_diff_wins_ties_broken_by_speed` | appeared once, **absent on an immediate rerun of the identical tree** | F17 |
 
 ---
 
@@ -730,23 +780,51 @@ environmental set in §7. Never quote "the suite passes" — quote the set.
 **On the full `tests/` tree the number is 128** (§7) — Phase 10's smaller figure was measured with
 foreign-WIP files `--ignore`d. Compare like with like.
 
-### Migration suites (P0–P3a) — 179 tests
+### Migration suites — 517 tests
 
 ```bash
 env -u PYTHONPATH .venv/bin/python -m pytest \
   tests/test_durable_layer_reachable.py tests/test_turn_journal_incremental.py \
   tests/test_action_idempotency_key.py tests/test_proposal_boundary_records.py \
   tests/test_proposal_boundary_no_bypass.py tests/test_verdict_layer_recorded.py \
-  tests/test_gate_order_corpus.py tests/test_acceptance_verdict.py -q
+  tests/test_gate_order_corpus.py tests/test_acceptance_verdict.py \
+  tests/test_task_graph_materialization.py tests/test_graph_mutation.py \
+  tests/test_recovery_ladder.py tests/test_stagnation_detection.py \
+  tests/test_context_trust.py tests/test_structured_delegation.py \
+  tests/test_session_reconstruction.py tests/test_durability_preconditions.py \
+  tests/reliability/test_killpoints.py -q
 ```
+
+### The regression method — read this before changing anything
+
+**A single-run failure count is NOT a baseline.** Two consecutive runs on identical code read **129** and
+**130**. Use the **stable set**, which is the *intersection of two runs*:
+
+```bash
+env -u PYTHONPATH .venv/bin/python -m pytest tests/ -q -p no:cacheprovider --no-header \
+  --continue-on-collection-errors --tb=no 2>&1 \
+  | grep -E "^(FAILED|ERROR)" | sort > /tmp/after.txt
+
+comm -13 .workbuddy-ai/memory/baseline-failures-stable.txt /tmp/after.txt   # NEW failures
+comm -23 .workbuddy-ai/memory/baseline-failures-stable.txt /tmp/after.txt   # now PASSING
+```
+
+Both directions must be empty. The baseline lives **in the repo** because `/tmp` did not survive a
+reboot and lost P0–P6's.
+
+**Known flaky / order-dependent — the count moves ±1 because of these:**
+
+| Test | Behaviour |
+|---|---|
+| `tests/test_cli_surface_e2e.py::TestGroup3Headless::test_print_blackhole_server_falls_back` | network timeout; appears in one run, not the next |
+| `tests/test_sandbox_fallback_contract.py::test_fallback_host_warns_at_tool_layer` | fails in the full run, **passes 5/5 in isolation** |
+| `tests/test_speculative_search.py::TestOracle::test_smallest_diff_wins_ties_broken_by_speed` | appeared once, absent on an immediate rerun (F17) |
 
 ### Comparing against a baseline — do NOT use `git stash`
 
-The tree has pre-existing uncommitted work in the same files. Copy the files you are about to edit to
-a path **outside** the repo first, then compare. A stash-based baseline reverts them to HEAD, discards
-that work, and makes unrelated failures look like yours. Finding F12.
-
----
+The tree has **pre-existing uncommitted work in the same files**. Stashing only the files you touched
+reverts them to HEAD, discards that work, and makes unrelated failures look like yours (F12). Snapshot
+the files to a path **outside the repo** first, then compare.
 
 ## 12. Open items
 
@@ -773,28 +851,31 @@ that work, and makes unrelated failures look like yours. Finding F12.
 | R8 | 3 untracked test files abort collection | User's WIP |
 | R9 | `wisp/core/graph/__init__.py` modified, uncommitted | User's pre-existing edit |
 
-### Migration open items (P0–P3a)
+### Migration open items — current
+
+**M9 is the keystone.** M11–M15 are all the same change and are all blocked on it.
 
 | # | Item | Nature |
 |---|---|---|
-| **M1** | **Stage 3b of the verification gate** — enable the acceptance gate behind a flag | **BLOCKED on a measurement**, which is itself blocked on a working tool path (`jsonschema`). The plan requires the `INCONCLUSIVE` rate be reported *before* enabling. ADR-0016. |
-| **M2** | **Journal-first reconstruction with blob fallback** | **OPEN.** Five production consumers read the session *blob* (`__main__.py`, `supervisor.py`, `sdk.py`, `acp_session.py`, `server/routes/sessions.py`). Hazard: **pre-P0 sessions have no turn body in the log**, so a naive switch reconstructs *worse* than the blob. `PHASE_P1_REPORT.md` §7.1. |
-| **M3** | **Killpoint integration** — `tests/reliability/test_killpoints.py` exists; the journal now supports it | **OPEN.** The *detection* primitive is implemented and tested (`Session.unresolved_actions()`); the harness integration is not. `PHASE_P1_REPORT.md` §7.2. |
-| **M4** | **Revisit ADR-0004 for the proposal/verdict path** | **OPEN.** Durable writes are best-effort by design; once an authorization verdict or a completion verdict is recorded, silently losing one is closer to a **correctness** precondition than an observability one. |
-| **M5** | **Foreground-turn `RunRecord` lifecycle** (P0 plan item 6, deferred) | **OPEN.** The *mechanism* is reachable and proven end-to-end for background runs; applying it to foreground turns is P1's stated remainder. |
-| **M6** | `PolicyDecisionEnvelope` (`contracts/policy.py`) is still **producer-less and consumer-less** | **OPEN** — the last unwired contract. `ToolRequest`/`ToolResult` were wired in P2. |
-| **M7** | `change_tracker.py` not yet wired into evidence (P3 plan item 7) | **OPEN** — deferred with 3b. |
-| **M8** | `multi_agent/dag.py` not yet retired into `wisp/graph/` (P4 plan item 5) | **OPEN — deferred deliberately.** It is on the live `fanout` path, and `test_13j1_fanout_contract_repair.py` is already red for environmental reasons, so a regression caused by the retirement would be indistinguishable from one already there. Needs a green fanout suite first. |
-| **M9** | **The message list is not yet a projection of the graph** (P4's stated risk mitigation) | **OPEN** — P5 work. P4 *enables* it by journalling both from one log; it does not implement it. |
-| **M15** | **The subagent spawn site is not wired to `child_principal`** | **OPEN** — the plumbing exists and is tested end to end through `authorize()`, but nothing constructs a child principal at spawn. A tripwire test asserts this. |
-| **M14** | **The context trust boundary has no production caller** | **OPEN** — `ContextAssembler` does not construct `ContextItem`s, so no context is actually tagged in production. Shares M9/M2 as prerequisite with M11–M13. |
-| **M13** | **The stagnation detector is not constructed by the turn loop** | **OPEN** — P7 uses the trap and reads the flag; nothing on the live path builds a detector. Shares M9/M2 as prerequisite with M11 and M12. |
-| **M12** | **The recovery ladder is not consulted by the turn loop** | **OPEN** — P6 shipped the ladder as a mechanism; live recovery behaviour is unchanged. Rewiring it alters the least-covered path. ADR-0026. |
-| **M11** | **The graph does not drive execution** | **OPEN** — P5's item 5, deferred. The turn loop executes tools directly; the graph is a record, not a driver. Making it drive is a change of control and must land **with** M9. |
-| **M10** | The materialized graph is a **lower bound** on iterations | **OPEN — by design.** The runtime materializes one node per closed tool exchange + one terminal node; iteration boundaries are not observable from the event stream, and inventing nodes would be a fabricated record. |
+| **M9** | **The message list is not yet a projection of the graph** | **OPEN — the sole keystone.** P4 *enables* it (both journal from one log); it is not implemented. Inverts the dependency between messages and graph, and is a change of **control** on the least-observable path. Needs its own session. |
+| **M11** | The graph does not drive execution | **OPEN** — the turn loop executes tools directly; the graph is a record, not a driver. Must land **with** M9. |
+| **M12** | The recovery ladder is not consulted by the turn loop | **OPEN** — P6 shipped the ladder as a mechanism. ADR-0026. |
+| **M13** | The stagnation detector is not constructed by the turn loop | **OPEN** — P7 uses the trap and reads the flag; nothing builds a detector. |
+| **M14** | The context trust boundary has no production caller | **OPEN** — `ContextAssembler` does not build `ContextItem`s, so nothing is tagged in production. |
+| **M15** | The subagent spawn site is not wired to `child_principal` | **OPEN** — plumbing exists and is tested through `authorize()`; nothing constructs a child principal at spawn. **A tripwire test asserts this.** |
+| **M16** | The `ESCALATION` record's loss is not fully addressed | **OPEN** — P6 made escalation *durable state*; if that write fails a parked run loses the record of why. The one row in ADR-0027's classification where "best-effort, canary" is arguably wrong. |
+| **M1** | P3 stage 3b — enable the acceptance gate | **BLOCKED on a measurement**, itself blocked on a working tool path (`jsonschema`). ADR-0016. |
+| **M2** | Journal-first reconstruction | ✅ **COMPLETE** — `reconstruct()` + `reconstruction_source()`; the pre-P0 hazard and the gap hazard are both handled and pinned. **Five consumers still read the blob** (a tripwire asserts it). |
+| **M3** | Killpoint integration | ✅ **COMPLETE** — `test_kp_session_midtool_then_killed`. One window covered. |
+| **M4** | ADR-0004 revisited | ✅ **COMPLETE** — **ADR-0027**. Found a live defect (M2's journal-first could return a provider-invalid transcript). |
+| **M5** | Foreground-turn `RunRecord` lifecycle | **OPEN** — proven end-to-end for background runs only. |
+| **M6** | `PolicyDecisionEnvelope` producer-less and consumer-less | **OPEN** — the last unwired contract. |
+| **M7** | `change_tracker.py` not wired into evidence | **OPEN** — deferred with 3b. |
+| **M8** | `multi_agent/dag.py` not retired into `wisp/graph/` | **OPEN — deferred deliberately.** On the live `fanout` path, and `test_13j1_fanout_contract_repair.py` is **already red** for environmental reasons, so a regression would be indistinguishable. Needs a green fanout suite first. |
+| **M10** | The materialized graph is a **lower bound** on iterations | **OPEN — by design.** One node per closed tool exchange + one terminal; iteration boundaries are not observable. |
 
-**Committed.** Phase 10 and migration P0–P3a are committed (§3). The remaining uncommitted files are
-the user's pre-existing WIP (§8) plus foreign-session test files.
+**Committed.** Phase 10 and migration P0–P9 + M2/M3/M4 are committed (§3). The remaining uncommitted
+files are the user's pre-existing WIP (§8) plus foreign-session test files.
 
 ---
 
@@ -848,6 +929,9 @@ the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_M2_REPORT.md` | Journal-first reconstruction with blob fallback |
 | `PHASE_M3_REPORT.md` | Killpoint integration for the session journal |
 | `PHASE_M4_REPORT.md` | Durability as a correctness precondition (ADR-0027) |
+| `PHASE_M2_REPORT.md` | Journal-first reconstruction with blob fallback |
+| `PHASE_M3_REPORT.md` | Killpoint integration for the session journal |
+| `PHASE_M4_REPORT.md` | Durability as a correctness precondition (ADR-0027) |
 
 **Guards added by the migration:**
 
@@ -865,6 +949,8 @@ the user's pre-existing WIP (§8) plus foreign-session test files.
 | `tests/test_graph_mutation.py` | the extended vocabulary is a superset (ratchet); expansion is acyclic by construction; invalidation cascades; supersession retains history; the growth budget is **enforced**; insertion order does not change the graph |
 | `tests/test_durability_preconditions.py` | a **gapped** journal is a provider-invalid transcript and is refused; contiguity semantics; **a real turn satisfies the invariant** (or the check would reject every session) |
 | `tests/test_session_reconstruction.py` | a pre-P0 session is **not truncated** (the hazard); the journal carries the audit records the blob never had; both paths are shape-compatible with the blob; **a tripwire asserting the five consumers are still un-migrated** |
+| `tests/test_durability_preconditions.py` | a **gapped** journal is a provider-invalid transcript and is refused; contiguity semantics; **a real turn satisfies the invariant** |
+| `tests/test_session_reconstruction.py` | a pre-P0 session is **not truncated**; the journal carries the audit records the blob never had; shape-compatible on both paths; **a tripwire asserting the five consumers are still un-migrated** |
 | `tests/test_structured_delegation.py` | a child gets exactly its declared tools; widening is refused; `["all"]` against an unbounded parent is refused rather than guessed; the executor authorizes as the principal it was given; **a tripwire asserting the spawn site is still unwired** |
 | `tests/test_context_trust.py` | every item is tagged; T1–T4 enforced structurally; assembly is deterministic and order-independent; truncation is recorded **as data**; an injection payload cannot escape its fence |
 | `tests/test_stagnation_detection.py` | the detector **reuses** `OscillationTrap` (AST-pinned); a productive task is never flagged; stagnation routes to a **replan, not a retry**; a stagnated goal cannot report `GOAL_MET`; `graph_oscillation_guard` is finally read |
