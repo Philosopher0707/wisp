@@ -542,6 +542,8 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `0b1f4e8` | `docs(m16):` pin the commit hash and repair the handoff docs |
 | `7cff74f` | `docs(m16):` ledger rows; keep agent workspace data untracked (+ `.gitignore`) |
 | `73c2bbc` | `docs(m16):` record the third occurrence of the flaky test F17 |
+| `e52333f` | `feat(m9):` the execution view is faithful; the graph is a shape, not a payload — 11 tests |
+| `b39c120` | `docs:` complete the commit table and stop over-claiming it |
 | `1229b87` | `docs(m16):` correct the commit counts and complete this table |
 | `ed9fee6` | `docs:` stop quoting a commit count that goes stale on every commit |
 
