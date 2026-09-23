@@ -17,10 +17,10 @@
 baseline `83b10af`. See §3 for the commit list.
 
 **The plan is fully traversed.** P0–P7 and P9 delivered their mechanisms; P3 shipped stage 3a only; P8
-is `PARTIAL`. **The substantive remainder is now one coherent piece of work**, not nine scattered
-phases: items **M11–M15** are all "wire the mechanism into the live turn loop", and they share one
-prerequisite — **M9** (the message list as a projection of the graph) plus **M2** (journal-first
-reconstruction). See `PHASE_P9_REPORT.md` §8.
+is `PARTIAL`. **M2 is complete** — journal-first reconstruction with blob fallback (`PHASE_M2_REPORT.md`). **M9 is
+now the sole keystone**: M11–M15 are five instances of the same change ("make the live turn loop use
+the mechanism"), and M9 is what makes it safe to make once rather than five times. See
+`PHASE_P9_REPORT.md` §8.
 
 **The Persistent Graph Loop migration is underway** — `WISP_MIGRATION_PLAN.md` defines phases P0–P9.
 
@@ -840,6 +840,7 @@ the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_P7_REPORT.md` | Stagnation detection |
 | `PHASE_P8_REPORT.md` | Context as a first-class subsystem |
 | `PHASE_P9_REPORT.md` | Structured delegation — **and the migration's closing summary (§8)** |
+| `PHASE_M2_REPORT.md` | Journal-first reconstruction with blob fallback |
 
 **Guards added by the migration:**
 
@@ -855,6 +856,7 @@ the user's pre-existing WIP (§8) plus foreign-session test files.
 | `tests/test_acceptance_verdict.py` | the verdict algebra; the floor guard is retained, not replaced; stage 3a does not gate |
 | `tests/test_task_graph_materialization.py` | readiness is **stored**, not recomputed; one transition API (AST, in-module and tree-wide); the graph is a projection of the log |
 | `tests/test_graph_mutation.py` | the extended vocabulary is a superset (ratchet); expansion is acyclic by construction; invalidation cascades; supersession retains history; the growth budget is **enforced**; insertion order does not change the graph |
+| `tests/test_session_reconstruction.py` | a pre-P0 session is **not truncated** (the hazard); the journal carries the audit records the blob never had; both paths are shape-compatible with the blob; **a tripwire asserting the five consumers are still un-migrated** |
 | `tests/test_structured_delegation.py` | a child gets exactly its declared tools; widening is refused; `["all"]` against an unbounded parent is refused rather than guessed; the executor authorizes as the principal it was given; **a tripwire asserting the spawn site is still unwired** |
 | `tests/test_context_trust.py` | every item is tagged; T1–T4 enforced structurally; assembly is deterministic and order-independent; truncation is recorded **as data**; an injection payload cannot escape its fence |
 | `tests/test_stagnation_detection.py` | the detector **reuses** `OscillationTrap` (AST-pinned); a productive task is never flagged; stagnation routes to a **replan, not a retry**; a stagnated goal cannot report `GOAL_MET`; `graph_oscillation_guard` is finally read |

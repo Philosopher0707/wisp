@@ -791,7 +791,75 @@ a working Persistent Graph Loop. Saying so is the difference between a migration
 
 ---
 
-## 13. Change log
+## 13. M2 — Journal-First Reconstruction with Blob Fallback
+
+### 13.1 What it is
+
+P1's first deferred prerequisite, and **one half of the M9/M2 pair** the P9 report named as the
+migration's single remaining keystone. P1 asked to make the journal the primary durable record with the
+snapshot as a materialized view, and deferred it with the reason and the safe shape:
+
+> *"The safe shape is **journal-first with blob fallback**, plus a migration check."*
+
+That is what `SessionRepository.reconstruct()` and `reconstruction_source()` implement.
+
+### 13.2 The hazard, and the predicate that avoids it
+
+A pre-P0 session's log holds a user message and a `DONE` marker — **and no turn body**. Replaying it
+yields `[{"role": "user", …}]`, which is a **non-empty** message list.
+
+So the obvious check — `if replayed.messages:` — picks the journal and returns a session **truncated to
+one message**. That is exactly the failure the P1 report predicted, and **the first implementation made
+it**; its own pre-P0 test caught it. The correct predicate is whether a **turn body** was journaled:
+
+```python
+any(str(m.get("role")) != "user" for m in replayed.messages)
+```
+
+A P0+ turn always produces at least one assistant message; a pre-P0 session never does. That single
+predicate is the difference between the migration working and silently destroying history.
+
+### 13.3 What the journal adds
+
+A `Session` replayed from the log has everything the blob does — `model`, `workspace`, `messages`,
+`compaction_history`, `created_at`, `updated_at` — **plus** the audit records the blob never had:
+proposals, outcomes, verdicts, the task graph, node transitions, recovery decisions and escalations.
+`title` is the one blob-only field and is taken from the blob.
+
+`SessionRepository` is the right home because it already holds `self._store` (the blob) *and* owns the
+journal — the only object with both sources in hand. Adoption is a one-line change per consumer.
+
+### 13.4 Shape compatibility
+
+`BLOB_KEYS` is asserted as a subset of the result on **both** paths, so a consumer switches by replacing
+`store.load_session(sid)` with `repo.reconstruct(sid)`. The added `_source` key is additive and records
+which path answered.
+
+### 13.5 Completion criteria
+
+- [x] Journal-first reconstruction exists and is tested (19 tests)
+- [x] The pre-P0 hazard is handled **and pinned** — `TestThePreP0Hazard`
+- [x] The migration check exists — `reconstruction_source()`
+- [x] Shape-compatible with the blob
+- [ ] Consumers migrated — **not done**, and **asserted** (§13.6)
+- [x] No regression — the methods are additive
+- [ ] `ruff` / `mypy` — not installed
+
+### 13.6 The five consumers are not migrated, and that is a tripwire
+
+`test_the_five_consumers_still_read_the_blob` counts the un-migrated consumers and **fails when one is
+migrated**, pointing at this section. Same pattern as P9's M15 tripwire, same reason: a gap that is
+documented *and asserted* is a gap someone closes.
+
+**Why not here.** Each is a different surface (CLI, supervisor, SDK, ACP, HTTP), and the switch has a
+real precondition: until **all** consumers read the journal, a partially-migrated system can read a
+**stale blob** for a session whose journal is authoritative. One-at-a-time is therefore not obviously
+safe, and all-at-once is a cross-cutting change across five surfaces with no shared harness.
+
+---
+
+## 14. Change log
+
 
 
 
@@ -846,6 +914,10 @@ a working Persistent Graph Loop. Saying so is the difference between a migration
 | 2026-09-23 | P9 | **Fixed a latent `AttributeError`**: `SubagentContract` had no `metadata` field, so `orchestrator:1316`'s *read* raised before it could attach the DAG node budget | 7 tests |
 | 2026-09-23 | P9 | `_circuit_breaker.py` documented as a **duplicate authority** (the wired one is `infra/`); **not deleted** — it is the user's untracked WIP | `PHASE_P9_REPORT.md` §11.5 |
 | 2026-09-23 | P9 | **Regression: 129, byte-identical in both directions.** The strongest result of the migration — the only phase whose change touched files the rest of the suite exercises | full suite, stable baseline |
+| 2026-09-23 | M2 | `SessionRepository.reconstruct()` + `reconstruction_source()` — **journal-first with blob fallback**, shape-compatible with `UnifiedStore.load_session` | 19 tests |
+| 2026-09-23 | M2 | The pre-P0 predicate: `any(role != "user")`, **not** `messages` being non-empty. The first implementation used the obvious test and its own pre-P0 test caught it | `PHASE_M2_REPORT.md` §13.2 |
+| 2026-09-23 | M2 | Consumer adoption **not** done, and **asserted** by a tripwire test | `PHASE_M2_REPORT.md` §13.6 |
+| 2026-09-23 | M2 | **Regression: 129, byte-identical in both directions.** The methods are additive (no caller), so the result is confirmation rather than the argument | full suite, stable baseline |
 
 ### 10.1 Regression summary
 

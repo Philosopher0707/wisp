@@ -117,6 +117,85 @@ class SessionRepository:
             return row["max_seq"]
         return -1
 
+    # ── Journal-first reconstruction with blob fallback (migration M2) ──
+    #
+    # P1's remainder. `UnifiedStore.load_session` (the blob) is read by five
+    # production consumers — `__main__.py`, `supervisor.py`, `sdk.py`,
+    # `acp_session.py`, `server/routes/sessions.py` — while the journal was a
+    # different function with a different shape. Switching them naively would
+    # make old sessions reconstruct WORSE than the blob does, because
+    # **pre-P0 sessions have no turn body in the log**.
+    #
+    # So: journal first, blob as the fallback, and a check that says which one
+    # answered. The returned dict is SHAPE-COMPATIBLE with
+    # `UnifiedStore.load_session`, so adoption is a one-line change per consumer
+    # rather than a rewrite.
+
+    def reconstruct(self, session_id: str) -> Optional[dict]:
+        """Rebuild a session from the journal, falling back to the blob.
+
+        Journal-first because the journal is the append-only record and carries
+        everything the blob does — plus the audit records (proposals, outcomes,
+        verdicts, the task graph, recovery) the blob never had.
+
+        Falls back to the blob when the journal yields no **turn body**, which
+        is the case for **every session written before P0**: the turn body was
+        not journaled then, so the log holds only a user message and a terminal
+        marker. Reconstructing from that alone would silently truncate a
+        session's history to one message.
+
+        Returns a dict shaped like `UnifiedStore.load_session`, or `None` when
+        neither source has the session.
+        """
+        source = self.reconstruction_source(session_id)
+        if source == "none":
+            return None
+
+        blob = self._store.load_session(session_id) or {}
+
+        if source == "journal":
+            replayed = self.load_session(session_id)
+            if replayed is not None:
+                return {
+                    "id": replayed.session_id,
+                    "model": replayed.model or blob.get("model", ""),
+                    "workspace": replayed.workspace or blob.get("workspace", ""),
+                    # `title` is a blob-only field; the journal never carried it.
+                    "title": blob.get("title", ""),
+                    "messages": list(replayed.messages),
+                    "compaction_history": list(replayed.compaction_history),
+                    "created_at": replayed.created_at or blob.get("created_at", 0.0),
+                    "updated_at": replayed.updated_at or blob.get("updated_at", 0.0),
+                    # Provenance, so a caller can tell which path answered.
+                    "_source": "journal",
+                }
+
+        if not blob:
+            return None
+        return {**blob, "_source": "blob"}
+
+    def reconstruction_source(self, session_id: str) -> str:
+        """`journal` | `blob` | `none` — the migration check.
+
+        A session is reconstructible from the journal only when the log holds a
+        **turn body** — an assistant or tool message — not merely the user
+        message and DONE marker a pre-P0 session has.
+
+        The predicate is `any(role != "user")`, not `messages` being non-empty.
+        A pre-P0 session replays to `[user]`, which IS non-empty, so the obvious
+        test picks the journal and returns a session truncated to one message —
+        the exact hazard this method exists to avoid. Verified the hard way: the
+        first implementation used `if replayed.messages:` and failed its own
+        pre-P0 test.
+        """
+        replayed = self.load_session(session_id)
+        if replayed is not None and any(
+                str(m.get("role")) != "user" for m in replayed.messages):
+            return "journal"
+        if self._store.load_session(session_id) is not None:
+            return "blob"
+        return "none"
+
     def was_last_turn_complete(self, session_id: str) -> bool:
         """True if the last event is a DONE event (turn completed normally)."""
         conn = self._store._get_conn()
