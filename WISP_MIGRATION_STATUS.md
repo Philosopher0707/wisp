@@ -41,7 +41,7 @@
 | **P6** | Recovery ladder | P5 ✅ | `COMPLETE` (live-loop wiring deferred) | `PHASE_P6_REPORT.md` |
 | **P7** | Stagnation detection | P1 ✅ P5 ✅ | `COMPLETE` (live-loop wiring deferred) | `PHASE_P7_REPORT.md` |
 | **P8** | Context as a first-class subsystem | P1 ✅ P4 ✅ | `PARTIAL` — trust boundary complete; items 3–6 deferred | `PHASE_P8_REPORT.md` |
-| **P9** | (final phase) | — | `NOT STARTED` | — |
+| **P9** | Structured delegation | P2 ✅ P5 ✅ | `PARTIAL` — two wiring fixes landed; five structural items deferred | `PHASE_P9_REPORT.md` |
 | **P2** | Introduce the proposal boundary | P1 | `NOT STARTED` | — |
 | **P3** | Independent verification | P2 | `NOT STARTED` | — |
 | **P4** | Task graph from durable state | P2 | `NOT STARTED` | — |
@@ -455,7 +455,7 @@ projection of the graph) rather than before it. Recorded as item **M11**.
 | **F15** | **A `read_only` denial is decided by the policy-engine gate, which runs BEFORE the `authorize()` consult** — so it names no controlling layer. Undocumented before P2; surfaced by writing the gate-order corpus RED-first. Relevant to the deferred proposal-boundary work: an outcome must be recorded even for denials that never reach `authorize()` | P2 | Pinned in the corpus with an explanatory comment (ADR-0014) |
 | **F16** | `contracts/tool.py`'s `ToolRequest`/`ToolResult` were **producer-less and consumer-less** (only the re-export and their own test referenced them). `contracts/policy.py`'s `PolicyDecisionEnvelope` still is. `CanonicalEvent` IS wired (`transport/renderer.py`, `contracts/adapters.py`) | P2 | **Fixed for tool** (`wisp/core/proposal.py`); `PolicyDecisionEnvelope` still unwired |
 | **F17** | **`tests/test_speculative_search.py::TestOracle::test_smallest_diff_wins_ties_broken_by_speed` is flaky under the full suite.** It asserts a diff-size ranking, passes 5/5 in isolation and 3/3 at file level, has zero coupling to the P3 surface, and **appeared once in a 129-failure run and was absent from an immediate rerun of the identical code**. Confirmed flaky rather than a regression by re-running the same tree | P3 | Logged; **not** caused by P3. The suite's failure count varies by ±1 run-to-run because of it |
-| **F21** | **`_fit_sections` records truncation as PROSE, not as structured data.** The plan claimed "no record at all"; evidence shows a `dropped_labels` accumulator rendered into the prompt as `[NOTE: … (omitted)]`. Prose cannot be asserted on, counted or alerted on — the same distinction as F7 (`controlling_layer`) | P8 | Fixed: `Context.dropped` is structured |\n| **F20** | **The full-suite failure set is NOT stable.** Two consecutive runs on identical code read 129 and 130. `test_cli_surface_e2e.py::…test_print_blackhole_server_falls_back` appears in one and not the other (it depends on a network timeout). Separately, `test_sandbox_fallback_contract.py::test_fallback_host_warns_at_tool_layer` fails in the full run but passes 5/5 in isolation (CONTEXT.md §7 documents it as order-dependent). **A single-run count is not a baseline** | P7 | Method fixed: the baseline is now the **intersection of two runs**, stored in the repo |
+| **F22** | **`SubagentContract` had no `metadata` field, and the orchestrator *reads* it.** `subagent_orchestrator.py:1316` is `if not task.metadata:` — a read — so the first time a DAG node declared a budget the orchestrator raised `AttributeError`. The plan described this as the budget being "never seen"; it is a latent crash. Phase 10's F1 reappearing in a second location | P9 | Fixed: `metadata` field added |\n| **F23** | **`multi_agent/_circuit_breaker.py` is a duplicate authority.** Imported by exactly one file — a foreign-session WIP test that does not collect — while a second, wired breaker lives at `infra/circuit_breaker.py` | P9 | Documented; **not deleted** (the user's untracked WIP) |\n| **F21** | **`_fit_sections` records truncation as PROSE, not as structured data.** The plan claimed "no record at all"; evidence shows a `dropped_labels` accumulator rendered into the prompt as `[NOTE: … (omitted)]`. Prose cannot be asserted on, counted or alerted on — the same distinction as F7 (`controlling_layer`) | P8 | Fixed: `Context.dropped` is structured |\n| **F20** | **The full-suite failure set is NOT stable.** Two consecutive runs on identical code read 129 and 130. `test_cli_surface_e2e.py::…test_print_blackhole_server_falls_back` appears in one and not the other (it depends on a network timeout). Separately, `test_sandbox_fallback_contract.py::test_fallback_host_warns_at_tool_layer` fails in the full run but passes 5/5 in isolation (CONTEXT.md §7 documents it as order-dependent). **A single-run count is not a baseline** | P7 | Method fixed: the baseline is now the **intersection of two runs**, stored in the repo |
 | **F19** | **Three tests P5's completion criteria require do not exist**: `test_graph_fuzz.py`, `test_graph_races.py`, `test_graph_resume.py`. They are the plan's own safety net for changing Layer B's node vocabulary, and their absence is why that change was not made (ADR-0021) | P5 | Verified absent; recorded |
 | **F18** | `graph/scheduler.py::ready_nodes` recomputed readiness on every pass and stored nothing — so the graph was a *view*, never state, and a divergence between it and any consumer would be silent | P4 | Fixed (ADR-0019/0020) |
 
@@ -689,7 +689,110 @@ reconstruction).
 
 ---
 
-## 11. Change log
+## 11. P9 — Structured Delegation
+
+### 11.1 Objective
+
+Make delegation a structured contract with enforced narrowing and transactional effects.
+
+### 11.2 Reconnaissance results
+
+**Item 1 confirmed exactly as claimed.** `derive_subagent` is defined at `auth/principal.py`,
+re-exported from `wisp.auth`, and called **only by two test files** — zero production callers. Meanwhile
+`tool_executor.py` hardcodes `local_principal(...)`, which returns a **`HUMAN`** principal with
+`capabilities=None` = **unbounded**. Every subagent's tool call is authorized as the local human, with
+the parent's full authority regardless of what the child was asked to do.
+
+**Item 7 was worse than described.** The plan says the missing `metadata` field means the DAG node
+budget "is never seen". Verified: `SubagentContract` is a plain dataclass with no `metadata` field, and
+line 1316 is `if not task.metadata:` — a **read**. So the first time a node declares a budget the
+orchestrator **raises `AttributeError`**; it is a latent crash, not a silent omission.
+
+**Item 6 is a duplicate authority, and the file is the user's.** `multi_agent/_circuit_breaker.py` is
+imported by exactly one file — `tests/test_subagent_enterprise.py`, a **foreign-session WIP file that
+does not collect**. A **second, wired** circuit breaker exists at `wisp/infra/circuit_breaker.py`
+(`core/stateless.py:1083-1107`, `core/doctor.py`), with config keys and two passing test files.
+
+### 11.3 Item-by-item status
+
+| # | Plan item | Status | Evidence |
+|---|---|---|---|
+| 1 | Wire `derive_subagent` | `PARTIAL` | `child_principal()` + `ToolExecutor.principal` (additive, default `None`); **the spawn site is M15** |
+| 2 | Structured `child_goal` | `NOT DONE` | deferred (§11.4) |
+| 3 | Mandatory `result_schema` | `NOT DONE` | deferred |
+| 4 | Transactional effects | `NOT DONE` | deferred |
+| 5 | Typed failure replacing prose markers | `NOT DONE` | deferred |
+| 6 | Wire or delete `_circuit_breaker.py` | `DOCUMENTED` | duplicate authority; the file is the user's **untracked WIP** — not deleted (§11.5) |
+| 7 | Fix the latent budget defect | `COMPLETE` | `SubagentContract.metadata` added and documented |
+| 8 | Retire `dag.py` into `wisp/graph/` | `NOT DONE` | already item **M8** |
+
+### 11.4 The `["all"]` question, decided rather than guessed
+
+`tools == ["all"]` means "inherit the parent's full toolset". Answerable when the parent is **bounded**
+(the child inherits that exact set — equal is not wider). **Not** answerable when the parent is
+**unbounded**: there is no universe to take a subset of, and both guesses are wrong — leave the child
+unbounded (the defect) or hand it an empty set (a child that can call nothing). So it is **refused**,
+naming the fix.
+
+### 11.5 The circuit breaker: documented, not deleted
+
+`CONTEXT.md` §8 records `multi_agent/_circuit_breaker.py` as the **user's untracked WIP**. Deleting
+someone's untracked file is not a decision a migration should make silently. Recommendation recorded;
+the decision is theirs.
+
+### 11.6 Completion criteria
+
+- [~] Capability narrowing is applied and tested — **tested**; not yet *applied* at the spawn site (M15)
+- [ ] A schema-violating result is rejected — not attempted (item 3)
+- [ ] Shared-workspace failure rolls back transactionally — not attempted (item 4)
+- [ ] One graph system — not attempted (item 8 = M8)
+- [x] **Zero new failures** — see §11.7
+- [ ] `ruff` / `mypy` — not installed
+
+### 11.7 Regression
+
+This phase modified **real production files** (`tool_executor.py`, `multi_agent/task.py`) — unlike P7
+and P8, which added only unreferenced modules — so the comparison carries more weight here.
+
+| Comparison | Result |
+|---|---|
+| Count | **129** |
+| New vs the stable baseline | **none** (`comm -13` empty) |
+| Absent vs the stable baseline | **none** (`comm -23` empty) |
+
+**The strongest regression result of the migration**, because it is the only one where the change
+touched files the rest of the suite exercises. `ToolExecutor.principal` is additive and defaults to
+`None`; the byte-identical set is the evidence that the fallback preserves behaviour, not the claim.
+
+### 11.8 The spawn site is not wired (M15), and it is asserted
+
+`test_derive_subagent_still_has_no_production_caller` is a **tripwire**: it fails the moment someone
+wires the spawn site, with a message telling them to update §11.8 and delete the test. A gap that is
+documented *and asserted* is a gap someone will close; a gap in a comment is not.
+
+---
+
+## 12. The migration, at the end of the plan
+
+Nine phases. The pattern is consistent: **the mechanisms mostly existed; what was missing was callers.**
+
+| Observation | Count |
+|---|---|
+| Phases whose plan claim needed narrowing against repository evidence | **6** — P0 ×2, P1, P2, P7, P8 |
+| Phases whose plan *target component* was wrong | **2** — P2 (stateless.py), P5 (Layer B) |
+| Phases whose remainder is integration, not construction | **5** — M11, M12, M13, M14, M15 |
+
+Those five are **one coherent piece of work**, sharing one prerequisite: **M9** (the message list as a
+projection of the graph) plus **M2** (journal-first reconstruction).
+
+**The honest summary:** eight mechanisms built, tested, and reachable from their packages — and **not
+yet driven by the live turn loop**. That is a substantial body of work, and it is not the same thing as
+a working Persistent Graph Loop. Saying so is the difference between a migration report and a claim.
+
+---
+
+## 13. Change log
+
 
 
 
@@ -739,6 +842,10 @@ reconstruction).
 | 2026-09-23 | P8 | Plan claim narrowed (6th): `_fit_sections` **does** record truncation — as **prose**, not as data | `context_assembler.py:504/522/567/571` |
 | 2026-09-23 | P8 | Items 3–6 deferred with reasons; trust boundary has **no production caller** yet (M14) | `PHASE_P8_REPORT.md` §7 |
 | 2026-09-23 | P8 | **Regression verified against the STABLE baseline: 129, failure set byte-identical in both directions.** First phase verified against a proper (two-run) baseline | full suite, `comm` both ways |
+| 2026-09-23 | P9 | **`child_principal()` + `ToolExecutor.principal`** — `derive_subagent` finally has a caller-shaped path and a place to pass the result; additive, default `None` | 15 tests |
+| 2026-09-23 | P9 | **Fixed a latent `AttributeError`**: `SubagentContract` had no `metadata` field, so `orchestrator:1316`'s *read* raised before it could attach the DAG node budget | 7 tests |
+| 2026-09-23 | P9 | `_circuit_breaker.py` documented as a **duplicate authority** (the wired one is `infra/`); **not deleted** — it is the user's untracked WIP | `PHASE_P9_REPORT.md` §11.5 |
+| 2026-09-23 | P9 | **Regression: 129, byte-identical in both directions.** The strongest result of the migration — the only phase whose change touched files the rest of the suite exercises | full suite, stable baseline |
 
 ### 10.1 Regression summary
 

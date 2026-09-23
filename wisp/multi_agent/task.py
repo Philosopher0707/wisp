@@ -69,6 +69,19 @@ class SubagentContract:
     role: str = "generalist"
     """Agent role — maps to ROLE_CONFIGS in roles.py."""
 
+    # ── Metadata (P9) ──
+    metadata: dict[str, Any] = field(default_factory=dict)
+    """Free-form per-invocation metadata.
+
+    Added in migration P9. `subagent_orchestrator.py:1316` writes
+    `task.metadata["_budget"]` and `_runner._budget_from_contract` reads
+    `contract.metadata["_budget"]`, but this class had **no `metadata` field**
+    — so the *read* on line 1316 raised `AttributeError` the first time a DAG
+    node declared a budget, and the declared budget never applied. That is
+    Phase 10's F1 (audit-2026-08-24 item 11, "honor metadata budget")
+    reappearing in a second location.
+    """
+
     # ── Task ──
     task: str = ""
     """The instruction / prompt given to the subagent."""

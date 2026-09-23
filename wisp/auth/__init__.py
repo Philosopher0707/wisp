@@ -9,6 +9,7 @@ from wisp.auth.decision import AuthorizationDecision, authorize
 from wisp.auth.principal import (
     Principal,
     PrincipalKind,
+    child_principal,
     derive_subagent,
     local_principal,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "authorize",
     "check_consent",
     "classify_workspace",
+    "child_principal",
     "derive_subagent",
     "local_principal",
     "origin_hash",

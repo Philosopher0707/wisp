@@ -11,14 +11,16 @@
 
 ---
 
-## 0. STATUS — Persistent Graph Loop migration, P0–P6 complete and committed
+## 0. STATUS — Persistent Graph Loop migration: **all nine phases delivered**
 
-**Phase 10 and migration P0–P6 are committed.** `HEAD` is **`e133a95`**, **nine** commits on top of
-the Phase 10 baseline `83b10af`. See §3 for the commit list.
+**Phase 10 and migration P0–P9 are committed.** `HEAD` is **`3d39ff3`**+, on top of the Phase 10
+baseline `83b10af`. See §3 for the commit list.
 
-**Next up: P7 — stagnation detection** (prerequisites P1 and P5 are met). Its detector,
-`core/graph/loop.py::OscillationTrap`, already exists and is **orphaned** — the same pathology this
-migration keeps finding.
+**The plan is fully traversed.** P0–P7 and P9 delivered their mechanisms; P3 shipped stage 3a only; P8
+is `PARTIAL`. **The substantive remainder is now one coherent piece of work**, not nine scattered
+phases: items **M11–M15** are all "wire the mechanism into the live turn loop", and they share one
+prerequisite — **M9** (the message list as a projection of the graph) plus **M2** (journal-first
+reconstruction). See `PHASE_P9_REPORT.md` §8.
 
 **The Persistent Graph Loop migration is underway** — `WISP_MIGRATION_PLAN.md` defines phases P0–P9.
 
@@ -33,7 +35,7 @@ migration keeps finding.
 | P6 — recovery ladder | `COMPLETE` (live-loop wiring deferred) | `PHASE_P6_REPORT.md` |
 | P7 — stagnation detection | `COMPLETE` (live-loop wiring deferred) | `PHASE_P7_REPORT.md` |
 | P8 — context as a first-class subsystem | `PARTIAL` — trust boundary complete; items 3–6 deferred | `PHASE_P8_REPORT.md` |
-| P9 | `NOT STARTED` | — |
+| P9 — structured delegation | `PARTIAL` — two wiring fixes landed; five structural items deferred | `PHASE_P9_REPORT.md` |
 
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings log F1–F17, change log).
 **Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (ADR-0001 … ADR-0026).
@@ -779,6 +781,7 @@ that work, and makes unrelated failures look like yours. Finding F12.
 | **M7** | `change_tracker.py` not yet wired into evidence (P3 plan item 7) | **OPEN** — deferred with 3b. |
 | **M8** | `multi_agent/dag.py` not yet retired into `wisp/graph/` (P4 plan item 5) | **OPEN — deferred deliberately.** It is on the live `fanout` path, and `test_13j1_fanout_contract_repair.py` is already red for environmental reasons, so a regression caused by the retirement would be indistinguishable from one already there. Needs a green fanout suite first. |
 | **M9** | **The message list is not yet a projection of the graph** (P4's stated risk mitigation) | **OPEN** — P5 work. P4 *enables* it by journalling both from one log; it does not implement it. |
+| **M15** | **The subagent spawn site is not wired to `child_principal`** | **OPEN** — the plumbing exists and is tested end to end through `authorize()`, but nothing constructs a child principal at spawn. A tripwire test asserts this. |
 | **M14** | **The context trust boundary has no production caller** | **OPEN** — `ContextAssembler` does not construct `ContextItem`s, so no context is actually tagged in production. Shares M9/M2 as prerequisite with M11–M13. |
 | **M13** | **The stagnation detector is not constructed by the turn loop** | **OPEN** — P7 uses the trap and reads the flag; nothing on the live path builds a detector. Shares M9/M2 as prerequisite with M11 and M12. |
 | **M12** | **The recovery ladder is not consulted by the turn loop** | **OPEN** — P6 shipped the ladder as a mechanism; live recovery behaviour is unchanged. Rewiring it alters the least-covered path. ADR-0026. |
@@ -836,6 +839,7 @@ the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_P6_REPORT.md` | Recovery ladder |
 | `PHASE_P7_REPORT.md` | Stagnation detection |
 | `PHASE_P8_REPORT.md` | Context as a first-class subsystem |
+| `PHASE_P9_REPORT.md` | Structured delegation — **and the migration's closing summary (§8)** |
 
 **Guards added by the migration:**
 
@@ -851,6 +855,7 @@ the user's pre-existing WIP (§8) plus foreign-session test files.
 | `tests/test_acceptance_verdict.py` | the verdict algebra; the floor guard is retained, not replaced; stage 3a does not gate |
 | `tests/test_task_graph_materialization.py` | readiness is **stored**, not recomputed; one transition API (AST, in-module and tree-wide); the graph is a projection of the log |
 | `tests/test_graph_mutation.py` | the extended vocabulary is a superset (ratchet); expansion is acyclic by construction; invalidation cascades; supersession retains history; the growth budget is **enforced**; insertion order does not change the graph |
+| `tests/test_structured_delegation.py` | a child gets exactly its declared tools; widening is refused; `["all"]` against an unbounded parent is refused rather than guessed; the executor authorizes as the principal it was given; **a tripwire asserting the spawn site is still unwired** |
 | `tests/test_context_trust.py` | every item is tagged; T1–T4 enforced structurally; assembly is deterministic and order-independent; truncation is recorded **as data**; an injection payload cannot escape its fence |
 | `tests/test_stagnation_detection.py` | the detector **reuses** `OscillationTrap` (AST-pinned); a productive task is never flagged; stagnation routes to a **replan, not a retry**; a stagnated goal cannot report `GOAL_MET`; `graph_oscillation_guard` is finally read |
 | `tests/test_recovery_ladder.py` | the taxonomy is closed at 10; **denials never retry** (by class, over the canonical vocabulary); escalation is terminal and resumable; an unsafe rollback escalates; every rung cites evidence; budgets are enforced |

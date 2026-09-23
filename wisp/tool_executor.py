@@ -428,9 +428,16 @@ class ToolExecutor:
         extensions: Any | None = None,
         policy: Any = None,
         run_store: Any = None,
+        principal: Any = None,
     ):
         self.config = config
         self.extensions = extensions
+        # Migration P9: the principal this executor authorizes AS. `None` keeps
+        # today's behaviour exactly (the unbounded local human principal), so
+        # this is additive. A subagent's executor passes a principal derived by
+        # `auth.principal.child_principal()`, which is how `derive_subagent`
+        # finally becomes reachable from a real call site.
+        self.principal = principal
         # EffectivePolicy (M4 seam closure): denials enforced in the I1
         # consult; "approve" entries force the approval path below.
         self.policy = policy
@@ -711,7 +718,9 @@ class ToolExecutor:
         _profile = getattr(self.config, "profile", None) or "default"
         _pm = effective_mode
         _decision = authorize(
-            local_principal(workspace=workspace, profile=str(_profile)),
+            self.principal
+            if self.principal is not None
+            else local_principal(workspace=workspace, profile=str(_profile)),
             func_name, func_args,
             classify_workspace(workspace),
             permission_mode=_pm.value if hasattr(_pm, "value") else str(_pm),
