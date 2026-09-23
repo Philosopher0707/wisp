@@ -39,7 +39,8 @@
 | **P4** | Task graph from durable state | P3 ✅ | `COMPLETE` (item 5 deferred) | `PHASE_P4_REPORT.md` |
 | **P5** | Runtime graph mutation | P4 ✅ | `COMPLETE` (item 5 deferred) | `PHASE_P5_REPORT.md` |
 | **P6** | Recovery ladder | P5 ✅ | `COMPLETE` (live-loop wiring deferred) | `PHASE_P6_REPORT.md` |
-| **P7** | Stagnation detection | P1 ✅ P5 ✅ | `READY TO START` | — |
+| **P7** | Stagnation detection | P1 ✅ P5 ✅ | `COMPLETE` (live-loop wiring deferred) | `PHASE_P7_REPORT.md` |
+| **P8** | Context as a first-class subsystem | P1 ✅ P4 ✅ | `READY TO START` | — |
 | **P2** | Introduce the proposal boundary | P1 | `NOT STARTED` | — |
 | **P3** | Independent verification | P2 | `NOT STARTED` | — |
 | **P4** | Task graph from durable state | P2 | `NOT STARTED` | — |
@@ -453,6 +454,7 @@ projection of the graph) rather than before it. Recorded as item **M11**.
 | **F15** | **A `read_only` denial is decided by the policy-engine gate, which runs BEFORE the `authorize()` consult** — so it names no controlling layer. Undocumented before P2; surfaced by writing the gate-order corpus RED-first. Relevant to the deferred proposal-boundary work: an outcome must be recorded even for denials that never reach `authorize()` | P2 | Pinned in the corpus with an explanatory comment (ADR-0014) |
 | **F16** | `contracts/tool.py`'s `ToolRequest`/`ToolResult` were **producer-less and consumer-less** (only the re-export and their own test referenced them). `contracts/policy.py`'s `PolicyDecisionEnvelope` still is. `CanonicalEvent` IS wired (`transport/renderer.py`, `contracts/adapters.py`) | P2 | **Fixed for tool** (`wisp/core/proposal.py`); `PolicyDecisionEnvelope` still unwired |
 | **F17** | **`tests/test_speculative_search.py::TestOracle::test_smallest_diff_wins_ties_broken_by_speed` is flaky under the full suite.** It asserts a diff-size ranking, passes 5/5 in isolation and 3/3 at file level, has zero coupling to the P3 surface, and **appeared once in a 129-failure run and was absent from an immediate rerun of the identical code**. Confirmed flaky rather than a regression by re-running the same tree | P3 | Logged; **not** caused by P3. The suite's failure count varies by ±1 run-to-run because of it |
+| **F20** | **The full-suite failure set is NOT stable.** Two consecutive runs on identical code read 129 and 130. `test_cli_surface_e2e.py::…test_print_blackhole_server_falls_back` appears in one and not the other (it depends on a network timeout). Separately, `test_sandbox_fallback_contract.py::test_fallback_host_warns_at_tool_layer` fails in the full run but passes 5/5 in isolation (CONTEXT.md §7 documents it as order-dependent). **A single-run count is not a baseline** | P7 | Method fixed: the baseline is now the **intersection of two runs**, stored in the repo |
 | **F19** | **Three tests P5's completion criteria require do not exist**: `test_graph_fuzz.py`, `test_graph_races.py`, `test_graph_resume.py`. They are the plan's own safety net for changing Layer B's node vocabulary, and their absence is why that change was not made (ADR-0021) | P5 | Verified absent; recorded |
 | **F18** | `graph/scheduler.py::ready_nodes` recomputed readiness on every pass and stored nothing — so the graph was a *view*, never state, and a divergence between it and any consumer would be silent | P4 | Fixed (ADR-0019/0020) |
 
@@ -510,7 +512,111 @@ it alters behaviour on the **failure** path — the least-covered path — and t
 
 ---
 
-## 9. Change log
+## 9. P7 — Stagnation Detection
+
+### 9.1 Objective
+
+Detect "working but not progressing", and route it to the recovery ladder.
+
+### 9.2 Reconnaissance result — the plan's claim narrowed
+
+The plan says *"the only importer is `tests/test_architectural_upgrade.py:81-90`"*. Evidence makes it
+sharper:
+
+| Piece | Actual state |
+|---|---|
+| `OscillationTrap` | **used** — inside `ExecutionGraph.run` (`loop.py:142`), which reverts files and enters `RECOVER` on oscillation |
+| `ExecutionGraph` | **zero production callers** — only the package re-export and `tests/test_architectural_upgrade.py` |
+| `config.graph_oscillation_guard` | defined at `config.py:256/618/888` and **never read** by anything |
+
+So the trap is not "unwired" in isolation: the **entire Layer C phase loop** (trap, graph, ceiling) is a
+self-consistent mechanism with no production entry point.
+
+### 9.3 Item-by-item status
+
+| # | Plan item | Status | Evidence |
+|---|---|---|---|
+| 1 | Wire `OscillationTrap` to the live loop | `PARTIAL` | the detector **uses** it and the config flag is read; the live turn loop does not construct a detector (M13) |
+| 2 | Build the progress metric from the four unconnected inputs | `COMPLETE` | `ProgressSignal.from_verdict_and_graph()` — draws on P3's verdicts and P4's graph |
+| 3 | Route `STAGNATION` to Global Replan → Diagnostic → Escalate | `COMPLETE` | `route_to_recovery()` via P6's `FailureClass.STAGNATION`; **Retry is not among the rungs** |
+| 4 | A stagnated goal must never reach `GOAL_MET` | `COMPLETE` | `StagnationDetector.may_report_goal_met()` |
+
+### 9.4 False positives, mitigated structurally
+
+The plan rates the risk `Low-medium` and names it: *"flagging productive work as stagnated"*. Two
+structural mitigations, not tuned thresholds: **N consecutive** flat observations, and the **strictly
+shrank** metric — a failing-criteria set that merely *changed* is churn, not progress, and treating it
+as progress is how a detector misses a real oscillation.
+
+### 9.5 The trap is reused, not reimplemented
+
+`stagnation.py` imports `OscillationTrap` and `diff_hash`. An AST test asserts `OscillationTrap` is
+**not** defined there — a second 1-cycle/2-cycle implementation would be a second authority for "is
+this a repeat?". The signal digest sorts every collection explicitly, because a `frozenset`'s iteration
+order is not stable across processes and an unstable digest would fire the trap on noise.
+
+### 9.6 Completion criteria
+
+- [x] A synthetic oscillation is detected and routed
+- [x] No false positive on a productive multi-step task
+- [x] **The existing `config.graph_oscillation_guard` flag is finally read**
+- [x] **Zero new failures** — see §9.7 for the ±1 and why
+- [x] Rollback by the existing flag
+- [ ] `ruff` / `mypy` — not installed
+
+### 9.7 Regression, and a method fix
+
+Two consecutive full runs on the **identical tree** read **129** and **130** — so the count is
+**not stable**, and the earlier phases' clean `131 → 128` narrative cannot simply be extended.
+
+| Run | Count | Note |
+|---|---|---|
+| P0 – P6 | 128 | consistent across four single runs |
+| P7 run 1 | 129 | |
+| P7 run 2 | 130 | = run 1 + `test_cli_surface_e2e.py::…test_print_blackhole_server_falls_back` |
+| **stable set** (both runs) | **129** | `.workbuddy-ai/memory/baseline-failures-stable.txt` |
+
+`test_print_blackhole_server_falls_back` depends on a **blackhole server** — a network timeout — and
+appears in one run but not the other. That is environment, not code.
+
+**What P7 can and cannot have caused.** Nothing imports `wisp.core.stagnation` (verified by scanning
+every `wisp/**/*.py` for an `import` line naming it). Its import chain is `core/graph/loop.py`, which
+imports stdlib plus `core/graph/phases` only. Running P7's suite immediately before
+`test_sandbox_fallback_contract.py` passes 49/49. So P7 has no cross-module reach.
+
+**The decisive experiment.** Running the full suite with P7's test file **excluded**
+(`--ignore=tests/test_stagnation_detection.py`) reads **129** — and the failure set is **byte-identical**
+to the run that included it (`diff` empty). So:
+
+> **P7 contributes zero failures.** The count is 129 with P7 and 129 without it.
+
+That also settles the collection-order hypothesis: adding the file changes nothing, so the earlier
+`test_sandbox_fallback_contract` suspicion was wrong.
+
+**Why the residual +1 over P6 is unexplained:** the P0–P6 baseline lists lived in `/tmp` and were
+**deleted between sessions**, so the P6 set no longer exists to diff against. P7 is **proven** to
+contribute nothing; the 129-vs-128 difference lies outside P7.
+
+**Method fix:** the baseline now lives **in the repo** and is the **intersection of two runs** rather
+than one run's output — a test failing in both is real, one appearing in only one is flaky. See
+`.workbuddy-ai/memory/README.md`.
+
+### 9.8 The live loop was not wired (item M13)
+
+The plan's first item is *"wire `OscillationTrap` to the live loop"*. The detector uses the trap and the
+config flag is read, but the live turn loop does not construct a detector.
+
+This is the **third consecutive phase** deferring the same class of change: P5's item 5 (graph drives
+execution), P6's M12 (recovery ladder consulted), and now M13. They share **one** prerequisite —
+**M9**, the message list as a projection of the graph, plus the journal-first reconstruction in **M2**.
+The live turn path's failure and progress behaviour is not observable enough to change safely until
+those land. Stated once here rather than three times as three separate omissions: the migration has
+built a **complete mechanism layer whose integration is a single coherent next step**.
+
+---
+
+## 10. Change log
+
 
 
 
@@ -550,8 +656,12 @@ it alters behaviour on the **failure** path — the least-covered path — and t
 | 2026-09-22 | P6 | **Wired the compensation declarations** — `plan_rollback()` consults `reversibility()`/`rollback_preview()`, their first production caller; an unsafe rollback **escalates** | 12 tests |
 | 2026-09-22 | P6 | The denial rule is enforced **by class** over the canonical vocabulary (Phase 10 removed a prose guard that matched nothing) | AST-pinned |
 | 2026-09-22 | P6 | **Regression verified: 128 → 128, failure set identical to P5. 0 new.** Report: `PHASE_P6_REPORT.md` | full suite, `diff -q` |
+| 2026-09-23 | P7 | `wisp/core/stagnation.py`: `ProgressSignal` (4 inputs), `StagnationDetector` (reuses `OscillationTrap`), `route_to_recovery()`, `may_report_goal_met()` | 44 tests |
+| 2026-09-23 | P7 | **`config.graph_oscillation_guard` is finally read** — the plan's explicit completion criterion | flag tests |
+| 2026-09-23 | P7 | Method fix: the baseline failure set now lives in the repo, not `/tmp` (which was cleared and lost P0–P6's) | `.workbuddy-ai/memory/baseline-failures-P7.txt` |
+| 2026-09-23 | P7 | **Regression: P7 contributes ZERO failures — proven.** The suite reads 129 with P7's test file and 129 without it, sets byte-identical. The count IS unstable run-to-run (129 vs 130), and the P0–P6 `/tmp` baselines were lost to a reboot. Report: `PHASE_P7_REPORT.md` §4.2 | full suite, three runs |
 
-### 9.1 Regression summary
+### 10.1 Regression summary
 
 | Run | Failures + errors |
 |---|---|

@@ -11,10 +11,14 @@
 
 ---
 
-## 0. STATUS — Persistent Graph Loop migration, P0–P3a complete and committed
+## 0. STATUS — Persistent Graph Loop migration, P0–P6 complete and committed
 
-**Phase 10 is committed.** `HEAD` is **`b17a927`**, four commits on top of the Phase 10 baseline
-`83b10af`. See §3 for the commit list.
+**Phase 10 and migration P0–P6 are committed.** `HEAD` is **`e133a95`**, **nine** commits on top of
+the Phase 10 baseline `83b10af`. See §3 for the commit list.
+
+**Next up: P7 — stagnation detection** (prerequisites P1 and P5 are met). Its detector,
+`core/graph/loop.py::OscillationTrap`, already exists and is **orphaned** — the same pathology this
+migration keeps finding.
 
 **The Persistent Graph Loop migration is underway** — `WISP_MIGRATION_PLAN.md` defines phases P0–P9.
 
@@ -27,8 +31,9 @@
 | P4 — task graph from durable state | `COMPLETE` (item 5 deferred) | `PHASE_P4_REPORT.md` |
 | P5 — runtime graph mutation | `COMPLETE` (item 5 deferred) | `PHASE_P5_REPORT.md` |
 | P6 — recovery ladder | `COMPLETE` (live-loop wiring deferred) | `PHASE_P6_REPORT.md` |
-| P7 — stagnation detection | `READY TO START` | — |
-| P8–P9 | `NOT STARTED` | — |
+| P7 — stagnation detection | `COMPLETE` (live-loop wiring deferred) | `PHASE_P7_REPORT.md` |
+| P8 — context as a first-class subsystem | `READY TO START` | — |
+| P9 | `NOT STARTED` | — |
 
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings log F1–F17, change log).
 **Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (ADR-0001 … ADR-0026).
@@ -457,6 +462,11 @@ dissolved under execution, four of them mine.
 | `744d081` | `feat:` P0 + P1 + P2 implementation and tests — 17 files, 119 new tests |
 | `385e552` | `docs:` P0–P2 wiring recorded in `AGENTS.md` + the ledger |
 | `b17a927` | `feat(p3):` acceptance criteria, evidence, verdicts (stage 3a) — 11 files, 60 new tests |
+| `98bb8f9` | `docs:` hand off the migration in `CONTEXT.md` — path, status, environment, open items |
+| `e56fc6e` | `feat(p4):` materialize a task graph from durable state — 35 new tests |
+| `e2da7f0` | `feat(p5):` runtime graph mutation — 49 new tests |
+| `e47118a` | `docs:` correct `CONTEXT.md` — Phase 10's other changes are **not** committed |
+| `e133a95` | `feat(p6):` recovery ladder — 69 new tests |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py` and `AGENTS.md` carried **pre-existing uncommitted work** from before the
@@ -769,6 +779,7 @@ that work, and makes unrelated failures look like yours. Finding F12.
 | **M7** | `change_tracker.py` not yet wired into evidence (P3 plan item 7) | **OPEN** — deferred with 3b. |
 | **M8** | `multi_agent/dag.py` not yet retired into `wisp/graph/` (P4 plan item 5) | **OPEN — deferred deliberately.** It is on the live `fanout` path, and `test_13j1_fanout_contract_repair.py` is already red for environmental reasons, so a regression caused by the retirement would be indistinguishable from one already there. Needs a green fanout suite first. |
 | **M9** | **The message list is not yet a projection of the graph** (P4's stated risk mitigation) | **OPEN** — P5 work. P4 *enables* it by journalling both from one log; it does not implement it. |
+| **M13** | **The stagnation detector is not constructed by the turn loop** | **OPEN** — P7 uses the trap and reads the flag; nothing on the live path builds a detector. Shares M9/M2 as prerequisite with M11 and M12. |
 | **M12** | **The recovery ladder is not consulted by the turn loop** | **OPEN** — P6 shipped the ladder as a mechanism; live recovery behaviour is unchanged. Rewiring it alters the least-covered path. ADR-0026. |
 | **M11** | **The graph does not drive execution** | **OPEN** — P5's item 5, deferred. The turn loop executes tools directly; the graph is a record, not a driver. Making it drive is a change of control and must land **with** M9. |
 | **M10** | The materialized graph is a **lower bound** on iterations | **OPEN — by design.** The runtime materializes one node per closed tool exchange + one terminal node; iteration boundaries are not observable from the event stream, and inventing nodes would be a fabricated record. |
@@ -822,6 +833,7 @@ the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_P4_REPORT.md` | Materialize a task graph from durable state |
 | `PHASE_P5_REPORT.md` | Runtime graph mutation |
 | `PHASE_P6_REPORT.md` | Recovery ladder |
+| `PHASE_P7_REPORT.md` | Stagnation detection |
 
 **Guards added by the migration:**
 
@@ -837,6 +849,7 @@ the user's pre-existing WIP (§8) plus foreign-session test files.
 | `tests/test_acceptance_verdict.py` | the verdict algebra; the floor guard is retained, not replaced; stage 3a does not gate |
 | `tests/test_task_graph_materialization.py` | readiness is **stored**, not recomputed; one transition API (AST, in-module and tree-wide); the graph is a projection of the log |
 | `tests/test_graph_mutation.py` | the extended vocabulary is a superset (ratchet); expansion is acyclic by construction; invalidation cascades; supersession retains history; the growth budget is **enforced**; insertion order does not change the graph |
+| `tests/test_stagnation_detection.py` | the detector **reuses** `OscillationTrap` (AST-pinned); a productive task is never flagged; stagnation routes to a **replan, not a retry**; a stagnated goal cannot report `GOAL_MET`; `graph_oscillation_guard` is finally read |
 | `tests/test_recovery_ladder.py` | the taxonomy is closed at 10; **denials never retry** (by class, over the canonical vocabulary); escalation is terminal and resumable; an unsafe rollback escalates; every rung cites evidence; budgets are enforced |
 
 
