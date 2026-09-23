@@ -48,7 +48,27 @@ class Principal:
         return self.capabilities is None or tool_name in self.capabilities
 
 
-def child_principal(parent: Principal, contract: Any) -> Principal:
+def executor_principal(tool_executor: Any, *, workspace: str,
+                       profile: str) -> Principal:
+    """The principal an executor authorizes as — **one place decides this**.
+
+    Precedence: the executor's configured `principal`, else the unbounded local
+    human. `ToolExecutor` uses this for its own calls, and `SubagentRunner` uses
+    it to find the *parent* a child is derived from.
+
+    Sharing the rule is the point: if the runner derived the parent by a
+    different route, a child's `parent_principal_id` could name a principal its
+    parent's own calls never use — a second authority for "who is the parent",
+    which is the defect class this migration exists to remove.
+    """
+    configured = getattr(tool_executor, "principal", None)
+    if configured is not None:
+        return configured
+    return local_principal(workspace=workspace, profile=profile)
+
+
+def child_principal(parent: Principal, contract: Any, *,
+                    capabilities: Any = None) -> Principal:
     """The narrowed principal a subagent should run under (migration P9).
 
     `derive_subagent` was implemented and tested but **never called in
@@ -68,8 +88,20 @@ def child_principal(parent: Principal, contract: Any) -> Principal:
     fix) or hand it an empty set (a child that can call nothing). So it is
     refused, with a message naming the fix.
 
+    **`capabilities` overrides the contract's declared tools.** A caller that has
+    already resolved them should pass the result here rather than calling
+    `derive_subagent` itself — a runner that filters the contract's list by
+    permission mode holds a concrete set where the contract says `"all"`, and
+    keeping the narrowing decision in this one function is what stops a second
+    implementation of "what may this child do" appearing at the call site. The
+    override narrows only: `derive_subagent` still refuses a widening.
+
     Raises `ValueError` on any widening attempt, via `derive_subagent`.
     """
+    if capabilities is not None:
+        return derive_subagent(
+            parent, capabilities=frozenset(str(c) for c in capabilities))
+
     declared = [str(t) for t in (getattr(contract, "tools", None) or [])]
 
     if not declared or declared == ["all"]:

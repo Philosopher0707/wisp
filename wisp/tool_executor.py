@@ -492,6 +492,24 @@ class ToolExecutor:
         # opportunistically purged on write (TTL + key cap).
         self._fetch_breaker: dict[tuple[int, int], tuple[float, int]] = {}
 
+    def _effective_principal(self, workspace: str,
+                             principal: Any | None = None) -> Any:
+        """The identity this call authorizes as — **one place decides it**.
+
+        Precedence: an explicit per-call principal (a subagent's) > the
+        executor's configured principal > the unbounded local human.
+
+        `auth.principal.executor_principal` owns the last two steps, so the
+        runner that derives a child from its parent's identity and this consult
+        cannot disagree about who the parent is.
+        """
+        if principal is not None:
+            return principal
+        from wisp.auth.principal import executor_principal
+        return executor_principal(
+            self, workspace=workspace,
+            profile=str(getattr(self.config, "profile", None) or "default"))
+
     # ── Public API ───────────────────────────────────────────────────
 
     def _repeat_key(self, func_name: str, func_args: dict[str, Any]) -> str:
@@ -670,8 +688,18 @@ class ToolExecutor:
         workspace: str,
         tool_call_id: str | None = None,
         approval_handler: ApprovalHandler | None = None,
+        principal: Any | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Execute one tool call and yield events.
+
+        `principal` is the identity to authorize AS for **this call** (migration
+        M15). It exists because a subagent must authorize as a narrowed child
+        while sharing its parent's executor: `ToolExecutor.__init__` creates two
+        `ThreadPoolExecutor`s whose shutdown the composition root owns, so a
+        per-child executor would leak two pools per subagent — and `fanout`
+        spawns many. The identity therefore travels with the call, not the
+        object. `None` keeps the executor's own principal (and, failing that,
+        the unbounded local human), so this is additive.
 
         Yields:
             - approval_request (if approval needed and not auto-approved)
@@ -679,6 +707,7 @@ class ToolExecutor:
         """
         func_name = tool_name
         func_args = dict(tool_args) if tool_args else {}
+        _principal = self._effective_principal(workspace, principal)
 
         # Dangerous commands are blocked before any mode/approval logic so
         # autonomous mode cannot accidentally escalate them. The regular
@@ -715,12 +744,9 @@ class ToolExecutor:
         # stays with the existing gate below. Default workspace trust is
         # REVIEW_REQUIRED (no behavior change); quarantine markers deny
         # non-read tools even in FULL mode.
-        _profile = getattr(self.config, "profile", None) or "default"
         _pm = effective_mode
         _decision = authorize(
-            self.principal
-            if self.principal is not None
-            else local_principal(workspace=workspace, profile=str(_profile)),
+            _principal,
             func_name, func_args,
             classify_workspace(workspace),
             permission_mode=_pm.value if hasattr(_pm, "value") else str(_pm),

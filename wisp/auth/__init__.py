@@ -10,6 +10,7 @@ from wisp.auth.principal import (
     Principal,
     PrincipalKind,
     child_principal,
+    executor_principal,
     derive_subagent,
     local_principal,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "check_consent",
     "classify_workspace",
     "child_principal",
+    "executor_principal",
     "derive_subagent",
     "local_principal",
     "origin_hash",

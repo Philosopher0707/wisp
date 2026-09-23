@@ -56,6 +56,7 @@ most recent are listed here for orientation.
 | **M4** | ADR-0004 revisited | M2 | `COMPLETE` — **found a live defect** | `PHASE_M4_REPORT.md` |
 | **M16** | The escalation is state, not audit | M4 | `COMPLETE` — **found a live read-side defect** | `PHASE_M16_REPORT.md` |
 | **M9** | The execution view | P1, P4 | `COMPLETE` — **the claim was the wrong target**; closed as faithfulness | `PHASE_M9_REPORT.md` |
+| **M15** | A subagent authorizes as a narrowed child | P9 | `COMPLETE` — **the obvious fix was a pool leak** | `PHASE_M15_REPORT.md` |
 
 Critical path: **P0 → P1 → P2 → P4 → P5 → P6**. P8 is independent and may start at any time.
 The `M` rows are the plan's **deferred prerequisites**, worked after the phases. **M9 remains open** —
@@ -1145,7 +1146,90 @@ and of each other, and each is bounded. Only M11 and M13 share a prerequisite.
 
 ---
 
-## 18. Findings log (migration-wide)
+## 18. M15 — A Subagent Authorizes as a Narrowed Child
+
+### 18.1 What was wrong
+
+The plan calls narrowing a subagent's authority *"the single most important fix in the delegation
+layer."* P9 built the plumbing and recorded the spawn site as the gap (M15), **with a tripwire test**
+asserting it was still unwired.
+
+Verified: `_runner._run_agent` builds the child core with `tool_executor=self._tool_executor` — the
+**parent's** executor, whose `principal` is `None`. So `ToolExecutor.execute` fell back to
+`local_principal(...)`: a `HUMAN` principal with `capabilities=None`, i.e. **unbounded**. Every child's
+tool call was authorized as the local human.
+
+The child's *tool list* was already narrowed. What was missing is the **authorization identity**:
+L1 of `authorize()` denies a tool the principal lacks, and the principal was always the unbounded human.
+
+### 18.2 The trap the obvious fix walks into (F26)
+
+Constructing a `ToolExecutor` per child is the natural fix and it is **wrong here**:
+`ToolExecutor.__init__` creates **two** `ThreadPoolExecutor`s whose shutdown the composition root owns.
+A per-child executor would create two pools per subagent that **nothing ever closes**, and `fanout`
+spawns many. The identity therefore travels with the **call**, not the object — and a ratchet test keeps
+it that way.
+
+### 18.3 The decision (ADR-0030)
+
+1. `ToolExecutor.execute(..., principal=None)` — additive; `None` preserves the old behaviour exactly.
+2. **One precedence authority**: `_effective_principal` resolves per-call > executor > local human, and
+   delegates the last two steps to the new `auth.principal.executor_principal()`. The subagent runner
+   uses the **same** function to find the parent, so a child's `parent_principal_id` cannot name a
+   principal its parent's own calls never authorize as.
+3. `child_principal(…, capabilities=…)` — an override for a caller that has already resolved the
+   contract's tools (`"all"` + mode → a concrete list). It narrows only.
+4. **Both child paths stamp it** — `_run_agent` and `_run_via_runtime` build *separate* session dicts,
+   and wiring one is the half-fix this migration keeps finding.
+
+### 18.4 The ordering fact, and what actually changed
+
+| Gate | Question | Runs |
+|---|---|---|
+| policy engine | is this tool permitted **in this mode**? | first — and names no controlling layer (F15) |
+| `authorize()` L1 | does this **principal** have this capability? | second |
+
+So the child inherits the parent's **mode** but not the parent's **contract**, and the principal layer is
+the gate that enforces the contract. Verified: a child declared `["read_file"]` calling `write_file` in
+`auto_edit` is now denied `[Denied by principal layer: … lacks capability write_file]`; before M15 it
+was permitted.
+
+The ordering decided the test design: `run_bash` **cannot** be the probe, because the policy gate denies
+it in `auto_edit` before `authorize()` runs. `test_the_mode_gate_denies_before_the_principal_consult`
+pins that so the principal layer is not mistaken for redundant.
+
+### 18.5 The tripwire worked
+
+P9's tripwire fired on the first run after the wiring, with the message it was written to emit:
+*"the spawn site is now wired — update `PHASE_P9_REPORT.md` §7 (M15) and delete this test"*. That is
+what happened: the P9 report is updated and the tripwire is replaced by its inverse.
+
+### 18.6 Completion criteria
+
+- [x] The spawn site derives and passes a narrowed child principal — **both** child paths
+- [x] A child is denied **at the authorization layer** for a tool its contract excludes
+- [x] A child can still call what its contract allows
+- [x] The parent is resolved by the **shared** rule, so the parent pointer cannot disagree
+- [x] No per-child executor — the pool leak is ratcheted against
+- [x] **Zero new failures** — 129, byte-identical in both directions; the delegation/auth scope checked
+      separately (511 tests, 14 failures, **all 14 verified pre-existing**)
+- [ ] `ruff` / `mypy` — not installed
+
+### 18.7 Honest limits
+
+- **The child's tool list was already narrowed.** `allowed_tools` filters the schemas and the core
+  rejects disallowed calls. M15 adds the **authorization** layer behind it — defence in depth, and the
+  layer that produces an audit record naming a `SUBAGENT` principal.
+- **No child turn was driven end to end.** The tests drive the runner's principal derivation, the
+  executor's per-call consult, and the core's forwarding, but not a full child turn.
+- **The mode is still inherited, not narrowed.** A child declaring `run_bash` still cannot use it in
+  `auto_edit`. Narrowing the *mode* is a separate change, not attempted here.
+- **`_child_principal` returns `None` when there is no executor** — a path with no principal. Consistent
+  with the core's no-executor fallback, but stated rather than implied.
+
+---
+
+## 19. Findings log (migration-wide)
 
 | # | Finding | Phase | Resolution |
 |---|---|---|---|
@@ -1174,6 +1258,7 @@ and of each other, and each is bounded. Only M11 and M13 share a prerequisite.
 | **F23** | **`multi_agent/_circuit_breaker.py` is a duplicate authority.** Imported by exactly one file — a foreign-session WIP test that does not collect — while a second, wired breaker lives at `infra/circuit_breaker.py` | P9 | Documented; **not deleted** (the user's untracked WIP) |
 | **F24** | **M4's blob fallback discarded a surviving escalation.** `reconstruction_source()` refuses a gapped journal and returns the blob — which answers *which transcript to trust* and says nothing about the journal-only records. A gapped journal whose escalation had survived still had it, and the fallback threw it away: the blob carries no `escalation` key, so a parked run lost the record of why it was parked, reported only as `_gap`. The failure mode M2 guarded against, arriving from M4 | M16 | Fixed (ADR-0028); `reconstruct()` salvages on both paths |
 | **F25** | **The replayed transcript was not the live transcript.** `Session.apply` added a `name` key to every tool reply that `_exchange_parts` never sets, while `runtime.py` states the invariant *"the log has to reproduce `messages` exactly"*. The journal and the blob therefore disagreed on the same session, and `context_pruner` branched on the difference | M9 | Fixed (ADR-0029); equality is now asserted on a real turn |
+| **F26** | **The obvious fix for the subagent-authority gap would have leaked thread pools.** `ToolExecutor.__init__` creates two `ThreadPoolExecutor`s whose shutdown the composition root owns; a per-child executor (the natural way to give a child its own `principal`) would create two pools per subagent that nothing closes, and `fanout` spawns many | M15 | Avoided: the principal travels with the call; ratcheted by `test_the_runner_does_not_construct_a_tool_executor` |
 
 The findings are numbered in discovery order and sorted here for reference. Each one is a claim in a
 plan document or an audit that **repository evidence contradicted** — the migration's recurring result
@@ -1181,7 +1266,7 @@ is that the mechanisms mostly existed and what was missing was callers.
 
 ---
 
-## 19. Change log
+## 20. Change log
 
 
 
@@ -1258,8 +1343,12 @@ is that the mechanisms mostly existed and what was missing was callers.
 | 2026-09-23 | M9 | Ratchet: `TaskNode` may not carry transcript payload, so the graph cannot become a second copy by convenience | AST + behavioural |
 | 2026-09-23 | M9 | **M11–M15 re-scoped**: M12/M14/M15 are independent of the graph, not blocked on it | `PHASE_M9_REPORT.md` §9 |
 | 2026-09-23 | M9 | **Regression: 129, byte-identical in both directions.** A behaviour change on an exercised path | full suite, stable baseline |
+| 2026-09-23 | M15 | **ADR-0030.** The spawn site derives a narrowed child principal; `execute(principal=…)` carries it per call rather than per executor | 22 tests |
+| 2026-09-23 | M15 | **F26 — the obvious fix leaks.** A per-child `ToolExecutor` would create two `ThreadPoolExecutor`s per subagent that nothing closes | ratchet test |
+| 2026-09-23 | M15 | The P9 tripwire **fired** with its written message; `PHASE_P9_REPORT.md` §7 updated and the tripwire replaced by its inverse | `TestReachability` |
+| 2026-09-23 | M15 | **Regression: 129, byte-identical in both directions.** Four production files, two on the live subagent path | full suite, stable baseline |
 
-### 19.1 Regression summary
+### 20.1 Regression summary
 
 | Run | Failures + errors |
 |---|---|

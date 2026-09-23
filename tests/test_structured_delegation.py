@@ -137,15 +137,26 @@ class TestExecutorAuthorizesAsAPrincipal:
             ToolExecutor.__init__).parameters["principal"].default is None
 
     def test_the_authorize_consult_prefers_the_executor_principal(self):
-        """AST: the consult reads `self.principal` and only falls back to
-        `local_principal` when it is unset."""
-        tree = ast.parse((REPO / "wisp" / "tool_executor.py")
-                         .read_text(encoding="utf-8"))
+        """The consult reads the configured principal and only falls back to the
+        local human when it is unset.
+
+        M15 moved the precedence into `ToolExecutor._effective_principal`, which
+        delegates the last two steps to `auth.principal.executor_principal` — so
+        the *rule* now has one home shared with the runner that derives a child
+        from its parent. Asserted as the delegation rather than as the literals
+        it replaced, and behaviourally in
+        `tests/test_child_principal_wired.py`.
+        """
         src = (REPO / "wisp" / "tool_executor.py").read_text(encoding="utf-8")
-        assert "self.principal" in src
-        assert "if self.principal is not None" in src
-        # and the fallback is still there, so nothing regresses
-        assert "local_principal(workspace=workspace" in src
+        assert "def _effective_principal" in src
+        assert "executor_principal(" in src, (
+            "the fallback rule is no longer the shared one, so the executor and "
+            "the subagent runner could disagree about who the parent is")
+        assert "authorize(\n            _principal," in src, (
+            "the authorize consult does not use the resolved principal")
+        # and the local-human fallback still exists, one module over
+        psrc = (REPO / "wisp" / "auth" / "principal.py").read_text(encoding="utf-8")
+        assert "local_principal(workspace=workspace" in psrc
 
     def test_a_narrowed_child_reaches_authorize(self, tmp_path):
         """The end of the chain: a principal derived for a contract, handed to
@@ -213,26 +224,14 @@ class TestDagNodeBudgetApplied:
 
 
 class TestReachability:
-    def test_derive_subagent_still_has_no_production_caller(self):
-        """Honest accounting: P9 wired the *plumbing* (`child_principal` +
-        `ToolExecutor.principal`), not the spawn site. This test documents the
-        remaining gap rather than letting it look closed."""
-        # AST, not string matching: a comment or docstring that merely NAMES
-        # these functions is not a caller. (P8's suite made exactly this
-        # mistake with its own module docstring.)
-        offenders: list[str] = []
-        for path in sorted((REPO / "wisp").rglob("*.py")):
-            if "__pycache__" in path.parts or path.name == "principal.py":
-                continue
-            tree = ast.parse(path.read_text(encoding="utf-8", errors="ignore"))
-            for node in ast.walk(tree):
-                if (isinstance(node, ast.Call)
-                        and isinstance(node.func, ast.Name)
-                        and node.func.id in ("derive_subagent", "child_principal")):
-                    offenders.append(f"{path.relative_to(REPO)}:{node.lineno}")
-        assert not offenders, (
-            "the spawn site is now wired — update PHASE_P9_REPORT.md §7 (M15) "
-            f"and delete this test: {offenders}")
+    # M15 wired the spawn site, so the tripwire that asserted it was unwired has
+    # fired and been replaced by its inverse in
+    # `tests/test_child_principal_wired.py::TestReachability`. Kept as a pointer
+    # so a reader following the P9 report finds where the assertion went.
+    def test_the_spawn_site_wiring_moved_to_the_m15_suite(self):
+        """The P9 gap (M15) is closed; the assertion now lives with M15."""
+        from wisp.multi_agent._runner import SubagentRunner
+        assert hasattr(SubagentRunner, "_child_principal")
 
     def test_child_principal_is_reachable(self):
         from wisp.auth import child_principal as exported

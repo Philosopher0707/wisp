@@ -41,6 +41,53 @@ def _effective_child_tools(
         ]
     return filter_allowed_for_mode(permission_mode, requested)
 
+
+def _stricter(a: int | float | None, b: int | float | None):
+    """The tighter of two optional limits; None means unlimited."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return min(a, b)
+
+
+def _budget_from_contract(contract: Any, deadline: float):
+    """Contract-derived resource budget, narrowed by a DAG node's declaration.
+
+    The contract's own fields are the floor. A DAG node's `budget` metadata —
+    built by the orchestrator and carried on the contract as
+    `metadata["_budget"]` — may only **narrow** it: a graph author can bound a
+    node, never widen it past the contract's limits.
+
+    Until Phase 10 this function did not exist and both call sites built a
+    bare `ResourceBudget()` from contract fields, so a node's declared budget
+    was constructed, attached, and silently dropped. That is audit-2026-08-24
+    item 11, *"honor metadata budget"* — the third of its three prescribed
+    fixes (blocked descendants and dependency injection are already in; see
+    `dag.py::_block_descendants` and `metadata["_dep_results"]`).
+    """
+    from .resource_budget import ResourceBudget
+
+    budget = ResourceBudget()
+    if contract.max_tokens:
+        budget.max_tokens = contract.max_tokens
+    if contract.max_input_tokens:
+        budget.max_tokens = (budget.max_tokens or contract.max_input_tokens)
+    budget.max_wall_time = deadline - time.monotonic()
+
+    declared = (getattr(contract, "metadata", None) or {}).get("_budget")
+    if declared is not None:
+        budget = ResourceBudget(
+            max_tokens=_stricter(budget.max_tokens, declared.max_tokens),
+            max_wall_time=_stricter(budget.max_wall_time, declared.max_wall_time),
+            max_tool_calls=_stricter(budget.max_tool_calls,
+                                     declared.max_tool_calls),
+        )
+
+    budget.start()
+    return budget
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -437,10 +484,16 @@ class SubagentRunner:
                 session_dict["subagent_system_prompt"] = system_prompt
             # Role tool restrictions become enforced (not just prompt text):
             # core filters the tool schemas AND rejects disallowed calls.
-            session_dict["allowed_tools"] = _effective_child_tools(
+            _effective = _effective_child_tools(
                 contract.tools,
                 str(getattr(config, "permission_mode", "auto_edit") or "auto_edit"),
             )
+            session_dict["allowed_tools"] = _effective
+            # The child's authorization identity (migration M15). `allowed_tools`
+            # is enforced by the core as a schema filter; this is the identity the
+            # authorization layer consults, so a child is denied at L1 rather
+            # than only being offered fewer schemas.
+            session_dict["principal"] = self._child_principal(contract, _effective)
 
             # Partition context — only pass relevant history to subagent
             raw_messages = list(session_dict.get("messages", []))
@@ -466,15 +519,7 @@ class SubagentRunner:
             engine_iterations = 0
             last_nonempty_round = ""
 
-            # Set up resource budget from contract metadata or contract fields
-            from .resource_budget import ResourceBudget
-            budget = ResourceBudget()
-            if contract.max_tokens:
-                budget.max_tokens = contract.max_tokens
-            if contract.max_input_tokens:
-                budget.max_tokens = (budget.max_tokens or contract.max_input_tokens)
-            budget.max_wall_time = deadline - time.monotonic()
-            budget.start()
+            budget = _budget_from_contract(contract, deadline)
 
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -616,10 +661,12 @@ class SubagentRunner:
             session_dict["messages"] = []
         if system_prompt:
             session_dict["subagent_system_prompt"] = system_prompt
-        session_dict["allowed_tools"] = _effective_child_tools(
+        _effective = _effective_child_tools(
             contract.tools,
             str(getattr(config, "permission_mode", "auto_edit") or "auto_edit"),
         )
+        session_dict["allowed_tools"] = _effective
+        session_dict["principal"] = self._child_principal(contract, _effective)
 
         # Ensure session exists in runtime store
         sid = session_dict.get("id", "")
@@ -632,19 +679,17 @@ class SubagentRunner:
             runtime_session["workspace"] = ws
         if "allowed_tools" in session_dict:
             runtime_session["allowed_tools"] = session_dict["allowed_tools"]
+        # The runtime path builds a SECOND session dict; the principal has to be
+        # stamped into it too, or this path authorizes as the local human while
+        # the other one does not — the half-fix this migration keeps finding.
+        if "principal" in session_dict:
+            runtime_session["principal"] = session_dict["principal"]
 
         output_text = ""
         engine_iterations = 0
         last_nonempty_round = ""
 
-        from .resource_budget import ResourceBudget
-        budget = ResourceBudget()
-        if contract.max_tokens:
-            budget.max_tokens = contract.max_tokens
-        if contract.max_input_tokens:
-            budget.max_tokens = (budget.max_tokens or contract.max_input_tokens)
-        budget.max_wall_time = deadline - time.monotonic()
-        budget.start()
+        budget = _budget_from_contract(contract, deadline)
 
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -724,6 +769,41 @@ class SubagentRunner:
                 except Exception:
                     pass
         self._provider_cache.clear()
+
+    def _child_principal(self, contract: SubagentContract,
+                         effective_tools: list[str]):
+        """The narrowed principal this child authorizes as (migration M15).
+
+        P9 built `child_principal` and `ToolExecutor.principal`; this is the
+        spawn site they were waiting for. Until now the child core was handed
+        the **parent's** executor, whose `principal` is `None`, so every child
+        call was authorized as the unbounded local human.
+
+        The parent is resolved by `auth.principal.executor_principal` — the same
+        rule the executor uses for its own calls — so a child can never be
+        derived from a different principal than its parent's own calls
+        authorize as.
+
+        `effective_tools` is passed explicitly rather than left to
+        `child_principal` reading `contract.tools`, because by this point
+        `_effective_child_tools` has resolved `"all"` (and the permission mode)
+        into a concrete list. `child_principal` correctly refuses to *guess* at
+        `"all"`; here there is nothing to guess.
+
+        Returns `None` when there is no executor to derive from — a runner
+        without one has no authorization layer at all, and the core's own
+        no-executor fallback already denies anything but safe reads.
+        """
+        if self._tool_executor is None:
+            return None
+        from wisp.auth.principal import child_principal, executor_principal
+
+        workspace = str(getattr(self, "workspace", "") or "")
+        parent = executor_principal(
+            self._tool_executor, workspace=workspace,
+            profile=str(getattr(self._parent_config, "profile", None)
+                        or "default"))
+        return child_principal(parent, contract, capabilities=effective_tools)
 
     def _build_child_config(self, contract: SubagentContract, workspace: str) -> WispConfig:
         """Clone the parent config with optional per-subagent overrides."""

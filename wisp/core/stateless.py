@@ -1874,10 +1874,16 @@ class WispAgentCore:
                     return approved, None
                 wrapped_handler = _wrap_approval
 
+            # Migration M15: a subagent authorizes as a NARROWED child, not as
+            # the local human. The principal travels with the session (the same
+            # channel `allowed_tools` uses) because the executor is shared: one
+            # executor serves many children under `fanout`, and building one per
+            # child would leak two thread pools each.
             async for agent_event in self.tool_executor.execute(
                 name, args, workspace,
                 tool_call_id=event.get("id"),
                 approval_handler=wrapped_handler,
+                principal=session.get("principal"),
             ):
                 yield _flatten_event(agent_event)
         else:

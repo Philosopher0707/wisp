@@ -35,9 +35,10 @@ baseline (see §11).
 | **M4** — ADR-0004 revisited | `COMPLETE` — **found a live defect** | `PHASE_M4_REPORT.md` |
 | **M16** — the escalation is state, not audit | `COMPLETE` — **found a live read-side defect** | `PHASE_M16_REPORT.md` |
 | **M9** — the execution view | `COMPLETE` — **the claim was the wrong target** | `PHASE_M9_REPORT.md` |
+| **M15** — a subagent authorizes as a narrowed child | `COMPLETE` — **the obvious fix was a pool leak** | `PHASE_M15_REPORT.md` |
 
-**Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F25**, change log).
-**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0029**).
+**Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F26**, change log).
+**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0030**).
 
 **The durability track is closed.** M2 (journal-first reconstruction), M3 (a real-SIGKILL kill point),
 M4 (durability as a correctness precondition) and M16 (the escalation is state, not audit) are all
@@ -80,11 +81,12 @@ reproduce `messages` exactly"*. The journal and the blob therefore disagreed on 
 | **M12** | nothing from M9 — a hook on the failure path so the ladder is consulted |
 | **M13** | meaningful progress signals, which depend on M11 |
 | **M14** | nothing from M9 — the context assembler must build `ContextItem`s |
-| **M15** | nothing from M9 — the spawn site must pass a `child_principal` |
+| **M15** | ✅ **DONE** — nothing from M9 was needed. The spawn site now passes a `child_principal`; the identity travels with the **call**, because a per-child executor would leak two thread pools each (ADR-0030) |
 
-So **M12, M14 and M15 are independent** of the graph and of each other, and each is bounded. Only M11
-and M13 share a prerequisite. The remaining work is **larger** than "one keystone", not smaller — and
-three of the five items can be started in any order.
+So **M12, M14 and M15 are independent** of the graph and of each other, and each is bounded — which
+**M15 confirmed by being done**: it needed nothing from the graph, and it is now complete. Only M11 and
+M13 share a prerequisite. The remaining work is **larger** than "one keystone", not smaller, but it is
+several small pieces rather than one large one.
 
 ### 0.0.3 Also open
 
@@ -825,7 +827,7 @@ env -u PYTHONPATH .venv/bin/python -m pytest \
   tests/test_context_trust.py tests/test_structured_delegation.py \
   tests/test_session_reconstruction.py tests/test_durability_preconditions.py \
   tests/test_escalation_durability.py tests/test_execution_view_projection.py \
-  tests/reliability/test_killpoints.py -q
+  tests/test_child_principal_wired.py tests/reliability/test_killpoints.py -q
 ```
 
 ### The regression method — read this before changing anything
@@ -895,7 +897,7 @@ the files to a path **outside the repo** first, then compare.
 | **M12** | The recovery ladder is not consulted by the turn loop | **OPEN** — P6 shipped the ladder as a mechanism. ADR-0026. |
 | **M13** | The stagnation detector is not constructed by the turn loop | **OPEN** — P7 uses the trap and reads the flag; nothing builds a detector. |
 | **M14** | The context trust boundary has no production caller | **OPEN** — `ContextAssembler` does not build `ContextItem`s, so nothing is tagged in production. |
-| **M15** | The subagent spawn site is not wired to `child_principal` | **OPEN** — plumbing exists and is tested through `authorize()`; nothing constructs a child principal at spawn. **A tripwire test asserts this.** |
+| **M15** | The subagent spawn site | ✅ **COMPLETE** — ADR-0030. The P9 tripwire fired and was replaced by its inverse; `execute(principal=…)` carries the child identity per call. |
 | **M16** | The `ESCALATION` record's loss is not fully addressed | **OPEN** — P6 made escalation *durable state*; if that write fails a parked run loses the record of why. The one row in ADR-0027's classification where "best-effort, canary" is arguably wrong. |
 | **M1** | P3 stage 3b — enable the acceptance gate | **BLOCKED on a measurement**, itself blocked on a working tool path (`jsonschema`). ADR-0016. |
 | **M2** | Journal-first reconstruction | ✅ **COMPLETE** — `reconstruct()` + `reconstruction_source()`; the pre-P0 hazard and the gap hazard are both handled and pinned. **Five consumers still read the blob** (a tripwire asserts it). |
@@ -964,6 +966,7 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_M4_REPORT.md` | Durability as a correctness precondition (ADR-0027) |
 | `PHASE_M16_REPORT.md` | The escalation is state, not audit (ADR-0028) |
 | `PHASE_M9_REPORT.md` | The execution view: faithful, and a shape not a payload (ADR-0029) |
+| `PHASE_M15_REPORT.md` | A subagent authorizes as a narrowed child (ADR-0030) |
 
 **Guards added by the migration:**
 
@@ -979,6 +982,7 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `tests/test_acceptance_verdict.py` | the verdict algebra; the floor guard is retained, not replaced; stage 3a does not gate |
 | `tests/test_task_graph_materialization.py` | readiness is **stored**, not recomputed; one transition API (AST, in-module and tree-wide); the graph is a projection of the log |
 | `tests/test_graph_mutation.py` | the extended vocabulary is a superset (ratchet); expansion is acyclic by construction; invalidation cascades; supersession retains history; the growth budget is **enforced**; insertion order does not change the graph |
+| `tests/test_child_principal_wired.py` | a child is **denied at the authorization layer** for a tool its contract excludes; the identity travels with the **call** (ratchet: no per-child executor); **both** child paths stamp it; the parent is resolved by the shared rule |
 | `tests/test_execution_view_projection.py` | a real turn's live transcript equals its replay; a tool reply carries only the protocol keys; `TaskNode` may not gain transcript payload (ratchet); the graph's nodes are a count, not an identity |
 | `tests/test_escalation_durability.py` | a surviving escalation is **not** discarded by the blob fallback; the write policy is best-effort for a turn body and **fail-loud for a state-bearing batch**; the carve-out cannot widen |
 | `tests/test_durability_preconditions.py` | a **gapped** journal is a provider-invalid transcript and is refused; contiguity semantics; **a real turn satisfies the invariant** (or the check would reject every session) |

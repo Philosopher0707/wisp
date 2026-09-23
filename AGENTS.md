@@ -124,6 +124,23 @@ add it to the live path too — or assert the invariant and watch it fail.
 **unchanged** — nothing on it calls the ladder. Do not assume failures are being classified or that
 recovery is budgeted in production; it is not yet (item M12).
 
+### A subagent authorizes as a narrowed child, and the identity travels with the call
+
+`SubagentRunner._child_principal()` derives a child principal from the parent's own identity (via
+`auth.principal.executor_principal`, the shared rule) and stamps it into the child session; the core
+forwards it to `ToolExecutor.execute(..., principal=…)`.
+
+**Do not build a `ToolExecutor` per child.** Its constructor creates two `ThreadPoolExecutor`s whose
+shutdown the composition root owns, so a per-child executor leaks two pools per subagent — and `fanout`
+spawns many. That is why the principal is a per-call argument, and
+`test_the_runner_does_not_construct_a_tool_executor` is the ratchet.
+
+**The ordering matters when testing it.** The policy gate asks "is this tool permitted in this mode?"
+and runs *first*, naming no controlling layer (F15); `authorize()` L1 asks "does this principal have this
+capability?" and runs second. So a child inherits the parent's **mode** but not the parent's
+**contract** — probe with a tool the mode permits and the contract excludes (`write_file`), not one the
+mode already denies (`run_bash`). ADR-0030.
+
 ### The graph is a shape, not a payload
 
 `wisp/core/task_graph.py` records *structure* — node identity, status, readiness, edges. It carries **no**
@@ -225,7 +242,8 @@ python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_
   tests/test_recovery_ladder.py tests/test_stagnation_detection.py \
   tests/test_context_trust.py tests/test_structured_delegation.py \
   tests/test_session_reconstruction.py tests/test_durability_preconditions.py \
-  tests/test_escalation_durability.py tests/test_execution_view_projection.py -q
+  tests/test_escalation_durability.py tests/test_execution_view_projection.py \
+  tests/test_child_principal_wired.py -q
 ```
 
 ### Reachability is mandatory for new durable code

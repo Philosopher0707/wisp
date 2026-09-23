@@ -134,7 +134,8 @@ change touched files the rest of the suite exercises:
 
 - **The spawn site is not wired.** `child_principal` and `ToolExecutor.principal` exist and are tested,
   but nothing in the subagent spawn path calls them. The mechanism is complete; the integration is
-  **M15**. This is the fifth consecutive phase whose remainder is integration (M11–M15).
+  **M15** — since **closed** by migration M15. This was the fifth consecutive phase whose remainder is
+integration (M11–M15); see `PHASE_M15_REPORT.md`.
 - **Capability narrowing is therefore not enforced in production.** A child still runs unbounded today.
   The plan's own mitigation applies: *"it must be measured and staged"* — and measuring needs a working
   tool path (`jsonschema` is absent).
@@ -147,7 +148,7 @@ change touched files the rest of the suite exercises:
 
 | Criterion | Status |
 |---|---|
-| Capability narrowing is applied and tested | ⚠️ **tested**; not yet *applied* at the spawn site (M15) |
+| Capability narrowing is applied and tested | ✅ **applied at the spawn site** by migration M15 (`PHASE_M15_REPORT.md`, ADR-0030) |
 | A schema-violating result is rejected | ❌ not attempted (item 3) |
 | Shared-workspace failure rolls back transactionally | ❌ not attempted (item 4) |
 | One graph system | ❌ not attempted (item 8 — already M8) |
@@ -158,7 +159,7 @@ change touched files the rest of the suite exercises:
 
 ## 7. Deviations from the plan
 
-### 7.1 The spawn site is not wired (M15)
+### 7.1 The spawn site was not wired (M15) — **CLOSED 2026-09-23**
 
 `derive_subagent`'s *reachability* is addressed: there is now a caller-shaped helper
 (`child_principal`) and a place to pass the result (`ToolExecutor.principal`), both tested end to end
@@ -172,6 +173,18 @@ authority change there now would make a regression the migration caused indistin
 already present.
 
 **Recorded as M15, with a tripwire test rather than a comment.**
+
+> **CLOSED by migration M15** (`PHASE_M15_REPORT.md`, ADR-0030). The tripwire fired on the first run
+> after the wiring, exactly as designed — its message said *"update `PHASE_P9_REPORT.md` §7 (M15) and
+> delete this test"*, which is what happened. The spawn site now derives a narrowed child principal via
+> `_runner._child_principal()` and stamps it into **both** child session dicts; the identity travels
+> with the **call** (`ToolExecutor.execute(..., principal=…)`) rather than in a per-child executor,
+> because `ToolExecutor.__init__` creates two thread pools whose shutdown the composition root owns.
+>
+> The P9 completion criterion *"capability narrowing is applied and tested"* was **⚠️ tested, not
+> applied**. It is now applied: a child declared `read_file` that calls `write_file` is denied
+> `[Denied by principal layer: … lacks capability write_file]` instead of being permitted as the
+> unbounded local human.
 
 ### 7.2 The circuit breaker was documented, not deleted
 
@@ -199,7 +212,7 @@ callers.
 |---|---|
 | Phases that found the plan's claim needed narrowing | **6** (P0 ×2, P1, P2, P7, P8) |
 | Phases that found the plan's *target component* was wrong | **2** (P2, P5) |
-| Phases whose remainder is integration rather than construction | **5** (M11, M12, M13, M14, M15) |
+| Phases whose remainder is integration rather than construction | **5** (M11, M12, M13, M14, M15) — **M15 closed**, M9 dissolved; see `PHASE_M9_REPORT.md` §9 and `PHASE_M15_REPORT.md` |
 
 Those five integration items are **one coherent piece of work**, and they share one prerequisite:
 **M9** (the message list as a projection of the graph) plus **M2** (journal-first reconstruction). That

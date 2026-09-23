@@ -973,6 +973,70 @@ from diverging.
 
 ---
 
+## ADR-0030 — A subagent's identity travels with the call, not the executor
+
+**Status:** ACCEPTED
+**Phase:** M15
+**Supersedes:** P9's `ToolExecutor(principal=…)` as the *only* way to supply a subagent identity
+
+**Context.** The plan calls narrowing a subagent's authority *"the single most important fix in the
+delegation layer."* P9 built the plumbing — `auth.principal.child_principal()` and
+`ToolExecutor(principal=…)` — and recorded the spawn site as the remaining gap (M15), with a **tripwire
+test** asserting it was still unwired.
+
+The gap, verified: `_runner._run_agent` builds the child core with
+`tool_executor=self._tool_executor` — the **parent's** executor, whose `principal` is `None`. So
+`ToolExecutor.execute` fell back to `local_principal(...)`: a `HUMAN` principal with
+`capabilities=None`, i.e. **unbounded**. Every child's tool call was authorized as the local human.
+
+The child's *tool list* was already narrowed (`session_dict["allowed_tools"]`, enforced by the core as a
+schema filter). What was missing is the **authorization identity**: L1 of `authorize()` denies a tool the
+principal lacks, and the principal was always the unbounded human.
+
+**Why not a per-child executor.** The obvious fix — construct a `ToolExecutor` per child with
+`principal=…` — is wrong here, and reading the constructor is what shows it: `ToolExecutor.__init__`
+creates **two** `ThreadPoolExecutor`s (`_tool_pool`, `_network_pool`) whose shutdown the composition root
+owns. A per-child executor would create two pools per subagent that nothing ever closes, and `fanout`
+spawns many. The identity therefore travels with the **call**, not the object.
+
+**Decision.**
+
+1. **`ToolExecutor.execute(..., principal=None)`** — the identity to authorize as for this call.
+   `None` preserves the previous behaviour exactly, so the change is additive for every existing caller.
+2. **One precedence authority.** `ToolExecutor._effective_principal` resolves per-call principal >
+   executor principal > unbounded local human, delegating the last two steps to the new
+   `auth.principal.executor_principal()`. The subagent runner uses the **same** function to find the
+   parent it derives a child from, so a child's `parent_principal_id` cannot name a principal its
+   parent's own calls never authorize as.
+3. **`child_principal(parent, contract, capabilities=…)`** — an explicit override for a caller that has
+   already resolved the contract's tools. `_effective_child_tools` turns `"all"` and the permission mode
+   into a concrete list *before* the principal is derived; `child_principal` correctly refuses to
+   **guess** at `"all"`, and here there is nothing to guess. The override narrows only —
+   `derive_subagent` still refuses a widening.
+4. **Both child paths stamp it.** `_run_agent` (stateless core) and `_run_via_runtime` (`AgentRuntime`)
+   build *separate* session dicts. Wiring one and not the other is the half-fix this migration keeps
+   finding, so a test asserts both.
+
+**Consequence — what actually changed.** The child inherits the parent's **permission mode** but not the
+parent's **contract**, and the principal layer is now the gate that enforces the contract:
+
+| Gate | Question | Runs |
+|---|---|---|
+| policy engine | is this tool permitted **in this mode**? | first — and names no controlling layer (F15) |
+| `authorize()` L1 | does this **principal** have this capability? | second |
+
+So a child declared `read_file` that calls `write_file` in `auto_edit` is now denied
+`[Denied by principal layer: principal … lacks capability write_file]`. Before M15 it was permitted,
+because the principal was the unbounded human. `run_bash` is *not* the test case: the policy gate denies
+it in `auto_edit` before `authorize()` runs, which is pinned by its own test so the ordering is not
+mistaken for redundancy.
+
+**Reversal condition:** If a future phase needs a *different* executor per child (e.g. per-child sandbox
+configuration), that executor must take its thread pools from a shared, owned pool — otherwise this ADR's
+reason for existing is lost and the leak returns.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -1006,3 +1070,4 @@ from diverging.
 | 0027 | Best-effort durability, revisited: the journal's *contiguity* is the precondition | M4 | ACCEPTED (supersedes ADR-0004's reversal condition) |
 | 0028 | A state-bearing record is not best-effort, in either direction | M16 | ACCEPTED (supersedes ADR-0027's `ESCALATION` row) |
 | 0029 | The graph is a shape, not a payload; the transcript projects from the journal | M9 | ACCEPTED (supersedes the M9 statement) |
+| 0030 | A subagent's identity travels with the call, not the executor | M15 | ACCEPTED |
