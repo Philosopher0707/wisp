@@ -416,10 +416,29 @@ class Session:
                     }
 
             case SessionEventType.TOOL_RESULT:
+                # The message shape is the LIVE one, exactly (migration M9).
+                #
+                # `_exchange_parts` builds a reply as
+                # `{role, tool_call_id, content}` and its comment states the
+                # invariant: "replay replaces the live transcript, so the log
+                # has to reproduce `messages` exactly." This case used to add a
+                # `name` key the live path never sets, so it did not — and the
+                # blob (saved from `messages`) disagreed with the journal on the
+                # same session. `reconstruct()` would then return different
+                # messages depending on which source it chose.
+                #
+                # `name` is not carried here because it is redundant: it is
+                # already in the assistant message's `tool_calls` block, in
+                # `Session.tool_calls`, and resolvable from `tool_call_id`.
+                # Adding it to the live path instead would put a key into
+                # `messages` that every provider adapter strips again, so it
+                # would be dead data on the hot path.
+                #
+                # Pinned by `test_the_journal_reproduces_the_transcript_exactly`
+                # and `test_a_tool_reply_carries_only_the_protocol_keys`.
                 reply: dict[str, Any] = {
                     "role": "tool",
                     "content": event.payload["result"],
-                    "name": event.payload["name"],
                 }
                 # Pairing id, when the writer supplied one. Without it the
                 # replayed transcript cannot be matched to its call by id,

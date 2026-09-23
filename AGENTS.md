@@ -111,11 +111,30 @@ escalation because the blob has no `escalation` key. `_journal` carries the jour
 (`JOURNAL_ONLY_RECORDS`) on either path; `_journal_records_at_risk` names what a gap endangers.
 `Session.journal_records()` is the accessor; `Session.has_escalation` is the named question.
 
+**Replay must reproduce the live transcript exactly.** `runtime.py` states this at the construction
+site, and it is now true and asserted: `Session.apply` produces the same tool-reply shape as
+`_exchange_parts` — `{role, tool_call_id, content}` and nothing else. It used to add a `name` key the
+live path never sets, which made the journal and the blob disagree on the same session and made
+`context_pruner` branch on the difference (ADR-0029, F25). If you add a key to a replayed message,
+add it to the live path too — or assert the invariant and watch it fail.
+
 ### The recovery ladder is not consulted by the turn loop
 
 `wisp/core/recovery.py` is complete and tested, but the live turn path's recovery behaviour is
 **unchanged** — nothing on it calls the ladder. Do not assume failures are being classified or that
 recovery is budgeted in production; it is not yet (item M12).
+
+### The graph is a shape, not a payload
+
+`wisp/core/task_graph.py` records *structure* — node identity, status, readiness, edges. It carries **no**
+tool name, arguments, result or assistant text, and it must not: copying the transcript into the nodes
+would create a second copy that can disagree with the first, which is the defect class this migration
+exists to remove. `test_task_nodes_carry_no_transcript_payload` is a ratchet — it fails if a payload
+field appears on `TaskNode`. The transcript projects from the **journal**; the graph contributes status.
+
+Related, and the real precondition for M11: the nodes are `turn:0 … turn:n-1`, generated from a **count**
+of closed exchanges. A node does not reference the work unit it stands for, so the graph cannot drive
+execution yet. Making it drivable means giving nodes **identity**, not payload. ADR-0029.
 
 ### A state-bearing record is not best-effort
 
@@ -206,7 +225,7 @@ python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_
   tests/test_recovery_ladder.py tests/test_stagnation_detection.py \
   tests/test_context_trust.py tests/test_structured_delegation.py \
   tests/test_session_reconstruction.py tests/test_durability_preconditions.py \
-  tests/test_escalation_durability.py -q
+  tests/test_escalation_durability.py tests/test_execution_view_projection.py -q
 ```
 
 ### Reachability is mandatory for new durable code

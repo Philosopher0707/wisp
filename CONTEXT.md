@@ -34,9 +34,10 @@ baseline (see §11).
 | **M3** — killpoint integration | `COMPLETE` (one window) | `PHASE_M3_REPORT.md` |
 | **M4** — ADR-0004 revisited | `COMPLETE` — **found a live defect** | `PHASE_M4_REPORT.md` |
 | **M16** — the escalation is state, not audit | `COMPLETE` — **found a live read-side defect** | `PHASE_M16_REPORT.md` |
+| **M9** — the execution view | `COMPLETE` — **the claim was the wrong target** | `PHASE_M9_REPORT.md` |
 
-**Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F24**, change log).
-**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0028**).
+**Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F25**, change log).
+**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0029**).
 
 **The durability track is closed.** M2 (journal-first reconstruction), M3 (a real-SIGKILL kill point),
 M4 (durability as a correctness precondition) and M16 (the escalation is state, not audit) are all
@@ -55,23 +56,35 @@ The migration built **eight mechanisms**, each tested and reachable from its pac
 working Persistent Graph Loop. The plan's own objective — *"the graph changes during execution"* — is met
 at the **mechanism** level and not at the **integration** level.
 
-### 0.0.2 The single remaining keystone: **M9**
+### 0.0.2 There is no single keystone — M9 was recorded as one, and that was wrong
 
-**M9 — the message list as a projection of the graph.** Five items are blocked on it, and they are all
-the *same* change ("make the live turn loop use the mechanism"):
+M9 was described here as *"the message list as a projection of the graph"*, with five items blocked on it.
+**M9 is now complete (ADR-0029), and the claim did not survive contact with the repository.** Two findings:
 
-| Item | What it needs |
+**The graph cannot project the transcript.** `TaskNode` carries no tool name, no arguments, no result, no
+assistant text — the graph is a *shape*, not a payload. Making it the source of the message list would
+mean copying the transcript into the nodes, i.e. a second copy that can disagree with the first. That is
+the defect class this migration exists to remove, so the strong reading of M9 was **the wrong target**,
+not merely unimplemented. The transcript projects from the **journal**; the graph contributes status.
+
+**The projection that does exist was not faithful.** `Session.apply` added a `name` key to every replayed
+tool reply that the live path never sets, while `runtime.py` states the invariant *"the log has to
+reproduce `messages` exactly"*. The journal and the blob therefore disagreed on the same session, and
+`context_pruner` branched on the difference. Fixed, and the equality is now asserted on a real turn.
+
+**And "five items blocked on M9" was itself an overstatement.** Re-scoped:
+
+| Item | What it actually needs |
 |---|---|
-| **M11** | the graph drives execution instead of merely recording it |
-| **M12** | the recovery ladder is consulted on the failure path |
-| **M13** | the stagnation detector is constructed per turn |
-| **M14** | context items are tagged in production |
-| **M15** | the subagent spawn site passes a `child_principal` |
+| **M11** | **node identity** — the graph's nodes are `turn:0…turn:n-1`, an index, not a reference to their work unit. This is the real precondition, and M9 *redefines* M11 rather than unblocking it |
+| **M12** | nothing from M9 — a hook on the failure path so the ladder is consulted |
+| **M13** | meaningful progress signals, which depend on M11 |
+| **M14** | nothing from M9 — the context assembler must build `ContextItem`s |
+| **M15** | nothing from M9 — the spawn site must pass a `child_principal` |
 
-M9 is what makes that change safe to make **once** rather than five times. **M9 was deliberately not
-attempted in this session**: it inverts the dependency between the message list and the graph, it is a
-change of *control* on the least-observable path, and a half-finished inversion would be worse than none.
-It needs its own session.
+So **M12, M14 and M15 are independent** of the graph and of each other, and each is bounded. Only M11
+and M13 share a prerequisite. The remaining work is **larger** than "one keystone", not smaller — and
+three of the five items can be started in any order.
 
 ### 0.0.3 Also open
 
@@ -809,7 +822,8 @@ env -u PYTHONPATH .venv/bin/python -m pytest \
   tests/test_recovery_ladder.py tests/test_stagnation_detection.py \
   tests/test_context_trust.py tests/test_structured_delegation.py \
   tests/test_session_reconstruction.py tests/test_durability_preconditions.py \
-  tests/test_escalation_durability.py tests/reliability/test_killpoints.py -q
+  tests/test_escalation_durability.py tests/test_execution_view_projection.py \
+  tests/reliability/test_killpoints.py -q
 ```
 
 ### The regression method — read this before changing anything
@@ -874,8 +888,8 @@ the files to a path **outside the repo** first, then compare.
 
 | # | Item | Nature |
 |---|---|---|
-| **M9** | **The message list is not yet a projection of the graph** | **OPEN — the sole keystone.** P4 *enables* it (both journal from one log); it is not implemented. Inverts the dependency between messages and graph, and is a change of **control** on the least-observable path. Needs its own session. |
-| **M11** | The graph does not drive execution | **OPEN** — the turn loop executes tools directly; the graph is a record, not a driver. Must land **with** M9. |
+| **M9** | The execution view | ✅ **COMPLETE** — ADR-0029. **The strong reading was the wrong target** (the graph carries no payload), and the projection that exists was **not faithful** (now fixed and asserted). |
+| **M11** | The graph does not drive execution | **OPEN** — the turn loop executes tools directly; the graph is a record, not a driver. **Precondition is node identity**, not M9: nodes are `turn:0…n-1`, an index. ADR-0029. |
 | **M12** | The recovery ladder is not consulted by the turn loop | **OPEN** — P6 shipped the ladder as a mechanism. ADR-0026. |
 | **M13** | The stagnation detector is not constructed by the turn loop | **OPEN** — P7 uses the trap and reads the flag; nothing builds a detector. |
 | **M14** | The context trust boundary has no production caller | **OPEN** — `ContextAssembler` does not build `ContextItem`s, so nothing is tagged in production. |
@@ -947,6 +961,7 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_M3_REPORT.md` | Killpoint integration for the session journal |
 | `PHASE_M4_REPORT.md` | Durability as a correctness precondition (ADR-0027) |
 | `PHASE_M16_REPORT.md` | The escalation is state, not audit (ADR-0028) |
+| `PHASE_M9_REPORT.md` | The execution view: faithful, and a shape not a payload (ADR-0029) |
 
 **Guards added by the migration:**
 
@@ -962,6 +977,7 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `tests/test_acceptance_verdict.py` | the verdict algebra; the floor guard is retained, not replaced; stage 3a does not gate |
 | `tests/test_task_graph_materialization.py` | readiness is **stored**, not recomputed; one transition API (AST, in-module and tree-wide); the graph is a projection of the log |
 | `tests/test_graph_mutation.py` | the extended vocabulary is a superset (ratchet); expansion is acyclic by construction; invalidation cascades; supersession retains history; the growth budget is **enforced**; insertion order does not change the graph |
+| `tests/test_execution_view_projection.py` | a real turn's live transcript equals its replay; a tool reply carries only the protocol keys; `TaskNode` may not gain transcript payload (ratchet); the graph's nodes are a count, not an identity |
 | `tests/test_escalation_durability.py` | a surviving escalation is **not** discarded by the blob fallback; the write policy is best-effort for a turn body and **fail-loud for a state-bearing batch**; the carve-out cannot widen |
 | `tests/test_durability_preconditions.py` | a **gapped** journal is a provider-invalid transcript and is refused; contiguity semantics; **a real turn satisfies the invariant** (or the check would reject every session) |
 | `tests/test_session_reconstruction.py` | a pre-P0 session is **not truncated** (the hazard); the journal carries the audit records the blob never had; both paths are shape-compatible with the blob; **a tripwire asserting the five consumers are still un-migrated** |

@@ -479,11 +479,19 @@ class TestSessionApply:
 
     def test_tool_result_without_id_keeps_legacy_shape(self):
         """Pre-migration events carry no tool_call_id; replaying them must
-        not invent one."""
+        not invent one.
+
+        The assertion names only the keys a tool reply may carry. It used to
+        also pin a `name` key, which was incidental to this test's purpose —
+        the docstring is about `tool_call_id` — and which the live path never
+        sets. M9 removed it so replay and the live transcript agree; see
+        `test_execution_view_projection.py`. What this test is *for* is
+        unchanged: no fabricated pairing id.
+        """
         s = Session(session_id="a")
         s.apply(SessionEvent.tool_result_event(1, "read_file", "body"))
-        assert s.messages[0] == {
-            "role": "tool", "content": "body", "name": "read_file"}
+        assert s.messages[0] == {"role": "tool", "content": "body"}
+        assert "tool_call_id" not in s.messages[0]
 
 
 # ── 4. Rollback flag restores the old behavior exactly ──────────────────

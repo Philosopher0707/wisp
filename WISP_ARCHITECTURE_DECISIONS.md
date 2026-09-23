@@ -895,6 +895,84 @@ treatment and needs its own analysis.
 
 ---
 
+## ADR-0029 — The graph is a shape, not a payload; the transcript projects from the journal
+
+**Status:** ACCEPTED
+**Phase:** M9
+**Supersedes:** the M9 statement in `WISP_MIGRATION_STATUS.md` ("the message list as a projection of the
+graph")
+
+**Context.** M9 was recorded as the migration's keystone — *"the message list is not yet a projection of
+the graph"* — with five items (M11–M15) blocked on it. The target architecture states the model:
+
+```
+Immutable Event Journal  ──materialize──►  Graph State  ──project──►  Execution View
+```
+
+and says the message list is a view "projected from **both**". Reconnaissance checked the strong reading
+against the repository and found it is not expressible, and that the weaker reading is currently broken.
+
+**Finding 1 — the graph cannot project the transcript.** `TaskNode` carries `node_id`, `kind`,
+`iteration`, `status`, `ready`, `deps`, `detail`, `superseded_by`. No tool name, no arguments, no result,
+no assistant text. Verified behaviourally as well as structurally: a real turn's graph serialises with no
+message content in it. To make the graph the *source* of the transcript, the transcript would have to be
+copied into the nodes — a second copy that can disagree with the first, which is the defect class this
+migration exists to remove, and precisely what P2 warned about when it made `PROPOSAL`/`OUTCOME`
+audit-only ("a second path into `messages` would duplicate every tool reply on replay").
+
+**Finding 2 — the nodes are a count, not an identity.** `build_turn_graph(run_id, n)` generates
+`turn:0 … turn:n-1` from `_work_units = len(exchanges) + 1`. A node does not reference the exchange it
+stands for. So the graph is a *lower bound on iterations* with a linear chain, not a structure over the
+work. **This, not payload, is the real precondition for M11**: for the graph to drive execution a node
+must be an *identified* unit of work.
+
+**Finding 3 — the projection that does exist is not faithful.** `runtime.py` states the invariant at the
+construction site: *"replay replaces the live transcript, so the log has to reproduce `messages`
+exactly."* It did not. `Session.apply`'s `TOOL_RESULT` case built
+`{role, content, name, tool_call_id}` while `_exchange_parts` builds `{role, tool_call_id, content}` — an
+extra `name` key on every replayed tool reply. Two consequences, both verified:
+
+| Consequence | Evidence |
+|---|---|
+| the journal and the **blob** disagreed on the same session | `blob["messages"] != replay.messages`; so `reconstruct()` returned different messages depending on which source it chose |
+| a consumer branched on the divergence | `context_pruner._get_tool_name_for_result` reads `name` first; live took the `tool_call_id` fallback, replay short-circuited |
+
+The divergence never reached a provider — `providers/openai.py` normalises tool messages to
+`{role, tool_call_id, content}` — so it was latent rather than broken. Latent is the point: it is a second
+producer of the same structure, and the next consumer to read `name` inherits a difference that no test
+covered.
+
+**Decision.**
+
+1. **The graph stays a shape.** It is not given transcript payload. The ratchet
+   `test_task_nodes_carry_no_transcript_payload` fails if a payload field appears on `TaskNode`, so the
+   decision cannot be reversed by a convenience change.
+2. **The transcript projects from the journal**, which is what `WISP_TARGET_ARCHITECTURE.md` already says
+   (*"the journal is the source of truth for what happened"*). The graph contributes status and
+   structure, not content.
+3. **The projection must be faithful, and faithfulness is now an invariant with a test.**
+   `Session.apply` produces the live shape exactly; `test_the_journal_reproduces_the_transcript_exactly`
+   compares a real turn's live transcript against its replay, and
+   `test_a_tool_reply_carries_only_the_protocol_keys` asserts the shape directly.
+
+**Why the live shape wins rather than the replayed one.** The live shape is what the engine has always
+produced and what the blob stores, so aligning the replay changes one branch in `Session.apply` instead
+of changing what every consumer of `messages` sees. `name` is also redundant in the message — it is in
+the assistant's `tool_calls` block, in `Session.tool_calls`, and resolvable from `tool_call_id` — and
+adding it to the live path would put a key into `messages` that every provider adapter strips again.
+
+**Consequence:** M9 is closed as *"the execution view is faithful and the graph is a shape"*, not as an
+inversion. M11–M15 remain open, but their prerequisite is now stated correctly: **node identity**, not
+message-list derivation. M12, M14 and M15 were recorded as blocked on M9 and are in fact independent of
+it.
+
+**Reversal condition:** If a future phase needs the graph to drive execution (M11), the change is to give
+nodes identity and a reference to their work unit — **not** payload. If a proposal to put transcript
+content into `TaskNode` appears, it needs a superseding ADR that explains how the second copy is kept
+from diverging.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -927,3 +1005,4 @@ treatment and needs its own analysis.
 | 0026 | The recovery ladder is a mechanism; the turn loop does not consult it yet | P6 | ACCEPTED |
 | 0027 | Best-effort durability, revisited: the journal's *contiguity* is the precondition | M4 | ACCEPTED (supersedes ADR-0004's reversal condition) |
 | 0028 | A state-bearing record is not best-effort, in either direction | M16 | ACCEPTED (supersedes ADR-0027's `ESCALATION` row) |
+| 0029 | The graph is a shape, not a payload; the transcript projects from the journal | M9 | ACCEPTED (supersedes the M9 statement) |

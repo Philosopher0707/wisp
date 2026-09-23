@@ -55,6 +55,7 @@ most recent are listed here for orientation.
 | **M3** | Killpoint integration | P1 | `COMPLETE` (one window) | `PHASE_M3_REPORT.md` |
 | **M4** | ADR-0004 revisited | M2 | `COMPLETE` — **found a live defect** | `PHASE_M4_REPORT.md` |
 | **M16** | The escalation is state, not audit | M4 | `COMPLETE` — **found a live read-side defect** | `PHASE_M16_REPORT.md` |
+| **M9** | The execution view | P1, P4 | `COMPLETE` — **the claim was the wrong target**; closed as faithfulness | `PHASE_M9_REPORT.md` |
 
 Critical path: **P0 → P1 → P2 → P4 → P5 → P6**. P8 is independent and may start at any time.
 The `M` rows are the plan's **deferred prerequisites**, worked after the phases. **M9 remains open** —
@@ -1049,7 +1050,102 @@ description of it. `RECOVERY` rows stay best-effort specifically because the ful
 
 ---
 
-## 17. Findings log (migration-wide)
+## 17. M9 — The Execution View: Faithful, and a Shape Not a Payload
+
+### 17.1 What M9 was recorded as
+
+*"The message list is not yet a projection of the graph. P4 enables it; it is not implemented. Inverts
+the dependency between the message list and the graph."* — and `CONTEXT.md` called it **the sole
+keystone**, with M11–M15 blocked on it.
+
+Reconnaissance checked that against the repository. It did not survive, in two directions at once.
+
+### 17.2 The target architecture says something narrower
+
+`WISP_TARGET_ARCHITECTURE.md` §14 says the message list is a view *"projected from **both**"* — journal
+for what happened, graph for what is true now. The ledger compressed that into "a projection of the
+graph", and that is the version that does not hold.
+
+### 17.3 Three findings
+
+| # | Finding | Evidence |
+|---|---|---|
+| 1 | **The graph cannot project the transcript** | `TaskNode` carries no tool name, arguments, result or text. Verified behaviourally: a real turn's graph serialises with no message content in it |
+| 2 | **The nodes are a count, not an identity** | `build_turn_graph(run_id, n)` generates `turn:0…turn:n-1` from `len(exchanges) + 1`; a node never references its work unit. **This is the real precondition for M11** |
+| 3 | **The projection that exists is not faithful** | `Session.apply` built `{role, content, name, tool_call_id}` where the live path builds `{role, tool_call_id, content}` |
+
+Finding 1 means the strong reading is **the wrong target**, not merely unimplemented: making the graph
+the source would require copying the transcript into the nodes — the second-copy defect P2 warned about.
+
+Finding 3 had two verified consequences: the journal and the **blob** disagreed on the same session, so
+`reconstruct()` returned different messages per source; and `context_pruner` **branched** on the
+divergence (it reads `name` first, so the live path took the `tool_call_id` fallback and the replay
+short-circuited). It never reached a provider — `providers/openai.py` normalises tool messages — so it
+was latent, which is the point: two producers of one structure.
+
+### 17.4 The decision (ADR-0029)
+
+1. **The graph stays a shape** — no transcript payload, with a **ratchet** test that fails if a payload
+   field appears on `TaskNode`.
+2. **The transcript projects from the journal**, as the target architecture already says.
+3. **Faithfulness is now an invariant with a test** — a real turn's live transcript is compared against
+   its replay, and the reply shape is asserted directly.
+
+The live shape wins because it is what the engine has always produced and what the blob stores, so
+aligning the replay changes one branch rather than what every consumer of `messages` sees. `name` is
+redundant in the message anyway — it is in the assistant's `tool_calls` block, in `Session.tool_calls`,
+and resolvable from `tool_call_id`.
+
+### 17.5 Item status
+
+| # | Concern | Status | Evidence |
+|---|---|---|---|
+| 1 | The strong reading of M9 checked and corrected | `COMPLETE` | ADR-0029 |
+| 2 | The existing projection made faithful | `COMPLETE` | `Session.apply`; RED-first test |
+| 3 | Faithfulness pinned on a **real turn** | `COMPLETE` | `TestTheProjectionIsFaithful` (5) |
+| 4 | The shape asserted directly | `COMPLETE` | `test_a_tool_reply_carries_only_the_protocol_keys` |
+| 5 | The graph's payload-lessness ratcheted | `COMPLETE` | `test_task_nodes_carry_no_transcript_payload` |
+| 6 | M11's real prerequisite identified | `COMPLETE` | §17.6 — **node identity** |
+
+### 17.6 Completion criteria
+
+- [x] The plan's claim narrowed against evidence — **7th time**
+- [x] The divergence reproduced RED-first, then fixed — 5 failing tests, all one key
+- [x] The graph cannot become a second copy of the transcript, and cannot quietly become one
+- [x] **Zero new failures** — 129, byte-identical in both directions
+- [x] Neighbouring suites re-run explicitly — 448 passed
+- [ ] `ruff` / `mypy` — not installed
+
+### 17.7 What this does to M11–M15
+
+All five were recorded as blocked on M9. That was **partly wrong**, and correcting it is worth more than
+the phase itself:
+
+| Item | Recorded | Actually needs |
+|---|---|---|
+| **M11** | blocked on M9 | **node identity** — M9 does not unblock it, it *redefines* it |
+| **M12** | blocked on M9 | nothing from M9 — a hook on the failure path |
+| **M13** | blocked on M9 | meaningful progress signals, which depend on M11 |
+| **M14** | blocked on M9 | nothing from M9 — the assembler must build `ContextItem`s |
+| **M15** | blocked on M9 | nothing from M9 — the spawn site must pass a `child_principal` |
+
+"One coherent next step" was itself an overstatement: **M12, M14 and M15 are independent** of the graph
+and of each other, and each is bounded. Only M11 and M13 share a prerequisite.
+
+### 17.8 Honest limits
+
+- **The graph is still not drivable.** Nodes remain indices; ADR-0029 records what would change that.
+- **The invariant is asserted for the cases this environment can produce.** `jsonschema` is absent, so
+  every tool call is denied — covered, and in fact the default path here. A *successful* execution is
+  exercised only through synthetic paths, not end to end.
+- **No provider was contacted.** The claim that the extra key never reached one rests on reading
+  `providers/openai.py`'s normalisation, not on observing a request.
+- **M9 closes without the inversion the ledger described** — which means the remaining work is *larger*
+  than "one keystone", not smaller.
+
+---
+
+## 18. Findings log (migration-wide)
 
 | # | Finding | Phase | Resolution |
 |---|---|---|---|
@@ -1076,6 +1172,7 @@ description of it. `RECOVERY` rows stay best-effort specifically because the ful
 | **F21** | **`_fit_sections` records truncation as PROSE, not as structured data.** The plan claimed "no record at all"; evidence shows a `dropped_labels` accumulator rendered into the prompt as `[NOTE: … (omitted)]`. Prose cannot be asserted on, counted or alerted on — the same distinction as F7 (`controlling_layer`) | P8 | Fixed: `Context.dropped` is structured |
 | **F22** | **`SubagentContract` had no `metadata` field, and the orchestrator *reads* it.** `subagent_orchestrator.py:1316` is `if not task.metadata:` — a read — so the first time a DAG node declared a budget the orchestrator raised `AttributeError`. The plan described this as the budget being "never seen"; it is a latent crash. Phase 10's F1 reappearing in a second location | P9 | Fixed: `metadata` field added |
 | **F23** | **`multi_agent/_circuit_breaker.py` is a duplicate authority.** Imported by exactly one file — a foreign-session WIP test that does not collect — while a second, wired breaker lives at `infra/circuit_breaker.py` | P9 | Documented; **not deleted** (the user's untracked WIP) |
+| **F25** | **The replayed transcript was not the live transcript.** `Session.apply` added a `name` key to every tool reply that `_exchange_parts` never sets, while `runtime.py` states the invariant *"the log has to reproduce `messages` exactly"*. The journal and the blob therefore disagreed on the same session, and `context_pruner` branched on the difference | M9 | Fixed (ADR-0029); equality is now asserted on a real turn |
 | **F24** | **M4's blob fallback discarded a surviving escalation.** `reconstruction_source()` refuses a gapped journal and returns the blob — which answers *which transcript to trust* and says nothing about the journal-only records. A gapped journal whose escalation had survived still had it, and the fallback threw it away: the blob carries no `escalation` key, so a parked run lost the record of why it was parked, reported only as `_gap`. The failure mode M2 guarded against, arriving from M4 | M16 | Fixed (ADR-0028); `reconstruct()` salvages on both paths |
 
 The findings are numbered in discovery order and sorted here for reference. Each one is a claim in a
@@ -1084,7 +1181,7 @@ is that the mechanisms mostly existed and what was missing was callers.
 
 ---
 
-## 18. Change log
+## 19. Change log
 
 
 
@@ -1156,8 +1253,13 @@ is that the mechanisms mostly existed and what was missing was callers.
 | 2026-09-23 | M16 | **ADR-0028.** Revisiting the escalation's durability found a **live read-side defect**: M4's fallback discarded a surviving escalation | 40 tests |
 | 2026-09-23 | M16 | `reconstruct()` carries `_journal` + `_journal_records_at_risk` on both paths; `_journal_turn_events` re-raises for a state-bearing batch | `PHASE_M16_REPORT.md` |
 | 2026-09-23 | M16 | **Regression: 129, byte-identical in both directions.** Three production files touched; changes additive plus one branch | full suite, stable baseline |
+| 2026-09-23 | M9 | **ADR-0029.** Reconnaissance found the keystone claim was the **wrong target**, and that the projection that does exist was **not faithful** | 11 tests |
+| 2026-09-23 | M9 | `Session.apply`'s tool reply now matches the live shape exactly; `test_the_journal_reproduces_the_transcript_exactly` is RED-first | `TestTheProjectionIsFaithful` (5) |
+| 2026-09-23 | M9 | Ratchet: `TaskNode` may not carry transcript payload, so the graph cannot become a second copy by convenience | AST + behavioural |
+| 2026-09-23 | M9 | **M11–M15 re-scoped**: M12/M14/M15 are independent of the graph, not blocked on it | `PHASE_M9_REPORT.md` §9 |
+| 2026-09-23 | M9 | **Regression: 129, byte-identical in both directions.** A behaviour change on an exercised path | full suite, stable baseline |
 
-### 18.1 Regression summary
+### 19.1 Regression summary
 
 | Run | Failures + errors |
 |---|---|
