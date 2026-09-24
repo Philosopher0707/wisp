@@ -189,6 +189,110 @@ FINAL_NODE_STATES = frozenset({
 })
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# The work-unit reference (migration M11)
+#
+# "A node never references its work unit" — M9 §17.6. Nodes were generated
+# from a COUNT (`turn:0 … turn:n-1`), so nothing connected a node to the work
+# it recorded, and `WISP_TARGET_ARCHITECTURE.md` §14's replay guarantee —
+# *"re-executing from that point is idempotent"* — had nothing to key on.
+#
+# `TaskNode.work_unit` is that reference. It is an **identity**, not content:
+# it names the work unit and carries none of it. The distinction is enforced,
+# not merely documented — see `NODE_FIELD_KINDS` below.
+# ══════════════════════════════════════════════════════════════════════════
+
+#: The reference used for a closed tool exchange: this prefix + the protocol
+#: ids the exchange's calls carry, joined by `+` for a parallel batch. The id
+#: is the one `runtime._exchange_parts` mints and stamps on the assistant
+#: `tool_calls` block, the tool reply, the TOOL_RESULT event, the proposal and
+#: the outcome — so the reference and the transcript cannot disagree.
+WORK_UNIT_CALL_PREFIX = "call:"
+
+#: The reference used for the terminal node: the turn's final output, which has
+#: no exchange and therefore no protocol id. A distinct kind rather than a
+#: fabricated call id.
+TERMINAL_WORK_UNIT = "output"
+
+#: The closed vocabulary. A reference's kind is readable without a lookup, and
+#: a new kind is a deliberate addition rather than an accident.
+WORK_UNIT_PREFIXES = (WORK_UNIT_CALL_PREFIX,)
+
+
+def turn_work_units(
+    exchange_call_ids: Iterable[Iterable[str]],
+) -> tuple[str, ...]:
+    """The identity of every work unit in one turn, in order.
+
+    One entry per closed tool exchange — identified by the protocol ids its
+    calls carry — plus the terminal output node. **The single authority for
+    "what are a turn's work units"**, so the runtime cannot build a node for
+    something the journal would not recognise.
+    """
+    units = [WORK_UNIT_CALL_PREFIX + "+".join(ids) for ids in exchange_call_ids]
+    return tuple(units) + (TERMINAL_WORK_UNIT,)
+
+
+class NodeFieldKind(StrEnum):
+    """What a `TaskNode` field is FOR. The classification *is* the design.
+
+    M9's payload ratchet was a **name blacklist** (`{"tool_name", "arguments",
+    "result", ...}`), which fails in both directions:
+
+    * it is **evadable by naming** — a payload field called `body` passes;
+    * it was **wrong about `tool_call_id`**, listed as a payload when it is the
+      reference M9's own report says M11 requires (ADR-0033).
+
+    Classifying every field closes the evasion: a new field is a test failure
+    until it is classified deliberately.
+    """
+
+    #: The graph's own bookkeeping — ids, state, readiness, a human note.
+    STRUCTURAL = "structural"
+    #: An opaque pointer at something outside the node: another node, or a work
+    #: unit in the journal. Carries no content.
+    REFERENCE = "reference"
+    #: Transcript content. **Forbidden.** A node holding tool content makes the
+    #: graph a second copy of the transcript, which can diverge from it.
+    #: Declared so the prohibition is expressible; no field may use it.
+    PAYLOAD = "payload"
+
+
+#: Every field on `TaskNode`, classified. `node_field_violations()` is the
+#: ratchet that reads this; `test_every_node_field_is_classified` drives it.
+NODE_FIELD_KINDS: dict[str, NodeFieldKind] = {
+    "node_id": NodeFieldKind.STRUCTURAL,
+    "kind": NodeFieldKind.STRUCTURAL,
+    "iteration": NodeFieldKind.STRUCTURAL,
+    "status": NodeFieldKind.STRUCTURAL,
+    "ready": NodeFieldKind.STRUCTURAL,
+    "detail": NodeFieldKind.STRUCTURAL,
+    "deps": NodeFieldKind.REFERENCE,
+    "superseded_by": NodeFieldKind.REFERENCE,
+    "work_unit": NodeFieldKind.REFERENCE,
+}
+
+
+def node_field_violations(names: Iterable[str]) -> list[str]:
+    """The field ratchet, as a function so a test can drive it.
+
+    Returns the violations for a set of field names: **unclassified** (a field
+    was added without a decision), **stale** (a classification outlived its
+    field), and **payload** (a field that would make the graph a second copy of
+    the transcript). Exposed rather than inlined so
+    `test_the_ratchet_is_not_vacuous` can prove it fires.
+    """
+    names = set(names)
+    out = [f"unclassified field: {n}"
+           for n in sorted(names - set(NODE_FIELD_KINDS))]
+    out += [f"stale classification: {n}"
+            for n in sorted(set(NODE_FIELD_KINDS) - names)]
+    out += [f"payload field: {n}"
+            for n, k in sorted(NODE_FIELD_KINDS.items())
+            if k is NodeFieldKind.PAYLOAD]
+    return out
+
+
 def is_legal_node_transition(from_status: TaskNodeState | str,
                              to_status: TaskNodeState | str) -> bool:
     return coerce_node_state(to_status) in \
@@ -214,6 +318,19 @@ class TaskNode:
     #: RETAINED with a pointer rather than deleted — replay needs the history,
     #: and a task is never mutated into a different task.
     superseded_by: str = ""
+    #: **The work unit this node records** (migration M11). An opaque reference
+    #: — `call:<protocol id>` for a closed tool exchange, `output` for the
+    #: terminal node — never the work itself. It is what makes "re-executing
+    #: from this point is idempotent" (target architecture §14) answerable: an
+    #: index cannot say *which* action already ran.
+    #:
+    #: NOTE the split from `node_id`. `node_id` is the graph's **structural
+    #: key**: edges, `deps`, transitions and supersession all address it, so it
+    #: must be stable and unique within the graph. Deriving it from a
+    #: provider-supplied id would put the topology at the mercy of transcript
+    #: data (and of `_exchange_parts`'s random fallback for id-less traffic).
+    #: The reference is a separate field on purpose — see ADR-0033.
+    work_unit: str = ""
 
     def __post_init__(self) -> None:
         """Coerce `status` to `TaskNodeState` on construction.
@@ -235,7 +352,8 @@ class TaskNode:
         return {"node_id": self.node_id, "kind": self.kind.value,
                 "iteration": self.iteration, "status": self.status.value,
                 "ready": self.ready, "deps": list(self.deps),
-                "detail": self.detail, "superseded_by": self.superseded_by}
+                "detail": self.detail, "superseded_by": self.superseded_by,
+                "work_unit": self.work_unit}
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "TaskNode":
@@ -246,7 +364,8 @@ class TaskNode:
                    ready=bool(d.get("ready", False)),
                    deps=tuple(d.get("deps") or ()),
                    detail=d.get("detail", ""),
-                   superseded_by=d.get("superseded_by", ""))
+                   superseded_by=d.get("superseded_by", ""),
+                   work_unit=d.get("work_unit", ""))
 
 
 @dataclass(frozen=True)
@@ -318,22 +437,45 @@ class TaskGraph:
 # ── Construction ────────────────────────────────────────────────────────
 
 
-def build_turn_graph(run_id: str, iterations: int) -> TaskGraph:
-    """One `AGENT` node per turn iteration, chained in order.
+def build_turn_graph(run_id: str,
+                     work_units: Iterable[str]) -> TaskGraph:
+    """One `AGENT` node per work unit, chained in order.
 
     The plan's mapping: *"the turn becomes a graph with one AGENT node per
     iteration."* Iteration 0 is the entrypoint; each later node depends on the
     one before it, so the chain is a real dependency structure rather than a
     list — which is what makes readiness meaningful rather than trivially
     "everything".
+
+    **It takes the work units, not a count** (migration M11). It used to take
+    an `int` and generate `turn:0 … turn:n-1`, which is how a node ended up
+    with no connection to the work it recorded. The caller supplies the
+    identities — `turn_work_units()` is the one authority for deriving them
+    from a turn — so a node that records nothing is not constructible.
+
+    `node_id` remains the structural key (`turn:i`); the identity travels in
+    `work_unit`. See ADR-0033 for why those are separate fields.
     """
+    if isinstance(work_units, (str, bytes)):
+        # A `str` IS a `Sequence[str]`, so `build_turn_graph(r, "abc")` would
+        # silently build three nodes named after the characters. Refused rather
+        # than guessed at.
+        raise TypeError(
+            "work_units must be a sequence of work-unit references, not a "
+            f"string: {work_units!r}")
+    units = tuple(work_units)
+    for u in units:
+        if not u:
+            raise ValueError(
+                "a work unit must be named; an empty reference is the pre-M11 "
+                "defect (a node that records nothing)")
     nodes: list[TaskNode] = []
     edges: list[tuple[str, str]] = []
-    for i in range(max(0, int(iterations))):
+    for i, unit in enumerate(units):
         nid = f"turn:{i}"
         deps = (f"turn:{i - 1}",) if i else ()
         nodes.append(TaskNode(node_id=nid, kind=NodeType.AGENT, iteration=i,
-                              deps=deps))
+                              deps=deps, work_unit=unit))
         if i:
             edges.append((f"turn:{i - 1}", nid))
     return TaskGraph(run_id=run_id,

@@ -37,6 +37,17 @@ from wisp.graph.types import NodeStatus, NodeType
 REPO = Path(__file__).resolve().parents[1]
 
 
+def _units(n: int) -> list[str]:
+    """`n` synthetic work units.
+
+    `build_turn_graph` takes the work-unit identities rather than a count
+    (migration M11): a node that records nothing is not constructible, so
+    these structural tests name their units explicitly. The `call:` prefix is
+    the real vocabulary — see `wisp.core.task_graph.WORK_UNIT_PREFIXES`.
+    """
+    return [f"call:c{i}" for i in range(n)]
+
+
 def _settle(graph, node_id, to_status, seq=1, reason="test"):
     node = graph.node(node_id)
     return apply_transition(graph, NodeTransition(
@@ -49,34 +60,34 @@ def _settle(graph, node_id, to_status, seq=1, reason="test"):
 
 class TestTurnMaterializesGraph:
     def test_build_turn_graph_has_nodes_and_edges(self):
-        g = build_turn_graph("r1", 3)
+        g = build_turn_graph("r1", _units(3))
         assert [n.node_id for n in g.nodes] == ["turn:0", "turn:1", "turn:2"]
         assert g.edges == (("turn:0", "turn:1"), ("turn:1", "turn:2"))
 
     def test_every_node_is_an_agent_node(self):
         """The plan's mapping: one AGENT node per iteration."""
-        g = build_turn_graph("r1", 4)
+        g = build_turn_graph("r1", _units(4))
         assert all(n.kind is NodeType.AGENT for n in g.nodes)
 
     def test_iteration_index_matches_node_order(self):
-        g = build_turn_graph("r1", 3)
+        g = build_turn_graph("r1", _units(3))
         assert [n.iteration for n in g.nodes] == [0, 1, 2]
 
     def test_entrypoint_is_the_first_node(self):
-        assert build_turn_graph("r1", 2).entrypoint == "turn:0"
+        assert build_turn_graph("r1", _units(2)).entrypoint == "turn:0"
 
     def test_deps_chain_is_real(self):
-        g = build_turn_graph("r1", 3)
+        g = build_turn_graph("r1", _units(3))
         assert g.node("turn:0").deps == ()
         assert g.node("turn:1").deps == ("turn:0",)
         assert g.node("turn:2").deps == ("turn:1",)
 
     def test_zero_iterations_is_an_empty_graph(self):
-        g = build_turn_graph("r1", 0)
+        g = build_turn_graph("r1", _units(0))
         assert g.nodes == () and g.edges == () and g.entrypoint == ""
 
     def test_graph_round_trips(self):
-        g = materialize(build_turn_graph("r1", 3))
+        g = materialize(build_turn_graph("r1", _units(3)))
         assert TaskGraph.from_dict(g.to_dict()) == g
 
     def test_a_real_turn_persists_a_graph(self, tmp_path):
@@ -173,7 +184,7 @@ class TestTurnMaterializesGraph:
 
 class TestReadyMaterialized:
     def test_materialize_stores_readiness(self):
-        g = materialize(build_turn_graph("r1", 3))
+        g = materialize(build_turn_graph("r1", _units(3)))
         assert g.node("turn:0").ready is True
         assert g.node("turn:1").ready is False
 
@@ -202,11 +213,11 @@ class TestReadyMaterialized:
         assert divergences(g) == ["a", "b"]
 
     def test_a_freshly_materialized_graph_has_no_divergence(self):
-        g = materialize(build_turn_graph("r1", 4))
+        g = materialize(build_turn_graph("r1", _units(4)))
         assert divergences(g) == []
 
     def test_settling_a_node_advances_readiness(self):
-        g = materialize(build_turn_graph("r1", 3))
+        g = materialize(build_turn_graph("r1", _units(3)))
         assert g.ready_ids() == ["turn:0"]
         g = _settle(g, "turn:0", NodeStatus.SUCCESS)
         assert g.ready_ids() == ["turn:1"]
@@ -214,23 +225,23 @@ class TestReadyMaterialized:
 
     def test_readiness_is_rematerialized_by_a_transition(self):
         """A transition must not leave `ready` stale behind it."""
-        g = materialize(build_turn_graph("r1", 2))
+        g = materialize(build_turn_graph("r1", _units(2)))
         g = _settle(g, "turn:0", NodeStatus.SUCCESS)
         assert divergences(g) == []
 
     def test_materialize_is_idempotent(self):
-        g = materialize(build_turn_graph("r1", 3))
+        g = materialize(build_turn_graph("r1", _units(3)))
         assert materialize(g) == g
 
     def test_materialize_does_not_mutate(self):
-        g = build_turn_graph("r1", 3)
+        g = build_turn_graph("r1", _units(3))
         materialize(g)
         assert all(n.ready is False for n in g.nodes)
 
     def test_a_failed_predecessor_still_releases_the_next_node(self):
         """A settled predecessor releases downstream work regardless of
         outcome — the graph records what CAN run, not what should."""
-        g = materialize(build_turn_graph("r1", 2))
+        g = materialize(build_turn_graph("r1", _units(2)))
         g = _settle(g, "turn:0", NodeStatus.FAILURE)
         assert g.ready_ids() == ["turn:1"]
 
@@ -296,20 +307,20 @@ class TestSingleTransitionApi:
         assert not offenders, f"TaskNode built with a status outside the API: {offenders}"
 
     def test_illegal_transition_is_refused(self):
-        g = materialize(build_turn_graph("r1", 1))
+        g = materialize(build_turn_graph("r1", _units(1)))
         g = _settle(g, "turn:0", NodeStatus.SUCCESS)
         with pytest.raises(ValueError, match="illegal node transition"):
             _settle(g, "turn:0", NodeStatus.RUNNING, seq=2)
 
     def test_stale_from_status_is_refused(self):
-        g = materialize(build_turn_graph("r1", 1))
+        g = materialize(build_turn_graph("r1", _units(1)))
         with pytest.raises(ValueError, match="stale transition"):
             apply_transition(g, NodeTransition(
                 run_id="r1", node_id="turn:0",
                 from_status=NodeStatus.RUNNING, to_status=NodeStatus.SUCCESS))
 
     def test_unknown_node_is_refused(self):
-        g = materialize(build_turn_graph("r1", 1))
+        g = materialize(build_turn_graph("r1", _units(1)))
         with pytest.raises(ValueError, match="unknown node"):
             apply_transition(g, NodeTransition(
                 run_id="r1", node_id="turn:99",
@@ -338,7 +349,7 @@ class TestSingleTransitionApi:
                 assert is_legal_node_transition(frm, to) == (to in allowed)
 
     def test_apply_transition_does_not_mutate_the_input(self):
-        g = materialize(build_turn_graph("r1", 2))
+        g = materialize(build_turn_graph("r1", _units(2)))
         before = [n.status for n in g.nodes]
         _settle(g, "turn:0", NodeStatus.SUCCESS)
         assert [n.status for n in g.nodes] == before
@@ -476,11 +487,11 @@ class TestTransitionPersisted:
 
 class TestGraphIsAProjection:
     def test_replay_rebuilds_the_graph(self):
-        g = materialize(build_turn_graph("r1", 3))
+        g = materialize(build_turn_graph("r1", _units(3)))
         live = _settle(g, "turn:0", NodeStatus.SUCCESS, seq=1)
         live = _settle(live, "turn:1", NodeStatus.FAILURE, seq=2)
 
-        rebuilt = replay_transitions(build_turn_graph("r1", 3), [
+        rebuilt = replay_transitions(build_turn_graph("r1", _units(3)), [
             NodeTransition("r1", "turn:0", NodeStatus.PENDING,
                            NodeStatus.SUCCESS, seq=1),
             NodeTransition("r1", "turn:1", NodeStatus.PENDING,
@@ -495,14 +506,14 @@ class TestGraphIsAProjection:
             NodeTransition("r1", "turn:1", NodeStatus.PENDING,
                            NodeStatus.SUCCESS, seq=2),
         ]
-        a = replay_transitions(build_turn_graph("r1", 2), ts)
-        b = replay_transitions(build_turn_graph("r1", 2), list(reversed(ts)))
+        a = replay_transitions(build_turn_graph("r1", _units(2)), ts)
+        b = replay_transitions(build_turn_graph("r1", _units(2)), list(reversed(ts)))
         assert a == b
 
     def test_session_rebuilds_its_graph_from_the_log(self):
         from wisp.core.session import Session, SessionEvent
 
-        g = materialize(build_turn_graph("s1", 2))
+        g = materialize(build_turn_graph("s1", _units(2)))
         s = Session(session_id="s1")
         s.replay([
             SessionEvent.task_graph_event(1, g.to_dict()),
@@ -519,7 +530,7 @@ class TestGraphIsAProjection:
         still built from ASSISTANT_MESSAGE + TOOL_RESULT alone."""
         from wisp.core.session import Session, SessionEvent
 
-        g = materialize(build_turn_graph("s2", 1))
+        g = materialize(build_turn_graph("s2", _units(1)))
         s = Session(session_id="s2")
         s.apply(SessionEvent.task_graph_event(1, g.to_dict()))
         s.apply(SessionEvent.node_transition_event(2, NodeTransition(

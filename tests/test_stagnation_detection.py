@@ -336,7 +336,8 @@ class TestOscillationTrapWired:
         from wisp.core.acceptance import CompletionVerdict, Verdict
         from wisp.core.task_graph import build_turn_graph, materialize
 
-        graph = materialize(build_turn_graph("r", 3))
+        graph = materialize(build_turn_graph(
+            "r", [f"call:c{i}" for i in range(3)]))
         signal = ProgressSignal.from_verdict_and_graph(
             CompletionVerdict(verdict=Verdict.PASS), graph)
         assert signal.criteria_satisfied == 1

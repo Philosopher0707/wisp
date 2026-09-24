@@ -49,7 +49,8 @@ REPO = Path(__file__).resolve().parents[1]
 
 
 def _graph(n: int = 3) -> TaskGraph:
-    return materialize(build_turn_graph("r1", n))
+    # `build_turn_graph` takes work-unit identities, not a count (M11).
+    return materialize(build_turn_graph("r1", [f"call:c{i}" for i in range(n)]))
 
 
 def _settle(graph, node_id, to, seq=1):

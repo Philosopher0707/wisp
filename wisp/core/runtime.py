@@ -266,7 +266,7 @@ def _serialize_tool_exchanges(
     field_reader: Callable[[dict[str, Any], str], Any],
     journal: bool = True,
     proposal: bool = True,
-) -> list[Any]:
+) -> tuple[list[Any], list[list[str]]]:
     """Append protocol-consistent assistant/tool messages for one turn.
 
     Per provider boundary: ONE assistant message holding every tool_calls
@@ -278,14 +278,24 @@ def _serialize_tool_exchanges(
     With `journal=False` no event objects are built; the message-writing
     behavior is identical either way, so the rollback flag cannot change
     the transcript.
+
+    Returns `(events, exchange_call_ids)`. The second value is migration M11's
+    work-unit identity: the protocol ids each exchange's blocks carry, **read
+    back from the blocks `_exchange_parts` just built** rather than recomputed.
+    Recomputing them would be wrong, not merely redundant — an exchange whose
+    events carry no id gets a fresh `uuid4` (`_exchange_parts`), so a second
+    pass would mint a different id and the graph's reference would name a work
+    unit the transcript never recorded.
     """
     events: list[Any] = []
+    exchange_call_ids: list[list[str]] = []
     for ex in exchanges:
         blocks, reply_msgs, ex_events = _exchange_parts(
             ex, field_reader, journal, proposal)
         if not blocks and not reply_msgs:
             continue
         events.extend(ex_events)
+        exchange_call_ids.append([str(b["id"]) for b in blocks])
         session["messages"].append({
             "role": "assistant",
             "content": "",
@@ -293,7 +303,7 @@ def _serialize_tool_exchanges(
         })
         session["messages"].extend(reply_msgs)
 
-    return events
+    return events, exchange_call_ids
 
 
 def _closed_exchange_events(
@@ -809,6 +819,11 @@ class AgentRuntime:
                 # from the SAME pairing walk that writes the messages, so the
                 # two cannot drift.
                 journal_events: list[Any] = []
+                # Migration M11: the identity of each work unit this turn
+                # performed, in order — read back from the blocks the one
+                # pairing authority just built. Empty when no exchange closed,
+                # which is the honest answer for a content-only turn.
+                exchange_call_ids: list[list[str]] = []
                 if tool_sequence:
 
                     # ── Group into provider-boundary exchanges ──────────
@@ -837,7 +852,7 @@ class AgentRuntime:
                         d = ev.get("data")
                         return d.get(key) if isinstance(d, dict) else None
 
-                    journal_events = _serialize_tool_exchanges(
+                    journal_events, exchange_call_ids = _serialize_tool_exchanges(
                         session, exchanges, _field, journal=journal_fidelity,
                         proposal=proposal_boundary)
                     # Migration P1: drop the prefix the incremental writer
@@ -878,15 +893,21 @@ class AgentRuntime:
                         from wisp.core.session import SessionEvent
                         from wisp.core.task_graph import (
                             NodeStatus, NodeTransition, apply_transition,
-                            build_turn_graph, materialize,
+                            build_turn_graph, materialize, turn_work_units,
                         )
-                        _exchanges = _group_exchanges(tool_sequence)
-                        _work_units = len(_exchanges) + 1  # + the final output
-                        _graph = materialize(build_turn_graph(sid, _work_units))
+                        # Migration M11 — the nodes name the work units they
+                        # record. `exchange_call_ids` comes from the SAME walk
+                        # that wrote the transcript and the journal (see
+                        # `_serialize_tool_exchanges`), so a node's reference is
+                        # the protocol id the transcript actually used. It used
+                        # to be `len(exchanges) + 1`, a count, which left every
+                        # node an index with nothing to trace back to.
+                        _units = turn_work_units(exchange_call_ids)
+                        _graph = materialize(build_turn_graph(sid, _units))
                         journal_events.append(SessionEvent.task_graph_event(
                             0, _graph.to_dict()))
                         _seq = 0
-                        for _i in range(_work_units):
+                        for _i in range(len(_units)):
                             _seq += 1
                             _to = (NodeStatus.SUCCESS if turn_succeeded
                                    else NodeStatus.FAILURE)

@@ -216,7 +216,8 @@ class TestToolEventJournaling:
         replies = [ev for k, ev in sequence if k == "reply"]
         exchanges = [{"calls": calls, "replies": replies}] if (calls or replies) else []
         session: dict = {"messages": []}
-        events = _serialize_tool_exchanges(
+        # M11: the walk now also returns the work-unit identities it minted.
+        events, _work_units = _serialize_tool_exchanges(
             session, exchanges, self._field, journal=journal,
             proposal=proposal)
         return session, events

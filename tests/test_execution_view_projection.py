@@ -203,56 +203,74 @@ class TestTheProjectionIsFaithful:
 
 
 class TestTheGraphCannotProjectTheTranscript:
-    def test_task_nodes_carry_no_transcript_payload(self):
-        """**The ratchet.** M9 asked for the message list to be a projection of
-        the graph. That is not expressible: a node holds no tool name, no
-        arguments, no result and no assistant text.
+    def test_the_payload_ratchet_is_superseded_and_strictly_stronger(self):
+        """**The ratchet, and why M11 replaced it (ADR-0033).**
 
-        Making it expressible means copying the transcript into the nodes — a
-        second copy that can disagree with the first, which is the defect class
-        this migration exists to remove. So this asserts the graph stays a
-        *shape*, and fails loudly if a payload field appears, forcing the
-        decision into the open rather than letting it arrive as a convenience.
+        M9 asked for the message list to be a projection of the graph. That is
+        not expressible: a node holds no tool name, no arguments, no result and
+        no assistant text. Making it expressible means copying the transcript
+        into the nodes — a second copy that can disagree with the first, which
+        is the defect class this migration exists to remove.
+
+        The guard this replaces was a **name blacklist**, and it failed in both
+        directions:
+
+        * **evadable by naming** — a payload field called `body` passed it;
+        * **it forbade the fix** — it listed `tool_call_id` as a payload, which
+          is exactly the reference M9's *own* report (§17.6) says M11 requires.
+
+        So the property is kept and the mechanism replaced: every `TaskNode`
+        field now carries a declared kind. This asserts the replacement catches
+        a payload the blacklist would have missed, and that the reference M11
+        added has a declared kind rather than being a payload.
         """
-        payload_fields = {"tool", "tool_name", "arguments", "args", "result",
-                          "content", "text", "messages", "transcript",
-                          "tool_call_id", "output"}
+        from wisp.core.task_graph import (
+            NODE_FIELD_KINDS, NodeFieldKind, node_field_violations)
+
         names = {f.name for f in dataclasses.fields(TaskNode)}
-        offenders = names & payload_fields
-        assert not offenders, (
-            f"TaskNode now carries transcript payload: {sorted(offenders)}. "
-            "That makes the graph a second copy of the transcript, which can "
-            "diverge from it. If this is intended, it needs an ADR first — "
-            "see PHASE_M9_REPORT.md.")
+        missed_by_the_blacklist = names | {"body"}
+        assert node_field_violations(missed_by_the_blacklist), (
+            "a payload field the old name blacklist would have missed is not "
+            "caught; the replacement ratchet is weaker than what it replaced")
+        assert NODE_FIELD_KINDS["work_unit"] is NodeFieldKind.REFERENCE, (
+            "the work-unit reference is not classified as a reference")
 
     def test_the_graph_cannot_supply_a_message_content(self, tmp_path):
         """Asserted behaviourally, not just structurally: replay the graph from
         the log and show it contains nothing that could become message content."""
         from wisp.core.task_graph import materialize, build_turn_graph
 
-        graph = materialize(build_turn_graph("r1", 3))
+        graph = materialize(build_turn_graph(
+            "r1", ["call:c0", "call:c1", "output"]))
         blob = json.dumps(graph.to_dict())
         for probe in ("read_file", "hello", "read it"):
             assert probe not in blob, (
                 f"the graph now contains {probe!r}; it is no longer only a shape")
 
-    def test_graph_node_ids_are_a_count_not_an_identity(self):
-        """The nodes are `turn:0 … turn:N-1`, generated from a **count**. They
-        do not reference the exchange they stand for, so a node cannot be
-        traced back to the work it records.
+    def test_node_ids_are_structural_and_the_work_unit_is_the_identity(self):
+        """**M11 inverted this test — it used to assert the defect.**
 
-        This is the real precondition for M11 (the graph driving execution): a
-        node has to be an *identified* unit of work, not an index. Pinned here
-        so the finding is not rediscovered.
+        It read: *"The nodes are `turn:0 … turn:N-1`, generated from a count.
+        They do not reference the exchange they stand for, so a node cannot be
+        traced back to the work it records."* That was M9's finding §17.6, and
+        it was pinned so it would not be rediscovered.
+
+        The ids are **still** `turn:i`, deliberately: `node_id` is the graph's
+        *structural* key — edges, `deps`, transitions and supersession all
+        address it — and deriving it from a provider-supplied id would put the
+        topology at the mercy of transcript data. The identity is a separate
+        field, and it is now required: a node that records no work unit is not
+        constructible (`build_turn_graph` refuses one).
         """
         from wisp.core.task_graph import materialize, build_turn_graph
 
-        graph = materialize(build_turn_graph("r1", 3))
+        graph = materialize(build_turn_graph(
+            "r1", ["call:c0", "call:c1", "output"]))
         assert [n.node_id for n in graph.nodes] == ["turn:0", "turn:1", "turn:2"]
-        for node in graph.nodes:
-            assert node.detail == "", (
-                "a node gained a detail string; check whether it now identifies "
-                "its work unit, and update PHASE_M9_REPORT.md if so")
+        assert [n.work_unit for n in graph.nodes] == [
+            "call:c0", "call:c1", "output"], (
+            "a node does not name its work unit; it is an index again")
+        assert all(n.work_unit for n in graph.nodes)
 
     def test_the_graph_records_a_lower_bound_on_iterations(self, tmp_path):
         """A content-only iteration leaves no exchange, so the node count is a
