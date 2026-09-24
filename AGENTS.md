@@ -181,12 +181,26 @@ mode already denies (`run_bash`). ADR-0030.
 `wisp/core/task_graph.py` records *structure* — node identity, status, readiness, edges. It carries **no**
 tool name, arguments, result or assistant text, and it must not: copying the transcript into the nodes
 would create a second copy that can disagree with the first, which is the defect class this migration
-exists to remove. `test_task_nodes_carry_no_transcript_payload` is a ratchet — it fails if a payload
-field appears on `TaskNode`. The transcript projects from the **journal**; the graph contributes status.
+exists to remove. The transcript projects from the **journal**; the graph contributes status.
 
-Related, and the real precondition for M11: the nodes are `turn:0 … turn:n-1`, generated from a **count**
-of closed exchanges. A node does not reference the work unit it stands for, so the graph cannot drive
-execution yet. Making it drivable means giving nodes **identity**, not payload. ADR-0029.
+The guard is **field classification, not a name blacklist**: every `TaskNode` field has a declared kind
+in `NODE_FIELD_KINDS` (`STRUCTURAL` / `REFERENCE` / `PAYLOAD`), `PAYLOAD` has no member, and
+`node_field_violations()` fails the suite on an unclassified, stale or payload field — so a payload
+field cannot slip in by being named something else. ADR-0033. A `REFERENCE` field is an opaque handle
+that carries no content; `work_unit` is one.
+
+### A node references its work unit
+
+The nodes were `turn:0 … turn:n-1`, generated from a **count** of closed exchanges, so nothing
+connected a node to the work it recorded — the real precondition M9 found for M11. Now every node
+carries `work_unit`: `call:<protocol id>` for a closed tool exchange (the same id the transcript and
+the journal use), `output` for the terminal node. `node_id` stays `turn:i` — it is the graph's
+*structural* key, and the identity is a separate field on purpose. `build_turn_graph` takes the work
+units, not a count, so a node that records nothing is not constructible. ADR-0033.
+
+The identity is **not recomputed**: `_serialize_tool_exchanges` returns `(events, exchange_call_ids)`
+from the blocks `_exchange_parts` minted. Id-less exchanges get a fresh `uuid4` there, so a second pass
+would name a work unit the transcript never recorded.
 
 ### A state-bearing record is not best-effort
 
@@ -203,9 +217,10 @@ event kind, so widening it fails the suite rather than passing quietly.
 
 `wisp/core/task_graph.py` can create, expand, invalidate and supersede nodes — but **nothing on the live
 turn path calls those functions yet**. The turn loop executes tools directly, and the graph is a
-*record* of that work, not its driver. Making it drive execution is a change of **control** (the point
-at which the message list stops being authoritative), and it is tracked as migration item M11. Do not
-assume the graph is authoritative — it is not.
+*record* of that work, not its driver. M11 landed the **precondition** (node identity, ADR-0033); making
+the graph drive execution is still open — a change of **control** (the point at which the message list
+stops being authoritative), pinned by `test_the_graph_still_does_not_drive_execution`. Do not assume
+the graph is authoritative — it is not.
 
 ### Stage 3a of the verification gate does NOT gate
 
@@ -268,7 +283,7 @@ python3 -m pytest tests/test_contracts_*.py tests/test_auth_*.py tests/test_runs
   tests/test_policy_*.py tests/test_trace_*.py tests/test_eval_*.py \
   tests/test_task_*.py tests/test_release_*.py tests/test_no_bypass.py -q
 
-# Durable record + proposal boundary + verdicts + task graph (migration P0-P9 + M2/M3/M4/M16)
+# Durable record + proposal boundary + verdicts + task graph (migration P0-P9 + M2/M3/M4/M16/M9/M15/M14/M12/M11)
 python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_incremental.py \
   tests/test_action_idempotency_key.py tests/test_proposal_boundary_records.py \
   tests/test_proposal_boundary_no_bypass.py tests/test_verdict_layer_recorded.py \
@@ -279,7 +294,7 @@ python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_
   tests/test_session_reconstruction.py tests/test_durability_preconditions.py \
   tests/test_escalation_durability.py tests/test_execution_view_projection.py \
   tests/test_child_principal_wired.py tests/test_prompt_section_trust.py \
-  tests/test_failure_signal_classification.py -q
+  tests/test_failure_signal_classification.py tests/test_node_identity.py -q
 ```
 
 ### Reachability is mandatory for new durable code

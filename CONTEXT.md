@@ -38,9 +38,10 @@ baseline (see §11).
 | **M15** — a subagent authorizes as a narrowed child | `COMPLETE` — **the obvious fix was a pool leak** | `PHASE_M15_REPORT.md` |
 | **M14** — prompt sections classified (T1) | `COMPLETE` — **found a live T1 violation** | `PHASE_M14_REPORT.md` |
 | **M12** — the failure path reaches the taxonomy | `COMPLETE` — **found the engine's refusals invisible** | `PHASE_M12_REPORT.md` |
+| **M11** — a node references its work unit | `COMPLETE` — **the guard for the property forbade the fix** | `PHASE_M11_REPORT.md` |
 
-**Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F28**, change log).
-**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0032**).
+**Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F31**, change log).
+**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0033**).
 
 **The durability track is closed.** M2 (journal-first reconstruction), M3 (a real-SIGKILL kill point),
 M4 (durability as a correctness precondition) and M16 (the escalation is state, not audit) are all
@@ -79,15 +80,15 @@ reproduce `messages` exactly"*. The journal and the blob therefore disagreed on 
 
 | Item | What it actually needs |
 |---|---|
-| **M11** | **node identity** — the graph's nodes are `turn:0…turn:n-1`, an index, not a reference to their work unit. This is the real precondition, and M9 *redefines* M11 rather than unblocking it |
+| **M11** | ✅ **DONE** — node identity. `TaskNode.work_unit` names the work unit the node records; `build_turn_graph` takes the units, not a count; the M9 ratchet that **forbade the fix and was evadable by naming** (F29/F30) is replaced by field classification (ADR-0033). **The graph driving execution stays open**, pinned by a tripwire |
 | **M12** | ✅ **DONE** — nothing from M9 was needed. `classify_failure_signal()` bridges the runtime's failure signals to the taxonomy, and **engine refusals are now recognised as denials** (they were being retried). Ladder *enforcement* stays deferred (ADR-0032) |
-| **M13** | meaningful progress signals, which depend on M11 |
+| **M13** | meaningful progress signals — **its precondition now exists**: the graph can say *which* work units completed; `ProgressSignal` still counts them. Tripwired |
 | **M14** | ✅ **DONE** — nothing from M9 was needed. The prompt sections are now classified and the **live T1 violation** (workspace-file content ahead of the system prompt) is fixed (ADR-0031) |
 | **M15** | ✅ **DONE** — nothing from M9 was needed. The spawn site now passes a `child_principal`; the identity travels with the **call**, because a per-child executor would leak two thread pools each (ADR-0030) |
 
-So **M12, M14 and M15 are independent** of the graph and of each other, and each is bounded — which
-**M15 confirmed by being done**: it needed nothing from the graph, and it is now complete. Only M11 and
-M13 share a prerequisite. The remaining work is **larger** than "one keystone", not smaller, but it is
+So **M12, M14 and M15 are independent** of the graph and of each other, and each is bounded — all three
+done. M11 needed node identity and is done. **Only M13 remains** of the five, and its precondition is
+met. The remaining work is **larger** than "one keystone", not smaller, but it is
 several small pieces rather than one large one.
 
 ### 0.0.3 Also open
@@ -546,14 +547,18 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `0b1f4e8` | `docs(m16):` pin the commit hash and repair the handoff docs |
 | `7cff74f` | `docs(m16):` ledger rows; keep agent workspace data untracked (+ `.gitignore`) |
 | `73c2bbc` | `docs(m16):` record the third occurrence of the flaky test F17 |
-| `e52333f` | `feat(m9):` the execution view is faithful; the graph is a shape, not a payload — 11 tests |
-| `b39c120` | `docs:` complete the commit table and stop over-claiming it |
-| `e52333f` | `feat(m9):` the execution view is faithful; the graph is a shape, not a payload — 11 tests |
-| `bed9f7e` | `feat(m15):` a subagent authorizes as a narrowed child — 22 tests |
-| `e502391` | `fix(m14):` classify prompt sections, and close a live T1 violation — 32 tests |
-| `43015ea` | `fix(m12):` bridge the failure path to the taxonomy; engine refusals are denials — 33 tests |
 | `1229b87` | `docs(m16):` correct the commit counts and complete this table |
 | `ed9fee6` | `docs:` stop quoting a commit count that goes stale on every commit |
+| `b39c120` | `docs:` complete the commit table and stop over-claiming it |
+| `e52333f` | `feat(m9):` the execution view is faithful; the graph is a shape, not a payload — 11 tests |
+| `034d4f0` | `docs(m9):` sort the findings log and complete the commit table |
+| `bed9f7e` | `feat(m15):` a subagent authorizes as a narrowed child — 22 tests |
+| `7c601c0` | `docs(m15):` record the M9 and M15 commits in the handoff table |
+| `e502391` | `fix(m14):` classify prompt sections, and close a live T1 violation — 32 tests |
+| `abbc4af` | `docs(m14):` record the M14 commit in the handoff table |
+| `43015ea` | `fix(m12):` bridge the failure path to the taxonomy; engine refusals are denials — 33 tests |
+| `e2b6f10` | `docs(m12):` record the M12 commit in the handoff table |
+| `0fdcdea` | `feat(m11):` give graph nodes a work-unit identity; the ratchet classifies fields, not names — 24 tests |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
@@ -895,17 +900,18 @@ the files to a path **outside the repo** first, then compare.
 
 ### Migration open items — current
 
-**M9 is the keystone.** M11–M15 are all the same change and are all blocked on it.
+**There is no single keystone.** M9 was recorded as one and that was wrong (§0.0.2). Of the five
+M9-blocked items, four are now done; **M13 remains, with its precondition met**.
 
 | # | Item | Nature |
 |---|---|---|
 | **M9** | The execution view | ✅ **COMPLETE** — ADR-0029. **The strong reading was the wrong target** (the graph carries no payload), and the projection that exists was **not faithful** (now fixed and asserted). |
-| **M11** | The graph does not drive execution | **OPEN** — the turn loop executes tools directly; the graph is a record, not a driver. **Precondition is node identity**, not M9: nodes are `turn:0…n-1`, an index. ADR-0029. |
+| **M11** | The graph does not drive execution | ✅ **COMPLETE as node identity** — ADR-0033. `TaskNode.work_unit` references the work unit (F29/F30: M9's own ratchet forbade the fix and was evadable by naming — replaced by field classification). **The graph driving execution is still open**, pinned by `test_the_graph_still_does_not_drive_execution`. |
 | **M12** | The failure path | ✅ **COMPLETE** — ADR-0032. The ladder can be driven from a real failure now, and engine refusals are denials (F28: they were being retried). Enforcement deferred. |
-| **M13** | The stagnation detector is not constructed by the turn loop | **OPEN** — P7 uses the trap and reads the flag; nothing builds a detector. |
+| **M13** | The stagnation detector is not constructed by the turn loop | **OPEN** — P7 uses the trap and reads the flag; nothing builds a detector. **Precondition now met** (M11): the graph can name *which* work completed; `ProgressSignal` still counts. Tripwired. |
 | **M14** | The context trust boundary | ✅ **COMPLETE** — ADR-0031. **Found a live T1 violation**: workspace-file content (`CLAUDE.md`) sat *before* the system prompt, unfenced. T2 fencing remains, deliberately staged. |
 | **M15** | The subagent spawn site | ✅ **COMPLETE** — ADR-0030. The P9 tripwire fired and was replaced by its inverse; `execute(principal=…)` carries the child identity per call. |
-| **M16** | The `ESCALATION` record's loss is not fully addressed | **OPEN** — P6 made escalation *durable state*; if that write fails a parked run loses the record of why. The one row in ADR-0027's classification where "best-effort, canary" is arguably wrong. |
+| **M16** | The `ESCALATION` record's loss is not fully addressed | ✅ **COMPLETE** — ADR-0028. A state-bearing record is not best-effort in either direction; `reconstruct()` salvages the journal-only records on both paths (F24). |
 | **M1** | P3 stage 3b — enable the acceptance gate | **BLOCKED on a measurement**, itself blocked on a working tool path (`jsonschema`). ADR-0016. |
 | **M2** | Journal-first reconstruction | ✅ **COMPLETE** — `reconstruct()` + `reconstruction_source()`; the pre-P0 hazard and the gap hazard are both handled and pinned. **Five consumers still read the blob** (a tripwire asserts it). |
 | **M3** | Killpoint integration | ✅ **COMPLETE** — `test_kp_session_midtool_then_killed`. One window covered. |
@@ -976,6 +982,7 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_M15_REPORT.md` | A subagent authorizes as a narrowed child (ADR-0030) |
 | `PHASE_M14_REPORT.md` | Prompt sections are classified, and T1 holds (ADR-0031) |
 | `PHASE_M12_REPORT.md` | The failure path reaches the taxonomy (ADR-0032) |
+| `PHASE_M11_REPORT.md` | A node references its work unit; the ratchet classifies fields, not names (ADR-0033) |
 
 **Guards added by the migration:**
 

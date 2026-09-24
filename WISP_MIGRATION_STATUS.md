@@ -59,10 +59,12 @@ most recent are listed here for orientation.
 | **M15** | A subagent authorizes as a narrowed child | P9 | `COMPLETE` — **the obvious fix was a pool leak** | `PHASE_M15_REPORT.md` |
 | **M14** | Prompt sections classified (T1) | P8 | `COMPLETE` — **found a live T1 violation** | `PHASE_M14_REPORT.md` |
 | **M12** | The failure path reaches the taxonomy | P6 | `COMPLETE` — **found the engine's refusals invisible** | `PHASE_M12_REPORT.md` |
+| **M11** | A node references its work unit | M9's re-scoping | `COMPLETE` — **the fix was forbidden by the guard for it** | `PHASE_M11_REPORT.md` |
 
 Critical path: **P0 → P1 → P2 → P4 → P5 → P6**. P8 is independent and may start at any time.
-The `M` rows are the plan's **deferred prerequisites**, worked after the phases. **M9 remains open** —
-see §12 and `CONTEXT.md` §0.
+The `M` rows are the plan's **deferred prerequisites**, worked after the phases. **M9 is complete**;
+what remains is **M13** (its precondition now met), **M1** (blocked on `jsonschema`) and **M8**
+(needs a green fanout suite) — see §12 and `CONTEXT.md` §0.
 
 ---
 
@@ -443,6 +445,10 @@ change of **control**, not an added capability — the point at which the messag
 authoritative, which P4's rollback contract preserves. It should land **with** M9 (message list as a
 projection of the graph) rather than before it. Recorded as item **M11**.
 
+**Resolved (M11, §21):** M9 re-scoped M11 to its precondition — **node identity** — and it is done
+(ADR-0033): a node now references its work unit. The change of *control* described above remains open
+and is pinned by a tripwire (`test_the_graph_still_does_not_drive_execution`).
+
 ---
 
 ## 8. P6 — Recovery Ladder
@@ -762,10 +768,12 @@ Nine phases. The pattern is consistent: **the mechanisms mostly existed; what wa
 |---|---|
 | Phases whose plan claim needed narrowing against repository evidence | **6** — P0 ×2, P1, P2, P7, P8 |
 | Phases whose plan *target component* was wrong | **2** — P2 (stateless.py), P5 (Layer B) |
-| Phases whose remainder is integration, not construction | **5** — M11, M12, M13, M14, M15 |
+| M-items whose remainder was integration, not construction | **4 of 5 DONE** — M12, M14, M15, M11 ✅; **M13 remains** |
 
-Those five are **one coherent piece of work**, sharing one prerequisite: **M9** (the message list as a
-projection of the graph) plus **M2** (journal-first reconstruction).
+Those five were recorded as **one coherent piece of work**, sharing one prerequisite (**M9**). M9 §17.7
+corrected that: **M12, M14 and M15 needed nothing from the graph**, and are done. **M11** needed node
+identity, and is done. **Only M13 remains** of the five — and its precondition (a node that names its
+work unit, so a progress signal can say *which* work completed rather than *how many*) now exists.
 
 **The honest summary:** eight mechanisms built, tested, and reachable from their packages — and **not
 yet driven by the live turn loop**. That is a substantial body of work, and it is not the same thing as
@@ -1107,7 +1115,7 @@ and resolvable from `tool_call_id`.
 | 2 | The existing projection made faithful | `COMPLETE` | `Session.apply`; RED-first test |
 | 3 | Faithfulness pinned on a **real turn** | `COMPLETE` | `TestTheProjectionIsFaithful` (5) |
 | 4 | The shape asserted directly | `COMPLETE` | `test_a_tool_reply_carries_only_the_protocol_keys` |
-| 5 | The graph's payload-lessness ratcheted | `COMPLETE` | `test_task_nodes_carry_no_transcript_payload` |
+| 5 | The graph's payload-lessness ratcheted | `COMPLETE` | `test_task_nodes_carry_no_transcript_payload` — **mechanism superseded by M11** (F29/F30; §21) |
 | 6 | M11's real prerequisite identified | `COMPLETE` | §17.6 — **node identity** |
 
 ### 17.6 Completion criteria
@@ -1386,7 +1394,108 @@ tested, and the budgets exist.
 
 ---
 
-## 21. Findings log (migration-wide)
+## 21. M11 — A Node References Its Work Unit
+
+### 21.1 What M9 found, verified once more
+
+M9 §17.6 named M11's real precondition — **node identity** — and pinned the defect:
+
+> *"`build_turn_graph(run_id, n)` generates `turn:0…turn:n-1` from `len(exchanges) + 1`; a node never
+> references its work unit."*
+
+Reproduced before changing anything (one real turn, two exchanges, ids `c0`/`c1`): neither id appears
+anywhere in the persisted graph; every node's `detail` is `""`. And `WISP_TARGET_ARCHITECTURE.md` §14
+says why it matters: *"re-executing from that point is idempotent"* requires *naming* the work unit.
+
+### 21.2 Two findings in one guard (F29, F30)
+
+M9's guard for its own property ("the graph is not a second copy of the transcript") was a **name
+blacklist** — and it failed in both directions:
+
+- **F29 — it forbade the fix.** The blacklist lists `tool_call_id`, the only thing that can reference
+  a work unit. M9's guard forbade exactly what M9's own report says M11 requires.
+- **F30 — it is evadable by naming.** A payload field called `body` passes it. A list of words is not
+  a property, so it cannot close the defect class it exists to close.
+
+The property is right; the mechanism was wrong — which is why the guard could not simply be relaxed.
+
+### 21.3 The decision (ADR-0033)
+
+1. **`TaskNode.work_unit: str`** — the identity of the work unit the node records. `call:<protocol
+   id>` for a closed tool exchange, `output` for the terminal node. **An identity, not content.**
+2. **`node_id` stays `turn:i`, deliberately** — it is the graph's *structural* key (edges, `deps`,
+   transitions, supersession), so it must stay stable and unique within the graph. Two fields, two jobs.
+3. **`build_turn_graph(run_id, work_units)`** — takes the identities, not a count, so a node that
+   records nothing is **not constructible from the turn's path**. A bare `str` is refused explicitly:
+   `str` *is* a `Sequence[str]`.
+4. **`turn_work_units(exchange_call_ids)`** — the ONE authority for "what are a turn's work units".
+5. **The identity comes from the authority that mints it** — `_serialize_tool_exchanges` returns
+   `(events, exchange_call_ids)`, read back from the blocks `_exchange_parts` just built. Not
+   recomputed: id-less exchanges get a fresh `uuid4` there, so a second pass would mint a *different*
+   id and the node would reference a work unit the transcript never recorded.
+6. **The ratchet classifies fields, not names** — `NODE_FIELD_KINDS` gives every `TaskNode` field a
+   kind; `PAYLOAD` is a declared kind with **no member**; a new field is a test failure until it is
+   classified deliberately.
+
+### 21.4 A live observation worth keeping
+
+`test_a_parallel_round_is_journaled_as_one_exchange_per_call` began expecting the `call:c0+c1` batch
+form and failed — the live engine dispatches each call and streams its reply before the next call
+arrives, so the emitted sequence is `callA replyA callB replyB` and `_group_exchanges` closes after
+each reply. The batch form is produced by `turn_work_units` and pinned by unit test; the live-path
+test now asserts the one-exchange-per-call behaviour **and pins the ordering it depends on**, so a
+future engine that batches its tool events changes the node count visibly, not silently.
+
+### 21.5 Item status
+
+| # | Concern | Status | Evidence |
+|---|---|---|---|
+| 1 | M9's finding verified against a real turn | `COMPLETE` | reproduction (§21.1) |
+| 2 | A node references its work unit | `COMPLETE` | `TaskNode.work_unit`; RED-first test |
+| 3 | The reference resolves to the journal | `COMPLETE` | `test_the_reference_resolves_to_the_journal` |
+| 4 | The reference carries no content | `COMPLETE` | behavioural content probe |
+| 5 | A node cannot be built without an identity | `COMPLETE` | `build_turn_graph(run_id, work_units)` |
+| 6 | The evadable ratchet replaced | `COMPLETE` | F29/F30; `NODE_FIELD_KINDS` |
+| 7 | The identity is the authority's output, not a recomputation | `COMPLETE` | `_serialize_tool_exchanges` |
+| 8 | The graph still does not drive execution | `DEFERRED — pinned` | AST tripwire (ADR-0029) |
+| 9 | M13's precondition surfaced | `DEFERRED — pinned` | tripwire on `ProgressSignal` |
+
+### 21.6 Completion criteria
+
+- [x] M9's finding reproduced RED-first, then fixed
+- [x] The reference is the same id the transcript uses — no recomputation
+- [x] The reference is content-free (behavioural probe) and resolvable (journal trace)
+- [x] The payload ratchet is no longer evadable by naming (F29/F30)
+- [x] Existing callers updated — none weakened; one M9 test inverted as its own comment said it would be
+- [x] Reachability: the new symbols are driven from the live turn path and from tests (RULE 11)
+- [x] **Zero new failures** — 129, set-identical in both directions (see F31 below)
+- [ ] `ruff` / `mypy` — not installed
+
+### 21.7 Honest limits
+
+- **The terminal node's identity is a constant** (`output`) — it names the one terminal work unit
+  within a run, which is all it needs to do; it is not a per-message identity.
+- **Only the reply-only grouping path is exercised here** — `jsonschema` is absent (F8), so every
+  call is denied pre-dispatch. The call-side id extraction is pinned by unit test and by construction,
+  not driven end to end with a real tool result.
+- **The `+`-joined batch reference is not produced by the live engine** (§21.4); pinned by unit test.
+- **M13 still reads counts** — the stagnation detector cannot yet use the identity. The tripwire keeps
+  that from being forgotten.
+
+### 21.8 What this does to M13 and the rest
+
+| Item | Now needs |
+|---|---|
+| **M13** | the progress signal reads *which* nodes completed, not how many — now expressible |
+| **M1** | still blocked on a working tool path (`jsonschema`) — unchanged |
+| **M8** | still needs a **green** fanout suite first — unchanged |
+
+Only M13 depended on M11, and M11's precondition is now met. **The graph driving execution** — M11's
+original wording — remains open; ADR-0029 records that the strong reading is the wrong target.
+
+---
+
+## 22. Findings log (migration-wide)
 
 | # | Finding | Phase | Resolution |
 |---|---|---|---|
@@ -1418,14 +1527,17 @@ tested, and the budgets exist.
 | **F26** | **The obvious fix for the subagent-authority gap would have leaked thread pools.** `ToolExecutor.__init__` creates two `ThreadPoolExecutor`s whose shutdown the composition root owns; a per-child executor (the natural way to give a child its own `principal`) would create two pools per subagent that nothing closes, and `fanout` spawns many | M15 | Avoided: the principal travels with the call; ratcheted by `test_the_runner_does_not_construct_a_tool_executor` |
 | **F27** | **A live T1 violation: workspace-file content sat before the system prompt.** `load_context_files()` reads `CLAUDE.md` / `.wisp/rules.md`, and `ContextAssembler` appended them at priority −1 — *ahead of* `default_system`. A repository whose `CLAUDE.md` carries an instruction placed it before the rules that forbid it, unfenced. The boundary that would have caught it (P8) had no production caller | M14 | Fixed (ADR-0031): classified and moved to the important tier |
 | **F28** | **The engine's own refusals were invisible to the denial predicate.** The engine emits pre-dispatch refusals as `Blocked: …` error events; `is_denial_text` checked the five canonical statuses and four prose markers and none matched. So the orchestrator's retry loop — which says *"Don't retry authorization denials"* — **retried them**, up to `max_retries`, on a call that would be refused identically | M12 | Fixed (ADR-0032): `_ENGINE_DENIAL_PREFIXES` |
+| **F29** | **M9's payload ratchet forbade what M9's own report says M11 requires.** The guard for "the graph is not a second copy of the transcript" was a name blacklist that listed `tool_call_id` — the only thing that can reference a work unit. Two artifacts of one phase, contradicting each other | M11 | Fixed (ADR-0033): the property kept, the mechanism replaced |
+| **F30** | **A name blacklist is evadable by naming.** The same guard passes for a payload field called `body`/`payload`/`blob` — it is a list of words, not a property, so it cannot close the defect class it exists to close | M11 | Fixed (ADR-0033): `NODE_FIELD_KINDS` classifies every field; `PAYLOAD` is a declared kind with no member |
+| **F31** | **`comm` on locale-sorted failure sets reports identical sets as different.** The baseline was sorted under a different locale's collation than the current session's `sort` (`en_US.UTF-8` weights `-`/`:` differently than `C`); `comm` line-walks expecting a common order, and reported 6 tests in BOTH directions on byte-identical sets. A regression check that cannot be trusted is worse than none | M11 | Method fixed: compare as **sets** (`LC_ALL=C sort` on both, or a Python set diff); recorded in the memory README |
 
 The findings are numbered in discovery order and sorted here for reference. Each one is a claim in a
 plan document or an audit that **repository evidence contradicted** — the migration's recurring result
-is that the mechanisms mostly existed and what was missing was callers.
+is that the mechanisms mostly existed and what was missing was callers. (F29–F31 are **M11's**.)
 
 ---
 
-## 22. Change log
+## 23. Change log
 
 
 
@@ -1515,8 +1627,14 @@ is that the mechanisms mostly existed and what was missing was callers.
 | 2026-09-23 | M12 | `_ENGINE_DENIAL_PREFIXES` (prefix, not substring) + `CODE_FAILURE_CLASS` (total by test) + `TRANSIENT_MARKERS` unified | ratchets |
 | 2026-09-23 | M12 | A P10 guard was a whole-file grep that matched its own documentation; made AST-based with a non-vacuity test | `test_the_denial_marker_guard_is_not_vacuous` |
 | 2026-09-23 | M12 | **Regression: 129, byte-identical in both directions.** A predicate the retry path consults changed | full suite, stable baseline |
+| 2026-09-23 | M11 | **ADR-0033.** `TaskNode.work_unit` — a node references its work unit; `build_turn_graph` takes the units, not a count | 24 tests |
+| 2026-09-23 | M11 | **F29/F30 — M9's ratchet forbade the fix and was evadable by naming.** Replaced by `NODE_FIELD_KINDS` (every field classified; `PAYLOAD` has no member) | AST + behavioural ratchets |
+| 2026-09-23 | M11 | The identity comes from the one authority that mints it — `_serialize_tool_exchanges` returns `(events, exchange_call_ids)`; not recomputed (uuid trap) | `test_the_reference_resolves_to_the_journal` |
+| 2026-09-23 | M11 | Existing callers updated, none weakened; one M9 test **inverted** as its own comment said it would be; the blacklist ratchet **superseded by a stronger one** | 6 test files |
+| 2026-09-23 | M11 | Live observation: the engine serialises a provider-parallel batch into one exchange per call; the ordering is pinned | `test_a_parallel_round_is_journaled_as_one_exchange_per_call` |
+| 2026-09-23 | M11 | **Regression: 129, set-identical in both directions.** `comm` reported 6 tests both ways on byte-identical sets — a **locale-collation artifact**; the comparison is now set-based (F31) | full suite, stable baseline |
 
-### 22.1 Regression summary
+### 23.1 Regression summary
 
 | Run | Failures + errors |
 |---|---|

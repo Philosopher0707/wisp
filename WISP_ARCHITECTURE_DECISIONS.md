@@ -1175,6 +1175,91 @@ rule, which would make every engine refusal invisible again.
 
 ---
 
+## ADR-0033 — A node references its work unit; the payload ratchet classifies fields, not names
+
+**Status:** ACCEPTED
+**Phase:** M11
+**Supersedes:** ADR-0029's payload ratchet mechanism (the property is kept; the blacklist is replaced)
+**Amends:** ADR-0029 §"what this does to M11" — M11 is *node identity*, not the graph driving execution
+
+**Context.** M11 was recorded as *"the graph does not drive execution"* (P5 item 5) and, after M9,
+re-scoped to its precondition: **node identity**. M9 §17.6 verified the defect:
+
+> *"`build_turn_graph(run_id, n)` generates `turn:0…turn:n-1` from `len(exchanges) + 1`; a node never
+> references its work unit."*
+
+Reproduced before changing anything — one real turn, two exchanges, ids `c0` and `c1`:
+
+| Observation | Before M11 |
+|---|---|
+| node ids | `turn:0`, `turn:1`, `turn:2` |
+| `c0` / `c1` present anywhere in the persisted graph | **no** |
+| `detail` on every node | `""` |
+
+`WISP_TARGET_ARCHITECTURE.md` §14 says why this is not cosmetic: *"given the journal, the system can
+reconstruct the state as of any recorded transition, and **re-executing from that point is
+idempotent**."* Re-executing a work unit idempotently requires naming it. An index cannot.
+
+**Finding F29 — the ratchet forbade the fix.** `tests/test_execution_view_projection.py` guarded the
+property M9 established (the graph must not become a second copy of the transcript) with a **name
+blacklist**:
+
+```python
+payload_fields = {"tool", "tool_name", "arguments", "args", "result",
+                  "content", "text", "messages", "transcript",
+                  "tool_call_id", "output"}
+```
+
+`tool_call_id` is in that set — and it is the only thing that can reference a work unit. **M9's guard
+forbade what M9's own report says M11 requires.** The two artifacts of one phase contradict each other,
+and the contradiction is the finding.
+
+**Finding F30 — a name blacklist is evadable by naming.** The same guard passes for a payload field
+called `body`, `payload`, `blob` or `body_text`. It is a list of words, not a property, so it cannot
+close the defect class it exists to close — it only catches the spellings its author thought of.
+
+**Decision.**
+
+1. **`TaskNode.work_unit: str`** — the identity of the work unit the node records. An *identity*, not
+   content: `call:<protocol id>` for a closed tool exchange (ids joined by `+` for a batch), `output`
+   for the terminal node. **`node_id` stays `turn:i`** and that is deliberate — it is the graph's
+   *structural* key, which edges, `deps`, transitions and supersession all address, so it must stay
+   stable and unique within the graph. Deriving it from a provider-supplied id would put the topology
+   at the mercy of transcript data (and of `_exchange_parts`'s random fallback for id-less traffic).
+   Two fields, two jobs.
+2. **`build_turn_graph(run_id, work_units)`** — it takes the identities, not a count. A node that
+   records nothing is therefore **not constructible from the turn's path**, which is the defect stated
+   as a type. A bare `str` is refused explicitly: `str` *is* a `Sequence[str]`, so
+   `build_turn_graph(r, "abc")` would otherwise build three nodes named after the characters.
+3. **`turn_work_units(exchange_call_ids)`** — the ONE authority for "what are a turn's work units".
+4. **The identity comes from the authority that mints it.** `_serialize_tool_exchanges` now returns
+   `(events, exchange_call_ids)`, read back from the blocks `_exchange_parts` just built. It is not
+   recomputed, and that is a correctness requirement rather than a tidiness one: an exchange whose
+   events carry no id gets a fresh `uuid4` (`_exchange_parts`), so a second pass would mint a
+   *different* id and the node would reference a work unit the transcript never recorded.
+5. **The ratchet classifies fields, not names.** `NODE_FIELD_KINDS` gives every `TaskNode` field a kind
+   — `STRUCTURAL`, `REFERENCE`, or `PAYLOAD` — and `node_field_violations()` reports unclassified,
+   stale and payload fields. `PAYLOAD` is a declared kind with **no member**: the prohibition is
+   expressible and enforced, and a new field is a test failure until it is classified deliberately.
+
+**Why the reference is not a payload.** A payload is content the graph could reconstruct a message
+from; a reference is an opaque handle that names a work unit and carries none of it. The test that
+separates them is behavioural, not definitional: the serialized graph of a real turn contains no tool
+name, no argument value and no result text (`test_the_graph_still_supplies_no_message_content`), and
+every exchange reference resolves to a `tool_call_id` the journal actually recorded
+(`test_the_reference_resolves_to_the_journal`).
+
+**Consequence:** a node can now be traced to the work it records, which is the precondition
+idempotent replay needs. The graph still **does not drive execution** — M11's original wording — and
+that remains open; ADR-0029 already recorded that the strong reading (the graph as the source of the
+transcript) is the wrong target, not merely unimplemented.
+
+**Reversal condition:** if a node's `work_unit` ever needs to carry content — a tool name for a UI, say
+— then the reference/payload boundary is wrong and this ADR is wrong with it. The test that would fail
+is `test_the_graph_still_supplies_no_message_content`.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -1211,3 +1296,4 @@ rule, which would make every engine refusal invisible again.
 | 0030 | A subagent's identity travels with the call, not the executor | M15 | ACCEPTED |
 | 0031 | Prompt sections are classified; untrusted content is not in instruction position | M14 | ACCEPTED |
 | 0032 | The failure path reaches the taxonomy through an adapter; engine refusals are denials | M12 | ACCEPTED |
+| 0033 | A node references its work unit; the payload ratchet classifies fields, not names | M11 | ACCEPTED (replaces ADR-0029's blacklist mechanism) |
