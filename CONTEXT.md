@@ -13,10 +13,22 @@
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is `2307925`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
+**HEAD is `d57951a`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
 on top of it and is the authority for the count — **F87**: it did not, until 2026-09-25. **Nine**
 "point the handoff" commits had never been listed, so the claim and the table disagreed; backfilled.
 The only exception is the handoff commit that carries *this* line, which the next landing lists.
+**`d57951a` is the Layer B boundary** — **ADR-0060**: Layer A is the driver and `wisp/graph/` is a
+record, **permanently**. Position **B** is **rejected on measurement**, not deferred: `Graph` is
+`frozen=True` so a node cannot be appended mid-run, `GraphExecutor`'s public surface has no growth API,
+`run()` refuses a graph that is not complete up front, and no `TaskGraph → Graph` lowering exists —
+while the turn loop discovers its work as the model streams. **A different blocker from ADR-0029's,
+and it does not mention payload.** M11's tripwire becomes the **contract** (reversal condition in the
+test); M8's divergence is re-scoped from a blocker to the **boundary** between two tools, so the
+removal is **not owed**. Found **F101** (a probe that checked the wrong paths and reported two present
+files absent), **F102** (ADR-0021's stated blocker was **false when written** — the three safety-net
+files are tracked and predate P5 by 152 commits), **F103**, **F104** (ADR-0057 had no index row; added).
+Canonical block **1455 → 1471** (the heading said 1453 — stale by 2, an **F85** instance). See
+`PHASE_LAYER_B_BOUNDARY.md`.
 **`2307925` is corpus integrity III** — **no new ADR**. 2.1 **CLOSED** (**F89**'s message; the trailing
 `or 0.0` was **unreachable**; 36/36 expiry inputs identical in outcome). 2.2: the dependency table is
 consolidated as **§6.1**, but both offline installs **still fail** — **OPEN**. 2.3: §10's class gains
@@ -1389,7 +1401,9 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `aa9d8a8` | `feat:` **wire the M4 policy layer** behind `WISP_POLICY_BUNDLE`, default **OFF** (**ADR-0058**) — `config.py` reads two string settings; `composition.py` loads via `load_organization_policy` and passes `policy=` at the single construction site; a named-but-unverifiable bundle refuses to boot. **§6's step 3 (REST) is deliberately not done** — `SecurityPolicy` has no organization slot, so a bundle there would be dead data; pinned. Four tripwires inverted, **two more fired for the wrong reason and were repaired** (**F92**); the canonical block gains three files and is re-measured (**F93**: 1390 → **1437**); 10-test guard, 7/7 probes caught; `PHASE_10_M4_GOVERNANCE_UNWIRED.md` updated in place; excludes the user's WIP (§8) |
 | `5330a0f` | `docs:` point the handoff at `aa9d8a8` — the previous mission's handoff commit, which §0 said the next landing would list (**F87**'s stated exception); excludes the user's WIP (§8) |
 | `f35188a` | `feat:` the **REST gate consults the M2 authority for its denial verdict** (**ADR-0059**) — closes the divergence **ADR-0058 created** (driven, **11 of 36** (route, mode) pairs; ADR-0055's 0-of-36 was measured with **no policy loaded**); rejects A (16 rows move with no bundle), B, and **D refuted by measurement**; **conditional on a bundle** ⇒ unset is today's gate **byte-for-byte** (40/40, status *and* detail, proved behaviourally *and* structurally); one load site (`root.organization_policy`), one principal; the §4 pin inverted; `AUTHORITY_CONSUMERS` gains `deps.py` (found by running the canonical block); 16-test guard, **10/10 probes caught** — the probe found a defect in the guard itself (**F96**); found **F94/F95/F98/F99**; canonical block 1437 → **1453**; excludes the user's WIP (§8) |
-| `2307925` | `docs:` **corpus integrity III** — 2.1 **CLOSED** (F89's message; the trailing `or 0.0` was **unreachable**; 36/36 expiry inputs identical in outcome), 2.2 **OPEN** (both offline installs still fail; the table is consolidated as §6.1), 2.3 closed (§10 gains sub-cases 5 and 6), 2.4 closed (ADR-0057's residual 1 → §12 row **W1**, **F100**); found **F97** (three stale ADR-range claims) and **F99** (the brief's ledger rows do not exist); excludes the user's WIP (§8) — **`HEAD`** |
+| `2307925` | `docs:` **corpus integrity III** — 2.1 **CLOSED** (F89's message; the trailing `or 0.0` was **unreachable**; 36/36 expiry inputs identical in outcome), 2.2 **OPEN** (both offline installs still fail; the table is consolidated as §6.1), 2.3 closed (§10 gains sub-cases 5 and 6), 2.4 closed (ADR-0057's residual 1 → §12 row **W1**, **F100**); found **F97** (three stale ADR-range claims) and **F99** (the brief's ledger rows do not exist); excludes the user's WIP (§8) |
+| `0504811` | `docs:` point the handoff at `2307925`, and record the ADR-0059 / corpus-integrity-III chain — the handoff commit §0 said the next landing would list (**F87**'s stated exception); excludes the user's WIP (§8) |
+| `d57951a` | `docs:` **the Layer B boundary is decided** (**ADR-0060**) — Layer A is the driver and `wisp/graph/` is a record, **permanently**; Position B rejected on measurement (`Graph` is `frozen=True`, `GraphExecutor` has no growth API, `run()` needs a complete graph up front, no `TaskGraph → Graph` lowering); `dag.py` stays deprecated and its divergence is an **accepted difference**, so the removal is **not owed**; `test_the_graph_still_does_not_drive_execution` becomes the **contract**, with its reversal condition stated in the test; 16-test guard, **10/10 probes caught**, tree restored byte-identical; `wisp/core/task_graph.py` docstring corrected (**prose-only** — docstring-stripped AST *and* recursive `co_code` identical); found **F101** (my own probe checked the wrong paths and reported two present files absent), **F102** (ADR-0021's stated blocker was **false when written** — all three safety-net files are tracked, added 2026-09-10, **152 commits before** the P5 landing), **F103** (`core/runtime.py` *does* reach the executor, through the doctor's pre-flight report), **F104** (ADR-0057 had **no index row** — the index jumped 0056 → 0058; row added); canonical block **1455 → 1471** (the heading said 1453 — **stale by 2 before this change**, an **F85** instance); excludes the user's WIP (§8) — **`HEAD`** |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
