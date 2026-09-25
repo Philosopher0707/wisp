@@ -1072,6 +1072,28 @@ _SUBCOMMAND_HELP: dict[str, str] = {
     "graph": 'Usage: wisp graph <list|show|validate|run|resume|status|cancel|trace|inspect|metrics> [args]\n\nDeterministic graph execution (see wisp graph --help).',
     "agents": 'Usage: wisp agents [list|status]\n\nList agent roles or show running swarm agent status.',
     "bench": 'Usage: wisp bench -m model1,model2 [...]\n\nBenchmark models on deterministic tasks.',
+    "converge": (
+        "Usage: wisp converge \"<objective>\" [--max-attempts N]\n"
+        "                    [--permission-mode full] [--resume] [--journal PATH]\n"
+        "                    [--allow-rollback] [--json] [-w dir] [-m model]\n"
+        "\n"
+        "Run an objective to convergence: measure acceptance evidence after\n"
+        "each attempt, and re-attempt with a strategy the recovery ladder\n"
+        "chooses, until the objective is proven or honestly is not.\n"
+        "\n"
+        "Acceptance criteria are derived by the host from the objective and\n"
+        "the workspace's own verification commands, and are stated to the\n"
+        "agent. The model's claim of success is never an input. Exits\n"
+        "non-zero unless the goal was met.\n"
+        "\n"
+        "  -w, --workspace <dir>     Workspace (a GLOBAL flag)\n"
+        "  -m, --model <model>       Model override (a GLOBAL flag)\n"
+        "\n"
+        "Note: the default permission mode is auto_edit, in which run_bash is\n"
+        "blocked. Acceptance is unaffected (the harness measures, not the\n"
+        "agent), but pass --permission-mode full to let the agent run the\n"
+        "project's own tests while it works."
+    ),
 }
 
 
@@ -1082,7 +1104,7 @@ _SUBCOMMAND_NAMES = frozenset({
     "completion", "release",
     "git", "plan", "progress", "diagnose",
     "locks", "changes", "acp", "server", "compact", "swarm", "agents", "graph",
-    "bench",
+    "bench", "converge",
 })
 
 
@@ -1393,6 +1415,11 @@ def main():
             from wisp.benchmark.cli import run_bench
             sys.exit(run_bench(rest))
 
+        def _do_converge():
+            from wisp.autonomous_cli import run_converge
+            sys.exit(run_converge(rest, model=flags_model or None,
+                                  workspace=flags_workspace or None))
+
         # ── One-shot dispatch table: single routing point for all
         # subcommands (12.5D). Each handler preserves its original
         # branch body verbatim; names stay in _SUBCOMMAND_NAMES.
@@ -1428,6 +1455,7 @@ def main():
             "agents": _do_agents,
             "graph": _do_graph,
             "bench": _do_bench,
+            "converge": _do_converge,
         }
         return _SUBCOMMAND_TABLE[first]()
 

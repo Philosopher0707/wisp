@@ -19,6 +19,16 @@ comment.
 
 **Terminal honesty (R3).** An exhausted ladder yields `ESCALATED_TO_HUMAN` — a terminal state, not a
 hang and not a false success. `RecoveryLadder.exhausted` is a property the caller can act on.
+
+**Progress as a second input (progress-aware recovery mission).** A failure class answers *what
+failed*; it cannot answer *whether the attempt moved the objective*, and for one class the two
+questions have opposite answers. `ENVIRONMENT` covers both "the model could not get started" and
+"the turn was cut off mid-implementation", and its legal set — `{DIAGNOSTIC, HUMAN}` — is right for
+the first and useless for the second. `decide(..., progress=…)` therefore lets a *meaningful
+progress* observation widen the class's legal set with the continuation rungs
+(`PROGRESS_CONTINUATION_RUNGS`). It is additive and defaults to `None`, so every existing caller and
+every existing invariant is unchanged: `SECURITY` still cannot retry, `REPEATED`/`STAGNATION` still
+cannot repeat, and R5 still forbids a rung twice.
 """
 from __future__ import annotations
 
@@ -41,6 +51,7 @@ from wisp.core.events import (
     classify_result,
     is_denial_text,
 )
+from wisp.core.progress import ProgressVerdict
 
 
 class FailureClass(StrEnum):
@@ -142,6 +153,47 @@ DENIAL_STATUSES = frozenset({
     DENIAL_POLICY_DENIED, DENIAL_USER_DENIED, DENIAL_APPROVAL_TIMEOUT,
     DENIAL_CANCELLED, DENIAL_SCHEMA_INVALID,
 })
+
+
+#: Rungs that a **meaningful-progress** observation may ADD to a class's legal
+#: set — the continuation rungs.
+#:
+#: This exists because the failure class alone cannot express the distinction
+#: the live experiment exposed. `CODE_TURN_TIMEOUT` is an `ENVIRONMENT` failure
+#: whether the turn was cut off mid-implementation or whether the model simply
+#: could not get started, and `ENVIRONMENT`'s legal set is `{DIAGNOSTIC, HUMAN}`
+#: *by design* — "the model is too slow or unreachable — not retrying". That
+#: design is right for the second case and wrong for the first, and no amount of
+#: re-classification can tell them apart, because they are the same failure.
+#: The difference is not *what failed*; it is *whether the attempt moved the
+#: objective*, which is a separate fact with a separate owner
+#: (`core/progress.py`).
+#:
+#: So progress **widens** rather than re-classifies. `ENVIRONMENT` gains
+#: `REPAIR` — "repair that specific failure rather than re-doing the whole
+#: task", which is exactly what continuing a partially-completed objective is —
+#: and gains nothing else, because a second progressing timeout means the
+#: objective genuinely exceeds the attempt budget and escalation is the honest
+#: answer, not a third strategy.
+#:
+#: TOTAL by design, like the two tables above, and **deliberately empty for six
+#: classes**. `SECURITY` must never widen (a denial is a denial, and the
+#: no-retry rule is not negotiable); `REPEATED` and `STAGNATION` must not
+#: either, because both are *defined* as the absence of progress and widening
+#: them would let this table contradict the classes that name it. The classes
+#: that already admit `REPAIR` need no entry: they are legal without it.
+PROGRESS_CONTINUATION_RUNGS: dict[FailureClass, frozenset[RecoveryRung]] = {
+    FailureClass.TRANSIENT: frozenset(),
+    FailureClass.TOOL: frozenset(),
+    FailureClass.IMPLEMENTATION: frozenset(),
+    FailureClass.VERIFICATION: frozenset(),
+    FailureClass.DEPENDENCY: frozenset(),
+    FailureClass.ENVIRONMENT: frozenset({RecoveryRung.REPAIR}),
+    FailureClass.INVALID_ASSUMPTION: frozenset(),
+    FailureClass.REPEATED: frozenset(),
+    FailureClass.STAGNATION: frozenset(),
+    FailureClass.SECURITY: frozenset(),
+}
 
 
 #: Transport markers that mean "try again shortly" — throttling and dropped
@@ -289,19 +341,50 @@ def classify_failure(result: Any = None, *, repeated: bool = False,
     return FailureClass.IMPLEMENTATION
 
 
+def _continuation_rungs(failure_class: FailureClass,
+                        progress: ProgressVerdict | str | None
+                        ) -> frozenset[RecoveryRung]:
+    """The rungs a progress observation adds, or nothing at all.
+
+    **Only `MEANINGFUL_PROGRESS` widens.** `NO_PROGRESS` leaves the class's set
+    exactly as it was (the conservative recovery the previous mission proved
+    terminates honestly), and `PROGRESS_UNDETERMINABLE` does the same: an
+    unmeasurable attempt is not evidence of progress, and treating it as such
+    would make every unmeasurable objective continue forever.
+    """
+    if progress is None:
+        return frozenset()
+    try:
+        verdict = ProgressVerdict(progress)
+    except ValueError:
+        # An unknown string is not a licence to widen. Fail closed.
+        return frozenset()
+    if verdict is not ProgressVerdict.MEANINGFUL_PROGRESS:
+        return frozenset()
+    return PROGRESS_CONTINUATION_RUNGS.get(failure_class, frozenset())
+
+
 def is_legal_rung(failure_class: FailureClass | str,
-                  rung: RecoveryRung | int) -> bool:
+                  rung: RecoveryRung | int,
+                  *,
+                  progress: ProgressVerdict | str | None = None) -> bool:
     """True when `rung` is both allowed and not forbidden for the class.
 
     Forbidden wins over legal: the two tables are independent, and a rung that
     appears in both is a defect the caller should see rather than one the
-    lookup order should hide.
+    lookup order should hide. That ordering is what keeps the progress
+    widening honest — a class that *forbids* a rung (SECURITY, REPEATED,
+    STAGNATION) cannot have it reintroduced by a progress observation, because
+    the forbidden check runs first and the continuation table is empty for all
+    three.
     """
     fc = FailureClass(failure_class)
     r = RecoveryRung(int(rung))
     if r in FORBIDDEN_RUNGS.get(fc, frozenset()):
         return False
-    return r in LEGAL_RUNGS[fc]
+    if r in LEGAL_RUNGS[fc]:
+        return True
+    return r in _continuation_rungs(fc, progress)
 
 
 # ── Budgets ─────────────────────────────────────────────────────────────
@@ -493,11 +576,19 @@ class RecoveryLadder:
     def tried(self, rung: RecoveryRung) -> bool:
         return any(d.rung is rung for d in self.history)
 
-    def legal_rungs(self, failure_class: FailureClass) -> list[RecoveryRung]:
-        """Legal, not-forbidden, in budget, and not already tried."""
+    def legal_rungs(self, failure_class: FailureClass, *,
+                    progress: ProgressVerdict | str | None = None
+                    ) -> list[RecoveryRung]:
+        """Legal, not-forbidden, in budget, and not already tried.
+
+        `progress` widens the class's set with the continuation rungs when the
+        previous attempt measurably moved the objective (see
+        `PROGRESS_CONTINUATION_RUNGS`). It is keyword-only and defaults to
+        `None`, so every existing caller keeps the exact behaviour it had.
+        """
         out: list[RecoveryRung] = []
         for rung in RecoveryRung:
-            if not is_legal_rung(failure_class, rung):
+            if not is_legal_rung(failure_class, rung, progress=progress):
                 continue
             if rung is RecoveryRung.HUMAN:
                 continue          # escalation is the fallback, never a choice
@@ -514,7 +605,8 @@ class RecoveryLadder:
                reason: str = "",
                *,
                tool_name: str = "",
-               records: Iterable[Any] = ()) -> RecoveryDecision:
+               records: Iterable[Any] = (),
+               progress: ProgressVerdict | str | None = None) -> RecoveryDecision:
         """Choose the next rung, or escalate.
 
         Evidence is REQUIRED. A rung that cites nothing cannot be reviewed, and
@@ -535,7 +627,7 @@ class RecoveryLadder:
             raise ValueError(
                 "a recovery rung must cite evidence — an unjustified rung is "
                 "an assertion, not a recovery")
-        candidates = self.legal_rungs(failure_class)
+        candidates = self.legal_rungs(failure_class, progress=progress)
         if not candidates:
             return self.escalate(
                 failure_class,

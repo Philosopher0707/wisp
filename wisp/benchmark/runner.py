@@ -48,9 +48,20 @@ def make_ollama_core_factory(config: Any):
 
     The factory swaps the model per benchmark run while reusing every
     other setting — same base_url, same options, different brain.
+
+    **The core MUST be built with a `tool_executor`.** Without one,
+    `WispAgentCore._execute_tool` takes its documented read-only fallback
+    (`stateless.py`, "no approval/policy/audit on the fallback path") and
+    denies every non-READ tool — `write_file`, `edit_file`, `run_bash`,
+    `run_tests`, `spawn`. A benchmark that cannot execute a mutation cannot
+    measure a coding agent: it was reporting FAIL for every task, including
+    ones the model was solving correctly, because every write was refused.
+    `CompositionRoot` wires this for the real entry points; this factory is
+    the one place that builds a core by hand.
     """
     from wisp.core.stateless import WispAgentCore
     from wisp.providers.factory import ProviderFactory
+    from wisp.tool_executor import ToolExecutor
 
     def factory(model: str) -> WispAgentCore:
         cfg = config.model_copy() if hasattr(config, "model_copy") else config
@@ -67,7 +78,8 @@ def make_ollama_core_factory(config: Any):
         except Exception:
             cfg.model = model
         provider = ProviderFactory().from_config(cfg)
-        return WispAgentCore(config=cfg, provider=provider)
+        return WispAgentCore(config=cfg, provider=provider,
+                             tool_executor=ToolExecutor(config=cfg))
 
     return factory
 
@@ -89,9 +101,23 @@ def _git_baseline(ws) -> None:
 
     Best-effort: without git (or on any failure) the patch is simply empty
     and scoring proceeds on verify() alone.
+
+    **The workspace must be its own repository ROOT.** `rev-parse --git-dir`
+    succeeds from any directory *inside* a repository, so the previous check
+    skipped `git init` for a nested workspace and then ran `git add -A` and
+    `git commit` against the **enclosing** repository — committing the host
+    project's entire working tree. That is a mutation of the caller's
+    repository by a benchmark harness, and it happened for real: eleven
+    `bench baseline` commits landed in the host repo before it was noticed.
+    `--show-toplevel` is the check that cannot be fooled by nesting.
     """
-    rc, _ = _git(["rev-parse", "--git-dir"], ws)
-    if rc != 0:
+    try:
+        from pathlib import Path as _Path
+
+        rc, top = _git(["rev-parse", "--show-toplevel"], ws)
+        if rc != 0 or not top or _Path(top).resolve() != _Path(ws).resolve():
+            _git(["init", "-q"], ws)
+    except (OSError, ValueError):
         _git(["init", "-q"], ws)
     _git(["-c", "user.email=wisp@bench", "-c", "user.name=wisp",
           "add", "-A"], ws)

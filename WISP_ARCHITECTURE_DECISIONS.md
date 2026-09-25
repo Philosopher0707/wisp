@@ -3655,6 +3655,309 @@ record's field names and values are untouched.
 
 ---
 
+## ADR-0045 — Convergence is an objective-level loop that consumes the turn-level authorities and re-implements none of them
+
+**Status:** ACCEPTED (NEXT mission). Adds the only mechanism the turn-level closure left
+missing; changes no existing contract.
+
+### Context
+
+ADR-0042 fixed the *turn*'s completion chain: provider terminal → stream state →
+`turn_succeeded` → acceptance verdict → goal state → recovery. ADR-0044 collapsed its
+duplicated predicate. ADR-0043 removed the last vocabulary list from a semantic decision.
+The execution semantics were declared CLOSED.
+
+Closed, but **per-turn**. A survey of the live code found the objective level empty:
+
+| Component | State before this ADR |
+|---|---|
+| `run_turn` callers (SDK, CLI, REPL, headless, WebSocket, ACP, server route, TUI, benchmark) | **every one dispatches exactly one turn and returns** |
+| `core/acceptance.py` | pure and total, but nothing constructs criteria from a user objective; the only producer is `verification.floor_guard_criteria`, i.e. the *actor's own* bookkeeping |
+| `core/goal.py` | derives a state from facts it is handed; nothing supplies objective-level facts |
+| `core/recovery.py::RecoveryLadder` | complete (10 classes, 7 rungs, legality tables, budgets, R5) and called from exactly one place — to **record** a decision, behind a flag defaulting OFF |
+| `planner.py::PlanStore` | persists plans; `ContextAssembler`'s `PlanState` is constructed by **no production caller**, and `_build_system_prompt` never passes `plan=` — the plan is write-only |
+| `core/task_graph.py` | journals a per-turn graph; `runtime.py` states plainly *"RECORDED, not enforced"* |
+| `graph/executor.py` | a real executor, reachable only from the interactive REPL via `coding.handle_prompt`, not from headless/benchmark/server |
+| `stagnation` (M13) | observes and records; the gate is default OFF and, per ADR-0037, cannot change the goal state |
+
+So a turn that failed simply ended. The agent's convergence rested entirely on one turn's
+internal iteration budget (`max_iterations`, default 50). Measured on the deterministic
+benchmark against the only free-tier provider model available, three consecutive tasks
+produced **FAIL (35 tool calls), FAIL (50 tool calls), TIMEOUT (300 s)** — with no retry,
+no strategy change, and no objective-level record.
+
+### Decision
+
+**Add one mechanism — the loop — and let it consume every existing authority.**
+
+`core/convergence.py::ConvergenceController` drives attempts until the objective is
+*proven by evidence the harness produced*, or honestly is not. `wisp/autonomous.py` wires
+it to the runtime; `wisp converge` exposes it. The rules:
+
+**R1 — Acceptance criteria are host-derived, never model-declared.**
+`derive_acceptance()` reads two sources, both machine-checkable: the workspace's own
+declared verification commands (`environment.collect_environment`), and an explicitly
+named definition in an explicitly named file, matched by a **closed, conservative
+grammar**. An objective it cannot parse confidently yields **no criterion**. A model-
+declared criterion would let the judged write the exam, which is the false-success shape
+ADR-0037/0042 exist to prevent.
+
+**R2 — Evidence is produced by the harness and names its producer.**
+`CommandProbe` / the benchmark's `VerifyProbe` write `Evidence` with
+`producer="convergence.command_probe"` (or `"benchmark.verify"`). The model has no
+channel to write an evidence record. The model's prose is not an input to any decision in
+this module.
+
+**R3 — No new verification authority.** The controller calls
+`acceptance.evaluate()`, `goal.derive_goal_state()`, `goal.terminal_outcome_from_evidence()`
+and `recovery.classify_failure*()`. It re-derives none of them. `GOAL_MET` remains
+reachable only through ADR-0035's row 6, which requires *both* a successful turn and an
+acceptance `PASS`.
+
+**R4 — A criterion that cannot be evaluated must not report `FAIL`.**
+`command_succeeds`/`symbol_defined` follow `floor_guard_criteria`'s established
+implication shape: an absent measurement returns `True` so that `evaluate`'s rule 3
+turns it into `INCONCLUSIVE`. A measurement that *exists* and says the command did not
+succeed (non-zero exit, timeout, unrunnable) **is** a failure. Collapsing "no evidence"
+into "failing evidence" is the collapse `Verdict` exists to prevent.
+
+**R5 — The next strategy is chosen by `RecoveryLadder`, not by this module.**
+The controller observes; the ladder decides. `legal_rungs()` already excludes anything in
+its history, so P6's **R5** ("a rung that would repeat an already-failed rung is illegal")
+is enforced structurally rather than remembered. The rung vocabulary is `recovery.py`'s;
+a second strategy vocabulary would be the duplicated-authority defect this repository
+keeps removing. When the chosen rung is not executable in this configuration (ROLLBACK
+without a snapshot) the ladder is asked again — the first decision is already in its
+history, so the second cannot repeat it.
+
+**R6 — A denial outranks the stagnation observation.** Precedence follows P6 exactly: an
+engine-reported failure is classified *before* `repeated`, so a second denied call reaches
+`SECURITY` (legal rungs: `{HUMAN}`) instead of being re-planned as stagnation. Reading it
+the other way is how the no-retry rule leaks.
+
+**R7 — Stagnation requires unmet criteria *and* a non-empty measurement.**
+The controller's observation is "the same criteria are unmet and nothing measurable
+changed". It does not fire when there are no criteria (an unexamined objective has not
+been shown to stagnate) and it does not fire on an empty measurement (which is identical
+to every other empty measurement). The *naming* is `classify_failure`'s; the class is
+`STAGNATION` rather than `REPEATED` because STAGNATION's legal rungs
+(`GLOBAL_REPLAN`, `DIAGNOSTIC`) are the strategy-changing ones and it forbids
+`RETRY`/`REPAIR`.
+
+**R8 — Each attempt gets a fresh session.** What crosses an attempt boundary is the
+measured evidence — a few lines of facts — not the transcript. Carrying the transcript
+forward grows without bound and feeds the model its own failed reasoning as if it were
+established fact.
+
+**R9 — Bounded, and exhaustion is a state.** Attempts are bounded by the objective's or
+the controller's budget; the ladder's own budgets apply underneath. Exhaustion yields
+`ESCALATED_TO_HUMAN` (via the ladder), `GOAL_STAGNATED` or `GOAL_UNVERIFIED` — never
+`GOAL_MET`, and never a hang.
+
+**R10 — Rollback is opt-in and refuses rather than truncating.** It is the one rung that
+destroys work, so `Objective.allow_rollback` defaults `False`; `WorkspaceSnapshot` refuses
+a workspace larger than its bounds instead of silently truncating, because a partial
+snapshot makes a restore look successful while leaving files behind.
+
+**R11 — Attempts are journaled append-only, and a resume re-runs nothing.**
+A torn final line is ignored rather than failing the resume; a completed attempt is never
+re-executed, which is what makes a restart after a crash safe.
+
+**R12 — The turn predicate is not re-derived.** `wisp/autonomous.py::observe_turn` reads
+the two facts ADR-0044's predicate uses and delegates to
+`terminal_outcome_from_evidence`; `turn_succeeded` is then a projection of that outcome.
+A second implementation of the rule is the defect ADR-0044 removed.
+
+**R13 — The acceptance conditions are stated to the agent on every attempt.**
+`AttemptRequest.criteria` carries the **required** criteria (advisory ones are recorded,
+not demanded) and `compose_attempt_prompt` prints them. An agent cannot converge on a
+target it has not been told: withholding the conditions until after a failure makes the
+first attempt a guess at what "done" means. This hands over no authority — the conditions
+are the harness's, and the agent still cannot write the evidence that satisfies them.
+
+### Consequences
+
+- `GOAL_MET` at the objective level now means "the harness measured the repository and
+  every required criterion held", and is unclaimable by any amount of model prose.
+- A capability that observes but does not act (`RecoveryLadder`, the stagnation detector,
+  `acceptance.evaluate`) now has a caller that acts on it.
+- The default `permission_mode` is `auto_edit`, in which `run_bash` is blocked. That does
+  **not** weaken acceptance — the harness measures, not the agent — but it does mean the
+  agent cannot run the project's tests itself in the default mode. Recorded as a
+  limitation, not changed here.
+- **F54, found by the loop's own benchmark and fixed here.** `_execute_tool`
+  (`stateless.py:2043`) has a deliberate and *correct* safety fallback: with no
+  `tool_executor` there is no approval, policy or audit, so it permits `READ` tools only
+  and refuses everything else (`[Denied: <tool> requires a wired ToolExecutor …]`).
+  `CompositionRoot` wires an executor; **`benchmark/runner.py::make_ollama_core_factory`
+  did not** — and it is the one place that builds a core by hand. So `wisp bench` refused
+  every `write_file`, `edit_file`, `run_bash`, `run_tests` and `spawn`, and had been
+  reporting FAIL for tasks no agent could pass; `subagent-delegate` was unpassable by
+  construction. The mutation trace is unambiguous: the model wrote a correct `shout()`
+  implementation and the runtime refused it six times. The fix is one line plus two
+  tripwires. With it wired, the same objective through `wisp converge` reaches `goal_met`
+  in 48 s / 9 tool calls, against 130 s / 35 tool calls / no change before.
+  **This is the architectural capability that was preventing convergence**, and it was
+  not visible from any unit test — every test builds its core through `CompositionRoot`
+  or injects a fixture executor, so the hand-built path was never exercised.
+- **F52, found while running the benchmark and fixed here.** `benchmark/runner.py::
+  _git_baseline` used `git rev-parse --git-dir`, which succeeds from any directory
+  *inside* a repository — so a nested workspace skipped `git init` and then ran
+  `git add -A` and `git commit` against the **enclosing** repository. Eleven
+  `bench baseline` commits landed in this project before it was noticed; the branch was
+  restored to `b8dc4ac` with `git reset --mixed` (working tree untouched, the user's
+  pre-existing WIP verified intact). The check is now `--show-toplevel`. A benchmark
+  harness that mutates the caller's repository is a mutation-safety defect, and the
+  tripwire is `tests/test_bench_predictions.py::TestBaselineNeverTouchesTheEnclosingRepository`.
+
+### Alternatives rejected
+
+| Alternative | Why not |
+|---|---|
+| Put the loop inside `AgentRuntime.run_turn` | `run_turn` is the single-turn authority every transport depends on; giving it an objective lifetime makes one object own two. |
+| Let the model declare its acceptance criteria | The judged writing the exam. Directly contradicts §23 of the mission and ADR-0037's spirit. |
+| Reuse `graph/executor.py` as the driver | It executes an LLM-node DAG, not attempts against repository evidence, and it is not reachable from headless/benchmark/server. A separate decision would be needed to unify them; none is taken here. |
+| Make the plan the driver | The plan is model-authored prose. Grounding completion in it would let the model's own words become the standard it is judged against. |
+| Retry with a reworded prompt on failure | That is the "slightly different prompt" §12 forbids. The rung vocabulary forces a different *approach*, and R5 makes repetition structurally impossible. |
+
+### Follow-up questions
+
+1. Should `coding.handle_prompt`'s graph path and this controller converge on one
+   execution model? That is a genuine architectural decision and is **not** taken here.
+2. Should the `stagnation_gate` (ADR-0036/0037, default OFF) now be enabled, given that an
+   objective-level loop exists that can act on stagnation? ADR-0016's measurement
+   precondition is still `NOT_YET_DETERMINABLE`; unchanged.
+
+---
+
+## ADR-0046 — Objective-relative progress is a second input to the recovery decision, not a re-classification of the failure
+
+**Status:** ACCEPTED (progress-aware recovery mission). Adds one table and one pure function;
+changes no existing contract and no existing caller's behaviour.
+
+### Context
+
+ADR-0045 gave the objective level a loop. A live experiment then produced the case the
+taxonomy cannot express:
+
+```text
+attempt 0 — 1800 s, 13 tests collected, 1 still failing
+    CODE_TURN_TIMEOUT  →  FailureClass.ENVIRONMENT  →  LEGAL_RUNGS {DIAGNOSTIC, HUMAN}
+                                                              │
+                                                    "Do not edit any file"
+```
+
+`ENVIRONMENT`'s legal set is right for what it was written for — *"the model is too slow or
+unreachable — not retrying"* (`recovery.py`). It is wrong for a turn that was cut off
+**mid-implementation**, because that turn's work is real and its only sensible recovery is to
+continue it. Both are the same failure: the host stopped the turn. The distinction is not
+*what failed*; it is *whether the attempt moved the objective* — a fact the taxonomy does not
+carry and must not be asked to.
+
+Two designs were available: re-classify the timeout, or add a second input.
+
+### Decision
+
+**Add objective-relative progress as a second, orthogonal input to `RecoveryLadder.decide`, and
+let a meaningful-progress observation WIDEN the class's legal rung set.**
+
+**R1 — Progress is a separate fact from failure.** `FailureClass` continues to answer *what
+failed*, and `CODE_TURN_TIMEOUT` continues to be `ENVIRONMENT`. Nothing re-classifies.
+
+**R2 — Progress is host-owned and evidence-based.** `core/progress.py::evaluate_progress`
+compares two `CommandProbe` measurements — the payloads `core/convergence.py` already takes —
+and reports which of the objective's own numbers moved. It reads no model text. The verdict is
+total: `NO_PROGRESS` / `MEANINGFUL_PROGRESS` / `PROGRESS_UNDETERMINABLE`.
+
+**R3 — Activity is not progress.** `files_changed > 0`, `tool_calls > 0` and a model's claim
+are *not* sufficient. File changes are recorded as `SUPPORTING` evidence that can never on its
+own produce `MEANINGFUL_PROGRESS`. Only a movement in the objective's own measurement can: a
+falling failure count, a rising pass count, a non-zero exit becoming zero, or a named symbol
+becoming defined.
+
+**R4 — A regression is not progress.** A measurement that moved backwards forces `NO_PROGRESS`
+even alongside an authoritative improvement. Fixing one thing while breaking another is not
+progress toward the objective, and there is no "negative progress" state to invent.
+
+**R5 — A measurement whose declared inputs moved supplies no signal at all.** The
+`inputs_digest` check runs first and disqualifies the whole criterion, yielding
+`PROGRESS_UNDETERMINABLE`. This is ADR-0045 R12's tamper-evidence rule extended from
+*convergence* to *progress*: a green suite reached by editing the contract must not be able to
+look like progress either. **Demonstrated load-bearing by mutation probe** — with the check
+disabled, the live tampering scenario is reported as `meaningful_progress`.
+
+**R6 — Only `MEANINGFUL_PROGRESS` widens, and only where a class permits it.**
+`PROGRESS_CONTINUATION_RUNGS` is total and empty for nine of the ten classes; `ENVIRONMENT`
+gains exactly `REPAIR`. `SECURITY` cannot widen (a denial is a denial), and `REPEATED` and
+`STAGNATION` cannot widen because both are *defined* as the absence of progress — widening them
+would let this table contradict the classes that name it. `FORBIDDEN_RUNGS` is checked first, so
+no widening can reintroduce a forbidden rung.
+
+**R7 — `PROGRESS_UNDETERMINABLE` is conservative.** An unmeasurable attempt — no prior
+measurement, or an untrustworthy one — recovers exactly as it did before this ADR. Treating
+"cannot tell" as progress would make every unmeasurable objective continue forever.
+
+**R8 — The continuation is a different strategy, not the same one re-worded.**
+`directive_for(rung, progress=…)` selects a continuation wording that says the measured thing:
+the objective moved, the work is real, continue from the current repository state, do not
+restart, do not redo, do not edit the tests. The rung vocabulary is unchanged.
+
+**R9 — The widening is bounded by everything that already bounded recovery.** R5's no-repeat
+rule, `max_attempts` and the ladder's own budgets are untouched. A second progress-producing
+`ENVIRONMENT` failure finds `REPAIR` already tried and falls to `DIAGNOSTIC`; a third escalates.
+
+**R10 — Progress is durable and replayable, and a resume re-derives it from durable facts.**
+`AttemptRecord` journals the verdict, the signals and the measurement's raw payloads, and the
+pre-work baseline is journaled as the journal's first record (`kind: "baseline"`). A resumed run
+prefers the **journaled** baseline, because re-measuring a workspace the interrupted run already
+mutated would change both the derived criteria and every subsequent progress verdict. A legacy
+journal with no baseline record still resumes.
+
+**R11 — Progress can never override acceptance or the goal state.** The verdict still comes from
+`acceptance.evaluate`; the state still comes from `goal.derive_goal_state`; `GOAL_MET` still
+needs both a successful turn and a `PASS`. Progress changes *which rung may be tried*, and
+nothing else.
+
+### Alternatives rejected
+
+- **Re-classify a progressing timeout as `IMPLEMENTATION`.** It would be a lie about what
+  failed, and it would let a timeout reach `GLOBAL_REPLAN`/`ROLLBACK`, which a turn that was
+  merely cut off has not earned.
+- **A new `FailureClass`.** The taxonomy is closed at ten and its classes answer "what failed".
+  The new fact is orthogonal to that question, so a class would force every consumer to learn a
+  distinction that is not about failure.
+- **A `CONTINUE` rung.** `REPAIR` already means "repair that specific failure rather than
+  re-doing the whole task", which is exactly continuing a partially-completed objective. A new
+  member of a 7-rung `IntEnum` would renumber a cost-ordered ladder that several invariants
+  compare.
+- **Reading only the failure count.** `environment._detect_verification_commands` hardcodes
+  `python -m pytest tests/ -x -q`, and `-x` stops at the first failure, so on a red suite the
+  failure count is pinned at 1 and the pass count is the only thing that moves. Reading only
+  failures would report "no progress" for a project that had just implemented half its
+  functions.
+- **Widening `TRANSIENT`/`TOOL`/`VERIFICATION` too.** They already admit `REPAIR` without
+  progress, so an entry would change nothing; the table stays empty for them so that "this class
+  gains something from progress" is a fact a reader can see.
+
+### Consequences
+
+- The missing capability — *continue work that was cut off* — is reachable, through the same
+  ladder, with the same legality rules and the same bounds.
+- `RecoveryLadder.decide` and `legal_rungs` gained a keyword-only `progress` parameter
+  defaulting to `None`; every existing caller's candidate set is provably identical (pinned by
+  test).
+- The failure taxonomy, the goal-state precedence, the acceptance verdict vocabulary and the
+  turn predicate are all untouched.
+- **A limit this ADR does not remove, recorded rather than hidden.** ADR-0035 row 3 makes a
+  fatal terminal error `GOAL_FAILED`, and row 6 requires `turn_succeeded` for `GOAL_MET`. So a
+  continuation attempt that satisfies every criterion but is *itself* cut off before emitting
+  `done` is reported `GOAL_FAILED` even though the harness measures the objective as met. That
+  is a false **negative**; it is not caused by progress awareness; and removing it would mean
+  changing ADR-0035's precedence, which needs its own evidence and its own decision. Recorded in
+  `PHASE_PROGRESS_AWARE_RECOVERY.md` §14.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -3703,3 +4006,5 @@ record's field names and values are untouched.
 | 0042 | The completion chain has five distinct authorities; exhaustion is neither goal success nor goal failure | POST-M13 (F44) | ACCEPTED (defines the relation ADR-0035 left implicit; changes no behaviour) |
 | 0043 | Meaningfulness is payload-based for every provider event; the classifier owns no vocabulary but the terminal authority | POST-M13 (closure) | ACCEPTED (supersedes ADR-0041 R3/R7 — removes the last vocabulary list from a semantic decision) |
 | 0044 | `terminal_outcome` is the turn-level authority and `turn_succeeded` derives from it; the recovery ladder's state is renamed | POST-M13 (closure) | ACCEPTED (removes the second implementation of the turn predicate and a cross-layer name collision) |
+| 0045 | Convergence is an objective-level loop that consumes the turn-level authorities and re-implements none of them | NEXT | ACCEPTED (adds the loop the turn-level closure left missing; changes no existing contract) |
+| 0046 | Objective-relative progress is a second input to the recovery decision, not a re-classification of the failure | NEXT (progress-aware recovery) | ACCEPTED (widens one class's legal rungs on measurable progress; amends no earlier decision, and changes no caller that does not pass `progress`) |

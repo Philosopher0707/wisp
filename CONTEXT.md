@@ -72,9 +72,63 @@ quoting it; §11 says how.
 | **POST-M13** — **canonicalization ownership (ADR-0040)** | `COMPLETE` — **`RATIFIED` (Option B)**; authority = `events.canonical_event`; 0 code changes | `PHASE_POST-M13_F40_CANONICALIZATION_OWNERSHIP_RECONCILIATION.md` |
 | **POST-M13** — **F43/F44 convergence (ADR-0041/0042)** | `COMPLETE` — **F43 CLOSED**, **F44 SETTLED**; recovery classification is semantic + terminal-first | `PHASE_POST-M13_F43_F44_RECOVERY_COMPLETION_CONVERGENCE.md` |
 | **POST-M13** — **final execution-semantics closure (ADR-0043/0044)** | `COMPLETE` — **`EXECUTION SEMANTICS: CLOSED`**; the last vocabulary list and the duplicated turn predicate removed | `PHASE_POST-M13_FINAL_EXECUTION_SEMANTICS_CLOSURE.md` |
+| **NEXT** — autonomous coding agent convergence (**ADR-0045**) | `COMPLETE` — **`CONVERGENT`**; found **F49–F54** | `PHASE_NEXT_AUTONOMOUS_CODING_AGENT_CONVERGENCE.md` |
+| **NEXT** — live recovery-to-success validation | `COMPLETE` — **`NOT DEMONSTRATED`**; found **F55–F58** | `PHASE_LIVE_RECOVERY_TO_SUCCESS_VALIDATION.md` |
+| **NEXT** — progress-aware recovery (**ADR-0046**) | `COMPLETE` — **`DEMONSTRATED`**; found **F59** (fixed), **F60/F61** (open) | `PHASE_PROGRESS_AWARE_RECOVERY.md` |
 
-**Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F44**, change log).
-**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0044**).
+**Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F61**, change log).
+**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0046**).
+
+### 0.0.0 NEXT — autonomous coding agent convergence (2026-09-25)
+
+The execution-semantics layer was CLOSED (ADR-0043/0044) but **per-turn**. A survey of the
+live code found the objective level empty: every `run_turn` caller dispatches exactly one
+turn and returns; `acceptance.evaluate` had no criteria producer for a user objective;
+`RecoveryLadder` was called only to *record*; `PlanStore` was write-only (`_build_system_prompt`
+never passes `plan=`); `core/task_graph` is *"RECORDED, not enforced"*; `graph/executor.py`
+is reachable only from the interactive REPL.
+
+**Added — the loop, and nothing that re-implements an existing authority:**
+
+| File | What it is |
+|---|---|
+| `wisp/core/convergence.py` | `ConvergenceController` — the objective-level loop. Derives acceptance, measures with a harness probe, evaluates via `acceptance.evaluate`, derives state via `goal.derive_goal_state`, classifies via `recovery.classify_failure*`, and lets `RecoveryLadder.decide` choose a structurally-new rung. Bounded, journaled, resumable. |
+| `wisp/autonomous.py` | The wiring: `observe_turn` (delegates the turn predicate to `terminal_outcome_from_evidence`), `compose_attempt_prompt`, workspace fingerprinting, `converge_on_objective`. |
+| `wisp/autonomous_cli.py` + `wisp converge` | The CLI face. Exit code 0 only when the goal was met. |
+| `scripts/next_bench.py`, `scripts/next_converge_bench.py` | Benchmarks: one turn per task, and the same tasks *through the loop*. |
+
+**ADR-0045** ratifies it (R1–R12). Tests: `tests/reliability/test_next_convergence_controller.py`
+(29) and `test_next_autonomous_wiring.py` (14).
+
+**Report:** `PHASE_NEXT_AUTONOMOUS_CODING_AGENT_CONVERGENCE.md`.
+
+### 0.0.1 PROGRESS-AWARE RECOVERY (2026-09-25)
+
+The NEXT mission's live experiment exposed a dead end the taxonomy could not express:
+`CODE_TURN_TIMEOUT → FailureClass.ENVIRONMENT → LEGAL_RUNGS {DIAGNOSTIC, HUMAN}`, where
+`DIAGNOSTIC`'s directive is *"Do not edit any file in this attempt"* — so a turn cut off
+**mid-implementation** was routed to a rung that **provably cannot** continue the work. The
+class is correct (`ENVIRONMENT` is *"the model is too slow or unreachable — not retrying"*);
+what was missing is a second, orthogonal fact: **did the attempt move the objective?**
+
+**Added — one pure module, one table, one optional parameter:**
+
+| File | What it is |
+|---|---|
+| `wisp/core/progress.py` | `evaluate_progress` — compares two `CommandProbe` measurements and reports which of the objective's own numbers moved. Host-owned, deterministic, reads no model text, no I/O, no model call. `NO_PROGRESS` / `MEANINGFUL_PROGRESS` / `PROGRESS_UNDETERMINABLE`. |
+| `wisp/core/recovery.py` | `PROGRESS_CONTINUATION_RUNGS` (total; `ENVIRONMENT` gains exactly `REPAIR`; empty for `SECURITY`/`REPEATED`/`STAGNATION`), and a keyword-only `progress=` on `decide`/`legal_rungs`/`is_legal_rung` defaulting to `None`. |
+| `wisp/core/convergence.py` | Progress per attempt; the continuation directive; the baseline journaled as the journal's first record; `read_journal_baseline`. |
+| `scripts/next_progress_experiment.py` | The live driver (`--scenario`, `--modules`, `--per-module`). |
+
+**ADR-0046** ratifies it (R1–R11). Tests: `tests/reliability/test_progress_aware_recovery.py`
+(39). **Report:** `PHASE_PROGRESS_AWARE_RECOVERY.md` — verdict
+**`PROGRESS-AWARE RECOVERY: DEMONSTRATED`**, with the boundary stated: in the five runs that
+reached `GOAL_MET` attempt 0 had already satisfied the *objective*, so the continuation closed
+the *turn*; the runs where the continuation wrote genuinely remaining work (**F61**:
+`positive10` finished 14 of 17 outstanding files) did not converge because `R5` permits exactly
+one continuation. **F60** (a `PASS`ing verdict on a timed-out turn is reported `goal_failed`)
+and **F61** are open and recorded, not patched — both would change preserved contracts.
+
 
 **The durability track is closed.** M2 (journal-first reconstruction), M3 (a real-SIGKILL kill point),
 M4 (durability as a correctness precondition) and M16 (the escalation is state, not audit) are all
