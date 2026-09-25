@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -36,7 +37,9 @@ sys.path.insert(0, str(REPO))
 
 MODULE_POOL = ("alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta",
                "theta", "iota", "kappa", "lambda_", "mu", "nu", "xi",
-               "omicron", "pi", "rho", "sigma")
+               "omicron", "pi", "rho", "sigma", "tau", "upsilon", "phi",
+               "chi", "psi", "omega", "aleph", "beth", "gimel", "daleth",
+               "he", "vav")
 MODULES = MODULE_POOL[:8]
 PER_MODULE = 2
 
@@ -257,12 +260,22 @@ async def main() -> int:
 
     after_files = _read_workspace(ws)
     final_pytest = _run_pytest(ws)
+    from wisp.core.recovery import PRODUCTIVE_BUDGET, RecoveryBudget
+
     payload = {
         "scenario": args.scenario,
         "model": args.model,
         "workspace": str(ws),
         "objective": objective,
         "wall_clock_s": wall,
+        # The bounds the run was under, so the trajectory can be read against
+        # them rather than against a number in a report.
+        "budgets": {
+            "max_attempts": args.max_attempts,
+            "turn_timeout_s": int(os.environ.get("WISP_TURN_TIMEOUT", "0") or 0),
+            PRODUCTIVE_BUDGET: getattr(RecoveryBudget(), PRODUCTIVE_BUDGET),
+        },
+        "rung_sequence": [a.rung for a in result.attempts],
         "criteria": [{"criteria_id": c.criteria_id, "required": c.required,
                       "description": c.description} for c in criteria],
         "baseline": {"lines": list(baseline.lines),

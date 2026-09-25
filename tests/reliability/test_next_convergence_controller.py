@@ -212,19 +212,80 @@ def test_criteria_without_evidence_are_inconclusive(ws):
     assert result.goal_state is GoalState.GOAL_UNVERIFIED
 
 
-def test_a_failing_turn_can_never_be_goal_met(ws):
-    """Even with the criteria satisfied, a failed turn is not a met goal."""
+def test_a_failed_turn_with_a_pass_is_goal_met(ws):
+    """**Revised by ADR-0047 (F60).** This used to assert `GOAL_FAILED`.
+
+    A failed *turn* is not a failed *objective*. Here the attempt wrote a
+    correct implementation and then died — a provider failure, in fact — and the
+    harness independently measured `exit 0`. The objective is satisfied; the
+    timeout is a fact about the *attempt*, and it belongs in the record rather
+    than in the verdict. Reporting `GOAL_FAILED` here was a false negative, and
+    five live runs paid for it with an extra attempt each: the objective was
+    already met, and the loop re-attempted only to close a turn the objective
+    did not need.
+    """
     def fix(_ws):
         _write(ws, "totals.py", "def sum_to(n):\n    return sum(range(1, n + 1))\n")
         return TurnObservation(turn_succeeded=False, terminal_outcome="failed",
-                               failure_message="provider died",
+                               failure_code="E1101",
+                               failure_message="Turn timed out after 5s",
                                failure_recoverable=False)
 
     ctl, turn, criteria = _controller(ws, [fix] * 3, max_attempts=2)
     result = _run(ctl.converge(Objective(goal="fix sum_to", workspace=str(ws),
                                         criteria=criteria)))
+    assert result.converged
+    assert result.goal_state is GoalState.GOAL_MET
+    assert len(turn.calls) == 1, "no attempt is spent closing a met objective"
+    # ...and the record still says the turn failed. The two facts are separate.
+    first = result.attempts[0]
+    assert first.observation.turn_succeeded is False
+    assert first.observation.terminal_outcome == "failed"
+    assert first.failure_class == FailureClass.ENVIRONMENT.value
+
+
+def test_a_failed_turn_without_a_pass_is_still_goal_failed(ws):
+    """The complement — F60 buys nothing by weakening terminal honesty.
+
+    No `PASS` verdict, so the fatal error still decides: `GOAL_FAILED`, not
+    `GOAL_MET`. This is the half of ADR-0035's row 3 that did not move.
+    """
+    def die(_ws):
+        return TurnObservation(turn_succeeded=False, terminal_outcome="failed",
+                               failure_message="provider died",
+                               failure_recoverable=False)
+
+    ctl, turn, criteria = _controller(ws, [die] * 3, max_attempts=2)
+    result = _run(ctl.converge(Objective(goal="fix sum_to", workspace=str(ws),
+                                        criteria=criteria)))
     assert not result.converged
     assert result.goal_state is GoalState.GOAL_FAILED
+
+
+def test_an_authorization_event_never_completes_even_with_a_pass(ws):
+    """F60-H. A denial is an exception to "the objective's evidence decides".
+
+    The attempt satisfied every criterion — and then tried something it was not
+    authorized to do. Absorbing that into `GOAL_MET` would launder a security
+    event, so the run escalates instead. This preserves the existing security
+    ordering (a `SECURITY` failure's only legal rung is `HUMAN`) rather than
+    inventing a rule: the escalation goes through the ladder's own row.
+    """
+    from wisp.core.events import DENIAL_POLICY_DENIED
+
+    def denied(_ws):
+        _write(ws, "totals.py", "def sum_to(n):\n    return sum(range(1, n + 1))\n")
+        return TurnObservation(turn_succeeded=False, terminal_outcome="failed",
+                               failure_message=DENIAL_POLICY_DENIED,
+                               failure_recoverable=False)
+
+    ctl, turn, criteria = _controller(ws, [denied] * 3, max_attempts=2)
+    result = _run(ctl.converge(Objective(goal="fix sum_to", workspace=str(ws),
+                                        criteria=criteria)))
+    assert not result.converged
+    assert result.goal_state is GoalState.ESCALATED_TO_HUMAN
+    assert result.escalation is not None
+    assert len(turn.calls) == 1, "an authorization event is terminal for the run"
 
 
 # ── Partial success and hidden regression ───────────────────────────────

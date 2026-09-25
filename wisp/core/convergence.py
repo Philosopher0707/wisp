@@ -232,8 +232,20 @@ class Measurement:
         Two consecutive attempts whose measurements digest identically made
         no measurable progress, which is the observation the controller
         reports to `classify_failure(stagnation=…)`.
+
+        **Over the state-bearing fields only.** `output_tail` is excluded, and
+        the reason is measured rather than aesthetic: it ends with the command's
+        *elapsed time* (`"3 failed in 0.04s"`), so hashing the whole payload made
+        the witness a function of **when it was taken** rather than of **what was
+        there**. Two probes of the same unchanged workspace produced different
+        digests — which made the stagnation predicate a coin flip (a genuinely
+        stagnant run could classify as `IMPLEMENTATION` and take `REPAIR` rather
+        than `GLOBAL_REPLAN`) and broke ADR-0046 R10's replay determinism. A
+        witness must be a function of the state.
         """
-        return content_digest(self.observations)
+        return content_digest({criteria_id: _witness_payload(payload)
+                               for criteria_id, payload
+                               in self.observations.items()})
 
     def to_dict(self) -> dict[str, Any]:
         """The durable form: the facts and the readable lines.
@@ -298,11 +310,11 @@ class CommandProbe:
             lines.append(line)
             for criteria_id in criteria_ids:
                 evidence.append(Evidence(
-                    evidence_id=f"{criteria_id}:{content_digest(payload)[:16]}",
+                    evidence_id=f"{criteria_id}:{witness_digest(payload)[:16]}",
                     criteria_id=criteria_id,
                     producer=self.PRODUCER,
                     kind=CriterionKind.DETERMINISTIC,
-                    content_hash=content_digest(payload),
+                    content_hash=witness_digest(payload),
                     observations=tuple(
                         f"{k}={v}" for k, v in sorted(payload.items())),
                     metadata={"spec": type(spec).__name__},
@@ -632,9 +644,26 @@ _PATH_RE = re.compile(r"[A-Za-z0-9_./-]+\.(?:py|js|ts|tsx|go|rs|java|rb)\b")
 #: stated, so it is promoted from advisory to required even on a red
 #: baseline. Closed and conservative: an objective that does not match
 #: leaves the absolute criterion advisory.
+#: Does the objective ask for the *suite* to be green, as opposed to asking for
+#: something else on a repository that happens to be red? Only the former
+#: promotes the absolute "exits 0" criterion from advisory to required.
+#:
+#: Three shapes, because the first one alone was too narrow and the narrowness
+#: became consequential under ADR-0047. On a red baseline an unpromoted command
+#: spec yields only *guard* criteria (`no_regression`, `inputs_unchanged`), so
+#: the objective silently becomes "do not make it worse" — which is a legitimate
+#: objective ("refactor without breaking anything") but the wrong one for an
+#: objective that says the suite must pass. Before ADR-0047 a timeout masked the
+#: difference; now a `PASS` completes the run, so the criteria are the only gate
+#: and stating them at the right strength is load-bearing.
 _WANTS_FIX_RE = re.compile(
+    # (1) a repair verb and a suite word — "fix the failing tests"
     r"\b(fix|repair|resolve|make|get|turn)\b[^.]{0,40}?"
-    r"\b(pass|passing|green|fail(?:ing|ure|ures)?|test|tests|suite|ci)\b",
+    r"\b(pass|passing|green|fail(?:ing|ure|ures)?|test|tests|suite|ci)\b"
+    # (2) a passing verb and a suite word — "so that the tests pass"
+    r"|\b(pass|passes|passing|green)\b[^.]{0,40}?\b(tests?|suite|ci)\b"
+    # (3) the same, in the other order — "the suite passes"
+    r"|\b(tests?|suite|ci)\b[^.]{0,20}?\b(pass|passes|passing|green)\b",
     re.IGNORECASE,
 )
 
@@ -756,6 +785,36 @@ _RUNG_DIRECTIVES: dict[str, str] = {
 }
 
 INITIAL_RUNG = "INITIAL"
+
+#: The payload fields that identify a **state**. Everything else in a payload is
+#: either prose for a human or a property of the observation rather than of the
+#: workspace, and neither belongs in a witness or an identifier.
+#:
+#: `output_tail` is the important exclusion. It is a human-readable excerpt that
+#: ends with the command's elapsed time, so including it made every witness and
+#: every evidence id depend on *when* it was taken. See `Measurement.digest`.
+WITNESS_FIELDS: tuple[str, ...] = (
+    "exit", "collected", "failed", "defined", "file_present",
+    "inputs_digest", "inputs_files",
+)
+
+
+def _witness_payload(payload: Any) -> Any:
+    """The state-bearing projection of one measurement payload."""
+    if not isinstance(payload, dict):
+        return payload
+    return {k: payload[k] for k in WITNESS_FIELDS if k in payload}
+
+
+def witness_digest(payload: Any) -> str:
+    """A content digest over a payload's state-bearing fields only.
+
+    Used for the stagnation witness and for evidence identity, so that two
+    observations of the same repository state are *the same* observation —
+    which is what makes the record replayable and the stagnation predicate
+    deterministic.
+    """
+    return content_digest(_witness_payload(payload))
 
 #: The directives for an attempt that follows a **meaningful-progress**
 #: failure. They are not a second strategy vocabulary: they are the same rungs,
@@ -1128,26 +1187,45 @@ class ConvergenceController:
                 saw_fatal_error=(observation.terminal_outcome
                                  == TerminalOutcome.FAILED.value),
             )
-            # The failure class. Precedence follows P6's rule exactly —
-            # **a denial outranks everything** — so an engine-reported
-            # failure is classified before the stagnation observation: a
-            # second denied call must reach SECURITY (whose only legal rung
-            # is HUMAN) rather than being re-planned as stagnation. Reading
-            # it the other way is how the no-retry rule leaks.
+            # The failure class, when the attempt produced a failure signal.
             #
-            # A PASSING attempt is not classified at all: there is no failure
-            # to name, and inventing one would put a failure class on a
-            # success record.
-            passed = (verdict.verdict is Verdict.PASS
-                      and observation.turn_succeeded)
-            if passed:
-                failure_class: FailureClass | None = None
-            elif observation.failure_code or observation.failure_message:
-                failure_class = classify_failure_signal(
+            # Computed for EVERY attempt, including one whose verdict is PASS.
+            # ADR-0047 makes a failed turn able to complete an objective, and
+            # the record must still say the turn failed — the two facts are
+            # separate, and collapsing them is the defect F60 named. A PASSING
+            # attempt still gets no *recovery* input from this: `passed` gates
+            # that below.
+            #
+            # Precedence follows P6's rule exactly — **a denial outranks
+            # everything** — so an engine-reported failure is classified before
+            # the stagnation observation: a second denied call must reach
+            # SECURITY (whose only legal rung is HUMAN) rather than being
+            # re-planned as stagnation. Reading it the other way is how the
+            # no-retry rule leaks.
+            signal_class: FailureClass | None = None
+            if observation.failure_code or observation.failure_message:
+                signal_class = classify_failure_signal(
                     observation.failure_message,
                     observation.failure_recoverable,
                     observation.failure_code,
                 )
+
+            # An authorization event is terminal for the RUN, whatever the
+            # objective's verdict says. A denial means the attempt did not
+            # proceed as authorized, and absorbing that into a success would
+            # launder a security event — so it is excluded from completion
+            # *before* the verdict is consulted, and it escalates below through
+            # the ladder's own SECURITY row rather than by a rule invented here.
+            authorization_event = signal_class is FailureClass.SECURITY
+
+            # ADR-0047: completion follows the OBJECTIVE's evidence. A `PASS`
+            # from the harness's own measurement means the objective is met; the
+            # turn's outcome is a fact about the attempt and is no longer a
+            # precondition. `turn_succeeded` is still recorded on the attempt.
+            passed = verdict.verdict is Verdict.PASS and not authorization_event
+
+            if signal_class is not None:
+                failure_class: FailureClass | None = signal_class
             elif repeated:
                 # The objective-level observation: the same criteria are
                 # unmet and nothing measurable changed. `STAGNATION` is the
@@ -1163,6 +1241,16 @@ class ConvergenceController:
                         verdict.verdict is Verdict.INCONCLUSIVE),
                     implementation_failed=(verdict.verdict is Verdict.FAIL),
                 )
+
+            # Escalate HERE, before the goal state is derived, so `escalated` is
+            # a durable fact rather than a prediction of what the ladder is
+            # about to do. The early return below prevents a second escalation
+            # when `_next_rung` would otherwise ask for one.
+            if authorization_event:
+                self._ladder.escalate(
+                    FailureClass.SECURITY,
+                    reason="an authorization event ended the run",
+                    evidence=tuple(measurement.lines) or ("authorization event",))
 
             record = AttemptRecord(
                 index=attempt, rung=rung, directive=directive,
@@ -1185,8 +1273,10 @@ class ConvergenceController:
 
             # The goal state is derived from the SAME facts the turn-level
             # arbiter uses, so the two levels cannot disagree about what
-            # happened — and `GOAL_MET` stays reachable only through row 6,
-            # which needs both a successful turn and an acceptance PASS.
+            # happened. ADR-0047 moved `PASS` above the fatal-error clause, so
+            # `GOAL_MET` here no longer requires the turn to have succeeded —
+            # but it still requires the acceptance verdict to say PASS, and
+            # `escalated` still outranks everything but cancellation.
             record.goal_state = str(derive_goal_state(
                 terminal_outcome=outcome,
                 acceptance_verdict=verdict.verdict,
@@ -1197,9 +1287,16 @@ class ConvergenceController:
             self.attempts.append(record)
             self._write_journal(record)
 
-            if failure_class is None:
-                # Equivalent to `passed`: a failure class is absent exactly
-                # when the verdict passed AND the turn succeeded.
+            if authorization_event:
+                return ConvergenceResult(
+                    goal_state=GoalState.ESCALATED_TO_HUMAN,
+                    attempts=tuple(self.attempts),
+                    escalation=self._ladder.escalation,
+                    reason=("an authorization event ended the run — the "
+                            "objective is not allowed to absorb it"),
+                    final_measurement=measurement)
+
+            if passed:
                 return ConvergenceResult(
                     goal_state=GoalState.GOAL_MET, attempts=tuple(self.attempts),
                     reason=("every required criterion has valid evidence "
@@ -1269,24 +1366,33 @@ class ConvergenceController:
 
         `progress` is passed straight through: when the attempt measurably
         moved the objective, the ladder widens the class's legal set with the
-        continuation rungs (`PROGRESS_CONTINUATION_RUNGS`). Nothing about the
-        ordering, the forbidden rules or R5 changes — this only adds candidates
-        the class's own table withheld.
+        continuation rungs (`PROGRESS_CONTINUATION_RUNGS`) **and** relaxes R5
+        for that case — a rung that produced measurable progress may be
+        re-chosen, bounded by the `productive_continuations` budget, because the
+        state it would act on is no longer the state it failed on.
+
+        `rejected` exists because of that relaxation. Without it, a rung that
+        progress had re-legalised and that is not executable here (ROLLBACK
+        without a snapshot) would be chosen by every retry in this loop and the
+        loop would exhaust itself instead of moving on.
         """
         evidence = tuple(evidence) or ("verdict=unknown",)
         unmet = tuple(unmet)
+        rejected: list[RecoveryRung] = []
         for _ in range(len(RecoveryRung)):
             decision = self._ladder.decide(
                 failure_class, evidence,
                 reason=f"attempt did not satisfy: "
                        f"{', '.join(unmet) or 'no evidence'}",
-                progress=progress)
+                progress=progress,
+                exclude=rejected)
             if decision.rung is RecoveryRung.HUMAN:
                 # `decide` has already recorded the escalation — this is the
                 # terminal-honesty path, not another choice to make.
                 return None
             if self._rung_executable(decision.rung):
                 return decision
+            rejected.append(decision.rung)
             logger.info("rung %s chosen but not executable here — asking again",
                         decision.rung.name)
         return None
@@ -1309,7 +1415,15 @@ class ConvergenceController:
         a resume exists to prevent. It is read from the record rather than
         recomputed: `evaluate_progress` needs the *previous* measurement's
         payloads, and the record already carries the verdict they produced.
+
+        **Nothing to resume is not an error (F62).** `resume=True` with a missing
+        or empty journal used to reach `self.attempts[-1]` on an empty list and
+        raise `IndexError` — so `wisp converge --resume` on a fresh run, or with
+        a `--journal` that had not been written yet, crashed instead of starting.
+        A resume with no durable history is simply a fresh run.
         """
+        if not self.attempts:
+            return
         for prev, cur in zip(self.attempts, self.attempts[1:]):
             if not prev.failure_class:
                 continue

@@ -206,11 +206,55 @@ class TestThePrecedenceMatrix:
         assert _derive(acceptance_verdict=Verdict.FAIL,
                        cancelled=True) is GoalState.CANCELLED
 
-    def test_t10_timeout_is_goal_failed(self):
+    def test_t10_timeout_with_a_pass_is_goal_met(self):
+        """**Revised by ADR-0047 (F60).** This row used to assert `GOAL_FAILED`.
+
+        A failed *turn* is not a failed *objective*. The acceptance verdict is
+        an independent, host-produced measurement; when it says every objective
+        criterion holds, the objective is met and the timeout is a fact about
+        the *attempt*. The old expectation made this a false negative, and five
+        live runs paid for it with an extra attempt each — the objective was
+        already satisfied and the loop re-attempted only to close the turn.
+
+        `turn_succeeded=False` is still passed, and is still recorded; it simply
+        no longer arbitrates.
+        """
         assert derive_goal_state(
             terminal_outcome=TerminalOutcome.FAILED,
             acceptance_verdict=Verdict.PASS,
+            turn_succeeded=False) is GoalState.GOAL_MET
+
+    def test_t10b_a_timeout_without_a_pass_is_still_goal_failed(self):
+        """The other half of the revision, and the half that did NOT move.
+
+        A fatal terminal error with no `PASS` is still a failure — and it still
+        outranks stagnation, so a *heuristic* cannot soften a *fact*. Without
+        this, ADR-0047 would have bought F60 by weakening terminal honesty.
+        """
+        assert derive_goal_state(
+            terminal_outcome=TerminalOutcome.FAILED,
+            acceptance_verdict=Verdict.INCONCLUSIVE,
             turn_succeeded=False) is GoalState.GOAL_FAILED
+        assert derive_goal_state(
+            terminal_outcome=TerminalOutcome.FAILED,
+            acceptance_verdict=Verdict.INCONCLUSIVE,
+            stagnating=True,
+            turn_succeeded=False) is GoalState.GOAL_FAILED
+        assert derive_goal_state(
+            terminal_outcome=TerminalOutcome.FAILED,
+            acceptance_verdict=None,
+            turn_succeeded=False) is GoalState.GOAL_FAILED
+
+    def test_t10c_a_pass_never_rescues_a_fail_verdict(self):
+        """Row 3 still outranks row 4: a `FAIL` is decisive whatever the turn did."""
+        assert derive_goal_state(
+            terminal_outcome=TerminalOutcome.FAILED,
+            acceptance_verdict=Verdict.FAIL,
+            turn_succeeded=False) is GoalState.GOAL_FAILED
+        assert derive_goal_state(
+            terminal_outcome=TerminalOutcome.SUCCEEDED,
+            acceptance_verdict=Verdict.FAIL,
+            turn_succeeded=True) is GoalState.GOAL_FAILED
 
     def test_t11_budget_exhaustion_is_goal_failed(self):
         assert derive_goal_state(

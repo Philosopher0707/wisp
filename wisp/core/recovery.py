@@ -341,6 +341,21 @@ def classify_failure(result: Any = None, *, repeated: bool = False,
     return FailureClass.IMPLEMENTATION
 
 
+def _is_meaningful_progress(progress: ProgressVerdict | str | None) -> bool:
+    """True only for `MEANINGFUL_PROGRESS`. Fail closed on anything else.
+
+    The single place that decides whether a progress observation may relax R5.
+    An unknown string, `None`, `NO_PROGRESS` and `PROGRESS_UNDETERMINABLE` all
+    answer `False` — "cannot tell" must never widen a recovery rule.
+    """
+    if progress is None:
+        return False
+    try:
+        return ProgressVerdict(progress) is ProgressVerdict.MEANINGFUL_PROGRESS
+    except ValueError:
+        return False
+
+
 def _continuation_rungs(failure_class: FailureClass,
                         progress: ProgressVerdict | str | None
                         ) -> frozenset[RecoveryRung]:
@@ -352,14 +367,7 @@ def _continuation_rungs(failure_class: FailureClass,
     unmeasurable attempt is not evidence of progress, and treating it as such
     would make every unmeasurable objective continue forever.
     """
-    if progress is None:
-        return frozenset()
-    try:
-        verdict = ProgressVerdict(progress)
-    except ValueError:
-        # An unknown string is not a licence to widen. Fail closed.
-        return frozenset()
-    if verdict is not ProgressVerdict.MEANINGFUL_PROGRESS:
+    if not _is_meaningful_progress(progress):
         return frozenset()
     return PROGRESS_CONTINUATION_RUNGS.get(failure_class, frozenset())
 
@@ -397,12 +405,32 @@ class RecoveryBudget:
     Defaults are deliberately small. Recovery is the most expensive thing the
     agent does — it re-plans, re-verifies and re-executes — so an unbounded
     recovery budget is an unbounded cost multiplier.
+
+    **`productive_continuations` (ADR-0047, F61)** is the fifth, and it exists
+    because R5's original unit was wrong. R5 forbade *a rung* from repeating,
+    which was the right rule while the only thing a rung could carry was a
+    failure. Once progress semantics exist, a rung can carry a *success that has
+    not finished* — and then the thing that must not repeat is **the same
+    strategy against materially unchanged state**, not the rung. Re-choosing a
+    rung is permitted only when the attempt measurably advanced the objective,
+    and only this many times; the bound is what keeps "productive" from meaning
+    "forever".
     """
 
     local_replans: int = 2
     global_replans: int = 1
     diagnostic_tasks: int = 2
     graph_growth_nodes: int = 64
+    #: How many times a rung that already ran may be chosen again, across the
+    #: whole objective. Counted separately from the rung's own budget so the
+    #: two bounds cannot be confused: `local_replans` bounds *how much replanning*
+    #: happens, this bounds *how much continuing* happens.
+    productive_continuations: int = 2
+
+
+#: The budget a re-used rung is charged to. A module constant so the name
+#: appears once — a second spelling is how a budget stops being a bound.
+PRODUCTIVE_BUDGET = "productive_continuations"
 
 
 @dataclass
@@ -448,7 +476,8 @@ class BudgetGovernor:
                    "spent": int(self.spent.get(name, 0)),
                    "total": getattr(self.budget, name)}
             for name in ("local_replans", "global_replans",
-                         "diagnostic_tasks", "graph_growth_nodes")
+                         "diagnostic_tasks", "graph_growth_nodes",
+                         PRODUCTIVE_BUDGET)
         }
         out["reported"] = dict(self.reported)
         return out
@@ -577,23 +606,51 @@ class RecoveryLadder:
         return any(d.rung is rung for d in self.history)
 
     def legal_rungs(self, failure_class: FailureClass, *,
-                    progress: ProgressVerdict | str | None = None
+                    progress: ProgressVerdict | str | None = None,
+                    exclude: Iterable[RecoveryRung] = ()
                     ) -> list[RecoveryRung]:
         """Legal, not-forbidden, in budget, and not already tried.
 
         `progress` widens the class's set with the continuation rungs when the
         previous attempt measurably moved the objective (see
-        `PROGRESS_CONTINUATION_RUNGS`). It is keyword-only and defaults to
-        `None`, so every existing caller keeps the exact behaviour it had.
+        `PROGRESS_CONTINUATION_RUNGS`), **and it also relaxes R5 for that one
+        case**. It is keyword-only and defaults to `None`, so every existing
+        caller keeps the exact behaviour it had.
+
+        **R5, refined (ADR-0047).** The rule was *"a rung that would repeat an
+        already-failed rung for the same failure is illegal"*. That unit — the
+        rung — was right while a rung could only ever carry a failure. A rung
+        that produced `MEANINGFUL_PROGRESS` carries something else: a *success
+        that has not finished*. What must not repeat is **the same strategy
+        against materially unchanged state**, and `MEANINGFUL_PROGRESS` is
+        exactly the host-owned witness that the state changed — it is computed
+        from the objective's own measurement, so a repeat is permitted only when
+        the measurement moved, never on the model's say-so.
+
+        So the rule becomes: *a rung may be re-chosen only when the previous
+        attempt measurably advanced the objective, and only while the
+        `productive_continuations` budget has room*. No progress → the original
+        R5, unchanged. No budget → no re-choice, and the ladder escalates.
+
+        `exclude` is for `_next_rung`'s "chosen but not executable here" retry:
+        without it, a rung that was re-legalised by progress could be re-chosen
+        by the retry and loop until the retry budget ran out.
         """
+        productive = _is_meaningful_progress(progress)
+        excluded = set(exclude)
         out: list[RecoveryRung] = []
         for rung in RecoveryRung:
+            if rung in excluded:
+                continue
             if not is_legal_rung(failure_class, rung, progress=progress):
                 continue
             if rung is RecoveryRung.HUMAN:
                 continue          # escalation is the fallback, never a choice
             if self.tried(rung):
-                continue          # R5
+                if not productive:
+                    continue      # R5, unchanged: no progress, no repeat
+                if self.governor.exhausted(PRODUCTIVE_BUDGET):
+                    continue      # the bound that makes "productive" finite
             budget_name = self._BUDGET_FOR.get(rung)
             if budget_name and self.governor.exhausted(budget_name):
                 continue
@@ -606,7 +663,8 @@ class RecoveryLadder:
                *,
                tool_name: str = "",
                records: Iterable[Any] = (),
-               progress: ProgressVerdict | str | None = None) -> RecoveryDecision:
+               progress: ProgressVerdict | str | None = None,
+               exclude: Iterable[RecoveryRung] = ()) -> RecoveryDecision:
         """Choose the next rung, or escalate.
 
         Evidence is REQUIRED. A rung that cites nothing cannot be reviewed, and
@@ -627,7 +685,8 @@ class RecoveryLadder:
             raise ValueError(
                 "a recovery rung must cite evidence — an unjustified rung is "
                 "an assertion, not a recovery")
-        candidates = self.legal_rungs(failure_class, progress=progress)
+        candidates = self.legal_rungs(failure_class, progress=progress,
+                                      exclude=exclude)
         if not candidates:
             return self.escalate(
                 failure_class,
@@ -644,9 +703,16 @@ class RecoveryLadder:
                     evidence=evidence + (f"reversibility({tool_name})="
                                          f"{plan.reversibility}",))
 
+        # Charge BOTH bounds when a rung is re-chosen: its own budget (which may
+        # already be exhausted — in which case `legal_rungs` never offered it)
+        # and the productive-continuation budget, which is what bounds the
+        # repeat. Charging only the former would make a rung with no budget
+        # entry — `REPAIR` — repeat without limit.
         budget_name = self._BUDGET_FOR.get(rung)
         if budget_name:
             self.governor.spend(budget_name)
+        if self.tried(rung):
+            self.governor.spend(PRODUCTIVE_BUDGET)
         decision = RecoveryDecision(failure_class=failure_class, rung=rung,
                                     reason=reason, evidence=evidence,
                                     seq=len(self.history) + 1)

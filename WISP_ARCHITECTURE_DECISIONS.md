@@ -3958,6 +3958,150 @@ nothing else.
 
 ---
 
+## ADR-0047 — A failed turn is not a failed objective, and R5's unit is the strategy, not the rung
+
+**Status:** ACCEPTED (multi-turn productive recovery mission). Amends ADR-0035's precedence rows
+3–6 and ADR-0046's use of R5. Changes no other contract; every caller that does not pass
+`progress` is unaffected.
+
+### Context
+
+Two questions were left open by ADR-0045 and ADR-0046, and the live experiments that closed
+those decisions produced the evidence for both:
+
+**F60.** `derive_goal_state`'s row 3 read *"P3 FAIL **or fatal terminal error**"*. So a turn that
+timed out outranked an independent acceptance `PASS`, and a repository that satisfied **every**
+objective criterion was reported `GOAL_FAILED`. Measured live: five runs reached `exit 0`,
+recorded verdict `pass` on every attempt, and terminated `goal_failed` — and each spent a whole
+extra attempt re-attempting an objective that was already met. A false **negative**, the mirror
+of F37.
+
+**F61.** `RecoveryLadder`'s R5 forbade *a rung* from repeating. That unit was right while the
+only thing a rung could carry was a failure. ADR-0046 gave rungs a second possible payload — a
+**success that has not finished** — and then the rule became actively harmful. Measured live:
+`positive10`'s attempt 1 completed **14 of the 17 outstanding files** and moved the objective
+from 1 to 44 passing checks, *more work than the first attempt*; it needed one more
+continuation, and R5 refused it. The ladder fell to `DIAGNOSTIC`, whose directive is *"Do not
+edit any file in this attempt"* — so the run was **guaranteed** to fail while every attempt had
+made measurable progress.
+
+### Decision
+
+**F60 — the objective's evidence decides where it is decisive; the execution outcome decides
+only where it is not.**
+
+**R1 — The fatal-terminal-error clause is qualified, not removed.** Row 4 is now *"fatal
+terminal error, **and no P3 PASS**"*. A fatal error with no `PASS` is still `GOAL_FAILED`, and
+still outranks stagnation. Only one input combination moved: *fatal error + `PASS`*,
+`GOAL_FAILED` → `GOAL_MET`.
+
+**R2 — `turn_succeeded` is not an arbitration input.** It is still recorded on every attempt,
+and `terminal_outcome` is still the turn-level authority (ADR-0044). It was never *sufficient*
+for `GOAL_MET` (row 6 still needs a `PASS`); F60 establishes that it is not *necessary* either.
+
+**R3 — Why a conjunction and not a reordering.** Three preserved rules must hold at once, and
+they are not totally orderable: a fatal error must outrank stagnation (a *heuristic* must not
+soften a *fact*); stagnation must outrank `PASS` (the completion gate withholds goal-met); and
+`PASS` must outrank a fatal error (R1). As priorities that is `fatal > stagnation > PASS >
+fatal` — a cycle, so **no ordering of rows can express it**. The cycle is broken where it is
+semantically broken: the fatal clause is the only one whose meaning depends on the verdict,
+because it is the only one that is a statement about the *attempt* rather than about the
+*objective*.
+
+**R4 — An authorization event is terminal for the run.** A denial or cancellation is excluded
+from completion *before* the verdict is consulted, and escalates through the ladder's own
+`SECURITY` row. Absorbing a denial into `GOAL_MET` would launder a security event; this
+preserves the existing security ordering rather than adding a rule.
+
+**R5 — The criteria are now the sole gate, and that is a consequence to be managed.** Before
+this ADR a timeout accidentally masked weak criteria. `criteria_for`'s *guards-only* case (a red
+baseline, no promotion, no symbol criterion) is a legitimate **no-regression objective** — "do
+not make it worse" — and `GOAL_MET` on it is honest. But an objective that plainly requires a
+green suite must state that, so `_WANTS_FIX_RE` was widened to cover three phrasings (a repair
+verb, "X passes", "the suite passes") instead of one. The criteria must be as strong as the
+objective.
+
+**F61 — the unit of non-repetition is the strategy against materially unchanged state.**
+
+**R6 — `MEANINGFUL_PROGRESS` is the witness that the state changed.** It is computed by
+`core/progress.py` from the objective's own measurement, so "the state materially changed" is
+host-owned, deterministic, and never the model's word. A rung may be re-chosen only when it is
+true; otherwise R5 is exactly what it was.
+
+**R7 — A dedicated budget bounds it.** `RecoveryBudget.productive_continuations` (default 2)
+counts re-choices across the whole objective, separately from the rung's own budget. This is the
+invariant: **productive recovery can continue, and productive recovery still terminates.** A
+rung with no budget entry of its own (`REPAIR`) is bounded by this and nothing else, which is
+why the two bounds are charged separately rather than one standing in for the other.
+
+**R8 — A regression, a tampered input, and an unmeasurable attempt cannot unlock it.** A
+regression forces `NO_PROGRESS`; a moved verification-input digest forces
+`PROGRESS_UNDETERMINABLE`; `None` and an unknown string fail closed. All three therefore leave
+R5 untouched.
+
+**R9 — `SECURITY`, `REPEATED` and `STAGNATION` can never be widened or repeated.** The
+continuation table stays empty for them and `FORBIDDEN_RUNGS` is still checked first, so no
+progress observation can reach a forbidden rung.
+
+**R10 — No new strategy-identity mechanism.** The journal already carries the strategy
+fingerprint — rung, directive, evidence lines, measurement digest, session, files changed — and
+R6 is what makes "the same strategy" decidable. Adding a second identity would be a second
+authority for a question the progress verdict already answers.
+
+**R11 — The bound is visible and durable.** `BudgetGovernor.snapshot()` reports it, and a
+resumed run replays the decisions that spent it (the ladder's history is rebuilt by
+`_resume_recovery`), so a restart cannot hand back a budget the interrupted run had used.
+
+**R12 — Failure history is not erased by progress.** The journal is append-only; every attempt
+is recorded with its own outcome, failure class and progress verdict, and a continuation adds a
+record rather than rewriting one.
+
+**R13 — One authority, unchanged.** `derive_goal_state` is still the only answer to "what is
+the objective state", and it still takes no model input. The run-level aggregation is stated
+once: *a run's state is the ladder's escalation if it surrendered, otherwise the last attempt's
+derived state.*
+
+### Alternatives rejected
+
+- **Design A — preserve strict R5.** Rejected: it is *measured* to guarantee failure for an
+  objective that needs two continuations, even when every attempt is productive.
+- **Design B — allow productive continuation with no new budget.** Rejected: "productive" would
+  then be the only bound, and a task the agent can advance one unit at a time would never
+  terminate. §5's invariant is explicit.
+- **Design E — a phase ladder (`INITIAL → RECOVERY → CONTINUATION → …`).** Rejected: the
+  existing rung vocabulary already names the strategy (`REPAIR` *is* "continue the work"), and a
+  phase axis would be a second vocabulary for the same question. The distinction that matters is
+  not *which phase* but *whether the state changed*, and R6 answers that directly.
+- **A new `GoalState` for "objective met, turn incomplete".** Rejected: ADR-0035 fixes six
+  states, the information is already durable on the attempt (`turn_succeeded`,
+  `terminal_outcome`, `failure_code`), and `GoalState` should answer one question. Adding a
+  seventh state would make every consumer learn a distinction that belongs to the record.
+- **Re-classifying a progressing timeout.** Already rejected in ADR-0046 and still rejected: a
+  timeout is an `ENVIRONMENT` failure either way.
+
+### Consequences
+
+- The live trajectory the previous mission could not reach — *work genuinely left over, and a
+  continuation that finishes it* — becomes reachable, and the mechanism that reaches it is the
+  one already in place.
+- The objective state is now a function of the objective's evidence, which makes the acceptance
+  criteria load-bearing in a way they were not before. R5 is the mitigation, and the residual is
+  recorded in `PHASE_MULTI_TURN_PRODUCTIVE_RECOVERY.md` §18.
+- **F63, found while writing the F61 tests and fixed here.** `Measurement.digest` hashed the
+  whole payload, including `output_tail` — which ends with the command's *elapsed time*. Two
+  probes of the same unchanged workspace digested differently, so
+  `repeated = digest == stagnation_witness` was a coin flip: a stagnant run could classify as
+  `IMPLEMENTATION` and take `REPAIR` instead of `GLOBAL_REPLAN`, and ADR-0046 R10's replay
+  determinism did not hold. The witness is now a digest over the state-bearing fields only
+  (`WITNESS_FIELDS`), and the same projection is used for evidence identity. The prose excerpt is
+  still recorded — it is evidence; it is simply not an identifier.
+- **F62, found by the same tests and fixed here.** `_resume_recovery` indexed `attempts[-1]` on
+  an empty list, so `resume=True` with a missing or empty journal raised `IndexError` —
+  `wisp converge --resume` on a fresh run crashed instead of starting. A resume with no durable
+  history is a fresh run.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -4008,3 +4152,4 @@ nothing else.
 | 0044 | `terminal_outcome` is the turn-level authority and `turn_succeeded` derives from it; the recovery ladder's state is renamed | POST-M13 (closure) | ACCEPTED (removes the second implementation of the turn predicate and a cross-layer name collision) |
 | 0045 | Convergence is an objective-level loop that consumes the turn-level authorities and re-implements none of them | NEXT | ACCEPTED (adds the loop the turn-level closure left missing; changes no existing contract) |
 | 0046 | Objective-relative progress is a second input to the recovery decision, not a re-classification of the failure | NEXT (progress-aware recovery) | ACCEPTED (widens one class's legal rungs on measurable progress; amends no earlier decision, and changes no caller that does not pass `progress`) |
+| 0047 | A failed turn is not a failed objective, and R5's unit is the strategy, not the rung | NEXT (multi-turn productive recovery) | ACCEPTED (amends ADR-0035 rows 3–6 — one input combination moves; refines ADR-0046's use of R5 under a new dedicated budget) |

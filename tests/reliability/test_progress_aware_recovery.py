@@ -65,7 +65,10 @@ from wisp.core.progress import (
 from wisp.core.recovery import (
     FORBIDDEN_RUNGS,
     PROGRESS_CONTINUATION_RUNGS,
+    PRODUCTIVE_BUDGET,
+    BudgetGovernor,
     FailureClass,
+    RecoveryBudget,
     RecoveryLadder,
     RecoveryRung,
     is_legal_rung,
@@ -174,12 +177,12 @@ class ScriptedTurn:
 
 
 def _controller(ws: Path, script, *, spec=None, max_attempts=3,
-                baseline=None, journal=None):
+                baseline=None, journal=None, ladder=None):
     spec = spec or _spec()
     turn = ScriptedTurn(ws, script)
     ctl = ConvergenceController(
         run_turn=turn, probe=CommandProbe([spec]), max_attempts=max_attempts,
-        baseline=baseline, journal_path=journal)
+        baseline=baseline, journal_path=journal, ladder=ladder)
     return ctl, turn, spec
 
 
@@ -187,8 +190,15 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+#: The objective the fixture states, as one string. The criteria below are
+#: built with `promote_absolute=True` because this objective says the suite must
+#: pass — and `test_the_fixture_objective_matches_its_criteria_strength` pins
+#: that correspondence against the real detector, so the two cannot drift.
+OBJECTIVE_TEXT = "implement the remaining functions so the suite passes"
+
+
 def _objective(ws: Path, criteria) -> Objective:
-    return Objective(goal="implement the remaining functions so the suite passes",
+    return Objective(goal=OBJECTIVE_TEXT,
                      workspace=str(ws), criteria=criteria)
 
 
@@ -366,7 +376,7 @@ def test_p1_a_timeout_with_measurable_progress_selects_continuation(tmp_path):
     spec = _spec()
     baseline = _measure(tmp_path, spec)
     assert _failed(baseline) == 3
-    criteria = criteria_for([spec], baseline=baseline)
+    criteria = criteria_for([spec], baseline=baseline, promote_absolute=True)
 
     def partial(ws):
         _implement(ws, implemented=3, total=4)      # 3 failed → 1 failed
@@ -404,7 +414,7 @@ def test_p7_a_five_of_ten_improvement_is_meaningful(tmp_path):
     spec = _spec()
     baseline = _measure(tmp_path, spec)
     assert _failed(baseline) == 10
-    criteria = criteria_for([spec], baseline=baseline)
+    criteria = criteria_for([spec], baseline=baseline, promote_absolute=True)
 
     def half(ws):
         _implement(ws, implemented=5, total=10)
@@ -424,7 +434,7 @@ def test_p2_a_timeout_with_no_progress_stays_conservative(tmp_path):
     _project(tmp_path, implemented=1, total=4)
     spec = _spec()
     baseline = _measure(tmp_path, spec)
-    criteria = criteria_for([spec], baseline=baseline)
+    criteria = criteria_for([spec], baseline=baseline, promote_absolute=True)
 
     def nothing(_ws):
         return _timeout(tool_calls=9)          # ran, changed nothing
@@ -447,7 +457,7 @@ def test_p3_file_churn_is_not_meaningful_progress(tmp_path):
     original_tests = (tmp_path / "tests" / "test_calc.py").read_bytes()
     spec = _spec()
     baseline = _measure(tmp_path, spec)
-    criteria = criteria_for([spec], baseline=baseline)
+    criteria = criteria_for([spec], baseline=baseline, promote_absolute=True)
 
     def churn(ws):
         # Real byte changes to the implementation that change nothing about
@@ -479,7 +489,7 @@ def test_p4_editing_the_declared_input_is_not_progress_and_not_success(tmp_path)
     _project(tmp_path, implemented=0, total=3)
     spec = _spec()
     baseline = _measure(tmp_path, spec)
-    criteria = criteria_for([spec], baseline=baseline)
+    criteria = criteria_for([spec], baseline=baseline, promote_absolute=True)
 
     def tamper(ws):
         # Make the suite pass by rewriting the tests — the live falsification.
@@ -512,7 +522,7 @@ def test_p5_a_green_with_zero_collected_is_not_progress(tmp_path):
     (tmp_path / "state.txt").write_text("stop", encoding="utf-8")
     baseline = _measure(tmp_path, spec)
     assert baseline.observations["verify:cmd0"]["exit"] == 1
-    criteria = criteria_for([spec], baseline=baseline)
+    criteria = criteria_for([spec], baseline=baseline, promote_absolute=True)
 
     def go(ws):
         (ws / "state.txt").write_text("go", encoding="utf-8")
@@ -534,7 +544,7 @@ def test_p6_a_regression_does_not_open_the_continuation_door(tmp_path):
     spec = _spec()
     baseline = _measure(tmp_path, spec)
     assert baseline.observations["verify:cmd0"]["exit"] == 0
-    criteria = criteria_for([spec], baseline=baseline)
+    criteria = criteria_for([spec], baseline=baseline, promote_absolute=True)
 
     def break_it(ws):
         _implement(ws, implemented=1, total=2)      # one passing test now fails
@@ -583,7 +593,7 @@ def test_p8b_a_clean_finish_is_goal_met(tmp_path):
     _project(tmp_path, implemented=0, total=2)
     spec = _spec()
     baseline = _measure(tmp_path, spec)
-    criteria = criteria_for([spec], baseline=baseline)
+    criteria = criteria_for([spec], baseline=baseline, promote_absolute=True)
 
     def finish(ws):
         _implement(ws, implemented=2, total=2)
@@ -604,7 +614,7 @@ def test_p9_a_provider_only_timeout_is_an_environment_failure(tmp_path):
     _project(tmp_path, implemented=1, total=3)
     spec = _spec()
     baseline = _measure(tmp_path, spec)
-    criteria = criteria_for([spec], baseline=baseline)
+    criteria = criteria_for([spec], baseline=baseline, promote_absolute=True)
 
     def provider_stall(_ws):
         return _timeout(tool_calls=0, changed_files=(),
@@ -630,12 +640,16 @@ def test_p10_resume_reproduces_progress_and_rung(tmp_path):
         _implement(ws, implemented=3, total=4)      # 3 failed → 1 failed
         return _timeout(tool_calls=11, changed_files=("calc.py",))
 
+    def finish(ws):
+        _implement(ws, implemented=4, total=4)      # 1 failed → 0
+        return _ok(tool_calls=2, changed_files=("calc.py",))
+
     # (a) Uninterrupted: both attempts in one process.
     _project(tmp_path, implemented=1, total=4)
     baseline = _measure(tmp_path, spec)
-    criteria = criteria_for([spec], baseline=baseline)
+    criteria = criteria_for([spec], baseline=baseline, promote_absolute=True)
     assert _failed(baseline) == 3
-    whole_ctl, _, _ = _controller(tmp_path, [partial, lambda ws: _ok()],
+    whole_ctl, _, _ = _controller(tmp_path, [partial, finish],
                                   spec=spec, baseline=baseline, max_attempts=2)
     whole = _run(whole_ctl.converge(_objective(tmp_path, criteria)))
 
@@ -654,7 +668,7 @@ def test_p10_resume_reproduces_progress_and_rung(tmp_path):
     assert recovered is not None
     assert _failed(recovered) == 3
 
-    resumed, turn2, _ = _controller(tmp_path, [lambda ws: _ok()], spec=spec,
+    resumed, turn2, _ = _controller(tmp_path, [finish], spec=spec,
                                     baseline=recovered, max_attempts=2,
                                     journal=journal)
     after = _run(resumed.converge(_objective(tmp_path, criteria), resume=True))
@@ -686,7 +700,7 @@ def test_p10c_a_torn_journal_still_resumes(tmp_path):
     _project(tmp_path, implemented=1, total=4)
     spec = _spec()
     baseline = _measure(tmp_path, spec)
-    criteria = criteria_for([spec], baseline=baseline)
+    criteria = criteria_for([spec], baseline=baseline, promote_absolute=True)
     journal = tmp_path / "run.jsonl"
 
     ctl, _, _ = _controller(
@@ -711,11 +725,21 @@ def test_p10c_a_torn_journal_still_resumes(tmp_path):
 
 
 def test_p11_progress_does_not_make_recovery_unbounded(tmp_path):
-    """Four progress-producing timeouts must still terminate honestly."""
+    """**Refined by ADR-0047 (F61).** Four progress-producing timeouts must still
+    terminate — and a rung may now repeat, so the bound is the *budget*, not the
+    rung's uniqueness.
+
+    R5's original form was "no rung twice", which this test pinned. That unit
+    was wrong once progress semantics existed: a rung that produced measurable
+    progress carries a *success that has not finished*, and refusing to continue
+    it guarantees failure. The bound moved to `productive_continuations`, so the
+    property to pin is no longer "no rung repeats" but **"a rung repeats only
+    while productive, and only as many times as the budget allows"**.
+    """
     _project(tmp_path, implemented=0, total=8)
     spec = _spec()
     baseline = _measure(tmp_path, spec)
-    criteria = criteria_for([spec], baseline=baseline)
+    criteria = criteria_for([spec], baseline=baseline, promote_absolute=True)
 
     def make(step):
         def _step(ws):
@@ -723,9 +747,14 @@ def test_p11_progress_does_not_make_recovery_unbounded(tmp_path):
             return _timeout(tool_calls=5, changed_files=("calc.py",))
         return _step
 
+    budget = 2
+    ladder = RecoveryLadder(governor=BudgetGovernor(
+        budget=RecoveryBudget(productive_continuations=budget)))
     ctl, turn, _ = _controller(tmp_path, [make(s) for s in (1, 2, 3, 4)],
-                               spec=spec, baseline=baseline, max_attempts=4)
+                               spec=spec, baseline=baseline, max_attempts=4,
+                               ladder=ladder)
     result = _run(ctl.converge(_objective(tmp_path, criteria)))
+
     assert len(result.attempts) <= 4, "the attempt budget must hold"
     assert len(turn.calls) <= 4
     assert not result.converged
@@ -733,9 +762,38 @@ def test_p11_progress_does_not_make_recovery_unbounded(tmp_path):
                                  GoalState.GOAL_FAILED,
                                  GoalState.GOAL_UNVERIFIED)
     rungs = [a.rung for a in result.attempts]
-    assert len(rungs) == len(set(rungs)), f"a rung repeated: {rungs}"
     assert all(a.progress == MEANINGFUL.value for a in result.attempts), (
         "every attempt made progress — and it still terminated")
+    # The repetition is real, and it is bounded by the budget: a rung may be
+    # *re-chosen* at most `productive_continuations` times.
+    repeats = len(rungs) - len(set(rungs))
+    assert repeats == budget, rungs
+    assert ladder.governor.exhausted(PRODUCTIVE_BUDGET), (
+        "the bound must be spent, not merely approached")
+
+
+def test_p11b_a_zero_productive_budget_restores_r5_exactly(tmp_path):
+    """The knob is the bound: with no productive budget, R5 is the old R5."""
+    _project(tmp_path, implemented=0, total=8)
+    spec = _spec()
+    baseline = _measure(tmp_path, spec)
+    criteria = criteria_for([spec], baseline=baseline, promote_absolute=True)
+
+    def make(step):
+        def _step(ws):
+            _implement(ws, implemented=step, total=8)
+            return _timeout(tool_calls=5, changed_files=("calc.py",))
+        return _step
+
+    ladder = RecoveryLadder(governor=BudgetGovernor(
+        budget=RecoveryBudget(productive_continuations=0)))
+    ctl, _, _ = _controller(tmp_path, [make(s) for s in (1, 2, 3)],
+                            spec=spec, baseline=baseline, max_attempts=3,
+                            ladder=ladder)
+    result = _run(ctl.converge(_objective(tmp_path, criteria)))
+    rungs = [a.rung for a in result.attempts]
+    assert len(rungs) == len(set(rungs)), f"a rung repeated: {rungs}"
+    assert rungs == [INITIAL_RUNG, "REPAIR", "DIAGNOSTIC"]
 
 
 # ── P12: the continuation is not the failed strategy ────────────────────
@@ -745,7 +803,7 @@ def test_p12_the_continuation_is_a_materially_different_strategy(tmp_path):
     _project(tmp_path, implemented=1, total=4)
     spec = _spec()
     baseline = _measure(tmp_path, spec)
-    criteria = criteria_for([spec], baseline=baseline)
+    criteria = criteria_for([spec], baseline=baseline, promote_absolute=True)
 
     def partial(ws):
         _implement(ws, implemented=3, total=4)
@@ -778,7 +836,7 @@ def test_the_continuation_is_shown_what_improved_not_only_what_is_wrong(ws=None)
     _project(tmp, implemented=1, total=4)
     spec = _spec()
     baseline = _measure(tmp, spec)
-    criteria = criteria_for([spec], baseline=baseline)
+    criteria = criteria_for([spec], baseline=baseline, promote_absolute=True)
 
     def partial(path):
         _implement(path, implemented=3, total=4)
@@ -804,7 +862,7 @@ def test_a_non_progressing_failure_shows_only_the_measurement():
     _project(tmp, implemented=1, total=4)
     spec = _spec()
     baseline = _measure(tmp, spec)
-    criteria = criteria_for([spec], baseline=baseline)
+    criteria = criteria_for([spec], baseline=baseline, promote_absolute=True)
 
     ctl, turn, _ = _controller(tmp, [lambda p: _timeout(tool_calls=4),
                                      lambda p: _ok()],
@@ -843,7 +901,7 @@ def test_the_p1_assertions_are_not_vacuous(tmp_path):
     _project(tmp_path, implemented=1, total=4)
     spec = _spec()
     baseline = _measure(tmp_path, spec)
-    criteria = criteria_for([spec], baseline=baseline)
+    criteria = criteria_for([spec], baseline=baseline, promote_absolute=True)
 
     def no_change(_ws):
         return _timeout(tool_calls=10)

@@ -78,9 +78,10 @@ quoting it; §11 says how.
 | **NEXT** — autonomous coding agent convergence (**ADR-0045**) | `COMPLETE` — **`CONVERGENT`**; found **F49–F54** | `PHASE_NEXT_AUTONOMOUS_CODING_AGENT_CONVERGENCE.md` |
 | **NEXT** — live recovery-to-success validation | `COMPLETE` — **`NOT DEMONSTRATED`**; found **F55–F58** | `PHASE_LIVE_RECOVERY_TO_SUCCESS_VALIDATION.md` |
 | **NEXT** — progress-aware recovery (**ADR-0046**) | `COMPLETE` — **`DEMONSTRATED`**; found **F59** (fixed), **F60/F61** (open) | `PHASE_PROGRESS_AWARE_RECOVERY.md` |
+| **NEXT** — multi-turn productive recovery (**ADR-0047**) | `COMPLETE` — **`F60 DEMONSTRATED`**, **`F61 DEMONSTRATED`**, **`CONVERGENCE AUTHORITY: CLOSED`**; **F60/F61 FIXED**, found **F62/F63** (fixed) | `PHASE_MULTI_TURN_PRODUCTIVE_RECOVERY.md` |
 
-**Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F61**, change log).
-**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0046**).
+**Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log).
+**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0047**).
 
 ### 0.0.0 NEXT — autonomous coding agent convergence (2026-09-25)
 
@@ -104,6 +105,35 @@ is reachable only from the interactive REPL.
 (29) and `test_next_autonomous_wiring.py` (14).
 
 **Report:** `PHASE_NEXT_AUTONOMOUS_CODING_AGENT_CONVERGENCE.md`.
+
+### 0.0.2 MULTI-TURN PRODUCTIVE RECOVERY (2026-09-25)
+
+Two questions left open by ADR-0045/0046 turned out to be **the same mistake in two places**: a
+fact about the *attempt* used as a fact about the *objective*.
+
+**F60 — completion authority.** `derive_goal_state` row 3 read *"P3 FAIL **or fatal terminal
+error**"*, so a turn timeout outranked an independent acceptance `PASS` and a repository that
+satisfied every criterion was reported `GOAL_FAILED`. Ratified, not accidental — it had its own
+test. **F61 — multi-turn recovery.** R5's unit was *the rung*, right while a rung could only
+carry a failure and wrong once ADR-0046 let one carry a *success that has not finished*; a
+continuation that completed 14 of 17 outstanding files was refused the rung that would have
+finished the job.
+
+| File | What changed |
+|---|---|
+| `wisp/core/goal.py` | rows 3–6 restated; the fatal clause qualified by *"and no P3 PASS"*; `turn_succeeded` demoted from arbitration to a recorded fact |
+| `wisp/core/recovery.py` | `RecoveryBudget.productive_continuations` (default 2); `_is_meaningful_progress`; `legal_rungs(..., exclude=)` with the refined R5; `decide` charges the productive budget on a re-choice |
+| `wisp/core/convergence.py` | `WITNESS_FIELDS`/`witness_digest` (**F63**); the failure class computed for every attempt; `authorization_event` excluded from completion and escalated first; `passed = verdict PASS`; `_WANTS_FIX_RE` widened to three phrasings; `_resume_recovery` guards the empty case (**F62**) |
+
+**ADR-0047** (R1–R13). Tests: `tests/reliability/test_multi_turn_productive_recovery.py` (50).
+**Report:** `PHASE_MULTI_TURN_PRODUCTIVE_RECOVERY.md`. Live: `f60-live3` reached the §15 target
+trajectory — `INITIAL → REPAIR → REPAIR`, three timeouts, passing `0→8→12→72`, `GOAL_MET` — and
+`f61-live`/`f61-live2` show one continuation finishing genuinely-remaining work.
+
+**The consequence to remember:** with F60, **the acceptance criteria are the sole gate**. A
+timeout used to mask weak criteria; it no longer does. `_WANTS_FIX_RE` was widened for that
+reason, and a *guards-only* criteria set (a red baseline, no promotion, no symbol criterion) is a
+legitimate **no-regression objective** whose `GOAL_MET` means "nothing got worse".
 
 ### 0.0.1 PROGRESS-AWARE RECOVERY (2026-09-25)
 
