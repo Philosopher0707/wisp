@@ -14,6 +14,7 @@ from typing import Any
 from wisp.auth.principal import Principal
 from wisp.auth.workspace_trust import WorkspaceTrust
 from wisp.core.contracts import ToolRisk, risk_for_tool
+from wisp.pathsec import PATH_BEARING_ARGS, is_protected_path
 
 # Tools that mutate without a specific path target.
 _EXEC_TOOLS = frozenset({"run_bash", "git_push", "spawn", "fanout"})
@@ -92,8 +93,16 @@ def authorize(principal: Principal, tool_name: str, args: dict[str, Any],
             reason=f"{tool_name} refused on restricted data")
 
     # L4 — arguments/target scan (hook-dir guard: audit §3 class).
-    target = str((args or {}).get("path", "") or (args or {}).get("command", ""))
-    if ".wisp/hooks" in target.replace("\\", "/") and risk != ToolRisk.READ:
+    # Every path-bearing argument is scanned, not just `path`: a rename whose
+    # *destination* is the hook directory is the same escalation as a write,
+    # and it used to pass. The predicate is the canonical one from
+    # `wisp.pathsec`, so a look-alike like `.wisp/hooksfoo` is correctly not
+    # treated as the hook directory.
+    if risk != ToolRisk.READ and any(
+        is_protected_path(str(value))
+        for key, value in (args or {}).items()
+        if key in PATH_BEARING_ARGS and value
+    ):
         return AuthorizationDecision(
             allowed=False, controlling_layer="arguments",
             reason="hook-directory mutation refused (privilege-escalation guard)")

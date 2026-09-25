@@ -31,6 +31,7 @@ from wisp.core.events import (
     CODE_PROVIDER_STREAM,
     CODE_ITERATION_BUDGET,
     AgentEvent,
+    canonical_event,
     content as content_event,
     tool_result as tool_result_event,
     error as error_event,
@@ -41,7 +42,11 @@ from wisp.core.events import (
     nudge_message,
     steering_message,
 )
-from wisp.core.provider_stream import guarded_provider_stream
+from wisp.core.provider_stream import (
+    TERMINAL_TYPES,
+    guarded_provider_stream,
+    passthrough_if_canonical,
+)
 from wisp.core.approval_gate import ApprovalGate
 from wisp.infra.circuit_breaker import (
     CircuitBreaker,
@@ -83,6 +88,19 @@ _CONTEXT_TTL: dict[str, tuple[float, str, object]] = {}
 
 _T = TypeVar("_T")
 
+#: How many times a closed stagnation predicate may withhold `done` in one turn
+#: (ADR-0036). The bound is the whole difference between an intervention and a
+#: veto: after it is spent the gate surrenders honestly, exactly as the
+#: verification floor does, so a stagnating turn still finishes — later, and
+#: recorded as `GOAL_STAGNATED` rather than as success.
+#:
+#: Deliberately a default on this mechanism rather than a config key, mirroring
+#: `VerificationFloorGuard.max_nudges` (which is also a constructor default).
+#: Deliberately NOT shared with the floor guard's budget: they answer different
+#: questions, and sharing one would let a progress signal spend the verification
+#: budget.
+_MAX_STAGNATION_INTERVENTIONS = 2
+
 
 def _ttl_get(kind: str, key: str, builder: Callable[[], _T], ttl: float) -> _T:
     """Memoize one context section per `kind`, valid while `key` is unchanged.
@@ -109,6 +127,44 @@ def _flatten_event(ev: AgentEvent | dict[str, Any]) -> dict[str, Any]:
     flat["type"] = str(ev.type)
     flat["timestamp"] = ev.timestamp
     return flat
+
+
+def _tool_result_output(result: Any) -> Any | None:
+    """A tool result's own output, or None when it carries none.
+
+    On the live path a tool result is the executor's envelope
+    (``{"status", "tool", "data", "metadata"}``) — not text. The verification
+    authority classifies a shell tool's **output text**, and the success
+    encoding is *positional*: ``tools/bash.py::_format_bash_output`` emits
+    ``[exit code: N]`` as the first thing on the line, and only for a non-zero
+    exit. An envelope begins ``{``, so that positional test never fires and
+    every command — including one that exited non-zero — reads as a success
+    (F37). Handing the authority the envelope is what this function prevents.
+
+    Only a **successful** envelope carries output. A refusal, a block, or a
+    tool-level error arrives as a non-``ok`` envelope or as a bare message,
+    and none of those is verification — returning None lets the caller skip
+    them instead of feeding a banner to a parser that reads absence-of-marker
+    as success.
+
+    A value that is not an envelope is not tool output either: the executor's
+    blocks (``[Blocked: …]``, ``[Denied: …]``) are plain strings on this same
+    channel.
+    """
+    if isinstance(result, dict):
+        if "status" not in result:
+            return None
+        return result.get("data") if result.get("status") == "ok" else None
+    if isinstance(result, str) and result.lstrip().startswith("{"):
+        import json as _json
+
+        try:
+            parsed = _json.loads(result)
+        except (ValueError, TypeError):
+            return None
+        if isinstance(parsed, dict) and "status" in parsed:
+            return parsed.get("data") if parsed.get("status") == "ok" else None
+    return None
 
 
 def _denial_display(status: str, tool_name: str, reason: str) -> str:
@@ -201,7 +257,7 @@ class WispAgentCore:
             if cb_config:
                 self._circuit_breaker = CircuitBreaker(cb_config)
 
-    async def turn(self, session: dict[str, Any], prompt: str, approval_handler: Any = None, steering_drain: Any = None) -> AsyncIterator[dict[str, Any]]:
+    async def turn(self, session: dict[str, Any], prompt: str, approval_handler: Any = None, steering_drain: Any = None, completion_gate: Any = None) -> AsyncIterator[dict[str, Any]]:
         """Run one turn, yielding events.
 
         Loops internally: provider → tool_calls → execute → append → provider
@@ -210,6 +266,14 @@ class WispAgentCore:
         *steering_drain*, when given, is called at each tool boundary; its
         strings are mid-course corrections appended as user messages so the
         next provider round-trip adapts (M3 of docs/repl-design.md).
+
+        *completion_gate*, when given, is a **read-only** predicate asked at the
+        pre-`done` gate: `True` = "completion may proceed". It is ADR-0036's
+        seam — the runtime owns M13's stagnation detector and passes a closure
+        over it, so the engine can withhold `done` for a bounded number of
+        replan interventions without gaining any authority over stagnation, and
+        without ever holding the detector (whose `observe()` mutates). Absent,
+        it behaves exactly as before.
 
         Has a wall-clock timeout (config turn_timeout, default 30 min) to
         prevent infinite hangs.
@@ -301,6 +365,7 @@ class WispAgentCore:
                     session, prompt, messages, system_prompt, tools,
                     max_iterations, self._memoize_handler(approval_handler),
                     steering_drain=steering_drain,
+                    completion_gate=completion_gate,
                 ):
                     yield event
         except _asyncio.TimeoutError:
@@ -315,6 +380,7 @@ class WispAgentCore:
     async def _turn_inner(
         self, session: dict[str, Any], prompt: str, messages: list[dict[str, Any]], system_prompt: str, tools: list[dict[str, Any]] | None,
         max_iterations: int, approval_handler: Any, steering_drain: Any = None,
+        completion_gate: Any = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Inner turn loop, separated for timeout wrapping."""
         streamed_any_content = False
@@ -332,6 +398,7 @@ class WispAgentCore:
         from wisp.core.verification import (
             SHORT_REPEAT_NUDGE,
             VerificationFloorGuard,
+            _VERIFY_TOOLS,
             compose_nudge,
         )
 
@@ -365,6 +432,11 @@ class WispAgentCore:
         # Nothing here changes the guard's behaviour; the completion invariant
         # is still the guard's alone.
         self._last_guard = guard
+        # Stagnation interventions spent this turn (ADR-0036). A LOCAL, not a
+        # field: it is per-turn control state and never authority — not
+        # journaled, not a goal-state input, and a field would make it shared
+        # state across concurrent turns.
+        stagnation_interventions_used = 0
         for iteration in range(max_iterations):
             pending_tool_calls: list[dict[str, Any]] = []
             tool_results_events_early: list[dict[str, Any]] = []
@@ -788,6 +860,49 @@ class WispAgentCore:
                     messages.append(nudge_message(nudge))
                     yield _flatten_event(system(nudge, level="warning"))
                     continue
+                # Stagnation completion gate (ADR-0036): M13's progress
+                # predicate may withhold `done` for a BOUNDED number of replan
+                # interventions, and then it surrenders honestly — exactly as
+                # the floor guard above does. It is deliberately NOT a veto: a
+                # veto would run the turn to the iteration budget, whose wrap-up
+                # emits a fatal CODE_ITERATION_BUDGET, and a progress signal
+                # would have been converted into a failure.
+                #
+                # The engine receives a READ-ONLY predicate and nothing else —
+                # never the detector, whose `observe()` mutates. M13 remains the
+                # single stagnation authority; this gate only asks. It sits
+                # AFTER the floor guard so a verification rejection keeps its
+                # exact behaviour and the turn is never double-nudged.
+                if (completion_gate is not None
+                        and stagnation_interventions_used
+                        < _MAX_STAGNATION_INTERVENTIONS
+                        # A further round must exist. Withholding on the last
+                        # iteration would end the loop, run the budget wrap-up,
+                        # and turn this honest surrender into a fatal
+                        # CODE_ITERATION_BUDGET — a bound that can do that is
+                        # not a bound.
+                        and iteration + 1 < max_iterations):
+                    try:
+                        may_complete = bool(completion_gate())
+                    except Exception:
+                        # Fail open (ADR-0036): a broken predicate must not
+                        # become a hung turn. The absence is not silent — the
+                        # goal record carries the predicate's own answer.
+                        logger.debug("completion gate failed", exc_info=True)
+                        may_complete = True
+                    if not may_complete:
+                        stagnation_interventions_used += 1
+                        # The prose comes from M13's home module (GH#27), so the
+                        # intervention cannot drift from the signal that caused
+                        # it. Imported lazily: with no gate to evaluate, the
+                        # engine keeps its zero coupling to stagnation.
+                        from wisp.core.stagnation import compose_replan_nudge
+
+                        replan = compose_replan_nudge(
+                            stagnation_interventions_used)
+                        messages.append(nudge_message(replan))
+                        yield _flatten_event(system(replan, level="warning"))
+                        continue
                 # RESOLVED (verified, not surrendered) → distill the trail
                 # into a permanent auto skill, best-effort, never blocking.
                 if guard.resolved():
@@ -850,12 +965,36 @@ class WispAgentCore:
                             from wisp.skill_capture import _digest_args
 
                             t_name = str(result_event.get("name", ""))
-                            t_res = result_event.get("result", "")
-                            t_text = t_res if isinstance(t_res, str) else str(t_res)
+                            # F37: the guard classifies a shell tool's OUTPUT
+                            # TEXT, and the success encoding is positional. The
+                            # event carries the executor's envelope, so unwrap
+                            # it — handing over the envelope made every command
+                            # read as a verified success.
+                            t_out = _tool_result_output(
+                                result_event.get("result", ""))
+                            if t_out is None:
+                                if t_name in _VERIFY_TOOLS:
+                                    # A refused, blocked or failed verification
+                                    # produced no verification, so it is not
+                                    # evidence, and its banner must not reach
+                                    # the parser (absence of the marker reads as
+                                    # success). Skipping matches what the
+                                    # pre-dispatch gate already does for a
+                                    # denied call, and leaves the prior verdict
+                                    # untouched rather than inventing one for a
+                                    # command that never ran.
+                                    continue
+                                # Every other tool is classified by NAME, so its
+                                # text is inert — but the fold must still
+                                # happen: a refused mutation is still an
+                                # attempted mutation. Pass no envelope.
+                                t_out = ""
+                            elif not isinstance(t_out, str):
+                                t_out = str(t_out)
                             t_args = _call_args_by_id.get(
                                 result_event.get("tool_call_id", ""), {})
                             guard.note_tool_result(
-                                t_name, t_text,
+                                t_name, t_out,
                                 _digest_args(t_args) if isinstance(t_args, dict) else {})
 
             # Append assistant + tool messages to continue the conversation
@@ -943,13 +1082,28 @@ class WispAgentCore:
                     prune_messages(messages, _DEFAULT_PRUNE_POLICY))
             except Exception:
                 _wrap_messages = None
-            async for ev in self._stream_events_async(system_prompt, _wrap_messages if _wrap_messages is not None else messages, None):
+            # ADR-0039 R4/R5: consume canonical events from the
+            # normalization-only boundary. This deliberately does NOT use
+            # `_guarded_provider_stream`: the wrap-up must not retry an empty
+            # final round, and it must SEE the terminal marker that the guard
+            # consumes for its own bookkeeping. Both reasons are why the
+            # boundary exists as a separate thing — not a reason to read raw
+            # provider events (which is F40-1).
+            async for ev in self._normalized_provider_stream(
+                system_prompt,
+                _wrap_messages if _wrap_messages is not None else messages,
+                None,
+            ):
                 etype = ev.get("type", "")
                 if etype in ("content", "text", "token"):
                     text = ev.get("text") or ev.get("content") or ""
                     if text:
                         yield _flatten_event(content_event(str(text)))
-                elif etype == "done":
+                elif etype in TERMINAL_TYPES:
+                    # ADR-0039 R7/R8: the shared terminal authority, not a
+                    # local `== "done"`. The typed Ollama path's only terminal
+                    # is StreamComplete(phase="complete"), so a `done`-only
+                    # check could never fire there (F40-2).
                     wrapped_up = True
                     break
         except Exception:
@@ -2073,9 +2227,41 @@ class WispAgentCore:
     # per-session lock until the 30-minute turn watchdog fired.
     CHUNK_DEADLINE_S = float(os.environ.get("WISP_CHUNK_DEADLINE", "90"))
 
-    # Provider bookkeeping events that don't count as real output when
-    # deciding whether a stream came back empty.
-    _BOOKKEEPING_TYPES = {"done", "stream_complete", "checkpoint", "usage", "stream_stats"}
+    # NOTE (ADR-0043): there is deliberately no `_BOOKKEEPING_TYPES` here.
+    # A vocabulary list of non-terminal event types once participated in the
+    # decision "did this attempt produce a response", and that list is what
+    # produced F43 (a bare typed terminal blessed an empty attempt) and its
+    # sibling (an unrecognised, payload-less event did the same). The guard now
+    # decides meaningfulness from the event's PAYLOAD for every type, so there
+    # is no list to keep in sync.
+
+    async def _normalized_provider_stream(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """One provider round-trip, canonicalized — and nothing else.
+
+        ADR-0039 R5/R6: normalization and stall recovery are two
+        responsibilities. This is the normalization-only boundary:
+
+          * exactly one canonicalization pass per event (R2);
+          * terminal events are **forwarded**, never consumed (R6);
+          * **no** retry, **no** stall/empty-stream recovery, **no**
+            completion decision, **no** authorization, **no** tool
+            execution, **no** persistence.
+
+        A consumer that needs canonical events but must not inherit stall
+        recovery (the iteration wrap-up) obtains them here instead of
+        reaching past the boundary to `_stream_events_async`.
+        """
+        async for event in self._stream_events_async(
+            system_prompt=system_prompt,
+            messages=messages,
+            tools=tools,
+        ):
+            yield self._normalize_event(event)
 
     async def _guarded_provider_stream(
         self,
@@ -2089,15 +2275,21 @@ class WispAgentCore:
         everything injected (stream opener, normalizer, deadlines), so it
         is testable without a core and this class stays the single place
         env-tuned knobs are read.
+
+        ADR-0039 R5: the guard now obtains its events from the
+        normalization-only boundary, so it no longer owns canonicalization —
+        it owns recovery. The stream is already canonical, so the normalizer
+        it is given is a no-copy passthrough that still delegates for any
+        non-canonical input (see `passthrough_if_canonical`), which keeps
+        the guard total without canonicalizing the same event twice.
         """
         async for event in guarded_provider_stream(
-            lambda: self._stream_events_async(
+            lambda: self._normalized_provider_stream(
                 system_prompt=system_prompt,
                 messages=messages,
                 tools=tools,
             ),
-            self._normalize_event,
-            self._BOOKKEEPING_TYPES,
+            passthrough_if_canonical,
             first_token_deadline_s=self.FIRST_TOKEN_DEADLINE_S,
             chunk_deadline_s=self.CHUNK_DEADLINE_S,
             max_attempts=max(1, int(os.environ.get("WISP_STREAM_ATTEMPTS", "3"))),
@@ -2105,51 +2297,15 @@ class WispAgentCore:
             yield event
 
     def _normalize_event(self, event: Any) -> dict[str, Any]:
-        """Normalize provider event to standard format.
+        """Normalize a provider event to the canonical flat representation.
 
-        Whitelist known fields instead of copying __dict__ to avoid
-        leaking internal state or circular references.
+        ADR-0039 R2: this method is the core's canonicalization entry point,
+        and `wisp.core.events.canonical_event` is its **single
+        implementation** — the whitelist lives there and nowhere else, so a
+        second copy cannot drift from it (F42 was exactly such a copy).
+        Delegating also keeps the projection total (ADR-0039 R3).
         """
-        if isinstance(event, dict):
-            return dict(event)
-
-        result: dict[str, Any] = {}
-
-        # Extract type/phase
-        if hasattr(event, "type"):
-            result["type"] = event.type
-        elif hasattr(event, "phase"):
-            result["type"] = event.phase
-        else:
-            result["type"] = "unknown"
-
-        # Whitelist known safe fields
-        safe_fields = {
-            "text",
-            "name",
-            "arguments",
-            "result",
-            "message",
-            "duration_ms",
-            "turns",
-            "session_id",
-            "summary",
-            "reason",
-            "level",
-            "recoverable",
-            "tool_call_id",
-            "id",
-            "calls",
-            "done_reason",
-        }
-        for field_name in safe_fields:
-            if hasattr(event, field_name):
-                result[field_name] = getattr(event, field_name)
-
-        # Map provider-specific event types to canonical types
-        # (ToolCallBatch uses 'tool_calls' which we handle in turn())
-
-        return result
+        return canonical_event(event)
 
     def _validate_tool_args(self, name: str, args: dict[str, Any], _dry_run: bool = False) -> Optional[str]:
         """Validate tool arguments against the registered JSON schema.
@@ -2309,6 +2465,22 @@ class WispAgentCore:
         )
         flat = _flatten_event(ev)
         flat["tool_call_id"] = tc.get("id", "")
+        # Migration M13 — the canonical action identity, on the refusal.
+        #
+        # A refused call `continue`s BEFORE the call event is yielded (the
+        # batch path appends it to `tool_results_events_early` instead), so the
+        # runtime never sees its arguments. Without this stamp the only identity
+        # a consumer could build from the reply is the tool *name*, which makes
+        # `read_file(a.txt)` and `read_file(b.txt)` indistinguishable — and a
+        # progress signal that cannot tell them apart flags a productive turn as
+        # stagnant (F33). Stamped here, at the ONE helper every refusal goes
+        # through, and computed with the same `action_key` the journal uses.
+        try:
+            from wisp.core.action_key import action_key as _action_key
+            flat["action_key"] = _action_key(
+                str(name), dict(tc.get("arguments", {}) or {}))
+        except Exception:
+            pass
         return flat
 
     def _make_action(self, event: dict[str, Any]) -> Any:

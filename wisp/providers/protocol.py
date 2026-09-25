@@ -9,7 +9,17 @@ import asyncio
 import contextlib
 import threading
 from abc import ABC, abstractmethod
-from typing import Any, AsyncIterator, Generator
+from typing import TYPE_CHECKING, Any, AsyncIterator, Generator
+
+if TYPE_CHECKING:
+    from wisp.stream_events import StreamEvent
+
+    # ADR-0039 R1 — the two forms a provider MAY yield: a canonical event
+    # dict, or a typed stream event. Deliberately not `Any`: the contract is
+    # the *shape* (`type`/`phase` + whitelist-readable fields), and this names
+    # it. The declaration is TYPE_CHECKING-only so this module keeps no runtime
+    # dependency on the event classes.
+    ProviderEvent = dict[str, Any] | StreamEvent
 
 
 class Provider(ABC):
@@ -33,16 +43,28 @@ class Provider(ABC):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         checkpoint_every: int = 50,
-    ) -> Generator[dict[str, Any], None, None]:
+    ) -> Generator[ProviderEvent, None, None]:
         """Generate a stream of events from the model (synchronous).
 
-        Yields standardized event dictionaries:
+        ADR-0039 R1 — a provider MAY yield **either** form:
+
+        * a canonical event dict, e.g.
           - {"type": "content", "text": "..."}
           - {"type": "tool_call", "name": "...", "arguments": {...}}
-          - {"type": "tool_calls", "calls": [...]}  # Batched tool calls (preferred)
+          - {"type": "tool_calls", "calls": [...]}  # batched (preferred)
           - {"type": "thinking", "text": "..."}
           - {"type": "done", "done_reason": "..."}
           - {"type": "error", "message": "..."}
+        * **or** a typed stream event from `wisp.stream_events`
+          (`TokenBatch`, `ToolCallBatch`, `Checkpoint`, `StreamComplete`,
+          `StreamError`) — what `OllamaClient` and `MockProvider` emit.
+
+        Neither form is a defect, and a provider SHALL NOT convert on the
+        consumer's behalf. Canonicalization is the **consumer's** obligation:
+        the core projects every provider event through
+        `wisp.core.events.canonical_event` (the single implementation) before
+        any consumer reads it. A provider SHALL NOT decide terminal semantics,
+        completion, or the canonical shape.
         """
         ...
 
@@ -52,7 +74,7 @@ class Provider(ABC):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         checkpoint_every: int = 50,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncIterator[ProviderEvent]:
         """Stream events from the model (asynchronous).
 
         Default implementation: bridges the sync generator onto a daemon
@@ -60,7 +82,8 @@ class Provider(ABC):
         an asyncio.Queue, so a blocking HTTP client never stalls the loop.
         Providers with native async I/O should override this.
 
-        Yields the same event format as generate_stream_events.
+        Yields the same event format as generate_stream_events — either form
+        is valid (ADR-0039 R1).
         """
         sync_gen = self.generate_stream_events(
             system_prompt, messages, tools, checkpoint_every

@@ -56,8 +56,15 @@ class TestStagnationDetected2Cycle:
         assert d.latest_trap_verdict == "cycle"
 
     def test_a_repeat_is_detected(self):
+        # NOTE (M13): the fixture is `_flat()` — an observation that CARRIES
+        # information — not `ProgressSignal(criteria_satisfied=0)`, which is the
+        # empty observation. P7 used the empty one here, which conflated "an
+        # observation with no progress" with "no observation at all"; that
+        # conflation is F32, and `observe` now refuses to treat an empty
+        # observation as evidence. The intent of this test is unchanged: two
+        # observations of the same non-progressing state are a repeat.
         d = StagnationDetector(min_consecutive=99)
-        s = ProgressSignal(criteria_satisfied=0)
+        s = _flat()
         for _ in range(2):
             d.observe(s)
         assert d.latest_trap_verdict == "repeat"
@@ -220,7 +227,7 @@ class TestStagnationRoutesToReplan:
                 break
         assert rungs[0] is RecoveryRung.GLOBAL_REPLAN
         assert rungs[-1] is RecoveryRung.HUMAN
-        assert ladder.terminal_outcome == "ESCALATED_TO_HUMAN"
+        assert ladder.ladder_state == "ESCALATED_TO_HUMAN"
 
     def test_nothing_is_routed_when_progressing(self):
         d = StagnationDetector(min_consecutive=2)
@@ -264,9 +271,15 @@ class TestStagnatedGoalNotMet:
 
     def test_a_trap_firing_alone_blocks_goal_met(self):
         """A repeat or cycle is evidence of stagnation even before the
-        consecutive run completes."""
+        consecutive run completes.
+
+        NOTE (M13): the fixture is `_flat()` — an observation that carries
+        information — not the empty `ProgressSignal(criteria_satisfied=0)` P7
+        used. The empty observation is not fed to the trap (F32), so the trap
+        could not fire on it; the intent of this test is unchanged.
+        """
         d = StagnationDetector(min_consecutive=99)
-        s = ProgressSignal(criteria_satisfied=0)
+        s = _flat()
         d.observe(s)
         d.observe(s)
         assert d.trap_fired

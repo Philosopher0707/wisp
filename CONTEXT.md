@@ -13,10 +13,14 @@
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is `1229b87`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
-on top of it and is the authority for the count.
-**557 migration tests pass.** The full-suite failure set is **129, byte-identical** to the stable
-baseline (see §11).
+**HEAD is `7c15626`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
+on top of it (**34**) and is the authority for the count.
+**The migration suites are 849 tests — 848 pass, 1 fails.** The failure is
+`test_node_identity.py::TestANodeReferencesItsWorkUnit::test_a_parallel_round_is_journaled_as_one_exchange_per_call`,
+finding **F38**: a test that had encoded the F8 environment as the contract (see §11).
+**The full-suite failure set of 129 is STALE.** It was measured while `jsonschema` was missing, so it
+conflated F8's effects with everything else — at least 24 of its entries were F8-caused. Re-measure before
+quoting it; §11 says how.
 
 | Phase | Status | Report |
 |---|---|---|
@@ -39,9 +43,35 @@ baseline (see §11).
 | **M14** — prompt sections classified (T1) | `COMPLETE` — **found a live T1 violation** | `PHASE_M14_REPORT.md` |
 | **M12** — the failure path reaches the taxonomy | `COMPLETE` — **found the engine's refusals invisible** | `PHASE_M12_REPORT.md` |
 | **M11** — a node references its work unit | `COMPLETE` — **the guard for the property forbade the fix** | `PHASE_M11_REPORT.md` |
+| **M13** — the stagnation detector on the live loop | `COMPLETE` — **the signal declared every session stagnant** | `PHASE_M13_REPORT.md` |
+| **POST-M13** — the authority recon | `COMPLETE` | `PHASE_POST_M13_AUTHORITY_RECON.md` |
+| **POST-M13** — the verdict contract (**ADR-0035**) | `COMPLETE` | `PHASE_POST_M13_VERDICT_CONTRACT.md` |
+| **POST-M13** — the authority ADR | `COMPLETE` | `PHASE_POST_M13_AUTHORITY_ADR.md` |
+| **POST-M13** — the authority implementation | `COMPLETE` | `PHASE_POST_M13_AUTHORITY_IMPLEMENTATION.md` |
+| **POST-M13** — the live completion seam recon | `COMPLETE` | `PHASE_POST_M13_LIVE_COMPLETION_SEAM_RECON.md` |
+| **POST-M13** — completion enforcement policy (**ADR-0036**) | `COMPLETE` | `PHASE_POST_M13_COMPLETION_ENFORCEMENT_POLICY_ADR.md` |
+| **POST-M13** — completion enforcement implementation | `COMPLETE` — **fixed F35** | `PHASE_POST_M13_COMPLETION_ENFORCEMENT_IMPLEMENTATION.md` |
+| **POST-M13** — stagnation reopening recon | `COMPLETE` | `PHASE_POST_M13_STAGNATION_REOPENING_RECON.md` |
+| **POST-M13** — stagnation latch amendment (**ADR-0037**) | `COMPLETE` — **completes ADR-0036** | `PHASE_POST_M13_STAGNATION_LATCH_ADR_AMENDMENT.md` |
+| **POST-M13** — stagnation docstring alignment | `COMPLETE` — docstrings only | `PHASE_POST_M13_STAGNATION_DOC_ALIGNMENT.md` |
+| **POST-M13** — stagnation gate validation | `COMPLETE` — **`ENABLEMENT_NOT_READY`** | `PHASE_POST_M13_STAGNATION_GATE_VALIDATION.md` |
+| **POST-M13** — F8 tool-validation authority recon | `COMPLETE` — **`ADR_REQUIRED: NO`** | `PHASE_POST_M13_F8_TOOL_VALIDATION_AUTHORITY_RECON.md` |
+| **POST-M13** — **F8 provisioning; tools really execute** | `COMPLETE` — **found F37, F38** | `PHASE_POST_M13_F8_PROVISIONING_AND_TOOL_EXECUTION_RESTORATION.md` |
+| **POST-M13** — F37 verification-evidence authority recon | `COMPLETE` — **root-caused to one expression** | `PHASE_POST_M13_VERIFICATION_EVIDENCE_AUTHORITY_RECON.md` |
+| **POST-M13** — **F37 evidence-adapter repair** | `COMPLETE` — **F37 FIXED**; 3 false-success shapes closed | `PHASE_POST_M13_VERIFICATION_EVIDENCE_ADAPTER_REPAIR.md` |
+| **POST-M13** — ADR-0016 live-provider measurement | `COMPLETE` — **`NOT_YET_DETERMINABLE`**; found **F39, F40** | `PHASE_POST-M13_ADR-0016_LIVE_PROVIDER_MEASUREMENT.md` |
+| **POST-M13** — F39 `num_predict` forensic recon | `COMPLETE` — **`REQUIRES ARCHITECTURE DECISION`** | `PHASE_POST-M13_F39_OLLAMA_NUM_PREDICT_FORENSIC_RECON.md` |
+| **POST-M13** — F39 token-budget boundary (**ADR-0038**) | `COMPLETE` — **`RATIFIED`**; no behavioural change | `PHASE_POST-M13_F39_TOKEN_BUDGET_BOUNDARY_ADR.md` |
+| **POST-M13** — **F39 mechanical diagnostic** | `COMPLETE` — **`ADR-0038 SATISFIED`**; found **F41** | `PHASE_POST-M13_F39_MECHANICAL_DIAGNOSTIC_IMPLEMENTATION.md` |
+| **POST-M13** — **F40 typed-event forensic recon** | `COMPLETE` — **`F40_CONFIRMED_PRODUCTION_DEFECT`**; `ADR_REQUIRED: YES`; 2-part mechanism, 2 sibling sites | `PHASE_POST-M13_F40_ITERATION_WRAPUP_TYPED_EVENT_FORENSIC_RECON.md` |
+| **POST-M13** — **F40 provider event contract (ADR-0039)** | `COMPLETE` — **`RATIFIED`**; one canonicalization owner; found **F42** | `PHASE_POST-M13_F40_PROVIDER_EVENT_CONTRACT_ADR.md` |
+| **POST-M13** — **ADR-0039 normalization implementation** | `COMPLETE` — **F40-1…F40-4, F42 CLOSED**; found **F43, F44** | `PHASE_POST-M13_F40_PROVIDER_EVENT_NORMALIZATION_IMPLEMENTATION.md` |
+| **POST-M13** — **canonicalization ownership (ADR-0040)** | `COMPLETE` — **`RATIFIED` (Option B)**; authority = `events.canonical_event`; 0 code changes | `PHASE_POST-M13_F40_CANONICALIZATION_OWNERSHIP_RECONCILIATION.md` |
+| **POST-M13** — **F43/F44 convergence (ADR-0041/0042)** | `COMPLETE` — **F43 CLOSED**, **F44 SETTLED**; recovery classification is semantic + terminal-first | `PHASE_POST-M13_F43_F44_RECOVERY_COMPLETION_CONVERGENCE.md` |
+| **POST-M13** — **final execution-semantics closure (ADR-0043/0044)** | `COMPLETE` — **`EXECUTION SEMANTICS: CLOSED`**; the last vocabulary list and the duplicated turn predicate removed | `PHASE_POST-M13_FINAL_EXECUTION_SEMANTICS_CLOSURE.md` |
 
-**Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F31**, change log).
-**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0033**).
+**Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F44**, change log).
+**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0044**).
 
 **The durability track is closed.** M2 (journal-first reconstruction), M3 (a real-SIGKILL kill point),
 M4 (durability as a correctness precondition) and M16 (the escalation is state, not audit) are all
@@ -56,9 +86,10 @@ The migration built **eight mechanisms**, each tested and reachable from its pac
 `core/stagnation.py` · `core/context_trust.py` · `auth/principal.child_principal()` ·
 `SessionRepository.reconstruct()`
 
-**None is driven by the live turn loop.** That is the honest summary, and it is not the same thing as a
-working Persistent Graph Loop. The plan's own objective — *"the graph changes during execution"* — is met
-at the **mechanism** level and not at the **integration** level.
+**None is driven by the live turn loop — with one exception.** M13 constructs the stagnation detector on
+the live turn path, so that mechanism is now driven (it observes and **records**; it does not act).
+Everything else remains at the **mechanism** level, and the plan's own objective — *"the graph changes
+during execution"* — is still met at the mechanism level rather than the integration level.
 
 ### 0.0.2 There is no single keystone — M9 was recorded as one, and that was wrong
 
@@ -82,21 +113,23 @@ reproduce `messages` exactly"*. The journal and the blob therefore disagreed on 
 |---|---|
 | **M11** | ✅ **DONE** — node identity. `TaskNode.work_unit` names the work unit the node records; `build_turn_graph` takes the units, not a count; the M9 ratchet that **forbade the fix and was evadable by naming** (F29/F30) is replaced by field classification (ADR-0033). **The graph driving execution stays open**, pinned by a tripwire |
 | **M12** | ✅ **DONE** — nothing from M9 was needed. `classify_failure_signal()` bridges the runtime's failure signals to the taxonomy, and **engine refusals are now recognised as denials** (they were being retried). Ladder *enforcement* stays deferred (ADR-0032) |
-| **M13** | meaningful progress signals — **its precondition now exists**: the graph can say *which* work units completed; `ProgressSignal` still counts them. Tripwired |
+| **M13** | ✅ **DONE** — the detector runs on the live turn path (ADR-0034). Wiring it found that the turn-end signal is **empty on a default configuration**, which declared every multi-turn session stagnant (F32), and that the runtime cannot see a refused call's arguments (F33 — so the identity travels with the refusal). **Enforcement stays deferred**: routing to the ladder and gating completion are tripwired |
 | **M14** | ✅ **DONE** — nothing from M9 was needed. The prompt sections are now classified and the **live T1 violation** (workspace-file content ahead of the system prompt) is fixed (ADR-0031) |
 | **M15** | ✅ **DONE** — nothing from M9 was needed. The spawn site now passes a `child_principal`; the identity travels with the **call**, because a per-child executor would leak two thread pools each (ADR-0030) |
 
 So **M12, M14 and M15 are independent** of the graph and of each other, and each is bounded — all three
-done. M11 needed node identity and is done. **Only M13 remains** of the five, and its precondition is
-met. The remaining work is **larger** than "one keystone", not smaller, but it is
-several small pieces rather than one large one.
+done. M11 needed node identity and is done. **M13 is done too**, and it confirmed the pattern a third
+time: M9's claim that M13 depended on M11 *narrowed again* — the identity stagnation needs is the
+**action** identity (`action_key`, P1), not the protocol id (F33). **All five are complete.** The
+remaining work is **larger** than "one keystone", not smaller, but it is several small pieces rather
+than one large one.
 
 ### 0.0.3 Also open
 
 | Item | Nature |
 |---|---|
-| **M1** | P3 stage 3b (enable the acceptance gate) — **blocked on a working tool path** (`jsonschema`) |
-| **M8** | retire `multi_agent/dag.py` — needs a **green** fanout suite first |
+| **M1** | P3 stage 3b (enable the acceptance gate) — **F37 fixed, a live measurement exists, but ADR-0016 is `NOT_YET_DETERMINABLE` and enablement needs a superseding ADR** |
+| **M8** | retire `multi_agent/dag.py` — **unblocked: the fanout suite is green now (F8 fixed)** |
 | **M5** | foreground-turn `RunRecord` lifecycle |
 | **M6** | `PolicyDecisionEnvelope` is still producer-less and consumer-less |
 | **M7** | `change_tracker.py` not wired into evidence |
@@ -127,7 +160,8 @@ the repo first, then compare against those copies.** Finding F12.
 
 Every phase was verified against the **stable baseline** (the intersection of two runs — a single-run
 count is not a baseline; see §7 and §11):
-**129, failure set byte-identical in both directions, for P8, P9, M2, M3, M4 and M16.**
+**129, failure set byte-identical in both directions, for P8, P9, M2, M3, M4, M16, M9, M15, M14, M12, M11 and M13**
+— M11 and M13 were each additionally confirmed by a **two-run** pass on the final tree.
 P0–P6 predate the method fix and were verified against single runs.
 
 ---
@@ -559,6 +593,7 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `43015ea` | `fix(m12):` bridge the failure path to the taxonomy; engine refusals are denials — 33 tests |
 | `e2b6f10` | `docs(m12):` record the M12 commit in the handoff table |
 | `0fdcdea` | `feat(m11):` give graph nodes a work-unit identity; the ratchet classifies fields, not names — 24 tests |
+| `7c15626` | `docs(m11):` record the M11 phase; findings F29–F31; repair the commit table — **`HEAD`** |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
@@ -688,8 +723,8 @@ This is the **fifth** instance of the §10 pattern: a conclusion drawn from *rea
 | **`grep -E "a\|b"`** | Fails silently in this shell. Use `grep -E "a|b"` or separate greps. |
 | **Tooling locations** | `ruff`: `/opt/anaconda3/envs/litllm/bin/ruff` · `mypy`: `/Library/Frameworks/Python.framework/Versions/3.12/bin/mypy` (neither in `.venv`) · project venv: `.venv/bin/python` (3.12.8) |
 | **mypy version** | `.venv` has none; `uv.lock` pins **2.3.1**. Use `uv run --no-project --with "mypy==2.3.1" mypy` for the true CI verdict. |
-| **`.venv` is missing 6 declared deps** | `aiohttp`, `tiktoken`, `prompt_toolkit`, `cryptography` (Phase 10) **+ `jsonschema`, `numpy`** (migration). `jsonschema` is the serious one — see the next row. |
-| **⚠️ `jsonschema` missing ⇒ EVERY tool call is refused** | `_validate_tool_args` (`core/stateless.py:2186-2199`) imports `jsonschema` inside a `try` and converts the `ModuleNotFoundError` into a validation-failure **string**, which the caller treats as a hard `SCHEMA_INVALID` denial. **No tool executes at all in this environment.** A missing dependency silently becomes a total tool outage, with the failure misdirected at the tool. Finding F8. `pip install` cannot fix it — no network (SSL cert verification fails). |
+| **`.venv` still lacks some declared deps — `jsonschema` no longer does** | `aiohttp`, `tiktoken`, `prompt_toolkit`, `cryptography` (Phase 10) **+ `numpy`** remain absent. `jsonschema` was the serious one and is **fixed** — see the next row. |
+| **✅ `jsonschema` — FIXED 2026-09-24 (this was F8)** | `_validate_tool_args` (`core/stateless.py:2285-2298`) imports `jsonschema` inside a `try` and converts the `ModuleNotFoundError` into a validation-failure **string**, so while it was missing **every tool call was refused before dispatch** and the failure was misdirected at the tool. It was **never a packaging problem**: the dependency was *declared* in `pyproject.toml` and *locked* in `uv.lock` — the venv simply lacked it. Provisioned **offline** from the uv cache at exactly the locked versions, with **0 production changes** and the lockfile/manifest byte-identical. **Tools really execute now** — a real read, a real write on disk, and an approved `run_bash` with captured stdout. **Install recipe:** `env -u PYTHONPATH UV_OFFLINE=1 ~/.local/bin/uv pip install --python .venv/bin/python --offline '<pkg>==<locked-version>'` (`uv` is **not on `PATH`** but lives at `~/.local/bin/uv`). **Two traps:** the interpreter has **no CA path** (`ssl.get_default_verify_paths()` → `cafile: None`), so `pip`/`urllib` fail TLS even though the machine has egress — `SSL_CERT_FILE=<certifi>/cacert.pem` fixes it; and **`.venv/bin/pip` has a broken pre-move shebang**, so use `python -m pip` or `uv`. The **error-classification** half of F8 is still unfixed — see F8's resolution row in the ledger. |
 | **Editable install is a MetaPathFinder** | `__editable___wisp_0_1_0_finder` resolves `wisp` ahead of `sys.path`, so **`PYTHONPATH` cannot override which package is imported**. To compare against a baseline you must change the files in place. |
 | **`git stash` is the wrong baseline tool here** | The tree has pre-existing uncommitted work in the same files. Stashing only your files reverts them to HEAD and discards it — producing false "regressions". Snapshot to a path outside the repo instead. Finding F12. |
 | **BSD `grep` via Bash is unreliable here** | `--include` silently matches nothing (caused a false "tiktoken is unused"), and a plain `grep -n "a\|b" file` returned empty with exit 1 for a pattern that plainly exists. **Use the Grep tool, not the shell.** |
@@ -709,18 +744,29 @@ This is the **fifth** instance of the §10 pattern: a conclusion drawn from *rea
 | P7 without its own test file | **129** | failure set byte-identical to run 1 → **P7 contributes zero** |
 | P8, P9, M2, M3, M4 | **129** | each byte-identical to the stable baseline in **both** directions |
 
-**The stable set is 129** — the intersection of two runs. A single run's count is not a baseline; see
-§11 for the method.
+**⚠️ THE STABLE SET OF 129 IS STALE — do not quote it as current.** Every number in the table above was
+measured while `jsonschema` was absent, which means it **conflated F8's effects with everything else**. The
+F8 provisioning phase settled the question for one whole directory: **`tests/reliability/` went from 24
+failures to 0**, including `test_13h2_determinism.py` (6→0, logged as "pre-existing" F10),
+`test_13j1_fanout_contract_repair.py` (13→0) and `test_13j_fanout_contract.py` (5→0). Those attributions
+were wrong. **The full-suite set must be re-measured before it is used as a baseline again.**
 
-Phase 10's much smaller figure (7 failed / 5 errors) was measured with foreign-WIP files `--ignore`d.
-The numbers above are the full tree and are the ones to compare against.
+**What is known now, measured after provisioning and re-measured after F37 / F39:**
 
-**The residual 129 are dominated by two missing dependencies:** `jsonschema` (every tool-executing test —
-`test_tools.py`, `test_salvage_gate.py`, `test_verification_loop.py`, `test_core_stateless.py`,
-`test_policy_modes.py`, `test_runtime_tool_history.py`, `test_no_bypass.py`, …) and `httpx` (11 starlette
-`TestClient` files, including `test_server_background_routes.py`). Plus
-`test_13j1_fanout_contract_repair.py` (13), `test_policy_cli.py` (5), `test_13h2_determinism.py` (6,
-scripted-stream timing), and the 17 collection `ERROR`s from foreign-session WIP files.
+| Suite | Result |
+|---|---|
+| migration suites (canonical set, §11) | **849 tests — 848 pass, 1 fails** (F38) |
+| `tests/reliability/` | **378 passed, 0 failed** — identical in one process and per file |
+| the focused stagnation / post-M13 set | **220 passed** |
+
+**Correction (2026-09-25).** This table previously read **385** for `tests/reliability/`, and the F37
+phase's report read **386** for the same directory. Both were wrong: the per-file data recorded by
+those phases **sums to 378**, and a fresh per-file run reproduces **378 exactly**, file for file, with
+zero change. The number is **378**; the two earlier figures were counting errors, not measurements.
+
+The residual failures are dominated by **`httpx`** (11 starlette `TestClient` files), the 17 collection
+`ERROR`s from foreign-session WIP files, and whatever the re-measurement finds. `jsonschema` is no longer
+among them, and neither are the three files above.
 
 **Three known flaky / order-dependent tests — the count moves ±1 because of them:**
 
@@ -822,10 +868,11 @@ the policy files are included. All 27 are accounted for: **20** are the missing
 `cryptography` (they pass 68/68 when it is supplied), and **7** are the known
 environmental set in §7. Never quote "the suite passes" — quote the set.
 
-**On the full `tests/` tree the number is 128** (§7) — Phase 10's smaller figure was measured with
-foreign-WIP files `--ignore`d. Compare like with like.
+**⚠️ These counts predate the F8 provisioning and are stale.** They were taken with
+`jsonschema` absent, so they include F8's effects. The `tests/reliability/` measurement after
+provisioning (24 failures → 0) shows the magnitude of the error. Re-measure before comparing.
 
-### Migration suites — 517 tests
+### Migration suites — 849 tests (848 pass, 1 fails)
 
 ```bash
 env -u PYTHONPATH .venv/bin/python -m pytest \
@@ -839,22 +886,48 @@ env -u PYTHONPATH .venv/bin/python -m pytest \
   tests/test_session_reconstruction.py tests/test_durability_preconditions.py \
   tests/test_escalation_durability.py tests/test_execution_view_projection.py \
   tests/test_child_principal_wired.py tests/test_prompt_section_trust.py \
-  tests/test_failure_signal_classification.py tests/reliability/test_killpoints.py -q
+  tests/test_failure_signal_classification.py tests/test_node_identity.py \
+  tests/test_stagnation_live_wiring.py tests/reliability/test_killpoints.py \
+  tests/reliability/test_post_m13_authority_implementation.py \
+  tests/reliability/test_post_m13_completion_enforcement.py \
+  tests/reliability/test_post_m13_stagnation_gate_validation.py \
+  tests/reliability/test_f8_tool_execution_restored.py \
+  tests/reliability/test_verification_evidence_adapter.py -q
 ```
+
+**Measured 2026-09-25, after the F37 evidence-adapter repair: 849 tests — 848 pass, 1 fails.** The failure is
+`test_node_identity.py::TestANodeReferencesItsWorkUnit::test_a_parallel_round_is_journaled_as_one_exchange_per_call`
+(**F38**): it pinned the exchange ordering that only existed because F8 refused every call pre-dispatch.
+Now that calls genuinely dispatch, the grouping rule produces the batch shape it explicitly supports
+(`call:c0+c1`). The production behaviour is *more* correct, not less — the test needs a one-line contract
+update, which requires explicit authorization.
+
+**This heading said "714 tests" until 2026-09-25** — that figure was the *pre-enforcement* count and the
+command below it had never been extended with the POST-M13 files.
 
 ### The regression method — read this before changing anything
 
 **A single-run failure count is NOT a baseline.** Two consecutive runs on identical code read **129** and
-**130**. Use the **stable set**, which is the *intersection of two runs*:
+**130**. Use the **stable set**, which is the *intersection of two runs*.
+
+**⚠️ The stored baseline is stale.** `.workbuddy-ai/memory/baseline-failures-stable.txt` holds **129**
+entries measured **with `jsonschema` absent** — so it is not a baseline for the current tree, and at least
+24 of its entries (the whole `tests/reliability/` set) were F8-caused. **Rebuild it before using it.**
+Until then, compare against a *fresh* two-run intersection.
 
 ```bash
+# LC_ALL=C is load-bearing: comm line-walks and expects a common collation, and a
+# baseline sorted under a different locale reports identical sets as different (F31).
 env -u PYTHONPATH .venv/bin/python -m pytest tests/ -q -p no:cacheprovider --no-header \
   --continue-on-collection-errors --tb=no 2>&1 \
-  | grep -E "^(FAILED|ERROR)" | sort > /tmp/after.txt
+  | grep -E "^(FAILED|ERROR)" | LC_ALL=C sort > /tmp/after.txt
 
-comm -13 .workbuddy-ai/memory/baseline-failures-stable.txt /tmp/after.txt   # NEW failures
-comm -23 .workbuddy-ai/memory/baseline-failures-stable.txt /tmp/after.txt   # now PASSING
+LC_ALL=C comm -13 .workbuddy-ai/memory/baseline-failures-stable.txt /tmp/after.txt   # NEW failures
+LC_ALL=C comm -23 .workbuddy-ai/memory/baseline-failures-stable.txt /tmp/after.txt   # now PASSING
 ```
+
+**The full suite cannot run in one process on this host** (F36): chunk it per directory or per file, union
+the results, and **say that the method was weaker than a two-run intersection**.
 
 Both directions must be empty. The baseline lives **in the repo** because `/tmp` did not survive a
 reboot and lost P0–P6's.
@@ -893,33 +966,33 @@ the files to a path **outside the repo** first, then compare.
 | R3 | Full provider-listing delegation | Unsafe until the 3 deltas (auth/timeout/degradation) converge; `test_provider_listing_equivalence.py` fails at that point and signals it |
 | R4 | `_is_transient` is a separate predicate | **Not debt** — different axis (retryability, not outcome class) |
 | R5 | Two `RunStatus` enums remain | **Resolved as a non-issue by the migration.** `RunStatus` (7 values, `graph/types.py:37`) is a **strict subset** of `RunState` (8, `runs/record.py:17`); the only asymmetry is `PLANNING`, which exists solely in `RunState`. Every `RunStatus` value coerces through `coerce_state()`. **No shim needed** — ADR-0003. Promote the `subset? True` assertion to a ratchet if a future phase adds a member. |
-| R6 | `.venv` missing deps | Environment — now **6** (`jsonschema` and `numpy` join the Phase 10 four). See §6. |
+| R6 | `.venv` missing deps | Environment — **5** now: `jsonschema` is **fixed** (F8), so `numpy` joins the Phase 10 four. See §6. |
 | R7 | `capability_filter.py` untracked but imported | See §8 |
 | R8 | 3 untracked test files abort collection | User's WIP |
 | R9 | `wisp/core/graph/__init__.py` modified, uncommitted | User's pre-existing edit |
 
 ### Migration open items — current
 
-**There is no single keystone.** M9 was recorded as one and that was wrong (§0.0.2). Of the five
-M9-blocked items, four are now done; **M13 remains, with its precondition met**.
+**There is no single keystone.** M9 was recorded as one and that was wrong (§0.0.2). **All five items
+M9 was said to block are now complete** — M12, M14, M15, M11, M13.
 
 | # | Item | Nature |
 |---|---|---|
 | **M9** | The execution view | ✅ **COMPLETE** — ADR-0029. **The strong reading was the wrong target** (the graph carries no payload), and the projection that exists was **not faithful** (now fixed and asserted). |
 | **M11** | The graph does not drive execution | ✅ **COMPLETE as node identity** — ADR-0033. `TaskNode.work_unit` references the work unit (F29/F30: M9's own ratchet forbade the fix and was evadable by naming — replaced by field classification). **The graph driving execution is still open**, pinned by `test_the_graph_still_does_not_drive_execution`. |
 | **M12** | The failure path | ✅ **COMPLETE** — ADR-0032. The ladder can be driven from a real failure now, and engine refusals are denials (F28: they were being retried). Enforcement deferred. |
-| **M13** | The stagnation detector is not constructed by the turn loop | **OPEN** — P7 uses the trap and reads the flag; nothing builds a detector. **Precondition now met** (M11): the graph can name *which* work completed; `ProgressSignal` still counts. Tripwired. |
+| **M13** | The stagnation detector is not constructed by the turn loop | ✅ **COMPLETE** — ADR-0034. The detector now runs per turn on the live path, gated by `config.graph_oscillation_guard`. **Found two defects**: an empty signal (both inputs are opt-in, so it is empty by default) declared every multi-turn session stagnant (F32), and the runtime cannot see a refused call's arguments (F33). **Enforcement deferred**: routing and goal-met gating are tripwired. |
 | **M14** | The context trust boundary | ✅ **COMPLETE** — ADR-0031. **Found a live T1 violation**: workspace-file content (`CLAUDE.md`) sat *before* the system prompt, unfenced. T2 fencing remains, deliberately staged. |
 | **M15** | The subagent spawn site | ✅ **COMPLETE** — ADR-0030. The P9 tripwire fired and was replaced by its inverse; `execute(principal=…)` carries the child identity per call. |
 | **M16** | The `ESCALATION` record's loss is not fully addressed | ✅ **COMPLETE** — ADR-0028. A state-bearing record is not best-effort in either direction; `reconstruct()` salvages the journal-only records on both paths (F24). |
-| **M1** | P3 stage 3b — enable the acceptance gate | **BLOCKED on a measurement**, itself blocked on a working tool path (`jsonschema`). ADR-0016. |
+| **M1** | P3 stage 3b — enable the acceptance gate | **Blocked on an architecture decision, not on evidence or code.** F8 is fixed, tools genuinely execute, **F37 is fixed** (the contaminated row is gone; the matrix re-measured to 2 PASS / 2 FAIL / 4 INCONCLUSIVE), and a **live-provider** population now exists (28 real turns across 3 models, `FALSE_SUCCESS_AFTER = 0`). But **ADR-0016 is `NOT_YET_DETERMINABLE`**: the contract asks for a *measurement period*, and what exists is a controlled matrix — and the rate proved **model-dependent** (64.3% for the capable model, 100% degenerate for the two small ones). Enabling `stagnation_gate` by default is listed by **ADR-0037** among the things forbidden **without a superseding ADR**. So the next step is an ADR, not a code change. ADR-0016. |
 | **M2** | Journal-first reconstruction | ✅ **COMPLETE** — `reconstruct()` + `reconstruction_source()`; the pre-P0 hazard and the gap hazard are both handled and pinned. **Five consumers still read the blob** (a tripwire asserts it). |
 | **M3** | Killpoint integration | ✅ **COMPLETE** — `test_kp_session_midtool_then_killed`. One window covered. |
 | **M4** | ADR-0004 revisited | ✅ **COMPLETE** — **ADR-0027**. Found a live defect (M2's journal-first could return a provider-invalid transcript). |
 | **M5** | Foreground-turn `RunRecord` lifecycle | **OPEN** — proven end-to-end for background runs only. |
 | **M6** | `PolicyDecisionEnvelope` producer-less and consumer-less | **OPEN** — the last unwired contract. |
 | **M7** | `change_tracker.py` not wired into evidence | **OPEN** — deferred with 3b. |
-| **M8** | `multi_agent/dag.py` not retired into `wisp/graph/` | **OPEN — deferred deliberately.** On the live `fanout` path, and `test_13j1_fanout_contract_repair.py` is **already red** for environmental reasons, so a regression would be indistinguishable. Needs a green fanout suite first. |
+| **M8** | `multi_agent/dag.py` not retired into `wisp/graph/` | **OPEN — the deferral's stated reason no longer holds.** It was deferred because `test_13j1_fanout_contract_repair.py` was *already red* for environmental reasons, so a regression would be indistinguishable. The F8 provisioning made it **green** (`test_13j1` 13→0, `test_13j` 5→0), so retiring `dag.py` can now be attempted and any regression **will** be attributable. Still on the live `fanout` path — treat it as a real change, not a cleanup. |
 | **M10** | The materialized graph is a **lower bound** on iterations | **OPEN — by design.** One node per closed tool exchange + one terminal; iteration boundaries are not observable. |
 
 **Committed.** Phase 10 and migration P0–P9 + M2/M3/M4 are committed (§3). The remaining uncommitted
@@ -962,8 +1035,8 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `WISP_CONTEXT_ARCHITECTURE.md` | Trust tags, `ContextRequest` → `Context`, graph context |
 | `WISP_SUBAGENT_ARCHITECTURE.md` | Structured delegation, transactional effects, one-graph |
 | `WISP_MIGRATION_PLAN.md` | **The plan of record** — phases P0–P9 with prerequisites, tests, risk, rollback |
-| `WISP_MIGRATION_STATUS.md` | **The ledger** — phase status, findings **F1–F24**, change log, regression summary |
-| `WISP_ARCHITECTURE_DECISIONS.md` | **ADR-0001 … ADR-0028** |
+| `WISP_MIGRATION_STATUS.md` | **The ledger** — phase status, findings **F1–F44**, change log, regression summary |
+| `WISP_ARCHITECTURE_DECISIONS.md` | **ADR-0001 … ADR-0044** |
 | `PHASE_P0_REPORT.md` | Wire the orphaned durable layer |
 | `PHASE_P1_REPORT.md` | Journal turn transitions |
 | `PHASE_P2_REPORT.md` | Introduce the proposal boundary |
@@ -983,6 +1056,7 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_M14_REPORT.md` | Prompt sections are classified, and T1 holds (ADR-0031) |
 | `PHASE_M12_REPORT.md` | The failure path reaches the taxonomy (ADR-0032) |
 | `PHASE_M11_REPORT.md` | A node references its work unit; the ratchet classifies fields, not names (ADR-0033) |
+| `PHASE_M13_REPORT.md` | The stagnation detector on the live turn path (ADR-0034) |
 
 **Guards added by the migration:**
 

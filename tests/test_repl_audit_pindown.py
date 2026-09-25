@@ -387,7 +387,7 @@ async def test_guarded_stream_retries_empty_then_errors():
         return gen()
 
     events = [ev async for ev in guarded_provider_stream(
-        open_empty, lambda e: e, set(),
+        open_empty, lambda e: e,
         first_token_deadline_s=1, chunk_deadline_s=1, max_attempts=2)]
     assert attempts == 2
     assert events and events[-1]["type"] == "error"

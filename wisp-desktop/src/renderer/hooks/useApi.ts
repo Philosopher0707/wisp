@@ -1,12 +1,45 @@
 import { useCallback, useMemo } from 'react';
 import type { SessionSummary, Message, ToolCallItem } from '../state/types.js';
 
+/**
+ * The single authority for the `Authorization` header.
+ *
+ * Every request this client makes must be built from this function. A request
+ * that constructs its own headers silently ships unauthenticated when the key
+ * is configured — and because the key is deliberately never sent as a query
+ * param (`authParams` is empty, so it cannot leak into logs), there is no
+ * fallback that would make the omission visible.
+ */
 function makeAuthHeaders(apiKey: string): Record<string, string> {
   const headers: Record<string, string> = {};
   if (apiKey) {
     headers['Authorization'] = `Bearer ${apiKey}`;
   }
   return headers;
+}
+
+/**
+ * Turn a failed response into a message that says *why*.
+ *
+ * The server returns a JSON `detail` for policy denials (403) and validation
+ * failures (400/404). Without this, every refusal reads as a bare
+ * "API 403: Forbidden" — which hides the reason now that the executable-config
+ * routes (hooks, MCP servers, plugins) carry the permission-policy gate: the
+ * useful text is "Blocked by server policy (read-only session); no approver is
+ * present over REST".
+ */
+async function describeApiError(resp: Response): Promise<string> {
+  const base = `API ${resp.status}: ${resp.statusText}`;
+  try {
+    const body = (await resp.clone().json()) as { detail?: unknown };
+    const detail = body?.detail;
+    if (typeof detail === 'string' && detail.trim()) {
+      return `${base} — ${detail}`;
+    }
+  } catch {
+    // Non-JSON body (empty, HTML error page) — the status line is all we have.
+  }
+  return base;
 }
 
 export interface GitStatus {
@@ -145,13 +178,13 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
     async (path: string, opts?: { method?: string; body?: unknown }): Promise<unknown> => {
       const url = serverUrl.replace(/\/$/, '') + path;
       const init: RequestInit = { method: opts?.method || 'GET' };
-      init.headers = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
+      init.headers = makeAuthHeaders(apiKey);
       if (opts?.body) {
         (init.headers as Record<string, string>)['Content-Type'] = 'application/json';
         init.body = JSON.stringify(opts.body);
       }
       const resp = await fetch(url, init);
-      if (!resp.ok) throw new Error(`API ${resp.status}: ${resp.statusText}`);
+      if (!resp.ok) throw new Error(await describeApiError(resp));
       return resp.json();
     },
     [serverUrl, apiKey],
@@ -197,7 +230,7 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
           const tcs = [...last.toolCalls];
           const idx = tcs.findIndex((tc) => !tc.result);
           if (idx >= 0) {
-            tcs[idx] = { ...tcs[idx], result: raw.content };
+            tcs[idx] = { ...tcs[idx], result: extractText(raw.content) };
             messages[messages.length - 1] = { ...last, toolCalls: tcs };
           }
         }
@@ -341,13 +374,16 @@ export function useApi(serverUrl: string, apiKey: string): ApiClient {
   const getCheckpointDiff = useCallback(async (id: string): Promise<string> => {
     try {
       const url = serverUrl.replace(/\/$/, '') + `/api/checkpoints/${encodeURIComponent(id)}/diff${authParams}`;
-      const resp = await fetch(url, { headers: makeAuthHeaders() });
-      if (!resp.ok) throw new Error(`API ${resp.status}`);
+      // This is the one request that cannot go through `apiFetch` (it reads a
+      // plain-text diff, not JSON), so it must build its headers from the same
+      // authority — and it must be handed the key to do so.
+      const resp = await fetch(url, { headers: makeAuthHeaders(apiKey) });
+      if (!resp.ok) throw new Error(await describeApiError(resp));
       return await resp.text();
     } catch {
       return '';
     }
-  }, [serverUrl, authParams, makeAuthHeaders]);
+  }, [serverUrl, apiKey, authParams]);
 
   // ── Plugins ──
 

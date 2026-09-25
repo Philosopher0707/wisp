@@ -5,10 +5,10 @@ Handles MCP server operations.
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from wisp.server.deps import verify_api_key
+from wisp.server.deps import require_tool_allowed, verify_api_key
 from wisp.server.routes.workspace import WORKSPACE_ROOT
 
 logger = logging.getLogger(__name__)
@@ -78,7 +78,15 @@ async def list_mcp_servers():
 
 
 @router.post("/api/mcp/servers", dependencies=[Depends(verify_api_key)])
-async def add_mcp_server(req: MCPServerAddRequest):
+async def add_mcp_server(req: MCPServerAddRequest, request: Request):
+    # Authority: registering an MCP server persists a command that is later
+    # spawned, so it is an executable-config mutation — the same authority
+    # class as a hook. It passes the same policy gate as file writes;
+    # READ_ONLY sessions cannot register one. The desktop client keeps
+    # working because the policy allows this action in full / auto_edit /
+    # ask_all and denies only in read_only.
+    require_tool_allowed(request, "mcp.add_server", {"name": req.name},
+                         str(WORKSPACE_ROOT))
     from wisp.mcp import MCPAuthMethod, MCPServerConfig
     manager = _get_mcp_manager()
     configs = manager.load_server_configs()
@@ -121,7 +129,12 @@ async def add_mcp_server(req: MCPServerAddRequest):
 
 
 @router.post("/api/mcp/servers/{name}/test", dependencies=[Depends(verify_api_key)])
-async def test_mcp_server(name: str):
+async def test_mcp_server(name: str, request: Request):
+    # Health-checking an MCP server SPAWNS it — the same authority class as
+    # registering one. Gating only add_mcp_server would leave this as a
+    # spawn-by-other-means bypass.
+    require_tool_allowed(request, "mcp.test_server", {"name": name},
+                         str(WORKSPACE_ROOT))
     manager = _get_mcp_manager()
     configs = manager.load_server_configs()
     if not any(c.name == name for c in configs):
@@ -132,7 +145,12 @@ async def test_mcp_server(name: str):
 
 
 @router.delete("/api/mcp/servers/{name}", dependencies=[Depends(verify_api_key)])
-async def delete_mcp_server(name: str):
+async def delete_mcp_server(name: str, request: Request):
+    # Symmetric with add_mcp_server: removing a server alters executable
+    # config. Leaving this ungated would let a READ_ONLY session tear down
+    # what it cannot create — an asymmetry with no security benefit.
+    require_tool_allowed(request, "mcp.remove_server", {"name": name},
+                         str(WORKSPACE_ROOT))
     manager = _get_mcp_manager()
     configs = manager.load_server_configs()
     if not any(c.name == name for c in configs):

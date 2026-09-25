@@ -581,8 +581,15 @@ class RecoveryLadder:
         return decision
 
     @property
-    def terminal_outcome(self) -> str:
-        """`ESCALATED_TO_HUMAN` once escalated — never a silent success."""
+    def ladder_state(self) -> str:
+        """`ESCALATED_TO_HUMAN` once escalated — never a silent success.
+
+        Named `ladder_state`, not `terminal_outcome` (ADR-0044 R6). This is the
+        RECOVERY mechanism's own state, not the turn's terminal evidence and not
+        a `GoalState`; sharing the name invited exactly the cross-layer collapse
+        ADR-0042 prohibits. Its values are deliberately upper-case member names,
+        distinct from `GoalState`'s lower-case values.
+        """
         return "ESCALATED_TO_HUMAN" if self.escalated else "IN_PROGRESS"
 
 

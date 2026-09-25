@@ -50,6 +50,25 @@ def _load_effective(args: list[str]):
     return load_local(path, pub)
 
 
+#: Emitted ahead of any command whose output describes a bundle's verdicts.
+#:
+#: Without it, `wisp policy dry-run run_bash` printing `allowed=False` is
+#: indistinguishable from an enforced denial — the operator concludes the fleet
+#: is governed. It is not: Wisp loads no policy bundle at runtime, so
+#: `authorize()`'s organization layer is always passed `None`. These commands
+#: validate and inspect a bundle; they do not describe what the agent may do.
+#: See PHASE_10_M4_GOVERNANCE_UNWIRED.md.
+_NOT_ENFORCED_NOTICE = (
+    "NOT ENFORCED: this bundle is not applied to any tool call. Wisp loads no\n"
+    "policy bundle at runtime, so the verdicts below describe the bundle, not\n"
+    "the agent's actual permissions. See PHASE_10_M4_GOVERNANCE_UNWIRED.md."
+)
+
+#: Commands whose output reads as an in-force verdict.
+_EVALUATING_COMMANDS = frozenset(
+    {"inspect", "verify", "explain", "dry-run", "health"})
+
+
 def _cmd_inspect(args: list[str], out: TextIO) -> int:
     eff = _load_effective(args)
     path = _bundle_path(args)
@@ -183,6 +202,8 @@ def main(argv: list[str], out: TextIO | None = None) -> int:
         print(f"unknown policy command (choose: {', '.join(sorted(_COMMANDS))})",
               file=out)
         return 2
+    if argv[0] in _EVALUATING_COMMANDS:
+        print(_NOT_ENFORCED_NOTICE, file=out)
     try:
         return _COMMANDS[argv[0]](argv[1:], out)
     except SystemExit as e:

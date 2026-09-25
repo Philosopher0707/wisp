@@ -358,18 +358,34 @@ class TestTerminalUniqueness:
         assert any("Turn timed out" in e.get("message", "")
                    for e in evs if e.get("type") == "error")
 
-    def test_d6_wrapup_failure_error_plus_done_once_each(self, tmp_path):
+    def test_d6_wrapup_success_summary_plus_done_once_each(self, tmp_path):
+        """REWRITTEN by ADR-0039 (PM-21) — it used to assert the defect.
+
+        The previous body asserted F40-1 as the contract: *"MockProvider
+        yields objects; the wrap-up path consumes RAW events (stateless.py:
+        826-834, ev.get) so it cannot see them: honest error."* That is a
+        description of the bug, and it passed because the wrap-up raised
+        `AttributeError` on the first typed event and the model's wrap-up
+        text was discarded behind a spurious `Max iterations reached`.
+
+        The wrap-up now consumes canonical events from the normalization
+        boundary, so the summary is delivered and no error is emitted. What
+        this class exists to assert — terminal uniqueness — is unchanged.
+        """
         prov = MockProvider(responses=["", ""], tool_calls=[
             [_read_call("a.txt", "c0")], [_read_call("a.txt", "c1")]])
         core, session, _ = _core(
             prov, tmp_path, ws_files={"a.txt": "alpha"}, max_iterations=2)
         evs = _run(core, session)
-        # MockProvider yields objects; the wrap-up path consumes RAW events
-        # (stateless.py:826-834, ev.get) so it cannot see them: honest error.
-        assert _types(evs).count("error") == 1
+        # F40-1/F40-2 closed: the wrap-up's text reaches the consumer.
+        # (TokenBatch chunks arrive separately — join before matching.)
+        joined = "".join(_texts(evs, "content"))
+        assert "no more responses" in joined, (
+            f"the wrap-up summary was discarded: {_texts(evs, 'content')!r}")
+        # No spurious budget error — the provider DID complete the wrap-up.
+        assert _types(evs).count("error") == 0, (
+            [e for e in evs if e.get("type") == "error"])
         assert _types(evs).count("done") == 1
-        assert any("Max iterations reached" in e.get("message", "")
-                   for e in evs if e.get("type") == "error")
 
 
 # ── Verification floor + steering (non-exits that extend turns) ──────
@@ -454,18 +470,48 @@ class TestCircuitOpen:
 # ── Empty / malformed / immediate-failure rounds ──────────────────────
 
 class TestDegenerateRounds:
-    def test_empty_object_stream_treated_as_natural_done(self, tmp_path, monkeypatch):
-        # MockProvider's bare StreamComplete (phase "complete") is NOT in the
-        # core's _BOOKKEEPING_TYPES (stateless.py:1922), though "complete" IS in
-        # TERMINAL_TYPES (provider_stream.py:51). The marker alone therefore
-        # counts as "meaningful" and the turn ends done(natural) with EMPTY
-        # content — a silent empty success. Recorded, not fixed.
+    def test_empty_object_stream_surfaces_error_without_done(self, tmp_path, monkeypatch):
+        """REWRITTEN by ADR-0041 (PM-23) — it used to assert the defect.
+
+        The previous body documented F43 as current behaviour: *"MockProvider's
+        bare StreamComplete is NOT in the core's _BOOKKEEPING_TYPES … the marker
+        alone therefore counts as 'meaningful' and the turn ends done(natural)
+        with EMPTY content — a silent empty success. Recorded, not fixed."*
+
+        The guard now classifies terminal FIRST and decides meaningfulness from
+        the event's payload (ADR-0041 R1/R2), so a bare terminal marker is an
+        empty attempt whichever provider emitted it — and the typed path takes
+        the same honest path as its dict twin below.
+        """
         monkeypatch.setenv("WISP_STREAM_ATTEMPTS", "1")
         core, session, _ = _core(MockProvider(responses=[""]), tmp_path)
         evs = _run(core, session)
-        assert _types(evs) == ["done"]
-        assert _texts(evs, "content") == ""
-        assert evs[0].get("reason") == "natural"
+        assert "done" not in _types(evs)
+        assert any("no usable response" in e.get("message", "")
+                   for e in evs if e.get("type") == "error")
+        assert _types(evs).count("error") == 2
+        assert "no final answer" in evs[-1].get("message", "")
+
+    def test_empty_object_and_empty_dict_streams_agree(self, tmp_path, monkeypatch):
+        """ADR-0041 R6: representation must not decide recovery.
+
+        The typed and dict bare-marker streams must produce the same event
+        types. Before ADR-0041 they produced `["done"]` and an error
+        respectively — the same semantics, two outcomes.
+        """
+        monkeypatch.setenv("WISP_STREAM_ATTEMPTS", "1")
+
+        def _empty():
+            def _g():
+                yield {"type": "done", "done_reason": "stop"}
+            return _g
+
+        core_t, session_t, _ = _core(MockProvider(responses=[""]), tmp_path)
+        typed = _types(_run(core_t, session_t))
+        core_d, session_d, _ = _core(_DictProvider([_empty()]), tmp_path)
+        dicts = _types(_run(core_d, session_d))
+        assert typed == dicts, f"typed={typed} dict={dicts}"
+        assert "done" not in typed
 
     def test_empty_dict_stream_surfaces_error_without_done(self, tmp_path, monkeypatch):
         # Dict-shaped empty round ({"type":"done"} only, "done" IS bookkeeping)
@@ -487,11 +533,24 @@ class TestDegenerateRounds:
         assert "no final answer" in evs[-1].get("message", "")
 
     def test_malformed_event_without_terminal_marker(self, tmp_path, monkeypatch):
+        """UPDATED by ADR-0043 (PM-24): the diagnostic changed, the contract did not.
+
+        The fixture yields a bare `object()` — no recognisable type and no
+        payload. Before ADR-0043 that counted as response output (it was not in
+        the bookkeeping set), so the attempt looked *truncated* and surfaced
+        "ended without its terminal marker". Now meaningfulness is decided by
+        payload, so an event carrying none is correctly an EMPTY attempt and
+        surfaces the empty-stream diagnostic instead.
+
+        The property this test exists for is unchanged: a malformed event must
+        never pass silently — no `done`, errors present, and the event is still
+        forwarded so the consumer sees what arrived.
+        """
         monkeypatch.setenv("WISP_STREAM_ATTEMPTS", "1")
         core, session, _ = _core(_DictProvider([_garbage()]), tmp_path)
         evs = _run(core, session)
         assert "done" not in _types(evs)
-        assert any("without its terminal marker" in e.get("message", "")
+        assert any("no usable response" in e.get("message", "")
                    for e in evs if e.get("type") == "error")
         # H3 closure: diagnostic + terminal classification, nothing silent.
         assert _types(evs).count("error") == 2

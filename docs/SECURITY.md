@@ -26,6 +26,9 @@ do not open public issues for unpatched holes. Target acknowledgment:
 - Secrets redacted at record construction (audit, traces, diagnostics).
 - Subagents derive narrowed capabilities, never root (M2).
 - Policy bundles Ed25519-signed, expiry trims authority (M4).
+  **⚠️ Not enforced at runtime** — the loader is never invoked by any entry
+  point, so a bundle does not currently restrict a tool call. See
+  `PHASE_10_M4_GOVERNANCE_UNWIRED.md`.
 - Hash-chained audit trail with `wisp audit verify` (M5).
 
 ## Supported versions

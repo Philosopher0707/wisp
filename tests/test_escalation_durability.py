@@ -153,12 +153,24 @@ class TestTheStateBearingAuthority:
 
     def test_the_journal_only_list_covers_every_audit_kind(self):
         """The list is what the fallback salvages. An audit kind missing from it
-        is a record silently dropped on the blob path."""
+        is a record silently dropped on the blob path.
+
+        NOTE (M13): `STAGNATION` joined the audit kinds in M13. This set is an
+        explicit enumeration rather than a totality check over the enum, because
+        not every event kind is an audit record (`USER_MESSAGE`, `DONE`,
+        `ERROR`, `COMPACTED` are not) — so a new audit kind must be added here
+        deliberately, which is what this guard is for.
+
+        NOTE (ADR-0035): `GOAL_STATE` joined in the post-M13 authority phase.
+        The guard fired again and was answered the same way — by declaring the
+        new kind, not by relaxing the count.
+        """
         audit = {
             SessionEventType.PROPOSAL, SessionEventType.OUTCOME,
             SessionEventType.VERDICT, SessionEventType.TASK_GRAPH,
             SessionEventType.NODE_TRANSITION, SessionEventType.RECOVERY,
-            SessionEventType.ESCALATION,
+            SessionEventType.ESCALATION, SessionEventType.STAGNATION,
+            SessionEventType.GOAL_STATE,
         }
         # Each kind maps to a Session field; the names are the contract.
         assert len(JOURNAL_ONLY_RECORDS) == len(audit)

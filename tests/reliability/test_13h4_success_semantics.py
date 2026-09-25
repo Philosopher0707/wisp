@@ -139,17 +139,55 @@ class TestAssignmentsAndH1Claim:
     def test_completion_derives_from_terminal_evidence(self):
         # H5 compatibility: the unconditional-True assignment H4 pinned is
         # gone; the single decision point derives from terminal evidence.
+        #
+        # UPDATED by ADR-0044 (PM-24): the decision point now derives the
+        # turn-level flag FROM the terminal outcome instead of re-implementing
+        # the predicate. The expression this test used to pin
+        # (`turn_succeeded = saw_done and not saw_fatal_error`) was a SECOND
+        # implementation of the same rule that `terminal_outcome_from_evidence`
+        # owns — and `derive_goal_state` reads both, so the two could have
+        # disagreed about one turn. This test asserts the single-predicate form.
         import pathlib
         src = pathlib.Path("wisp/core/runtime.py").read_text()
-        assert "turn_succeeded = saw_done and not saw_fatal_error" in src
+        assert "turn_succeeded = _goal_outcome is TerminalOutcome.SUCCEEDED" in src
+        assert "turn_succeeded = saw_done and not saw_fatal_error" not in src, (
+            "the turn-success predicate was re-implemented (ADR-0044 R2)")
         assert "if turn_succeeded:" in src
         assert "SessionEvent.error(seq_num, terminal_error)" in src
 
     def test_no_other_producer_in_tree(self):
+        """One **producer** of the turn-success rule, and only one.
+
+        Refined from a whole-file substring search to an AST check over
+        assignment targets. The substring form also caught *readers*, which is
+        not what it meant to forbid: ADR-0035's goal arbiter
+        (`wisp/core/goal.py`) consumes the turn-success fact as an input without
+        producing it, and a guard that cannot tell those apart forces the code to
+        stop naming the thing — the P8 trap in reverse. Same refinement M12 made
+        to the denial-marker guard, and it is strictly stronger: a *reader* is
+        now explicitly permitted while the producer stays pinned.
+        """
+        import ast
         import pathlib
-        hits = [str(p) for p in pathlib.Path("wisp").rglob("*.py")
-                if "turn_succeeded" in p.read_text()]
-        assert hits == ["wisp/core/runtime.py"]
+
+        producers: list[str] = []
+        for p in pathlib.Path("wisp").rglob("*.py"):
+            for node in ast.walk(ast.parse(p.read_text())):
+                targets: list = []
+                if isinstance(node, ast.Assign):
+                    targets = list(node.targets)
+                elif isinstance(node, ast.AugAssign):
+                    targets = [node.target]
+                for t in targets:
+                    if isinstance(t, ast.Name) and t.id == "turn_succeeded":
+                        producers.append(str(p))
+                        break
+
+        assert sorted(set(producers)) == ["wisp/core/runtime.py"], (
+            "the turn-success rule gained a second producer: "
+            f"{sorted(set(producers))}")
+        # Non-vacuity: a rename must not make this pass by finding nothing.
+        assert producers, "the AST check found no producer — it is vacuous"
 
 
 # ── §6. Outcome matrix A–J (runtime level, repo-backed) ───────────────
@@ -242,13 +280,23 @@ class TestOutcomeMatrix:
         # H5 compatibility: was repo-complete (H4 finding), now incomplete.
         assert repo.was_last_turn_complete("f") is False
 
-    def test_f2_empty_object_natural_done(self, tmp_path, monkeypatch):
+    def test_f2_empty_object_repo_incomplete(self, tmp_path, monkeypatch):
+        """REWRITTEN by ADR-0041 (PM-23).
+
+        The old body asserted `_types(evs) == ["done"]  # bookkeeping-set
+        mismatch (H2)` and `was_last_turn_complete is True` — i.e. it recorded
+        F43 as the contract: a bare typed terminal counted as a meaningful
+        response, so an empty stream was blessed as a completed turn.
+
+        A bare terminal marker is now an empty attempt on both representations,
+        so this row matches its dict twin (`test_f_empty_dict_repo_incomplete`).
+        """
         monkeypatch.setenv("WISP_STREAM_ATTEMPTS", "1")
         runtime, repo, ws = _runtime(MockProvider(responses=[""]), tmp_path)
         session = _session(ws, "f2")
         evs = _run_turn(runtime, session)
-        assert _types(evs) == ["done"]  # bookkeeping-set mismatch (H2)
-        assert repo.was_last_turn_complete("f2") is True
+        assert "done" not in _types(evs)
+        assert repo.was_last_turn_complete("f2") is False
 
     def test_g_iteration_exhaustion(self, tmp_path):
         prov = _DictProvider([

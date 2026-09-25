@@ -18,10 +18,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-from typing import Any, AsyncIterator, Callable, Iterable
+from typing import Any, AsyncIterator, Callable
 
 from wisp.core.events import (
     CODE_PROVIDER_STREAM,
+    canonical_event,
     error as error_event,
     provider_status as provider_status_event,
 )
@@ -48,11 +49,29 @@ class _TransientOpenError(Exception):
 # marker ALONE (no content/tool payload before it) is an empty stream, not
 # a meaningful response — adapters emit these unconditionally on clean end,
 # so counting them as meaningful would bless vacuous success.
+#
+# This is the ONLY vocabulary the recovery classifier owns (ADR-0043 R2/R3).
+# There is deliberately no second list of "bookkeeping" types: a vocabulary
+# list participating in a *semantic* decision is what produced F43 (a bare
+# typed `StreamComplete` blessed an empty attempt) and its sibling (an
+# unrecognised, payload-less event did the same). Meaningfulness is decided
+# by `_event_has_payload` for every event type instead.
 TERMINAL_TYPES = frozenset({"done", "complete", "stream_complete"})
 
 
-def _terminal_has_payload(normalized: dict[str, Any]) -> bool:
-    """True if a terminal event carries response content (not a bare marker)."""
+def _event_has_payload(normalized: dict[str, Any]) -> bool:
+    """True if an event carries response content rather than being a bare marker.
+
+    Applies to **every** event type, terminal or not (ADR-0043 R1): whether an
+    attempt produced a response is a question about what the provider SENT, not
+    about which dialect name it chose. That makes it impossible for a new
+    provider spelling to change whether an empty attempt is retried.
+
+    `final_content` is retained deliberately (ADR-0043 R6): a canonical **dict**
+    passes through `canonical_event` unchanged, so a dict-shaped provider may
+    supply it — dropping the key would make such a provider's payload invisible
+    and turn a real response into a silent empty attempt.
+    """
     for key in ("text", "content", "final_content", "tool_calls", "calls"):
         val = normalized.get(key)
         if isinstance(val, str) and val:
@@ -72,10 +91,28 @@ def _flatten_event(ev: Any) -> dict[str, Any]:
     return flat
 
 
+def passthrough_if_canonical(event: Any) -> dict[str, Any]:
+    """Normalizer for a stream that is ALREADY canonical (ADR-0039 R5).
+
+    The guard obtains its events from the core's normalization-only
+    boundary, so each event is already a canonical dict — re-canonicalizing
+    it would be a second pass over the same event for no gain, and the
+    main loop mutates what it receives, so the boundary's copy is the one
+    that must survive.
+
+    It stays **total** anyway: anything that is not a dict is still
+    canonicalized through the single authority, so a future caller that
+    wires the guard directly to a raw provider stream cannot crash it on a
+    typed event. That is the property F40 was about.
+    """
+    if isinstance(event, dict):
+        return event
+    return canonical_event(event)
+
+
 async def guarded_provider_stream(
     open_stream: Callable[[], Any],
     normalize_event: Callable[[Any], dict[str, Any]],
-    bookkeeping_types: Iterable[str],
     *,
     first_token_deadline_s: float,
     chunk_deadline_s: float,
@@ -96,7 +133,6 @@ async def guarded_provider_stream(
     never silent success. No retry is added here: post-output retry would
     duplicate consumer-visible bytes (retry policy unchanged).
     """
-    bookkeeping = set(bookkeeping_types)
     last_transient_status: int | None = None
     last_transient_error: BaseException | None = None
     for attempt in range(1, max_attempts + 1):
@@ -192,19 +228,27 @@ async def guarded_provider_stream(
                             continue  # transient — hold it for the retry path
                         yield event
                         return  # permanent API error: surface immediately
-                    if ntype not in bookkeeping:
+                    # Classification is SEMANTIC (ADR-0043 R1/R2): whether an
+                    # attempt produced a response is decided by what the event
+                    # CARRIES, for every event type — never by which provider
+                    # spelled it, and never by a vocabulary list. Terminal
+                    # detection runs first so `saw_terminal` is recorded
+                    # regardless of payload; meaningfulness is then the payload
+                    # question, asked once and answered the same way for all
+                    # types. No list can drift because there is no list.
+                    is_terminal = ntype in TERMINAL_TYPES
+                    if is_terminal:
+                        saw_terminal = True
+                    if _event_has_payload(normalized):
                         got_meaningful = True
-                    if ntype in TERMINAL_TYPES:
+                    if is_terminal:
                         # Provider-declared terminal marker (§6): ends the
                         # attempt here. A bare marker carries no payload, so
                         # it never rescues an empty attempt; post-terminal
                         # bytes/timeouts cannot retroactively fail a
                         # completed stream (§10 ordering rule). Markers are
                         # consumed, not forwarded (previous wire behavior:
-                        # bookkeeping types were never yielded).
-                        saw_terminal = True
-                        if _terminal_has_payload(normalized):
-                            got_meaningful = True
+                        # markers were never yielded).
                         break
                     yield event
             finally:

@@ -675,6 +675,64 @@ class AgentRuntime:
             task_graph_recording = bool(
                 getattr(getattr(self, "config", None), "task_graph", False)
                 and self.session_repo is not None)
+            # Migration POST-M13 (ADR-0035): consult P6's recovery ladder at the
+            # turn boundary and journal the rung it chooses. Defaults OFF — this
+            # is the name ADR-0026's reversal condition reserved, and the
+            # production path must be unchanged until it is explicitly enabled.
+            # It gates the RECOVERY track only: completion semantics are
+            # deliberately not coupled to it (ADR-0035's two-authority split).
+            recovery_ladder_enabled = bool(
+                getattr(getattr(self, "config", None), "recovery_ladder", False)
+                and self.session_repo is not None)
+            # Migration POST-M13 (ADR-0035), completion side: derive and record
+            # the goal state. Defaults OFF for the same reason as
+            # `record_verdict`/`task_graph` — it adds a record to the log of
+            # every existing caller — which is ADR-0035 clause 9's
+            # "recorded first, enforced later" staging. Nothing acts on the
+            # state, so turn completion is unchanged either way.
+            goal_state_recording = bool(
+                getattr(getattr(self, "config", None), "goal_state", False)
+                and self.session_repo is not None)
+            # Migration POST-M13 (ADR-0036), ENFORCEMENT: let M13's predicate
+            # withhold `done` for a bounded replan. Defaults OFF, and separate
+            # from `graph_oscillation_guard` (which disables the detector
+            # itself) because recording and enforcing are different concerns —
+            # so the rollback has two levels. This needs no session repo: it is
+            # control, not a record.
+            stagnation_gate_enabled = bool(
+                getattr(getattr(self, "config", None), "stagnation_gate", False))
+            # Migration M13 — the stagnation detector, on the live turn path.
+            #
+            # Constructed per TURN, not per session: the question it answers is
+            # "is this turn going round in circles?", and a detector that spans
+            # turns would compare one user request against the next, which is
+            # not the same task.
+            #
+            # `from_config` reads `config.graph_oscillation_guard` — the flag
+            # that has existed since before this migration and was read by
+            # nothing (P7's explicit completion criterion). A disabled detector
+            # returns PROGRESSING from `observe`, so the flag is the rollback
+            # switch and no separate check is needed.
+            stagnation_detector = None
+            stagnation_signal = None
+            stagnation_seen = False
+            #: The arguments of each call that streamed, keyed by its id — so an
+            #: observation can name the ACTION, not just the tool. Empty when the
+            #: engine refused a call before dispatch (it emits no call event
+            #: then, and the arguments never reach the runtime): the outcome
+            #: hash carries the signal instead. See ADR-0034 / F33.
+            call_args_by_id: dict[str, tuple[str, Any]] = {}
+            try:
+                from wisp.core.stagnation import (
+                    ProgressSignal as _ProgressSignal,
+                    StagnationDetector as _StagnationDetector,
+                    StagnationVerdict as _StagnationVerdict,
+                )
+                stagnation_detector = _StagnationDetector.from_config(
+                    getattr(self, "config", None))
+                stagnation_signal = _ProgressSignal()
+            except Exception:
+                logger.debug("stagnation detector unavailable", exc_info=True)
             # Provider-visible injections the core appended to its LOCAL
             # messages mid-turn (verification nudges, steering notes,
             # budget notice). Persisted in the finally block so
@@ -690,13 +748,52 @@ class AgentRuntime:
             saw_done = False
             saw_fatal_error = False
             terminal_error_message: str | None = None
+            #: ADR-0035 — the engine error code, kept because it is what
+            #: distinguishes a budget exhaustion from a timeout inside
+            #: `GOAL_FAILED`, and it is the durable input M12 classifies from.
+            terminal_error_code: str = ""
             turn_succeeded = False
+            #: ADR-0044 — the turn's terminal evidence, computed ONCE at the end
+            #: of the turn loop below from the final `saw_done`/`saw_fatal_error`.
+            #: `turn_succeeded` is a projection of it and `derive_goal_state`
+            #: reads both, so they must come from one computation: two
+            #: predicates feeding one arbiter could disagree, and rows 3/5 key
+            #: on the outcome while row 6 keys on the flag.
+            _goal_outcome: Any = None
+
+            # ADR-0036's seam: a READ-ONLY predicate over the per-turn detector,
+            # handed to the engine so it may withhold `done` for a bounded
+            # replan. The engine never receives the detector itself —
+            # `observe()` mutates, and handing it over would give a second party
+            # write access to the one stagnation authority. The closure is made
+            # here and dies with the turn, so it is per-turn by construction:
+            # nothing to cache, nothing to leak between turns or sessions.
+            #
+            # `None` when the flag is off or there is no detector — exactly
+            # today's behaviour. No detector, no intervention authority: the
+            # subagent/background paths drive `core.turn` directly and pass
+            # nothing (ADR-0036's explicit non-goal).
+            completion_gate = (
+                (lambda: bool(stagnation_detector.may_report_goal_met()))
+                if (stagnation_gate_enabled and stagnation_detector is not None)
+                else None)
 
             try:
-                async for raw_event in core.turn(
-                    session, prompt, approval_handler=approval_handler,
-                    steering_drain=lambda: self.drain_steering(sid),
-                ):
+                # The completion gate is passed ONLY when there is one. This is
+                # not tidiness: `turn()` is an implementation point as well as a
+                # call site, and an alternative core — every `_MockCore` in the
+                # suite — implements the pre-ADR-0036 signature. Passing
+                # `completion_gate=None` unconditionally made those cores raise
+                # `TypeError`, i.e. it widened a pinned signature for a new
+                # concern (ADR-0009). With the flag off (the default) the call
+                # below is byte-for-byte the old call.
+                turn_kwargs: dict[str, Any] = {
+                    "approval_handler": approval_handler,
+                    "steering_drain": lambda: self.drain_steering(sid),
+                }
+                if completion_gate is not None:
+                    turn_kwargs["completion_gate"] = completion_gate
+                async for raw_event in core.turn(session, prompt, **turn_kwargs):
                     # Engine already yields flat dicts — normalize only if needed
                     if isinstance(raw_event, dict) and "type" in raw_event:
                         event = dict(raw_event)
@@ -713,6 +810,14 @@ class AgentRuntime:
                     elif etype == "tool_call":
                         tool_calls.append(event)
                         tool_sequence.append(("call", event))
+                        # Migration M13 — remember this call's action identity
+                        # so its reply can be observed as a *named* action.
+                        _cid = str(event.get("id") or _ev_get(event, "id", "") or "")
+                        if _cid:
+                            call_args_by_id[_cid] = (
+                                str(_ev_get(event, "name", "") or ""),
+                                _ev_get(event, "arguments", {}) or {},
+                            )
                         _data = event.get("data")
                         self._note_touched_file(
                             sid, _data if isinstance(_data, dict) else event)
@@ -723,6 +828,52 @@ class AgentRuntime:
                     elif etype == "tool_result":
                         tool_results.append(event)
                         tool_sequence.append(("reply", event))
+                        # Migration M13 — observe one closed exchange.
+                        #
+                        # The signal is built from what is ALWAYS present here
+                        # — the action (when the call streamed) and the outcome
+                        # — not from the opt-in records `from_verdict_and_graph`
+                        # reads. That distinction is the whole point: both of
+                        # those default off, so a turn-end signal would be empty
+                        # on every default configuration and the detector would
+                        # read "no information" as "no progress" (F32).
+                        #
+                        # Accumulated immutably (`with_work`), because progress
+                        # is "we have learned something new at some point", and
+                        # a delta comparison would call an A→B→A oscillation
+                        # progress on every step.
+                        if stagnation_detector is not None:
+                            try:
+                                from wisp.core.action_key import action_key
+                                from wisp.core.graph.loop import diff_hash
+                                # The action identity, from whichever producer
+                                # saw the call: the engine stamps it on a
+                                # refusal (a refused call emits no call event),
+                                # and for an allowed call the runtime already
+                                # read the call event above. Two producers for
+                                # disjoint cases, not two copies of one — and
+                                # both go through the same `action_key`.
+                                _unit = str(event.get("action_key") or "")
+                                if not _unit:
+                                    _args = call_args_by_id.get(
+                                        str(event.get("tool_call_id") or ""))
+                                    if _args:
+                                        _unit = action_key(_args[0], _args[1])
+                                _raw = _ev_get(event, "result", None)
+                                if _raw is None:
+                                    _raw = _ev_get(event, "data", "")
+                                _text = (json.dumps(_raw, default=str)
+                                         if isinstance(_raw, dict)
+                                         else str(_raw or ""))
+                                stagnation_signal = stagnation_signal.with_work(
+                                    work_unit=_unit,
+                                    outcome_hash=diff_hash(_text) if _text else "")
+                                if (stagnation_detector.observe(stagnation_signal)
+                                        is _StagnationVerdict.STAGNATING):
+                                    stagnation_seen = True
+                            except Exception:
+                                logger.debug("stagnation observation failed",
+                                             exc_info=True)
                         # Migration P1: journal each exchange the moment it
                         # closes, so a crash mid-turn leaves the completed
                         # exchanges on disk instead of nothing at all.
@@ -785,11 +936,22 @@ class AgentRuntime:
                             saw_fatal_error = True
                         terminal_error_message = str(
                             _ev_get(event, "message") or "turn failed")
+                        terminal_error_code = str(
+                            _ev_get(event, "code", "") or "")
 
-                # 13-H5: completion derives from terminal evidence — a done
-                # with no fatal error. Bare exhaustion, partial output, or
-                # fatal diagnostics never count as success.
-                turn_succeeded = saw_done and not saw_fatal_error
+                # 13-H5 / ADR-0044 R1-R2: completion derives from terminal
+                # evidence — a done with no fatal error. Bare exhaustion,
+                # partial output, or fatal diagnostics never count as success.
+                #
+                # The evidence is turned into its outcome HERE, once, and the
+                # turn-level flag is a PROJECTION of it. `turn_succeeded` used
+                # to re-implement the same predicate, and `derive_goal_state`
+                # reads both inputs — so the two could have disagreed about the
+                # same turn.
+                from wisp.core.goal import TerminalOutcome, terminal_outcome_from_evidence
+                _goal_outcome = terminal_outcome_from_evidence(
+                    saw_done=saw_done, saw_fatal_error=saw_fatal_error)
+                turn_succeeded = _goal_outcome is TerminalOutcome.SUCCEEDED
 
             except Exception as exc:
                 logger.exception("Turn failed for session %s", sid)
@@ -965,6 +1127,174 @@ class AgentRuntime:
                             logger.debug("verdict recording failed",
                                          exc_info=True)
 
+                # Migration M13 — record the stagnation verdict.
+                #
+                # RECORDED, not enforced: the detector observes and reports, and
+                # nothing acts on the report. Routing it to the recovery ladder
+                # would change this turn's control flow, which is the risk
+                # ADR-0026 named and the same deferral M12 made for the ladder's
+                # enforcement. A tripwire asserts the ladder is still unconsulted.
+                #
+                # Written only when the verdict was reached, so a normal turn
+                # adds no record to any caller's log — which is what lets this
+                # run under the flag's declared default (`True`) rather than
+                # being opt-in like `record_verdict`/`task_graph`.
+                if (stagnation_seen and stagnation_detector is not None
+                        and journal_fidelity and self.session_repo is not None):
+                    try:
+                        from wisp.core.session import SessionEvent
+                        journal_events.append(SessionEvent.stagnation_event(
+                            0, stagnation_detector.to_dict()))
+                    except Exception:
+                        logger.debug("stagnation recording failed",
+                                     exc_info=True)
+
+                # ── ADR-0035 — the completion authority, and the recovery
+                # track behind its own flag. ────────────────────────────────
+                #
+                # ORDERING is taken from ADR-0035's **normative precedence
+                # table**; its flow diagram is illustrative. The completion
+                # GATE is first — it lives in the engine, before `done` is
+                # emitted (`stateless.py:761-806`), which is the only place
+                # completion can be *prevented*. The DERIVATION below runs last
+                # because precedence row 2 (`ESCALATED_TO_HUMAN`) is a recovery
+                # outcome: the escalation fact must exist before the state is
+                # derived.
+                #
+                # Nothing is re-derived here. The acceptance verdict comes from
+                # the floor guard (P3), the stagnation predicate from M13, the
+                # failure class from M12. This block only arbitrates.
+                from wisp.core.goal import (
+                    already_recorded_from,
+                    derive_goal_state,
+                    terminal_outcome_from_evidence,
+                )
+
+                # ADR-0044 R3: the outcome was computed ONCE, at the end of the
+                # turn loop above. Re-deriving it unconditionally here is the
+                # second implementation this ADR removes. The guard covers the
+                # one path where that computation did not happen — the turn body
+                # raised before its evidence was final, and this `finally` still
+                # ran. Same function; never a second predicate.
+                if _goal_outcome is None:
+                    _goal_outcome = terminal_outcome_from_evidence(
+                        saw_done=saw_done, saw_fatal_error=saw_fatal_error)
+
+                # P3's verdict, read from the guard the engine published
+                # (ADR-0018) — the ONE floor implementation, not a second one.
+                _acceptance = None
+                _guard_for_goal = getattr(core, "_last_guard", None)
+                if _guard_for_goal is not None:
+                    try:
+                        from wisp.core.verification import floor_guard_verdict
+                        _acceptance = floor_guard_verdict(
+                            _guard_for_goal).verdict
+                    except Exception:
+                        logger.debug("acceptance verdict unavailable",
+                                     exc_info=True)
+
+                # M13's established predicate — consumed, not re-inferred.
+                _stagnating = bool(
+                    stagnation_detector is not None
+                    and not stagnation_detector.may_report_goal_met())
+
+                # ── The recovery track (ADR-0035), behind `recovery_ladder`. ──
+                #
+                # Consulted only when the turn did not succeed — there is
+                # nothing to recover from otherwise — and emitted only when a
+                # rung is actually chosen. Never because a detector exists, and
+                # never merely because a failure occurred.
+                _escalated = False
+                if recovery_ladder_enabled and not turn_succeeded:
+                    try:
+                        from wisp.core.recovery import (
+                            RecoveryLadder, classify_failure_signal,
+                        )
+                        from wisp.core.session import SessionEvent as _SEv
+                        from wisp.core.stagnation import route_to_recovery
+
+                        _ladder = RecoveryLadder()
+                        _evidence = (
+                            f"terminal={_goal_outcome.value}",
+                            f"code={terminal_error_code or 'none'}",
+                        )
+                        if _stagnating and stagnation_detector is not None:
+                            # P7's existing routing, reused — not reimplemented.
+                            _decision = route_to_recovery(
+                                stagnation_detector, _ladder, _evidence)
+                        else:
+                            _failure_class = classify_failure_signal(
+                                terminal_error_message,
+                                not saw_fatal_error,
+                                terminal_error_code or None)
+                            _decision = _ladder.decide(
+                                _failure_class, _evidence,
+                                reason=str(terminal_error_message or ""))
+                        if _decision is not None:
+                            journal_events.append(
+                                _SEv.recovery_event(0, _decision.to_dict()))
+                        if _ladder.escalated:
+                            _escalated = True
+                            journal_events.append(_SEv.escalation_event(
+                                0, _ladder.escalation.to_dict()))
+                    except Exception:
+                        logger.debug("recovery ladder unavailable",
+                                     exc_info=True)
+
+                # ── The goal state: derived, then recorded. ──────────────────
+                #
+                # The record carries the INPUTS as well as the answer, which is
+                # what closes ADR-0035's two durability gaps: the acceptance
+                # verdict is present whenever the goal state is authoritative
+                # (without switching the diagnostic `VERDICT` record on), and
+                # every evaluated turn has an explicit stagnation outcome — so a
+                # missing stagnation record can no longer be ambiguous between
+                # "not evaluated" and "evaluated and not stagnating".
+                _stagnation_verdict = (
+                    str(getattr(stagnation_detector.verdict, "value",
+                                stagnation_detector.verdict))
+                    if stagnation_detector is not None else "not_evaluated")
+                _goal_state = derive_goal_state(
+                    terminal_outcome=_goal_outcome,
+                    acceptance_verdict=_acceptance,
+                    stagnating=_stagnating,
+                    turn_succeeded=turn_succeeded,
+                    cancelled=False,
+                    escalated=_escalated,
+                    already_recorded=already_recorded_from(
+                        session.get("goal_states")
+                        if isinstance(session, dict) else None),
+                )
+                if goal_state_recording:
+                    try:
+                        from wisp.core.session import SessionEvent
+                        journal_events.append(SessionEvent.goal_state_event(
+                            0, {
+                                "goal_state": str(_goal_state),
+                                "terminal_outcome": _goal_outcome.value,
+                                "acceptance_verdict": str(
+                                    getattr(_acceptance, "value", _acceptance)
+                                    or ""),
+                                "stagnation_verdict": _stagnation_verdict,
+                                # F35 / ADR-0036 §6 — the predicate the arbiter
+                                # ACTUALLY consumed, taken from the same
+                                # computation (`not _stagnating`) so the record
+                                # and the arbitration cannot drift. The
+                                # `stagnation_verdict` above is M13's
+                                # human-readable verdict, which ignores
+                                # `trap_fired`; replay must read THIS field or a
+                                # trap-only stagnation reconstructs as GOAL_MET
+                                # and live and replay disagree.
+                                "stagnation_allows_goal_met": not _stagnating,
+                                "turn_succeeded": bool(turn_succeeded),
+                                "cancelled": False,
+                                "escalated": bool(_escalated),
+                                "failure_code": terminal_error_code,
+                            }))
+                    except Exception:
+                        logger.debug("goal state recording failed",
+                                     exc_info=True)
+
                 # Transcript unification (issue #2, part B): record the
                 # injected context above so the persisted transcript shows
                 # the model exactly what it saw mid-turn.
@@ -983,7 +1313,8 @@ class AgentRuntime:
                 # strictly increasing. Dropped entirely when the repository is
                 # absent or both writers are off.
                 if (journal_fidelity or proposal_boundary or verdict_recording
-                        or task_graph_recording) \
+                        or task_graph_recording or recovery_ladder_enabled
+                        or goal_state_recording) \
                         and journal_events and self.session_repo is not None:
                     from dataclasses import replace as _replace_event
                     stamped: list[Any] = []

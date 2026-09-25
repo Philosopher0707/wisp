@@ -52,14 +52,47 @@ def clear_models_cache(provider_name: str | None = None) -> None:
 
 def list_models(provider_name: str, cfg: Any = None,
                 force: bool = False) -> list[str]:
-    """Models a provider can actually serve right now. [] = unknown.
+    """CANONICAL MODEL-LISTING CONTRACT. Models a provider can serve now.
 
-    Live listings where the provider offers one; curated static lists
-    only where it does not. A provider that cannot be reached yields []
-    — callers treat that as "cannot verify", never as "model invalid".
+    This function is the semantic authority for "which models does provider X
+    offer". Its contract is deliberately narrow and is pinned by
+    `tests/test_provider_listing_equivalence.py`:
 
-    Results are cached for MODELS_CACHE_TTL_S keyed by provider + base +
-    key fingerprint; pass force=True for an explicit refresh.
+    INPUT
+        ``provider_name`` — a key of ``provider_select.KNOWN_PROVIDERS``.
+        ``cfg``           — a ``WispConfig`` (endpoint + credentials).
+        ``force``         — bypass the cache.
+
+    OUTPUT
+        ``list[str]`` of model ids. **Empty list means "cannot verify"**, never
+        "no models exist" — callers must not treat ``[]`` as invalidity.
+
+    GUARANTEES
+        - returns ``[]`` (never raises) for an unreachable or unauthenticated
+          provider — the transport helper absorbs connection/auth errors. A
+          programming error in a provider-specific branch still propagates;
+          this is not a blanket exception swallow.
+        - results are cached per (provider, endpoint, key fingerprint)
+        - the offline fallback uses a provider's **public** surface only
+
+    PROVIDER-SPECIFIC TRANSPORT — LEGITIMATELY DISTINCT
+        The *transport* beneath this contract is intentionally not unified with
+        ``Provider.list_models()``. Phase 9 measured three real deltas, so
+        delegating would be a behaviour change, not a refactor:
+
+        1. **Auth** — this path sends only ``Authorization: Bearer <key>``;
+           ``OpenRouterProvider._auth_headers()`` also sends
+           ``HTTP-Referer``/``X-Title``, and the Ollama client path sends no
+           bearer at all.
+        2. **Timeout** — this path uses a flat 5.0 s; OpenRouter uses 15 s and
+           OpenAI uses ``HARDENED_TIMEOUT``.
+        3. **Degradation** — ``/api/models`` has its own per-provider guard, so
+           its test patches *this* module's seam.
+
+        A single HTTP implementation would silently change all three. The
+        authority that matters is semantic, and it is singular. When the three
+        deltas converge, delegate — the equivalence tests fail at that point
+        and signal that the work can be done.
     """
     name = (provider_name or "").strip().lower()
     base_part = ""

@@ -17,6 +17,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Optional
 
+from wisp.pathsec import PROTECTED_PATH_FRAGMENTS, is_protected_path
 from wisp.tools.errors import ToolError
 
 logger = logging.getLogger(__name__)
@@ -247,42 +248,35 @@ def check_dangerous_command(command: str) -> Optional[str]:
 # to by agent tools, because hook scripts execute with the full process
 # environment and can be self-installed by the agent, creating a privilege
 # escalation path (write_file -> hook -> arbitrary code execution).
-_SENSITIVE_HOOK_DIR_FRAGMENTS: frozenset[str] = frozenset({
-    ".wisp/hooks",
-    ".wisp\\hooks",  # Windows
-})
-_SENSITIVE_ENV_KEYS: frozenset[str] = frozenset({
-    "WISP_API_KEY",
-    "OLLAMA_HOST",
-    "OPENAI_API_KEY",
-    "ANTHROPIC_API_KEY",
-    "AWS_ACCESS_KEY_ID",
-    "AWS_SECRET_ACCESS_KEY",
-    "AZURE_OPENAI_API_KEY",
-    "GOOGLE_API_KEY",
-    "HF_TOKEN",
-    "GITHUB_TOKEN",
-    "GITLAB_TOKEN",
-    "DOCKER_CONFIG",
-    "KUBECONFIG",
-    "HOME",  # prevents scripts that resolve via ~
-    "USER",
-    "SSH_AGENT_LAUNCHER",
-    "SSH_AUTH_SOCK",
-})
+#
+# The predicate itself lives in `wisp.pathsec` (Phase 10) so that every
+# authorization path — the agent tool path, the filesystem tools, and the
+# REST policy gate — consults ONE implementation. This name is kept because
+# `tools/filesystem.py` and `tools/checkpoints.py` import it.
+_SENSITIVE_HOOK_DIR_FRAGMENTS: frozenset[str] = PROTECTED_PATH_FRAGMENTS
+
+# NOTE (Phase 10): a `_SENSITIVE_ENV_KEYS` frozenset used to live here. It had
+# no consumer — every env scrub goes through `wisp/tools/_utils_env.py`, which
+# is stricter and more nuanced than a static list:
+#   - `scrub_sensitive_env` (hooks) uses an **allow-list** (_ALLOWED_ENV_KEYS),
+#   - `credential_free_env` (bash/sandbox/MCP) pairs a deny-list with
+#     _CREDENTIAL_ENV_PATTERN, which covers every key the old set named,
+#   - `minimal_process_env` (strict MCP) uses its own reduced set.
+# The old set also listed HOME/USER as sensitive; the live implementation
+# deliberately *keeps* them for the agent's bash tool (a usable POSIX
+# environment) while excluding them from hooks via the allow-list. Deleting it
+# removes a trap: wiring the static list instead of the pattern would be a
+# narrower control wearing a similar name. See PHASE_10_UNWIRED_CONTROLS_INVENTORY.md.
+
+
 def _is_hook_controlled_path(path: str) -> bool:
-    """Return True if the path resolves inside a hook-controlled directory."""
-    # Normalize separators (collapse double backslashes, then unify)
-    # Use os.path.normpath which handles both / and \\ on both platforms.
-    norm = os.path.normpath(path).replace("\\", "/")
-    # Must be inside the hooks/ directory, not just contain "hooks" as fragment
-    for frag in _SENSITIVE_HOOK_DIR_FRAGMENTS:
-        if frag in norm:
-            idx = norm.index(frag)
-            after = norm[idx + len(frag) :]
-            if after == "" or after.startswith("/"):
-                return True
-    return False
+    """Return True if the path resolves inside a hook-controlled directory.
+
+    Delegates to the canonical predicate (`wisp.pathsec.is_protected_path`).
+    """
+    return is_protected_path(path)
+
+
 def _resolve_path(path: str, workspace: str) -> Path:
     """Resolve a path relative to workspace, with security boundary enforcement.
 

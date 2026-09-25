@@ -9,7 +9,7 @@ interface CommandItem {
   id: string;
   label: string;
   description: string;
-  icon: React.FC<{ size?: number }>;
+  icon: IconComponent;
   action: () => void;
   category?: string;
 }

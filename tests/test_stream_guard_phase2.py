@@ -71,7 +71,6 @@ def test_guarded_stream_propagates_cancellation():
             async for ev in guarded_provider_stream(
                 _open,
                 lambda e: e,
-                set(),
                 first_token_deadline_s=5,
                 chunk_deadline_s=5,
                 max_attempts=3,

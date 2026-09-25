@@ -144,6 +144,69 @@ class AgentEvent:
 
 # ── Event normalizer ──────────────────────────────────────────────
 
+# ── The ONE provider-object canonicalization implementation (ADR-0039) ──
+#
+# ADR-0039 R2: exactly one canonicalizer for provider objects shall exist.
+# The whitelist below is that one implementation. `WispAgentCore._normalize_event`
+# and `normalize_event` both delegate here, so no second whitelist can exist to
+# drift from this one — F42 was precisely that drift (a 14-field copy that
+# silently dropped `calls` and `done_reason`).
+#
+# The whitelist is deliberately narrow: it drops provider-internal metadata
+# (`batch_index`, `phase`, `validation_hash`, `total_tokens`, `error_type`,
+# `partial_*`, `final_*`, `accumulated_*`). ADR-0039 measured every dropped
+# field and found zero consumers outside the providers, so the projection is
+# minimal but adequate — and the schema is deliberately NOT expanded.
+CANONICAL_EVENT_FIELDS: frozenset[str] = frozenset({
+    "text",
+    "name",
+    "arguments",
+    "result",
+    "message",
+    "duration_ms",
+    "turns",
+    "session_id",
+    "summary",
+    "reason",
+    "level",
+    "recoverable",
+    "tool_call_id",
+    "id",
+    "calls",
+    "done_reason",
+})
+
+
+def canonical_event(event: Any) -> dict[str, Any]:
+    """Project any provider event to the canonical flat representation.
+
+    **Total** (ADR-0039 R3): returns a dict for ANY input and never raises.
+    A dict is copied (the copy is load-bearing — the main loop mutates the
+    result, and mutating a provider's own dict would corrupt shared state);
+    a provider object contributes `type`/`phase` plus the whitelisted
+    fields; anything else becomes ``type="unknown"``.
+
+    This is data transformation only (ADR-0039 R11): it may remove keys,
+    never add them, and it executes nothing.
+    """
+    if isinstance(event, dict):
+        return dict(event)
+
+    result: dict[str, Any] = {}
+    if hasattr(event, "type"):
+        result["type"] = event.type
+    elif hasattr(event, "phase"):
+        result["type"] = event.phase
+    else:
+        result["type"] = "unknown"
+
+    for field_name in CANONICAL_EVENT_FIELDS:
+        if hasattr(event, field_name):
+            result[field_name] = getattr(event, field_name)
+
+    return result
+
+
 def normalize_event(event: Any) -> AgentEvent:
     """Normalize any event representation to a canonical AgentEvent.
 
@@ -155,6 +218,10 @@ def normalize_event(event: Any) -> AgentEvent:
 
     Returns:
         Canonical AgentEvent with all payload in the data dict.
+
+    Provider objects are projected by :func:`canonical_event` — the single
+    implementation. This function owns **no whitelist of its own** (ADR-0039
+    R2), so it cannot drift from the core's canonicalization.
     """
     if isinstance(event, AgentEvent):
         return event
@@ -162,26 +229,9 @@ def normalize_event(event: Any) -> AgentEvent:
     if isinstance(event, dict):
         return AgentEvent.from_dict(event)
 
-    # Provider object (TokenBatch, Checkpoint, etc.)
-    result: dict[str, Any] = {}
-    if hasattr(event, "type"):
-        result["type"] = event.type
-    elif hasattr(event, "phase"):
-        result["type"] = event.phase
-    else:
-        result["type"] = "unknown"
-
-    # Whitelist known safe fields
-    safe_fields = {
-        "text", "name", "arguments", "result", "message",
-        "duration_ms", "turns", "session_id", "summary", "reason",
-        "level", "recoverable", "tool_call_id", "id",
-    }
-    for field_name in safe_fields:
-        if hasattr(event, field_name):
-            result[field_name] = getattr(event, field_name)
-
-    return AgentEvent.from_dict(result)
+    # Provider object (TokenBatch, Checkpoint, ...) — delegate, do not
+    # re-implement. Keeping a second whitelist here is what F42 was.
+    return AgentEvent.from_dict(canonical_event(event))
 
 
 # Human-readable descriptions
@@ -581,4 +631,6 @@ __all__ = [
     "provider_status",
     "subagent",
     "normalize_event",
+    "canonical_event",
+    "CANONICAL_EVENT_FIELDS",
 ]

@@ -34,11 +34,13 @@ async def test_h1_stream_attempts_bounded_and_resend():
         seen_payloads.append("full-context")
         return gen()
 
-    # Production bookkeeping set (stateless._BOOKKEEPING_TYPES): terminal
-    # markers must be included or a bare marker counts as meaningful.
+    # ADR-0043: the guard owns NO vocabulary of non-terminal event types. It
+    # decides meaningfulness from the event's PAYLOAD for every type, so there
+    # is no bookkeeping set to pass and nothing that can drift from
+    # `TERMINAL_TYPES`. This test remains the regression guard for the "a bare
+    # marker is an empty attempt" contract.
     out = [e async for e in guarded_provider_stream(
         open_stream, lambda e: dict(e),
-        ("done", "stream_complete", "checkpoint", "usage", "stream_stats"),
         first_token_deadline_s=5, chunk_deadline_s=5, max_attempts=3)]
     assert len(calls) == 3  # bounded, no more
     assert len(seen_payloads) == 3  # every attempt resends everything

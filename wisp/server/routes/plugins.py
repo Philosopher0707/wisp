@@ -6,10 +6,10 @@ Handles plugin operations.
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from wisp.server.deps import verify_api_key
+from wisp.server.deps import require_tool_allowed, verify_api_key
 from wisp.server.routes.workspace import WORKSPACE_ROOT
 
 logger = logging.getLogger(__name__)
@@ -66,7 +66,14 @@ async def plugin_marketplace():
 
 
 @router.post("/api/plugins/install", dependencies=[Depends(verify_api_key)])
-async def install_plugin(req: PluginInstallRequest):
+async def install_plugin(req: PluginInstallRequest, request: Request):
+    # Authority: installing a plugin activates third-party code that runs
+    # in-process, so it is an executable-config mutation. It passes the same
+    # policy gate as file writes; READ_ONLY sessions cannot install one. The
+    # desktop client keeps working because the policy allows this action in
+    # full / auto_edit / ask_all and denies only in read_only.
+    require_tool_allowed(request, "plugins.install", {"path": req.path},
+                         str(WORKSPACE_ROOT))
     registry = _get_plugin_registry()
     raw_path = Path(req.path).expanduser()
 
@@ -105,7 +112,12 @@ async def install_plugin(req: PluginInstallRequest):
 
 
 @router.post("/api/plugins/{name}/toggle", dependencies=[Depends(verify_api_key)])
-async def toggle_plugin(name: str, req: PluginToggleRequest):
+async def toggle_plugin(name: str, req: PluginToggleRequest, request: Request):
+    # Enabling a plugin turns its code on in-process — the same authority
+    # class as installing one, and the obvious bypass if install were gated
+    # alone.
+    require_tool_allowed(request, "plugins.toggle", {"name": name},
+                         str(WORKSPACE_ROOT))
     registry = _get_plugin_registry()
     if not registry.get(name):
         raise HTTPException(status_code=404, detail=f"Plugin '{name}' not installed")
@@ -117,7 +129,12 @@ async def toggle_plugin(name: str, req: PluginToggleRequest):
 
 
 @router.delete("/api/plugins/{name}", dependencies=[Depends(verify_api_key)])
-async def delete_plugin(name: str):
+async def delete_plugin(name: str, request: Request):
+    # Symmetric with install_plugin: uninstalling removes executable config.
+    # Leaving this ungated would let a READ_ONLY session destroy what it
+    # cannot create — an asymmetry with no security benefit.
+    require_tool_allowed(request, "plugins.uninstall", {"name": name},
+                         str(WORKSPACE_ROOT))
     registry = _get_plugin_registry()
     if not registry.get(name):
         raise HTTPException(status_code=404, detail=f"Plugin '{name}' not installed")

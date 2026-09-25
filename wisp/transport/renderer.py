@@ -29,30 +29,14 @@ from wisp.terminal_width import (
 def result_is_error(result: Any) -> bool:
     """Authoritative tool-result failure check (Finding A + 13F.1 R2).
 
-    success icon <=> this returns False. Any dict/JSON status other than
-    "ok" counts as failure — covering "error" as well as the structured
-    denial statuses (POLICY_DENIED, USER_DENIED, APPROVAL_TIMEOUT,
-    CANCELLED). Parses JSON-string envelopes (not just raw-text
-    prefixes) so slow tools on the spinner path render failures
-    honestly. Markers cover the executor's legacy text errors and the
-    web tools' bracket tags.
+    success icon <=> this returns False. Delegates to the canonical outcome
+    classifier in `wisp.core.events` — the module that owns the status
+    taxonomy — so this and every other consumer answer the question the same
+    way. See `OutcomeClass` for the full taxonomy (a POLICY_DENIED result is
+    a failure that must not be retried; a transient ERROR may be).
     """
-    if isinstance(result, dict):
-        return result.get("status", "ok") != "ok"
-    if isinstance(result, str):
-        text = result.strip()
-        if text.startswith("{"):
-            try:
-                import json as _json
-                parsed = _json.loads(text)
-                if isinstance(parsed, dict):
-                    return parsed.get("status", "ok") != "ok"
-            except (ValueError, TypeError):
-                pass
-        return text.startswith(("Error", "[Error", "[WEB_FETCH_FAILED]",
-                                "[WEB_FETCH_BLOCKED]", "[Denied", "[Blocked",
-                                "[Cancelled", "ToolError:", "Unexpected error:"))
-    return False
+    from wisp.core.events import is_error_outcome
+    return is_error_outcome(result)
 
 
 def format_duration(duration_ms: float | None) -> str:

@@ -339,6 +339,54 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "env_var": "WISP_TASK_GRAPH",
     },
+    "recovery_ladder": {
+        "type": bool,
+        "default": False,
+        "description": (
+            "Migration POST-M13 rollback flag (ADR-0035): consult P6's "
+            "recovery ladder at the turn boundary and journal the rung it "
+            "chooses (RECOVERY), plus ESCALATION when the ladder is exhausted. "
+            "The name was reserved by ADR-0026's reversal condition. Defaults "
+            "OFF, so the production path is byte-for-byte unchanged until the "
+            "flag is explicitly enabled. This gates the RECOVERY track only — "
+            "it does not change completion semantics, which is why it is "
+            "separate from the completion-side flags."
+        ),
+        "env_var": "WISP_RECOVERY_LADDER",
+    },
+    "goal_state": {
+        "type": bool,
+        "default": False,
+        "description": (
+            "Migration POST-M13 (ADR-0035) completion-side flag: derive and "
+            "record the goal state (GOAL_MET / GOAL_UNVERIFIED / "
+            "GOAL_STAGNATED / GOAL_FAILED / ESCALATED_TO_HUMAN / CANCELLED) "
+            "as a journal-only GOAL_STATE record carrying its own inputs. "
+            "RECORDS only — nothing acts on the state, so turn completion is "
+            "unchanged. Defaults OFF for the same reason as `record_verdict` "
+            "and `task_graph`: it adds a record to the log of every existing "
+            "caller. This is ADR-0035 clause 9's 'recorded first, enforced "
+            "later' staging."
+        ),
+        "env_var": "WISP_GOAL_STATE",
+    },
+    "stagnation_gate": {
+        "type": bool,
+        "default": False,
+        "description": (
+            "Migration POST-M13 (ADR-0036) ENFORCEMENT flag: let M13's "
+            "stagnation predicate withhold `done` at the engine's pre-`done` "
+            "gate for a bounded number of replan interventions, then surrender "
+            "honestly. Enforcement only — with this OFF, M13 still observes and "
+            "the goal record still carries the predicate; only the intervention "
+            "stops. Defaults OFF, so the production path is unchanged until it "
+            "is explicitly enabled. Deliberately separate from "
+            "`graph_oscillation_guard`, which disables the detector itself: "
+            "recording and enforcing are different concerns (ADR-0002), so the "
+            "rollback has two levels."
+        ),
+        "env_var": "WISP_STAGNATION_GATE",
+    },
     "tool_pool_size": {
         "type": int,
         "default": 8,
@@ -633,6 +681,15 @@ class WispConfig:
     proposal_boundary: bool
     record_verdict: bool
     task_graph: bool
+    #: Migration POST-M13 (ADR-0035). Reserved by ADR-0026's reversal condition;
+    #: this is its first implementation. Gates the RECOVERY track only.
+    recovery_ladder: bool
+    #: Migration POST-M13 (ADR-0035) completion side. Records the derived goal
+    #: state; nothing acts on it. Defaults OFF like `record_verdict`.
+    goal_state: bool
+    #: Migration POST-M13 (ADR-0036). Enforcement only — M13 keeps observing
+    #: and recording when this is OFF; only the replan intervention stops.
+    stagnation_gate: bool
 
     # ── Modes & permissions ───────────────────────────────────────
     permission_mode: PermissionMode | str
@@ -914,6 +971,15 @@ class WispConfig:
         )
         object.__setattr__(self, "task_graph",
             _parse_bool(get_setting("task_graph", "false"), False)
+        )
+        object.__setattr__(self, "recovery_ladder",
+            _parse_bool(get_setting("recovery_ladder", "false"), False)
+        )
+        object.__setattr__(self, "goal_state",
+            _parse_bool(get_setting("goal_state", "false"), False)
+        )
+        object.__setattr__(self, "stagnation_gate",
+            _parse_bool(get_setting("stagnation_gate", "false"), False)
         )
 
     def load_context_files(self) -> str:

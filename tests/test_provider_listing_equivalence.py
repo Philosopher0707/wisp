@@ -128,3 +128,92 @@ def test_catalog_output_contract_is_a_list_of_strings(name, monkeypatch, isolate
     out = pc._list_models_impl(name, WispConfig())
     assert isinstance(out, list)
     assert all(isinstance(m, str) for m in out)
+
+
+# ── The semantic contract itself (Target A) ──────────────────────────
+# The authority is SEMANTIC, not transport. These tests pin the semantics so
+# that the transport divergence stays a documented boundary rather than an
+# unexamined duplicate.
+
+def test_the_contract_is_declared_where_the_authority_lives():
+    """An undeclared contract is an assumption. This one names its own
+    boundary and the three measured deltas."""
+    doc = pc.list_models.__doc__ or ""
+    assert "CANONICAL MODEL-LISTING CONTRACT" in doc
+    for delta in ("Auth", "Timeout", "Degradation"):
+        assert delta in doc, f"the contract no longer documents the {delta} delta"
+
+
+@pytest.mark.parametrize("name", ["mock", "ollama", "openai", "openrouter", "nvidia",
+                                  "no-such-provider"])
+def test_contract_yields_empty_when_the_fetch_fails(name, monkeypatch, isolated_wisp_env):
+    """The realistic offline case: the transport helper absorbs the failure
+    and returns []. This is what the route's degradation depends on.
+
+    Note the contract is NOT "swallows every exception" — a programming error
+    in a provider branch still propagates. What is guaranteed is that a
+    *network/auth* failure yields [], because `_authed_get` never raises.
+    """
+    monkeypatch.setattr(pc, "_authed_get", lambda *a, **k: [])
+    out = pc._list_models_impl(name, WispConfig())
+    assert isinstance(out, list)
+    # `mock` never fetches (hardcoded list) and `nvidia` has a static offline
+    # fallback, so only the genuinely-live providers must yield [].
+    if name not in ("mock", "nvidia"):
+        assert out == [], f"{name} should yield [] when the fetch fails"
+
+
+def test_the_transport_helper_is_the_failure_absorber():
+    """The guarantee above rests on this one property of `_authed_get`."""
+    import inspect
+    src = inspect.getsource(pc._authed_get)
+    assert "except Exception" in src, (
+        "_authed_get no longer absorbs failures; the [] contract is broken"
+    )
+    assert "return []" in src
+
+
+def test_empty_means_cannot_verify_not_no_models():
+    """The contract's most load-bearing sentence: [] is 'unknown'.
+
+    Callers must not read an empty listing as 'this model is invalid'. The
+    docstring states it; this pins that the statement survives.
+    """
+    doc = pc.list_models.__doc__ or ""
+    assert "cannot verify" in doc
+    assert "never" in doc
+
+
+def test_caching_is_part_of_the_contract(monkeypatch, isolated_wisp_env):
+    """Results are cached; force=True bypasses. Pinned because callers rely
+    on not re-hitting the network per keystroke in the REPL."""
+    calls = {"n": 0}
+
+    def _counting(*a, **k):
+        calls["n"] += 1
+        return ["m1"]
+
+    monkeypatch.setattr(pc, "_authed_get", _counting)
+    pc.clear_models_cache()
+    first = pc.list_models("openai", WispConfig())
+    second = pc.list_models("openai", WispConfig())
+    assert first == second
+    assert calls["n"] == 1, "the second call was not served from cache"
+    pc.list_models("openai", WispConfig(), force=True)
+    assert calls["n"] == 2, "force=True did not bypass the cache"
+
+
+def test_provider_specific_transport_is_confined_to_the_catalog():
+    """The distinct transport must live in ONE module.
+
+    If a second module starts doing provider HTTP for listings, the boundary
+    has leaked and the duplication is real again.
+    """
+    src = (REPO / "wisp/provider_catalog.py").read_text(encoding="utf-8")
+    assert "_authed_get" in src, "the catalog's transport helper disappeared"
+    # The catalog must not import a concrete provider (Phase 9 fixed this).
+    for concrete in ("providers.ollama", "providers.openai",
+                     "providers.nvidia", "providers.openrouter"):
+        assert f"from wisp.{concrete} import" not in src, (
+            f"the catalog imports {concrete} directly again"
+        )

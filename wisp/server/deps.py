@@ -388,12 +388,42 @@ def require_tool_allowed(request: Request, action_name: str, args: dict,
 
     REST has no human to approve, so approval-required verdicts deny —
     same as ApprovalGate with no handler. Call BEFORE any side effect.
+
+    Two checks, in order:
+
+    1. **Protected-path guard** — a non-read action whose target lies in a
+       directory Wisp itself executes from (`.wisp/hooks`) is refused. The
+       agent tool path has enforced this since M2, but REST did not: the
+       policy engine is mode-based and has no argument scan, so
+       `POST /api/files` could write a hook that the equivalent
+       `write_file` tool call was refused. The predicate is the canonical
+       `wisp.pathsec.is_protected_path`, so all three paths agree.
+    2. **Policy verdict** — the session's permission mode.
+
+    Order matters only for the message: the guard is unconditional, so it
+    denies even in `full` mode.
     """
+    from wisp.core.contracts import ToolRisk, risk_for_tool
     from wisp.infra.security import Action, Context
+    from wisp.pathsec import PATH_BEARING_ARGS, is_protected_path
+
+    args = dict(args or {})
+    if risk_for_tool(action_name) != ToolRisk.READ and any(
+        is_protected_path(str(value))
+        for key, value in args.items()
+        if key in PATH_BEARING_ARGS and value
+    ):
+        logger.warning("rest_tool_gate_protected_path action=%s args=%s",
+                       action_name, sorted(args))
+        raise HTTPException(
+            status_code=403,
+            detail="Blocked by the protected-path guard: refusing to mutate a "
+                   "directory Wisp executes from (.wisp/hooks)",
+        )
 
     policy = request_policy(request)
     decision = policy.check(
-        Action(name=action_name, args=dict(args or {})),
+        Action(name=action_name, args=args),
         Context(workspace=Path(workspace)),
     )
     logger.info("rest_tool_gate action=%s allowed=%s approval_required=%s reason=%s",

@@ -3,11 +3,66 @@
 ONE implementation of "prove this path is inside this root or reject",
 used by tools, graph artifacts, and workspace isolation. Dependency-light
 (stdlib only); raises ValueError — callers map to their own error types.
+
+Also owns the **protected-path** predicate (Phase 10): ONE implementation of
+"is this target inside a directory that non-read operations must not touch",
+used by the agent authorization layer (`auth/decision`), the filesystem tools
+(`tools/filesystem`, `tools/checkpoints`), and the REST policy gate
+(`server/deps`). See `is_protected_path`.
 """
 
 from __future__ import annotations
 
 import os
+
+
+#: Path fragments whose contents are executed by Wisp itself. A hook script
+#: runs with the full process environment before later tool calls, so writing
+#: one is a privilege-escalation primitive — an agent that can write here can
+#: arrange arbitrary code execution without a further approval. Reads stay
+#: allowed; only mutation is refused.
+PROTECTED_PATH_FRAGMENTS: frozenset[str] = frozenset({
+    ".wisp/hooks",
+    ".wisp\\hooks",  # Windows
+})
+
+
+#: Tool/action argument keys that can name a filesystem target. Every
+#: authorization path scans all of them, so a rename *into* a protected
+#: directory is refused as surely as a write to it. Defined here, beside the
+#: predicate, so a new path-bearing argument is added in one place rather than
+#: silently escaping one of the guards.
+PATH_BEARING_ARGS: frozenset[str] = frozenset({
+    "path", "command", "new_path", "dest", "target",
+})
+
+
+def is_protected_path(candidate: str) -> bool:
+    """True when `candidate` names something inside a protected directory.
+
+    Boundary-aware, unlike a bare substring test: `.wisp/hooks/x.json` and
+    `.wisp/hooks` match, while `.wisp/hooksfoo/x.json` does **not** — the
+    fragment must be followed by a separator or end the path.
+
+    Accepts either a filesystem path or a shell command string, because the
+    authorization layers hold whichever the caller supplied. Separators are
+    normalised so a Windows-style path is caught on POSIX and vice versa.
+    Returns False for empty/None input rather than raising: callers treat
+    "cannot tell" as "not protected", and the containment primitive is what
+    rejects malformed paths.
+    """
+    if not candidate or not isinstance(candidate, str):
+        return False
+    norm = os.path.normpath(candidate).replace("\\", "/")
+    for fragment in PROTECTED_PATH_FRAGMENTS:
+        marker = fragment.replace("\\", "/")
+        idx = norm.find(marker)
+        if idx < 0:
+            continue
+        after = norm[idx + len(marker):]
+        if after == "" or after.startswith("/"):
+            return True
+    return False
 
 
 def resolve_contained(root: str, candidate: str, *, allow_absolute: bool = True) -> str:

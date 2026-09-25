@@ -1,9 +1,9 @@
 import React from 'react';
 import { useAppState } from '../../state/context.js';
-import { Shield, SlidersHorizontal, Pencil, FileText, ChevronDown } from '../../icons/index.js';
+import { Shield, SlidersHorizontal, Pencil, FileText, ChevronDown, type IconComponent } from '../../icons/index.js';
 import './PermissionSelector.css';
 
-const MODES: { mode: 'full' | 'ask_all' | 'auto_edit' | 'read_only'; label: string; icon: React.FC<{ size?: number }>; desc: string }[] = [
+const MODES: { mode: 'full' | 'ask_all' | 'auto_edit' | 'read_only'; label: string; icon: IconComponent; desc: string }[] = [
   { mode: 'full', label: 'Full Access', icon: Shield, desc: 'Auto-execute all tools' },
   { mode: 'ask_all', label: 'Ask All', icon: SlidersHorizontal, desc: 'Approve every tool call' },
   { mode: 'auto_edit', label: 'Auto Edit', icon: Pencil, desc: 'Auto edits, ask for bash/git' },

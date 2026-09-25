@@ -45,6 +45,16 @@ class SessionEventType(StrEnum):
     # resumed when an answer arrives.
     RECOVERY = "recovery"
     ESCALATION = "escalation"
+    # Migration M13 — the stagnation verdict. AUDIT-ONLY, like VERDICT: it
+    # reports what the progress signal concluded without becoming part of the
+    # transcript, and without acting on the conclusion.
+    STAGNATION = "stagnation"
+    # Migration POST-M13 (ADR-0035) — the derived goal state. AUDIT-ONLY, and
+    # deliberately NOT state-bearing: the goal state is a pure projection of
+    # durable inputs (`core/goal.py`), so losing this record costs a query
+    # convenience, not the authority — replay re-derives it. What makes it
+    # replayable is that it carries the INPUTS, not just the answer.
+    GOAL_STATE = "goal_state"
     COMPACTED = "compacted"
     ERROR = "error"
     DONE = "done"
@@ -63,8 +73,9 @@ class SessionEventType(StrEnum):
 #: carved it out. A `HumanIntervention` is not a description of a parked run; it
 #: **is** the parked run's state, and `resumable` reads it to decide whether to
 #: resume. The other audit kinds (`PROPOSAL`/`OUTCOME`, `VERDICT`,
-#: `TASK_GRAPH`/`NODE_TRANSITION`, `RECOVERY`) are records *about* a turn whose
-#: own behaviour is unaffected by their loss, so best-effort stands for them.
+#: `TASK_GRAPH`/`NODE_TRANSITION`, `RECOVERY`, `STAGNATION`, `GOAL_STATE`) are
+#: records *about* a turn whose own behaviour is unaffected by their loss, so
+#: best-effort stands for them.
 STATE_BEARING_EVENT_TYPES: frozenset[SessionEventType] = frozenset({
     SessionEventType.ESCALATION,
 })
@@ -75,7 +86,7 @@ STATE_BEARING_EVENT_TYPES: frozenset[SessionEventType] = frozenset({
 #: assert the blob genuinely lacks each one.
 JOURNAL_ONLY_RECORDS: tuple[str, ...] = (
     "proposals", "outcomes", "verdicts", "task_graph", "node_transitions",
-    "recovery", "escalation",
+    "recovery", "escalation", "stagnations", "goal_states",
 )
 
 
@@ -90,6 +101,8 @@ JOURNAL_ONLY_SHAPES: dict[str, type] = {
     "node_transitions": list,
     "recovery": list,
     "escalation": dict,
+    "stagnations": list,
+    "goal_states": list,
 }
 
 
@@ -226,6 +239,35 @@ class SessionEvent:
         return cls(SessionEventType.RECOVERY, seq, {"decision": decision})
 
     @classmethod
+    def stagnation_event(cls, seq: int, record: dict) -> SessionEvent:
+        """A recorded stagnation verdict (migration M13). Audit-only.
+
+        Reports what the progress signal concluded. Acting on the conclusion —
+        routing it to the recovery ladder — is deliberately not wired, so this
+        record never changes the turn it describes.
+        """
+        return cls(SessionEventType.STAGNATION, seq, {"stagnation": record})
+
+    @classmethod
+    def goal_state_event(cls, seq: int, record: dict) -> SessionEvent:
+        """The derived goal state, with the inputs it was derived from.
+
+        ADR-0035: the goal state is a **pure projection** of durable facts, so
+        this record carries both the conclusion and its inputs — terminal
+        outcome, acceptance verdict, stagnation verdict, `turn_succeeded`,
+        cancellation and escalation. That is what closes the two durability gaps
+        the ADR identified: the acceptance verdict is present whenever the goal
+        state is authoritative (without turning the diagnostic `VERDICT` record
+        on), and every evaluated turn has an explicit stagnation outcome, so a
+        missing stagnation record can no longer be ambiguous between "not
+        evaluated" and "evaluated and not stagnating".
+
+        Written once per turn that reaches a terminal outcome, and only then:
+        the goal state describes a turn that has an outcome.
+        """
+        return cls(SessionEventType.GOAL_STATE, seq, {"goal_state": record})
+
+    @classmethod
     def escalation_event(cls, seq: int, intervention: dict) -> SessionEvent:
         """A `HumanIntervention` (migration P6). Audit-only.
 
@@ -295,13 +337,23 @@ class Session:
     # The recovery ladder (migration P6). Audit-only.
     recovery: list[dict] = field(default_factory=list)
     escalation: dict = field(default_factory=dict)
+    # Recorded stagnation verdicts (migration M13). Audit-only — the detector
+    # observes and reports; acting on the verdict is a separate change.
+    stagnations: list[dict] = field(default_factory=list)
+    # Derived goal states (ADR-0035). Audit-only, and deliberately NOT
+    # state-bearing: the state is a pure projection of durable inputs
+    # (`core/goal.py`), so losing the record costs a query convenience, not the
+    # authority — replay re-derives it. The record carries its inputs, which is
+    # what makes that true.
+    goal_states: list[dict] = field(default_factory=list)
 
     def journal_records(self) -> dict:
         """The records the journal carries and the blob does not (ADR-0028).
 
-        One accessor rather than seven, because both reconstruction paths need
-        the same set and a caller should not have to know which of them a given
-        source happens to supply. The keys are `JOURNAL_ONLY_RECORDS`.
+        One accessor rather than one per record, because both reconstruction
+        paths need the same set and a caller should not have to know which of
+        them a given source happens to supply. The keys are
+        `JOURNAL_ONLY_RECORDS`.
 
         Values are copies: a caller that mutates the result must not be able to
         reach back into the session's state.
@@ -314,6 +366,8 @@ class Session:
             "node_transitions": list(self.node_transitions),
             "recovery": list(self.recovery),
             "escalation": dict(self.escalation),
+            "stagnations": list(self.stagnations),
+            "goal_states": list(self.goal_states),
         }
 
     @property
@@ -508,6 +562,27 @@ class Session:
                 # Audit-only. Overwrites: a session has one live escalation,
                 # and the full history travels inside it.
                 self.escalation = dict(event.payload.get("intervention") or {})
+
+            case SessionEventType.STAGNATION:
+                # Audit-only (migration M13). Appended, not overwritten: a
+                # session may stagnate in several turns, and each verdict's
+                # evidence is its own record.
+                self.stagnations.append({
+                    "sequence_num": event.sequence_num,
+                    "timestamp": event.timestamp,
+                    **dict(event.payload.get("stagnation") or {}),
+                })
+
+            case SessionEventType.GOAL_STATE:
+                # Audit-only (ADR-0035). Appended, not overwritten: the goal
+                # state is per turn, so a session accumulates one per turn and
+                # the FIRST record for a turn is the frozen one. Overwriting
+                # would let a duplicate event rewrite history.
+                self.goal_states.append({
+                    "sequence_num": event.sequence_num,
+                    "timestamp": event.timestamp,
+                    **dict(event.payload.get("goal_state") or {}),
+                })
 
             case SessionEventType.COMPACTED:                self.compaction_history.append({
                     "before_count": event.payload["before_count"],

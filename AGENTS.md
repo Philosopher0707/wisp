@@ -40,9 +40,10 @@ Guidance for AI coding agents working in the Wisp codebase.
 | `wisp/tools/primitives.py` | Thin harness surface | `exec_sandbox` / `fs_mutate` / `git_checkpoint` (pydantic args, delegate to bash/filesystem/checkpoints); `PRIMITIVE_SCHEMAS`; core opts in via `thin_tools` config (schemas + prompt menu + dispatcher) |
 | `wisp/core/verification.py` | Completion gate | `VerificationFloorGuard`: blocks finish until exit-0 postdates last mutation or grind floor (`min_turns` + nudges) exhausts; `HARNESS_REJECTION` text; `resolved()` triggers auto-capture. **Also projects itself onto the acceptance model** via `floor_guard_criteria/evidence/verdict()` — read-only; the guard's own behaviour is unchanged |
 | `wisp/core/acceptance.py` | Acceptance verdicts (P3, stage 3a) | `Verdict` (`PASS`/`FAIL`/`INCONCLUSIVE`), `CriterionKind`, `AcceptanceCriteria`, `Evidence` (content-addressed, with `producer` + `observations`), `CompletionVerdict`, `evaluate()`, `invalidate()`, `route_for()`. **Records; does not gate** — routing is *derived* from the verdict so the graph vocabulary stays an output, not a competitor |
+| `wisp/core/goal.py` | Goal-state arbiter (**ADR-0035**, POST-M13) | `TerminalOutcome` (3), `GoalState` (6), `PRECEDENCE` (ADR-0035's ordered table **as data**, so the contract can be compared against the code without reverse-engineering branches), `derive_goal_state()` — **pure and total** (the final `return` is reachable, so no input combination raises or falls through), `already_recorded_from()`, `goal_state_from_record()` (fails **loud** on absence: "missing" and "unreadable" are different facts). **`GOAL_MET` is reachable only through row 6**, which requires `turn_succeeded` **and** an acceptance `PASS` — so a terminal `done` alone can never become goal success, and an absent verdict yields `GOAL_UNVERIFIED` rather than an optimistic pass. Completion lives here; recovery lives in `core/recovery.py`, and **completion is evaluated first** |
 | `wisp/auth/principal.py` | Principals (P9) | `local_principal()`, `derive_subagent()` (narrows; raises on widening), and **`child_principal(parent, contract)`** — the caller-shaped wrapper that reads the contract's declared tools. `["all"]` against a **bounded** parent inherits that set; against an **unbounded** parent it is **refused** (there is no universe to subset, and both guesses are wrong). `ToolExecutor(principal=…)` authorizes as it; **the spawn site does not pass one yet** (M15) |
 | `wisp/core/context_trust.py` | Context trust boundary (P8) | `TrustTag` (SYSTEM/OPERATOR/REPOSITORY/TOOL_OUTPUT/EXTERNAL), `Influence`, `may_influence()` (**the single authority** for T3), `ContextItem` (tag + **required** `Provenance`), `assemble()` → `Context` with a **structured** `dropped` list. T1–T4 enforced structurally; untrusted content is always fenced as `<<UNTRUSTED:TAG source=…>>`. **Defaults to tagging-only**; nothing on the live path produces tagged items yet (M14) |
-| `wisp/core/stagnation.py` | Stagnation detection (P7) | `ProgressSignal` (criteria satisfied / failing set / artifact hashes / completed nodes — the four inputs that already existed and were unconnected), `StagnationDetector` (**reuses** `core/graph/loop.py::OscillationTrap` — AST-pinned that it does not define its own), `route_to_recovery()`, `may_report_goal_met()`. Reads `config.graph_oscillation_guard`, which was **never read before P7**. **The turn loop does not construct one yet** (M13) |
+| `wisp/core/stagnation.py` | Stagnation detection (P7, wired by M13) | `ProgressSignal` (criteria satisfied / failing set / artifact hashes / completed nodes / **action identities**), `StagnationDetector` (**reuses** `core/graph/loop.py::OscillationTrap` — AST-pinned that it does not define its own), `route_to_recovery()`, `may_report_goal_met()`. Reads `config.graph_oscillation_guard`, which was **never read before P7**. **M13 constructs one per turn on the live path** and journals a `STAGNATION` record when the verdict is reached — it **records; it does not act** (ADR-0034). An empty observation is not evidence of stagnation (F32) |
 | `wisp/core/recovery.py` | Recovery ladder (P6) | `FailureClass` (closed, 10), `RecoveryRung` (7), `LEGAL_RUNGS` / total `FORBIDDEN_RUNGS`, `classify_failure()` (delegates to `classify_result`), `BudgetGovernor`, `RecoveryLadder`, `HumanIntervention` (durable, resumable), `plan_rollback()` — the first caller of `runs/compensation.py`'s declarations. **Denials never retry, by class** (ADR-0024). **The turn loop does not consult it yet** (M12) |
 | `wisp/core/task_graph.py` | Materialized task graph (P4) + runtime mutation (P5) | `TaskNode` / `TaskGraph` (with **stored** `ready`), `TaskNodeState` (14 states — a **superset** of `NodeStatus`), `NodeTransition`, `LEGAL_NODE_TRANSITIONS`, `build_turn_graph()`, `materialize()`, `apply_transition()`, `replay_transitions()`, `divergences()`. P5 adds `create_node()` / `expand()` / `invalidate()` (transitive cascade) / `supersede()` + an enforced `GraphGrowthBudget`. **Every mutation is a pure function** — a mutated-in-place graph cannot be replayed. Journals through `UnifiedStore`, so the graph is a **projection of the log** (ADRs 0019–0023) |
 | `wisp/core/action_key.py` | Durable idempotency (P1) | `action_key(tool, args)` — sha256 over canonical sorted JSON; JSON-string and dict args hash alike, unserializable args degrade to `repr` rather than raising. Stamped on `TOOL_CALL` (intent) and its `TOOL_RESULT` (resolution) so "dispatched but never resolved" is queryable via `Session.unresolved_actions()` |
@@ -63,9 +64,11 @@ Guidance for AI coding agents working in the Wisp codebase.
 
 ## Durable-record flags
 
-The durable record (run registry, span sink, session journal, proposal boundary) is gated by five
-independent flags. Each is read with `getattr(config, name, True)` — the `thin_tools` convention — so
-`SimpleNamespace` test doubles keep working, and each is independently rollable.
+The durable record (run registry, span sink, session journal, proposal boundary) is gated by independent
+flags — one per concern (ADR-0002), so each is independently rollable. Each is read with
+`getattr(config, name, True)` — the `thin_tools` convention — so `SimpleNamespace` test doubles keep
+working. **The table below is the list; do not quote its size in prose**, because a count in a sentence
+goes stale on the next flag while the table does not.
 
 | Flag | Env var | Gates |
 |---|---|---|
@@ -76,6 +79,9 @@ independent flags. Each is read with `getattr(config, name, True)` — the `thin
 | `proposal_boundary` | `WISP_PROPOSAL_BOUNDARY` | `PROPOSAL` / `OUTCOME` records |
 | `record_verdict` | `WISP_RECORD_VERDICT` | acceptance verdict (`VERDICT` event). **Defaults `false`** — unlike the others it adds a record to every existing caller's log |
 | `task_graph` | `WISP_TASK_GRAPH` | materialized task graph (`TASK_GRAPH` + `NODE_TRANSITION` events). **Defaults `false`** — the message list remains authoritative |
+| `recovery_ladder` | `WISP_RECOVERY_LADDER` | the recovery consumer at the turn boundary (`RECOVERY`, plus `ESCALATION` when exhausted). **Defaults `false`** |
+| `goal_state` | `WISP_GOAL_STATE` | the derived goal state (`GOAL_STATE` record). **Defaults `false`** — records only; nothing acts on it |
+| `stagnation_gate` | `WISP_STAGNATION_GATE` | **enforcement**: lets M13 withhold `done` for a bounded replan. **Defaults `false`** — observation and recording are unaffected, so it is a *separate* concern from `graph_oscillation_guard`, which disables the detector itself |
 
 Three rules that are easy to get wrong:
 
@@ -202,6 +208,23 @@ The identity is **not recomputed**: `_serialize_tool_exchanges` returns `(events
 from the blocks `_exchange_parts` minted. Id-less exchanges get a fresh `uuid4` there, so a second pass
 would name a work unit the transcript never recorded.
 
+### An empty observation is not evidence of stagnation
+
+`ProgressSignal` distinguishes *"we observed no progress"* from *"we observed nothing"* via `is_empty`.
+`observe()` refuses an empty observation — it is not appended, not counted flat, and not fed to the trap.
+This is not defensive tidiness: `from_verdict_and_graph` reads two **opt-in** records (`record_verdict`,
+`task_graph`) that both default off, so its signal is empty on every turn of a default configuration, and
+treating that as flat declared every multi-turn session stagnating (F32).
+
+The live path therefore builds its own signal with `with_work()` from state that is **always present**:
+the action identity (`action_key(tool, args)` — **not** `TaskNode.work_unit`, which is a per-call id that
+would make every repeat look like new work) and the outcome hash. A refused call emits no `tool_call`
+event, so its arguments are carried on the refusal by `_refusal_result_event`. ADR-0034.
+
+The detector **records; it does not act**: routing to the recovery ladder and gating completion on
+`may_report_goal_met()` are both deferred and pinned by tripwires in
+`tests/test_stagnation_live_wiring.py`.
+
 ### A state-bearing record is not best-effort
 
 `STATE_BEARING_EVENT_TYPES` (currently `{ESCALATION}`) names the records whose loss is a **correctness**
@@ -229,6 +252,34 @@ completion path consumes it: `turn_succeeded` still derives from terminal eviden
 `VerificationFloorGuard` still owns the completion invariant. Enabling the gate is **stage 3b**, a
 separate decision taken on a measured `INCONCLUSIVE` rate — the plan rates P3 the highest-risk phase in
 the migration precisely because it changes completion semantics. ADR-0016.
+
+### The completion gate is two gates, and only stagnation is bounded
+
+`stateless.py`'s pre-`done` gate consults two independent authorities, **in this order**:
+
+1. **`VerificationFloorGuard.rejection()`** — the verification floor. Unchanged, and consulted FIRST, so a
+   verification rejection keeps its exact behaviour and the turn is never double-nudged.
+2. **`completion_gate`** (ADR-0036) — a **read-only** predicate the runtime passes, closing over M13's
+   per-turn `StagnationDetector`. When it returns `False`, the engine appends a replan nudge and loops
+   again — for at most `_MAX_STAGNATION_INTERVENTIONS` (2) times, and never on the last iteration.
+
+**The engine never receives the detector** — only the predicate; `observe()` mutates, so handing the object
+over would give a second party write access to the one stagnation authority. The engine imports exactly one
+name from `stagnation.py` (`compose_replan_nudge`), lazily, inside the withhold branch. AST ratchets in
+`tests/reliability/test_post_m13_completion_enforcement.py` pin all of that.
+
+**Bounded, so it is a delay and not a veto.** After the budget is spent the gate falls through to `done`, so
+`turn_succeeded` stays `True` and the goal state is `GOAL_STAGNATED` — ADR-0035 line 1478's coexistence,
+holding in the field. Withholding on the last iteration is forbidden because the loop would end, the budget
+wrap-up would run, and the honest surrender would become a fatal `CODE_ITERATION_BUDGET`.
+
+**It cannot change the goal state — the latch is monotonic (ADR-0037).** `trap_fired` is append-only, so
+once a repeat closes `may_report_goal_met()` it never reopens inside the detector's lifetime; the only exit
+is the turn boundary, where `run_turn` builds a fresh detector. Later genuine progress resets
+`consecutive_flat` and still does not reopen it, so the interventions cannot convert a `GOAL_STAGNATED` into
+a `GOAL_MET`. `min_consecutive` gates the **verdict** only, not the predicate — whose effective threshold is
+**1**. Read ADR-0037 and `PHASE_POST_M13_COMPLETION_ENFORCEMENT_IMPLEMENTATION.md` §15.1 before relying on
+enforcement.
 
 ## Common patterns
 
@@ -283,7 +334,9 @@ python3 -m pytest tests/test_contracts_*.py tests/test_auth_*.py tests/test_runs
   tests/test_policy_*.py tests/test_trace_*.py tests/test_eval_*.py \
   tests/test_task_*.py tests/test_release_*.py tests/test_no_bypass.py -q
 
-# Durable record + proposal boundary + verdicts + task graph (migration P0-P9 + M2/M3/M4/M16/M9/M15/M14/M12/M11)
+# Durable record + proposal boundary + verdicts + task graph
+# (migration P0-P9 + M2/M3/M4/M16/M9/M15/M14/M12/M11/M13 + POST-M13 + ADR-0035/0036/0037)
+# 849 tests — 848 pass, 1 fails (F38: a test that encoded the pre-F8 exchange ordering).
 python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_incremental.py \
   tests/test_action_idempotency_key.py tests/test_proposal_boundary_records.py \
   tests/test_proposal_boundary_no_bypass.py tests/test_verdict_layer_recorded.py \
@@ -294,8 +347,37 @@ python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_
   tests/test_session_reconstruction.py tests/test_durability_preconditions.py \
   tests/test_escalation_durability.py tests/test_execution_view_projection.py \
   tests/test_child_principal_wired.py tests/test_prompt_section_trust.py \
-  tests/test_failure_signal_classification.py tests/test_node_identity.py -q
+  tests/test_failure_signal_classification.py tests/test_node_identity.py \
+  tests/test_stagnation_live_wiring.py tests/reliability/test_killpoints.py \
+  tests/reliability/test_post_m13_authority_implementation.py \
+  tests/reliability/test_post_m13_completion_enforcement.py \
+  tests/reliability/test_post_m13_stagnation_gate_validation.py \
+  tests/reliability/test_f8_tool_execution_restored.py \
+  tests/reliability/test_verification_evidence_adapter.py -q
 ```
+
+### The environment will fight you
+
+Always `env -u PYTHONPATH` — the WorkBuddy `sitecustomize.py` shim blocks pytest's temp `mkdir` and
+produces **false** failures.
+
+**Installing a declared dependency.** `uv` is **not on `PATH`** (it lives at `~/.local/bin/uv`), and
+`~/.cache/uv` already holds unpacked wheels — so prefer offline:
+
+```bash
+env -u PYTHONPATH UV_OFFLINE=1 ~/.local/bin/uv pip install \
+    --python .venv/bin/python --offline '<pkg>==<locked-version>'
+```
+
+Dry-run with `--dry-run` first and check every resolved version against `uv.lock`. This edits neither
+`uv.lock` nor `pyproject.toml`. Two traps: the interpreter has **no CA path**
+(`ssl.get_default_verify_paths()` → `cafile: None`), so `pip`/`urllib` fail TLS even though the machine has
+egress — `SSL_CERT_FILE=<certifi>/cacert.pem` fixes it; and **`.venv/bin/pip` has a broken pre-move
+shebang**, so use `python -m pip` or `uv`.
+
+**The full suite cannot run in one process here** (F36 — the kernel kills it). Chunk it, union the results,
+and say the method was weaker than a two-run intersection. `baseline-failures-stable.txt` is **stale**: it
+was measured with `jsonschema` absent, so it conflated that outage with everything else.
 
 ### Reachability is mandatory for new durable code
 

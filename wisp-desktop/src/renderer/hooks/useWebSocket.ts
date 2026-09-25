@@ -5,6 +5,13 @@ interface ServerMessage {
   type: string;
   phase?: 'thinking' | 'content';
   text?: string;
+  /**
+   * `plan_ready` carries the plan text here. The server sends it
+   * (`tests/test_server_run_error_handling.py` asserts the shape) and the VS Code
+   * client reads it (`vscode-extension/src/wispClient.ts`), but this local
+   * interface had drifted and omitted it.
+   */
+  content?: string;
   name?: string;
   arguments?: Record<string, unknown>;
   result?: string;

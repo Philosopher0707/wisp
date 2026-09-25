@@ -149,7 +149,7 @@ class TestDenialNeverRetries:
         ladder = RecoveryLadder()
         decision = ladder.decide(FailureClass.SECURITY, ["policy denied"])
         assert decision.rung is RecoveryRung.HUMAN
-        assert ladder.terminal_outcome == "ESCALATED_TO_HUMAN"
+        assert ladder.ladder_state == "ESCALATED_TO_HUMAN"
 
     def test_the_ladder_never_offers_retry_for_a_denial(self):
         assert RecoveryRung.RETRY not in RecoveryLadder().legal_rungs(
@@ -182,7 +182,7 @@ class TestEscalationIsTerminal:
         ladder = RecoveryLadder()
         for _ in range(20):
             ladder.decide(FailureClass.ENVIRONMENT, ["diagnostic inconclusive"])
-        assert ladder.terminal_outcome == "ESCALATED_TO_HUMAN"
+        assert ladder.ladder_state == "ESCALATED_TO_HUMAN"
 
     def test_exhaustion_does_not_raise_or_hang(self):
         """R3: terminal honesty. The caller gets a state it can act on."""
@@ -192,7 +192,7 @@ class TestEscalationIsTerminal:
         assert d.rung is RecoveryRung.HUMAN
 
     def test_in_progress_is_not_reported_as_escalated(self):
-        assert RecoveryLadder().terminal_outcome == "IN_PROGRESS"
+        assert RecoveryLadder().ladder_state == "IN_PROGRESS"
 
     def test_escalation_creates_a_human_intervention(self):
         ladder = RecoveryLadder()
@@ -268,7 +268,7 @@ class TestDurableRollbackSurvivesCrash:
         d = ladder.decide(FailureClass.IMPLEMENTATION, ["e"],
                           tool_name="git_push")                  # ROLLBACK -> unsafe
         assert d.rung is RecoveryRung.HUMAN
-        assert ladder.terminal_outcome == "ESCALATED_TO_HUMAN"
+        assert ladder.ladder_state == "ESCALATED_TO_HUMAN"
 
     def test_the_refusal_cites_the_reversibility_verdict(self):
         ladder = RecoveryLadder()
@@ -406,7 +406,7 @@ class TestLadderBudgetEnforced:
             local_replans=0, global_replans=0, diagnostic_tasks=0)))
         d = ladder.decide(FailureClass.DEPENDENCY, ["e"])
         assert d.rung is RecoveryRung.HUMAN
-        assert ladder.terminal_outcome == "ESCALATED_TO_HUMAN"
+        assert ladder.ladder_state == "ESCALATED_TO_HUMAN"
 
     def test_the_snapshot_reports_everything_from_one_place(self):
         """The audit found five unordered termination modes and no object that

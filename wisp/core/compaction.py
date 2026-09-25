@@ -13,6 +13,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from wisp.core.events import canonical_event
 from wisp.infra.token_counter import TokenCounter
 
 logger = logging.getLogger(__name__)
@@ -143,10 +144,16 @@ Messages to compress:
                     messages=[{"role": "user", "content": user_prompt}],
                     tools=None,
                 ):
-                    if event.get("type") == "content":
-                        summary_parts.append(event.get("text", ""))
-                    elif event.get("type") == "error":
-                        raise RuntimeError(event.get("message", "Compaction failed"))
+                    # ADR-0039 R4: consume canonical events. A provider MAY
+                    # emit a typed dataclass (Ollama, MockProvider), so reading
+                    # the raw event with `.get()` raised AttributeError, which
+                    # the handler below turned into the "summary" — silently
+                    # degrading every compaction to truncation (F40-3).
+                    canonical = canonical_event(event)
+                    if canonical.get("type") == "content":
+                        summary_parts.append(canonical.get("text", ""))
+                    elif canonical.get("type") == "error":
+                        raise RuntimeError(canonical.get("message", "Compaction failed"))
             except Exception as e:
                 summary_parts.append(f"[ERROR: {e}]")
 

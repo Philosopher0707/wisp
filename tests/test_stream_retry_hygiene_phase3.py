@@ -75,7 +75,6 @@ def test_empty_stream_still_retries_with_positive_backoff():
             events = [e async for e in guarded_provider_stream(
                 lambda: next(it)(),
                 lambda e: e,
-                {"stream_stats", "done"},
                 first_token_deadline_s=5,
                 chunk_deadline_s=5,
                 max_attempts=3,
@@ -118,7 +117,6 @@ def test_jitter_uses_random_uniform():
             [e async for e in guarded_provider_stream(
                 _empty,
                 lambda e: e,
-                {"stream_stats", "done"},
                 first_token_deadline_s=5,
                 chunk_deadline_s=5,
                 max_attempts=2,

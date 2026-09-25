@@ -7,10 +7,10 @@ import json as _json
 import logging
 import re
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from wisp.server.deps import verify_api_key, RATE_LIMITER
+from wisp.server.deps import require_tool_allowed, verify_api_key, RATE_LIMITER
 from wisp.server.routes.workspace import WORKSPACE_ROOT
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,14 @@ async def hook_logs():
 
 
 @router.post("/api/hooks", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
-async def create_hook(req: HookCreateRequest):
+async def create_hook(req: HookCreateRequest, request: Request):
+    # Authority: a hook persists a command that is later executed as a shell
+    # hook with no further approval, so creating one is an executable-config
+    # mutation. It passes the same policy gate as file writes — READ_ONLY
+    # sessions cannot install one. The desktop client keeps working because
+    # the policy allows this action in full / auto_edit / ask_all.
+    require_tool_allowed(request, "hooks.create", {"name": req.name},
+                         str(WORKSPACE_ROOT))
     from wisp.infra.hook_types import HookConfig, HookEvent
 
     hooks_dir = WORKSPACE_ROOT / ".wisp" / "hooks"
@@ -115,7 +122,11 @@ async def create_hook(req: HookCreateRequest):
 
 
 @router.post("/api/hooks/{name}/test", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
-async def test_hook(name: str, request: dict):
+async def test_hook(name: str, request: dict, http_request: Request):
+    # Testing a hook EXECUTES its command — the same authority class as
+    # creating one. Gating only create_hook would leave this as a bypass.
+    require_tool_allowed(http_request, "hooks.test", {"name": name},
+                         str(WORKSPACE_ROOT))
     from wisp.infra.hook_types import HookManager, build_hook_context
 
     manager = HookManager(workspace=WORKSPACE_ROOT)

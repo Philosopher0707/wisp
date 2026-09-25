@@ -14,7 +14,7 @@ wisp "fix the off-by-one in totals.py and prove it with tests"
 
 Wisp reads your codebase, edits files, runs tests, and remembers context across sessions. One Python CLI drives interactive REPL, single-shot, headless CI, and server modes. It serves frontier cloud models (Claude 3.7 Sonnet, DeepSeek R1, GPT-4o via OpenRouter/OpenAI/NVIDIA) and local inference (Ollama, vLLM-compatible endpoints) through the same provider interface, with `wisp setup` handling selection, live validation, and sealed credential storage.
 
-Where Claude Code, Aider, and SWE-agent stop at the single-turn loop, Wisp adds the runtime around it: multi-agent orchestration with bounded concurrency, AST-grounded repository context, automatic per-turn mutation checkpoints with rewind, and Ed25519-signed governance policies with tamper-evident audit logs.
+Where Claude Code, Aider, and SWE-agent stop at the single-turn loop, Wisp adds the runtime around it: multi-agent orchestration with bounded concurrency, AST-grounded repository context, automatic per-turn mutation checkpoints with rewind, and Ed25519-signed governance policies with tamper-evident audit logs. (The policy bundle is validated and inspectable; it is **not yet applied at runtime** — see [Enterprise-Ready Governance](#enterprise-ready-governance).)
 
 ---
 
@@ -48,11 +48,17 @@ Deterministic, durable multi-agent execution in `wisp/graph/` — the graph owns
 - **Real dependencies** — edges require a stated reason (`B consumes A.output`); independent branches fan out with isolated contexts and merge by node id, never positionally.
 - **Control** — chain/fan/router/controlled-cycle topologies, six join policies, evidence-based verifier nodes + pure gate functions, human approval gates.
 - **Durable** — per-transition SQLite checkpoints in the workspace store; crash-safe resume reuses completed nodes and never repeats successes; graph hash pinned per run.
-- **Governed** — graph policy is narrow-only over the active policy; every tool call still passes `ToolExecutor.authorize()`.
+- **Governed** — a graph's own declared policy narrows what its nodes may use (`allowed_nodes` / `allowed_tools` / `allowed_models`; `"all"` is refused under a restrictive policy). Every tool call still passes `ToolExecutor.authorize()`. *(This is independent of the policy-bundle layer, which is not yet wired.)*
 
 ### Enterprise-Ready Governance
 
-- **Signed policy bundles** — Ed25519, narrow-only precedence, revocation + expiry; `wisp policy inspect/verify/explain/dry-run`.
+> ⚠️ **The policy-bundle layer is not yet wired to the runtime.** Bundles are
+> signed, verified, merged, and inspectable — but no entry point loads one, so
+> `wisp policy dry-run` reports what *the bundle* says, not what the agent is
+> permitted to do. Tracked as finding **E** in
+> `PHASE_10_M4_GOVERNANCE_UNWIRED.md`. Everything else in this section is live.
+
+- **Signed policy bundles** — Ed25519, narrow-only precedence, revocation + expiry; `wisp policy inspect/verify/explain/dry-run`. **Not applied to tool calls today** (see the note above).
 - **Layered authority** — every effect passes `ToolExecutor` + `authorize()` (capabilities → workspace → risk → args → sensitivity → approval). Denials name the controlling layer.
 - **Evidence** — hash-chained audit log (`wisp audit verify`), redacted span store, dry-run-only replay, tier-gated OTLP.
 - **Durable runs & tasks** — SQLite run store with crash recovery and idempotent resume; `wisp task ...` lifecycle with plan-review-apply.

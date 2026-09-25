@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { useAppState } from '../state/context.js';
-import { Grid3x3, Bot, Shield, Folder, ExternalLink } from '../icons/index.js';
+import { Grid3x3, Bot, Shield, Folder, ExternalLink, type IconComponent } from '../icons/index.js';
 import './PluginsPanel.css';
 
 interface PluginItem {
-  icon: React.FC<{ size?: number }>;
+  icon: IconComponent;
   name: string;
   description: string;
 }

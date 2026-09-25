@@ -47,7 +47,7 @@ export const CheckpointPanel: React.FC = () => {
       setDiffContent('Failed to load diff.');
     }
     setDiffLoading(false);
-  }, [base, params]);
+  }, [base, state.apiKey]);
 
   const handleDiff = (id: string) => {
     if (expandedDiff === id) {

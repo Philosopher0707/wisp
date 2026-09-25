@@ -576,10 +576,19 @@ class OpenAIProvider(Provider):
         if self.max_tokens and isinstance(self.max_tokens, int) and self.max_tokens > 0:
             # Cloud gateways (OpenRouter, NVIDIA) reject huge max_tokens with
             # 402 "can only afford N" — cap to a generous but credit-safe
-            # value. Local Ollama ignores this field anyway.
-            # OpenRouter's remaining-credit check is dynamic (e.g. 5403), so
-            # use a conservative 4096 for openrouter to stay under the
+            # value. OpenRouter's remaining-credit check is dynamic (e.g. 5403),
+            # so use a conservative 4096 for openrouter to stay under the
             # typical free-tier balance; nvidia can use 16384.
+            #
+            # This is an AFFORDABILITY policy, NOT a model-capacity one
+            # (ADR-0038 R9): it caps what the ACCOUNT can pay for, and says
+            # nothing about what the MODEL can emit. Do not fold it into the
+            # capacity boundary, and do not infer capacity from it.
+            #
+            # An earlier version of this comment claimed "Local Ollama ignores
+            # this field anyway." That is false: Ollama enforces its own
+            # per-model output limit and rejects an over-budget request with a
+            # 400 rather than ignoring the value (F39).
             max_tok = int(self.max_tokens)
             if self.api_base == "https://openrouter.ai/api/v1" and max_tok > 4096:
                 max_tok = 4096

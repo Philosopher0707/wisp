@@ -163,7 +163,7 @@ const CodeBlock: React.FC<{ code: string; lang: string }> = ({ code, lang }) => 
     try {
       const base = serverUrl.replace(/\/$/, '');
 
-      const qs = `${params ? '&' : '?'}path=${encodeURIComponent(diffPath)}`;
+      const qs = `?path=${encodeURIComponent(diffPath)}`;
       const resp = await fetch(`${base}/api/files${qs}`, {
         method: 'POST',
         headers: {

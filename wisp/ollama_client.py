@@ -12,6 +12,7 @@ import asyncio
 import contextvars
 import json
 import logging
+import re
 import threading
 import time
 from typing import Any, Optional, Iterator
@@ -45,6 +46,81 @@ _ollama_stream_response: contextvars.ContextVar[Optional[dict]] = contextvars.Co
 class OllamaError(Exception):
     """Raised when Ollama API calls fail after all retries."""
     pass
+
+
+# ── Configuration incompatibility (ADR-0038 R5/R6) ─────────────────────
+#
+# Ollama rejects a request whose requested output budget exceeds the model's
+# maximum output tokens. That is a CONFIGURATION incompatibility — permanent,
+# and not a transient provider failure — and the rejection names the limit.
+#
+# ADR-0038 permits SURFACING that limit in the diagnostic and forbids deriving
+# a capability from it. Nothing below caches the number, feeds it into a
+# request, records it as model metadata, or persists it; it is parsed only to
+# build the message, and the request is never retried, re-sent or modified.
+#
+# The pattern is anchored on the whole distinctive phrase rather than on a
+# bare keyword: "maximum output tokens (N)" preceded by "exceeds". A generic
+# HTTP 400 does not match, and neither does an unrelated mention of a token
+# count.
+_CAPACITY_REJECTION_RE = re.compile(
+    r"exceeds\s+model['\u2019]s\s+maximum\s+output\s+tokens\s*\((\d+)\)",
+    re.IGNORECASE,
+)
+
+
+class OllamaConfigurationError(OllamaError):
+    """The request Wisp sent is incompatible with the provider's configuration.
+
+    Permanent by construction: re-sending the identical request cannot succeed,
+    so this is deliberately NOT retried and NOT transient (ADR-0038 R5/R7).
+    It subclasses ``OllamaError``, so every existing handler keeps working; a
+    caller that needs to tell "fix the configuration" apart from "try again"
+    catches this type.
+    """
+
+    kind = "CONFIGURATION_INCOMPATIBILITY"
+
+
+def _response_text(response: Any) -> str:
+    """The response body, or ``""`` when it cannot be read.
+
+    Defensive by design: a **closed** streamed response has no body at all, and
+    a duck-typed test double may carry no ``.text``. Neither is an error worth
+    raising over — the caller only ever uses this to build a message.
+    """
+    try:
+        return response.text or ""
+    except Exception:
+        return ""
+
+
+def _configuration_incompatibility(body: Any, configured: Any) -> Optional[str]:
+    """Diagnostic when the provider rejected the output budget, else None.
+
+    Returns a message naming the configured budget and the provider-reported
+    limit, or ``None`` when this is not that specific rejection — every other
+    HTTP error keeps its existing classification and message.
+
+    *configured* being ``None`` returns ``None`` deliberately: with no budget
+    sent there is no budget to exceed, so a claim that the user's configuration
+    is at fault would be wrong.
+    """
+    if configured is None or not body:
+        return None
+    match = _CAPACITY_REJECTION_RE.search(body)
+    if match is None:
+        return None
+    limit = match.group(1)
+    return (
+        f"Ollama rejected the request: the configured max_tokens ({configured}) "
+        f"exceeds this model's maximum output tokens ({limit}). This is a "
+        f"CONFIGURATION INCOMPATIBILITY, not a transient provider failure: the "
+        f"request is not retried and was not modified. Lower `max_tokens` to at "
+        f"most {limit} for this model, or set it to null to let the provider "
+        f"choose the budget. The limit above is reported by the provider for "
+        f"this message only — Wisp does not record it or use it on later requests."
+    )
 
 
 
@@ -260,6 +336,15 @@ class OllamaClient:
                         logger.warning("Server error %d, retrying in %ds...", status, delay)
                         _async_sleep_if_in_loop(delay)
                         continue
+                # ADR-0038 R5/R6 — placed after every retry branch so the retry
+                # policy is untouched: a capacity rejection is a 400, which no
+                # branch above retries, so this can only ever be reached for an
+                # already-permanent status. This path is not streamed, so the
+                # response body is still readable here.
+                _config_err = _configuration_incompatibility(
+                    _response_text(getattr(e, "response", None)), self.max_tokens)
+                if _config_err is not None:
+                    raise OllamaConfigurationError(_config_err)
                 raise OllamaError(f"Ollama HTTP error: {e}")
             except BaseException as e:
                 # Unified transient check: covers TimeoutError, ConnectionResetError,
@@ -671,11 +756,19 @@ class OllamaClient:
 
         for attempt in range(max_retries):
             events_yielded = False
+            # The error body is captured while the response is still OPEN.
+            # `raise_for_status()` raises inside the `with`, so by the time the
+            # handler runs the response has been closed and `response.text` is
+            # empty — a streamed response's body is not buffered. ADR-0038 R6
+            # needs the provider's message, so it is read here.
+            error_body = ""
             try:
                 if logger.isEnabledFor(logging.DEBUG):
                     payload_dump = json.dumps(payload, default=str)
                     logger.debug("Ollama POST %s payload (attempt %d): %s", url, attempt + 1, payload_dump[:3000])
                 with self._session.post(url, json=payload, timeout=timeout, stream=True) as resp:
+                    if resp.status_code >= 400:
+                        error_body = _response_text(resp)
                     resp.raise_for_status()
                     try:
                         for event in parse_stream(resp):
@@ -686,18 +779,23 @@ class OllamaClient:
                         raise
                 return  # stream exhausted normally
             except requests.exceptions.HTTPError as e:
-                # Log response body on 4xx errors for easier debugging
+                # Log response body on 4xx errors for easier debugging.
+                # Reads the body captured above: a closed streamed response has
+                # none, so `e.response.text` here would always be empty.
                 if e.response is not None and 400 <= e.response.status_code < 500:
-                    try:
-                        body = e.response.text[:500]
-                        logger.error("Ollama %d response: %s", e.response.status_code, body)
-                    except Exception:
-                        pass
+                    if error_body:
+                        logger.error("Ollama %d response: %s",
+                                     e.response.status_code, error_body[:500])
                 if e.response.status_code >= 500 and attempt < max_retries - 1 and not events_yielded:
                     delay = base_delay * (2 ** attempt)
                     logger.warning("Server error %d, retrying in %ds...", e.response.status_code, delay)
                     _async_sleep_if_in_loop(delay)
                     continue
+                # ADR-0038 R5/R6 — after the 5xx retry branch, which a 400 cannot
+                # enter, so the retry policy stays exactly as it was.
+                _config_err = _configuration_incompatibility(error_body, self.max_tokens)
+                if _config_err is not None:
+                    raise OllamaConfigurationError(_config_err)
                 raise OllamaError(f"Ollama HTTP error: {e}")
             except requests.exceptions.ConnectionError as e:
                 if attempt < max_retries - 1 and not events_yielded:

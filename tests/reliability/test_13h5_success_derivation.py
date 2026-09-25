@@ -266,15 +266,37 @@ class TestTimeoutCancellation:
 # ── §12/§13. Exhaustion / malformed / empty-object ────────────────────
 
 class TestExhaustionMalformed:
-    def test_exhaustion_not_success(self, tmp_path):
+    def test_exhaustion_delivers_wrapup_and_flag_pinned_F44(self, tmp_path):
+        """UPDATED by ADR-0039 (PM-21) — the old assertion was F40-dependent.
+
+        This test used to assert `was_last_turn_complete("ex") is False` and a
+        "Max iterations reached" error. Both held ONLY because MockProvider
+        emits *typed* events: the wrap-up raised AttributeError on the first
+        one (F40-1), so the model's wrap-up text was discarded and the turn's
+        last persisted event was the spurious error.
+
+        MEASURED: with a dict-emitting provider the identical script yields
+        `was_last_turn_complete == True` and no error — and the dict path is
+        untouched by ADR-0039. So the old assertion was an artifact of the
+        provider representation, which is precisely what ADR-0039 removes.
+
+        The turn-level question it was reaching for — *should an exhausted turn
+        that DID deliver a wrap-up summary count as complete?* — is a
+        completion-authority question (ADR-0035), not a normalization one. It
+        is recorded as **F44** and deliberately NOT decided here.
+        """
         prov = MockProvider(responses=["", ""], tool_calls=[
             [_read_call("a.txt", "c0")], [_read_call("a.txt", "c1")]])
         runtime, repo, ws = _runtime(
             prov, tmp_path, ws_files={"a.txt": "a"}, max_iterations=2)
         evs = _run_turn(runtime, _session(ws, "ex"))
-        assert any("Max iterations reached" in e.get("message", "")
-                   for e in evs if e.get("type") == "error")
-        assert repo.was_last_turn_complete("ex") is False
+        # the wrap-up delivered the provider's text instead of a spurious error
+        assert "done" in _types(evs)
+        assert not any("Max iterations reached" in str(e.get("message", ""))
+                       for e in evs if e.get("type") == "error"), (
+            "the spurious budget error is still emitted for a typed provider")
+        # F44 pin: typed and dict providers now AGREE on the completion flag.
+        assert repo.was_last_turn_complete("ex") is True
 
     def test_malformed_not_success(self, tmp_path, monkeypatch):
         monkeypatch.setenv("WISP_STREAM_ATTEMPTS", "1")
@@ -283,14 +305,23 @@ class TestExhaustionMalformed:
         assert "done" not in _types(evs)
         assert repo.was_last_turn_complete("mf") is False
 
-    def test_natural_empty_success_preserved(self, tmp_path, monkeypatch):
-        # H2 bookkeeping behavior: bare "complete" marker alone still ends
-        # done(natural). H5 does not reclassify provider semantics.
+    def test_natural_empty_not_success(self, tmp_path, monkeypatch):
+        """REWRITTEN by ADR-0041 (PM-23).
+
+        The old body was `test_natural_empty_success_preserved`: *"H2
+        bookkeeping behavior: bare 'complete' marker alone still ends
+        done(natural). H5 does not reclassify provider semantics."* — i.e. it
+        preserved F43 deliberately, as a cross-phase compatibility pin.
+
+        ADR-0041 does reclassify it, because the classification was wrong: a
+        bare terminal marker is not a response. An empty stream is an empty
+        stream whichever provider emitted it, so it is not a success.
+        """
         monkeypatch.setenv("WISP_STREAM_ATTEMPTS", "1")
         runtime, repo, ws = _runtime(MockProvider(responses=[""]), tmp_path)
         evs = _run_turn(runtime, _session(ws, "ne"))
-        assert _types(evs) == ["done"]
-        assert repo.was_last_turn_complete("ne") is True
+        assert "done" not in _types(evs)
+        assert repo.was_last_turn_complete("ne") is False
 
 
 # ── §14/§15. Ordering + single terminality ────────────────────────────

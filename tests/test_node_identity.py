@@ -453,19 +453,22 @@ class TestTheDeferralTripwires:
             "execution, which is M11's original wording and not what shipped. "
             "If this is intended, it needs its own ADR and a report.")
 
-    def test_progress_signals_still_count_nodes_rather_than_name_them(self):
-        """**M13's precondition, and it is still open.**
+    def test_the_progress_signal_now_names_work_units(self):
+        """**M11's tripwire fired, and this is its inverse.**
 
-        The graph can now say *which* work units completed; `ProgressSignal`
-        still counts them (`completed_nodes` / `total_nodes`), so a stagnation
-        verdict cannot distinguish "three different nodes finished" from "the
-        same node reported three times". Pinned so the next phase starts from
-        the fact rather than rediscovering it.
+        It read: *"`ProgressSignal` still counts nodes rather than naming
+        them ... Pinned so the next phase starts from the fact rather than
+        rediscovering it."* M13 landed and the signal now names the work it
+        observed, so the tripwire did its job and is replaced by its inverse —
+        the P9/M15 pattern.
+
+        The count fields stay: the turn-end signal (`from_verdict_and_graph`)
+        still reads them, and M13 did not remove an existing input.
         """
         from wisp.core.stagnation import ProgressSignal
 
         names = {f.name for f in dataclasses.fields(ProgressSignal)}
-        assert {"completed_nodes", "total_nodes"} <= names
-        assert not {n for n in names if "work_unit" in n or "node_id" in n}, (
-            "ProgressSignal now names work units — M13 has started; update "
-            "WISP_MIGRATION_STATUS.md §M13 and PHASE_M11_REPORT.md")
+        assert {"completed_nodes", "total_nodes"} <= names, (
+            "the count-based fields were removed; M13's signal reads them")
+        assert "work_units" in names, (
+            "the progress signal does not name the work it observed")

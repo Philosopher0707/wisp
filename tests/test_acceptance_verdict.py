@@ -532,11 +532,26 @@ class TestStage3aDoesNotGate:
     def test_completion_rule_is_unchanged(self):
         """The plan's staging exists because P3 changes completion semantics.
         In 3a the verdict is RECORDED and nothing consumes it — so
-        `turn_succeeded` must still derive from terminal evidence alone."""
+        `turn_succeeded` must still derive from terminal evidence alone.
+
+        UPDATED by ADR-0044 (PM-24): the decision point now derives the flag
+        FROM the terminal outcome instead of re-implementing the predicate. The
+        intent is unchanged and now stronger — the expression this test used to
+        pin was a SECOND implementation of the rule that
+        `terminal_outcome_from_evidence` owns. The verdict still does not reach
+        the turn-level flag; it is consumed only by `derive_goal_state`.
+        """
         from pathlib import Path
         src = (Path(__file__).resolve().parents[1]
                / "wisp" / "core" / "runtime.py").read_text(encoding="utf-8")
-        assert "turn_succeeded = saw_done and not saw_fatal_error" in src
+        assert "turn_succeeded = _goal_outcome is TerminalOutcome.SUCCEEDED" in src
+        assert "turn_succeeded = saw_done and not saw_fatal_error" not in src, (
+            "the turn-success predicate was re-implemented (ADR-0044 R2)")
+        # the rule still consults ONLY terminal evidence
+        assert "_goal_outcome = terminal_outcome_from_evidence(" in src
+        assert "acceptance" not in src.split(
+            "_goal_outcome = terminal_outcome_from_evidence")[1].split(
+            "turn_succeeded = _goal_outcome")[0]
 
     def test_the_verdict_does_not_reach_the_transcript(self):
         """VERDICT is audit-only: it must not append a message."""

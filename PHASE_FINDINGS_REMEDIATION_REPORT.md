@@ -398,12 +398,31 @@ The broad sweep reported **27 failed, 5 errors, 1,997 passed**. Each failure was
 | **Provider contract** | `providers/protocol.py` | **STATIC** — ABC fails at instantiation |
 | **Graph representation** | `graph/types.py` | **RUNTIME** — `Graph.fingerprint()` pins security-relevant fields on resume |
 | **Model authority** | `ToolExecutor.execute → authorize()` | **RUNTIME** — single delegation point; READ-only fallback |
-| **Model listing** | **none** | **NOTHING.** Two implementations exist and no test compares them. *Answer: the remediation is incomplete here.* |
-| **Error classification** | **none** | **NOTHING.** Three predicates, no shared test. *Incomplete.* |
-| **REST policy boundary** | **none** | **NOTHING.** 35/41 routes ungated, no test asserts a gate class. *Incomplete.* |
-| **Core→presentation direction** | **none** | **NOTHING.** No import-direction test exists. *Incomplete.* |
+| **Model listing** | `provider_catalog.list_models` (semantic contract) | **TESTED** — contract-confinement + precondition tests that fire when the three deltas converge |
+| **Error classification** | `core/events.py` (`OutcomeClass`, `classify_result`) | **TESTED + STATIC** — AST scan forbids re-deriving outcome from `"ok"`/`"error"` outside the authority; single-definition pin |
+| **REST policy boundary** | `require_tool_allowed` at the route | **TESTED** — exact-set pin, host-execution ⇒ gated invariant, empty `UNRESOLVED_UNGATED`, plus functional deny-in-`read_only` / allow-in-`full` tests |
+| **Core→presentation direction** | no such dependency except one classified diagnostic edge | **TESTED + STATIC** — AST scan forbids module-level and type-only edges; every edge must be classified |
 
-**Four subsystems cannot yet answer the question.** That is the honest measure of what remains: the remediations closed the four concepts that had drifted into silent-failure territory, and the four that remain are visible, bounded, and now *named* rather than latent.
+> **UPDATED BY PHASE 10 — and this table was already stale when written.**
+> It was drafted before rounds 2–4, so it understated the state at `83b10af`:
+> `tests/test_tool_result_error_authority.py` (18 tests) and
+> `tests/test_layer_direction.py` (7 tests) were added in rounds 2 and 4, so
+> error classification and core→presentation were already partially enforced.
+> Phase 10 then closed all four areas — three by establishing the authority,
+> and REST policy by the user's decision to gate the executable-config routes
+> (`PHASE_10_AUTHORITY_CLOSURE_AUDIT.md` §3.3). See that document §11 for the
+> current answers to all four questions.
+>
+> **One claim in that decision's rationale was false.** Phase 10's first pass
+> held REST policy open because gating "breaks the shipped desktop client."
+> Measured against the real policy, those actions are allowed in `full`,
+> `auto_edit`, and `ask_all` and denied only in `read_only` — there was no
+> client-breaking cost. Corrected in the Phase 10 audit §3.3.
+
+**All four subsystems can now answer the question.** The four remediations in
+this report closed the concepts that had drifted into silent-failure territory;
+Phase 10 closed the four that remained open, and the REST boundary is the only
+one that needed a product decision rather than an implementation.
 
 ---
 

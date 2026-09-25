@@ -19,6 +19,7 @@ import time
 import uuid
 from typing import Any
 
+from wisp.core.events import canonical_event
 from wisp.graph.dsl import graph_from_dict
 from wisp.graph.types import Graph, GraphPolicy
 from wisp.graph.validator import validate_graph
@@ -117,9 +118,15 @@ def _parse_text_fallback(provider: Any, messages: list[dict]) -> Any:
             else:
                 text = out
         else:
-            chunks = list(provider.generate_stream_events(PLANNER_SYSTEM, messages))
-            text = "".join(c.get("text", c.get("content", ""))
-                           for c in chunks if isinstance(c, dict))
+            # ADR-0039 R4: canonicalize through the single authority instead
+            # of gating on `isinstance(c, dict)`. That gate silently DISCARDED
+            # every typed provider event, leaving empty planner text and an
+            # `INVALID_PLANNER_OUTPUT` that looked like a bad model (F40-4).
+            chunks = [
+                canonical_event(c)
+                for c in provider.generate_stream_events(PLANNER_SYSTEM, messages)
+            ]
+            text = "".join(c.get("text", c.get("content", "")) for c in chunks)
     except Exception as exc:
         raise PlanError("PLANNING_FAILED", f"provider error: {exc}") from exc
     if not isinstance(text, str) or len(text) > MAX_IR_BYTES:
