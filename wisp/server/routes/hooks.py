@@ -10,7 +10,12 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from wisp.server.deps import require_tool_allowed, verify_api_key, RATE_LIMITER
+from wisp.server.deps import (
+    RATE_LIMITER,
+    require_rest_approval,
+    require_tool_allowed,
+    verify_api_key,
+)
 from wisp.server.routes.workspace import WORKSPACE_ROOT
 
 logger = logging.getLogger(__name__)
@@ -77,10 +82,18 @@ async def create_hook(req: HookCreateRequest, request: Request):
     # Authority: a hook persists a command that is later executed as a shell
     # hook with no further approval, so creating one is an executable-config
     # mutation. It passes the same policy gate as file writes — READ_ONLY
-    # sessions cannot install one. The desktop client keeps working because
-    # the policy allows this action in full / auto_edit / ask_all.
+    # sessions cannot install one.
+    #
+    # ADR-0057: it ALSO asks a human over the WebSocket channel in
+    # `auto_edit`/`ask_all`, because a REST caller otherwise gets the agent's
+    # *no-approver* behaviour for an action that persists code. Flag-gated by
+    # `WISP_REST_APPROVAL` (default OFF); with no client connected the request
+    # is DENIED, so "the policy allows this action in auto_edit/ask_all" is no
+    # longer the whole story.
     require_tool_allowed(request, "hooks.create", {"name": req.name},
                          str(WORKSPACE_ROOT))
+    await require_rest_approval(request, "hooks.create", {"name": req.name},
+                                str(WORKSPACE_ROOT))
     from wisp.infra.hook_types import HookConfig, HookEvent
 
     hooks_dir = WORKSPACE_ROOT / ".wisp" / "hooks"

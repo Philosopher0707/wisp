@@ -22,6 +22,20 @@ MAX_WS_TEXT_SIZE = 256_000      # 256 KiB max for text/control messages
 MAX_WS_IMAGE_SIZE = 10_000_000  # 10 MB max for image uploads
 
 
+class _WsApprovalChannel:
+    """One WebSocket connection, as an approval channel for REST (ADR-0057).
+
+    The bridge owns correlation and timeouts; a channel only has to deliver a
+    frame. That is what lets the round-trip be tested without a real WebSocket.
+    """
+
+    def __init__(self, ws: Any) -> None:
+        self._ws = ws
+
+    async def send_approval_frame(self, frame: dict) -> None:
+        await self._ws.send_json(frame)
+
+
 async def _turn_task_body(
     transport: WebSocketTransport,
     ws: Any,
@@ -84,6 +98,15 @@ async def agent_websocket(websocket: WebSocket):
     else:
         transport = None
 
+    # ADR-0057: this connection is an approval channel, so a REST request for an
+    # executable-config action can ask a human. Registered only once auth has
+    # passed (below), so an unauthenticated socket never sees an action's name
+    # or arguments.
+    bridge = getattr(root, "approval_bridge", None) if root is not None else None
+    channel = _WsApprovalChannel(websocket) if bridge is not None else None
+    if channel is not None and not _auth.required:
+        bridge.register(channel)
+
     session_id = None
     model = None
     turn_task: asyncio.Task[None] | None = None
@@ -134,6 +157,8 @@ async def agent_websocket(websocket: WebSocket):
                 if _auth.required:
                     if auth_key == _auth.key:
                         _ws_authenticated = True
+                        if bridge is not None and channel is not None:
+                            bridge.register(channel)
                     else:
                         await websocket.send_json({"type": "error", "message": "Invalid API key"})
                         await websocket.close(code=4001)
@@ -202,6 +227,14 @@ async def agent_websocket(websocket: WebSocket):
                     approved = transport.resolve_decision(decision, approval_id=msg.get("id"))
                 else:
                     approved = bool(msg.get("approved", False))
+                    # ADR-0057: a REST-originated approval is resolved by the
+                    # bridge, which owns its own correlation map. Checked FIRST:
+                    # the transport has no entry for a `rest:` id, so falling
+                    # through would turn a real approval into a denial.
+                    if bridge is not None and call_id and bridge.resolve(call_id, approved):
+                        await websocket.send_json(
+                            {"type": "tool_approved", "id": call_id, "approved": approved})
+                        continue
                     if transport is not None:
                         resolved = transport.resolve_approval(approved, approval_id=msg.get("id"))
                         approved = approved and resolved
@@ -288,6 +321,8 @@ async def agent_websocket(websocket: WebSocket):
     except Exception as e:
         logger.error("WebSocket error for %s: %s", client_id, e)
     finally:
+        if bridge is not None and channel is not None:
+            bridge.unregister(channel)
         if turn_task is not None and not turn_task.done():
             turn_task.cancel()
             try:

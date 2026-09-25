@@ -407,6 +407,25 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "env_var": "WISP_TURN_CRITERIA_SOURCE",
     },
+    "rest_approval": {
+        "type": bool,
+        "default": False,
+        "description": (
+            "ADR-0057: route a REST request for an executable-config action "
+            "(`hooks.create`, `mcp.add_server`, `plugins.install`) through the "
+            "WebSocket channel for a human decision. ADR-0055 measured that the "
+            "agent has no operation for those three names and that REST and the "
+            "agent agree on every route today; what REST lacks is the ability to "
+            "ASK, so a REST caller got the agent's no-approver behaviour. With "
+            "this ON, those actions in `auto_edit`/`ask_all` send a "
+            "`tool_approval_request` frame to a connected client and wait, bounded "
+            "by `REST_APPROVAL_TIMEOUT_S`. With NO client connected the request is "
+            "DENIED — the brief's constraint is that it must not hang and must not "
+            "silently allow. `full` does not ask (it relaxes approval); `read_only` "
+            "denies outright. Defaults OFF, i.e. today's behaviour exactly."
+        ),
+        "env_var": "WISP_REST_APPROVAL",
+    },
     "acceptance_gate": {
         "type": bool,
         "default": False,
@@ -733,6 +752,10 @@ class WispConfig:
     #: ADR-0054. The acceptance gate: withhold `done` on an unsatisfied declared
     #: criterion. Dependent on `turn_criteria_source`; defaults OFF.
     acceptance_gate: bool
+    #: ADR-0057. Route REST requests for executable-config actions through the
+    #: WebSocket channel for a human decision. Defaults OFF: with it off the REST
+    #: gate is today's code exactly.
+    rest_approval: bool
 
     # ── Modes & permissions ───────────────────────────────────────
     permission_mode: PermissionMode | str
@@ -1029,6 +1052,9 @@ class WispConfig:
         )
         object.__setattr__(self, "acceptance_gate",
             _parse_bool(get_setting("acceptance_gate", "false"), False)
+        )
+        object.__setattr__(self, "rest_approval",
+            _parse_bool(get_setting("rest_approval", "false"), False)
         )
 
     def load_context_files(self) -> str:

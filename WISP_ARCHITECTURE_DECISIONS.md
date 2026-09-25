@@ -5665,6 +5665,183 @@ then R4's rejection is revisited: at that point `structured_declaration` becomes
 composition is no longer a choice between independent flags. That is the condition, and it is stated so
 the question is not re-derived from the follow-up text alone.
 
+## ADR-0057 — A REST request for an executable-config action asks a human over the WebSocket channel; no client means deny
+
+**Status:** ACCEPTED
+**Phase:** REST approval through the WebSocket channel (ADR-0055 §7's own decision)
+**Flag-gated by `rest_approval` / `WISP_REST_APPROVAL`, default OFF — with it off, every caller sees
+today's behaviour exactly.**
+**Evidence:** `wisp/server/approval_bridge.py`; `tests/reliability/test_rest_approval.py` (18 tests,
+**5/5 non-vacuity probes caught**, tree restored byte-identical); `PHASE_REST_APPROVAL.md`.
+
+### Context
+
+ADR-0055 §7 named this as its own decision:
+
+> *"Not whether REST should be able to register a hook with only an API key. … Option C … is the correct
+> fix for a **different** problem: REST cannot ask a human, so a REST caller gets the agent's
+> *no-approver* behaviour rather than its *approver* behaviour."*
+
+ADR-0055 §3 residual 3 measured the gap: driven with `approval_handler=None`, a `write_file` in
+`auto_edit` **runs** — the approval branch is entered, the handler is absent, `forced_approval` is
+`False`, and control falls through.
+
+The commissioning brief then stated, as a premise:
+
+> *"The WebSocket channel already implements bidirectional approval flow (`wisp/transport/websocket.py`,
+> wired through `wisp/server/routes/agents.py`). The REST routes just don't use it."*
+
+**Reading the channel before designing the round-trip — as the brief required — shows the premise is
+half true, and the half that is false decides the shape of this ADR.**
+
+### Problem — the channel is wired in one direction, not two
+
+`WebSocketTransport.approve()` (`websocket.py:159-163`) sends:
+
+```
+{"type": "approval_request", "approval_id": …, "tool_call": {…}}
+```
+
+Both shipped clients branch on **a different type and read different fields**:
+
+| client | branches on | reads |
+|---|---|---|
+| `wisp-desktop/src/renderer/hooks/useWebSocket.ts:103` | `tool_approval_request` | `call_id`, `name`, `arguments`, `reason` |
+| `wisp/tui/data/ws_client.py:127` | `tool_approval_request` | `call_id`, `name`, `arguments`, `reason` |
+
+**No client recognises the frame the server sends**, so the agent path's WebSocket approval prompt has
+never rendered. The **response** direction, by contrast, already works and is consistent across both
+clients (`ApprovalPrompt.tsx:31`, `useKeybindings.ts:117`, `ws_client.py:157`):
+
+```
+{"type": "tool_approval", "id": <call_id>, "approved": <bool>, "reason"?: …}
+```
+
+and `wisp/server/routes/agents.py:196-208` already resolves it, **already correlated on `id`**.
+
+So the channel is **half-wired**: the answer path works, the question path does not.
+
+**Two consequences decide this ADR.** First, *"wire REST into the existing channel"* cannot be done as
+stated — there is no working question path to wire into. Second, and more usefully, **the clients'
+vocabulary is already a de-facto contract**: adopting *it* needs **no client change**, whereas adopting
+the server's current frame would need one in both clients.
+
+### Decision
+
+> **R1 — the frame is the clients' vocabulary.** `tool_approval_request`, carrying `call_id`, `name`,
+> `arguments`, `reason`. Chosen because both shipped clients already read exactly that, so the client
+> change is **zero**. Rejected: the server's current `approval_request` / `{approval_id, tool_call}`,
+> which no client reads — measured, above.
+>
+> **R2 — the correlation key is `call_id`.** It is what the clients already echo back as `id`, and
+> `agents.py:196-208` already resolves on it. A response therefore reaches the request it belongs to
+> rather than whichever happened to be first.
+>
+> **R3 — the bridge owns its own correlation map.** `ApprovalBridge` does **not** touch
+> `WebSocketTransport`, its `_approvals` map, or `approve()`. That is what makes R10's non-violations
+> hold *by construction* rather than by care, and it is the smallest viable seam: the agent path cannot
+> be perturbed by a REST-only feature.
+>
+> **R4 — the trigger is per-route and per-mode, stated as a set.** `REST_APPROVAL_ACTIONS` =
+> `{hooks.create, mcp.add_server, plugins.install}` — the **executable-config** actions, which persist
+> something Wisp later *executes*. `REST_APPROVAL_MODES` = `{auto_edit, ask_all}`. **`full` does not
+> ask** (it relaxes approval, and always did); **`read_only` denies outright** and never reaches the
+> bridge. A file write does not ask.
+>
+> **R5 — the no-client case is DENY.** No connected client ⇒ `403`. Rejected alternatives, with reasons:
+> *holding* would hold an HTTP connection open on a condition that cannot change, which is the "must not
+> hang" the brief forbids; *falling through with a warning* would **silently allow** an executable-config
+> mutation, which the brief forbids outright. Deny is also what the channel's own `approve()` already
+> does with no client (`websocket.py:119-123`), so the two paths agree.
+>
+> **R6 — the timeout is bounded, named, and defaulted.** `REST_APPROVAL_TIMEOUT_S = 30.0`, shorter than
+> the channel's own 60 s because a REST request is holding an HTTP connection. ADR-0036's bounded delay
+> is the precedent: **the delay is bounded and the fallback is deny**, never "assume yes".
+>
+> **R7 — the gate order is policy first, then ask.** `require_rest_approval` is a separate **async**
+> companion to `require_tool_allowed`, called *after* it, so a mode that denies outright never prompts.
+> `require_tool_allowed` keeps its signature and its behaviour, and ADR-0055 §4's corrected docstring is
+> unchanged.
+>
+> **R8 — the client change is ZERO, and that is a claim the guard pins.** Because R1 adopts the
+> vocabulary the clients already read and R2 uses the correlation field they already send, **no client
+> change is authorised by this ADR**. The guard fails if either client stops reading that frame or the
+> desktop client stops sending that response — at which point this becomes a client change and a new
+> decision. *This is ADR-0055 §Why-not-B's precedent applied: a client change is real and is stated,
+> never made silently.*
+>
+> **R9 — G3 is DEFERRED, as its own ADR.** `POST /api/hooks` accepting an unvalidated `command` is a
+> question about **what a hook may run**; this ADR is about **who may register one**. They share a route
+> and not a decision: G3's answer would be a content restriction on `command`, and hooks exist precisely
+> to run arbitrary commands, so it needs its own evidence. ADR-0055 §7 already assigned it that way and
+> this ADR does not absorb it.
+>
+> **R10 — the four non-violations, asserted by tests, not merely stated.**
+>
+> * **R10.1** `ToolExecutor.execute`'s gate chain — `policy_hard_deny` → `authorize()` → the approval
+>   test — in that order. Asserted from the **AST** of `execute`.
+> * **R10.2** `authorize()` and `SecurityPolicy.check()` — signatures and decision fields.
+> * **R10.3** the turn path's approval model — `_get_write_tools` + `_needs_forced_approval`, the third
+>   model ADR-0055 §1.3 named, including that the three REST-only names are **still absent** from it.
+> * **R10.4** `turn_succeeded`, `VerificationFloorGuard`, and `goal.PRECEDENCE` — the precedence table
+>   by **content** (eight rows, indices 0–7, and its eight outcomes), the guard's `rejection` /
+>   `resolved` / `wrote_code`, and that `turn_succeeded` is still derived from
+>   `terminal_outcome_from_evidence`.
+>
+> **R11 — the flag is read once, at the gate.** `rest_approval` / `WISP_REST_APPROVAL`, default **OFF**.
+> OFF, `require_rest_approval` returns before doing anything, so **every existing caller sees today's
+> behaviour exactly** — asserted by a test. ADR-0002's one-flag-per-concern rule: this flag gates REST
+> approval and nothing else; it is not coupled to `stagnation_gate`, `turn_criteria_source`, or
+> `acceptance_gate`.
+
+### Consequences
+
+- **The gap ADR-0055 named is closed for the three routes**, behind a flag defaulting OFF.
+- **The corpus gains the measured shape of the channel**: half-wired, with the answer path working and
+  the question path not. That is a **finding**, and it means ADR-0055 §Context's *"the WebSocket
+  transport implements bidirectional approval flow (Issue 8)"* is **half false** — the answer direction
+  is bidirectional; the question direction never reached a client.
+- **The three routes' comments change**, because the behaviour they describe changes: *"the desktop
+  client keeps working because the policy allows this action in full / auto_edit / ask_all"* becomes
+  *"…and, with `WISP_REST_APPROVAL` on, it asks in `auto_edit`/`ask_all` and denies when no client is
+  connected."* Stated as a decision, not as docstring drift.
+- **A REST caller with no client connected is now denied those three actions when the flag is on.** That
+  is the intended cost of not silently allowing, and it is why the flag defaults OFF.
+- **Nothing is enabled by default.** No mode changes, no client change, no gate chain change.
+
+### Rejected alternatives
+
+| Alternative | Why rejected |
+|---|---|
+| **Reuse the server's current frame** (`approval_request` / `{approval_id, tool_call}`) | No client reads it (measured). Adopting it would make the REST round-trip need a client change in both clients — the opposite of R8 |
+| **Route the REST request through `WebSocketTransport.approve()`** | It resolves its connection from the turn's `ContextVar` / `_current_ws`, which a REST request does not have. Reaching in would couple the agent path to a REST-only feature and put R10.1's chain at risk for no gain |
+| **Hold the request until a client connects** | Holds an HTTP connection open on a condition that may never change — the "must not hang" the brief forbids |
+| **Fall through with a warning** | **Silently allows** an executable-config mutation. The brief forbids it outright |
+| **Change `SecurityPolicy`'s block sets so it reports `approval_required`** | ADR-0055 §1.3 measured that the three names have no `TOOL_RISK_TABLE` row; adding them to a mode block-set would change a model REST *and* `ApprovalGate` share, for a REST-only concern. R4's explicit set is narrower and readable |
+| **Absorb G3 (validate `command`)** | A content restriction, not an authorization decision; hooks exist to run arbitrary commands. Its own ADR (R9) |
+| **Reconcile the agent path's frame onto R1's vocabulary in the same step** | It would change a **live** path's behaviour (the agent's WS prompt would start rendering, where today it times out to deny). That is a real fix and a real change; this ADR names it as a residual and does not make it silently |
+
+### Residuals, named
+
+1. **The agent path's WebSocket approval prompt has never rendered.** `approve()` sends a frame no
+   client reads, so it always timed out (60 s) and denied. Reconciling it onto R1's vocabulary would
+   *fix* it — and would change a live path's behaviour, so it is its own ADR. Pinned by
+   `test_the_frame_is_the_one_both_clients_read`, which fails if either client changes.
+2. **`resolve_approval` still ignores the client's `id` when the transport resolves it** (the route
+   passes it; `WebSocketTransport.resolve_approval` falls back to "first pending" when the id does not
+   match). The bridge correlates correctly; the transport's path is weaker. Not changed here — it is
+   the agent path's resolver.
+3. **G3 remains open** (R9).
+4. **A multi-client deployment asks every registered channel** and takes the first response. Fine for
+   the shipped single-client desktop model; a per-client routing decision is its own ADR.
+
+### Reversal condition
+
+If the desktop client is changed to read a different frame, or stops sending `tool_approval`, then R8's
+"the client change is zero" is no longer true and the round-trip must be re-decided — the guard fails
+in exactly that case, which is the signal. If a future ADR reconciles the agent path's frame onto R1's
+vocabulary, residual 1 closes and this ADR's R1 becomes the single frame for both paths.
+
 ---
 
 ## Decision index
@@ -5727,3 +5904,4 @@ the question is not re-derived from the follow-up text alone.
 | 0054 | The acceptance gate consumes `verdict_keys_on_declared` at the engine's pre-`done` gate, bounded and defaulting OFF | Acceptance gate enablement | ACCEPTED (supplies the consumer ADR-0053 §10 recorded as missing: the engine asks a read-only callable — `DeclaredCriteriaGate` — at its pre-`done` gate, because a gate acting after `done` withholds nothing; the probe is taken there, cached, and reused at the verdict site; the withholding reuses ADR-0036's bounded replan model and **shares the turn's extension budget**; `WISP_ACCEPTANCE_GATE` defaults **OFF** and is **dependent** on `WISP_TURN_CRITERIA_SOURCE`; ADR-0051 R2–R6's contract is **NOT satisfied** — the population needs ≥ 2 capable models and the environment serves exactly **1** of 13, measured by a committed instrument; `turn_succeeded`, `VerificationFloorGuard` and `goal.PRECEDENCE` unchanged, asserted) |
 | 0055 | The REST gate is at parity with the agent path; the recorded divergence was between two *models*, not two *paths* | Authorization parity (G1) | ACCEPTED (drives the two production paths instead of the two models: **0 path divergences of 36**, **6 model divergences of 36** — the agent and `require_tool_allowed` reach the same outcome on every route in every mode when the agent runs under REST's condition, no approver. Chooses **Option A**: accept, and correct the record. Rejects **B** because it is not a parity fix — it would deny `hooks.create`/`mcp.add_server`/`plugins.install` in modes where the agent denies nothing (those three names are **not agent tools** and have **no `TOOL_RISK_TABLE` row**), i.e. REST stricter than the agent with no counterpart, and it would 403 the shipped client; rejects **C** for this decision as the fix for a *different* problem (REST cannot ask a human), deferred to its own ADR. Corrects `require_tool_allowed`'s docstring to state the control those routes actually have; keeps every ratchet property and **gains a real-path parity guard**; names four residuals (the approval authority is split three ways; three action names are in none of the three sets; REST cannot ask; five further gated routes are unmeasured). States the relationship to finding E without wiring L0. `authorize()`, `SecurityPolicy.check()` and `ToolExecutor.execute`'s gate chain unchanged, asserted by AST-parsed tests) |
 | 0056 | The two criteria flags are independent on the objective path; their interaction is derivation *order*, not flag coupling | Objective-path flag composition (ADR-0050 follow-up 1) | ACCEPTED (decides the last open ADR-0050 follow-up by driving the 2×2 flag matrix rather than reading it: `strict` **alone** withholds on the prose path (criteria 3→4), `use_declaration` **alone** collapses them to the declared set, and a valid declaration **pre-empts** `strict` — `undetermined` is empty either way, so `strict` is recorded and **inert**. Rejects **"dependent"** as measured-false (it would silently disable ADR-0048's fix for the measured false `GOAL_MET`); rejects **"composed"** (a declaration required) as a new policy no measurement supports, which would turn a silent-defect fix into a hard refusal for every objective written before ADR-0050 — and which is **not implemented** (`use_declaration=True` without a block is a no-op). Does not widen `explain_acceptance`'s parameters (ADR-0009): composition is a *policy* at the composition point, not a third parameter. Relates to ADR-0053 R8 — the *reason* does not transfer (one read site here, two parameters), the *decision* does. **No production change**: the measured behaviour already is the decision. Names one residual: `CriteriaDerivation.strict` records `True` when pre-empted) |
+| 0057 | A REST request for an executable-config action asks a human over the WebSocket channel; no client means deny | REST approval through the WebSocket channel (ADR-0055 §7) | ACCEPTED (reading the channel — as the brief required — shows its premise is **half false**: the **answer** direction works and is consistent across both clients, but the **question** direction does not, because `WebSocketTransport.approve()` sends `approval_request`/`{approval_id, tool_call}` and **both shipped clients branch on `tool_approval_request`** reading `call_id`/`name`/`arguments`/`reason`. So the agent path's WS approval prompt has never rendered (residual 1). The ADR adopts the **clients'** vocabulary — `tool_approval_request`, correlated on `call_id` — which makes the client change **zero** (R8, pinned by the guard); a new `ApprovalBridge` owns its own correlation map so it does **not** touch `WebSocketTransport`, `approve()`, or the agent path (R3). Trigger is an explicit per-route/per-mode set (R4): the three executable-config actions in `auto_edit`/`ask_all`; `full` does not ask, `read_only` denies outright. **No client connected ⇒ 403** (R5) — holding would hang and falling through would silently allow, both forbidden; timeout bounded at 30 s (R6). Gate order is policy-then-ask, via a new **async** companion so `require_tool_allowed` keeps its signature (R7). G3 **deferred** as its own ADR (R9). `rest_approval`/`WISP_REST_APPROVAL` default **OFF** (R11). The four non-violations asserted from the AST (R10). Names four residuals, including that reconciling the agent path's dead frame is a real fix this ADR does not make silently) |

@@ -449,6 +449,84 @@ def require_tool_allowed(request: Request, action_name: str, args: dict,
                    f"no approver is present over REST",
         )
 
+
+# ── REST approval through the WebSocket channel (ADR-0057) ───────────
+
+def configured_permission_mode(request: Request) -> str:
+    """The mode the REST gate is evaluating under — the same source as `request_policy`."""
+    try:
+        state = getattr(getattr(request, "app", None), "state", None)
+        mode = getattr(getattr(getattr(state, "root", None), "config", None),
+                       "permission_mode", None)
+        if mode is not None:
+            return str(getattr(mode, "value", mode))
+    except Exception:
+        pass
+    return "auto_edit"
+
+
+def rest_approval_enabled(request: Request) -> bool:
+    """True when `WISP_REST_APPROVAL` is on for this server root."""
+    try:
+        root = request.app.state.root
+    except Exception:
+        return False
+    return bool(getattr(getattr(root, "config", None), "rest_approval", False))
+
+
+def approval_bridge(request: Request):
+    """The root's `ApprovalBridge`, or None when the root has none (tests, embeddings)."""
+    try:
+        root = request.app.state.root
+    except Exception:
+        return None
+    return getattr(root, "approval_bridge", None)
+
+
+async def require_rest_approval(request: Request, action_name: str, args: dict,
+                                workspace: str | Path) -> None:
+    """Ask a connected client to approve an executable-config action. Raises 403 on deny.
+
+    **A separate, async companion to `require_tool_allowed`, which keeps its signature
+    and its behaviour.** Routes call this *after* the policy gate, so a mode that denies
+    outright (`read_only`) never prompts.
+
+    Flag-gated: with `WISP_REST_APPROVAL` **OFF** (the default) this returns immediately
+    and every caller sees today's behaviour exactly. ON, an action in
+    `approval_bridge.REST_APPROVAL_ACTIONS` in a mode in `REST_APPROVAL_MODES` is asked
+    over the WebSocket channel. **No connected client ⇒ 403** — the no-client case must
+    not hang and must not silently allow.
+    """
+    from wisp.server.approval_bridge import action_requires_rest_approval
+
+    if not rest_approval_enabled(request):
+        return
+    if not action_requires_rest_approval(action_name, configured_permission_mode(request)):
+        return
+
+    bridge = approval_bridge(request)
+    if bridge is None:
+        logger.warning("rest_approval_no_bridge action=%s", action_name)
+        raise HTTPException(
+            status_code=403,
+            detail="Blocked: this action requires approval over the WebSocket channel, "
+                   "and this server has no approval bridge",
+        )
+
+    approved = await bridge.request_approval(
+        name=action_name,
+        arguments=dict(args or {}),
+        reason=f"{action_name} registers something Wisp will execute",
+    )
+    logger.info("rest_approval action=%s approved=%s", action_name, approved)
+    if not approved:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Blocked: {action_name} requires a human approval and none was "
+                   f"given (no client connected, declined, or timed out after "
+                   f"{bridge.timeout_s:.0f}s)",
+        )
+
 # Lazy exports for API_KEY compatibility
 API_KEY = _auth
 

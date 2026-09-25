@@ -131,9 +131,38 @@ quoting it; §11 says how.
 | acceptance gate enablement (**ADR-0054**) | `PARTIAL` — the mechanism is built and driven; the population is short by one capable model | `PHASE_GATE_ENABLEMENT_DECISION.md` |
 | authorization parity (**ADR-0055**) | `COMPLETE` — **`DECIDED`**, Option A; found **F78** (a model is not a path), **F79**, **F80**, **F81** | `PHASE_AUTHORIZATION_PARITY.md` |
 | objective-path flag composition (**ADR-0056**) | `COMPLETE` — **`DECIDED`**, independent; the interaction is derivation order | `PHASE_OBJECTIVE_FLAG_COMPOSITION.md` |
+| REST approval through the WebSocket channel (**ADR-0057**) | `COMPLETE` — **`DECIDED`**, the clients' frame; no client ⇒ deny; flag default OFF; found **F83** (the channel was half-wired) | `PHASE_REST_APPROVAL.md` |
+| corpus integrity pass | `COMPLETE` — 2.1 **OPEN** (no `httpx` anywhere on the host), 2.2–2.4 closed | `PHASE_CORPUS_INTEGRITY.md` |
 
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log).
-**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0056**).
+**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0057**).
+
+### 0.0.16 REST APPROVAL THROUGH THE WEBSOCKET CHANNEL (2026-09-25) — ADR-0057
+
+**The brief's premise, driven, was half false — and the false half decided the shape.** The brief (and
+ADR-0055 §Context) said the WebSocket channel *"already implements bidirectional approval flow"*. Reading
+it, as the brief required:
+
+| direction | server | both shipped clients | match |
+|---|---|---|---|
+| server → client | `approval_request` · `{approval_id, tool_call}` | `tool_approval_request` · `{call_id, name, arguments, reason}` | **NO** |
+| client → server | `tool_approval` · `{approved}` | `tool_approval` · `{id, approved}` | yes |
+
+**The answer direction works; the question direction never reached a client** — so the *agent* path's WS
+approval prompt has never rendered, and `approve()` always timed out to deny. **F83**, F78's shape one
+level down.
+
+**The decision.** Adopt the **clients'** vocabulary (`tool_approval_request`, correlated on `call_id`) —
+which makes the **client change zero**. A new `wisp/server/approval_bridge.py` owns its **own**
+correlation map, so `WebSocketTransport`, `approve()` and the agent path are untouched. Trigger:
+`{hooks.create, mcp.add_server, plugins.install}` in `{auto_edit, ask_all}` (`full` does not ask;
+`read_only` denies outright). **No client ⇒ 403** — holding would hang and falling through would silently
+allow, both forbidden. Timeout `REST_APPROVAL_TIMEOUT_S = 30.0`. Policy first, then ask, via a new
+**async** companion so `require_tool_allowed` keeps its signature. **G3 deferred.** Flag
+`rest_approval` / `WISP_REST_APPROVAL`, default **OFF** — with it off every caller sees today's code.
+Guard `tests/reliability/test_rest_approval.py` (18 tests, **5/5** probes caught). **No client change, no
+gate-chain change.** Residuals: the agent path's dead frame (a real fix, its own ADR), `resolve_approval`
+ignoring `id` on the transport path, G3, and multi-client routing.
 
 ### 0.0.15 THE OBJECTIVE-PATH FLAG COMPOSITION (2026-09-25) — ADR-0056
 
@@ -1593,7 +1622,7 @@ environmental set in §7. Never quote "the suite passes" — quote the set.
 `jsonschema` absent, so they include F8's effects. The `tests/reliability/` measurement after
 provisioning (24 failures → 0) shows the magnitude of the error. Re-measure before comparing.
 
-### Canonical suites — 1294 tests (1293 pass, 1 fails)
+### Canonical suites — 1312 tests (1311 pass, 1 fails)
 
 ```bash
 env -u PYTHONPATH .venv/bin/python -m pytest \
@@ -1628,7 +1657,8 @@ env -u PYTHONPATH .venv/bin/python -m pytest \
   tests/reliability/test_f8_published_status.py \
   tests/reliability/test_criteria_source_on_turn_path.py \
   tests/reliability/test_acceptance_gate_enablement.py \
-  tests/reliability/test_objective_flag_composition.py -q
+  tests/reliability/test_objective_flag_composition.py \
+  tests/reliability/test_rest_approval.py -q
 ```
 
 **Measured 2026-09-25, after the F8 error-classification landing: 1115 tests — 1114 pass, 1 fails.** The

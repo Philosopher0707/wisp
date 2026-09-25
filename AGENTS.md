@@ -28,7 +28,9 @@ Guidance for AI coding agents working in the Wisp codebase.
 | `wisp/transport/renderer.py` | Terminal rendering | Pure functions: `render_tool_call()`, `_box()`, `_rule()`, `render_phase_bar()`, `render_turn_stats()` |
 | `wisp/transport/progress.py` | Progress tracking | `ProgressTracker`, `TurnProgress` — phase detection, tool counting, file tracking |
 | `wisp/transport/spinner.py` | Terminal spinner | `Spinner` — inline `\r`-based spinner with mode-aware frames |
-| `wisp/transport/websocket.py` | Live WebSocket transport | `WebSocketTransport`: connection ↔ session routing, event streaming, bidirectional approval; wired through `wisp/server/routes/agents.py` |
+| `wisp/transport/websocket.py` | Live WebSocket transport | `WebSocketTransport`: connection ↔ session routing, event streaming, approval. **The approval round-trip is HALF-wired (ADR-0057)**: the *answer* direction works and both shipped clients send `tool_approval`/`{id, approved}`, but `approve()` emits `approval_request`/`{approval_id, tool_call}` while **both clients branch on `tool_approval_request`** reading `call_id` — so the agent path's WS approval prompt has never rendered (residual 1). Wired through `wisp/server/routes/agents.py` |
+| `wisp/server/approval_bridge.py` | REST-originated approvals (ADR-0057) | `ApprovalBridge` — a registry of connected channels plus the round-trip, owning its **own** correlation map so `WebSocketTransport`, `approve()` and the agent path are untouched. Speaks the vocabulary **both clients already read** (`REST_APPROVAL_FRAME = "tool_approval_request"`, correlated on `call_id`), so the client change is **zero**. `REST_APPROVAL_ACTIONS` / `REST_APPROVAL_MODES` / `action_requires_rest_approval()` state the trigger; `REST_APPROVAL_TIMEOUT_S` bounds it; **no client ⇒ deny** |
+| `wisp/server/deps.py` | FastAPI dependencies | `verify_api_key`, `SQLiteRateLimiter`, `request_policy`, `require_tool_allowed` (the REST policy gate), **`require_rest_approval`** — its **async** companion (ADR-0057), called *after* the policy gate so a denying mode never prompts |
 | `wisp/transport/headless.py` | Headless transport | `HeadlessTransport`: collects events into result dict, no I/O |
 | `wisp/tools/registry.py` | Tool definitions | `TOOL_SCHEMAS` (list), `TOOL_IMPLS` (dict), `execute_tool()`, `ToolRegistry` |
 | `wisp/tool_executor.py` | Tool call lifecycle | `ToolExecutor`: approval gating, pre/post hooks, dangerous-command blocking, metrics; named tools dispatch via `_SPECIAL_TOOL_ROUTES` table (uniform `(executor, func_args, workspace)` adapters), then MCP / run_bash / generic-pool branches |
@@ -91,6 +93,7 @@ goes stale on the next flag while the table does not.
 | `structured_declaration` | `WISP_CRITERIA_STRUCTURED_DECLARATION` | **ADR-0050 R8** — lets an objective carry a `--- criteria ---` block that *states* its acceptance conditions. **Defaults `false`**, i.e. no declaration is parsed and every caller keeps ADR-0048's behaviour. ON, a malformed or unmeasurable declaration **raises** `CriteriaDeclarationRejected` and the run stops — it never falls back to the prose grammar. Read once, at the same composition point. **A valid declaration pre-empts `strict_derivation`** (ADR-0056 R2): the derivation returns early, so `strict` is *recorded and inert* — there is nothing to withhold when the objective has said. `use_declaration=True` with **no** block is a no-op |
 | `turn_criteria_source` | `WISP_TURN_CRITERIA_SOURCE` | **ADR-0053 R7** — lets the **turn path's** required-criteria set carry the objective's declared criteria, unioned with `floor_guard_criteria(guard)`. **Defaults `false`**: with it off the verdict site is `floor_guard_verdict(guard)` unchanged, and the set is exactly `['floor:verification']`. ON, a declaration at the head of the prompt adds its criteria and the declaration's own probe evidence (`CommandProbe`, bounded by `spec.timeout_s`), so the verdict can be `FAIL` for a reason the floor guard does not enforce. **Deliberately independent of `structured_declaration`** — that flag gates the objective-level derivation; coupling them would put two read sites on one concern (ADR-0002). Read once, at `AgentRuntime.run_turn`'s entry |
 | `acceptance_gate` | `WISP_ACCEPTANCE_GATE` | **ADR-0054 R6** — the **acceptance gate**: the engine's pre-`done` gate asks a read-only callable (`turn_criteria.DeclaredCriteriaGate`) and withholds `done` by ADR-0036's bounded delay-not-veto model when the objective's declared criteria are not satisfied. **Defaults `false`**, and the reason is measured: ADR-0051 R4 requires **≥ 2 capable models** and this environment serves exactly **1** of 13 (`scripts/acceptance_gate_population.py`). **Dependent on `turn_criteria_source`** — with the source off there are no declared criteria, so the gate would withhold on a verdict the record does not carry. Read once, at `AgentRuntime.run_turn`'s entry |
+| `rest_approval` | `WISP_REST_APPROVAL` | **ADR-0057 R11** — a REST request for an **executable-config** action (`hooks.create`, `mcp.add_server`, `plugins.install`) asks a human over the WebSocket channel. **Defaults `false`**: with it off `require_rest_approval` returns immediately and every caller sees today's code. ON, those actions in `auto_edit`/`ask_all` send a `tool_approval_request` frame (the vocabulary **both shipped clients already read**) and wait, bounded by `REST_APPROVAL_TIMEOUT_S` (30 s). **With no client connected the request is DENIED** — it must not hang and must not silently allow. `full` does not ask; `read_only` denies outright. Independent of every other flag (ADR-0002) |
 
 Three rules that are easy to get wrong:
 
@@ -444,7 +447,7 @@ python3 -m pytest tests/test_contracts_*.py tests/test_auth_*.py tests/test_runs
 # Durable record + proposal boundary + verdicts + task graph
 # (migration P0-P9 + M2/M3/M4/M16/M9/M15/M14/M12/M11/M13 + POST-M13 + ADR-0035/0036/0037
 #  + the NEXT chain ADR-0045/0046/0047/0048)
-# 1294 tests — 1293 pass, 1 fails (F38: a test that encoded the pre-F8 exchange ordering).
+# 1312 tests — 1311 pass, 1 fails (F38: a test that encoded the pre-F8 exchange ordering).
 # The block below was extended with the four NEXT-mission files, the five
 # documentation-authority / criteria-authority / F8-classification / precedence /
 # structured-criteria files, the four 2026-09-25-mission files (gate-enablement,
@@ -483,7 +486,8 @@ python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_
   tests/reliability/test_f8_published_status.py \
   tests/reliability/test_criteria_source_on_turn_path.py \
   tests/reliability/test_acceptance_gate_enablement.py \
-  tests/reliability/test_objective_flag_composition.py -q
+  tests/reliability/test_objective_flag_composition.py \
+  tests/reliability/test_rest_approval.py -q
 ```
 
 ### The environment will fight you
