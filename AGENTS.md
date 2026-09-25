@@ -454,6 +454,21 @@ python3 -m pytest tests/test_contracts_*.py tests/test_auth_*.py tests/test_runs
 # (migration P0-P9 + M2/M3/M4/M16/M9/M15/M14/M12/M11/M13 + POST-M13 + ADR-0035/0036/0037
 #  + the NEXT chain ADR-0045/0046/0047/0048)
 # 1505 tests — 1504 pass, 1 fails (F38: a test that encoded the pre-F8 exchange ordering).
+#
+# ⚠️ THE COUNT IS NOT MEASURABLE ON THIS HOST (2026-09-25) — do not quote one (F111, F94).
+# Re-measured in every one of the corpus-governance mission's four changes, as F85 requires,
+# and it does not reproduce: the block reports 154 spurious failures WITH and WITHOUT that
+# mission's new guard (154 failed / 1379 passed vs 154 failed / 1351 passed), while the three
+# failing files pass in isolation (114 passed in 2.6 s). Free memory measured 60-87 MB of
+# 16 GB; the block's wall time tripled (118 s -> 360 s). F36 describes the milder half: it
+# says the kernel KILLS the run (exit=137); here the run COMPLETES and reports a wrong
+# answer, which is the instrument-defect class one level up. "Never quote a count from prose
+# — run the block" is necessary but not sufficient: never quote one from a block run on a
+# starved host. A count's scope includes the host's free memory (F94). See CONTEXT.md §11.
+#
+# Also: two CONCURRENT pytest processes race on the shared pytest-of-<user> temp directory
+# and produce "PermissionError: EEXIST: mkdir ..." at fixture setup — 869 errors from one
+# overlapping run, which reads as a code failure and is not (F112). RUN THE BLOCK ALONE.
 # The block below was extended with the four NEXT-mission files, the five
 # documentation-authority / criteria-authority / F8-classification / precedence /
 # structured-criteria files, the four 2026-09-25-mission files (gate-enablement,
@@ -500,6 +515,7 @@ python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_
   tests/reliability/test_current_findings_pins.py \
   tests/reliability/test_current_open_items_pins.py \
   tests/reliability/test_current_flags_pins.py \
+  tests/reliability/test_derived_registers_entry_point.py \
   tests/reliability/test_f8_published_status.py \
   tests/reliability/test_criteria_source_on_turn_path.py \
   tests/reliability/test_acceptance_gate_enablement.py \

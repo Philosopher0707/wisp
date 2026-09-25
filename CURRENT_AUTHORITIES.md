@@ -9,17 +9,19 @@
 > A claim that cannot be pinned is a finding, not a claim. §5 records this page's own findings: the two
 > it could **not** pin are now **decided by ADR-0049** and are kept as a resolution trail.
 >
-> Generated 2026-09-25 at `7a61171` · covers **ADR-0001 … ADR-0061** · supersession chains in §1.1–1.6.
+> Generated 2026-09-25 at `5580257` · covers **ADR-0001 … ADR-0061** · supersession chains in §1.1–1.6.
 > **Regenerated with the header only** — no stated authority changed (ADR-0055 §6's rule, re-applied by
-> ADR-0059, again by ADR-0060 — a *boundary*, not an authority over completion or recovery — and again by
-> ADR-0061, which decides a transport frame and a hook's input rule, and by ADR-0060 R5's Layer C
-> relocation, which moves two symbols between layers and changes no authority), so the body is
-> byte-identical; the range and the commit are the page's own claim about the log's extent, and both were
-> stale (F97).
+> ADR-0059, ADR-0060 — a *boundary*, not an authority over completion or recovery — ADR-0061, which
+> decides a transport frame and a hook's input rule, and ADR-0060 R5's Layer C relocation, which moves
+> two symbols between layers), so the body is byte-identical except the sibling pointer below; the range
+> and the commit are the page's own claim about the log's extent, and both were stale (F97).
 >
 > **The header's commit and range are checked, not trusted** (`test_current_authorities_pins.py`
 > ::`TestTheProseClaimsAreMechanicallyCheckable`). Until 2026-09-25 the range said `ADR-0049` while the
 > page cited ADR-0051/0053/0054 — F81's class, prose drifting where a `path:line` guard cannot see it.
+>
+> **Sibling registers:** `CURRENT_FINDINGS.md`, `CURRENT_OPEN_ITEMS.md`, `CURRENT_FLAGS.md` — all
+> derived; none may decide. See `CONTEXT.md`'s **"The derived registers"**.
 
 ---
 
