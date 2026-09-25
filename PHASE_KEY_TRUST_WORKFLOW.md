@@ -166,6 +166,25 @@ the first run and both were fixed:
 A third probe (NV8) had an anchor that matched zero times and was reported as **SKIPPED** rather than
 silently counted — the probe's own floor doing its job.
 
+### And the landing exposed a third: a tripwire that fired on a legitimate addition
+
+`test_the_loader_entry_points_have_no_runtime_caller` pins an exact **set** of callers
+(`{wisp/policy/cli.py, tests/test_policy_modes.py}`). D1's guard drives `load_local`, so the set grew and
+the tripwire fired — **for the wrong reason**: a *test* file calling the loader is not *"the layer may be
+wired"*, and the tripwire's own docstring already says *"reachable only from the CLI and **tests**"*.
+This is the class the brief names: *a guard that pins a state rather than a property is a nuisance; write
+it so it fails on a real violation, not on the next legitimate addition.*
+
+**Repaired, not weakened** — the property is now stated as a rule and probed in both directions:
+
+```
+a runtime CALL in wisp/composition.py   -> CAUGHT   (1 failed)
+a new TEST caller                      -> MISSED   (1 passed — correct)
+```
+
+`wisp/composition.py` restored byte-identical. The tripwire keeps its floor (`the CLI must still be a
+caller`) and still fires when Deliverable 2 wires the composition root.
+
 ---
 
 ## 7. Non-violations, asserted

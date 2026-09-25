@@ -263,7 +263,15 @@ def test_the_m4_spec_still_has_no_wiring_section():
 
 
 def test_the_loader_entry_points_have_no_runtime_caller():
-    """`load_local`/`load_managed` are reachable only from the CLI and tests."""
+    """`load_local`/`load_managed` are reachable only from the CLI and tests.
+
+    **The assertion is the property, not a file list.** It used to pin the exact
+    set `{wisp/policy/cli.py, tests/test_policy_modes.py}` — a *state*, and it
+    fired on the next legitimate addition: a second test file driving the loader
+    (`tests/reliability/test_key_trust_workflow.py`, ADR-0058's guard) is not
+    *"the layer may be wired"*, and the sentence above already says tests are
+    expected. Stated as a rule: **the CLI, and tests — nothing else.**
+    """
     callers = set()
     for base in ("wisp", "tests"):
         for py in (REPO / base).rglob("*.py"):
@@ -275,9 +283,14 @@ def test_the_loader_entry_points_have_no_runtime_caller():
                     name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
                     if name in ("load_local", "load_managed", "merge_all"):
                         callers.add(str(py.relative_to(REPO)))
-    assert callers == {"wisp/policy/cli.py", "tests/test_policy_modes.py"}, (
-        "a new caller of the bundle loaders appeared — the layer may be wired: "
-        f"{sorted(callers)}"
+    assert callers, "floor: the scan must reach the callers it already knows about"
+    assert "wisp/policy/cli.py" in callers, (
+        "the CLI no longer calls the bundle loaders — the scan or the CLI changed"
+    )
+    outside = {c for c in callers if c != "wisp/policy/cli.py" and not c.startswith("tests/")}
+    assert not outside, (
+        "a caller of the bundle loaders appeared outside the CLI and tests — the "
+        f"runtime layer may be wired: {sorted(outside)}"
     )
 
 
