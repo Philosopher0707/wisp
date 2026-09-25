@@ -375,10 +375,10 @@ python3 -m pytest tests/test_contracts_*.py tests/test_auth_*.py tests/test_runs
 # Durable record + proposal boundary + verdicts + task graph
 # (migration P0-P9 + M2/M3/M4/M16/M9/M15/M14/M12/M11/M13 + POST-M13 + ADR-0035/0036/0037
 #  + the NEXT chain ADR-0045/0046/0047/0048)
-# 1115 tests — 1114 pass, 1 fails (F38: a test that encoded the pre-F8 exchange ordering).
-# The block below was extended with the four NEXT-mission files and the three
-# documentation-authority / criteria-authority / F8-classification files; the earlier
-# "849 tests" figure was the pre-NEXT count.
+# 1143 tests — 1142 pass, 1 fails (F38: a test that encoded the pre-F8 exchange ordering).
+# The block below was extended with the four NEXT-mission files and the four
+# documentation-authority / criteria-authority / F8-classification / precedence files;
+# the earlier "849 tests" figure was the pre-NEXT count.
 python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_incremental.py \
   tests/test_action_idempotency_key.py tests/test_proposal_boundary_records.py \
   tests/test_proposal_boundary_no_bypass.py tests/test_verdict_layer_recorded.py \
@@ -402,7 +402,8 @@ python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_
   tests/reliability/test_multi_turn_productive_recovery.py \
   tests/reliability/test_current_authorities_pins.py \
   tests/reliability/test_criteria_derivation_authority.py \
-  tests/reliability/test_f8_error_classification.py -q
+  tests/reliability/test_f8_error_classification.py \
+  tests/reliability/test_precedence_canonical.py -q
 ```
 
 ### The environment will fight you

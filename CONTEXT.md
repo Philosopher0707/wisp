@@ -13,10 +13,14 @@
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is `d7a55c2`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
+**HEAD is `3298894`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
 on top of it and is the authority for the count.
+**`3298894` is the precedence-correction landing** — 5 files, +873/−27, covering **ADR-0049**: the
+canonical precedence table is `goal.PRECEDENCE` (eight rows, 0–7), older numbering is historical and is
+resolved **by content**. **A record update — no code, no behaviour change**; the 48-combination
+differential is identical before and after. See §0.0.6 below.
 **`d7a55c2` is the F8 error-classification landing** — 6 files, +883/−11, covering F8's second half
-(a missing validator is a system failure, not a schema verdict). See §0.0.3 below.
+(a missing validator is a system failure, not a schema verdict). See §0.0.5 below.
 **`7023af0` is the criteria-derivation landing** — 6 files, +1,347/−11, covering **ADR-0048** (the
 authority over *"does this objective require a green suite?"*). See §0.0.4 below.
 **`802413a` is the current-authorities landing** — 3 files, +687, adding `CURRENT_AUTHORITIES.md`
@@ -91,11 +95,68 @@ quoting it; §11 says how.
 | **NEXT** — current authorities (documentation) | `COMPLETE` — `CURRENT_AUTHORITIES.md` + its guard; found **F64/F65** (the arbitration drift, the row-numbering ambiguity) | `PHASE_CURRENT_AUTHORITIES.md` |
 | **NEXT** — criteria derivation authority (**ADR-0048**) | `COMPLETE` — **`RATIFIED`**; found **F66** (three measured failure modes, MODE A a false `GOAL_MET`), **F67** (the wiring had no test) | `PHASE_CRITERIA_DERIVATION_AUTHORITY.md` |
 | **NEXT** — F8 error classification | `COMPLETE` — **`F8 SECONDARY_DEFECT REMOVED`**; found **F68** (inert retry), **F69** (two classifications for one condition) | `PHASE_F8_ERROR_CLASSIFICATION.md` |
+| **NEXT** — precedence correction (**ADR-0049**) | `COMPLETE` — **`RECORD UPDATE`**; F-1/F-2 from the authorities page **DECIDED**; found the brief's **inverted numbering claim** | `PHASE_PRECEDENCE_CORRECTION.md` |
 
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log).
 **Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0047**).
 
-### 0.0.5 CRITERIA AUTHORITY & CORPUS NAVIGABILITY (2026-09-25) — three deliverables
+### 0.0.7 PRECEDENCE CORRECTION (2026-09-25) — ADR-0049
+
+The two findings `CURRENT_AUTHORITIES.md` §5 recorded but was not authorised to decide. Both are now
+**DECIDED**, as a **record update: no code, no behaviour change**.
+
+**ADR-0049 R1** makes `goal.PRECEDENCE` (`wisp/core/goal.py:108-117`, **eight rows 0–7**) the
+**canonical precedence table**, and declares ADR-0035 §Precedence's rows 0–6 and ADR-0047's renumbering
+**historical**: any "row N" in either is resolved against the canonical table **by content**, not by
+number. The table is restated in full in the ADR, verbatim, so a reader needs no other document.
+
+**R2** establishes that `terminal_outcome == INCOMPLETE` is **not a row condition anywhere** — an
+`INCOMPLETE` turn is routed by its verdict — and **ratifies** the two cells this moved
+(`INCOMPLETE`+`PASS` → `GOAL_MET`, both `turn_succeeded` states) on ADR-0047's own principle: the
+objective's evidence decides where it is decisive. **R3** **scopes** ADR-0047 R3 rather than changing it:
+*"a fatal error must outrank stagnation"* holds for a fatal error **with no `PASS`** (the case R3's own
+test exercises); a fatal error **with** a `PASS` is not fatal, so `fatal`+`PASS`+`stagnating` →
+`GOAL_STAGNATED` is correct. **ADR-0047 is not reopened.**
+
+**The brief's pinned claim about the numbering was INVERTED, and is corrected.** It said ADR-0035's row 4
+and ADR-0047 R1's "row 4" name the same row by content (stagnation), that the canonical table expresses
+it as row 4, and that ADR-0047's revised row 4 is canonical row 5. **Driven** over all 48 combinations:
+
+| "row 4" in | Condition | Resolves to |
+|---|---|---|
+| ADR-0035 §Precedence | `may_report_goal_met() is False` (**stagnation**) | canonical row **5** |
+| ADR-0047 R1 | *"fatal terminal error, and no P3 PASS"* (**the fatal clause**) | canonical row **4** |
+
+Different content, and the mapping is the **reverse** of the claim — which matters because R1 of this very
+ADR is the rule that resolves "row N". Had it been adopted, R1 would have mapped the fatal clause to
+stagnation. The brief's R2 was also imprecise: it said `INCOMPLETE` is "handled by row 6"; only the `PASS`
+case is (row 7 for `INCONCLUSIVE`/absent, row 3 for `FAIL`, row 5 for stagnation), so R2 states the
+routing as a table.
+
+**The driven mapping** (not read): ADR-0035's row 3 spans canonical 3, 4, 5, 6; row 4 → 5; row 5 → 6, 7;
+row 6 → 6. And **ADR-0035's table is silent for 3 of 48 combinations** — F-2's non-totality, quantified
+for the first time.
+
+**No behaviour change, evidenced:** the 48-combination differential of `derive_goal_state` is
+**identical before and after** the ADR —
+`bb8b54e638a0d1304c5200ad28a0b2ab0bf9616baa1482646ddbbb0d37f1a139` (census: `goal_failed` 20,
+`goal_met` 6, `goal_stagnated` 14, `goal_unverified` 8) — and `wisp/core/goal.py` is byte-identical.
+
+**Guard:** `tests/reliability/test_precedence_canonical.py` (27) parses the ADR's restated table out of
+the markdown and compares it to `goal.PRECEDENCE` row for row, so neither can drift from the other.
+**Two probes did not falsify and are the finding:** one because a helper returned the whole ADR section
+rather than the named subsection, one because a `+` regex group made an emptied disposition skip the
+finding and the loop pass vacuously. Both were a check that can pass by finding nothing.
+
+**A guard that had pinned the OLD state was rewritten, not weakened**:
+`test_the_page_records_its_unpinnable_claims` asserted the literal phrase *"could not pin"* — the page's
+state before this ADR — so it went red when the page was correctly regenerated. It now asserts the
+property: every finding in §5 is marked `DECIDED` (with an ADR cited) or `OPEN`, and §5 does not
+re-argue a decision.
+
+**Report:** `PHASE_PRECEDENCE_CORRECTION.md`.
+
+### 0.0.6 CRITERIA AUTHORITY & CORPUS NAVIGABILITY (2026-09-25) — three deliverables
 
 **1. `CURRENT_AUTHORITIES.md` — the current-state-of-the-authorities page (no decision).**
 The corpus is 48 ADRs; the *reasoning* is in them and the *answers* are scattered across six or more, so
@@ -772,7 +833,9 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `af3a89a` | `docs:` point the handoff at `b9af5f0` |
 | `802413a` | `docs:` add the current-state-of-the-authorities page, and guard it — 3 files, +687; found **F64/F65**; excludes the user's WIP (§8) |
 | `7023af0` | `feat:` decide the criteria-derivation authority (ADR-0048) — 6 files, +1,347/−11; found **F66/F67**; excludes the user's WIP (§8) |
-| `d7a55c2` | `fix:` F8's second half — a missing validator is a system failure, not a schema verdict — 6 files, +883/−11; found **F68/F69**; excludes the user's WIP (§8) — **`HEAD`** |
+| `d7a55c2` | `fix:` F8's second half — a missing validator is a system failure, not a schema verdict — 6 files, +883/−11; found **F68/F69**; excludes the user's WIP (§8) |
+| `dd21f6d` | `docs:` point the handoff at `d7a55c2`, record F64–F71, and correct two false claims |
+| `3298894` | `docs:` decide the precedence numbering (**ADR-0049**) — the code did not move — 5 files, +873/−27; **no behaviour change**; corrects the brief's inverted numbering claim; excludes the user's WIP (§8) — **`HEAD`** |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
