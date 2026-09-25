@@ -13,10 +13,23 @@
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is `08dd57e`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
+**HEAD is `aa9d8a8`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
 on top of it and is the authority for the count — **F87**: it did not, until 2026-09-25. **Nine**
 "point the handoff" commits had never been listed, so the claim and the table disagreed; backfilled.
 The only exception is the handoff commit that carries *this* line, which the next landing lists.
+**`aa9d8a8` is the M4 wiring** — the policy layer is **WIRED**, behind `WISP_POLICY_BUNDLE`, default
+**OFF**. `config.py` reads two string settings; `composition.py` loads via `load_organization_policy`
+and passes `policy=` at the single construction site (ADR-0006); a named-but-unverifiable bundle
+**refuses to boot**. **§6's step 3 (REST) is deliberately NOT done** — `SecurityPolicy` has no
+organization slot, so a bundle there would be dead data; pinned so it cannot drift. Four tripwires
+inverted; **two more fired for the wrong reason and were repaired** (**F92** — the nuisance class).
+The canonical block gains three files and is re-measured: **1437** (**F93**). See `PHASE_M4_WIRING.md`.
+**`86ab7cb` is the key-trust decision** — **ADR-0058**, the brief's "0059" (**F90**: the previous
+mission produced no ADR, so 0058 was free). The model is the **operator-supplied organization public
+key**; **absence is a configuration, invalidity is a refusal**. **The brief's worked example was wrong
+and the error decided the workflow** (**F91**): `WISP_POLICY_PUBKEY` is base64 **key material**, not a
+path. Found **F88** (the M4 policy suite is red here — `cryptography` absent) and **F89** (a bundle
+omitting `expires_at` raises `min() iterable argument is empty`). See `PHASE_KEY_TRUST_WORKFLOW.md`.
 **`08dd57e` is corpus integrity II** — **no new ADR**. 2.1 **CLOSED** (the M4 guard's count is 3; the
 third site is `wisp/benchmark/runner.py`, added by `8a7e9ab` and **authorised** by ADR-0045's F54 fix —
 the brief and `PHASE_CORPUS_INTEGRITY.md` §2.1 both said `acp_session.py`/`cef3e90`, wrong on both
@@ -158,6 +171,8 @@ quoting it; §11 says how.
 | corpus integrity pass | `COMPLETE` — 2.1 **OPEN** (no `httpx` anywhere on the host), 2.2–2.4 closed | `PHASE_CORPUS_INTEGRITY.md` |
 | outcome-classification violation | `COMPLETE` — the **code** was wrong, the guard was right; a mechanical fix (**no ADR**); found **F85**, **F86** | `PHASE_OUTCOME_CLASSIFICATION_VIOLATION.md` |
 | corpus integrity II | `COMPLETE` — 2.1 **CLOSED** (count 3, third site authorised by ADR-0045/F54), 2.2 **OPEN** (`httpx`) | `PHASE_CORPUS_INTEGRITY_II.md` |
+| key-trust workflow (**ADR-0058**) | `COMPLETE` — **`DECIDED`**; the operator's public key; absence is a config, invalidity a refusal; found **F88** (the M4 policy suite is red here), **F89**, **F90**, **F91** | `PHASE_KEY_TRUST_WORKFLOW.md` |
+| M4 wiring | `COMPLETE` — the layer is **WIRED**, default OFF; §6 step 3 (REST) deliberately not done; 4 tripwires inverted, **2 repaired** (**F92**); found **F93** | `PHASE_M4_WIRING.md` |
 
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log).
 **Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0057**).
@@ -890,7 +905,7 @@ Phase 10's brief asked one question of four subsystems: *"where is the authority
 | **C** | REST policy boundary — 35/41 mutating routes ungated | ✅ **FIXED** (user chose option B) |
 | **C+** | The `.wisp/hooks` protected-path guard was absent from REST — `POST /api/files` wrote a hook the `write_file` *tool* was refused | ✅ **FIXED** (§0b) |
 | **G1** | Authorization parity — **CLOSED by ADR-0055.** Driven, the agent path and the REST gate agree on **every** route in **every** mode (**0 path divergences of 36**); the 6 pinned pairs are a **model** divergence (`authorize()` vs `SecurityPolicy`) on three action names that are **REST-only** — the agent has no operation for them | ✅ **`DECIDED` — Option A** (§0.0.14) |
-| **E** | The M4 organization policy layer is **never loaded** — a governance control that appears to exist and does not | ✅ false-assurance half **FIXED**; wiring needs a decision (§0d) |
+| **E** | The M4 organization policy layer is **never loaded** — a governance control that appears to exist and does not | ✅ **CLOSED** — the key-trust decision is **ADR-0058** and the wiring landed (`PHASE_M4_WIRING.md`); the layer is **WIRED**, default **OFF**. **REST still does not receive L0** (named) |
 | **F** | The prior audit's 12 "written-but-unwired controls" were half-remediated and never maintained | ✅ **RE-VERIFIED**; #2 deleted, #7 fixed (§0e) |
 | **R10** | The desktop client's checkpoint-diff request was **unauthenticated** — the one request that bypasses `apiFetch` built its headers from a *second* helper, called with no argument | ✅ **FIXED**; the 26-way duplication measured + ratcheted (§0f) |
 
@@ -1351,7 +1366,11 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `aa47ae0` | `docs:` **corpus integrity pass** — 2.1 **OPEN** (`httpx` absent from the cache and the host), 2.2–2.4 closed; the pin guard gains **four prose properties** and caught a real header drift on its first run; found **two Phase-10 guards red at HEAD** (neither F38, neither in the canonical block); excludes the user's WIP (§8) |
 | `5c129d5` | `docs:` point the handoff at `aa47ae0` |
 | `6ec0f48` | `fix:` `_tool_result_output`'s success test **delegates to the taxonomy** — the guard was RED since `ade4dc6` and the **code** was wrong, not the test; both branches call `core.events.is_error_outcome`, 35-case differential on the production function identical; **no ADR**; a **floor** added to the canonical guard; found **F85** (a count is canonical only if measured after the LAST change to any member) and **F86** (two unlike guards classified as one class); both outcome-classification files added to the canonical block; excludes the user's WIP (§8) |
-| `08dd57e` | `docs:` **corpus integrity II** — 2.1 **CLOSED** (the M4 guard's count is 3; the third site is `wisp/benchmark/runner.py`, from `8a7e9ab`, **authorised** by ADR-0045's F54 fix — not `acp_session.py`/`cef3e90`), 2.2 **OPEN** (`httpx` re-attempted, still absent); **F87** — §3's own table was missing **nine** "point the handoff" commits; excludes the user's WIP (§8) — **`HEAD`** |
+| `08dd57e` | `docs:` **corpus integrity II** — 2.1 **CLOSED** (the M4 guard's count is 3; the third site is `wisp/benchmark/runner.py`, from `8a7e9ab`, **authorised** by ADR-0045's F54 fix — not `acp_session.py`/`cef3e90`), 2.2 **OPEN** (`httpx` re-attempted, still absent); **F87** — §3's own table was missing **nine** "point the handoff" commits; excludes the user's WIP (§8) |
+| `db29a11` | `docs:` point the handoff at `08dd57e`, and backfill §3's commit table (**F87** — nine "point the handoff" commits had never been listed; the checker now reports *every commit is listed*) |
+| `86ab7cb` | `docs:` decide the **key-trust workflow** (**ADR-0058** — the brief said 0059; **F90**) — the operator-supplied organization **public key**; absence is a configuration, invalidity is a refusal; expiry narrows, it does not refuse; the key is shared; offline by construction; the private key is never Wisp's. Rejects TOFU, a built-in root, and the registration ceremony (out of scope, not wrong). **The brief's worked example was wrong and decided the workflow** (**F91**): `WISP_POLICY_PUBKEY` is base64 key material, not a path. Found **F88** (the M4 policy suite is red in this environment — `cryptography` absent: 14 failed, 6 errors, 13 passed, none in the canonical block) and **F89** (a bundle omitting `expires_at` raises `min() iterable argument is empty`); 12-test guard, 9/9 probes caught, incl. **two defects in the guard itself**; excludes the user's WIP (§8) |
+| `1f5f6fc` | `fix:` the **loader-caller tripwire** states its property, not a file list — D1's guard drives `load_local`, so the exact-set assertion fired **for the wrong reason**; repaired (the CLI, and tests, nothing else) and probed in both directions; excludes the user's WIP (§8) |
+| `aa9d8a8` | `feat:` **wire the M4 policy layer** behind `WISP_POLICY_BUNDLE`, default **OFF** (**ADR-0058**) — `config.py` reads two string settings; `composition.py` loads via `load_organization_policy` and passes `policy=` at the single construction site; a named-but-unverifiable bundle refuses to boot. **§6's step 3 (REST) is deliberately not done** — `SecurityPolicy` has no organization slot, so a bundle there would be dead data; pinned. Four tripwires inverted, **two more fired for the wrong reason and were repaired** (**F92**); the canonical block gains three files and is re-measured (**F93**: 1390 → **1437**); 10-test guard, 7/7 probes caught; `PHASE_10_M4_GOVERNANCE_UNWIRED.md` updated in place; excludes the user's WIP (§8) — **`HEAD`** |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
@@ -1648,7 +1667,16 @@ approval"* without driving it; the question direction had never reached a client
   *never quote a count from prose*; F82 said *only if there is ONE block*; F85 says the measurement must
   follow the last change, not the change that motivated measuring. Measured: the canonical block reported
   **1316** where both headings said **1312**, because one deliverable set the headings and the next added
-  four tests to a block member.
+  four tests to a block member. Measured again by the M4 wiring (**F93**): **1390 → 1437** on **+3 files**,
+  re-measured in the same change that added them.
+- **A guard that pins a STATE rather than a PROPERTY is a nuisance — and it fails for the wrong reason
+  (F92).** Write it so it fails on a real violation, not on the next legitimate addition. Measured twice
+  in one mission, on the M4 tripwires: one pinned an exact **set** of callers, so a *test* that drives the
+  loader made it fire though its own docstring said tests were expected; the other scanned for a **bare
+  name** (`policy_pubkey=`), which matched an unrelated, same-named **config setting** rather than the
+  route attribute it was about. Both repaired, both probed **in both directions** — a real violation
+  CAUGHT, the legitimate addition MISSED. **The tell:** a failure whose message does not describe the
+  thing that changed.
 - **The instrument is not exempt.** A check that has never been falsified has not been validated.
 
 ---
@@ -1817,7 +1845,7 @@ Deliverable 1 is stale the moment Deliverable 2 touches a file the block names.
 **The two blocks were out of sync (F82).** Until the authorization-parity mission, `AGENTS.md`'s block
 listed **two files this one did not** — `test_precedence_canonical.py` and `test_structured_criteria.py` —
 so the two "canonical" counts described different suites and neither was the intersection. Both now list
-the same **43 files**, and both headings carry the count measured from that block.
+the same **50 files**, and both headings carry the count measured from that block.
 
 ### The regression method — read this before changing anything
 
@@ -1867,7 +1895,7 @@ the files to a path **outside the repo** first, then compare.
 | R1 | ~~REST gate — finish option B~~ | ✅ **DONE** (§0) |
 | R2 | ~~Correct the "breaks the client" claim~~ | ✅ **DONE** (§5) |
 | **G0** | ~~REST bypass of the protected-path guard~~ | ✅ **DONE** (§0b) |
-| **E** | **M4 governance layer not wired to the runtime** — `wisp/policy/` is never loaded; `ToolExecutor.policy` is `None` at **all three** construction sites (`composition.py:142`, `acp_session.py:208`, `benchmark/runner.py:82` — the third added by `8a7e9ab` and authorised by ADR-0045's F54 fix; corrected 2026-09-25, `PHASE_CORPUS_INTEGRITY_II.md` §1); `config.py` has no policy setting; `app.state.policy_pubkey` is set only by tests | **False-assurance half FIXED** (option C: CLI notice + doc qualifiers). **Wiring itself OPEN** (§0d) — depends on the **key-distribution ceremony** the M4 spec deferred. Pinned by `tests/test_m4_governance_wiring.py` (25 tests). |
+| **E** | **M4 governance layer not wired to the runtime** — `wisp/policy/` was never loaded; `ToolExecutor.policy` was `None` at **all three** construction sites (`composition.py:142`, `acp_session.py:208`, `benchmark/runner.py:82` — the third added by `8a7e9ab` and authorised by ADR-0045's F54 fix; corrected 2026-09-25, `PHASE_CORPUS_INTEGRITY_II.md` §1); `config.py` had no policy setting; `app.state.policy_pubkey` is set only by tests | ✅ **CLOSED 2026-09-25.** The key-trust decision is **ADR-0058** (`PHASE_KEY_TRUST_WORKFLOW.md`) and the wiring landed (`PHASE_M4_WIRING.md`): `config.py` reads `WISP_POLICY_BUNDLE`/`WISP_POLICY_PUBKEY`, `composition.py` loads and passes `policy=` at the single construction site, and a named-but-unverifiable bundle **refuses to boot**. **Default OFF** — unset means byte-for-byte today's behaviour. **Two things stay open and are named:** **REST does not receive L0** (`SecurityPolicy` has no organization slot; a bundle there would be dead data), and `acp_session.py:208`/`benchmark/runner.py:82` do not receive it. Pinned by `tests/test_m4_governance_wiring.py` (25 tests) + `tests/reliability/test_m4_policy_wiring.py` (10). |
 | **G1** | **Authorization parity gap** — the agent composes *both* models (`policy_hard_deny` + `authorize()` + the approval gate); REST consults *only* `SecurityPolicy`. 6 of 36 (route, mode) pairs diverge, all the approval layer, in the **default** `auto_edit` mode. | **OPEN, measured** (§0c). Ratcheted by `tests/test_authorization_parity.py`. Options A/B/C in `PHASE_10_AUTHORIZATION_PARITY.md`; recommended **B now, C as the real fix**. |
 | R1b | `POST /api/hooks` still accepts an unvalidated `command` | **OPEN — needs a decision.** The gate restricts *who* may register a hook, not *what* it runs. |
 | **R10** | ~~`useApi.ts:368` sends no `Authorization` header~~ | ✅ **FIXED** (§0f) — the functional half. **What remains is a decision:** the 32 pre-existing renderer errors (7 of them in `ErrorBoundary.test.tsx`, i.e. a test file being typechecked by the *build* config); the vacuous `typecheck` script; and whether to canonicalize the 26 re-implementations now that the ratchet records them |
