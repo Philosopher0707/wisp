@@ -13,8 +13,12 @@
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is `805eca8`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
+**HEAD is `800ada0`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
 on top of it and is the authority for the count.
+**`800ada0` is the criteria-source landing** — **ADR-0053**: the turn path's required-criteria set carries
+the objective's declared criteria, so the verdict stops being a projection of the floor guard (ADR-0051
+R1's precondition). Flag `WISP_TURN_CRITERIA_SOURCE`, default **OFF**; the acceptance gate is still **not**
+enabled. See §0.0.12 below.
 **`805eca8` is the F8-published-status landing** — **ADR-0052**: a capability failure is published as a
 failure of the **host**, not a denial; the denial taxonomy and the prompt are **unchanged**. See §0.0.11
 below.
@@ -112,6 +116,71 @@ quoting it; §11 says how.
 
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log).
 **Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0047**).
+
+### 0.0.12 THE CRITERIA SOURCE ON THE TURN PATH (2026-09-25) — ADR-0053
+
+ADR-0051 R1's precondition was *"the turn path's required-criteria set contains at least one required
+criterion not derivable from `VerificationFloorGuard`'s own state"*, and ADR-0051 **measured** that it did
+not — the turn's verdict was `floor_guard_verdict(guard)`, a pure projection, `verdict == FAIL` agreeing
+with `guard.rejection()` **192/192** times. ADR-0051 §"what this does not decide" named the fix as its own
+ADR. **ADR-0053 is that ADR.**
+
+**The mechanism.** `wisp/core/turn_criteria.py` — the **one** producer of the turn's criteria set:
+
+```
+required = floor_guard_criteria(guard) ∪ explain_acceptance(prompt, ws, use_declaration=True).criteria
+evidence = floor_guard_evidence(guard) + CommandProbe(declaration.specs).measure(ws)
+verdict  = acceptance.evaluate(...)      <- unchanged
+```
+
+The declared half uses the **same derivation the objective-level loop uses**, so the two levels cannot
+disagree about what a declaration means. Re-implements nothing.
+
+**The gate's condition (R4)** — `verdict == FAIL` **and every criterion it names is non-floor**. Driven
+over six cases (`scripts/turn_criteria_measurement.py`), **two discriminate**:
+
+| case | OFF | ON | gate? |
+|---|---|---|---|
+| plain, no mutation | `inconclusive`/`goal_unverified` | same | False |
+| plain, verified mutation | `pass`/`goal_met` | same | False |
+| declared symbol **present**, no mutation | `inconclusive` | `inconclusive` | False |
+| **declared symbol ABSENT, no mutation** | `inconclusive` | **`fail`/`goal_failed`** | **True** |
+| **declared symbol ABSENT, verified mutation** | **`pass`/`goal_met`** | **`fail`/`goal_failed`** | **True** |
+| declared symbol ABSENT, FAILED verification | `fail` | `fail` | **False** |
+
+**Row 5 is the point.** A mutation-verified turn satisfies the floor guard *completely* — `rejection()`
+is `None`, floor-only `PASS`/`GOAL_MET` — while the declared criterion fails. **Row 6 is the control**:
+a `FAIL` the floor guard already enforces returns `False`, so a gate keyed on R4 cannot duplicate
+`rejection()`.
+
+**The routing (R5)** — through **neither** the `done` gate nor the ladder. The verdict is computed *after*
+the engine emitted `done`, so ADR-0036's withholding gate cannot act on it; the consumption point is
+`derive_goal_state`, so a declared failure lands `GOAL_FAILED` (row 3) where a floor-only verdict landed
+`GOAL_UNVERIFIED` or `GOAL_MET`.
+
+**The flag (R7/R8)** — `turn_criteria_source` / `WISP_TURN_CRITERIA_SOURCE`, default **OFF**, read once at
+`run_turn`'s entry, **deliberately independent** of `WISP_CRITERIA_STRUCTURED_DECLARATION` (which gates
+the objective-level derivation; coupling them would put two read sites on one concern). This answers
+ADR-0050's follow-up question 1 **for the turn path**.
+
+**A rejected declaration propagates** (R6 — ADR-0050 R4's loud rule); the parse and probe sit **outside**
+the `except Exception` that guards "verdict unavailable", so a malformed head block cannot become a silent
+floor-only run.
+
+**This does not enable the acceptance gate.** `acceptance_gate` / `WISP_ACCEPTANCE_GATE` is still **not
+added**; R1 is a *precondition*, and ADR-0051's R2–R6 measurement contract still gates enablement — it
+needs a **declared turn population**, which does not exist. **M1's ledger state is `BLOCKED`** with that
+reason recorded. *(ADR-0051's Consequence used to coin `BLOCKED_ON_PRECONDITION`; that is a **reason**, not
+a state, and it is corrected in place — `WISP_MIGRATION_STATUS.md:41`'s vocabulary governs.)*
+
+**`CURRENT_AUTHORITIES.md` was re-pinned** (`runtime.py` moved; its guard caught it). **Finding — the pin
+guard checks for a BLANK line, not the right line:** it caught **one** of **five** stale pins and passed
+four that had moved onto non-blank lines. The **sixth instance** of the instrument-defect class (§10);
+reported, not repaired — widening that guard is its own change.
+
+**Produced:** ADR-0053 + its index row; `wisp/core/turn_criteria.py`; the flag in `config.py`; the verdict
+site in `runtime.py`; `scripts/turn_criteria_measurement.py` (committed); `tests/reliability/test_criteria_source_on_turn_path.py`
+(25 tests, 3/3 non-vacuity probes caught); `PHASE_CRITERIA_SOURCE.md`.
 
 ### 0.0.11 F8 PUBLISHED STATUS (2026-09-25) — ADR-0052: a host failure is not a denial
 
@@ -1066,7 +1135,8 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `3f9e639` | `feat:` let an objective declare its criteria (**ADR-0050**), and reject rather than reinterpret — 7 files, +1,332/−30; flag `WISP_CRITERIA_STRUCTURED_DECLARATION` default OFF; found **F72/F73**; excludes the user's WIP (§8) |
 | `3990313` | `docs:` decide the acceptance gate's enablement contract (**ADR-0051**) — the gate has nothing to gate on — 6 files; **no production change**; the instrument is **committed** (`scripts/`), fixing the class F75 names; found **F75/F76**; excludes the user's WIP (§8) |
 | `1e83e34` | `docs(m8):` survey the `dag.py` retirement and decide **DEPRECATE**, not remove — blocked on a **measured semantic divergence** (which definition of a valid DAG wins); prose-only in `wisp/`; 10-test guard incl. 3 tripwires on the residual; excludes the user's WIP (§8) |
-| `805eca8` | `fix:` publish a capability failure as a **host** failure, not a denial (**ADR-0052**) — a system-failure envelope with the `kind` in `data`; the denial taxonomy and the prompt are unchanged; 15-test whole-path guard; found the helper defect that made NV1 non-falsifying; excludes the user's WIP (§8) — **`HEAD`** |
+| `805eca8` | `fix:` publish a capability failure as a **host** failure, not a denial (**ADR-0052**) — a system-failure envelope with the `kind` in `data`; the denial taxonomy and the prompt are unchanged; 15-test whole-path guard; found the helper defect that made NV1 non-falsifying; excludes the user's WIP (§8) |
+| `800ada0` | `feat:` the turn path's criteria set carries the objective's declared criteria (**ADR-0053**) — satisfies ADR-0051 R1's precondition; the gate's condition is driven to differ from `rejection()` on 2 of 6 cases; flag `WISP_TURN_CRITERIA_SOURCE` default OFF; `CURRENT_AUTHORITIES.md` re-pinned (found the pin guard's blank-line weakness — a 6th instrument-defect instance); excludes the user's WIP (§8) — **`HEAD`** |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
@@ -1298,6 +1368,39 @@ input comes from.**
 **Corollary, also proven four times: mechanical guards find what manual review misses** — and, increasingly, what *I* missed. The containment structural scan found a 4th re-implementation; the relative-import fix overturned 3 of 4 "dead module" claims; the doc-drift guard found `_MockIO` in `CLAUDE.md`; the inventory ratchet caught the `semantic_compressor` error before anyone read the claim.
 
 **Practical rule:** drive the real path; write the guard; then report.
+
+### The instrument is not exempt from the discipline
+
+**A probe with a defect is invisible, because the probe is what catches the other defects.** Six
+instances, and every one was found by *accident* — a probe that ran, a flake that was investigated, a
+test that failed for a reason someone noticed. None was found by looking for it.
+
+| # | Where | The instrument | The defect it hid |
+|---|---|---|---|
+| 1 | `PHASE_POST-M13_F39_MECHANICAL_DIAGNOSTIC_IMPLEMENTATION.md` (**F41**) | a test double that raised from `post()`, so the `with` block never ran | the 4xx error-body log had **never logged a body** |
+| 2 | `PHASE_NEXT_AUTONOMOUS_CODING_AGENT_CONVERGENCE.md` (**F54**) | every test built its core through `CompositionRoot` or injected a fixture executor | `make_ollama_core_factory` was never exercised; `wisp bench` refused every mutation |
+| 3 | `PHASE_STRUCTURED_CRITERIA.md` §5 | a size-preserving mutation left stale bytecode; a same-second restore reported a **false control failure** | the harness reported its own defect as the subject's |
+| 4 | `PHASE_PRECEDENCE_CORRECTION.md` §5, §6 (**P5**, **Q1**) | a helper that returned the wrong section; a regex `+` group that let an emptied finding skip the check | two checks that could pass by **finding nothing** |
+| 5 | `PHASE_DAG_RETIREMENT.md` §7.1 | a bare string scan over `wisp/**/*.py` | it counted a **docstring** as a caller |
+| 6 | `PHASE_CRITERIA_SOURCE.md` §6 | `test_current_authorities_pins.py` checks a pinned line is **non-blank** | it caught **1 of 5** stale pins and passed four that had moved onto other, non-blank lines |
+
+**The class, stated once:** *the instrument does not reproduce the production control flow, or does not
+fail when the subject fails, and reports its own defect as a result about the subject.*
+
+**The discipline:**
+
+- **A probe that does not falsify is not a pass — it is a finding that the test is not testing what you
+  think.** Investigate the flake; do not retry it. Three times now: ADR-0052's NV1, `PHASE_STRUCTURED_CRITERIA`'s
+  P2 (a baseline keyed to the wrong criteria id), and ADR-0053's NV1 — where the *helper* took the answer
+  as a parameter and set the flag itself, so the predicate under test was never exercised.
+- **A check that can pass by finding nothing has not run.** Every check whose subject is a collection —
+  findings, pins, callers, imports — needs a **floor**: assert the collection is non-empty before
+  iterating it.
+- **A check over a Python tree must parse it, not scan it.** AST, not strings; a string scan reads
+  docstrings and comments as code (instance 5).
+- **A test double must reproduce the production control flow it replaces**, or say explicitly that it does
+  not — and the test must fail if the production path changes in a way the double does not model.
+- **The instrument is not exempt.** A check that has never been falsified has not been validated.
 
 ---
 

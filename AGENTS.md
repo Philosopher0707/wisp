@@ -519,6 +519,32 @@ The tree carries pre-existing uncommitted work. Stashing only the files you touc
 **Copy the files you are about to edit somewhere outside the repo first**, then compare against those
 copies. See `WISP_MIGRATION_STATUS.md` finding F12.
 
+### The instrument is not exempt from the discipline
+
+**A probe with a defect is invisible, because the probe is what catches the other defects.** Six recorded
+instances, every one found by accident: **F41** (a test double that raised from `post()`, hiding that the
+4xx body log had never worked), **F54** (every test built its core through `CompositionRoot`, so the
+hand-built factory was never exercised and `wisp bench` refused every mutation), the `.pyc` purge
+(`PHASE_STRUCTURED_CRITERIA.md` §5 — stale bytecode reported the harness's defect as the subject's),
+**P5**/**Q1** (`PHASE_PRECEDENCE_CORRECTION.md` §5, §6 — a helper that returned the wrong section; a
+regex that skipped an emptied finding), `PHASE_DAG_RETIREMENT.md` §7.1 (a string scan over a Python tree
+that read its own docstring as a caller), and `PHASE_CRITERIA_SOURCE.md` §6 (the pin guard checks a
+pinned line is *non-blank*, so it caught 1 of 5 stale pins).
+
+**The class:** *the instrument does not reproduce the production control flow, or does not fail when the
+subject fails, and reports its own defect as a result about the subject.*
+
+- **A probe that does not falsify is a finding, not a pass.** Investigate the flake; do not retry it. If
+  breaking the thing under test leaves the suite green, the test is not testing what it claims.
+- **A check over a collection needs a floor.** Assert the collection is non-empty *before* iterating it,
+  or the check passes by finding nothing.
+- **A check over Python code must parse it (AST), not scan it as text.** A string scan reads docstrings
+  and comments as code.
+- **A double must reproduce the production control flow it replaces** — or say it does not, and fail if
+  the production path changes in a way the double does not model.
+- **A guard that pins a state rather than a property is a nuisance.** Write it to fail on a *real*
+  violation, not on the next legitimate addition.
+
 ## File conventions
 
 - Tests live in a flat `tests/` tree (plus `tests/reliability/` and `tests/security/`). Naming follows the module under test (`wisp/transport/progress.py` → `tests/test_progress.py`) but paths do NOT mirror source layout
