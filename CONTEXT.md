@@ -21,7 +21,7 @@ second authority for a fact that already has one.
 
 | page | answers | generator | guard |
 |---|---|---|---|
-| `CURRENT_AUTHORITIES.md` | *What is each completion/recovery authority's current state?* | (hand-regenerated; see its §6) | `tests/reliability/test_current_authorities_pins.py` |
+| `CURRENT_AUTHORITIES.md` | *What is each completion/recovery authority's current state?* | `scripts/derive_current_authorities.py` (since ADR-0062 R8 — it was hand-regenerated until then, **F113**) | `tests/reliability/test_current_authorities_pins.py` |
 | `CURRENT_FINDINGS.md` | *What is the current status of finding `Fn`?* | `scripts/derive_current_findings.py` | `tests/reliability/test_current_findings_pins.py` |
 | `CURRENT_OPEN_ITEMS.md` | *What is open, and what does it block on?* | `scripts/derive_current_open_items.py` | `tests/reliability/test_current_open_items_pins.py` |
 | `CURRENT_FLAGS.md` | *What does each switch default to, and where is it read?* | `scripts/derive_current_flags.py` | `tests/reliability/test_current_flags_pins.py` |

@@ -34,6 +34,7 @@ CONTEXT = REPO / "CONTEXT.md"
 #: The four registers, and the generator + guard each names in the entry-point section.
 REGISTERS = {
     "CURRENT_AUTHORITIES.md": (
+        "scripts/derive_current_authorities.py",
         "tests/reliability/test_current_authorities_pins.py",
     ),
     "CURRENT_FINDINGS.md": (

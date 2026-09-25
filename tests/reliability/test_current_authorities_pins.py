@@ -20,6 +20,11 @@ Three properties, each independently falsifiable:
    is therefore *reproduced*, not paraphrased: change a row in the code and the page fails.
 3. **The page declares itself regenerable.** A prose tripwire, in the repo's established
    style — a documented property should also be asserted.
+4. **The page is reproducible from its committed generator** (ADR-0062 R8, closing F113's
+   build half). `scripts/derive_current_authorities.py` renders it; regenerating must
+   reproduce it byte-for-byte modulo the commit and date it names, the generator must
+   refuse a stale pin, a matrix row the code does not return and an unresolved ADR chain,
+   and §5 is append-only — emitted unchanged, never losing a finding.
 
 Non-vacuity was checked by breaking each property in turn (a moved pin, a mutated row,
 a deleted header) and confirming the corresponding test fails.
@@ -492,3 +497,153 @@ class TestTheProseClaimsAreMechanicallyCheckable:
             f"the header names `{sha}`, which is not an ancestor of HEAD — the page "
             "claims a revision that is not in this history"
         )
+
+
+# ── property 4 — the page is reproducible from its committed generator ─────
+#
+# F113: the founding page of the derived-register pattern declared "REGENERATE, DO NOT
+# EDIT IN PLACE" and had no generator, so "regeneration" meant by hand — F75's class.
+# ADR-0062 R8 makes a committed generator the rule. These tests hold the page to it.
+
+GENERATOR = REPO / "scripts" / "derive_current_authorities.py"
+SHA_RE = re.compile(r"`[0-9a-f]{7,40}`")
+DATE_RE = re.compile(r"Generated \d{4}-\d{2}-\d{2} at")
+
+
+def _generator():
+    import importlib.util
+    import sys
+
+    assert GENERATOR.exists(), (
+        f"{GENERATOR.relative_to(REPO)} is missing — ADR-0062 R8 requires a committed "
+        "generator for every derived page (F113)")
+    spec = importlib.util.spec_from_file_location("derive_current_authorities", GENERATOR)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _section_5(text: str) -> str:
+    assert "\n## 5." in text, "the page has no §5"
+    return "## 5." + text.split("\n## 5.", 1)[1].split("\n---\n", 1)[0]
+
+
+def _normalise(text: str) -> str:
+    """The commit and the date are the only fields that move without a source change."""
+    return DATE_RE.sub("Generated <date> at", SHA_RE.sub("`<sha>`", text))
+
+
+class TestThePageIsReproducibleFromItsGenerator:
+    def test_the_generator_is_not_ignored_by_git(self):
+        """F75's failure mode was an instrument `.gitignore` excluded. Committable is the
+        property; `git ls-files` would fail on the uncommitted working tree it is written in."""
+        import subprocess
+
+        _generator()
+        ignored = subprocess.run(
+            ["git", "check-ignore", "-q", str(GENERATOR.relative_to(REPO))],
+            cwd=REPO, capture_output=True)
+        assert ignored.returncode == 1, (
+            "the generator is git-ignored — an instrument that cannot be committed is not a "
+            "re-runnable measurement (F75)")
+
+    def test_the_banner_names_the_generator(self, page_text):
+        banner = page_text.split("\n---", 1)[0]
+        assert "scripts/derive_current_authorities.py" in banner, (
+            "the banner must name its generator, as the other three registers' banners do")
+
+    def test_regenerating_reproduces_the_page(self, page_text):
+        fresh = _generator().render()
+        assert _normalise(fresh) == _normalise(page_text), (
+            "CURRENT_AUTHORITIES.md does not match what its generator produces — the page "
+            "was hand-edited, or a source moved without regenerating. Run:\n"
+            "  env -u PYTHONPATH .venv/bin/python scripts/derive_current_authorities.py")
+
+    def test_the_generator_accepts_the_current_tree(self):
+        problems = _generator()._check()
+        assert problems == [], "the generator refuses the current tree:\n  " + "\n  ".join(
+            problems)
+
+    def test_the_generator_refuses_a_stale_pin(self):
+        mod = _generator()
+        good = mod.render()
+        assert mod._pin_problems(good) == [], "floor: the rendered page must pin cleanly"
+        stale = good.replace("`wisp/core/provider_stream.py:113`",
+                             "`wisp/core/provider_stream.py:1`", 1)
+        assert stale != good, "the probe did not change the page — the pin moved"
+        assert mod._pin_problems(stale), (
+            "a pin moved onto an unrelated line and the generator did not refuse it")
+
+    def test_the_generator_refuses_a_matrix_row_the_code_does_not_return(self):
+        mod = _generator()
+        from wisp.core import goal
+
+        assert mod._matrix_problems(goal.PRECEDENCE) == [], "floor"
+        lying = tuple((n, c, "GOAL_FAILED" if n == 6 else r) for n, c, r in goal.PRECEDENCE)
+        assert mod._matrix_problems(lying), (
+            "PRECEDENCE was made to disagree with derive_goal_state's row-6 branch and the "
+            "generator did not refuse it")
+
+    def test_the_generator_refuses_an_unresolved_adr_chain(self):
+        mod = _generator()
+        assert mod._chain_problems(mod.AUTHORITIES) == [], "floor"
+        # 1.2 cites ADR-0041 R3/R7, which ADR-0043 supersedes. Dropping ADR-0043 leaves a
+        # chain that names a superseded clause as current.
+        dropped = [(h, o, c, a.replace("**ADR-0043**", "ADR-9043"), f)
+                   for h, o, c, a, f in mod.AUTHORITIES]
+        assert mod._chain_problems(dropped), (
+            "a chain lost the ADR that supersedes one it cites, and the generator accepted it")
+        dangling = [(h, o, c, a + " → **ADR-0999**", f) for h, o, c, a, f in mod.AUTHORITIES]
+        assert mod._chain_problems(dangling), "a chain cites a non-existent ADR and passed"
+
+    def test_the_matrix_reads_precedence_at_render_time(self, monkeypatch):
+        """The observation point is the arbiter's table, not a copy in the generator (F96)."""
+        mod = _generator()
+        from wisp.core import goal
+
+        moved = tuple((n, c, "GOAL_PROBE" if n == 6 else r) for n, c, r in goal.PRECEDENCE)
+        monkeypatch.setattr(goal, "PRECEDENCE", moved)
+        row6 = [ln for ln in mod.render_matrix().splitlines() if ln.startswith("| 6 |")]
+        assert row6 and "`GOAL_PROBE`" in row6[0], (
+            "§3's row 6 did not follow goal.PRECEDENCE — the matrix is transcribed, not "
+            "generated")
+
+    def test_the_header_range_is_the_log_extent(self, page_text):
+        """F97: the range is the log's extent, read from the log — not a claim someone typed."""
+        m = HEADER_RE.search(page_text)
+        assert m, "the header's range is not parseable"
+        defined = _defined_adrs()
+        assert len(defined) >= 60, "floor: the ADR log parsed too few headings"
+        assert int(m.group(3)) == max(defined), (
+            f"the header covers up to ADR-{int(m.group(3)):04d} but the log runs to "
+            f"ADR-{max(defined):04d} — regenerate")
+
+
+class TestSectionFiveIsAppendOnly:
+    """ADR-0062 R8's one permitted exception: §5 is emitted unchanged, never regenerated."""
+
+    def test_section_5_is_the_generators_record_verbatim(self, page_text):
+        assert _section_5(page_text).rstrip("\n") == _generator().SECTION_5.rstrip("\n"), (
+            "§5 on the page differs from the generator's SECTION_5 — §5 was edited on the "
+            "page; append to SECTION_5 in the generator instead")
+
+    def test_no_finding_is_lost_against_the_committed_page(self, page_text):
+        """Append-only, as a property: every finding HEAD's page carries is still here, and a
+        DECIDED finding stays DECIDED. Comparing against HEAD (not a list in this file) means a
+        new finding is a legitimate addition and does not fire this (F92)."""
+        import subprocess
+
+        head = subprocess.run(["git", "show", "HEAD:CURRENT_AUTHORITIES.md"], cwd=REPO,
+                              capture_output=True, text=True)
+        if head.returncode != 0:
+            pytest.skip("CURRENT_AUTHORITIES.md is not in HEAD")
+        pat = re.compile(r"\*\*(F-\d+) — ?([^*]*)\*\*")
+        before = dict(pat.findall(_section_5(head.stdout)))
+        now = dict(pat.findall(_section_5(page_text)))
+        assert len(before) >= 2, "floor: HEAD's §5 parsed fewer than two findings"
+        lost = sorted(set(before) - set(now))
+        assert not lost, f"§5 lost finding(s) {lost} — §5 is append-only"
+        undecided = sorted(f for f, d in before.items()
+                           if "DECIDED" in d and "DECIDED" not in now.get(f, ""))
+        assert not undecided, f"finding(s) {undecided} were DECIDED and no longer are"

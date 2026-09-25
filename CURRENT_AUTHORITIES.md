@@ -1,24 +1,19 @@
 # CURRENT_AUTHORITIES.md — the current state of the completion and recovery authorities
 
 > **DERIVED DOCUMENT — REGENERATE, DO NOT EDIT IN PLACE.**
-> Regenerate this file whenever an ADR changes. It states the **current** state, not history: it cites
-> ADRs, it does not re-derive them, and it **introduces no decision**. If two ADRs conflict, that is a
-> **finding** (recorded in the phase report), never a decision taken here.
+> Regenerate with `env -u PYTHONPATH .venv/bin/python scripts/derive_current_authorities.py`.
+> It states the **current** state, not history: it cites ADRs, it does not re-derive them, and it
+> **introduces no decision**. If two ADRs conflict, that is a **finding** (recorded in §5), never a
+> decision taken here.
 >
 > **Every claim below carries a pin**: `ADR-XXXX §Y` for the decision, and `path:line` for the code.
-> A claim that cannot be pinned is a finding, not a claim. §5 records this page's own findings: the two
-> it could **not** pin are now **decided by ADR-0049** and are kept as a resolution trail.
+> The generator **checks every pin against the tree** and **generates §3 from `goal.PRECEDENCE`**; a
+> pin that does not name its symbol, a row the arbiter does not return, or an ADR chain that omits an
+> ADR superseding one it cites **refuses the derivation**. §5 is this page's own findings record —
+> **append-only**, emitted unchanged (ADR-0062 R8).
 >
-> Generated 2026-09-25 at `5580257` · covers **ADR-0001 … ADR-0061** · supersession chains in §1.1–1.6.
-> **Regenerated with the header only** — no stated authority changed (ADR-0055 §6's rule, re-applied by
-> ADR-0059, ADR-0060 — a *boundary*, not an authority over completion or recovery — ADR-0061, which
-> decides a transport frame and a hook's input rule, and ADR-0060 R5's Layer C relocation, which moves
-> two symbols between layers), so the body is byte-identical except the sibling pointer below; the range
-> and the commit are the page's own claim about the log's extent, and both were stale (F97).
->
-> **The header's commit and range are checked, not trusted** (`test_current_authorities_pins.py`
-> ::`TestTheProseClaimsAreMechanicallyCheckable`). Until 2026-09-25 the range said `ADR-0049` while the
-> page cited ADR-0051/0053/0054 — F81's class, prose drifting where a `path:line` guard cannot see it.
+> Generated 2026-09-26 at `1e45b19` · covers **ADR-0001 … ADR-0062** · supersession chains in §1.1–1.6.
+> The commit, the date and the range are **read from `git` and the ADR log**, not written (F97).
 >
 > **Sibling registers:** `CURRENT_FINDINGS.md`, `CURRENT_OPEN_ITEMS.md`, `CURRENT_FLAGS.md` — all
 > derived; none may decide. See `CONTEXT.md`'s **"The derived registers"**.
@@ -103,7 +98,8 @@ place the aggregation is stated; a second statement would be a second authority 
 
 ## 3. (b) The precedence matrix
 
-Reproduced from **ADR-0035**'s ordered arbiter as revised by **ADR-0047** R1, and pinned to the code.
+Generated from `goal.PRECEDENCE` (each row and its result) and `derive_goal_state` (each code pin),
+following **ADR-0035**'s ordered arbiter as revised by **ADR-0047** R1.
 `T` = terminal outcome, `A` = the P3 acceptance verdict, `S` = the P7 stagnation predicate.
 
 | # | Condition | Result | Source |
@@ -184,14 +180,10 @@ resolved on this page.
 
 ## 6. Regeneration procedure
 
-1. Change an ADR. 2. Re-pin §1's code locations (they move). 3. Re-run the §5 differential:
-
-```bash
-env -u PYTHONPATH .venv/bin/python - <<'PY'
-import importlib.util, itertools, subprocess, sys, tempfile, pathlib
-# diff the arbiter at HEAD against any earlier revision, over the full input space
-PY
-```
-
-4. Re-generate the matrix from `goal.PRECEDENCE` and `derive_goal_state`, **not** by editing §3's table.
-5. Any claim that no longer pins becomes a new finding in §5; do not delete it silently.
+1. Change an ADR, or move code a pin names. 2. Re-pin in the generator's data — **never on this page**.
+3. Run `env -u PYTHONPATH .venv/bin/python scripts/derive_current_authorities.py`. It **refuses, and
+writes nothing**, if a pin no longer names its symbol, if a §3 row's branch does not return what
+`goal.PRECEDENCE` states, or if an authority's ADR chain cites an ADR the log supersedes without citing
+the ADR that supersedes it. 4. §3 is generated from the code; there is no table to edit.
+5. Any claim that no longer pins becomes a new finding appended to `SECTION_5` in the generator; a
+finding is never deleted, and a decided one is marked `DECIDED` with its ADR.
