@@ -13,8 +13,11 @@
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is `3f9e639`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
+**HEAD is `3990313`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
 on top of it and is the authority for the count.
+**`3990313` is the gate-enablement landing** — 6 files, covering **ADR-0051** (the acceptance gate's
+enablement contract is a **non-redundancy precondition**, not a rate) and its measurement. **No
+production change** — no flag is added, nothing is enabled. See §0.0.9 below.
 **`3f9e639` is the structured-criteria landing** — 7 files, +1,332/−30, covering **ADR-0050** (the
 objective may declare its criteria; the host validates and **rejects rather than reinterprets**) and its
 implementation. Flag `WISP_CRITERIA_STRUCTURED_DECLARATION`, default **OFF**. See §0.0.8 below.
@@ -971,7 +974,8 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `dd21f6d` | `docs:` point the handoff at `d7a55c2`, record F64–F71, and correct two false claims |
 | `3298894` | `docs:` decide the precedence numbering (**ADR-0049**) — the code did not move — 5 files, +873/−27; **no behaviour change**; corrects the brief's inverted numbering claim; excludes the user's WIP (§8) |
 | `0bc4f22` | `docs:` point the handoff at `3298894`, and record F64/F65 as DECIDED |
-| `3f9e639` | `feat:` let an objective declare its criteria (**ADR-0050**), and reject rather than reinterpret — 7 files, +1,332/−30; flag `WISP_CRITERIA_STRUCTURED_DECLARATION` default OFF; found **F72/F73**; excludes the user's WIP (§8) — **`HEAD`** |
+| `3f9e639` | `feat:` let an objective declare its criteria (**ADR-0050**), and reject rather than reinterpret — 7 files, +1,332/−30; flag `WISP_CRITERIA_STRUCTURED_DECLARATION` default OFF; found **F72/F73**; excludes the user's WIP (§8) |
+| `3990313` | `docs:` decide the acceptance gate's enablement contract (**ADR-0051**) — the gate has nothing to gate on — 6 files; **no production change**; the instrument is **committed** (`scripts/`), fixing the class F75 names; found **F75/F76**; excludes the user's WIP (§8) — **`HEAD`** |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
