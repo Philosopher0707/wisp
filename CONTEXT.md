@@ -1589,6 +1589,7 @@ was sound about the wrong thing**, and it looked like a fact for three phases.
 |---|---|---|
 | `PHASE_AUTHORIZATION_PARITY.md` §6 (**F78**) | `tests/test_authorization_parity.py` compared `authorize()` to `SecurityPolicy.check()` and called the first *"the agent's verdict"* | two **models**, not the two **paths** its name, its docstring and its table all described. Driven against the real paths: **0 divergences of 36**, where the table had claimed 6 — on three action names the agent **cannot execute at all** |
 | `PHASE_OBJECTIVE_FLAG_COMPOSITION.md` §6 (**F82**) | two "canonical suite" command blocks, each quoting a count | **one of two** blocks, and they listed different file sets (43 vs 41) — so neither count described the intersection the method calls for |
+| `PHASE_CORPUS_INTEGRITY.md` §2.1 (**F86**) | a table classifying **two** red Phase-10 guards as one class, on the evidence of **one** | *"contract updates — exactly F38's class"* is right for the M4 count guard (a legitimate site was added) and **wrong** for the outcome-classification guard, where the **code** violated the rule and the test was doing its job. F78's shape one level up: a claim about **two** things, derived from **one** |
 
 **The tell is a table whose NAME and whose SUBJECT have drifted apart.** A ratchet called *parity between
 the paths* that drives two functions; a block called *the* canonical suite when there are two. Neither is
@@ -1615,6 +1616,11 @@ approval"* without driving it; the question direction had never reached a client
   docstrings and comments as code (instance 5).
 - **A test double must reproduce the production control flow it replaces**, or say explicitly that it does
   not — and the test must fail if the production path changes in a way the double does not model.
+- **A count is canonical only if it is measured after the LAST change to any member (F85).** F71 said
+  *never quote a count from prose*; F82 said *only if there is ONE block*; F85 says the measurement must
+  follow the last change, not the change that motivated measuring. Measured: the canonical block reported
+  **1316** where both headings said **1312**, because one deliverable set the headings and the next added
+  four tests to a block member.
 - **The instrument is not exempt.** A check that has never been falsified has not been validated.
 
 ---
@@ -1642,28 +1648,35 @@ uv run --no-project --with "mypy==2.3.1" mypy wisp/      # 1844 errors in 228 fi
 #   ERROR tests/test_protected_path_guard.py  - starlette.testclient requires httpx
 #   ERROR tests/test_server_policy_gate.py    - starlette.testclient requires httpx
 #
-# With those two ignored, the block runs and reports **216 passed, 2 FAILED** — and
-# both failures are pre-existing and neither is F38:
+# With those two ignored, the block now reports **218 passed, 0 failed.** Both of the
+# guards it was reporting RED have been closed, each by the mission that owns it:
 #
 #   test_outcome_classification_authority.py::test_no_module_reimplements_tool_result_status_classification
 #       `wisp/core/stateless.py:158,167` compared `.get("status")` to "ok"/"error"
 #       directly; introduced by ade4dc6 (POST-M13 execution semantics).
-#       **FIXED** by the outcome-classification mission — the success test is now
-#       delegated to `core.events.is_error_outcome` (both branches; 35-case
-#       differential identical). **The guard was RIGHT and the code was wrong:**
-#       calling this one a "contract update" was F86. It is in the canonical block
-#       now, so it can no longer be red-and-unseen.
+#       **FIXED** (outcome-classification mission): the success test is delegated to
+#       `core.events.is_error_outcome` in both branches — 35-case differential
+#       identical on the production function. **The guard was RIGHT and the code was
+#       wrong**, so calling this one a "contract update" was **F86**. It is in the
+#       canonical block now, so it can no longer be red-and-unseen.
 #   test_m4_governance_wiring.py::test_tool_executor_construction_sites_are_known
-#       asserts 2 ToolExecutor construction sites; there are 3 (the third is
-#       `wisp/acp_session.py`, from cef3e90).
+#       asserted 2 ToolExecutor construction sites; there are 3. **UPDATED** (corpus
+#       integrity II) to 3, and the files are named so a swap cannot hide behind the
+#       count. The third is `wisp/benchmark/runner.py`, added by 8a7e9ab and
+#       **authorised** by ADR-0045's F54 fix — a genuine CONTRACT UPDATE, exactly as
+#       PHASE_CORPUS_INTEGRITY.md §2.1 classified it. (`PHASE_CORPUS_INTEGRITY.md`
+#       said the third was `wisp/acp_session.py`, from cef3e90; driven, that is wrong
+#       on both counts — `acp_session.py` was one of the ORIGINAL two.)
 #
-# The M4 count guard is a CONTRACT UPDATE and needs explicit authorisation, exactly
-# like F38 — it is not a side effect of another phase. (The other one was not.)
-# Neither was in the canonical block, which is why nothing caught them.
+# Neither was in the canonical block, which is why nothing caught them. The
+# outcome-classification guard is in it now; the M4 count guard is not (it is a
+# Phase-10 contract guard, and its own tripwire is what matters).
 #
 # RULE (F71, restated): do not quote a count that has not been produced in THIS
 # environment. The two httpx-dependent files are listed but ignored until httpx can
-# be installed.
+# be installed. **Re-attempted by corpus integrity II:** `httpx` is still absent from
+# the cache and from the host; the two files still ERROR at collection with
+# `RuntimeError: The starlette.testclient requires httpx`. Finding F80 stays OPEN.
 env -u PYTHONPATH .venv/bin/python -m pytest \
   tests/test_outcome_classification_authority.py \
   tests/test_rest_gate_boundary.py \

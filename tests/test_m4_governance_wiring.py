@@ -99,11 +99,33 @@ def _tool_executor_calls() -> list[tuple[str, int, bool]]:
 
 
 def test_tool_executor_construction_sites_are_known():
+    """**Three** sites. The count was 2 until `8a7e9ab` added the third.
+
+    `8a7e9ab` (the autonomous-convergence chain) wired an executor into
+    `benchmark/runner.py::make_ollama_core_factory`. That is **authorised** —
+    it is F54 in **ADR-0045**: `_execute_tool`'s no-executor fallback permits
+    `READ` tools only, so `wisp bench` was refusing every mutation and
+    reporting FAIL for tasks no agent could pass. The fix was deliberate and
+    measured (0 passed/2 failed/2 timeout → 3 passed/0 failed/1 timeout).
+
+    So this count is a **state**, and it went stale the moment a legitimate
+    site was authorised — which is exactly why the failure message says
+    *"check whether it passes a policy bundle"* rather than *"this must never
+    change"*. The property this file exists for is the tripwire **below**:
+    no site passes a policy bundle. This assertion only keeps the inventory
+    honest, and it names the files so that a fourth site cannot hide behind a
+    count that a swap would leave unchanged.
+    """
     sites = _tool_executor_calls()
-    assert len(sites) == 2, (
+    assert len(sites) == 3, (
         "a new ToolExecutor construction site appeared — check whether it "
         f"passes a policy bundle: {sites}"
     )
+    assert {rel for rel, _line, _passes in sites} == {
+        "wisp/composition.py",       # the composition root
+        "wisp/acp_session.py",       # the ACP session's config-driven fallback
+        "wisp/benchmark/runner.py",  # the benchmark factory — ADR-0045, F54
+    }, f"the construction-site inventory changed: {sites}"
 
 
 def test_no_tool_executor_is_constructed_with_a_policy():

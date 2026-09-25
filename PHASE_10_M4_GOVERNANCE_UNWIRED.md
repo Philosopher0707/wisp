@@ -49,6 +49,19 @@ gets.
 | Callers of `load_local` / `load_managed` / `merge_all` / `EffectivePolicy(...)` | `wisp/policy/cli.py` and `tests/test_policy_modes.py`. **Nothing in the runtime** |
 | `wisp.policy` importers | `wisp/__main__.py:493` (the `policy` subcommand), `wisp/server/routes/policy.py:40` (publish). **Not composition, not the executor, not the REPL** |
 
+> **ANNOTATED 2026-09-25 (corpus integrity II) — the first row is now wrong twice, and the record
+> keeps its number.** Driven, there are **three** `ToolExecutor(...)` construction sites, not two:
+> `composition.py:142`, `acp_session.py:208` and **`benchmark/runner.py:82`**. Two corrections:
+> the composition line number was stale (`:134` → `:142`), and the **third site was added by
+> `8a7e9ab`** (the autonomous-convergence chain) — **after** this document was written, and
+> **authorised** by ADR-0045's F54 fix, which wired an executor into
+> `benchmark/runner.py::make_ollama_core_factory` because `_execute_tool`'s no-executor fallback
+> permits `READ` tools only, so `wisp bench` was refusing every mutation and reporting FAIL for
+> tasks no agent could pass. The invariant this table exists for — *no site passes `policy=`* —
+> **still holds at all three**. The stale row is annotated rather than rewritten: a phase report
+> records what was measured **then**, and deleting its number would falsify history. See
+> `PHASE_CORPUS_INTEGRITY_II.md` §1.
+
 **The server routes hold a bundle and stop.** `POST /api/policy/publish`
 verifies a signature and stores the document on `request.app.state.policy_bundle`
 (`routes/policy.py:51`). `GET /api/policy/current` serves it back.

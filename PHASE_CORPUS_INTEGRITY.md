@@ -53,6 +53,23 @@ claims about that file until it can be re-measured."*
    that needs its own authorisation, not a side effect of another phase. Named, dated, and attributed so
    the next reader can act on them deliberately.
 
+   > **ANNOTATED 2026-09-25 (corpus integrity II).** The row above is corrected on two counts, and the
+   > *classification* in the paragraph is corrected for **one of the two guards**:
+   >
+   > - **the outcome-classification guard was NOT a contract update (F86).** Its table entry is right —
+   >   `stateless.py:158,167` did compare the envelope status to the literal — but the **code** was wrong
+   >   and the **test was doing its job**. F38's class is a *test* that encoded the broken environment as
+   >   the contract; this is the opposite. **Fixed** by the outcome-classification mission: the success
+   >   test delegates to `core.events.is_error_outcome`, proven equivalent over 35 cases on the
+   >   production function.
+   > - **the M4 count guard WAS a contract update**, and the third site is **`wisp/benchmark/runner.py`**,
+   >   not `wisp/acp_session.py` (which was one of the original two). It was added by **`8a7e9ab`**, not
+   >   `cef3e90`, and it is **authorised** by ADR-0045's F54 fix. **Updated** to 3 by corpus integrity II.
+   >
+   > Both rows now stand corrected in `PHASE_OUTCOME_CLASSIFICATION_VIOLATION.md` (F86) and
+   > `PHASE_CORPUS_INTEGRITY_II.md` §1. The table above is annotated, not rewritten — it records what was
+   > measured on the day.
+
 **What changed in the corpus.**
 
 | Location | Change |
