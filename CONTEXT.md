@@ -13,12 +13,15 @@
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is `3298894`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
+**HEAD is `3f9e639`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
 on top of it and is the authority for the count.
+**`3f9e639` is the structured-criteria landing** — 7 files, +1,332/−30, covering **ADR-0050** (the
+objective may declare its criteria; the host validates and **rejects rather than reinterprets**) and its
+implementation. Flag `WISP_CRITERIA_STRUCTURED_DECLARATION`, default **OFF**. See §0.0.8 below.
 **`3298894` is the precedence-correction landing** — 5 files, +873/−27, covering **ADR-0049**: the
 canonical precedence table is `goal.PRECEDENCE` (eight rows, 0–7), older numbering is historical and is
 resolved **by content**. **A record update — no code, no behaviour change**; the 48-combination
-differential is identical before and after. See §0.0.6 below.
+differential is identical before and after. See §0.0.7 below.
 **`d7a55c2` is the F8 error-classification landing** — 6 files, +883/−11, covering F8's second half
 (a missing validator is a system failure, not a schema verdict). See §0.0.5 below.
 **`7023af0` is the criteria-derivation landing** — 6 files, +1,347/−11, covering **ADR-0048** (the
@@ -96,9 +99,81 @@ quoting it; §11 says how.
 | **NEXT** — criteria derivation authority (**ADR-0048**) | `COMPLETE` — **`RATIFIED`**; found **F66** (three measured failure modes, MODE A a false `GOAL_MET`), **F67** (the wiring had no test) | `PHASE_CRITERIA_DERIVATION_AUTHORITY.md` |
 | **NEXT** — F8 error classification | `COMPLETE` — **`F8 SECONDARY_DEFECT REMOVED`**; found **F68** (inert retry), **F69** (two classifications for one condition) | `PHASE_F8_ERROR_CLASSIFICATION.md` |
 | **NEXT** — precedence correction (**ADR-0049**) | `COMPLETE` — **`RECORD UPDATE`**; F-1/F-2 from the authorities page **DECIDED**; found the brief's **inverted numbering claim** | `PHASE_PRECEDENCE_CORRECTION.md` |
+| **NEXT** — structured criteria (**ADR-0050**) | `COMPLETE` — **`RATIFIED + IMPLEMENTED`**; found **F72** (the error rate is a function of the workspace, not the objective) and **F73** (an over-broad tripwire) | `PHASE_STRUCTURED_CRITERIA.md` |
 
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log).
 **Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0047**).
+
+### 0.0.8 STRUCTURED CRITERIA (2026-09-25) — ADR-0050, decided and implemented
+
+ADR-0048 R6 decided the objective-declared structured path was **viable** and fixed its boundary, then
+deferred *"the grammar, the validation surface, and the rejection behaviour"*. **ADR-0050 decides and
+implements them.**
+
+**The decision.** The declaration is a fenced block **at the head** of the objective, opened by
+`--- criteria ---` and closed by `--- /criteria ---`, with one YAML-shaped line per criterion
+(`<kind>: <spec>`), `<kind>` one of exactly two — `command_succeeds` or `symbol_defined`. The host
+validates each spec against the measurable surface; a declaration naming an unmeasurable spec is
+**rejected** with `CriteriaDeclarationRejected`, surfaced to the caller and **journalled**, and it **does
+not fall back** to the prose grammar. `WISP_CRITERIA_STRUCTURED_DECLARATION` gates the path and defaults
+**OFF**.
+
+| Rule | Substance |
+|---|---|
+| R1 placement | at the **head** — a block quoted mid-prose is not a declaration |
+| R2 grammar | closed: two kinds; comments and blanks allowed; an unknown kind and a malformed line are **rejected**, not skipped |
+| R3 validation | `argv[0]` must resolve (workspace-relative executable, or on `PATH`); `<path>::<symbol>` must be **inside the workspace**, exist, and be an identifier. **Runnability, never outcome** |
+| R4 rejection | loud, journalled, and the derivation **stops** — five shapes: unterminated, empty, unknown-kind, malformed-line, unmeasurable-spec |
+| R5 precedence | `DECLARED` is a fourth derivation outcome and **precedes** the inference |
+| R6 no model channel | the objective comes from the **caller**; the host validates; the harness measures — structural, not promised |
+| R7 optional | no block → today's behaviour |
+| R8 flag | `WISP_CRITERIA_STRUCTURED_DECLARATION`, default **OFF**, read once at the composition point |
+
+A **hand-rolled** parser, not `pyyaml` — which **is** declared and available, so this is a choice: a
+general YAML parser accepts sequences, maps, anchors and non-string scalars, and **every shape it accepts
+is a shape the host must then interpret.**
+
+**What closes, and what does not.** MODE A and MODE B both close **on the declared path only**. MODE A:
+`DECLARED` makes the suite criterion **required**, so a no-op cannot pass. MODE B: closed **structurally**,
+because the prose is not read at all. An objective that declares nothing keeps today's behaviour and
+today's defects — **the declaration does not make the classifier better, it makes the *objective*
+complete.** Both `DEFECT-PIN` classes still pass, docstrings updated to record the closure and point at the
+declared-path tests; **not deleted**.
+
+**The corpus, and the numbers ADR-0048's reversal condition needed.** Collected **by AST** — every string
+literal the repo passes as an objective to the three call names, every module-level `*_OBJECTIVE`
+constant, plus the benchmark prompts. **13 distinct objectives, 11 hand-labelled decidable**, measured on a
+**red** baseline (the only baseline on which the promotion decision exists):
+
+| | |
+|---|---|
+| required when it should be | **4** |
+| required when it should **not** (MODE B) | **1** |
+| **not** required when it should be (MODE A) | **1** |
+| correctly not required | **5** |
+| **accuracy** | **9/11 = 82%** |
+
+**F72 — the error rate is not a single number.** The classifier's answer is a function of
+`(objective, workspace)`, not of the objective alone: a symbol criterion is derivable only when the named
+file **exists**, so three objectives move `UNDETERMINED` → `UNSTATED` against their own fixture workspace,
+where `UNSTATED` is the **correct** answer. **Corrected for each objective's own workspace: 12/14 = 86%.**
+ADR-0048's reversal condition is therefore **under-specified** — *"determinable from its own words"* is not
+a property of the words.
+
+**F73 — an over-broad tripwire, fixed.** The ADR-0045 R1 no-model-channel tripwire pinned parameter set
+**equality**, so adding `use_declaration: bool` tripped it — though a boolean switch cannot carry criteria.
+Rewritten as an allow-list, a probe showed a harmless `verbose: bool` **also** tripped it, which is worse
+(it trains the reader to extend the list unthinkingly). Rewritten **again** to test the two things that
+make a channel: a criteria-holding **annotation**, and a channel-shaped **name on a non-scalar**. T1/T2
+caught, T3 green.
+
+**Also found and fixed in-phase:** the declared-path test's red baseline was keyed `verify:cmd0` while a
+declared spec's id is `declared:cmd0` — so `base is None` made the criterion required *regardless of the
+promotion*, and the assertion was **vacuous**. Found by a probe, not by reading. In production the baseline
+**does** cover the id, so the mutation would have reopened MODE A with a green suite.
+
+**Report:** `PHASE_STRUCTURED_CRITERIA.md`. **Guard:** `tests/reliability/test_structured_criteria.py` (53),
+which drives the real `converge_on_objective` rather than only the parser.
 
 ### 0.0.7 PRECEDENCE CORRECTION (2026-09-25) — ADR-0049
 
@@ -835,7 +910,9 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `7023af0` | `feat:` decide the criteria-derivation authority (ADR-0048) — 6 files, +1,347/−11; found **F66/F67**; excludes the user's WIP (§8) |
 | `d7a55c2` | `fix:` F8's second half — a missing validator is a system failure, not a schema verdict — 6 files, +883/−11; found **F68/F69**; excludes the user's WIP (§8) |
 | `dd21f6d` | `docs:` point the handoff at `d7a55c2`, record F64–F71, and correct two false claims |
-| `3298894` | `docs:` decide the precedence numbering (**ADR-0049**) — the code did not move — 5 files, +873/−27; **no behaviour change**; corrects the brief's inverted numbering claim; excludes the user's WIP (§8) — **`HEAD`** |
+| `3298894` | `docs:` decide the precedence numbering (**ADR-0049**) — the code did not move — 5 files, +873/−27; **no behaviour change**; corrects the brief's inverted numbering claim; excludes the user's WIP (§8) |
+| `0bc4f22` | `docs:` point the handoff at `3298894`, and record F64/F65 as DECIDED |
+| `3f9e639` | `feat:` let an objective declare its criteria (**ADR-0050**), and reject rather than reinterpret — 7 files, +1,332/−30; flag `WISP_CRITERIA_STRUCTURED_DECLARATION` default OFF; found **F72/F73**; excludes the user's WIP (§8) — **`HEAD`** |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,

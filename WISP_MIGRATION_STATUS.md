@@ -42,6 +42,33 @@ It excludes the user's pre-existing WIP (`CONTEXT.md` §8) deliberately and file
 
 ---
 
+## 0. NEXT — structured criteria (2026-09-25)
+
+Landed as `3f9e639`. **ADR-0050**: the objective may carry a declared criteria block
+(`--- criteria ---` … `--- /criteria ---`, at the head), the host validates each spec against the
+measurable surface, and a declaration it cannot use is **rejected** — never reinterpreted, never a
+fallback to the prose grammar. `WISP_CRITERIA_STRUCTURED_DECLARATION`, default **OFF**.
+
+**Findings F72, F73, F74** — the rows are in **§23**; this section does not repeat them, because the
+duplication that already exists (F64–F71 appear in both this §0 and §23) is the navigability defect this
+chain was about and should not be extended.
+
+**What closes, and what does not:** MODE A and MODE B both close **on the declared path only**. An
+objective that declares nothing keeps today's behaviour and today's defects. **The declaration does not
+make the classifier better, it makes the *objective* complete.** Both `DEFECT-PIN` classes still pass,
+with docstrings updated to record the closure — not deleted.
+
+**Report:** `PHASE_STRUCTURED_CRITERIA.md`. **Guard:** `tests/reliability/test_structured_criteria.py`
+(53), which drives the real `converge_on_objective` rather than only the parser.
+
+**Doc-hygiene observation, recorded not repaired:** F64–F71 exist in **two** places — this file's §0
+mission sections and §23's table. Both copies agree, so nothing is wrong; but the log has two homes for
+the same rows, which is exactly the kind of split §23's own note already flags for F45–F63. A future
+editorial pass should give the findings one home (either move F45+ into §23, or keep §23 as the F1–F44
+record and say so). Not done here — it is a 25-row reorganization and this phase is about criteria.
+
+---
+
 ## 0. NEXT — precedence correction (2026-09-25)
 
 Landed as `3298894`. **ADR-0049**: the canonical precedence table is `goal.PRECEDENCE` (eight rows, 0–7);
@@ -1815,6 +1842,9 @@ prescribes rather than a single run.
 | **F69** | **One condition, two published classifications: a schema failure is a *denial* on the pre-dispatch path and an *error* on the defense-in-depth path.** The dry-run sites stamp `tc_event["_denial"] = "SCHEMA_INVALID"` → `denial_result()` → `OutcomeClass.INVALID` → **non-retryable** (`TERMINAL_OUTCOME_CLASSES`). `_execute_tool` (`stateless.py:2007`) reports the identical condition as `{"status": "error", "data": schema_error}` → `OutcomeClass.ERROR` → **retryable**. The two differ on the one axis the taxonomy exists to decide | F8 error classification (Deliverable 3) | **RECORDED.** Part of the same undecided question as the residual below — the evidence that the denial-status question is genuinely undecided rather than merely unimplemented |
 | **F70** | **The editable install is a NO-OP, and `CONTEXT.md` §6's claim about it was INVERTED.** The row read *"`__editable___wisp_0_1_0_finder` resolves `wisp` ahead of `sys.path`, so **`PYTHONPATH` cannot override which package is imported**."* Measured: the finder's `MAPPING` points at `/Users/philosopher/Documents/wisp/wisp` — the **pre-move** path — and **that directory does not exist**; from a foreign cwd with no `PYTHONPATH`, `import wisp` raises `ModuleNotFoundError`; with `PYTHONPATH` set to the repo root it imports. So the finder resolves **nothing**, `PYTHONPATH` **can** override, and what actually resolves `wisp` is the **cwd**. The practical rule (*change files in place*) is still right, but for a different reason, and the real hazard is the one the row did not name: **run from anywhere but the repo root and `wisp` resolves to nothing** — or to a foreign tree if one is on `PYTHONPATH` | criteria-authority mission (Deliverable 2) | **RECORDED, NOT REPAIRED** (repairing the venv is an environment change; §9 keeps F8's env work separate from architecture). **The §6 row is corrected in place**, since a wrong claim in the environment authority is what makes the error recur |
 | **F71** | **`CONTEXT.md` §11's verification authority was wrong in two ways.** (1) Its heading read *"849 tests (848 pass, 1 fails)"* and its command block omitted the four NEXT-mission files — the figure was the **pre-NEXT** count (it had said "714" before that). (2) It listed *"Gates (both must be green)"*. Measured at `d7a55c2`: `ruff check wisp/` reports **11 errors** (incl. `F821` undefined names in `wisp/auth/principal.py` and `wisp/context_assembler.py`) and the pinned `mypy` reports **1844 errors in 228 files** — not zero. **Every phase that claimed a green lint/type criterion claimed something untrue.** Both error sets are **unchanged** by the 2026-09-25 chain (set diff: 0 new, 0 gone) | criteria-authority mission (all three deliverables) | **CORRECTED IN PLACE** — §11 now states the measured counts and says neither gate is green; the canonical block is extended to the seven new files and reads **1115 / 1114 / 1**. The 11 ruff and 1844 mypy errors are **not repaired**: unrelated modules, and repairing them would sweep a large diff into a documentation commit |
+| **F72** | **The criteria classifier's error rate is not a single number — it is a function of `(objective, workspace)`.** Measured over a corpus of **every objective in the repository**, collected by AST (13 distinct, 11 hand-labelled decidable) and run on a **red** baseline, the only baseline on which the promotion decision exists: required-when-it-should **4**, required-when-it-should-not (MODE B) **1**, not-required-when-it-should (MODE A) **1**, correctly-not-required **5** — **accuracy 9/11 = 82%**. But a `symbol_defined` criterion is derivable only when the named file **exists**, so three objectives move `UNDETERMINED` → `UNSTATED` against a workspace containing their fixture file, and `UNSTATED` is the **correct** answer for all three. **Corrected for each objective's own workspace: 12/14 = 86%.** | structured-criteria mission (Deliverable 2) | **RECORDED; ADR-0050's Context carries it.** This is the measurement ADR-0048's reversal condition asked for, and it shows the condition is **under-specified**: *"an objective whose requirement was determinable from its own words"* is not a property of the words. Instrument committed at `.workbuddy-ai/memory/post-m13-structured/corpus.py` |
+| **F73** | **The ADR-0045 R1 no-model-channel tripwire was over-broad, in two successive forms.** It asserted **parameter set equality** on `explain_acceptance`, so adding `use_declaration: bool` (ADR-0050 R8) tripped it — though a boolean switch cannot carry criteria. Rewritten with an explicit allow-list, a probe showed a **harmless** `verbose: bool` also tripped it, which is worse than the first form: a check that fires on every innocuous addition trains the reader to extend the list without thinking, defeating the check. It checked *which* parameters exist, not *whether any can carry criteria* | structured-criteria mission (Deliverable 2) | **FIXED** — rewritten to test the two things that make a channel: a criteria-holding **annotation**, and a channel-shaped **name on a non-scalar**. Probe **T1** (`tuple[AcceptanceCriteria, …]`) and **T2** (`declared_specs`, unannotated) are caught; **T3** (`verbose: bool`) stays green. The residual — a parameter typed `Any` under an innocuous name — is stated in the test |
+| **F74** | **A declared-path test was vacuous with respect to the promotion it claimed to test.** The red baseline was keyed `verify:cmd0` while a declared spec's criteria id is `declared:cmd0`, so `criteria_for` saw `base is None` and made the absolute criterion **required regardless of `promote_absolute`** — un-promoting the declared criterion was invisible. **In production the baseline does cover the id** (the probe measures the declared specs), so the mutation would have **reopened MODE A with a green suite** | structured-criteria mission (Deliverable 2) | **FIXED** — the baseline's criteria id is now a parameter, and the declared-path tests are keyed to the id under test. Found by mutation probe **P2** *not falsifying*, not by reading. Same class as F63 and Deliverable 1's P5: **a check that can pass for a reason unrelated to its claim** |
 
 
 
