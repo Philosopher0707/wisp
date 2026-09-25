@@ -4341,6 +4341,203 @@ off.
 
 ---
 
+## ADR-0049 — The canonical precedence table is `goal.PRECEDENCE` (eight rows, 0–7); every older numbering is historical and is resolved by content
+
+**Status:** ACCEPTED (precedence-correction mission). **A record update: it restates what the code
+already does.** Changes no behaviour, changes no code, and edits neither ADR-0035 nor ADR-0047 —
+both are named as **historical** for the numbering. Supersedes nothing.
+
+### Context
+
+`CURRENT_AUTHORITIES.md` §5 recorded two findings it could not decide, because a derived page is not
+authorised to change a decision. This ADR decides them.
+
+**The numbering defect.** ADR-0035 §Precedence states an ordered arbiter with rows **0–6** and **no
+fall-through**. The implementation has always had a row 7, so **the ADR's table was never total** — the
+combination `terminal_outcome = SUCCEEDED` with no acceptance verdict matches none of ADR-0035's rows.
+ADR-0047 then revised the table **without restating it**: R1 reads *"Row 4 is now «fatal terminal error,
+**and no P3 PASS**»"*, against a numbering that exists only in `goal.PRECEDENCE`, which has eight rows.
+
+So **"row 4" resolves to three different rows depending on which document is read**, and the next
+implementer reasons from one and gets a different answer than the one who reads another.
+
+**The measurement, and an inverted claim in circulation.** The mapping below was **driven**, not read:
+ADR-0035's conditions were evaluated in order over the full 48-combination input space and the result
+compared with what `derive_goal_state` actually returns
+(`.workbuddy-ai/memory/post-m13-precedence/row_mapping.py`).
+
+| ADR-0035 §Precedence row | Its condition | Covers canonical row(s) |
+|---|---|---|
+| 3 | `P3 FAIL ∨ fatal terminal error` | **3** (×12), **4** (×8), **5** (×2), **6** (×2) — the `∨ fatal` term reaches four rows |
+| **4** | `may_report_goal_met() is False` (**stagnation**) | **5** (×12) |
+| 5 | `P3 INCONCLUSIVE ∨ terminal outcome INCOMPLETE` | **6** (×2), **7** (×6) |
+| 6 | `turn_succeeded ∧ P3 PASS` | **6** (×1) |
+
+**ADR-0035's table is silent for 3 of 48 combinations** — quantified here for the first time:
+`succeeded`+`pass`+`turn_succeeded=False` (canonical row 6 answers it) and
+`succeeded`+no-verdict in both `turn_succeeded` states (canonical row 7 answers them).
+
+**The specific correction.** The mission brief that commissioned this ADR carried a pinned claim that
+ADR-0035's row 4 and ADR-0047 R1's "row 4" *"name the same row by content (stagnation)"*, that the
+canonical table *"expresses as row 4 as well"*, and that ADR-0047's revised row 4 *"corresponds to the
+canonical row 5"*. **All three are inverted**, and the measurement above is the authority:
+
+- ADR-0035's row 4 is **stagnation** → canonical row **5**.
+- ADR-0047 R1's "row 4" is **the fatal clause** → canonical row **4**.
+- They are **different content**, not the same row.
+
+This is recorded because it is the defect R1 exists to close: a numbering that reads plausibly and
+resolves wrongly. **Had the claim been adopted, R1 would have written a rule that maps the fatal clause
+to stagnation.**
+
+### Decision
+
+**R1 — `goal.PRECEDENCE` is the canonical table, and it has eight rows (0–7).**
+The table is defined at `wisp/core/goal.py:108-117` and evaluated by `derive_goal_state`
+(`wisp/core/goal.py:146-215`; the arbitration body is `:190-213`). ADR-0035 §Precedence's rows 0–6 and
+ADR-0047's renumbering are **historical**: they SHALL be read as statements about the same table at an
+earlier revision, never as a competing table. **"Row N" in either older document SHALL be resolved
+against the canonical table by CONTENT, not by number.** The canonical table is restated in full in
+§The canonical table below; a reader needs no other document to resolve any row.
+
+**R2 — `terminal_outcome == INCOMPLETE` is not a row condition, and the two cells it moved are
+ratified.** ADR-0035's row 5 carried an `∨ terminal outcome INCOMPLETE` term. The canonical table has
+**no such term in any row**: an `INCOMPLETE` turn is routed **by its verdict**, exactly like any other
+turn. The routing, measured:
+
+| `INCOMPLETE` turn | Canonical row | Result |
+|---|---|---|
+| `PASS`, not stagnating | **6** | `GOAL_MET` ← **the ratified cells** |
+| `PASS`, stagnating | **5** | `GOAL_STAGNATED` |
+| `FAIL` | **3** | `GOAL_FAILED` |
+| `INCONCLUSIVE` or absent verdict, not stagnating | **7** | `GOAL_UNVERIFIED` |
+| `INCONCLUSIVE` or absent verdict, stagnating | **5** | `GOAL_STAGNATED` |
+
+**The two cells this moves — `INCOMPLETE + PASS → GOAL_MET`, in both `turn_succeeded` states — are
+RATIFIED.** The rationale is ADR-0047's own principle, applied to `INCOMPLETE` rather than `FAILED`:
+*the objective's evidence decides where it is decisive; the attempt's outcome decides only where it is
+not.* A turn that exhausted its iteration budget without emitting `done`, while the harness measured
+**every** objective criterion satisfied, is the same shape as a turn that timed out — and ADR-0047 R1
+already ratified that one. The alternative reading (an exhausted turn can never reach `GOAL_MET` even
+when the objective is proven satisfied) would let the *attempt's* budget veto the *objective's* evidence,
+which is the defect ADR-0047 removed.
+
+**R3 — ADR-0047 R3 is SCOPED, not changed.** R3 reads *"a fatal error must outrank stagnation, so a
+heuristic cannot soften a fact."* That rule holds for a fatal error **with no `PASS`** — the case R3's own
+test (`test_a_fatal_error_with_a_closed_predicate_stays_goal_failed`) exercises, and the case canonical
+row 4 expresses as *"fatal terminal error, **and no P3 PASS**"*. A fatal error **with** a `PASS` is
+**not fatal**: by R1's own qualifier the cell reduces to `PASS` + stagnation, which canonical row 5
+answers. So **`fatal + PASS + stagnating → GOAL_STAGNATED` is the correct cell**, and it is not a
+softening of a fact by a heuristic — the fact was qualified before the heuristic was consulted.
+
+**R3 does not reopen ADR-0047.** It restates R3's scope to match the qualifier R1 already introduced.
+ADR-0047's decision, its rejected alternatives and its test are untouched.
+
+#### The canonical table
+
+Verbatim from `goal.PRECEDENCE` (`wisp/core/goal.py:108-117`) — the Condition and Result columns are the
+table's own strings, so a reader can compare the contract against the code without reverse-engineering
+branches, and a test can compare them mechanically.
+
+| # | Condition | Result |
+|---|---|---|
+| 0 | `already-recorded terminal state` | `frozen — never rewritten (ADR-0020)` |
+| 1 | `operator cancellation` | `CANCELLED` |
+| 2 | `ladder exhausted / human escalation` | `ESCALATED_TO_HUMAN` |
+| 3 | `P3 FAIL` | `GOAL_FAILED` |
+| 4 | `fatal terminal error, and no P3 PASS` | `GOAL_FAILED` |
+| 5 | `may_report_goal_met() is False` | `GOAL_STAGNATED` |
+| 6 | `P3 PASS` | `GOAL_MET` |
+| 7 | `otherwise — no decisive verdict` | `GOAL_UNVERIFIED` |
+
+**Cells ratified by this ADR** — marked `← ADR-0049`:
+
+| # | Ratified cells | Why |
+|---|---|---|
+| 5 | `INCOMPLETE + PASS + stagnating` (row 5, not row 6) | stagnation vetoes goal-met; canonical row 5 outranks row 6 by construction |
+| 6 | `INCOMPLETE + PASS`, **both** `turn_succeeded` states ← ADR-0049 | R2 — the objective's evidence decides where it is decisive |
+| 4 | `fatal + PASS + stagnating` resolves to **row 5**, not row 4 ← ADR-0049 | R3 — a fatal error *with* a `PASS` is not fatal |
+
+#### Resolution rules, stated once
+
+1. **Resolve by content.** Find the row whose *condition* holds; never by number.
+2. **First match wins**, and the order is the table's order — row 3 before row 4, row 4 before row 5,
+   row 5 before row 6, row 6 before row 7.
+3. **Row 0 is a prior state, not a condition.** It is selected by `already_recorded is not None`
+   (`wisp/core/goal.py:190-191`), before any condition is evaluated.
+4. **Row 7 is the fall-through.** It is reached by *exhaustion*, not by a matching condition — which is
+   what makes the table total where ADR-0035's was not.
+5. **A citation of "row 4" from ADR-0035 or ADR-0047 is resolved by the condition it quotes**, not by
+   the number. ADR-0035's row 4 quotes `may_report_goal_met() is False` → canonical row 5.
+   ADR-0047 R1's "Row 4" quotes *"fatal terminal error, and no P3 PASS"* → canonical row 4.
+
+### Behaviour change
+
+**None.** This ADR ratifies the code; it does not move it. Measured, not asserted: the 48-combination
+differential of `derive_goal_state` was produced **before** this ADR landed and reproduced **after**,
+and the two digests are identical.
+
+| | |
+|---|---|
+| **Digest before** | `bb8b54e638a0d1304c5200ad28a0b2ab0bf9616baa1482646ddbbb0d37f1a139` |
+| **Digest after** | *(identical — see `PHASE_PRECEDENCE_CORRECTION.md` §4)* |
+| **State census (both runs)** | `goal_failed` 20 · `goal_met` 6 · `goal_stagnated` 14 · `goal_unverified` 8 |
+| **Delta vs `b9af5f0^`** | 7 of 48 cells, in three classes — (a) `FAILED`+`PASS` → `GOAL_MET` (ADR-0047 R1); (b) `turn_succeeded` demotion (ADR-0047 R2); (c) the cells R2/R3 ratify here |
+
+The code is unchanged because **no code was changed**: `wisp/core/goal.py` is byte-identical before and
+after. The digest is the evidence that the *documentation* did not smuggle in a behaviour claim.
+
+### Alternatives rejected
+
+- **Edit ADR-0035's table in place to add row 7.** Rejected: the decision log is append-only. An
+  in-place edit destroys the record of what was decided when, and the whole point of R1 is that a
+  reader can tell which revision a row number belongs to.
+- **Edit ADR-0047 R1 to restate the table.** Rejected for the same reason, and because ADR-0047's
+  renumbering is itself evidence: it shows a numbering can be introduced implicitly and then misread.
+- **Renumber `goal.PRECEDENCE` to match ADR-0035.** Rejected: the code's numbering is the one the tests,
+  the docstrings and the derived page already cite, and `PRECEDENCE`'s row numbers are part of the
+  contract it documents. Renumbering would be a behaviour-adjacent change to satisfy a document.
+- **Treat the numbering ambiguity as harmless.** Rejected by measurement: the commissioned brief's own
+  pinned claim was inverted, and it is a competent reader's claim. The ambiguity is not theoretical.
+- **Ratify `INCOMPLETE + PASS → GOAL_UNVERIFIED`** (the pre-ADR-0047 behaviour). Rejected under R2: it
+  lets the attempt's budget veto the objective's evidence, which is exactly the defect ADR-0047 removed
+  for `FAILED`. A different decision here would be a *reversal* of ADR-0047, and nothing measured
+  supports one.
+
+### Risks
+
+- **A historical row number still reads plausibly.** R1 makes the resolution rule explicit but cannot
+  rewrite the older documents, so a reader who skips R1 will still resolve "row 4" wrongly. The
+  mitigation is that the canonical table is restated **in full** here and pinned by a test, so the
+  answer is reachable without either older document.
+- **R2's ratification is a judgement, not a measurement.** The two cells' *behaviour* is measured; the
+  claim that it is *correct* is an argument from ADR-0047's principle. It is stated as an argument so a
+  future reader can attack the argument rather than the code.
+- **`goal.PRECEDENCE` is documentation-as-data**, so it can drift from `derive_goal_state`. Mitigated by
+  `tests/reliability/test_precedence_canonical.py`, which drives each row through the real arbiter.
+
+### Rollback / reversal
+
+This ADR is a record update with no behaviour and no code, so there is nothing to roll back
+operationally. **It is reversed if** a measurement shows the canonical table's numbering cannot be
+resolved by content for a real citation — i.e. if two rows' conditions are ever satisfied by the same
+input in a way that makes "the row whose condition holds" ambiguous. The table is a total order with
+first-match-wins, so that cannot happen by construction; a future row that breaks it would be the
+reversal trigger.
+
+### Follow-up questions
+
+1. **Should ADR-0035's table carry an in-place pointer to this ADR?** Append-only forbids editing its
+   text; a one-line *"superseded for numbering by ADR-0049"* banner is not an edit to the decision. Not
+   taken here — it is an editorial question about the log's convention.
+2. **Should `PRECEDENCE` be derived from the code rather than transcribed beside it?** The table is
+   already documentation-as-data in the same module as the arbiter; generating it would remove the last
+   transcription. Out of scope.
+3. **Is `INCOMPLETE` reachable with `PASS` in practice?** R2 ratifies the cell; how often a turn
+   exhausts its budget while every criterion measures satisfied is a measurement nobody has taken.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -4393,3 +4590,4 @@ off.
 | 0046 | Objective-relative progress is a second input to the recovery decision, not a re-classification of the failure | NEXT (progress-aware recovery) | ACCEPTED (widens one class's legal rungs on measurable progress; amends no earlier decision, and changes no caller that does not pass `progress`) |
 | 0047 | A failed turn is not a failed objective, and R5's unit is the strategy, not the rung | NEXT (multi-turn productive recovery) | ACCEPTED (amends ADR-0035 rows 3–6 — one input combination moves; refines ADR-0046's use of R5 under a new dedicated budget) |
 | 0048 | The acceptance criteria are host-derived from the objective's *stated* conditions; silence is not consent, and an undetermined requirement is `INCONCLUSIVE` | NEXT (criteria authority) | ACCEPTED (names what the host may infer from silence; authorises one additive record and one flag-gated behaviour defaulting to today; declares the objective-declared structured path viable without violating ADR-0045 R1) |
+| 0049 | The canonical precedence table is `goal.PRECEDENCE` (eight rows, 0–7); every older numbering is historical and is resolved by content | NEXT (precedence correction) | ACCEPTED (a record update — restates what the code already does; ratifies two cells ADR-0047 moved without stating; scopes ADR-0047 R3 to the no-`PASS` case; edits neither ADR-0035 nor ADR-0047) |

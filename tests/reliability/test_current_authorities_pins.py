@@ -231,11 +231,42 @@ class TestTheMatrixIsTheArbiter:
         assert "FAILED" in page_text and "GOAL_MET" in page_text, (
             "the page must name the fatal+PASS cell that moved to GOAL_MET")
 
-    def test_the_page_records_its_unpinnable_claims(self, page_text):
-        """A page with nothing unpinnable is claiming more than it can support."""
-        assert "could not pin" in page_text, (
-            "the page must have a section for claims it could not pin — the brief makes "
-            "that section mandatory when such a claim exists")
+    def test_the_page_records_its_findings_and_their_disposition(self, page_text):
+        """Every finding the page lists must be marked DECIDED (with an ADR) or OPEN.
+
+        This replaces an earlier assertion that the page contains the phrase *"could not
+        pin"*. That phrase described the page's state **before ADR-0049** decided the two
+        claims it had recorded, so the assertion went red when the page was correctly
+        regenerated — **the guard had pinned the old state, not the property.** The
+        property is: the page may not carry an undated, undispositioned finding.
+
+        The disposition group is `[^*]*`, not `[^*]+`, so a finding that has **lost** its
+        disposition still matches and is then rejected. A mutation probe found the
+        `+`-form passing vacuously: an emptied disposition made the regex skip the finding,
+        and an empty finding list satisfies a `for` loop.
+        """
+        assert "## 5." in page_text, (
+            "the page must keep a section for its own findings")
+        section = page_text.split("## 5.", 1)[1].split("\n## ", 1)[0]
+        findings = re.findall(r"\*\*(F-\d+) — ?([^*]*)\*\*", section)
+        assert len(findings) >= 2, (
+            f"only {len(findings)} findings parsed from §5 — the loop below would pass "
+            "vacuously; either the section lost its findings or the finding format moved")
+        for fid, disposition in findings:
+            assert "DECIDED" in disposition or "OPEN" in disposition, (
+                f"{fid} is neither DECIDED nor OPEN — a finding must carry its "
+                f"disposition, or the page is asserting something it has not resolved: "
+                f"{disposition.strip()!r}")
+            if "DECIDED" in disposition:
+                assert re.search(r"ADR-\d{4}", disposition), (
+                    f"{fid} claims to be DECIDED with no ADR cited — a decision "
+                    "without a record is not a decision")
+
+    def test_the_page_does_not_re_argue_a_decision(self, page_text):
+        """A derived page cites a decision; re-arguing it makes a second authority."""
+        section = page_text.split("## 5.", 1)[1].split("\n## ", 1)[0]
+        assert "Alternatives rejected" not in section, (
+            "§5 is re-arguing a decision — that belongs in the ADR, not on a derived page")
 
 
 class TestTheSixAuthoritiesAreTheOnesTheChainNames:

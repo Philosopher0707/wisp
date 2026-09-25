@@ -6,10 +6,10 @@
 > **finding** (recorded in the phase report), never a decision taken here.
 >
 > **Every claim below carries a pin**: `ADR-XXXX §Y` for the decision, and `path:line` for the code.
-> A claim that cannot be pinned is a finding, not a claim. The two claims this page could **not** pin
-> are listed in §5 — they are the reason this page is a derived artifact and not an ADR.
+> A claim that cannot be pinned is a finding, not a claim. §5 records this page's own findings: the two
+> it could **not** pin are now **decided by ADR-0049** and are kept as a resolution trail.
 >
-> Generated 2026-09-25 at `af3a89a` · covers **ADR-0001 … ADR-0047** · supersession chains in §1.1–1.6.
+> Generated 2026-09-25 at `dd21f6d` · covers **ADR-0001 … ADR-0049** · supersession chains in §1.1–1.6.
 
 ---
 
@@ -65,7 +65,7 @@ provider terminal → stream state → turn predicate → acceptance verdict
 |---|---|
 | **Current owner** | `goal.derive_goal_state` (`wisp/core/goal.py:146`); the contract as data is `goal.PRECEDENCE` (`wisp/core/goal.py:108-117`), 8 rows |
 | **Cannot decide** | recovery rung · **whether `done` was withheld** |
-| **Current ADRs** | **ADR-0035** (the contract; rows 0–6) → **ADR-0036** (amends ADR-0035 by reconciling its two clauses; adds the predicate to the goal record) → **ADR-0037** (completes ADR-0036) → **ADR-0042** (states the relation ADR-0035 left implicit; no behaviour change) → **ADR-0044** (removes the duplicated predicate) → **ADR-0047** R1–R5 (rows 3–6 revised) |
+| **Current ADRs** | **ADR-0035** (the contract; rows 0–6) → **ADR-0036** (amends ADR-0035 by reconciling its two clauses; adds the predicate to the goal record) → **ADR-0037** (completes ADR-0036) → **ADR-0042** (states the relation ADR-0035 left implicit; no behaviour change) → **ADR-0044** (removes the duplicated predicate) → **ADR-0047** R1–R5 (rows 3–6 revised) → **ADR-0049** (makes this table canonical at eight rows; resolves older numbering by content; ratifies two cells) |
 | **Durable record fields** | `SessionEvent.goal_state_event` (`wisp/core/runtime.py:1271`), 9 keys: `goal_state`, `terminal_outcome`, `acceptance_verdict`, `stagnation_verdict`, `stagnation_allows_goal_met`, `turn_succeeded`, `cancelled`, `escalated`, `failure_code` (`wisp/core/runtime.py:1273-1292`). **`stagnation_allows_goal_met` is the one replay must read** — `stagnation_verdict` ignores `trap_fired` (F35, ADR-0036 §6) |
 
 ### 1.6 recovery ladder state
@@ -103,11 +103,19 @@ Reproduced from **ADR-0035**'s ordered arbiter as revised by **ADR-0047** R1, an
 | 4 | `T` = `FAILED` **and no `A` = `PASS`** | `GOAL_FAILED` | **ADR-0047 R1** · `wisp/core/goal.py:203` |
 | 5 | `S` — `may_report_goal_met()` is `False` | `GOAL_STAGNATED` | ADR-0035 row 4 · `wisp/core/goal.py:205` |
 | 6 | `A` = `PASS` | `GOAL_MET` | ADR-0035 row 6 · `wisp/core/goal.py:207` |
-| 7 | otherwise — no decisive verdict | `GOAL_UNVERIFIED` | code only — see **§5 F-2** · `wisp/core/goal.py:213` |
+| 7 | otherwise — no decisive verdict | `GOAL_UNVERIFIED` | fall-through, code only — **ADR-0049 R1** · `wisp/core/goal.py:213` |
+
+**This table is canonical by ADR-0049 R1** — `goal.PRECEDENCE` (`wisp/core/goal.py:108-117`), eight rows.
+ADR-0035 §Precedence's rows 0–6 and ADR-0047's renumbering are **historical**: resolve any "row N" against
+this table **by content**, not by number. ADR-0035's row 4 is stagnation (this table's row 5); ADR-0047
+R1's "Row 4" is the fatal clause (this table's row 4) — **different rows**. Full restatement, the mapping
+and the resolution rules are in **ADR-0049**.
 
 **The input combination F60 moved is row 4's qualifier: `T` = `FAILED` + `A` = `PASS` was `GOAL_FAILED`,
 and is now `GOAL_MET`.** That is the change ADR-0047 R1 documents, and it is the reason `turn_succeeded`
-stopped arbitrating (R2). **Two further cells also moved and ADR-0047 does not state them** — see §5 F-1.
+stopped arbitrating (R2). **Two further cells moved and ADR-0047 does not state them — both are ratified
+by ADR-0049** (R2: `INCOMPLETE`+`PASS` → `GOAL_MET`; R3: `fatal`+`PASS`+`stagnating` → `GOAL_STAGNATED`).
+See §5 F-1.
 
 **The rules the row order cannot express.** `fatal > stagnation`, `stagnation > PASS`, `PASS > fatal` is a
 **cycle**, so no ordering of rows can express it (ADR-0047 R3). It is broken where it is semantically
@@ -128,22 +136,33 @@ the **attempt** rather than the **objective**.
 
 ---
 
-## 5. Claims this page could not pin — recorded as findings, not asserted
+## 5. This page's own findings, and where they were decided
 
-**F-1 — the arbitration has drifted further than the ADR states.** ADR-0047 R1 says *"Only one input
-combination moved"*. A differential of `derive_goal_state` against `b9af5f0^` over all 48 input
-combinations finds **7 cells changed, in three distinct semantic classes**: (a) `FAILED`+`PASS`
-(documented, R1); (b) `turn_succeeded=False` no longer blocking `PASS` (documented, R2); (c)
-**`INCOMPLETE`+`PASS` → `GOAL_MET`** (was `GOAL_UNVERIFIED`) and **`FAILED`+`PASS`+`stagnating` →
-`GOAL_STAGNATED`** (was `GOAL_FAILED`) — **undocumented**. Recorded, not decided: this page states the
-code's current behaviour (rows 3–7 above) and does not rule on whether (c) is intended.
+§5 exists because a derived page may **state** the current state but may not **decide** it. Both claims
+below were recorded here as findings and have since been decided — the resolution is cited, not
+re-argued, because a page that re-argued a decision would be a second authority for it.
 
-**F-2 — the precedence table is only total in the code.** ADR-0035's arbiter has rows **0–6** and no
-fall-through, so the combination `T` = `SUCCEEDED` + no verdict matches no row, and its `GOAL_UNVERIFIED`
-*requires* `INCONCLUSIVE ∨ INCOMPLETE` — which that combination does not have. The code has always had a
-row 7. ADR-0047 neither restates the table nor says it added a row, and it renumbers (*"Row 4 is now…"*)
-against a numbering that exists only in the code. **Consequence for a reader: "row N" is ambiguous between
-ADR-0035 and the implementation, which is exactly the drift this page exists to prevent.**
+**F-1 — DECIDED (ADR-0049 R2/R3).** *The arbitration had moved further than ADR-0047 stated.*
+ADR-0047 R1 said *"Only one input combination moved"*; a differential against `b9af5f0^` over all 48
+input combinations found **7 cells changed in three semantic classes** — two documented, and two not:
+`INCOMPLETE`+`PASS` → `GOAL_MET` (was `GOAL_UNVERIFIED`), and `fatal`+`PASS`+`stagnating` →
+`GOAL_STAGNATED` (was `GOAL_FAILED`).
+**ADR-0049 R2 ratifies the first** (the objective's evidence decides where it is decisive — ADR-0047's own
+principle, applied to `INCOMPLETE` rather than `FAILED`), and **ADR-0049 R3 scopes the second** (a fatal
+error *with* a `PASS` is not fatal, so the cell reduces to `PASS` + stagnation, which is row 5).
+The measured routing is in `tests/reliability/test_precedence_canonical.py::TestTheRatifiedCells`.
+
+**F-2 — DECIDED (ADR-0049 R1).** *The precedence table was total only in the code, and "row N" was
+ambiguous between two ADRs and the implementation.* ADR-0035's arbiter had rows **0–6** and no
+fall-through; the code has always had a row 7.
+**ADR-0049 R1 makes `goal.PRECEDENCE` (`wisp/core/goal.py:108-117`, eight rows 0–7) the canonical table**
+and declares every older numbering **historical**, to be resolved against it **by content**. The
+resolution rule is §3's table plus ADR-0049's §Resolution rules; the mapping is pinned by
+`tests/reliability/test_precedence_canonical.py::TestTheContentMappingIsReproducible`, which drives
+ADR-0035's conditions over the full input space and reports which canonical row answers each one.
+
+**No open findings.** A future conflict between two ADRs is recorded here and stops — it is never
+resolved on this page.
 
 ---
 
