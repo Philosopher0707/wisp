@@ -13,12 +13,20 @@
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is `9d56aec`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
+**HEAD is `aa47ae0`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
 on top of it and is the authority for the count.
+**`aa47ae0` is the corpus-integrity pass** — **no new ADR**. 2.1 **OPEN** (`httpx` is absent from the
+cache *and from this host*, so the protected-path guard cannot be collected; the corpus's counts are
+corrected instead — and the measurement found the block aborts on **two** files, not one, and that **two
+Phase-10 guards are red at HEAD**). 2.2–2.4 closed. See `PHASE_CORPUS_INTEGRITY.md`.
+**`e639115` is the REST-approval landing** — **ADR-0057**: a REST request for an executable-config action
+asks a human over the WebSocket channel, in the **clients'** vocabulary (so the client change is **zero**);
+**no client ⇒ 403**. Flag `WISP_REST_APPROVAL`, default **OFF**. Found **F83** (the channel's question
+direction had never reached a client) and **F84**. See §0.0.16 below.
 **`9d56aec` is the objective-path flag-composition landing** — **ADR-0056**: the two criteria flags are
 **independent**, and the one interaction is **derivation order** (a declaration pre-empts `strict`, which
 is then recorded and inert). **No production change** — the measured behaviour already is the decision.
-Found **F82** (the two "canonical" blocks listed different file sets). See §0.0.15 below.
+Found **F82**. See §0.0.15 below.
 **`7bb8f8a` is the authorization-parity landing** — **ADR-0055**: the REST gate is **at parity with the
 agent path**; the recorded divergence was between two **models**, not two **paths** (0 path divergences
 of 36). **Option A** — accept, and correct the record. **No production behaviour moves.** Found
@@ -1313,7 +1321,9 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `74ac43b` | `feat:` the acceptance gate consumes `verdict_keys_on_declared` (**ADR-0054**) — the engine's pre-`done` gate asks a read-only callable, bounded by ADR-0036's model and sharing the turn's budget; `WISP_ACCEPTANCE_GATE` default **OFF** (ADR-0051 R2–R6 **not** satisfied: **1** capable model of 13, measured by a committed instrument); the ADR-0051 tripwire fired and was replaced by its inverse; `CURRENT_AUTHORITIES.md` re-pinned; excludes the user's WIP (§8) |
 | `17130c7` | `fix:` the pin guard asserts the pinned **content**, not that a line exists — found **nine** stale pins the old check passed; 3/3 non-vacuity probes caught (NV3 first MISSED because the *probe* replaced only the first occurrence); `CONTEXT.md` §10's sixth instrument-defect instance **CLOSED**; excludes the user's WIP (§8) |
 | `7bb8f8a` | `docs:` the REST gate is **at parity with the agent path** (**ADR-0055**) — **0 path divergences of 36**, 6 **model** divergences; **Option A**; `require_tool_allowed`'s docstring qualified (**+13/−0**, pure); the ratchet keeps all seven properties and gains a **real-path parity guard** (25 tests); committed instrument `scripts/authorization_parity_measurement.py`; found **F78–F81**; `M1` → **`PARTIAL`**; excludes the user's WIP (§8) |
-| `9d56aec` | `docs:` the two criteria flags are **independent** on the objective path (**ADR-0056**) — the interaction is **derivation order** (a declaration pre-empts `strict`); **no production change**; 7-test guard with an AST composition pin; found **F82** (the two canonical blocks listed different file sets — both now 43 files, **1294 tests**); excludes the user's WIP (§8) — **`HEAD`** |
+| `9d56aec` | `docs:` the two criteria flags are **independent** on the objective path (**ADR-0056**) — the interaction is **derivation order** (a declaration pre-empts `strict`); **no production change**; 7-test guard with an AST composition pin; found **F82** (the two canonical blocks listed different file sets — both now 45 files, **1312 tests**); excludes the user's WIP (§8) |
+| `e639115` | `feat:` a REST request for an executable-config action **asks a human** (**ADR-0057**) — the frame is the **clients'** vocabulary (client change **zero**), **no client ⇒ 403**, flag `WISP_REST_APPROVAL` default **OFF**; new `wisp/server/approval_bridge.py` + an async gate companion; 18-test guard, 5/5 probes caught; found **F83** (the WS approval channel was half-wired) and **F84**; excludes the user's WIP (§8) |
+| `aa47ae0` | `docs:` **corpus integrity pass** — 2.1 **OPEN** (`httpx` absent from the cache and the host), 2.2–2.4 closed; the pin guard gains **four prose properties** and caught a real header drift on its first run; found **two Phase-10 guards red at HEAD** (neither F38, neither in the canonical block); excludes the user's WIP (§8) — **`HEAD`** |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
