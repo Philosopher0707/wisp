@@ -120,6 +120,49 @@ code change.
 
 ---
 
+## F87 — §3's commit table did not list every commit, and §0 said it did
+
+Found while doing the §0/§3 update this mission requires, by **driving the claim instead of trusting
+it**. `CONTEXT.md` §0 says:
+
+> *"§3 lists every commit on top of it and is the authority for the count."*
+
+Driven (`git log --reverse --format="%h %s" 83b10af..HEAD` diffed against the table's hash rows):
+
+```
+68 commits on top of 83b10af; 58 hash-rows in §3's table
+MISSING from the table (11):
+  08dd57e docs: corpus integrity II …          ← this mission
+  6ec0f48 fix: the success test …              ← this mission
+  5c129d5 docs: point the handoff at aa47ae0
+  0cd5613 docs: point the handoff at 9d56aec
+  8de56d8 docs: point the handoff at 17130c7
+  c03eee3 docs: point the handoff at 5898e0e
+  3ed402a docs: point the handoff at 805eca8
+  3c1b6dd docs: point the handoff at 1e83e34
+  8a7db35 docs: point the handoff at 3990313
+  40cfa52 docs: point the handoff at 3f9e639, and record F72-F74
+  c8b3cc8 docs: point the handoff at 8a7e9ab
+```
+
+**Nine of those predate this mission** — every "point the handoff" commit since `0bc4f22` had simply
+stopped being listed, while the table went on listing earlier ones (`b8dc4ac`, `af3a89a`, `dd21f6d`,
+`0bc4f22`). So the claim and the table disagreed for four phases, and nothing checked.
+
+**Closed, not named.** The fix is pure transcription — twelve rows from `git log`, no judgement — and
+the claim §0 makes is load-bearing (§3 is *"the authority for the count"*). Backfilled, and the
+`HEAD` marker moved from `aa47ae0` (where it had been left) to `08dd57e`.
+
+**One exception remains, and it is stated rather than papered over.** The handoff commit that carries
+the §0 line pointing at `08dd57e` is necessarily created *after* the table is written, so it cannot
+list itself. §0 now names that exception explicitly. That is the honest resolution of a
+self-referential table; the alternative — a table that claims completeness it cannot have — is the
+defect being fixed.
+
+**Re-runnable:** `.workbuddy-ai/memory/post-m13-gate-enablement/check_commit_table.py`.
+
+---
+
 ## What changed, and what was left alone
 
 | Location | Change |
@@ -131,6 +174,7 @@ code change.
 | `PHASE_10_M4_GOVERNANCE_UNWIRED.md` | annotated: `:134` → `:142`, the third site named, its authorisation cited. **Not rewritten** |
 | `PHASE_CORPUS_INTEGRITY.md` §2.1 | annotated: the classification is corrected for one of the two guards (F86) and the third site for the other. **Not rewritten** |
 | `tests/test_outcome_classification_authority.py` | the floor (Deliverable 1) — the M4 guard needed **no** floor: its subject is not a collection |
+| `CONTEXT.md` §0 / §3 / §12 | the `HEAD` line and the two new phase rows; **§3's table backfilled with the nine missing handoff commits, plus this mission's three (F87)**; §12's M4 row corrected from *"both construction sites"* to **three**, with the third's provenance |
 
 **Nothing else.** No production code changed in this deliverable. The `httpx` item is environmental and
 stays open. The other instrument-defect instances were not opened.

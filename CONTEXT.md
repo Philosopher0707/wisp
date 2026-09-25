@@ -13,8 +13,23 @@
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is `aa47ae0`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
-on top of it and is the authority for the count.
+**HEAD is `08dd57e`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
+on top of it and is the authority for the count — **F87**: it did not, until 2026-09-25. **Nine**
+"point the handoff" commits had never been listed, so the claim and the table disagreed; backfilled.
+The only exception is the handoff commit that carries *this* line, which the next landing lists.
+**`08dd57e` is corpus integrity II** — **no new ADR**. 2.1 **CLOSED** (the M4 guard's count is 3; the
+third site is `wisp/benchmark/runner.py`, added by `8a7e9ab` and **authorised** by ADR-0045's F54 fix —
+the brief and `PHASE_CORPUS_INTEGRITY.md` §2.1 both said `acp_session.py`/`cef3e90`, wrong on both
+counts). 2.2 **OPEN** (`httpx` re-attempted, still absent from the cache and the host). See
+`PHASE_CORPUS_INTEGRITY_II.md`.
+**`6ec0f48` is the outcome-classification fix** — the migration's **own rule was being violated in a
+production file**, and the guard that catches it had been RED since `ade4dc6`, invisible because its
+block aborts at collection. `wisp/core/stateless.py`'s two direct `.get("status") == "ok"` comparisons
+now delegate to `core.events.is_error_outcome`; 35-case differential on the production function
+identical. **No ADR** — the rule is unchanged and the code is brought into compliance. The corpus's
+"contract update" classification was **F86** (right for the M4 guard, wrong for this one). Found
+**F85** (a count is canonical only if measured after the LAST change to any member). See
+`PHASE_OUTCOME_CLASSIFICATION_VIOLATION.md`.
 **`aa47ae0` is the corpus-integrity pass** — **no new ADR**. 2.1 **OPEN** (`httpx` is absent from the
 cache *and from this host*, so the protected-path guard cannot be collected; the corpus's counts are
 corrected instead — and the measurement found the block aborts on **two** files, not one, and that **two
@@ -141,6 +156,8 @@ quoting it; §11 says how.
 | objective-path flag composition (**ADR-0056**) | `COMPLETE` — **`DECIDED`**, independent; the interaction is derivation order | `PHASE_OBJECTIVE_FLAG_COMPOSITION.md` |
 | REST approval through the WebSocket channel (**ADR-0057**) | `COMPLETE` — **`DECIDED`**, the clients' frame; no client ⇒ deny; flag default OFF; found **F83** (the channel was half-wired) | `PHASE_REST_APPROVAL.md` |
 | corpus integrity pass | `COMPLETE` — 2.1 **OPEN** (no `httpx` anywhere on the host), 2.2–2.4 closed | `PHASE_CORPUS_INTEGRITY.md` |
+| outcome-classification violation | `COMPLETE` — the **code** was wrong, the guard was right; a mechanical fix (**no ADR**); found **F85**, **F86** | `PHASE_OUTCOME_CLASSIFICATION_VIOLATION.md` |
+| corpus integrity II | `COMPLETE` — 2.1 **CLOSED** (count 3, third site authorised by ADR-0045/F54), 2.2 **OPEN** (`httpx`) | `PHASE_CORPUS_INTEGRITY_II.md` |
 
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log).
 **Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0057**).
@@ -1304,6 +1321,7 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `ade4dc6` | `feat:` land the POST-M13 execution-semantics work (ADR-0034 – ADR-0044) — 108 files, +26,811/−397; excludes the user's WIP (§8) |
 | `b8dc4ac` | `docs:` point the handoff at `ade4dc6` |
 | `8a7e9ab` | `feat:` land the autonomous-convergence chain (ADR-0045 – ADR-0046) — 21 files, +8,173/−14; excludes the user's WIP (§8) |
+| `c8b3cc8` | `docs:` point the handoff at `8a7e9ab` |
 | `b9af5f0` | `feat:` close F60 and F61 (ADR-0047) — a failed turn is not a failed objective — 12 files, +2,208/−93; excludes the user's WIP (§8) |
 | `af3a89a` | `docs:` point the handoff at `b9af5f0` |
 | `802413a` | `docs:` add the current-state-of-the-authorities page, and guard it — 3 files, +687; found **F64/F65**; excludes the user's WIP (§8) |
@@ -1313,17 +1331,27 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `3298894` | `docs:` decide the precedence numbering (**ADR-0049**) — the code did not move — 5 files, +873/−27; **no behaviour change**; corrects the brief's inverted numbering claim; excludes the user's WIP (§8) |
 | `0bc4f22` | `docs:` point the handoff at `3298894`, and record F64/F65 as DECIDED |
 | `3f9e639` | `feat:` let an objective declare its criteria (**ADR-0050**), and reject rather than reinterpret — 7 files, +1,332/−30; flag `WISP_CRITERIA_STRUCTURED_DECLARATION` default OFF; found **F72/F73**; excludes the user's WIP (§8) |
+| `40cfa52` | `docs:` point the handoff at `3f9e639`, and record F72–F74 |
 | `3990313` | `docs:` decide the acceptance gate's enablement contract (**ADR-0051**) — the gate has nothing to gate on — 6 files; **no production change**; the instrument is **committed** (`scripts/`), fixing the class F75 names; found **F75/F76**; excludes the user's WIP (§8) |
+| `8a7db35` | `docs:` point the handoff at `3990313` |
 | `1e83e34` | `docs(m8):` survey the `dag.py` retirement and decide **DEPRECATE**, not remove — blocked on a **measured semantic divergence** (which definition of a valid DAG wins); prose-only in `wisp/`; 10-test guard incl. 3 tripwires on the residual; excludes the user's WIP (§8) |
+| `3c1b6dd` | `docs:` point the handoff at `1e83e34` |
 | `805eca8` | `fix:` publish a capability failure as a **host** failure, not a denial (**ADR-0052**) — a system-failure envelope with the `kind` in `data`; the denial taxonomy and the prompt are unchanged; 15-test whole-path guard; found the helper defect that made NV1 non-falsifying; excludes the user's WIP (§8) |
+| `3ed402a` | `docs:` point the handoff at `805eca8` |
 | `800ada0` | `feat:` the turn path's criteria set carries the objective's declared criteria (**ADR-0053**) — satisfies ADR-0051 R1's precondition; the gate's condition is driven to differ from `rejection()` on 2 of 6 cases; flag `WISP_TURN_CRITERIA_SOURCE` default OFF; `CURRENT_AUTHORITIES.md` re-pinned (found the pin guard's blank-line weakness — a 6th instrument-defect instance); excludes the user's WIP (§8) |
 | `5898e0e` | `docs:` name the instrument-defect class once, with its six instances — **documentation only**, no code changed; `CONTEXT.md` §10 + `AGENTS.md`; excludes the user's WIP (§8) |
+| `c03eee3` | `docs:` point the handoff at `5898e0e` |
 | `74ac43b` | `feat:` the acceptance gate consumes `verdict_keys_on_declared` (**ADR-0054**) — the engine's pre-`done` gate asks a read-only callable, bounded by ADR-0036's model and sharing the turn's budget; `WISP_ACCEPTANCE_GATE` default **OFF** (ADR-0051 R2–R6 **not** satisfied: **1** capable model of 13, measured by a committed instrument); the ADR-0051 tripwire fired and was replaced by its inverse; `CURRENT_AUTHORITIES.md` re-pinned; excludes the user's WIP (§8) |
 | `17130c7` | `fix:` the pin guard asserts the pinned **content**, not that a line exists — found **nine** stale pins the old check passed; 3/3 non-vacuity probes caught (NV3 first MISSED because the *probe* replaced only the first occurrence); `CONTEXT.md` §10's sixth instrument-defect instance **CLOSED**; excludes the user's WIP (§8) |
+| `8de56d8` | `docs:` point the handoff at `17130c7` |
 | `7bb8f8a` | `docs:` the REST gate is **at parity with the agent path** (**ADR-0055**) — **0 path divergences of 36**, 6 **model** divergences; **Option A**; `require_tool_allowed`'s docstring qualified (**+13/−0**, pure); the ratchet keeps all seven properties and gains a **real-path parity guard** (25 tests); committed instrument `scripts/authorization_parity_measurement.py`; found **F78–F81**; `M1` → **`PARTIAL`**; excludes the user's WIP (§8) |
 | `9d56aec` | `docs:` the two criteria flags are **independent** on the objective path (**ADR-0056**) — the interaction is **derivation order** (a declaration pre-empts `strict`); **no production change**; 7-test guard with an AST composition pin; found **F82** (the two canonical blocks listed different file sets — both now 45 files, **1312 tests**); excludes the user's WIP (§8) |
+| `0cd5613` | `docs:` point the handoff at `9d56aec` |
 | `e639115` | `feat:` a REST request for an executable-config action **asks a human** (**ADR-0057**) — the frame is the **clients'** vocabulary (client change **zero**), **no client ⇒ 403**, flag `WISP_REST_APPROVAL` default **OFF**; new `wisp/server/approval_bridge.py` + an async gate companion; 18-test guard, 5/5 probes caught; found **F83** (the WS approval channel was half-wired) and **F84**; excludes the user's WIP (§8) |
-| `aa47ae0` | `docs:` **corpus integrity pass** — 2.1 **OPEN** (`httpx` absent from the cache and the host), 2.2–2.4 closed; the pin guard gains **four prose properties** and caught a real header drift on its first run; found **two Phase-10 guards red at HEAD** (neither F38, neither in the canonical block); excludes the user's WIP (§8) — **`HEAD`** |
+| `aa47ae0` | `docs:` **corpus integrity pass** — 2.1 **OPEN** (`httpx` absent from the cache and the host), 2.2–2.4 closed; the pin guard gains **four prose properties** and caught a real header drift on its first run; found **two Phase-10 guards red at HEAD** (neither F38, neither in the canonical block); excludes the user's WIP (§8) |
+| `5c129d5` | `docs:` point the handoff at `aa47ae0` |
+| `6ec0f48` | `fix:` `_tool_result_output`'s success test **delegates to the taxonomy** — the guard was RED since `ade4dc6` and the **code** was wrong, not the test; both branches call `core.events.is_error_outcome`, 35-case differential on the production function identical; **no ADR**; a **floor** added to the canonical guard; found **F85** (a count is canonical only if measured after the LAST change to any member) and **F86** (two unlike guards classified as one class); both outcome-classification files added to the canonical block; excludes the user's WIP (§8) |
+| `08dd57e` | `docs:` **corpus integrity II** — 2.1 **CLOSED** (the M4 guard's count is 3; the third site is `wisp/benchmark/runner.py`, from `8a7e9ab`, **authorised** by ADR-0045's F54 fix — not `acp_session.py`/`cef3e90`), 2.2 **OPEN** (`httpx` re-attempted, still absent); **F87** — §3's own table was missing **nine** "point the handoff" commits; excludes the user's WIP (§8) — **`HEAD`** |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
@@ -1836,7 +1864,7 @@ the files to a path **outside the repo** first, then compare.
 | R1 | ~~REST gate — finish option B~~ | ✅ **DONE** (§0) |
 | R2 | ~~Correct the "breaks the client" claim~~ | ✅ **DONE** (§5) |
 | **G0** | ~~REST bypass of the protected-path guard~~ | ✅ **DONE** (§0b) |
-| **E** | **M4 governance layer not wired to the runtime** — `wisp/policy/` is never loaded; `ToolExecutor.policy` is `None` at both construction sites; `config.py` has no policy setting; `app.state.policy_pubkey` is set only by tests | **False-assurance half FIXED** (option C: CLI notice + doc qualifiers). **Wiring itself OPEN** (§0d) — depends on the **key-distribution ceremony** the M4 spec deferred. Pinned by `tests/test_m4_governance_wiring.py` (25 tests). |
+| **E** | **M4 governance layer not wired to the runtime** — `wisp/policy/` is never loaded; `ToolExecutor.policy` is `None` at **all three** construction sites (`composition.py:142`, `acp_session.py:208`, `benchmark/runner.py:82` — the third added by `8a7e9ab` and authorised by ADR-0045's F54 fix; corrected 2026-09-25, `PHASE_CORPUS_INTEGRITY_II.md` §1); `config.py` has no policy setting; `app.state.policy_pubkey` is set only by tests | **False-assurance half FIXED** (option C: CLI notice + doc qualifiers). **Wiring itself OPEN** (§0d) — depends on the **key-distribution ceremony** the M4 spec deferred. Pinned by `tests/test_m4_governance_wiring.py` (25 tests). |
 | **G1** | **Authorization parity gap** — the agent composes *both* models (`policy_hard_deny` + `authorize()` + the approval gate); REST consults *only* `SecurityPolicy`. 6 of 36 (route, mode) pairs diverge, all the approval layer, in the **default** `auto_edit` mode. | **OPEN, measured** (§0c). Ratcheted by `tests/test_authorization_parity.py`. Options A/B/C in `PHASE_10_AUTHORIZATION_PARITY.md`; recommended **B now, C as the real fix**. |
 | R1b | `POST /api/hooks` still accepts an unvalidated `command` | **OPEN — needs a decision.** The gate restricts *who* may register a hook, not *what* it runs. |
 | **R10** | ~~`useApi.ts:368` sends no `Authorization` header~~ | ✅ **FIXED** (§0f) — the functional half. **What remains is a decision:** the 32 pre-existing renderer errors (7 of them in `ErrorBoundary.test.tsx`, i.e. a test file being typechecked by the *build* config); the vacuous `typecheck` script; and whether to canonicalize the 26 re-implementations now that the ratchet records them |
