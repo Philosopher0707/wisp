@@ -175,7 +175,7 @@ quoting it; §11 says how.
 | M4 wiring | `COMPLETE` — the layer is **WIRED**, default OFF; §6 step 3 (REST) deliberately not done; 4 tripwires inverted, **2 repaired** (**F92**); found **F93** | `PHASE_M4_WIRING.md` |
 
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log).
-**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0057**).
+**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0059**).
 
 ### 0.0.16 REST APPROVAL THROUGH THE WEBSOCKET CHANNEL (2026-09-25) — ADR-0057
 
@@ -1515,6 +1515,38 @@ This is the **fifth** instance of the §10 pattern: a conclusion drawn from *rea
 | **BSD `grep` via Bash is unreliable here** | `--include` silently matches nothing (caused a false "tiktoken is unused"), and a plain `grep -n "a\|b" file` returned empty with exit 1 for a pattern that plainly exists. **Use the Grep tool, not the shell.** |
 | **Long background runs get reaped** | The harness kills long pytest runs without writing a summary. Report per-subsystem results; **do not claim a full-suite pass.** |
 
+### 6.1 The declared-and-absent dependencies (one table, four phases' worth of rediscovery)
+
+A declared-and-absent dependency is an **environment state**, not a per-mission discovery. Each of these
+was found in its own phase; this table is the one place they are stated together, with what each one
+makes **un-quotable**.
+
+| dependency | `uv.lock` pin | check it is absent | files that cannot run | counts NOT quotable |
+|---|---|---|---|---|
+| **`httpx`** | `0.28.1` | `env -u PYTHONPATH .venv/bin/python -c "import httpx"` | **9** `TestClient` files: `test_api_key_security`, `test_mcp_route_binding`, `test_policy_routes`, `test_protected_path_guard`, `test_security_integration`, `test_server_background_routes`, `test_server_blocking_routes`, `test_server_policy_gate`, `test_server_sessions_store` | **all of them.** Two (`test_protected_path_guard`, `test_server_policy_gate`) are in §11's Phase-10 block, which therefore **aborts at collection** — its old "(245 passed)" was never producible here (**216 passed, 2 failed** with both ignored). Finding **F80** |
+| **`cryptography`** | `50.0.1` | `… -c "import cryptography"` | `test_policy_bundle.py`, `test_policy_modes.py`, `test_policy_cli.py`, `test_policy_routes.py` — anything calling `generate_keypair`/`sign_bundle`, because `verify_bundle` swallows the failed import and returns `False` for **everything** | **the M4 policy suite.** Driven per file: bundle **4 failed / 3 passed**, modes **10 failed**, cli **2 passed / 5 errors**, routes **1 error** (httpx), precedence **8 passed**, enforcement **5 passed** — **14 failed, 6 errors, 18 passed** across the six. None is in the canonical block. Finding **F88** |
+| **`numpy`** | `2.4.6` | `… -c "import numpy"` | the numeric benchmarks; no test file | — (open; nothing quotes a number from it) |
+| **`tiktoken`** | `0.14.0` | `… -c "import tiktoken"` | P8's token-budget measurement — it cannot be measured faithfully | **P8's token budgets.** An estimate is not a measurement |
+| **`aiohttp`** | `3.14.3` | `… -c "import aiohttp"` | no test file imports it directly | — |
+| **`jsonschema`** | `4.26.0` | — | **none** | — |
+
+**`jsonschema` is the one that was fixed** (2026-09-24, offline from the uv cache) — that was **F8**, and
+it was the serious one: while it was missing *every tool call was refused before dispatch*. Its row stays
+here so the pattern is legible.
+
+**The offline install recipe** (already in §6's table, repeated because this is where it is used):
+
+```bash
+env -u PYTHONPATH UV_OFFLINE=1 ~/.local/bin/uv pip install \
+  --python .venv/bin/python --offline '<pkg>==<locked-version>'
+```
+
+**Re-attempted 2026-09-25** (the cache could have been populated since): **`httpx` and `cryptography`
+both still fail** with *"was not found in the cache … the network was disabled"*. The uv cache exists
+and is populated (`archive-v0`, `builds-v0`, `sdists-v9`, `simple-v24`, `wheels-v6`) and holds no
+`httpx` or `cryptography` entry of any kind. **Closing either needs network access, not a code change.**
+Until then the "not quotable" column stands.
+
 ---
 
 ## 7. Known failures — the environmental set (NOT regressions)
@@ -1649,6 +1681,32 @@ field is compared, check that something **reads** it — a computed value with n
 the function that computes it, not about the system. (F83, the next mission, is the same shape applied to
 a *claim* rather than an instrument: ADR-0055 §Context called the WebSocket channel *"bidirectional
 approval"* without driving it; the question direction had never reached a client.)
+
+**The fifth sub-case — a raise that does not discriminate.** Added 2026-09-25. `pytest.raises(X)` is
+satisfied by **any** `X`, so a test whose property is *"this refuses, for this reason"* passes on a
+refusal for a different reason. The instrument reports the right **type** and the wrong **fact**.
+
+| Where | The instrument | The defect it hid |
+|---|---|---|
+| `PHASE_KEY_TRUST_WORKFLOW.md` §6 (**NV1**) | `pytest.raises(ValueError)` on an unverifiable bundle | with the signature check disabled, the loader reached `_bundle_to_effective` and raised **F89**'s unrelated `ValueError` — the same type, from the same call. The test passed while the property was broken. Fixed by pinning the **message** |
+| `PHASE_CORPUS_INTEGRITY_III.md` §2.1 (the fix's own test) | the same shape, inverted | the F89 pin is only discriminating if the **pre-fix** message *fails* it — so that is asserted, by reproducing the old expression |
+
+**The tell:** the assertion names a **type**, and that type has more than one producer. **The discipline:**
+pin the message, or assert the *identity* of the failure — never the type alone.
+
+**The sixth sub-case — a guard that pins a STATE rather than a PROPERTY.** Added 2026-09-25. A guard whose
+subject is a *snapshot* fails on the next legitimate change, so it is either weakened or, worse, believed.
+It is the **inverse** of a broken instrument: it works, it fails, and it fails **for the wrong reason**.
+
+| Where | The instrument | What it actually pinned |
+|---|---|---|
+| `PHASE_M4_WIRING.md` §3 (**F92**, first) | `test_the_loader_entry_points_have_no_runtime_caller` asserted an exact **set** of callers | a *test* file driving the loader made it fire, although the tripwire's own docstring says *"the CLI and **tests**"*. Repaired to a rule (CLI + tests, nothing else) with a floor |
+| `PHASE_M4_WIRING.md` §3 (**F92**, second) | `test_the_distribution_surface_is_unconfigured_in_production` scanned for the **bare name** `policy_pubkey=` | it matched the *config setting* ADR-0058 added, not the route attribute it is about. Repaired to `state.policy_pubkey` — what its sibling test already did |
+| `PHASE_REST_AUTHORIZATION_COMPOSITION.md` §6.1 (**F96**) | `test_rest_authorizes_as_the_same_principal_as_the_agent` **recomputed** the REST principal and compared it with the agent's | a *copy* of the production call, not the production call — so mutating `deps.py` did not falsify it. The **observation point** must be the code under test |
+
+**The tell:** the guard's failure message describes a *situation*, not a *violation*. **The discipline:**
+write it so it fails on a real violation and stays silent on the next legitimate addition; and make sure
+what it observes is the production path, not a reconstruction beside it.
 
 **The discipline:**
 
@@ -1900,6 +1958,7 @@ the files to a path **outside the repo** first, then compare.
 | **E** | **M4 governance layer not wired to the runtime** — `wisp/policy/` was never loaded; `ToolExecutor.policy` was `None` at **all three** construction sites (`composition.py:142`, `acp_session.py:208`, `benchmark/runner.py:82` — the third added by `8a7e9ab` and authorised by ADR-0045's F54 fix; corrected 2026-09-25, `PHASE_CORPUS_INTEGRITY_II.md` §1); `config.py` had no policy setting; `app.state.policy_pubkey` is set only by tests | ✅ **CLOSED 2026-09-25.** The key-trust decision is **ADR-0058** (`PHASE_KEY_TRUST_WORKFLOW.md`) and the wiring landed (`PHASE_M4_WIRING.md`): `config.py` reads `WISP_POLICY_BUNDLE`/`WISP_POLICY_PUBKEY`, `composition.py` loads and passes `policy=` at the single construction site, and a named-but-unverifiable bundle **refuses to boot**. **Default OFF** — unset means byte-for-byte today's behaviour. **Two things stay open and are named:** **REST now receives L0** — **ADR-0059** (`PHASE_REST_AUTHORIZATION_COMPOSITION.md`): `require_tool_allowed` consults `authorize()` with the root's loaded policy for its **denial** verdict only, closing a divergence **ADR-0058 created** (driven, 11 of 36 (route, mode) pairs; ADR-0055's 0-of-36 was measured with no policy loaded). `acp_session.py:208`/`benchmark/runner.py:82` still do not receive it (named). Pinned by `tests/test_m4_governance_wiring.py` (25 tests) + `tests/reliability/test_m4_policy_wiring.py` (10) + `tests/reliability/test_rest_authorization_composition.py` (16). |
 | **G1** | **Authorization parity** — the agent composes *both* models (`policy_hard_deny` + `authorize()` + the approval gate); REST consulted *only* `SecurityPolicy`. 6 of 36 (route, mode) pairs diverge, all the approval layer, in the **default** `auto_edit` mode. | ✅ **CLOSED.** **ADR-0055** drove the real paths: **0 path divergences of 36**; the 6 are a **model** divergence on three REST-only names the agent has no operation for (Option A). **ADR-0059** then closed the **L0 gap ADR-0058 created** — REST now consults `authorize()` for its denial verdict (driven, 11 of 36 pairs had diverged once a bundle was loaded). This row said **OPEN** until 2026-09-25 — **stale since ADR-0055**, and contradicting §0.0's own row (F98). Ratcheted by `tests/test_authorization_parity.py` + `tests/reliability/test_rest_authorization_composition.py`. |
 | R1b | `POST /api/hooks` still accepts an unvalidated `command` | **OPEN — needs a decision.** The gate restricts *who* may register a hook, not *what* it runs. |
+| **W1** | **The agent path's WebSocket approval prompt has never rendered.** `WebSocketTransport.approve()` sends `approval_request` / `{approval_id, tool_call}` while **both shipped clients branch on `tool_approval_request`** reading `call_id` / `name` / `arguments` / `reason`. So the agent path's WS prompt always timed out (60 s) and denied. **ADR-0057 residual 1**; finding **F83**. | **OPEN — needs its own ADR.** Reconciling it onto ADR-0057 R1's vocabulary would *fix* it and would change a **live** path's behaviour, so ADR-0057 names it rather than making it silently. Pinned by `test_the_frame_is_the_one_both_clients_read`, which fails if either client changes. **This row exists because a residual named in an ADR is not automatically a live item** — §12 is the handoff's open-items authority and did not carry it (F100). |
 | **R10** | ~~`useApi.ts:368` sends no `Authorization` header~~ | ✅ **FIXED** (§0f) — the functional half. **What remains is a decision:** the 32 pre-existing renderer errors (7 of them in `ErrorBoundary.test.tsx`, i.e. a test file being typechecked by the *build* config); the vacuous `typecheck` script; and whether to canonicalize the 26 re-implementations now that the ratchet records them |
 | **F1** | ~~`metadata["_budget"]` write-only~~ | ✅ **FIXED** (§0e.2) — completes `docs/audit-2026-08-24.md` item 11 |
 | **F2** | ~~`_SENSITIVE_ENV_KEYS` has no consumer~~ | ✅ **FIXED** (§0e.1) — deleted as superseded |
@@ -1910,7 +1969,7 @@ the files to a path **outside the repo** first, then compare.
 | R3 | Full provider-listing delegation | Unsafe until the 3 deltas (auth/timeout/degradation) converge; `test_provider_listing_equivalence.py` fails at that point and signals it |
 | R4 | `_is_transient` is a separate predicate | **Not debt** — different axis (retryability, not outcome class) |
 | R5 | Two `RunStatus` enums remain | **Resolved as a non-issue by the migration.** `RunStatus` (7 values, `graph/types.py:37`) is a **strict subset** of `RunState` (8, `runs/record.py:17`); the only asymmetry is `PLANNING`, which exists solely in `RunState`. Every `RunStatus` value coerces through `coerce_state()`. **No shim needed** — ADR-0003. Promote the `subset? True` assertion to a ratchet if a future phase adds a member. |
-| R6 | `.venv` missing deps | Environment — **5** now: `jsonschema` is **fixed** (F8), so `numpy` joins the Phase 10 four. See §6. |
+| R6 | `.venv` missing deps | Environment — **one table now: §6.1.** `jsonschema` is **fixed** (F8); `httpx`, `cryptography`, `numpy`, `tiktoken`, `aiohttp` remain absent, each with its pin, its check, the files it blocks, and the counts it makes **un-quotable**. Re-attempted offline 2026-09-25: both `httpx` and `cryptography` still fail |
 | R7 | `capability_filter.py` untracked but imported | See §8 |
 | R8 | 3 untracked test files abort collection | User's WIP |
 | R9 | `wisp/core/graph/__init__.py` modified, uncommitted | User's pre-existing edit |
@@ -1980,7 +2039,7 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `WISP_SUBAGENT_ARCHITECTURE.md` | Structured delegation, transactional effects, one-graph |
 | `WISP_MIGRATION_PLAN.md` | **The plan of record** — phases P0–P9 with prerequisites, tests, risk, rollback |
 | `WISP_MIGRATION_STATUS.md` | **The ledger** — phase status, findings **F1–F44**, change log, regression summary |
-| `WISP_ARCHITECTURE_DECISIONS.md` | **ADR-0001 … ADR-0044** |
+| `WISP_ARCHITECTURE_DECISIONS.md` | **ADR-0001 … ADR-0059** |
 | `PHASE_P0_REPORT.md` | Wire the orphaned durable layer |
 | `PHASE_P1_REPORT.md` | Journal turn transitions |
 | `PHASE_P2_REPORT.md` | Introduce the proposal boundary |

@@ -152,6 +152,64 @@ def test_is_expired_is_true_at_and_after_the_instant():
     assert PolicyBundle(org_id="a", expires_at=time.time() + 3600).is_expired() is False
 
 
+def test_a_bundle_with_no_expiry_raises_a_named_error():
+    """**F89, closed — the message, not the behaviour.**
+
+    `merge_layers` read `min(h for h in (hi, lo) if h) or 0.0`, which looks like
+    *"earliest stated, else 0.0"* and is not: the filter drops every falsy
+    candidate, so on an all-falsy input `min()` raises
+    `ValueError: min() iterable argument is empty` — naming neither the bundle nor
+    the cause — and the trailing **`or 0.0` is unreachable**, because `min()` never
+    returns a falsy value from a non-empty filtered sequence. A bundle that omitted
+    `expires_at` (the dataclass default is `0.0`) therefore failed with a message
+    about `min()`.
+
+    **The behaviour is unchanged.** It still refuses, and refusing is right: a
+    silent `expires_at=0.0` makes `is_expired()` true and `trim_expired` then sets
+    every approval to `deny` and the network to `off` without saying so — the
+    silent transformation ADR-0058 R3 exists to refuse. Only the message changed.
+    """
+    from wisp.policy.bundle import PolicyBundle
+    from wisp.policy.loader import _bundle_to_effective
+
+    import time
+
+    bundle = PolicyBundle(org_id="acme")            # expires_at defaults to 0.0
+    with pytest.raises(ValueError) as excinfo:
+        _bundle_to_effective(bundle, "local file")
+    message = str(excinfo.value)
+    assert "min() iterable" not in message, "the generic `min()` message is back"
+    assert "expires_at" in message and "PolicyBundle" in message, (
+        "the error no longer names the field to set and the type that defaults it"
+    )
+
+    # and a stated expiry still merges, so the refusal is not unconditional
+    # (`PolicyBundle` is frozen, so this is a second bundle, not a mutation)
+    stated = PolicyBundle(org_id="acme", expires_at=time.time() + 3600)
+    assert _bundle_to_effective(stated, "local file").expires_at > 0
+
+
+def test_the_named_expiry_error_is_a_discriminating_pin():
+    """ADR-0058 §6 NV1's lesson: *a raise of type X is not a raise of X for the
+    right reason.*
+
+    `pytest.raises(ValueError)` above passes on **any** `ValueError`. So the
+    assertions pin the **text** — and this test proves the text discriminates, by
+    reproducing the pre-fix expression and showing its message, the same exception
+    type from the same call, fails those same assertions.
+    """
+    try:
+        min(h for h in (0.0, 0.0) if h) or 0.0
+        raise AssertionError("the old expression no longer raises — premise moved")
+    except ValueError as exc:
+        old = str(exc)
+    assert "min() iterable" in old, f"the old message changed: {old!r}"
+    assert "expires_at" not in old, (
+        "the pre-fix message already named `expires_at`, so the pin above is not "
+        "discriminating — it would pass on the defect"
+    )
+
+
 # ── R6 — offline by construction ─────────────────────────────────────
 
 def test_the_local_loader_is_offline_and_imports_no_network_module():
