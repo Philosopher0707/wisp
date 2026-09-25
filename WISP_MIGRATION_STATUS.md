@@ -549,7 +549,7 @@ recomputation.
 | 2 | Map each turn's work to `GraphNode`s, one `AGENT` node per iteration | `COMPLETE` | `build_turn_graph()`; the runtime materializes one node per **closed tool exchange** + one terminal node, and says so — iteration boundaries are not observable, so the count is a lower bound |
 | 3 | Materialize `READY` rather than recomputing it | `COMPLETE` | `ready` is a stored field; `divergences()` detects staleness; `apply_transition` re-materializes |
 | 4 | `NodeTransition` as the only write path for node state | `COMPLETE` | AST-pinned in-module **and** tree-wide |
-| 5 | Retire `multi_agent/dag.py` into `wisp/graph/` | `NOT DONE` | **deferred** — §7.4 |
+| 5 | Retire `multi_agent/dag.py` into `wisp/graph/` | `SCOPED` — see **M8** | **surveyed and decided 2026-09-25** (`PHASE_DAG_RETIREMENT.md`): **deprecate, do not remove** — the removal is blocked on a *measured semantic divergence* (which definition of a valid DAG wins), not on work. §6.4 |
 
 ### 6.4 Item 5 deferred, with reason
 
@@ -558,6 +558,29 @@ executor — a change to a working, load-bearing path whose own regression suite
 (`test_13j1_fanout_contract_repair.py`, 13 failures) is **already red for environmental reasons**. Doing
 it now would make a regression the migration caused indistinguishable from one that was already there.
 Recorded as item **M8**, not silently dropped.
+
+**UPDATE 2026-09-25 — M8 is surveyed and DECIDED, and the answer is `DEPRECATE`, not remove.**
+The deferral's stated reason was resolved by the F8 provisioning (the fanout suite went green), so the
+retirement was attempted and **driven**. It is blocked on a *semantic* divergence, not on work:
+
+* The two implementations **disagree on what a valid DAG is.** `wisp/graph/` requires a non-empty graph
+  and every node reachable from the entrypoint; `TaskDAG` is a general partial order and permits
+  disconnected components. Re-pointing `orchestrate_dag` onto `validate_graph` would **reject inputs it
+  accepts today** — a behaviour change to a live, model-callable tool.
+* `TaskDAG.validate()` **mis-reports an unknown dependency as a cycle** (the unknown dep inflates the
+  in-degree count and can never be dequeued). The graph's validator names the real cause.
+* `wisp/graph/compat.py::dag_to_graph` — the intended lowering — is **test-only**; it has no production
+  caller.
+
+They **agree** on cycle detection and unknown-dependency detection, so the duplicate is real; they
+**diverge** on the entrypoint/reachability rule, so the duplicate is not interchangeable. Choosing which
+definition wins is its own decision.
+
+**What landed instead:** `wisp/multi_agent/dag.py`'s module docstring now declares the ownership boundary
+and names the blocker (a **prose-only** change — docstring-stripped AST byte-identical); the divergences,
+the shared property and the defect are pinned by `tests/reliability/test_dag_retirement_contract.py`
+(10 tests, 4 classes, incl. a DEFECT-PIN and three tripwires); the fanout safety net is green
+(107 passed). **The residual is open and tripwired**, not closed.
 
 ### 6.5 Completion criteria
 
@@ -1669,7 +1692,7 @@ future engine that batches its tool events changes the node count visibly, not s
 |---|---|
 | **M13** | the progress signal reads *which* nodes completed, not how many — now expressible |
 | **M1** | still blocked on a working tool path (`jsonschema`) — unchanged |
-| **M8** | **UNBLOCKED 2026-09-24** — it was waiting on a green fanout suite, and the F8 provisioning made the whole `tests/reliability/` directory green (`test_13j1` 13→0, `test_13j` 5→0). The deferral's stated reason no longer holds, so retiring `dag.py` can now be attempted and any regression will be attributable |
+| **M8** | **SURVEYED AND DECIDED 2026-09-25 — `DEPRECATE`, not remove.** The fanout suite is green (`test_13j1` 13→0, `test_13j` 5→0; 107 passed here), so the retirement was attempted and driven. It is blocked on a **measured semantic divergence**, not on work: `wisp/graph/` requires a non-empty graph with every node reachable from the entrypoint, `TaskDAG` is a general partial order — so re-pointing `orchestrate_dag` onto `validate_graph` would **reject inputs it accepts today**. `dag_to_graph` is test-only; `TaskDAG.validate()` mis-reports an unknown dependency as a cycle. Choosing which definition wins is its own decision. Guard: `tests/reliability/test_dag_retirement_contract.py`. Report: `PHASE_DAG_RETIREMENT.md` |
 
 Only M13 depended on M11, and M11's precondition is now met. **The graph driving execution** — M11's
 original wording — remains open; ADR-0029 records that the strong reading is the wrong target.

@@ -107,6 +107,52 @@ quoting it; §11 says how.
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log).
 **Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0047**).
 
+### 0.0.10 DAG RETIREMENT (2026-09-25) — M8 surveyed and decided: **deprecate**, not remove
+
+M8's premise was that `multi_agent/dag.py` is *"a duplicate of `wisp/graph/`'s executor — a strictly
+weaker one"*. **Driven, the premise is half right, and the half that is wrong is the half that decides
+the scope.**
+
+**The duplicate is real.** All twelve behaviours `dag.py` provides have a `wisp/graph/` equivalent, and
+the graph's is equal or superior in eleven — it adds durable runs, audit, artifacts, retries, joins,
+bounded cycles, resource policy, and a structural + contract + governance + resource + security
+validator. The two also **agree** on cycle detection and unknown-dependency detection.
+
+**But the two disagree on what a valid DAG *is*.** Driven over a 9-case corpus:
+
+| Case | `TaskDAG.validate()` | `validate_graph` |
+|---|---|---|
+| `single` / `chain` / `diamond` | valid | valid |
+| `cycle2` / `self_cycle` / `cycle3` | INVALID | INVALID |
+| `unknown_dep` | INVALID | INVALID |
+| **`empty`** | **valid** | **INVALID** — *"graph has no nodes"* |
+| **`disconnected`** (two independent roots) | **valid** | **INVALID** — *"unreachable nodes from 'a': b"* |
+
+`wisp/graph/` requires a single reachable entrypoint; `TaskDAG` is a general partial order. A
+disconnected DAG is a **legitimate `orchestrate_dag` input**. So a re-point is not a refactor — it would
+**reject inputs the live tool accepts today**, and `GraphExecutor.run` would additionally create a
+durable run per call and enforce a workspace-containment rule. **Choosing which definition wins is its
+own decision**, and the brief forbids taking it silently inside a retirement.
+
+**Two further measured facts.** `TaskDAG.validate()` **mis-reports an unknown dependency as a cycle**
+(the unknown dep inflates the in-degree count and can never be dequeued) — a `DEFECT-PIN`, not repaired.
+And `wisp/graph/compat.py::dag_to_graph` — the intended lowering — has **no production caller** (tests
+only): another written-but-unwired instance.
+
+**What landed:** `dag.py`'s module docstring declares the ownership boundary and names the blocker — a
+**PROSE-ONLY** change (docstring-stripped AST byte-identical to HEAD's) — plus
+`tests/reliability/test_dag_retirement_contract.py` (**10 tests**, 4 classes: the shared property, the
+measured divergences, the defect pin, and **three tripwires on the residual**), the `AGENTS.md` module-map
+row, and the `WISP_MIGRATION_STATUS.md` §6.4/item-5/M8 updates.
+
+**The residual is open and tripwired, not closed.** The tripwires fail the moment either the divergence
+closes or the execution path is re-pointed.
+
+**Instrument defect, recorded:** the guard's `dag_to_graph`-caller check was written as a **bare string
+scan** and failed on its first run — because this deliverable's own docstring *names* the symbol. It is
+now `ast`-based (only an import or a call counts). *A string scan over a Python tree reads docstrings as
+code.*
+
 ### 0.0.9 GATE ENABLEMENT (2026-09-25) — ADR-0051, decided; the gate has nothing to gate on
 
 ADR-0016 staged P3 as **3a** (record the verdict) and **3b** (enable the gate *"after a measurement
@@ -1394,7 +1440,7 @@ M9 was said to block are now complete** — M12, M14, M15, M11, M13.
 | **M5** | Foreground-turn `RunRecord` lifecycle | **OPEN** — proven end-to-end for background runs only. |
 | **M6** | `PolicyDecisionEnvelope` producer-less and consumer-less | **OPEN** — the last unwired contract. |
 | **M7** | `change_tracker.py` not wired into evidence | **OPEN** — deferred with 3b. |
-| **M8** | `multi_agent/dag.py` not retired into `wisp/graph/` | **OPEN — the deferral's stated reason no longer holds.** It was deferred because `test_13j1_fanout_contract_repair.py` was *already red* for environmental reasons, so a regression would be indistinguishable. The F8 provisioning made it **green** (`test_13j1` 13→0, `test_13j` 5→0), so retiring `dag.py` can now be attempted and any regression **will** be attributable. Still on the live `fanout` path — treat it as a real change, not a cleanup. |
+| **M8** | `multi_agent/dag.py` not retired into `wisp/graph/` | **SURVEYED AND DECIDED 2026-09-25 — `DEPRECATE`, not remove.** The fanout suite is green (107 passed), so the retirement was attempted and **driven**. It is blocked on a **measured semantic divergence**: `wisp/graph/` requires a non-empty graph with every node reachable from the entrypoint, `TaskDAG` is a general partial order — so re-pointing `orchestrate_dag` onto `validate_graph` would **reject inputs it accepts today** (a behaviour change to a live, model-callable tool). Also measured: `TaskDAG.validate()` mis-reports an unknown dependency as a cycle, and `compat.dag_to_graph` is test-only. Choosing which definition of a valid DAG wins is its own decision. **The residual is open and tripwired** (3 tripwires). Guard: `tests/reliability/test_dag_retirement_contract.py`. Report: `PHASE_DAG_RETIREMENT.md`. |
 | **M10** | The materialized graph is a **lower bound** on iterations | **OPEN — by design.** One node per closed tool exchange + one terminal; iteration boundaries are not observable. |
 
 **Committed.** Phase 10 and migration P0–P9 + M2/M3/M4 are committed (§3). The remaining uncommitted

@@ -2,6 +2,31 @@
 
 Level-by-level parallel execution. Each level's tasks run concurrently
 up to max_parallelism. Dependencies must complete before dependents start.
+
+**Legacy entry point (M8) — `wisp/graph/` is the graph engine.** This module is a
+compatibility layer for the two live callers (`orchestrate_dag` in
+`wisp/tools/orchestration.py`, and `SubagentOrchestrator.run_dag`). It is **not** the
+canonical graph implementation, and `wisp/graph/` is strictly more capable: durable runs,
+audit, artifacts, retries, joins, bounded cycles, resource policy, and a structural +
+contract + governance + resource + security validator.
+
+Its retirement is **blocked on a decision**, not on work, and the blocker is measured in
+`tests/reliability/test_dag_retirement_contract.py`:
+
+* **The two disagree on what a valid DAG *is*.** `wisp/graph/` requires a non-empty graph
+  and every node reachable from the entrypoint; `TaskDAG` is a general partial order and
+  permits disconnected components. Re-pointing `orchestrate_dag` onto `validate_graph`
+  would therefore **reject inputs it accepts today** — a behaviour change to a live,
+  model-callable tool.
+* **`validate()` mis-reports an unknown dependency as a cycle.** An unknown dep inflates
+  the in-degree count but can never be dequeued, so its dependent never reaches degree 0.
+  The graph's validator names the real cause (`edge X->Y: unknown source`).
+* `wisp/graph/compat.py::dag_to_graph` — the intended lowering — is **test-only**; it has
+  no production caller.
+
+The removal is therefore a semantic reconciliation (which definition of a valid DAG wins),
+which is its own decision. Until then the tripwires above fail the moment either the
+divergence closes or the execution path is re-pointed.
 """
 
 from __future__ import annotations
