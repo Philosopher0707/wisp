@@ -30,6 +30,7 @@ from wisp.core.events import (
     CODE_TURN_TIMEOUT,
     CODE_PROVIDER_STREAM,
     CODE_ITERATION_BUDGET,
+    DENIAL_SCHEMA_INVALID,
     AgentEvent,
     canonical_event,
     content as content_event,
@@ -165,6 +166,78 @@ def _tool_result_output(result: Any) -> Any | None:
         if isinstance(parsed, dict) and "status" in parsed:
             return parsed.get("data") if parsed.get("status") == "ok" else None
     return None
+
+
+# ── Argument-validation failure kinds (F8's second half) ────────────────
+#: The validator RAN and rejected the arguments. A failure of the DATA.
+VALIDATION_SCHEMA_INVALID = DENIAL_SCHEMA_INVALID
+#: The validator could not run — absent, unimportable, or broken. A failure of
+#: the SYSTEM, and the distinction F8 exists to make: when a missing capability
+#: is reported as a failure of the *input*, every test downstream becomes a test
+#: of the wrong thing. Measured: 24 failures attributed to "pre-existing" that
+#: were F8-caused, and six tests in `test_13h2_determinism.py` reporting the
+#: wrong thing for the life of the repository.
+VALIDATION_CAPABILITY_MISSING = "CAPABILITY_MISSING"
+
+
+class ValidationFailure(str):
+    """A validation failure that says *which kind* it is, without parsing prose.
+
+    A `str` subclass **on purpose**. `_validate_tool_args` returns
+    `Optional[str]`; three call sites interpolate the value into a message or an
+    event payload, and one puts it in a JSON-serializable `data` field — so the
+    value has to *be* a string for every existing consumer. Subclassing keeps all
+    of that working (`isinstance(x, str)` is true, `if x:` is true, f-strings
+    render the message) while adding the one thing F8's second half needs: a
+    caller can tell a *system* failure from a *data* failure **without reading the
+    message**, which is the difference between "your arguments are wrong" and
+    "we could not check your arguments".
+
+    A dataclass is the obvious shape and the wrong one: it would reach
+    `{"status": "error", "data": <object>}` and stop being serializable, and
+    `f"Blocked: {x}"` would render a repr instead of the message.
+    """
+
+    __slots__ = ("kind",)
+
+    #: Declared, not merely assigned in `__new__`: `__slots__` alone leaves the
+    #: attribute invisible to a type checker, and "the failure has no `kind`" is
+    #: precisely the claim this class exists to make.
+    kind: str
+
+    def __new__(cls, message: str, kind: str) -> "ValidationFailure":
+        self = super().__new__(cls, message)
+        self.kind = kind
+        return self
+
+
+def _schema_invalid(tool_name: str, exc: BaseException) -> ValidationFailure:
+    """The validator ran and rejected the arguments — a **data** failure.
+
+    Byte-identical to the message this site produced before F8's second half, so
+    a genuine rejection is unchanged.
+    """
+    return ValidationFailure(
+        f"Schema validation failed for tool '{tool_name}': {exc}",
+        VALIDATION_SCHEMA_INVALID)
+
+
+def _capability_missing(tool_name: str, exc: BaseException) -> ValidationFailure:
+    """The validator could not run — a **system** failure, not a verdict.
+
+    The message names the missing capability, says plainly that the arguments were
+    never checked, and does not blame the caller's input. It also states that
+    re-issuing the call unchanged will fail identically, because the model is the
+    reader and "retry" is otherwise the obvious response to a refusal.
+    """
+    return ValidationFailure(
+        f"Tool argument validation is UNAVAILABLE for '{tool_name}': the JSON "
+        f"Schema validator could not be loaded "
+        f"({type(exc).__name__}: {exc}). This is a failure of the host, NOT of "
+        f"the arguments — they were never checked. Install the declared "
+        f"`jsonschema` dependency (see pyproject.toml); re-issuing this call "
+        f"unchanged will fail identically.",
+        VALIDATION_CAPABILITY_MISSING)
 
 
 def _denial_display(status: str, tool_name: str, reason: str) -> str:
@@ -2371,7 +2444,29 @@ class WispAgentCore:
             import jsonschema
             jsonschema.validate(instance=args, schema=schema)
             return None
+        except ImportError as exc:
+            # F8's second half. The validator is absent, unimportable, or cannot
+            # import something it needs — a failure of the SYSTEM, not a verdict
+            # on the arguments. This clause must come FIRST: the broad handler
+            # below would otherwise launder it into a schema verdict, which is
+            # how a *valid* call came to be refused as `SCHEMA_INVALID` for the
+            # life of the repository.
+            #
+            # `ModuleNotFoundError` is an `ImportError`, so the original defect
+            # (`import jsonschema` raising) and a `jsonschema`-internal import
+            # failure (a `$ref` resolver, say) are both caught here — the brief's
+            # "absent, unimportable, or raises from its own code".
+            #
+            # A schema rejection cannot reach this clause: `ValidationError` and
+            # `SchemaError` are not `ImportError`s.
+            return _capability_missing(name, exc)
         except Exception as exc:
+            # A retry that re-validates the SAME `args` against the SAME `schema`.
+            # Kept as it was; note that it is **inert**: nothing mutates `args`
+            # between the two calls (the salvage above runs before the `try`), so
+            # a deterministic validator raises identically and the `return None`
+            # below is unreachable. Recorded, not removed — see
+            # `PHASE_F8_ERROR_CLASSIFICATION.md` F-1.
             if name == "write_file" and isinstance(args, dict) and "path" in args:
                 try:
                     import jsonschema as _js2
@@ -2380,7 +2475,7 @@ class WispAgentCore:
                     return None
                 except Exception:
                     pass
-            return f"Schema validation failed for tool '{name}': {exc}"
+            return _schema_invalid(name, exc)
 
     def _get_approval_gate(self) -> ApprovalGate:
         """Lazily create the approval gate from current security policy."""

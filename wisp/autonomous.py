@@ -257,13 +257,15 @@ async def converge_on_objective(
     # already moved, so a fresh measurement would be a baseline of the mutated
     # state — a different exam for attempt N than attempt 0 was given.
     resumed_baseline = (read_journal_baseline(journal_path) if resume else None)
-    criteria_derived = criteria is None
     derivation = None
-    if criteria_derived:
+    if criteria is None:
         strict = _strict_derivation_enabled()
-        _, derived_specs = explain_acceptance(objective_text, workspace,
-                                              strict=strict)
-        specs = derived_specs if specs is None else specs
+        # The spec list is baseline-independent, so the first call produces it and
+        # the second closes the criteria over the baseline. `explain_acceptance`
+        # returns a `CriteriaDerivation`, NOT a `(criteria, specs)` tuple — read
+        # the field, do not unpack the object.
+        first = explain_acceptance(objective_text, workspace, strict=strict)
+        specs = first.specs if specs is None else specs
         probe = CommandProbe(specs)
         baseline = resumed_baseline or probe.measure(workspace)
         derivation = explain_acceptance(objective_text, workspace,
@@ -282,7 +284,7 @@ async def converge_on_objective(
         goal=objective_text, workspace=workspace,
         criteria=tuple(criteria or ()), max_attempts=max_attempts,
         allow_rollback=allow_rollback,
-        derivation=derivation.reasons if criteria_derived else (),
+        derivation=derivation.reasons if derivation is not None else (),
     )
 
     own_root = root is None

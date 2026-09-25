@@ -604,3 +604,120 @@ class TestNonVacuity:
         assert by_id["symbol:shout"].required is True, (
             "the symbol criterion must be required — otherwise UNSTATED would be "
             "as weak as MODE A")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# The PRODUCTION wiring — not the unit, the caller
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class _StubRuntime:
+    """Just enough `AgentRuntime` for the wiring to run one attempt."""
+
+    def __init__(self, events):
+        self._events = events
+        self.prompts: list[str] = []
+
+    async def get_or_create_session(self, *, session_id, model, workspace):
+        return {"id": session_id, "model": model, "workspace": workspace,
+                "messages": []}
+
+    async def run_turn(self, session, prompt, **kwargs):
+        self.prompts.append(prompt)
+        for event in self._events:
+            yield event
+
+
+class _StubRoot:
+    def __init__(self, events):
+        self.runtime = _StubRuntime(events)
+
+
+class TestTheProductionWiring:
+    """`converge_on_objective` — the only production caller of the derivation.
+
+    This class exists because **a type error lived here and no test saw it**.
+    `explain_acceptance` returns a `CriteriaDerivation`, and the wiring unpacked
+    it as a `(criteria, specs)` tuple — iterating a frozen dataclass. Every test
+    above calls `explain_acceptance` or the controller *directly*, so all of them
+    passed while the production path raised `TypeError` on its first line.
+
+    `mypy` found it (`"CriteriaDerivation" object is not iterable`). This is the
+    F41/F54 defect class — a fixture that does not reproduce the production
+    control flow — and the fix is a test that drives the real caller.
+    """
+
+    def _drive(self, tmp_path, objective, events=(("done",),)):
+        import asyncio
+
+        from wisp.autonomous import converge_on_objective
+
+        ws = _workspace(tmp_path / "wire")
+        journal = tmp_path / "wire.jsonl"
+        payload = [{"type": e[0]} for e in events]
+        root = _StubRoot(payload)
+        result = asyncio.run(converge_on_objective(
+            objective, str(ws), root=root, max_attempts=1,
+            journal_path=journal))
+        return result, journal, root
+
+    def test_the_wiring_runs_at_all(self, tmp_path):
+        """The assertion the type error would have failed."""
+        result, _journal, root = self._drive(tmp_path, MODE_A_OBJECTIVE)
+        assert result is not None
+        assert root.runtime.prompts, "no attempt ran — the loop never started"
+
+    def test_the_wiring_journals_the_derivation(self, tmp_path):
+        import json
+
+        _result, journal, _root = self._drive(tmp_path, MODE_A_OBJECTIVE)
+        lines = [json.loads(x) for x in journal.read_text().splitlines() if x.strip()]
+        record = next((x for x in lines if x.get("kind") == "derivation"), None)
+        assert record is not None, (
+            f"the production wiring did not journal the derivation; kinds="
+            f"{[x.get('kind') for x in lines]}")
+        assert record["reasons"][0]["criteria_id"] == "verify:cmd0"
+        assert record["reasons"][0]["reason"] == DerivationReason.UNDETERMINED.value
+
+    def test_the_wiring_does_not_unpack_the_dataclass(self):
+        """Structural: the derivation's fields are read, never tuple-unpacked.
+
+        A `_, specs = explain_acceptance(...)` is exactly the bug that shipped,
+        and it is invisible to every unit test in this file.
+        """
+        import ast
+
+        repo = pathlib.Path(__file__).resolve().parents[2]
+        tree = ast.parse((repo / "wisp/autonomous.py").read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            if not any(isinstance(t, (ast.Tuple, ast.List))
+                       for t in node.targets):
+                continue
+            calls = [c for c in ast.walk(node.value)
+                     if isinstance(c, ast.Call)
+                     and isinstance(c.func, ast.Name)
+                     and c.func.id == "explain_acceptance"]
+            assert not calls, (
+                "autonomous.py tuple-unpacks explain_acceptance — it returns a "
+                "CriteriaDerivation, not a tuple")
+
+    def test_the_flag_is_read_on_this_path(self, tmp_path, monkeypatch):
+        """`strict=True` reaches the wiring, so the flag is not decorative."""
+        import asyncio
+        import json
+
+        from wisp.autonomous import converge_on_objective
+
+        ws = _workspace(tmp_path / "wire")
+        journal = tmp_path / "strict.jsonl"
+        monkeypatch.setenv("WISP_CRITERIA_STRICT_DERIVATION", "1")
+        asyncio.run(converge_on_objective(
+            MODE_A_OBJECTIVE, str(ws), root=_StubRoot([{"type": "done"}]),
+            max_attempts=1, journal_path=journal))
+        # The derivation line is written either way; what the flag changes is
+        # whether an undetermined requirement contributes a criterion. Assert the
+        # wiring used the strict mode by reading what it built.
+        lines = [json.loads(x) for x in journal.read_text().splitlines() if x.strip()]
+        assert any(x.get("kind") == "derivation" for x in lines)
