@@ -9,7 +9,11 @@
 > A claim that cannot be pinned is a finding, not a claim. §5 records this page's own findings: the two
 > it could **not** pin are now **decided by ADR-0049** and are kept as a resolution trail.
 >
-> Generated 2026-09-25 at `dd21f6d` · covers **ADR-0001 … ADR-0049** · supersession chains in §1.1–1.6.
+> Generated 2026-09-25 at `e639115` · covers **ADR-0001 … ADR-0057** · supersession chains in §1.1–1.6.
+>
+> **The header's commit and range are checked, not trusted** (`test_current_authorities_pins.py`
+> ::`TestTheProseClaimsAreMechanicallyCheckable`). Until 2026-09-25 the range said `ADR-0049` while the
+> page cited ADR-0051/0053/0054 — F81's class, prose drifting where a `path:line` guard cannot see it.
 
 ---
 

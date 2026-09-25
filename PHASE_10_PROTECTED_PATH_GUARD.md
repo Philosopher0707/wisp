@@ -170,6 +170,12 @@ regressions checked
 | `ruff check wisp/` | **All checks passed** |
 | `mypy` (2.3.1) | **exit 0** |
 
+> ⚠️ **Not re-producible in the current `.venv` (corrected 2026-09-25, F80).** This table records what was
+> measured in Phase 10's environment. Today `tests/test_protected_path_guard.py` **cannot be collected**:
+> it imports `fastapi.testclient`, which requires `httpx`, which is absent from `.venv`, from the uv cache,
+> and from this host. The corpus must not quote the **26** until it can be produced here. The row above is
+> kept because it is what the phase measured — not because it is current.
+
 ---
 
 ## 6. What prevents a second guard

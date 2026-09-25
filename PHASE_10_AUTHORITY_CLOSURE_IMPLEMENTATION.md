@@ -28,6 +28,13 @@
 
 ### Tests (6 files: 3 new, 3 extended)
 
+> ⚠️ **Counts in this section are Phase-10-era, measured in a different environment (corrected
+> 2026-09-25, F80/F71).** Two of the files below (`tests/test_protected_path_guard.py`,
+> `tests/test_server_policy_gate.py`) import `fastapi.testclient`, which requires `httpx` — absent from
+> `.venv`, from the uv cache, and from this host — so they **cannot be collected** today. Do not quote
+> their counts as current. `ruff`/`mypy` are likewise not green at HEAD (F71). The numbers are kept
+> because they are what the phase measured.
+
 | File | Tests | Target |
 |---|---|---|
 | `tests/test_outcome_classification_authority.py` | **67 (new)** | B |

@@ -886,7 +886,20 @@ The user approved **"Gate all three, update client"** (option B), and it is fini
 
 ### 0.0.2 Current verification (all of it)
 
-| Check | Result |
+⚠️ **This table is a Phase-10-era snapshot, measured in a DIFFERENT environment. It is not
+re-producible here, and the corpus must not quote it as current.** Corrected 2026-09-25 by the
+corpus-integrity pass:
+
+- **`ruff check wisp/` is NOT clean** — it reports **11 errors** at HEAD (F71). The row below was true
+  in Phase 10's environment.
+- **`mypy` is NOT exit 0** — the pinned 2.3.1 reports **1844 errors in 228 files** (F71).
+- **"Phase 10 focused tests (11 files) → 245 passed" is not producible here.** The block **aborts at
+  collection**: two of its files (`tests/test_protected_path_guard.py`, `tests/test_server_policy_gate.py`)
+  import `fastapi.testclient`, which needs `httpx`, which is absent from `.venv` and from the uv cache
+  (F80). With those two ignored the block reports **216 passed, 2 FAILED**, both pre-existing. §11 carries
+  the repaired, runnable command.
+
+| Check | Result (Phase 10's environment — see the correction above) |
 |---|---|
 | `ruff check wisp/` | **All checks passed** |
 | `mypy` (2.3.1, the `uv.lock` pin) | **exit 0** |
@@ -1366,6 +1379,10 @@ migration documents (§13) and eight test suites (§11).
 
 ### Tests (11 files, 231 tests)
 
+⚠️ **A Phase-10-era inventory, not a re-measurable claim.** Per-file counts are as recorded then; the two
+`fastapi.testclient` files cannot be collected here (F80), and `tests/test_m4_governance_wiring.py` now
+**fails** (it asserts 2 `ToolExecutor` construction sites; there are 3). See §11 for the runnable block.
+
 `tests/test_outcome_classification_authority.py` (67), `tests/test_rest_gate_boundary.py` (16), `tests/test_protected_path_guard.py` (26), `tests/test_authorization_parity.py` (18), `tests/test_m4_governance_wiring.py` (25), `tests/test_unwired_controls_inventory.py` (20), `tests/test_provider_listing_equivalence.py` (+6 → 19), `tests/test_layer_direction.py` (+4 → 11), `tests/test_server_policy_gate.py` (+10 → 14).
 
 Plus two desktop-client guards (§0f): `wisp-desktop/src/renderer/hooks/useApi.test.ts` (5) and `authHeaderAuthority.test.ts` (4).
@@ -1475,9 +1492,11 @@ phase's report read **386** for the same directory. Both were wrong: the per-fil
 those phases **sums to 378**, and a fresh per-file run reproduces **378 exactly**, file for file, with
 zero change. The number is **378**; the two earlier figures were counting errors, not measurements.
 
-The residual failures are dominated by **`httpx`** (11 starlette `TestClient` files), the 17 collection
-`ERROR`s from foreign-session WIP files, and whatever the re-measurement finds. `jsonschema` is no longer
-among them, and neither are the three files above.
+The residual failures are dominated by **`httpx`** (**9** starlette `TestClient` files — measured
+2026-09-25 by AST-scanning `tests/**` for a `testclient` import; the line read "11" until then, which was
+an estimate rather than a measurement, F80), the 17 collection `ERROR`s from foreign-session WIP files,
+and whatever the re-measurement finds. `jsonschema` is no longer among them, and neither are the three
+files above.
 
 **Three known flaky / order-dependent tests — the count moves ±1 because of them:**
 
@@ -1551,6 +1570,28 @@ test that failed for a reason someone noticed. None was found by looking for it.
 **The class, stated once:** *the instrument does not reproduce the production control flow, or does not
 fail when the subject fails, and reports its own defect as a result about the subject.*
 
+**The fourth sub-case — the instrument's SUBJECT was the wrong thing.** Added 2026-09-25. The first five
+instances are all *a broken instrument*: it ran, and its result was not what its claim said. This one is
+different and harder to see, because **the instrument was working perfectly and its result was sound — it
+was sound about the wrong thing**, and it looked like a fact for three phases.
+
+| Where | The instrument | What it was actually about |
+|---|---|---|
+| `PHASE_AUTHORIZATION_PARITY.md` §6 (**F78**) | `tests/test_authorization_parity.py` compared `authorize()` to `SecurityPolicy.check()` and called the first *"the agent's verdict"* | two **models**, not the two **paths** its name, its docstring and its table all described. Driven against the real paths: **0 divergences of 36**, where the table had claimed 6 — on three action names the agent **cannot execute at all** |
+| `PHASE_OBJECTIVE_FLAG_COMPOSITION.md` §6 (**F82**) | two "canonical suite" command blocks, each quoting a count | **one of two** blocks, and they listed different file sets (43 vs 41) — so neither count described the intersection the method calls for |
+
+**The tell is a table whose NAME and whose SUBJECT have drifted apart.** A ratchet called *parity between
+the paths* that drives two functions; a block called *the* canonical suite when there are two. Neither is
+visible by reading the instrument's output — only by asking **what it actually drives**. And the
+consequence is worse than a broken probe: a broken probe gives a wrong answer about the right subject,
+whereas this gives a **right answer about the wrong subject**, which is indistinguishable from a finding.
+
+**The discipline it adds:** *before trusting a comparison, drive the two things its name says.* And when a
+field is compared, check that something **reads** it — a computed value with no consumer is a fact about
+the function that computes it, not about the system. (F83, the next mission, is the same shape applied to
+a *claim* rather than an instrument: ADR-0055 §Context called the WebSocket channel *"bidirectional
+approval"* without driving it; the question direction had never reached a client.)
+
 **The discipline:**
 
 - **A probe that does not falsify is not a pass — it is a finding that the test is not testing what you
@@ -1581,19 +1622,46 @@ uv run --no-project --with "mypy==2.3.1" mypy wisp/      # 1844 errors in 228 fi
 # lint/type criterion claimed something untrue. Both sets are UNCHANGED by the 2026-09-25 chain
 # (verified by set diff: 0 new, 0 gone), so the chain neither caused nor repaired them. Finding F71.
 
-# Phase 10 tests — the full set (245 passed)
+# Phase 10 tests — MEASURED, and the block had to be repaired to run at all.
+#
+# The heading said "(245 passed)" until 2026-09-25. That number was NOT producible
+# in this environment: the block ABORTS AT COLLECTION, because TWO of its files
+# import `fastapi.testclient`, which needs `httpx`, which is not installed in .venv
+# and is not in the uv cache (nor anywhere on this host) — finding F80.
+#
+#   ERROR tests/test_protected_path_guard.py  - starlette.testclient requires httpx
+#   ERROR tests/test_server_policy_gate.py    - starlette.testclient requires httpx
+#
+# With those two ignored, the block runs and reports **216 passed, 2 FAILED** — and
+# both failures are pre-existing and neither is F38:
+#
+#   test_outcome_classification_authority.py::test_no_module_reimplements_tool_result_status_classification
+#       `wisp/core/stateless.py:158,167` compare `.get("status")` to "ok"/"error"
+#       directly; introduced by ade4dc6 (POST-M13 execution semantics).
+#   test_m4_governance_wiring.py::test_tool_executor_construction_sites_are_known
+#       asserts 2 ToolExecutor construction sites; there are 3 (the third is
+#       `wisp/acp_session.py`, from cef3e90).
+#
+# Neither file is in the canonical block, which is why nothing caught them. Fixing
+# either is a CONTRACT UPDATE and needs explicit authorisation, exactly like F38 —
+# it is not a side effect of another phase.
+#
+# RULE (F71, restated): do not quote a count that has not been produced in THIS
+# environment. The two httpx-dependent files are listed but ignored until httpx can
+# be installed.
 env -u PYTHONPATH .venv/bin/python -m pytest \
   tests/test_outcome_classification_authority.py \
   tests/test_rest_gate_boundary.py \
-  tests/test_protected_path_guard.py \
   tests/test_authorization_parity.py \
   tests/test_m4_governance_wiring.py \
   tests/test_unwired_controls_inventory.py \
-  tests/test_server_policy_gate.py \
   tests/test_provider_listing_equivalence.py \
   tests/test_provider_model_authority.py \
   tests/test_layer_direction.py \
-  tests/test_doc_drift.py -q -p no:cacheprovider
+  tests/test_doc_drift.py \
+  --ignore=tests/test_protected_path_guard.py \
+  --ignore=tests/test_server_policy_gate.py \
+  -q -p no:cacheprovider            # 216 passed, 2 failed (both pre-existing, above)
 
 # The policy tests need `cryptography`, which .venv lacks — supply it isolated:
 env -u PYTHONPATH uv run --no-project --with "cryptography==50.0.1" \

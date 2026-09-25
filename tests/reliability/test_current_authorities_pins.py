@@ -380,3 +380,115 @@ class TestTheSixAuthoritiesAreTheOnesTheChainNames:
 
         assert callable(guarded_provider_stream), (
             "the page names guarded_provider_stream as the stream-state owner")
+
+
+# ── the page's PROSE claims, checked mechanically (ADR-0057 §2.3) ───────────
+#
+# F81 was this page carrying a superseded disposition ("enablement is ADR-0016's
+# question and remains NOT_YET_DETERMINABLE") for three ADRs. The `path:line` guard
+# could not catch it, because it checks pins and the drift was prose. These four
+# properties are the ones a derived page can be held to WITHOUT interpreting meaning:
+# a citation must resolve, must not be superseded, and the header's commit and ADR
+# range must be consistent with what the page actually cites.
+#
+# The reversal condition is explicit: if a check here needs to READ for meaning rather
+# than PARSE a citation, it is the "pins a state, not a property" class and must not be
+# written. Each of the four below parses a citation or a header field.
+
+DECISIONS = REPO / "WISP_ARCHITECTURE_DECISIONS.md"
+ADR_HEADING_RE = re.compile(r"^## ADR-(\d{4})\b", re.M)
+ADR_CITE_RE = re.compile(r"ADR-(\d{4})")
+HEADER_RE = re.compile(
+    r"Generated (\d{4}-\d{2}-\d{2}) at `([0-9a-f]{7,40})`.*?"
+    r"covers \*\*ADR-0001 … ADR-(\d{4})\*\*", re.S)
+
+
+def _defined_adrs() -> set[int]:
+    return {int(m) for m in ADR_HEADING_RE.findall(DECISIONS.read_text(encoding="utf-8"))}
+
+
+def _cited_adrs(page_text: str) -> set[int]:
+    return {int(m) for m in ADR_CITE_RE.findall(page_text)}
+
+
+def _superseded_adrs() -> set[int]:
+    """Index rows whose Status cell begins SUPERSEDED."""
+    out = set()
+    for line in DECISIONS.read_text(encoding="utf-8").splitlines():
+        m = re.match(r"^\| (\d{4}) \|", line)
+        if not m:
+            continue
+        cells = line.split("|")
+        if len(cells) > 4 and cells[4].strip().upper().startswith("SUPERSEDED"):
+            out.add(int(m.group(1)))
+    return out
+
+
+class TestTheProseClaimsAreMechanicallyCheckable:
+    def test_every_cited_adr_exists(self, page_text):
+        """A citation of an ADR that does not exist is a broken reference."""
+        cited = _cited_adrs(page_text)
+        assert cited, "floor: the page cites no ADR at all"
+        assert len(cited) >= 20, f"the citation set shrank to {len(cited)}"
+        dangling = sorted(cited - _defined_adrs())
+        assert not dangling, (
+            "the page cites ADRs that do not exist: "
+            + ", ".join(f"ADR-{d:04d}" for d in dangling)
+        )
+
+    def test_no_cited_adr_is_superseded(self, page_text):
+        """A superseded decision must not be cited as current authority."""
+        superseded = _superseded_adrs()
+        cited = _cited_adrs(page_text)
+        assert cited, "floor"
+        bad = sorted(cited & superseded)
+        assert not bad, (
+            "the page cites superseded ADRs as current: "
+            + ", ".join(f"ADR-{b:04d}" for b in bad)
+        )
+
+    def test_the_header_range_covers_every_adr_the_page_cites(self, page_text):
+        """**F81's drift, mechanised.**
+
+        The header said it covered ADR-0001 … ADR-0049 while the page cited ADR-0051,
+        0053 and 0054 — a stale header on a page whose whole purpose is to state the
+        current state. This parses the range and compares it to the citations.
+        """
+        m = HEADER_RE.search(page_text)
+        assert m, (
+            "the header no longer states `Generated <date> at `<sha>` … covers "
+            "**ADR-0001 … ADR-NNNN**` — the range cannot be checked without it"
+        )
+        covered = int(m.group(3))
+        cited = _cited_adrs(page_text)
+        assert cited, "floor"
+        beyond = sorted(c for c in cited if c > covered)
+        assert not beyond, (
+            f"the page cites {', '.join(f'ADR-{b:04d}' for b in beyond)} but its header "
+            f"claims to cover only up to ADR-{covered:04d} — regenerate the header"
+        )
+
+    def test_the_header_names_a_real_ancestor_commit(self, page_text):
+        """The generated-at commit must exist and be an ancestor of HEAD.
+
+        Not `== HEAD`: that would fail on every subsequent commit, which is the
+        nuisance class. *Ancestor* is the property — a header naming a commit that is
+        not in this history is either a typo or a lie about when it was generated.
+        """
+        import subprocess
+
+        m = HEADER_RE.search(page_text)
+        assert m, "the header no longer names the commit it was generated at"
+        sha = m.group(2)
+        have = subprocess.run(["git", "cat-file", "-e", sha],
+                              cwd=REPO, capture_output=True)
+        assert have.returncode == 0, (
+            f"the header names `{sha}`, which is not a commit in this repository"
+        )
+        ancestor = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", sha, "HEAD"],
+            cwd=REPO, capture_output=True)
+        assert ancestor.returncode == 0, (
+            f"the header names `{sha}`, which is not an ancestor of HEAD — the page "
+            "claims a revision that is not in this history"
+        )
