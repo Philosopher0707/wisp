@@ -1908,10 +1908,12 @@ a coercion. **F42** was found *by the ADR itself*, while answering "who owns nor
 never worked, because a closed streamed response has no body and the test double raised from `post()`
 so the `with` block never ran — **the same defect class as F37**.)
 
-**⚠️ This log is SPLIT, and the split is itself a navigability defect.** The table above runs **F1–F44**;
-**F45–F63 live in §0**, under the per-mission sections that introduced them (F45–F54 with the autonomous
-convergence mission, F55–F58 with the live-recovery mission, F59–F61 with progress-aware recovery, F62–F63
-with multi-turn productive recovery). **F64–F71 resume here.** `CONTEXT.md` §0 describes this file as
+**The canonical register for a finding's status is `CURRENT_FINDINGS.md` (ADR-0062 R1)** — all 104, each
+pinned. This log is **append-only and not backfilled**, so it is split, historically: the table above runs
+**F1–F44** and **F64–F74**; **F45–F63 live in §0**, under the per-mission sections that introduced them
+(F45–F54 autonomous convergence, F55–F58 live recovery, F59–F61 progress-aware recovery, F62–F63 multi-turn
+productive recovery); **F75 onward have no row here** (F106). *(This note said "F64–F71 resume here" —
+undercounting its own table by three — until ADR-0062.)* `CONTEXT.md` §0 describes this file as
 *"the phase ledger, findings F1–F63"*, which is true of the **file** and false of **§23** — and the brief
 for the 2026-09-25 chain cited *"§23 (F60–F63)"*, landing on a table that stops 19 findings short.
 **Recorded, not reorganized:** moving 19 rows is an editorial decision, and the finding is that a reader

@@ -1670,6 +1670,7 @@ This is the **fifth** instance of the §10 pattern: a conclusion drawn from *rea
 | Gotcha | Detail |
 |---|---|
 | **Clear `PYTHONPATH`** | The WorkBuddy `sitecustomize.py` shim blocks pytest's temp `mkdir` → **false test failures**. Always `env -u PYTHONPATH`. |
+| **One pytest process at a time, with a private `--basetemp`** (ADR-0062 R6, F112) | Two **concurrent** pytest processes race on the shared `…/T/pytest-of-<user>` base directory and fail at fixture setup with `PermissionError: EEXIST` — **869 errors** from one overlapping run, which reads as a code failure and is not. **A measurement run is exclusive**, and a block run passes `--basetemp="$TMPDIR/wisp-pytest-$$"`. The shim row above is a real hazard for a *single* run; this one is contention between processes, and it was misattributed to the shim until ADR-0062. |
 | **Clear proxies** | Ambient `HTTP_PROXY`/`HTTPS_PROXY` leak into hermetic subprocess tests → spurious `502`. Use `env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy`. |
 | **`getpass` reads `/dev/tty`** | `< /dev/null` does NOT stop a credential-prompt hang. (Fixed in Phase 9, but the lesson stands.) |
 | **BSD `grep`** | `--include` must come BEFORE the path or it silently matches nothing. This caused a **false** "tiktoken is unused" finding. |
@@ -1986,6 +1987,7 @@ cd wisp-desktop && npx tsc -b
 # Broad regression (expect the known environmental failures only)
 env -u PYTHONPATH -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
   .venv/bin/python -m pytest tests/ -q -p no:cacheprovider --tb=no -rf \
+  --basetemp="$TMPDIR/wisp-sweep-$$" \
   --ignore=tests/test_auto_delegate_defense.py \
   --ignore=tests/test_delegation_research_only.py \
   --ignore=tests/test_input_and_interrupts.py \
@@ -2050,7 +2052,7 @@ env -u PYTHONPATH .venv/bin/python -m pytest \
   tests/reliability/test_key_trust_workflow.py \
   tests/reliability/test_m4_policy_wiring.py \
   tests/reliability/test_rest_authorization_composition.py \
-  tests/test_m4_governance_wiring.py -q
+  tests/test_m4_governance_wiring.py -q --basetemp="$TMPDIR/wisp-block-$$"   # alone — ADR-0062 R6
 ```
 
 **Measured 2026-09-25, after the F8 error-classification landing: 1115 tests — 1114 pass, 1 fails.** The
@@ -2099,11 +2101,12 @@ instrument reports its own defect as a result about the subject.* So §11's rule
 sufficient: **never quote a count from prose — and never quote one from a block run on a starved
 host.** A count's *scope* includes the host's free memory (F94).
 
-**A second host condition, also found by running:** two **concurrent** pytest processes race on the
-shared `pytest-of-<user>` temp directory and produce
+**A second host condition, also found by running — now a rule (ADR-0062 R6):** two **concurrent**
+pytest processes race on the shared `pytest-of-<user>` temp directory and produce
 `PermissionError: EEXIST: mkdir '…/T/pytest-of-philosopher'` at fixture setup — **869 errors** from
 one overlapping run. §6 says *"The WorkBuddy shim blocks pytest's temp `mkdir`"*; the measured cause
-is contention between processes, not the shim. **Run the block alone.**
+is contention between processes, not the shim. **Run the block alone, with a private `--basetemp`** —
+the flag removes the race rather than relying on discipline, and neither touches a `wisp/` file.
 
 **And "1312" was stale within the mission that wrote it (F85).** The corpus-integrity pass measured the
 block in **Deliverable 1** and set both headings; **Deliverable 2** then added **four** tests to
@@ -2193,7 +2196,7 @@ M9 was said to block are now complete** — M12, M14, M15, M11, M13.
 | # | Item | Nature |
 |---|---|---|
 | **M9** | The execution view | ✅ **COMPLETE** — ADR-0029. **The strong reading was the wrong target** (the graph carries no payload), and the projection that exists was **not faithful** (now fixed and asserted). |
-| **M11** | The graph does not drive execution | ✅ **COMPLETE — and DECIDED, not deferred.** ADR-0033 landed **node identity** (`TaskNode.work_unit`; F29/F30: M9's own ratchet forbade the fix and was evadable by naming — replaced by field classification). **ADR-0060 closes the second half:** Layer A is the driver and `wisp/graph/` is a record, **permanently**. *"The graph drives execution"* is **rejected as a target**, on measurement — `wisp.graph.types.Graph` is `frozen=True`, `GraphExecutor`'s public surface is `run`/`resume`/`cancel`/`register_function` with **no growth API**, `run()` refuses a graph that is not complete up front, and **no `TaskGraph → Graph` lowering exists**; a turn's node set is produced by the model *during* the turn. `test_the_graph_still_does_not_drive_execution` is now the **contract**, with its reversal condition stated in the test. Guard: `tests/reliability/test_layer_b_boundary.py` (16). Report: `PHASE_LAYER_B_BOUNDARY.md`. |
+| **M11** | The graph does not drive execution | ✅ **COMPLETE.** *Reason:* **decided, not deferred** (ADR-0060; ADR-0062 R3). ADR-0033 landed **node identity** (`TaskNode.work_unit`; F29/F30: M9's own ratchet forbade the fix and was evadable by naming — replaced by field classification). **ADR-0060 closes the second half:** Layer A is the driver and `wisp/graph/` is a record, **permanently**. *"The graph drives execution"* is **rejected as a target**, on measurement — `wisp.graph.types.Graph` is `frozen=True`, `GraphExecutor`'s public surface is `run`/`resume`/`cancel`/`register_function` with **no growth API**, `run()` refuses a graph that is not complete up front, and **no `TaskGraph → Graph` lowering exists**; a turn's node set is produced by the model *during* the turn. `test_the_graph_still_does_not_drive_execution` is now the **contract**, with its reversal condition stated in the test. Guard: `tests/reliability/test_layer_b_boundary.py` (16). Report: `PHASE_LAYER_B_BOUNDARY.md`. |
 | **M12** | The failure path | ✅ **COMPLETE** — ADR-0032. The ladder can be driven from a real failure now, and engine refusals are denials (F28: they were being retried). Enforcement deferred. |
 | **M13** | The stagnation detector is not constructed by the turn loop | ✅ **COMPLETE** — ADR-0034. The detector now runs per turn on the live path, gated by `config.graph_oscillation_guard`. **Found two defects**: an empty signal (both inputs are opt-in, so it is empty by default) declared every multi-turn session stagnant (F32), and the runtime cannot see a refused call's arguments (F33). **Enforcement deferred**: routing and goal-met gating are tripwired. |
 | **M14** | The context trust boundary | ✅ **COMPLETE** — ADR-0031. **Found a live T1 violation**: workspace-file content (`CLAUDE.md`) sat *before* the system prompt, unfenced. T2 fencing remains, deliberately staged. |
@@ -2206,9 +2209,19 @@ M9 was said to block are now complete** — M12, M14, M15, M11, M13.
 | **M5** | Foreground-turn `RunRecord` lifecycle | **OPEN** — proven end-to-end for background runs only. |
 | **M6** | `PolicyDecisionEnvelope` producer-less and consumer-less | **OPEN** — the last unwired contract. |
 | **M7** | `change_tracker.py` not wired into evidence | **OPEN** — deferred with 3b. |
-| **M8** | `multi_agent/dag.py` not retired into `wisp/graph/` | **SURVEYED AND DECIDED 2026-09-25 — `DEPRECATE`, not remove**, and **RE-SCOPED by ADR-0060**: the divergence is no longer a blocker awaiting reconciliation but the **boundary** between two different tools. The fanout suite is green (107 passed), so the retirement was attempted and **driven**. The measured semantic divergence stands — `wisp/graph/` requires a non-empty graph with every node reachable from the entrypoint, `TaskDAG` is a general partial order — so re-pointing `orchestrate_dag` onto `validate_graph` would **reject inputs it accepts today** (a behaviour change to a live, model-callable tool). Also measured: `TaskDAG.validate()` mis-reports an unknown dependency as a cycle, and `compat.dag_to_graph` is test-only. **The removal is not owed**: choosing which definition of a valid DAG wins is a change to a live tool and is its own decision. **The residual stays open and tripwired** (3 tripwires). Guard: `tests/reliability/test_dag_retirement_contract.py`. Reports: `PHASE_DAG_RETIREMENT.md`, `PHASE_LAYER_B_BOUNDARY.md`. |
+| **M8** | `multi_agent/dag.py` not retired into `wisp/graph/` | ✅ **COMPLETE.** *Reason:* surveyed and decided 2026-09-25 — **`DEPRECATE`, not remove** — and **re-scoped by ADR-0060** (ADR-0062 R3): the divergence is no longer a blocker awaiting reconciliation but the **boundary** between two different tools. The fanout suite is green (107 passed), so the retirement was attempted and **driven**. The measured semantic divergence stands — `wisp/graph/` requires a non-empty graph with every node reachable from the entrypoint, `TaskDAG` is a general partial order — so re-pointing `orchestrate_dag` onto `validate_graph` would **reject inputs it accepts today** (a behaviour change to a live, model-callable tool). Also measured: `TaskDAG.validate()` mis-reports an unknown dependency as a cycle, and `compat.dag_to_graph` is test-only. **The removal is not owed**: choosing which definition of a valid DAG wins is a change to a live tool and is its own decision. **The residual stays open and tripwired** (3 tripwires). Guard: `tests/reliability/test_dag_retirement_contract.py`. Reports: `PHASE_DAG_RETIREMENT.md`, `PHASE_LAYER_B_BOUNDARY.md`. |
 | **M10** | The materialized graph is a **lower bound** on iterations | **OPEN — by design.** One node per closed tool exchange + one terminal; iteration boundaries are not observable. |
-| **Layer C** | **`wisp/core/graph/` — ADR-0001 named it *disowned*, and it was not.** The live turn path imported `OscillationTrap` and `diff_hash` from it (`core/stagnation.py` since M13, and `core/runtime.py`) — the *disowned-but-consumed* drift. **This row did not exist**; §12 is the live open-items authority and carried no Layer C entry (F100's class). | ✅ **DECIDED 2026-09-25 (ADR-0060 R5).** The live symbols **moved** to `wisp/core/oscillation.py` (Layer A) and are re-exported from `loop.py`, so `wisp/core/graph/__init__.py` — the user's WIP — needs **no edit**. **The rule is a direction:** a disowned layer may import from Layer A; the live path may never import from a disowned layer. The dead part (`ExecutionGraph`, `phases.py`, **zero** production callers) is **retained as a reference implementation** — deleting it would edit the WIP file, and the user's own uncommitted note there says *"Keep for reference; delete if no caller appears"*, and a caller **did** appear. Guard: `tests/reliability/test_layer_c_disposition.py` (18). Report: `PHASE_LAYER_B_BOUNDARY.md`. |
+| **Layer C** | **`wisp/core/graph/` — ADR-0001 named it *disowned*, and it was not.** The live turn path imported `OscillationTrap` and `diff_hash` from it (`core/stagnation.py` since M13, and `core/runtime.py`) — the *disowned-but-consumed* drift. **This row did not exist**; §12 is the live open-items authority and carried no Layer C entry (F100's class). | ✅ **COMPLETE.** *Reason:* decided 2026-09-25 by **ADR-0060 R5** (ADR-0062 R3). The live symbols **moved** to `wisp/core/oscillation.py` (Layer A) and are re-exported from `loop.py`, so `wisp/core/graph/__init__.py` — the user's WIP — needs **no edit**. **The rule is a direction:** a disowned layer may import from Layer A; the live path may never import from a disowned layer. The dead part (`ExecutionGraph`, `phases.py`, **zero** production callers) is **retained as a reference implementation** — deleting it would edit the WIP file, and the user's own uncommitted note there says *"Keep for reference; delete if no caller appears"*, and a caller **did** appear. Guard: `tests/reliability/test_layer_c_disposition.py` (18). Report: `PHASE_LAYER_B_BOUNDARY.md`. |
+
+**State and reason (ADR-0062 R3).** `DECIDED` is a **reason**, not a state: an item finished by a
+decision is `COMPLETE`, and the decision follows as *Reason:*. The table's other words (`DONE`, `OPEN`,
+`Accepted`, …) are mapped onto the ledger's six (`WISP_MIGRATION_STATUS.md:41`) by
+`CURRENT_OPEN_ITEMS.md` §(a); `BLOCKED` is a state no item is currently in.
+**Two id namespaces (ADR-0062 R2).** The first table's `F1`–`F5` are **open items** — cite them
+`ITEM-F1` … `ITEM-F5`; the findings log's `F1`–`F104` are **findings** — cite them `FIND-F7`. **`M1`–`M7`
+name two things:** this table's migration items (`M4` = *ADR-0004 revisited*, also
+`WISP_MIGRATION_STATUS.md:204`) and the enterprise track's milestones in `AGENTS.md`'s module map (`M1`
+contracts … `M4` the governance layer — carried above as row **`E`** … `M7` release).
 
 **Committed.** Phase 10 and migration P0–P9 + M2/M3/M4 are committed (§3). The remaining uncommitted
 files are the user's pre-existing WIP (§8) plus foreign-session test files.
@@ -2282,6 +2295,7 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_CURRENT_OPEN_ITEMS.md` | **Corpus governance D2** — the open-items register; the vocabulary is not one vocabulary |
 | `PHASE_CURRENT_FLAGS.md` | **Corpus governance D3** — the flags register; the brief's ADR-0002 paraphrase is wrong |
 | `PHASE_CORPUS_GOVERNANCE.md` | **Corpus governance D4** — the entry point, and the mission's report |
+| `PHASE_CORPUS_GOVERNANCE_II.md` | **Corpus governance II** — ADR-0062's eight editorial decisions, `CURRENT_AUTHORITIES.md`'s generator, `F77`'s disposition, and the decisions applied |
 | `PHASE_EXTERNAL_INPUT_PATH.md` | **The external input path (ADR-0061)** — W1's frame driven, G3's boundary named, the two-decisions-or-one answer, and ADR-0059 residual 1 re-driven |
 | `PHASE_M13_REPORT.md` | The stagnation detector on the live turn path (ADR-0034) |
 

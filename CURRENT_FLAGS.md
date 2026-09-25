@@ -14,7 +14,7 @@
 > `CURRENT_FINDINGS.md` (every recorded finding and its status), `CURRENT_OPEN_ITEMS.md`
 > (what is open). All four are derived; none may decide.
 >
-> Generated 2026-09-25 at `8854907` · **26 switches** (23 `bool` settings in `WispConfig` + 3 read from the environment) · **11 ON**, 15 OFF.
+> Generated 2026-09-25 at `dcad1f8` · **26 switches** (23 `bool` settings in `WispConfig` + 3 read from the environment) · **11 ON**, 15 OFF.
 
 ---
 
@@ -136,14 +136,16 @@ changes the other.
   site* — the point of `getattr` is that a test double which predates the flag still gets
   the new behaviour. Under the brief's paraphrase, `verification_loop`'s two sites and
   `turn_spans`'s two sites would each be a violation of a rule the corpus does not have.
-  **Recorded, not repaired** — the ADR is the authority and the page follows it.
+  **Decided by ADR-0062 R4**, which records ADR-0002's rule verbatim, names the paraphrase as
+  the defect, and traces its source to ADR-0056's local *"read once, independently"*.
 - **Five flags the brief names do not exist.** The brief lists `verification_gate`,
   `graph_mutation`, `criteria_strict_derivation`, `criteria_structured_declaration` and
   `ws_auto_approve` among the flags. Measured: **`verification_gate` and `graph_mutation`
   appear nowhere in `wisp/`** — the real names are `verification_loop` and
   (for the P5 concern) `task_graph`. The other three exist but **are not `WispConfig`
   fields** (§(a) departure 1). The brief's list is a hypothesis, and five of its nineteen
-  names do not resolve.
+  names do not resolve. **Decided by ADR-0062 R5:** the two are **wrong names** — not aliases,
+  not deprecated names — and no alias is added.
 - **Eight switches carry `—` in `read_at`.** `auto_approve`, `capability_filtering`,
   `show_thinking`, `show_tool_output`, `compact_mode`, `env_context`, `auto_compact` and
   `autonomous` are read by the transports, the renderer and the prompt assembler — surfaces

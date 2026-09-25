@@ -14,7 +14,7 @@
 > `CURRENT_OPEN_ITEMS.md` (what is open), `CURRENT_FLAGS.md` (every rollback flag and its
 > default). All four are derived; none may decide.
 >
-> Generated 2026-09-25 at `7d06321` · **104 findings** (F1–F104) · **15 not closed** · vocabulary in §(a), classes in §(b).
+> Generated 2026-09-25 at `dcad1f8` · **104 findings** (F1–F104) · **15 not closed** · vocabulary in §(a), classes in §(b).
 
 ---
 
@@ -259,8 +259,9 @@ the *artifacts*, not a new finding — no `F`-number is coined here.
 
 ### Claims that cannot be pinned
 
-- **F75–F104.** **No ledger row.** `WISP_MIGRATION_STATUS.md` §23's note says the log runs F1–F44 with “**F64–F71 resume here**”; measured, its table actually runs F1–F44 **and F64–F74**, §0 carries F45–F63, and **F75–F104 have no ledger row at all** — they exist only in `CONTEXT.md` §0's phase table and in the phase reports. A reader told the ledger is the findings log will not find 30 of the 104.
-- **F64–F71.** **Two homes.** These eight exist twice: at `WISP_MIGRATION_STATUS.md:112-119` (the criteria-authority §0 section, statuses “RECORDED, NOT DECIDED”) and at `:1882-1889` (§23, statuses “DECIDED — ADR-0049”). The §0 copies are stale. The ledger itself flags this at `:64-68` as *“the navigability defect this chain was about and should not be extended”* — and then extended it.
+- **F75–F104.** **No ledger row — kept on purpose.** `WISP_MIGRATION_STATUS.md`'s table runs F1–F44 **and F64–F74**, §0 carries F45–F63, and **F75–F104 have no ledger row at all** — they exist only in `CONTEXT.md` §0's phase table and in the phase reports. **Decided by ADR-0062 R1:** this register is canonical for a finding's status and the ledger is append-only and **not backfilled**; §23's note now says so and states its own range (it read “**F64–F71 resume here**”, three short, until then).
+- **F64–F71.** **Two homes.** These eight exist twice: at `WISP_MIGRATION_STATUS.md:112-119` (the criteria-authority §0 section, statuses “RECORDED, NOT DECIDED”) and at `:1882-1889` (§23, statuses “DECIDED — ADR-0049”). The §0 copies are stale. The ledger itself flags this at `:64-68` as *“the navigability defect this chain was about and should not be extended”* — and then extended it. Under ADR-0062 R1 the §0 copies are historical; this register's rows are the current status.
+- **F1–F5.** **Two id namespaces** (ADR-0062 R2 — this page records the collision once). `CONTEXT.md` §12's `F1`–`F5` are **open items**; this register's `F1`–`F104` are **findings**. Tolerated, not renamed: a citation writes `ITEM-F1` for §12's row and `FIND-F1` for this page's. `CURRENT_OPEN_ITEMS.md` carries the §12 side.
 
 ### Claims pinned since
 
@@ -273,5 +274,5 @@ the *artifacts*, not a new finding — no `F`-number is coined here.
   introduces no decision.
 - **No conflict was resolved.** `F8`, `F19`, `F37`, `F39` and `F89` each carry two recorded
   statuses; the row states the one the *later* source records and the conflict is listed.
-- **The ledger was not edited.** Reorganising the split log is an editorial decision that
-  `WISP_MIGRATION_STATUS.md` §23 already declined once (*“Recorded, not reorganized”*).
+- **The ledger's rows were not edited.** ADR-0062 R1 decided the split log stays append-only and
+  un-backfilled, with this page canonical; only its §23 note changed, to say so.

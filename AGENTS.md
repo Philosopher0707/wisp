@@ -99,7 +99,9 @@ goes stale on the next flag while the table does not.
 
 Three rules that are easy to get wrong:
 
-- **Read a flag ONCE.** `AgentRuntime.run_turn` reads all of them at one site because the stream loop
+- **Read a flag at its consumption site** — ADR-0002's rule, restated by ADR-0062 R4: `getattr(config,
+  name, <safe default>)`, resolvable via `get_setting`. *"Read once, at the composition point"* is **not**
+  the rule (ADR-0062 R4 names it as a defect). `AgentRuntime.run_turn` does read these at one site, because the stream loop
   and the `finally` block must agree; a flag read in two places is a flag that can disagree with itself.
 - **`PROPOSAL` / `OUTCOME` / `VERDICT` / `TASK_GRAPH` / `NODE_TRANSITION` are AUDIT-ONLY.** None may
   append to `Session.messages`. The transcript is rebuilt from
@@ -468,7 +470,8 @@ python3 -m pytest tests/test_contracts_*.py tests/test_auth_*.py tests/test_runs
 #
 # Also: two CONCURRENT pytest processes race on the shared pytest-of-<user> temp directory
 # and produce "PermissionError: EEXIST: mkdir ..." at fixture setup — 869 errors from one
-# overlapping run, which reads as a code failure and is not (F112). RUN THE BLOCK ALONE.
+# overlapping run, which reads as a code failure and is not (F112). RUN THE BLOCK ALONE, with a
+# private --basetemp — ADR-0062 R6 makes both a rule.
 # The block below was extended with the four NEXT-mission files, the five
 # documentation-authority / criteria-authority / F8-classification / precedence /
 # structured-criteria files, the four 2026-09-25-mission files (gate-enablement,
@@ -526,7 +529,7 @@ python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_
   tests/reliability/test_key_trust_workflow.py \
   tests/reliability/test_m4_policy_wiring.py \
   tests/reliability/test_rest_authorization_composition.py \
-  tests/test_m4_governance_wiring.py -q
+  tests/test_m4_governance_wiring.py -q --basetemp="$TMPDIR/wisp-block-$$"   # alone — ADR-0062 R6
 ```
 
 ### The environment will fight you

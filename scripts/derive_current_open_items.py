@@ -106,7 +106,7 @@ ROWS: list[tuple[str, str, str, str, str, str]] = [
     ("M8", "`multi_agent/dag.py` not retired into `wisp/graph/`", "COMPLETE",
      "— (re-scoped by ADR-0060: the divergence is the *boundary*, not a blocker; the removal is **not owed**)",
      "tests/reliability/test_dag_retirement_contract.py",
-     "CONTEXT.md:2073 — “**SURVEYED AND DECIDED 2026-09-25 — `DEPRECATE`, not remove**, and **RE-SCOPED by ADR-0060**”"),
+     "CONTEXT.md:2212 — “✅ **COMPLETE.** *Reason:* surveyed and decided 2026-09-25 — **`DEPRECATE`, not remove** — and **re-scoped by ADR-0060**”"),
     ("M9", "The execution view", "COMPLETE", "—", "—",
      "CONTEXT.md:2059 — “✅ **COMPLETE** — ADR-0029.”"),
     ("M10", "The materialized graph is a lower bound on iterations", "NOT STARTED",
@@ -114,7 +114,7 @@ ROWS: list[tuple[str, str, str, str, str, str]] = [
      "CONTEXT.md:2074 — “**OPEN — by design.**”"),
     ("M11", "The graph does not drive execution", "COMPLETE", "—",
      "tests/reliability/test_layer_b_boundary.py",
-     "CONTEXT.md:2060 — “✅ **COMPLETE — and DECIDED, not deferred.** ADR-0033 … **ADR-0060 closes the second half**”"),
+     "CONTEXT.md:2199 — “✅ **COMPLETE.** *Reason:* **decided, not deferred** (ADR-0060; ADR-0062 R3). ADR-0033 … **ADR-0060 closes the second half**”"),
     ("M12", "The failure path", "COMPLETE", "—", "—",
      "CONTEXT.md:2061 — “✅ **COMPLETE** — ADR-0032.”"),
     ("M13", "The stagnation detector is not constructed by the turn loop", "COMPLETE", "—",
@@ -128,7 +128,7 @@ ROWS: list[tuple[str, str, str, str, str, str]] = [
      "CONTEXT.md:2065 — “✅ **COMPLETE** — ADR-0028.”"),
     ("Layer C", "`wisp/core/graph/` — named *disowned* and consumed by the live path", "COMPLETE", "—",
      "tests/reliability/test_layer_c_disposition.py",
-     "CONTEXT.md:2075 — “✅ **DECIDED 2026-09-25 (ADR-0060 R5).** The live symbols **moved**”"),
+     "CONTEXT.md:2214 — “✅ **COMPLETE.** *Reason:* decided 2026-09-25 by **ADR-0060 R5** (ADR-0062 R3). The live symbols **moved**”"),
 
     # ── WISP_MIGRATION_STATUS.md — the phase ledger's non-COMPLETE rows ──────
     ("P0 · item 6", "A normal turn creates a `RunRecord` row", "COMPLETE", "—", "—",
@@ -417,8 +417,8 @@ def render() -> str:
     A("| `IN PROGRESS` | Work is under way and the item is not finished. The `blocked_by` cell")
     A("  carries whatever the source names as the remaining obstacle. |")
     A("| `PARTIAL` | Some named part landed and another did not. The source says which is which. |")
-    A("| `BLOCKED` | The item cannot proceed. **No row uses this word**, because every source that")
-    A("  could has preferred `IN PROGRESS` or `NOT STARTED` plus a stated `blocked_by` — see §(b). |")
+    A("| `BLOCKED` | The item cannot proceed. **No item is currently in this state** (ADR-0062 R3.2):")
+    A("  every source that could has preferred `IN PROGRESS` or `NOT STARTED` plus a stated `blocked_by`. |")
     A("| `COMPLETE` | The item is finished. For an item closed by a *decision* rather than a change,")
     A("  the decision is cited in the source cell. |")
     A("| `SUPERSEDED` | A later decision replaced the item's question. |")
@@ -429,7 +429,7 @@ def render() -> str:
     A("|---|---|---|")
     A("| `OPEN` | `NOT STARTED` | `CONTEXT.md` §12 |")
     A("| `✅ DONE` · `FIXED` · `CLOSED` | `COMPLETE` | `CONTEXT.md` §12 |")
-    A("| `DECIDED` | `COMPLETE` | `CONTEXT.md` §12 (see §(b) — this one is a *reason*) |")
+    A("| `DECIDED` | — (a *reason*; ADR-0062 R3) | `CONTEXT.md` §12 **until ADR-0062**, now written *Reason:* after `COMPLETE` |")
     A("| `Accepted (low)` · `Accepted` · `Unresolved, no action` | `NOT STARTED` | `CONTEXT.md` §12 |")
     A("| `DEFERRED` · `NOT DONE` | `NOT STARTED` | `WISP_MIGRATION_STATUS.md` per-item tables |")
     A("| `BLOCKED_ON_PRECONDITION` | — | **not used anywhere in this corpus** (§(b)) |")
@@ -443,17 +443,16 @@ def render() -> str:
     A("coining a state word for a reason leaves two vocabularies in the ledger, which is how `OPEN`")
     A("and `NOT STARTED` came to coexist for the same state.")
     A("")
-    A("**Every place a reason is recorded as a state.** One, measured:")
+    A("**Every place a reason was recorded as a state.** One, measured — and **repaired by ADR-0062 R3**:")
     A("")
-    A("- **`DECIDED`** — `CONTEXT.md` §12's table uses it as a state word for **`M8`**, **`M11`** and")
+    A("- **`DECIDED`** — `CONTEXT.md` §12's table used it as a state word for **`M8`**, **`M11`** and")
     A("  **`Layer C`**. It names *why* the item is finished (an ADR decided it) rather than *that* it")
-    A("  is. The ledger has no `DECIDED` word. This page maps it to `COMPLETE`, which is the state it")
-    A("  describes, and cites the ADR in the source cell. **Recorded, not repaired** — §12 is a")
-    A("  handoff section and amending its vocabulary is an editorial decision.")
-    A("- **`BLOCKED`** is a state the ledger defines and **no source uses.** Every item that is")
-    A("  blocked is recorded as `IN PROGRESS` or `NOT STARTED` with a stated obstacle. So the")
-    A("  vocabulary has a word with no members — the inverse of the defect above, and the reason this")
-    A("  section states the rule rather than assuming the vocabulary is used uniformly.")
+    A("  is. ADR-0062 R3 decided it is a reason: each of the three now reads `COMPLETE`, followed by")
+    A("  *Reason:* and the deciding ADR — quoted in the source cells above.")
+    A("- **`BLOCKED`** is a state the ledger defines and **no item is currently in** (ADR-0062 R3.2).")
+    A("  Every item that is blocked is recorded as `IN PROGRESS` or `NOT STARTED` with a stated")
+    A("  obstacle. A defined word with no members is a vocabulary, not a defect, and the word is kept so")
+    A("  a future blocked item is representable.")
     A("")
     A("**The brief's own vocabulary, checked.** The mission brief lists `OPEN · IN_PROGRESS ·")
     A("BLOCKED · DECIDED · CLOSED · SUPERSEDED` as *\"the ledger's own vocabulary\"*. It is not: the")
@@ -504,19 +503,22 @@ def render() -> str:
     A("  ledger). `WISP_MIGRATION_STATUS.md` §23 and `CURRENT_FINDINGS.md` use `F1`–`F104` as")
     A("  **finding** ids. `§12`'s `F1` (`metadata[\"_budget\"]` write-only) and the findings log's")
     A("  `F1` (`test_canonical_execution_state.py` already exists) are different things with the same")
-    A("  name. **Recorded, not repaired** — renaming either is an editorial decision, and this page")
-    A("  disambiguates by carrying the source on every row.")
-    A("- **`M4`.** `CONTEXT.md` §12's `M4` is *ADR-0004 revisited* (a migration item). The brief for")
-    A("  this mission and `PHASE_10_M4_GOVERNANCE_UNWIRED.md` use *M4* for the **governance layer**,")
-    A("  which §12 carries as row **`E`**. `WISP_MIGRATION_STATUS.md:2041`'s `M4` is a third usage.")
-    A("  **Finding F99** records the same collision from the other side.")
+    A("  name. **Decided by ADR-0062 R2: tolerated, not renamed** — a citation writes `ITEM-F1` for")
+    A("  §12's rows and `FIND-F1` for a finding, and §12 states the rule once.")
+    A("- **`M4`** — and, measured, **`M1`–`M7`**. `CONTEXT.md` §12's `M4` is *ADR-0004 revisited* (a")
+    A("  migration item, also `WISP_MIGRATION_STATUS.md:204`). `PHASE_10_M4_GOVERNANCE_UNWIRED.md` and")
+    A("  `AGENTS.md`'s module map use *M4* for the enterprise track's **governance layer**, which §12")
+    A("  carries as row **`E`** — and the enterprise track's `M1`–`M7` collide with the migration's")
+    A("  `M1`–`M7` the same way. This page used to name `WISP_MIGRATION_STATUS.md:2041` as a third")
+    A("  `M4`; **that line has never named `M4`** (corpus governance II §5). **Annotated once at §12,**")
+    A("  per ADR-0062 R2. **Finding F99** records the same collision from the other side.")
     A("")
     A("### Claims that cannot be pinned")
     A("")
     A("- **The brief's state vocabulary is not the ledger's.** Recorded in §(b). The register uses")
     A("  the ledger's, because the brief itself says *\"the ledger's vocabulary governs\"*.")
-    A("- **`BLOCKED` has no members.** The vocabulary defines a word no source uses. Recorded in")
-    A("  §(b); not repaired, because inventing a `BLOCKED` row would be coining a state.")
+    A("- **`BLOCKED` has no members** — no item is currently in this state (ADR-0062 R3.2). Kept,")
+    A("  not removed, and no `BLOCKED` row is invented, because that would be coining a state.")
     A("- **No ADR before 0053 has a named-residual section.** The ADR log's residual lists begin at")
     A("  ADR-0053; ADR-0001–0052's residuals, where they exist, are in their phase reports instead.")
     A("  So *\"every ADR's named residuals\"* resolves to **six** ADRs, not 61 — a scope the brief's")
@@ -526,8 +528,8 @@ def render() -> str:
     A("### What this page did not do")
     A("")
     A("- **No new decision, and no new item id.** Every id is the source's own name.")
-    A("- **No source was edited.** §12's `DECIDED` word and the `F1`–`F5` collision are recorded,")
-    A("  not repaired.")
+    A("- **No source was edited by this page.** §12's `DECIDED` word and the id collisions were")
+    A("  repaired at their source, by edits ADR-0062 R2/R3 authorise; this page records the result.")
     A("- **No closed item was deleted.** They are kept in §The closed items so a regression is")
     A("  visible as a move between the two tables.")
     A("")

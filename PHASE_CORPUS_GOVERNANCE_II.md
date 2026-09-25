@@ -12,6 +12,45 @@ and the **edits** the decision authorises.
 
 ---
 
+## §1 — The mission, in one page
+
+**The ten findings, and where each ended:**
+
+| finding | disposition | where |
+|---|---|---|
+| **F105** `F77` has no source | **closed** — F77 is `PHASE_DAG_RETIREMENT.md` §7.1's instrument defect, identified by two records outside the report and driven; the reference made explicit; no number coined | §4 |
+| **F106** 30 findings with no ledger row | **decided** (R1) — the register is canonical, the ledger is not backfilled, its note says so | §2, §5 |
+| **F107** id namespaces collide | **decided** (R2) — prose prefixes; annotated once. **Measured wider than recorded:** `M1`–`M7` collide, and R2's third `M4` never existed | §2, §5 |
+| **F108** the vocabulary is not one | **decided** (R3) — `DECIDED` is a reason and left §12's state words; `BLOCKED` kept, stated empty | §2, §5 |
+| **F109** the ADR-0002 paraphrase | **decided** (R4) — the rule verbatim, the paraphrase named and traced to ADR-0056; `AGENTS.md` corrected | §2, §5 |
+| **F110** phantom flag names | **decided** (R5) — wrong names, no alias; guarded by AST over `wisp/` | §2, §5 |
+| **F111** the starved host | **stands** — a host condition; this mission measured 118 MB free and ran the block in chunks rather than quote a count | §5 |
+| **F112** concurrent pytest races | **decided** (R6) — one process at a time, `--basetemp`; both canonical blocks carry it | §2, §5 |
+| **F113** the authorities page has no generator | **decided** (R8) **and built** — `scripts/derive_current_authorities.py` | §2, §3 |
+| **F114** a report missing from the index | **decided** (R7) — and this mission's own D1 committed the same omission, now corrected and guarded | §2, §5 |
+
+**What the mission built:** one ADR; one generator; one disposition; the edits the ADR authorises;
+**one new guard (27 tests) and two extended ones**. Mutation probes across the four deliverables:
+**7/7** (D2), **3/4** (D3 — the miss is a recorded defect in D1's generator), **10/10 + 3/3 silent**
+(D4). **No `wisp/` file was changed**; two probes mutated `wisp/core/goal.py` and restored it
+byte-identical.
+
+**What it found that nobody had listed**, all recorded rather than numbered:
+
+1. **The register generators check a source's line range, not its content.** Measured: **12** of
+   `CURRENT_FINDINGS.md`'s quoted sources and **55** of `CURRENT_OPEN_ITEMS.md`'s are no longer on the
+   line they cite — the entry-point section and §0.0.17 pushed §12 down ~140 lines. It is the weakness
+   `17130c7` closed for the authorities page, recurring in two siblings. **The one real follow-up.**
+2. **ADR-0062 R2's premise had a bad pin** (`WISP_MIGRATION_STATUS.md:2041` never named `M4`).
+3. **`CURRENT_AUTHORITIES.md`'s header was stale again** the moment ADR-0062 landed — now generated.
+4. **49 of 89 tracked phase reports have never been in §13**, and one is in it twice.
+
+**What it did not do.** No flag default, gate or authority changed. No finding was created or
+renumbered. No ledger row was added. The Tier 2 items — M8's removal, budget tuning, ADR-0016's
+measurement — were not started.
+
+---
+
 ## §2 — Deliverable 1: ADR-0062, the eight editorial decisions
 
 **Commit:** `docs: ADR-0062 — the corpus's editorial decisions` (this one).
@@ -252,3 +291,101 @@ may be wrapped. **Recorded, not repaired, and not numbered**: re-pinning those t
 change rows this deliverable may not change, and adding a quote-at-line check would fail the build
 until they are re-pinned. It is one self-contained follow-up: re-pin the twelve and give
 `_check_sources` a content check with a floor, as `17130c7` did for the authorities page.
+
+---
+
+## §5 — Deliverable 4: ADR-0062's decisions applied to the artifacts
+
+**Commit:** `docs: apply ADR-0062 to the artifacts, and guard it (corpus governance II, D4)`.
+
+### Every edit, and the ADR section that authorises it
+
+| artifact | edit | authority |
+|---|---|---|
+| `CONTEXT.md` §12 — `M8`, `M11`, `Layer C` | the state word becomes `COMPLETE`; the decision follows as *Reason:* with its ADR | **R3.1** |
+| `CONTEXT.md` §12 — one note after the table | `DECIDED` is a reason; the other words are mapped by `CURRENT_OPEN_ITEMS.md` §(a); `BLOCKED` has no item | **R3** |
+| the same note | the `ITEM-F1` / `FIND-F7` prefix rule; `M4`'s meanings, with row **`E`** named | **R2** |
+| `CONTEXT.md` §6 | a new row — *one pytest process at a time, with a private `--basetemp`* — **beside** the shim row, which stays | **R6** |
+| `CONTEXT.md` §11 | the canonical block and the broad sweep pass `--basetemp`; the F112 paragraph restated as the rule | **R6** |
+| `AGENTS.md` | its copy of the canonical block passes `--basetemp`; *"RUN THE BLOCK ALONE"* cites R6 | **R6** |
+| `AGENTS.md` — the three flag rules | *"**Read a flag ONCE.**"* → *read at the consumption site*, ADR-0002's words; the paraphrase named as not the rule; `run_turn`'s single read site kept as the **local** fact it is | **R4** |
+| `CONTEXT.md` §13 | `PHASE_EXTERNAL_INPUT_PATH.md` **confirmed present**; `PHASE_CORPUS_GOVERNANCE_II.md` **added** | **R7** |
+| `WISP_MIGRATION_STATUS.md` §23 note | names `CURRENT_FINDINGS.md` as canonical, states its own range (`F64`–`F74`), says `F75` onward have no row; **no row backfilled** | **R1** |
+| `CURRENT_OPEN_ITEMS.md` (regenerated) | the three R3 rows re-quoted **and re-pinned** (`:2073/2060/2075` → `:2212/2199/2214`); §(a)/§(b) record `DECIDED` as repaired and `BLOCKED` as *"no item is currently in this state"*; §Findings records the R2 decision and the corrected `M4` meanings | **R2, R3, R8** |
+| `CURRENT_FINDINGS.md` (regenerated) | §Findings records the `F1`–`F5` collision **once**, as R2 requires; the ledger-gap entries cite R1 | **R1, R2, R8** |
+| `CURRENT_FLAGS.md` (regenerated) | §Findings: the paraphrase and the phantom names are **decided by R4 / R5** | **R4, R5, R8** |
+| `CURRENT_AUTHORITIES.md` (regenerated) | the header's commit | **R8** |
+
+**No `wisp/` file was touched.** `AGENTS.md` carries neither phantom name as a flag — its only
+`graph_mutation` is the real test file `tests/test_graph_mutation.py` — so R5 needed no edit there.
+
+### Defects the edits exposed — recorded, not numbered
+
+1. **ADR-0062 R2's third meaning of `M4` does not exist.** R2 (and `F107`, and `CURRENT_OPEN_ITEMS.md`'s
+   §Findings) name *"`WISP_MIGRATION_STATUS.md:2041`'s row"* as a third `M4`. Driven: that line is the
+   ADR-0039 implementation row, **and it was already that row at `2a8cac9`**, the commit that wrote
+   the claim — the pin never named `M4`. The ledger's own `M4` (`:204`) is §12's meaning, *ADR-0004
+   revisited*. **Measured, the collision is two meanings — and it is wider than one id:** the enterprise
+   track's `M1`–`M7` (contracts … the governance layer … release, `AGENTS.md`'s module map) share every
+   id with the migration's `M1`–`M7`. The §12 annotation states what was measured rather than R2's
+   *"three meanings"*, and the new guard asserts that every pin in it **names `M4`**. ADR-0062 is
+   append-only, so it is not edited; a reader of R2 is pointed here by this entry.
+2. **D1 of this mission violated R7 in the change that decided it.** `PHASE_CORPUS_GOVERNANCE_II.md`
+   was created by `1e45b19` — the ADR-0062 commit — and not added to §13. Added now; the new R7 test
+   fails on exactly that omission (probe P8).
+3. **`PHASE_EXTERNAL_INPUT_PATH.md` is in §13 twice** — once as the previous landing added it and once
+   as the corpus-governance landing re-added it (`F114`'s correction). Left as found: R7 governs a
+   missing row, and deleting a row is not an edit ADR-0062 authorises.
+4. **49 of 89 tracked phase reports have never been in §13.** The pre-ADR-0062 history; R7 governs
+   forward, and the guard compares against git history since ADR-0062 so it neither re-litigates the
+   past nor fires on it.
+5. **`CURRENT_OPEN_ITEMS.md`'s sources have drifted, like `CURRENT_FINDINGS.md`'s (§4).** Its
+   `_check` is range-only too. Measured over all 102 rows: **26** quote their cited line, **21** are
+   within ±3, **55 are not** — chiefly every `CONTEXT.md` §12 row, cited at `:2030–:2075` while the
+   rows now sit at `:2166–:2214` (the entry-point section and §0.0.17 were inserted above them). The
+   three rows this deliverable touched are re-pinned to their real lines; the other 55 are not rows
+   ADR-0062 authorises editing. **Together with §4's twelve, this is one follow-up**: give both
+   generators' source checks a content check with a floor, and re-pin the 67 rows it fails.
+
+### The guard — `tests/reliability/test_corpus_editorial_decisions.py`
+
+**27 tests, one class per rule.** Floors on every collection; AST for every read of Python (R5 walks
+`Name`, `Attribute`, `arg`, `def`/`class` names and string constants under `wisp/`); observation points
+are the production artifacts — the ledger's own `:41` vocabulary line, the live `wisp.config.get_schema()`,
+the git index, and each page's banner (R8 *discovers* derived pages by their `DERIVED DOCUMENT` banner,
+so a fifth register is checked without editing the test).
+
+**Falsified in both directions:**
+
+| probe | rule | result |
+|---|---|---|
+| P1 the ledger gains an `F75` row | R1 | **CAUGHT** |
+| P2 the `M4` annotation's pin moves to `:2041` | R2 | **CAUGHT** |
+| P3 `M8` back to *"SURVEYED AND DECIDED"* as its state | R3 | **CAUGHT** |
+| P4 an open-items row uses `DECIDED` | R3 | **CAUGHT** |
+| P5 `AGENTS.md`'s rule reverts to *"Read a flag ONCE."* | R4 | **CAUGHT** (two tests) |
+| P6 `_PROBE = "verification_gate"` appended to `wisp/core/goal.py` | R5 | **CAUGHT** |
+| P7 §11's block loses `--basetemp` | R6 | **CAUGHT** |
+| P8 this mission's report leaves §13 | R7 | **CAUGHT** |
+| P9 a `DERIVED DOCUMENT` page with no generator | R8 | **CAUGHT** (two tests) |
+| P10 `BLOCKED`'s emptiness stated the old way | R3.2 | **CAUGHT** |
+| L1 a new §12 row finished by a decision, written `COMPLETE` + *Reason:* | R3 | **SILENT** — as intended |
+| L2 a local *"read once, at the composition point"* about one named flag | R4 | **SILENT** — R4 permits a local fact |
+| L3 a new phase report, staged **and indexed** | R7 | **SILENT** |
+| L4 control — the same report, **not** indexed | R7 | **FIRED** |
+
+**10/10 caught, 3/3 legitimate additions silent, 1/1 control fired.** Tree restored **byte-identical**
+(sha256) and the git index clean after every probe. One instrument defect was found before probing:
+the R3.2 test first skipped `SUPERSEDED` arbitrarily to pass; it was narrowed to `BLOCKED`, the word
+R3.2 actually names.
+
+### Verification
+
+| check | result |
+|---|---|
+| the new guard | **27 passed** |
+| the four register guards + entry point + `test_doc_drift.py` | **179 passed**, one process, alone, `--basetemp` |
+| the four registers | **regenerated, not hand-edited**; each guard's reproducibility test passes |
+| **the canonical block** | **not measured as one run** — free memory was **118 MB of 16 GB** at the time (F111's condition; F111's 154 phantom failures appeared at 60–87 MB). Run instead as **8 sequential chunks** of ≤8 files, alone, each with its own `--basetemp`, over the block's **58 files + this mission's new guard**: **1665 tests — 1664 passed, 1 failed**, the one failure `test_node_identity.py::TestANodeReferencesItsWorkUnit::test_a_parallel_round_is_journaled_as_one_exchange_per_call` (**F38**, pre-existing). **The method is weaker than a single block run and weaker than a two-run intersection**, and the number is a chunked set, **not** a canonical count to quote (F111, F85) |
+| `ruff` / `mypy` | not re-run — no Python file under `wisp/` changed; both gates are red at HEAD for pre-existing reasons (**F71**), and this mission neither caused nor repaired that |
+| the user's WIP | `wisp/core/graph/__init__.py` still the only modified tracked file, diff unchanged; no untracked WIP staged |
