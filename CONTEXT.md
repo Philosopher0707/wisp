@@ -1932,6 +1932,7 @@ env -u PYTHONPATH .venv/bin/python -m pytest \
   tests/reliability/test_external_input_path.py \
   tests/reliability/test_current_findings_pins.py \
   tests/reliability/test_current_open_items_pins.py \
+  tests/reliability/test_current_flags_pins.py \
   tests/reliability/test_f8_published_status.py \
   tests/reliability/test_criteria_source_on_turn_path.py \
   tests/reliability/test_acceptance_gate_enablement.py \
