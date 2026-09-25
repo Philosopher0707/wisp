@@ -1646,15 +1646,20 @@ uv run --no-project --with "mypy==2.3.1" mypy wisp/      # 1844 errors in 228 fi
 # both failures are pre-existing and neither is F38:
 #
 #   test_outcome_classification_authority.py::test_no_module_reimplements_tool_result_status_classification
-#       `wisp/core/stateless.py:158,167` compare `.get("status")` to "ok"/"error"
+#       `wisp/core/stateless.py:158,167` compared `.get("status")` to "ok"/"error"
 #       directly; introduced by ade4dc6 (POST-M13 execution semantics).
+#       **FIXED** by the outcome-classification mission — the success test is now
+#       delegated to `core.events.is_error_outcome` (both branches; 35-case
+#       differential identical). **The guard was RIGHT and the code was wrong:**
+#       calling this one a "contract update" was F86. It is in the canonical block
+#       now, so it can no longer be red-and-unseen.
 #   test_m4_governance_wiring.py::test_tool_executor_construction_sites_are_known
 #       asserts 2 ToolExecutor construction sites; there are 3 (the third is
 #       `wisp/acp_session.py`, from cef3e90).
 #
-# Neither file is in the canonical block, which is why nothing caught them. Fixing
-# either is a CONTRACT UPDATE and needs explicit authorisation, exactly like F38 —
-# it is not a side effect of another phase.
+# The M4 count guard is a CONTRACT UPDATE and needs explicit authorisation, exactly
+# like F38 — it is not a side effect of another phase. (The other one was not.)
+# Neither was in the canonical block, which is why nothing caught them.
 #
 # RULE (F71, restated): do not quote a count that has not been produced in THIS
 # environment. The two httpx-dependent files are listed but ignored until httpx can
@@ -1700,7 +1705,7 @@ environmental set in §7. Never quote "the suite passes" — quote the set.
 `jsonschema` absent, so they include F8's effects. The `tests/reliability/` measurement after
 provisioning (24 failures → 0) shows the magnitude of the error. Re-measure before comparing.
 
-### Canonical suites — 1312 tests (1311 pass, 1 fails)
+### Canonical suites — 1390 tests (1389 pass, 1 fails)
 
 ```bash
 env -u PYTHONPATH .venv/bin/python -m pytest \
@@ -1736,7 +1741,9 @@ env -u PYTHONPATH .venv/bin/python -m pytest \
   tests/reliability/test_criteria_source_on_turn_path.py \
   tests/reliability/test_acceptance_gate_enablement.py \
   tests/reliability/test_objective_flag_composition.py \
-  tests/reliability/test_rest_approval.py -q
+  tests/reliability/test_rest_approval.py \
+  tests/test_outcome_classification_authority.py \
+  tests/reliability/test_outcome_classification_delegation.py -q
 ```
 
 **Measured 2026-09-25, after the F8 error-classification landing: 1115 tests — 1114 pass, 1 fails.** The
@@ -1749,10 +1756,19 @@ update, which requires explicit authorization.
 
 **The heading said "849 tests" until 2026-09-25, "714 tests" before that, "1115 tests" until the
 gate-enablement mission, "1289" until the acceptance-gate-enablement mission, "1314" until its
-Deliverable 2, and "1317" until the authorization-parity mission.** None was current for long: the
-command block had never been extended with the POST-M13 files (714 → 849), the four NEXT-mission files
-and the three 2026-09-25 files (849 → 1115), or the guards the later missions added. Finding **F71**.
-**Do not quote a count from prose** — run the block.
+Deliverable 2, "1317" until the authorization-parity mission, and "1312" until the
+outcome-classification mission.** None was current for long: the command block had never been extended
+with the POST-M13 files (714 → 849), the four NEXT-mission files and the three 2026-09-25 files
+(849 → 1115), or the guards the later missions added. Finding **F71**. **Do not quote a count from
+prose** — run the block.
+
+**And "1312" was stale within the mission that wrote it (F85).** The corpus-integrity pass measured the
+block in **Deliverable 1** and set both headings; **Deliverable 2** then added **four** tests to
+`tests/reliability/test_current_authorities_pins.py` — a block member — and the headings were never
+re-measured. Measured now, the same 45 files collect **1316**, not 1312. F71 said *never quote a count
+from prose*; F82 said *a count is canonical only if there is ONE block*; **F85 says a count is
+canonical only if it is measured after the LAST change to any member** — and a heading written in
+Deliverable 1 is stale the moment Deliverable 2 touches a file the block names.
 
 **The two blocks were out of sync (F82).** Until the authorization-parity mission, `AGENTS.md`'s block
 listed **two files this one did not** — `test_precedence_canonical.py` and `test_structured_criteria.py` —

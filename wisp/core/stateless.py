@@ -33,6 +33,7 @@ from wisp.core.events import (
     DENIAL_SCHEMA_INVALID,
     AgentEvent,
     canonical_event,
+    is_error_outcome,
     content as content_event,
     tool_result as tool_result_event,
     error as error_event,
@@ -151,11 +152,22 @@ def _tool_result_output(result: Any) -> Any | None:
     A value that is not an envelope is not tool output either: the executor's
     blocks (``[Blocked: …]``, ``[Denied: …]``) are plain strings on this same
     channel.
+
+    *"Is this envelope a success?"* is the taxonomy's question, not this
+    function's: the answer is delegated to ``core.events.is_error_outcome``,
+    the binary view of the one outcome classifier. Comparing
+    ``.get("status")`` to the literal ``"ok"`` here would be a second
+    classifier for a vocabulary this module does not own — and
+    ``test_no_module_reimplements_tool_result_status_classification`` exists
+    precisely to catch it. The ``"status" not in result`` guard above is
+    **not** redundant with the classifier: ``classify_result`` defaults a
+    missing status to ``"ok"`` (success), while this function must treat a
+    status-less dict as *not an envelope at all* and return None.
     """
     if isinstance(result, dict):
         if "status" not in result:
             return None
-        return result.get("data") if result.get("status") == "ok" else None
+        return result.get("data") if not is_error_outcome(result) else None
     if isinstance(result, str) and result.lstrip().startswith("{"):
         import json as _json
 
@@ -164,7 +176,7 @@ def _tool_result_output(result: Any) -> Any | None:
         except (ValueError, TypeError):
             return None
         if isinstance(parsed, dict) and "status" in parsed:
-            return parsed.get("data") if parsed.get("status") == "ok" else None
+            return parsed.get("data") if not is_error_outcome(parsed) else None
     return None
 
 

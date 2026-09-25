@@ -447,14 +447,17 @@ python3 -m pytest tests/test_contracts_*.py tests/test_auth_*.py tests/test_runs
 # Durable record + proposal boundary + verdicts + task graph
 # (migration P0-P9 + M2/M3/M4/M16/M9/M15/M14/M12/M11/M13 + POST-M13 + ADR-0035/0036/0037
 #  + the NEXT chain ADR-0045/0046/0047/0048)
-# 1312 tests — 1311 pass, 1 fails (F38: a test that encoded the pre-F8 exchange ordering).
+# 1390 tests — 1389 pass, 1 fails (F38: a test that encoded the pre-F8 exchange ordering).
 # The block below was extended with the four NEXT-mission files, the five
 # documentation-authority / criteria-authority / F8-classification / precedence /
 # structured-criteria files, the four 2026-09-25-mission files (gate-enablement,
-# dag-retirement, F8-published-status, criteria-source), and the two later
-# 2026-09-25 files (acceptance-gate-enablement, objective-flag-composition);
-# the earlier "849 tests" figure was the pre-NEXT count.
-# NEVER quote a count from prose — run the block.
+# dag-retirement, F8-published-status, criteria-source), the two later
+# 2026-09-25 files (acceptance-gate-enablement, objective-flag-composition), and the
+# outcome-classification pair (the taxonomy guard + its delegation guard, added by the
+# outcome-classification mission so the guard that was RED for four phases is now in a
+# block that actually runs); the earlier "849 tests" figure was the pre-NEXT count.
+# NEVER quote a count from prose — run the block. (F85: measure it after the LAST change
+# to any member, not after the change that motivated measuring.)
 python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_incremental.py \
   tests/test_action_idempotency_key.py tests/test_proposal_boundary_records.py \
   tests/test_proposal_boundary_no_bypass.py tests/test_verdict_layer_recorded.py \
@@ -487,7 +490,9 @@ python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_
   tests/reliability/test_criteria_source_on_turn_path.py \
   tests/reliability/test_acceptance_gate_enablement.py \
   tests/reliability/test_objective_flag_composition.py \
-  tests/reliability/test_rest_approval.py -q
+  tests/reliability/test_rest_approval.py \
+  tests/test_outcome_classification_authority.py \
+  tests/reliability/test_outcome_classification_delegation.py -q
 ```
 
 ### The environment will fight you

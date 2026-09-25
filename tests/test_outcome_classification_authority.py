@@ -313,16 +313,26 @@ def _compares_tool_result_status(path: pathlib.Path) -> list[int]:
 
 
 def test_no_module_reimplements_tool_result_status_classification():
+    scanned = 0
     offenders: dict[str, list[int]] = {}
     for py in (REPO / "wisp").rglob("*.py"):
         if "__pycache__" in py.parts:
             continue
+        scanned += 1
         rel = str(py.relative_to(REPO))
         if rel == _TAXONOMY_OWNER:
             continue
         hits = _compares_tool_result_status(py)
         if hits:
             offenders[rel] = hits
+    # A check whose subject is a **collection** needs a non-empty floor: a scan
+    # that reaches nothing passes vacuously and reports nothing (CONTEXT.md §10).
+    # 380 modules under `wisp/` at HEAD; the floor is far below that and far
+    # above zero, so it fires on a path change and not on a legitimate addition.
+    assert scanned >= 100, (
+        f"the scan reached only {scanned} module(s) — it is no longer scanning "
+        "`wisp/`, so its silence is not evidence of anything"
+    )
     assert not offenders, (
         "a module classifies a tool-result status by comparing "
         ".get(\"status\") to \"ok\"/\"error\" directly — classify through "
