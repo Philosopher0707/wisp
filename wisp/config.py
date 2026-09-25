@@ -407,6 +407,23 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "env_var": "WISP_TURN_CRITERIA_SOURCE",
     },
+    "acceptance_gate": {
+        "type": bool,
+        "default": False,
+        "description": (
+            "ADR-0054: the ACCEPTANCE GATE. Withholds `done` at the engine's "
+            "pre-`done` gate — by ADR-0036's bounded delay-not-veto model — when "
+            "the objective's DECLARED criteria (ADR-0050) are not satisfied. This "
+            "is the consumer ADR-0053 §10 recorded as missing for "
+            "`verdict_keys_on_declared`. DEPENDENT on `turn_criteria_source`: "
+            "with the source off there are no declared criteria in the set, so the "
+            "gate would withhold on a verdict the record does not carry. Defaults "
+            "OFF, and ADR-0051 R2's measurement contract is NOT satisfied — the "
+            "population it requires needs >= 2 capable models and this environment "
+            "has exactly one (see ADR-0054)."
+        ),
+        "env_var": "WISP_ACCEPTANCE_GATE",
+    },
     "tool_pool_size": {
         "type": int,
         "default": 8,
@@ -713,6 +730,9 @@ class WispConfig:
     #: ADR-0053. The turn path's criteria set gains the objective's declared
     #: criteria. Defaults OFF: with it off the verdict site is today's code.
     turn_criteria_source: bool
+    #: ADR-0054. The acceptance gate: withhold `done` on an unsatisfied declared
+    #: criterion. Dependent on `turn_criteria_source`; defaults OFF.
+    acceptance_gate: bool
 
     # ── Modes & permissions ───────────────────────────────────────
     permission_mode: PermissionMode | str
@@ -1006,6 +1026,9 @@ class WispConfig:
         )
         object.__setattr__(self, "turn_criteria_source",
             _parse_bool(get_setting("turn_criteria_source", "false"), False)
+        )
+        object.__setattr__(self, "acceptance_gate",
+            _parse_bool(get_setting("acceptance_gate", "false"), False)
         )
 
     def load_context_files(self) -> str:

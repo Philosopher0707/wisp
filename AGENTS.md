@@ -90,6 +90,7 @@ goes stale on the next flag while the table does not.
 | `strict_derivation` | `WISP_CRITERIA_STRICT_DERIVATION` | **ADR-0048 R5** — lets the acceptance-criteria derivation decline to complete an objective whose requirement it could not determine. **Defaults `false`**, i.e. today's behaviour: the derivation's reasoning is journalled and acted on by nothing. Read at the composition point (`wisp/autonomous.py`), not inside the pure function |
 | `structured_declaration` | `WISP_CRITERIA_STRUCTURED_DECLARATION` | **ADR-0050 R8** — lets an objective carry a `--- criteria ---` block that *states* its acceptance conditions. **Defaults `false`**, i.e. no declaration is parsed and every caller keeps ADR-0048's behaviour. ON, a malformed or unmeasurable declaration **raises** `CriteriaDeclarationRejected` and the run stops — it never falls back to the prose grammar. Read once, at the same composition point |
 | `turn_criteria_source` | `WISP_TURN_CRITERIA_SOURCE` | **ADR-0053 R7** — lets the **turn path's** required-criteria set carry the objective's declared criteria, unioned with `floor_guard_criteria(guard)`. **Defaults `false`**: with it off the verdict site is `floor_guard_verdict(guard)` unchanged, and the set is exactly `['floor:verification']`. ON, a declaration at the head of the prompt adds its criteria and the declaration's own probe evidence (`CommandProbe`, bounded by `spec.timeout_s`), so the verdict can be `FAIL` for a reason the floor guard does not enforce. **Deliberately independent of `structured_declaration`** — that flag gates the objective-level derivation; coupling them would put two read sites on one concern (ADR-0002). Read once, at `AgentRuntime.run_turn`'s entry |
+| `acceptance_gate` | `WISP_ACCEPTANCE_GATE` | **ADR-0054 R6** — the **acceptance gate**: the engine's pre-`done` gate asks a read-only callable (`turn_criteria.DeclaredCriteriaGate`) and withholds `done` by ADR-0036's bounded delay-not-veto model when the objective's declared criteria are not satisfied. **Defaults `false`**, and the reason is measured: ADR-0051 R4 requires **≥ 2 capable models** and this environment serves exactly **1** of 13 (`scripts/acceptance_gate_population.py`). **Dependent on `turn_criteria_source`** — with the source off there are no declared criteria, so the gate would withhold on a verdict the record does not carry. Read once, at `AgentRuntime.run_turn`'s entry |
 
 Three rules that are easy to get wrong:
 
@@ -370,11 +371,19 @@ declared `symbol_defined` criterion fails (declared: `FAIL`/`GOAL_FAILED`). A `F
 already enforces returns `False` from that predicate, so a gate keyed on it cannot duplicate the floor
 guard.
 
-**The failure routing is `derive_goal_state`, not the `done` gate.** The verdict is computed *after* the
-engine has emitted `done`, so the turn-level withholding gate (ADR-0036) cannot act on it; a declared
-failure lands `GOAL_FAILED` (row 3) where a floor-only verdict landed `GOAL_UNVERIFIED` or `GOAL_MET`.
-The ladder is unchanged. Making a declared failure *repairable within the turn* means moving the probe
-into the engine — a separate decision.
+**The failure routing is `derive_goal_state`, not the `done` gate — until ADR-0054 turns the gate on.**
+The verdict is computed *after* the engine has emitted `done`, so the turn-level withholding gate
+(ADR-0036) cannot act on it; a declared failure lands `GOAL_FAILED` (row 3) where a floor-only verdict
+landed `GOAL_UNVERIFIED` or `GOAL_MET`. The ladder is unchanged.
+
+**ADR-0054 adds the withholding, where it can act.** `acceptance_gate` (default OFF, dependent on
+`turn_criteria_source`) makes the engine ask `turn_criteria.DeclaredCriteriaGate` — a **read-only
+callable**, so the engine receives no criteria, no specs and no probe — at its pre-`done` gate. The probe
+is taken **there**, because that is the moment the workspace is final, and it is **cached** so the verdict
+site reuses it: one probe per declared turn. Withholding reuses ADR-0036's bound and **shares the turn's
+extension budget**, then surrenders honestly, so the withheld turn still ends with `done` and
+`turn_succeeded` stays a projection of terminal evidence. The gate is an **extension, not a success
+signal**.
 
 **A malformed declaration at the head of the prompt raises out of `run_turn`** (ADR-0050 R4 — loud, never
 a fallback). A block that is not at the head is not a declaration at all, so it never reaches that path.
@@ -435,7 +444,7 @@ python3 -m pytest tests/test_contracts_*.py tests/test_auth_*.py tests/test_runs
 # Durable record + proposal boundary + verdicts + task graph
 # (migration P0-P9 + M2/M3/M4/M16/M9/M15/M14/M12/M11/M13 + POST-M13 + ADR-0035/0036/0037
 #  + the NEXT chain ADR-0045/0046/0047/0048)
-# 1289 tests — 1288 pass, 1 fails (F38: a test that encoded the pre-F8 exchange ordering).
+# 1314 tests — 1313 pass, 1 fails (F38: a test that encoded the pre-F8 exchange ordering).
 # The block below was extended with the four NEXT-mission files, the five
 # documentation-authority / criteria-authority / F8-classification / precedence /
 # structured-criteria files, and the four 2026-09-25-mission files (gate-enablement,
@@ -470,7 +479,8 @@ python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_
   tests/reliability/test_gate_enablement_contract.py \
   tests/reliability/test_dag_retirement_contract.py \
   tests/reliability/test_f8_published_status.py \
-  tests/reliability/test_criteria_source_on_turn_path.py -q
+  tests/reliability/test_criteria_source_on_turn_path.py \
+  tests/reliability/test_acceptance_gate_enablement.py -q
 ```
 
 ### The environment will fight you

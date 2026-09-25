@@ -119,6 +119,53 @@ quoting it; §11 says how.
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log).
 **Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0047**).
 
+### 0.0.13 ACCEPTANCE GATE ENABLEMENT (2026-09-25) — ADR-0054
+
+ADR-0053 satisfied ADR-0051 R1's precondition and left one thing open (§10): *"`verdict_keys_on_declared`
+is a predicate, and nothing calls it in production … ADR-0051's enablement decision is what would consume
+it."* **ADR-0054 is that consumer.**
+
+**The question, answered.** ADR-0053 §9's residual 2 said a declared failure is *recorded*, not repaired,
+because the verdict is computed *after* `done`. A gate acting after `done` withholds nothing — so
+enforcement had to mean asking **before** `done`. **It does:** the engine's pre-`done` gate asks a
+**read-only callable** the runtime builds (`turn_criteria.DeclaredCriteriaGate`), receiving no criteria,
+no specs and no probe — the ADR-0036 shape. The probe is taken **at the gate**, because that is the moment
+the workspace is final, and it is **cached** so the verdict site reuses it: **one probe per declared
+turn**. Withholding reuses ADR-0036's bound and **shares the turn's extension budget**, then surrenders
+honestly — so the withheld turn still ends with `done` and `turn_succeeded` stays a projection of terminal
+evidence. **The gate is an extension, not a success signal.**
+
+**The flag.** `acceptance_gate` / `WISP_ACCEPTANCE_GATE`, default **OFF**, read once, **dependent** on
+`turn_criteria_source` (with the source off there are no declared criteria, so the gate would withhold on
+a verdict the record does not carry).
+
+**The measurement: the contract is NOT satisfied, and that is measured.** ADR-0051 R4 requires **≥ 2
+capable models**. `scripts/acceptance_gate_population.py` enumerates all **13** models the local daemon
+serves: **capable 1** (`nemotron-3-ultra:cloud`) · **degenerate 2** · **retired 5** · **paywalled 5** ·
+unclassified 0. So the `GOAL_MET` rate ADR-0051 R2 specifies is **not produced** — a rate over one model
+is the model-dependent artefact ADR-0051 §Problem already measured. **What would produce it:** a second
+capable model that is neither retired nor paywalled, or a provider key.
+
+**What IS produced — the mechanism, driven end to end through a real turn:** a failing declaration with
+the gate ON withholds `done` **exactly twice** (the shared budget), emits the `[DECLARED CRITERIA]` nudge,
+**then finishes**; a satisfied declaration withholds nothing; the flag OFF withholds nothing; the gate is
+**inert** without the criteria source.
+
+**The ADR-0051 tripwire fired and was replaced by its inverse.** `test_gate_enablement_contract.py`'s
+`TestNoUnwiredAcceptanceGateFlagWasAdded` asserted the flag was *absent* — and failed when it was added,
+exactly as its docstring predicted. Rewritten, not weakened: it now defends that the flag exists,
+**defaults OFF**, is read once, and is dependent.
+
+**`CURRENT_AUTHORITIES.md` was re-pinned — and the pin guard's weakness recurred.** It caught **one** of
+**five** stale pins again (the same defect ADR-0053 §6 recorded, one iteration later), so four were again
+found by reading. That recurrence is **Deliverable 2's** subject.
+
+**Produced:** ADR-0054 + its index row; `DeclaredCriteriaGate` / `declared_criteria_gate` /
+`compose_declared_nudge` in `turn_criteria.py`; the `declared_gate` parameter and gate block in
+`stateless.py`; the flag and wiring in `runtime.py` + `config.py`;
+`scripts/acceptance_gate_population.py` (committed); `tests/reliability/test_acceptance_gate_enablement.py`
+(25 tests, 3/3 non-vacuity probes caught); `PHASE_GATE_ENABLEMENT_DECISION.md`.
+
 ### 0.0.12 THE CRITERIA SOURCE ON THE TURN PATH (2026-09-25) — ADR-0053
 
 ADR-0051 R1's precondition was *"the turn path's required-criteria set contains at least one required
@@ -1461,7 +1508,7 @@ environmental set in §7. Never quote "the suite passes" — quote the set.
 `jsonschema` absent, so they include F8's effects. The `tests/reliability/` measurement after
 provisioning (24 failures → 0) shows the magnitude of the error. Re-measure before comparing.
 
-### Canonical suites — 1289 tests (1288 pass, 1 fails)
+### Canonical suites — 1314 tests (1313 pass, 1 fails)
 
 ```bash
 env -u PYTHONPATH .venv/bin/python -m pytest \
@@ -1492,7 +1539,8 @@ env -u PYTHONPATH .venv/bin/python -m pytest \
   tests/reliability/test_gate_enablement_contract.py \
   tests/reliability/test_dag_retirement_contract.py \
   tests/reliability/test_f8_published_status.py \
-  tests/reliability/test_criteria_source_on_turn_path.py -q
+  tests/reliability/test_criteria_source_on_turn_path.py \
+  tests/reliability/test_acceptance_gate_enablement.py -q
 ```
 
 **Measured 2026-09-25, after the F8 error-classification landing: 1115 tests — 1114 pass, 1 fails.** The
@@ -1503,11 +1551,12 @@ Now that calls genuinely dispatch, the grouping rule produces the batch shape it
 (`call:c0+c1`). The production behaviour is *more* correct, not less — the test needs a one-line contract
 update, which requires explicit authorization.
 
-**The heading said "849 tests" until 2026-09-25, "714 tests" before that, and "1115 tests" until the
-2026-09-25 gate-enablement mission.** None was current for long: the command block had never been
-extended with the POST-M13 files (714 → 849), the four NEXT-mission files and the three 2026-09-25 files
-(849 → 1115), or the four guards the gate-enablement mission added (1115 → 1289). Finding **F71**. **Do
-not quote a count from prose** — run the block.
+**The heading said "849 tests" until 2026-09-25, "714 tests" before that, "1115 tests" until the
+gate-enablement mission, and "1289" until the acceptance-gate-enablement mission.** None was current for
+long: the command block had never been extended with the POST-M13 files (714 → 849), the four
+NEXT-mission files and the three 2026-09-25 files (849 → 1115), or the five guards the two
+gate-enablement missions added (1115 → 1314). Finding **F71**. **Do not quote a count from prose** — run
+the block.
 
 ### The regression method — read this before changing anything
 
@@ -1589,7 +1638,7 @@ M9 was said to block are now complete** — M12, M14, M15, M11, M13.
 | **M14** | The context trust boundary | ✅ **COMPLETE** — ADR-0031. **Found a live T1 violation**: workspace-file content (`CLAUDE.md`) sat *before* the system prompt, unfenced. T2 fencing remains, deliberately staged. |
 | **M15** | The subagent spawn site | ✅ **COMPLETE** — ADR-0030. The P9 tripwire fired and was replaced by its inverse; `execute(principal=…)` carries the child identity per call. |
 | **M16** | The `ESCALATION` record's loss is not fully addressed | ✅ **COMPLETE** — ADR-0028. A state-bearing record is not best-effort in either direction; `reconstruct()` salvages the journal-only records on both paths (F24). |
-| **M1** | P3 stage 3b — enable the acceptance gate | **`BLOCKED`** — and the reason is no longer the precondition. ADR-0051 replaced 3b's condition with a two-conjunct contract; **R1 (the non-redundancy precondition) is now SATISFIED by ADR-0053**: the turn path's required-criteria set carries the objective's declared criteria, so the verdict can be `FAIL` for a reason `guard.rejection()` does not enforce — driven, a mutation-verified turn is floor-only `PASS`/`GOAL_MET` and declared `FAIL`/`GOAL_FAILED`. What still blocks **enablement** is R2's measure: it needs a **declared turn population**, and none exists (the declaration flag is OFF in every production caller, and the corpus holds 13 objectives). The flag `acceptance_gate` / `WISP_ACCEPTANCE_GATE` is still **not added** — a flag whose gate cannot fire is the written-but-unwired control this repo already diagnosed. **ADR-0051** (amends ADR-0016) + **ADR-0053**. |
+| **M1** | P3 stage 3b — enable the acceptance gate | **`IN_PROGRESS`** — the precondition is satisfied **and** the mechanism is built and driven; what remains is the population. ADR-0051 R1's precondition was satisfied by **ADR-0053**; **ADR-0054** supplies the consumer ADR-0053 §10 named — the engine's pre-`done` gate asks a read-only callable and withholds `done` by ADR-0036's bounded model, **driven end to end through a real turn** (withheld exactly twice, then finished). The flag `acceptance_gate` / `WISP_ACCEPTANCE_GATE` is **added, default OFF, dependent on `turn_criteria_source`**. **The reason it is not ON:** ADR-0051 R4 requires **≥ 2 capable models** and this environment serves exactly **1** of 13 (`scripts/acceptance_gate_population.py`: capable 1 · degenerate 2 · retired 5 · paywalled 5). What would close it: a second capable model that is neither retired nor paywalled, or a provider key — **not a code change**. **ADR-0051** (amends ADR-0016) + **ADR-0053** + **ADR-0054**. |
 | **M2** | Journal-first reconstruction | ✅ **COMPLETE** — `reconstruct()` + `reconstruction_source()`; the pre-P0 hazard and the gap hazard are both handled and pinned. **Five consumers still read the blob** (a tripwire asserts it). |
 | **M3** | Killpoint integration | ✅ **COMPLETE** — `test_kp_session_midtool_then_killed`. One window covered. |
 | **M4** | ADR-0004 revisited | ✅ **COMPLETE** — **ADR-0027**. Found a live defect (M2's journal-first could return a provider-invalid transcript). |

@@ -703,6 +703,21 @@ class AgentRuntime:
             # verdict site below is byte-for-byte today's code.
             turn_criteria_source_enabled = bool(
                 getattr(getattr(self, "config", None), "turn_criteria_source", False))
+            # ADR-0054: the ACCEPTANCE GATE — withholds `done` (bounded, by ADR-0036's
+            # model) when the objective's declared criteria are not satisfied. This is
+            # the consumer ADR-0053 §10 recorded as missing.
+            #
+            # DEPENDENT on `turn_criteria_source`, deliberately: the gate withholds on
+            # the criteria the source produces, and the verdict the RECORD carries must
+            # be the one the gate acted on. With the source off there are no declared
+            # criteria in the set, so the gate would withhold on a verdict the record
+            # does not contain — two answers to one question.
+            #
+            # Defaults OFF. ADR-0051 R2's measurement contract is NOT satisfied (see
+            # ADR-0054), so nothing is enabled by default. Read once, here.
+            acceptance_gate_enabled = bool(
+                getattr(getattr(self, "config", None), "acceptance_gate", False)
+                and turn_criteria_source_enabled)
             # Migration POST-M13 (ADR-0036), ENFORCEMENT: let M13's predicate
             # withhold `done` for a bounded replan. Defaults OFF, and separate
             # from `graph_oscillation_guard` (which disables the detector
@@ -788,6 +803,17 @@ class AgentRuntime:
                 if (stagnation_gate_enabled and stagnation_detector is not None)
                 else None)
 
+            # ADR-0054: the declared-criteria gate, built BEFORE the turn because the
+            # engine asks it at its pre-`done` gate. A malformed declaration raises HERE
+            # (ADR-0050 R4 — loud, never a fallback), outside any handler, so it cannot
+            # become a silent floor-only run (ADR-0053 R6).
+            declared_gate = None
+            if acceptance_gate_enabled:
+                from wisp.core.turn_criteria import declared_criteria_gate
+
+                declared_gate = declared_criteria_gate(
+                    prompt, session.get("workspace", "."))
+
             try:
                 # The completion gate is passed ONLY when there is one. This is
                 # not tidiness: `turn()` is an implementation point as well as a
@@ -803,6 +829,8 @@ class AgentRuntime:
                 }
                 if completion_gate is not None:
                     turn_kwargs["completion_gate"] = completion_gate
+                if declared_gate is not None:
+                    turn_kwargs["declared_gate"] = declared_gate
                 async for raw_event in core.turn(session, prompt, **turn_kwargs):
                     # Engine already yields flat dicts — normalize only if needed
                     if isinstance(raw_event, dict) and "type" in raw_event:
@@ -1207,7 +1235,11 @@ class AgentRuntime:
 
                     _turn_verdict, _turn_criteria = turn_acceptance_verdict(
                         _guard_for_goal, prompt, session.get("workspace", "."),
-                        enabled=True)
+                        enabled=True,
+                        # Reuse the gate's probe when it ran: the declared command is the
+                        # expensive part, and one turn pays for it once (ADR-0054 R3).
+                        measurement=(declared_gate.last_measurement
+                                     if declared_gate is not None else None))
                     _acceptance = _turn_verdict.verdict
                     if _turn_criteria.declared:
                         logger.debug("turn criteria: floor + declared %s",

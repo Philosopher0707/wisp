@@ -209,31 +209,44 @@ class TestTheThreeNonViolations:
             saw_done=False, saw_fatal_error=False).value == "incomplete"
 
 
-# ── 3. The tripwire: no unwired flag was added (ADR-0051 R1) ────────────────
+# ── 3. The flag ADR-0054 added, and the default it must keep ────────────────
 
 
-class TestNoUnwiredAcceptanceGateFlagWasAdded:
-    """R1: the flag is named but NOT added while the precondition is unmet.
+class TestTheAcceptanceGateFlagIsAddedAndDefaultsOff:
+    """**This class is the inverse of the tripwire that stood here.**
 
-    This test is a **tripwire**. It is expected to fail the moment a non-floor criteria
-    source reaches the turn path and someone adds the flag — which is the correct signal,
-    because that change requires re-running the measurement ADR-0051 R2 specifies.
+    Until ADR-0053 it asserted `acceptance_gate` / `WISP_ACCEPTANCE_GATE` was **absent**
+    from production, because ADR-0051 R1's precondition was unmet and a flag whose gate
+    cannot fire is a written-but-unwired control. **It fired** when ADR-0054 added the
+    flag — the signal it was written to give, and its own docstring said so.
+
+    It is rewritten, not weakened (the repo's rule for a guard that pinned the old
+    state). The property it now defends is that the flag exists, **defaults OFF**, is
+    read once, and is **dependent** on the criteria source. Default-OFF is not tidiness:
+    ADR-0051 R2's measurement contract is **not satisfied** — the population it needs
+    requires ≥ 2 capable models and this environment has exactly one (ADR-0054).
     """
 
-    def test_the_flag_is_absent_from_production(self):
-        hits = [
-            str(p.relative_to(REPO))
-            for p in (REPO / "wisp").rglob("*.py")
-            if "WISP_ACCEPTANCE_GATE" in p.read_text()
-            or "acceptance_gate" in p.read_text()
-        ]
-        assert hits == [], (
-            f"`acceptance_gate` / `WISP_ACCEPTANCE_GATE` appears in production: {hits}. "
-            f"ADR-0051 R1 forbids adding the flag while the turn path's criteria set is a "
-            f"projection of the floor guard — a flag whose gate cannot fire is a "
-            f"written-but-unwired control. Satisfy R1 first, then re-run R2's measurement."
-        )
+    def test_the_flag_exists_and_defaults_off(self):
+        from wisp.config import WispConfig
 
-    def test_the_flag_is_not_read_by_the_config_reader(self):
-        config = (REPO / "wisp/config.py").read_text()
-        assert "acceptance_gate" not in config
+        assert WispConfig().acceptance_gate is False, (
+            "the acceptance gate must default OFF — ADR-0051 R2's measurement contract "
+            "is not satisfied (ADR-0054), so enabling it by default is not authorised")
+
+    def test_the_flag_is_read_once(self):
+        src = (REPO / "wisp/core/runtime.py").read_text()
+        assert src.count('"acceptance_gate"') == 1, (
+            "the flag is read at more than one site (ADR-0002)")
+
+    def test_the_flag_is_dependent_on_the_criteria_source(self):
+        """The gate withholds on the criteria the SOURCE produces; with the source off
+        there are none, so it would act on a verdict the record does not carry."""
+        src = (REPO / "wisp/core/runtime.py").read_text()
+        i = src.index('"acceptance_gate"')
+        assert "turn_criteria_source_enabled" in src[i:i + 240], (
+            "the gate is no longer gated on the criteria source — it could withhold on "
+            "a verdict the goal record does not contain")
+
+    def test_the_env_var_is_named(self):
+        assert '"env_var": "WISP_ACCEPTANCE_GATE"' in (REPO / "wisp/config.py").read_text()

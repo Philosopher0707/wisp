@@ -5181,6 +5181,159 @@ therefore returns the acceptance gate to `BLOCKED`; that must not be done withou
 
 ---
 
+## ADR-0054 — The acceptance gate consumes `verdict_keys_on_declared` at the engine's pre-`done` gate, bounded and defaulting OFF
+
+**Status:** ACCEPTED
+**Phase:** Acceptance gate enablement (post-ADR-0053)
+**Consumes ADR-0053's predicate; supplies the consumer ADR-0053 §10 recorded as missing. Amends
+ADR-0051's R7 staging by *adding the flag* — and states that R2–R6's measurement contract is **not
+satisfied**, so the flag defaults OFF.**
+**Evidence:** `scripts/acceptance_gate_population.py` (committed, re-runnable);
+`tests/reliability/test_acceptance_gate_enablement.py` (24 tests, 3/3 non-vacuity probes caught, one
+class driving a **real turn**); `PHASE_GATE_ENABLEMENT_DECISION.md`.
+
+### Context
+
+ADR-0051 R1 stated the enablement precondition and **measured that it was unmet** — the turn path's
+verdict was a pure projection of `VerificationFloorGuard`, `verdict == FAIL` agreeing with
+`guard.rejection()` **192/192** times over the guard state space. **ADR-0053 satisfied it**: the turn's
+required-criteria set is now `floor_guard_criteria(guard) ∪` the objective's declared criteria, and the
+gate's condition is `verdict_keys_on_declared` — `FAIL` **and every named criterion non-floor** — which
+ADR-0053 drove to differ from `rejection()` on two of six cases.
+
+ADR-0053 §10 then recorded the remaining gap:
+
+> *"`verdict_keys_on_declared` is a **predicate**, and nothing calls it in production. It is the ADR's
+> named condition and its guard's subject; ADR-0051's enablement decision is what would consume it."*
+
+And ADR-0053 §9's residual 2 stated the obstacle to consuming it:
+
+> *"A declared failure does not produce a replan. It is recorded (`GOAL_FAILED`), not repaired within the
+> turn, because the verdict is computed **after** `done`."*
+
+### Problem
+
+**A gate that acts after `done` cannot withhold anything.** The turn-level completion gate lives in the
+engine (`stateless.py`), before `done` is emitted; the runtime computes the verdict afterwards, from
+`core._last_guard`. So "enable the gate" cannot mean "the runtime acts on the verdict" — that is what
+already happens, and it changes nothing.
+
+**Enforcement therefore requires asking *before* `done`** — and at that moment the workspace is final, so
+a probe taken there is valid. That is the decision this ADR takes.
+
+### Decision
+
+> **R1 — the consumer.** The engine's pre-`done` gate asks a **read-only callable** the runtime builds.
+> The engine receives no criteria, no specs and no probe — the ADR-0036 shape exactly. The callable is
+> `turn_criteria.DeclaredCriteriaGate`.
+>
+> **R2 — the gate's condition.** The callable answers `verdict_keys_on_declared` (ADR-0053 R4) asked of a
+> **declared-only** criteria set: a `FAIL` whose named criterion is non-floor is, on that set, exactly *"a
+> declared criterion failed"*. The condition is **not redefined**.
+>
+> **R3 — the probe, and its cost.** `CommandProbe(specs).measure(workspace)`, taken at the gate — bounded
+> by each spec's own `timeout_s`. The measurement is **cached on the callable** and the runtime's verdict
+> site **reuses** it, so one turn pays for the declared command **once**.
+>
+> **R4 — the intervention: delay, never a veto.** Withholding reuses **ADR-0036's bounded replan model**:
+> at most `_MAX_STAGNATION_INTERVENTIONS` interventions, never on the last iteration, then an honest
+> surrender. It **shares the turn's extension budget** with the stagnation gate, because the bound is on
+> the **turn**, not on the concern — two gates spending from one pool keeps the total extension bounded,
+> which is the property ADR-0036 §4 established. The nudge text lives in the criteria source's own module
+> (`compose_declared_nudge`, GH#27), so the intervention cannot drift from the signal.
+>
+> **R5 — fail open.** A predicate that raises permits `done`. A broken predicate must not become a hung
+> turn (ADR-0036 §5).
+>
+> **R6 — the flag.** `acceptance_gate` / `WISP_ACCEPTANCE_GATE`, default **OFF**, read **once** at
+> `run_turn`'s entry (ADR-0002). It is **dependent on `turn_criteria_source`**: with the source off there
+> are no declared criteria in the set, so the gate would withhold on a verdict the goal record does not
+> carry — two answers to one question. A malformed declaration raises **when the gate is built, before the
+> turn**, outside any handler (ADR-0050 R4 / ADR-0053 R6).
+>
+> **R7 — the measurement, and why the default is OFF.** ADR-0051 R2–R6's contract is **NOT satisfied**.
+> See §The measurement.
+>
+> **R8 — the three non-violations**, asserted by tests: `turn_succeeded` is unchanged — and in particular
+> the gate is **not** a `turn_gated` flag, because the withheld turn still ends with `done`; the floor
+> guard's semantics are unchanged; `goal.PRECEDENCE` is unchanged in content and count.
+>
+> **R9 — no new authority.** The criteria flow through `acceptance.evaluate`; the verdict through
+> `goal.derive_goal_state`; neither is re-implemented (ADR-0053 R9). The engine gains a **predicate and a
+> text**, never a criteria source.
+
+### The measurement — the contract is not satisfiable, and this is measured
+
+ADR-0051 R4 requires **≥ 2 capable models**. `scripts/acceptance_gate_population.py` enumerates every model
+the local daemon serves (2026-09-25):
+
+| model | class | probe |
+|---|---|---|
+| `nemotron-3-ultra:cloud` | **CAPABLE** | recorded: 5/5 schema-valid tool calls |
+| `llama3.2:3b` · `qwen2.5:0.5b` | degenerate | recorded: cannot drive the tool surface |
+| `qwen3.5:cloud` · `deepseek-v4-flash:cloud` · `gemini-3-flash-preview:cloud` · `kimi-k2.5:cloud` · `glm-5.1:cloud` | retired | *"was retired at …"* |
+| `glm-5.2:cloud` · `kimi-k3:cloud` · `minimax-m2.7:cloud` · `deepseek-v4-pro:cloud` · `kimi-k2.6:cloud` | paywalled | *"not included in your free usage"* |
+
+```text
+capable 1 · degenerate 2 · retired 5 · paywalled 5 · unclassified 0   (of 13 served)
+```
+
+**Exactly one capable model.** So:
+
+- **the flag ships default OFF** — not by preference, but because the contract's population does not
+  exist;
+- the `GOAL_MET` rate ADR-0051 R2 specifies is **not produced**, and cannot be: a rate over one model is
+  the model-dependent artefact ADR-0051 §Problem already measured (64.3% vs 100%);
+- **what would produce it**: a second capable model that is neither retired nor paywalled, or a
+  provider key. The instrument is committed, so the check re-runs and the enumeration cannot go stale
+  silently.
+
+**What IS produced:** the withholding is **driven end to end through a real turn** — a failing declaration
+withholds `done` exactly **twice** (the shared budget), the nudge appears, and the turn still finishes. So
+the mechanism is demonstrated; only the *population* is missing.
+
+### Rejected alternatives
+
+| Alternative | Why rejected |
+|---|---|
+| **The runtime acts on the verdict after the turn** | That is what already happens (the verdict reaches `derive_goal_state`), and it withholds nothing. It would be a flag that changes no behaviour. |
+| **Moving the whole verdict computation into the engine** | It would move the criteria source, the probe and `derive_goal_state`'s input into the engine, and the engine would then hold criteria — the coupling R1 avoids. |
+| **An unbounded gate, or a veto** | ADR-0036's rejected alternatives: a veto runs the turn to the iteration budget, whose wrap-up emits a fatal `CODE_ITERATION_BUDGET`, converting a criteria failure into a turn failure. |
+| **A second, separate intervention budget** | The bound is on the turn's extension, not on the concern. Two pools would let one turn be extended four times — a weaker bound than ADR-0036 established. |
+| **An independent flag (not dependent on `turn_criteria_source`)** | The gate would withhold on a verdict the goal record does not carry — the record and the gate disagreeing about one question. |
+| **Re-measuring the declared command at the verdict site** | The command is the expensive part; the gate's measurement is valid (the workspace is final at the pre-`done` gate) and is reused. |
+| **Enabling by default anyway, with the population short** | ADR-0051 R4 is part of the contract this ADR is asked to satisfy. Enabling without it would be the manufactured closure the brief forbids. |
+| **Replacing ADR-0036's budget constant with a turn-level name** | ADR-0036's AST ratchets pin `_MAX_STAGNATION_INTERVENTIONS` and `stagnation_interventions_used` **by name**; renaming would weaken pins that are not this ADR's to move. The sharing is documented at the site instead. |
+
+### Consequence
+
+- **`verdict_keys_on_declared` now has a production consumer**, and the withholding is real, bounded and
+  demonstrated — but **not enabled**.
+- **`turn_succeeded` is untouched.** The withheld turn still ends with `done`; the goal state still comes
+  from `derive_goal_state` reading the unchanged verdict. The gate is an *extension*, not a success signal.
+- **`CONTEXT.md` §12's M1 row moves from `BLOCKED` to `IN_PROGRESS`** in the ledger's own vocabulary: the
+  precondition is satisfied and the mechanism is built and driven; what remains is the population.
+- **No authority moved.** `CURRENT_AUTHORITIES.md` is unchanged — no stated authority's owner changed.
+
+### Residuals, named
+
+1. **The population is short by one capable model.** This is the only thing between the contract and the
+   enablement decision, and it is an *environment* fact, not a design one.
+2. **The declared command runs once per declared turn** (at the gate; reused at the verdict site). With
+   `command_succeeds` that is a real cost, and it is why the flag defaults OFF.
+3. **The gate shares the stagnation gate's budget**, so a stagnating turn can spend the declared gate's
+   extensions. That is the intended reading of a turn-level bound, and it is stated rather than discovered.
+4. **`stagnation_gate` is untouched** (ADR-0037 forbids enabling it without a superseding ADR). The two
+   gates are now both wired and both default OFF, independently.
+
+### Reversal condition
+
+`acceptance_gate` off restores today's behaviour exactly, with no code change; `turn_criteria_source` off
+additionally removes the criteria the gate acts on. Reverting the *default* (to ON) requires ADR-0051
+R2–R6 satisfied by a produced measurement — which needs the missing capable model, not a code change.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -5238,3 +5391,4 @@ therefore returns the acceptance gate to `BLOCKED`; that must not be done withou
 | 0051 | The acceptance gate's enablement contract is a non-redundancy precondition, not a rate; the `INCONCLUSIVE` rate is not a function of the gate | Gate enablement | ACCEPTED (amends ADR-0016's 3b *condition* — replaces "a measurement period showing how many turns become `INCONCLUSIVE`" with a precondition on the criteria set plus a declared-population `GOAL_MET` measure; measures that the turn path's verdict is a projection of `VerificationFloorGuard`, so the gate is redundant or harmful on today's criteria set; adds no flag, enables nothing, changes no authority) |
 | 0052 | A capability failure is published as a failure of the host, not as a denial; the denial taxonomy is unchanged | F8's published status | ACCEPTED (completes the half `PHASE_F8_ERROR_CLASSIFICATION.md` §4 left open; routes a `CAPABILITY_MISSING` validation failure through a system-failure envelope with the `kind` in `data`, so the attribution is correct where the failure is *published* as well as where it is *produced*; adds no denial status and edits no prompt, so it is not a behavioural change) |
 | 0053 | The turn path's required-criteria set carries the objective's declared criteria; the gate keys on a `FAIL` the floor guard does not enforce | The criteria source on the turn path | ACCEPTED (satisfies ADR-0051 R1's precondition by unioning the floor guard's criterion with the objective's declared criteria at `AgentRuntime.run_turn`'s verdict site, behind `WISP_TURN_CRITERIA_SOURCE` default OFF; the gate's condition is `FAIL` **and every named criterion is non-floor**, measured to differ from `rejection()` on two of six driven cases; adds no authority — the criteria flow through `acceptance.evaluate` and the verdict through `goal.derive_goal_state`, both unchanged; does not enable the acceptance gate, which remains ADR-0051's separate decision) |
+| 0054 | The acceptance gate consumes `verdict_keys_on_declared` at the engine's pre-`done` gate, bounded and defaulting OFF | Acceptance gate enablement | ACCEPTED (supplies the consumer ADR-0053 §10 recorded as missing: the engine asks a read-only callable — `DeclaredCriteriaGate` — at its pre-`done` gate, because a gate acting after `done` withholds nothing; the probe is taken there, cached, and reused at the verdict site; the withholding reuses ADR-0036's bounded replan model and **shares the turn's extension budget**; `WISP_ACCEPTANCE_GATE` defaults **OFF** and is **dependent** on `WISP_TURN_CRITERIA_SOURCE`; ADR-0051 R2–R6's contract is **NOT satisfied** — the population needs ≥ 2 capable models and the environment serves exactly **1** of 13, measured by a committed instrument; `turn_succeeded`, `VerificationFloorGuard` and `goal.PRECEDENCE` unchanged, asserted) |

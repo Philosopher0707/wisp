@@ -341,7 +341,7 @@ class WispAgentCore:
             if cb_config:
                 self._circuit_breaker = CircuitBreaker(cb_config)
 
-    async def turn(self, session: dict[str, Any], prompt: str, approval_handler: Any = None, steering_drain: Any = None, completion_gate: Any = None) -> AsyncIterator[dict[str, Any]]:
+    async def turn(self, session: dict[str, Any], prompt: str, approval_handler: Any = None, steering_drain: Any = None, completion_gate: Any = None, declared_gate: Any = None) -> AsyncIterator[dict[str, Any]]:
         """Run one turn, yielding events.
 
         Loops internally: provider → tool_calls → execute → append → provider
@@ -450,6 +450,7 @@ class WispAgentCore:
                     max_iterations, self._memoize_handler(approval_handler),
                     steering_drain=steering_drain,
                     completion_gate=completion_gate,
+                    declared_gate=declared_gate,
                 ):
                     yield event
         except _asyncio.TimeoutError:
@@ -465,6 +466,7 @@ class WispAgentCore:
         self, session: dict[str, Any], prompt: str, messages: list[dict[str, Any]], system_prompt: str, tools: list[dict[str, Any]] | None,
         max_iterations: int, approval_handler: Any, steering_drain: Any = None,
         completion_gate: Any = None,
+        declared_gate: Any = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Inner turn loop, separated for timeout wrapping."""
         streamed_any_content = False
@@ -996,6 +998,40 @@ class WispAgentCore:
                             stagnation_interventions_used)
                         messages.append(nudge_message(replan))
                         yield _flatten_event(system(replan, level="warning"))
+                        continue
+                # Declared-criteria completion gate (ADR-0054): the objective's DECLARED
+                # criteria (ADR-0050) may withhold `done` for a bounded replan. Same
+                # delay-not-veto model as the two gates above, and it SHARES their
+                # per-turn extension budget because the bound is on the TURN, not on the
+                # concern — two gates spending from one pool keeps the total extension
+                # bounded, which is the property ADR-0036 §4 established.
+                #
+                # The engine receives a READ-ONLY callable and nothing else: the criteria,
+                # the specs and the probe live in the runtime's `DeclaredCriteriaGate`, so
+                # the engine keeps no criteria and gains no authority. It sits AFTER both
+                # gates so neither loses its exact behaviour and the turn is never
+                # double-nudged.
+                if (declared_gate is not None
+                        and stagnation_interventions_used
+                        < _MAX_STAGNATION_INTERVENTIONS
+                        and iteration + 1 < max_iterations):
+                    try:
+                        declared_ok = bool(declared_gate())
+                    except Exception:
+                        # Fail open, as above: a broken predicate must not become a
+                        # hung turn.
+                        logger.debug("declared-criteria gate failed", exc_info=True)
+                        declared_ok = True
+                    if not declared_ok:
+                        stagnation_interventions_used += 1
+                        # The prose comes from the criteria source's own module (GH#27),
+                        # so the intervention cannot drift from the signal.
+                        from wisp.core.turn_criteria import compose_declared_nudge
+
+                        nudge = compose_declared_nudge(
+                            stagnation_interventions_used)
+                        messages.append(nudge_message(nudge))
+                        yield _flatten_event(system(nudge, level="warning"))
                         continue
                 # RESOLVED (verified, not surrendered) → distill the trail
                 # into a permanent auto skill, best-effort, never blocking.
