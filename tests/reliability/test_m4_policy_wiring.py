@@ -150,26 +150,44 @@ def test_the_loaded_bundle_actually_denies(tmp_path, clean_env):
     assert decision.controlling_layer == "organization"
 
 
-# ── REST is not wired, and the reason is measured ────────────────────
+# ── REST receives L0 — through the root, NOT through a SecurityPolicy slot ──
 
-def test_rest_does_not_receive_l0_because_security_policy_has_no_slot():
-    """§6's step 3 is **not** done, and this is why — measured, not asserted.
+def test_rest_receives_l0_through_the_root_not_a_security_policy_slot():
+    """**The pin, inverted** (ADR-0059; the P9/M15 and M11/M13 precedent).
 
-    `require_tool_allowed` consumes `SecurityPolicy.check(action, context)`. L0
-    lives inside `authorize()`, which REST does not call for these actions
-    (ADR-0055). So a bundle loaded into `request_policy` would be **dead data** —
-    a new instance of the pattern the M4 finding diagnoses. If `SecurityPolicy`
-    ever grows an organization slot, this test fails and the decision is revisited.
+    It used to assert that REST does **not** receive L0, because
+    `SecurityPolicy` has no organization slot and a bundle loaded into
+    `request_policy` would have been **dead data** — a new instance of the
+    pattern the M4 finding diagnoses.
+
+    ADR-0059 closes the gap **without** taking that route: `require_tool_allowed`
+    consults `authorize()` with the policy the **composition root** loaded, so
+    the two assertions below are still true and still worth pinning — they now
+    say *which route was not taken* rather than *that the gap is open*. If
+    `SecurityPolicy` ever grows a policy slot, a second design has landed and
+    this test fails so that it is noticed.
     """
     from wisp.infra.security import SecurityPolicy
 
     assert not [n for n in dir(SecurityPolicy) if "policy" in n.lower()], (
-        "SecurityPolicy now has a policy-shaped attribute — REST could receive L0. "
-        "Re-read PHASE_M4_WIRING.md §REST before wiring it."
+        "SecurityPolicy grew a policy-shaped attribute — a SECOND way for REST to "
+        "receive L0 has appeared. ADR-0059 chose the root's loaded policy "
+        "(one load site, ADR-0006); re-read PHASE_REST_AUTHORIZATION_COMPOSITION.md."
     )
     assert list(inspect.signature(SecurityPolicy.check).parameters) == [
         "self", "action", "context",
     ], "SecurityPolicy.check's signature moved — it may now take a bundle"
+
+    # And the route that WAS taken, as a property of the code.
+    src = (REPO / "wisp/server/deps.py").read_text(encoding="utf-8")
+    assert "organization_policy" in src, (
+        "require_tool_allowed no longer reaches the root's loaded policy — "
+        "ADR-0059's composition is gone and the L0 gap is open again"
+    )
+    assert "load_local" not in src and "load_managed" not in src, (
+        "deps.py now loads a bundle itself: that is a SECOND load site, and "
+        "ADR-0006 names exactly one"
+    )
 
 
 # ── The three non-violations, re-asserted in the WIRED state ─────────

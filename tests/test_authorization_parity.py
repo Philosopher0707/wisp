@@ -13,6 +13,18 @@ and `require_tool_allowed` reach the same outcome on every route in every mode. 
 file's `KNOWN_MODEL_DIVERGENCES` records is the **model** comparison, which is a different
 question and is kept because a silent change in either model is still worth knowing about.
 
+**ADR-0059: REST consults both models too — for DENIALS.** ADR-0055's 0-of-36 was measured
+with **no organization policy loaded**. ADR-0058 then wired one into the agent path, so a
+bundle denying an agent tool name was enforced there and **silently unenforced on REST** —
+driven, 11 (route, mode) pairs diverge once a bundle denies `write_file`/`edit_file`/
+`run_bash`. `require_tool_allowed` now consults `authorize()` with the root's loaded
+`effective_policy` and refuses when it denies. The **approval** half is still
+`SecurityPolicy`'s alone, and the reason is measured: the two models agree on `allowed` in
+all 36 pairs and disagree only on `approval_required`, and only on the three names the agent
+cannot reach — so composing approval here would 403 the shipped client with no bundle at
+all. The model table above is unchanged; the **path** composition is not. See
+`tests/reliability/test_rest_authorization_composition.py`.
+
 ## The three approval models (measured — ADR-0055)
 
 The agent's turn path does **not** use `authorize()`'s `approval_required`:
@@ -220,13 +232,108 @@ def test_the_rest_gate_documents_the_approval_contract():
 
 
 def test_the_agent_consults_both_models():
-    """Pins the asymmetry: the agent composes both layers, REST uses one.
+    """Pins the composition **per path** — parsed, not scanned.
 
-    If the agent ever drops one, this parity table stops describing reality.
+    ADR-0055 pinned the asymmetry with a string scan (`"policy_hard_deny(" in src`),
+    which finding **F79** named as the weakness: a scan reads the comment that
+    describes the order as readily as the order. ADR-0059 made the asymmetry finer,
+    so the pin is the call sites themselves.
+
+    | path | denials | approval |
+    |---|---|---|
+    | the agent (`ToolExecutor.execute`) | both models | the turn path's own set |
+    | REST (`require_tool_allowed`) | both models (ADR-0059) | `SecurityPolicy` alone |
+
+    If either path drops a model, this table stops describing reality.
     """
-    src = (REPO / "wisp/tool_executor.py").read_text(encoding="utf-8")
-    assert "policy_hard_deny(" in src, "the agent no longer consults the mode rules"
-    assert "authorize(" in src, "the agent no longer consults the authority layer"
+    fn = _tool_executor_execute_ast()
+    calls: dict[str, int] = {}
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else (
+            func.attr if isinstance(func, ast.Attribute) else None)
+        if name in ("policy_hard_deny", "authorize", "_get_write_tools"):
+            calls.setdefault(name, node.lineno)
+    assert set(calls) == {"policy_hard_deny", "authorize", "_get_write_tools"}, (
+        "the agent no longer composes both models plus its approval set: "
+        f"{sorted(calls)}"
+    )
+
+    deps = _function_ast(REPO / "wisp/server/deps.py", "require_tool_allowed")
+    assert "check" in {n.attr for n in ast.walk(deps) if isinstance(n, ast.Attribute)}, (
+        "REST no longer consults the mode engine (`SecurityPolicy.check`)"
+    )
+    called = {n.func.id for n in ast.walk(deps)
+              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    assert "_m2_denial" in called, (
+        "REST no longer consults the M2 authority — ADR-0059's composition is gone, "
+        "and a bundle denial is again silently unenforced on REST"
+    )
+
+
+def test_a_bundle_denial_reaches_both_paths(tmp_path):
+    """ADR-0059's property: with a bundle loaded, the paths agree on `allowed`.
+
+    Driven through the **real** REST gate and the **real** `authorize()`. Before
+    ADR-0059 the REST side ignored the bundle entirely, so this is the guard on
+    the closure — and it fails if the consult is removed or stops reading
+    `allowed`.
+    """
+    from fastapi import HTTPException
+
+    from wisp.auth.decision import authorize
+    from wisp.auth.principal import local_principal
+    from wisp.auth.workspace_trust import classify_workspace
+    from wisp.policy.bundle import PolicyBundle
+    from wisp.policy.loader import _bundle_to_effective
+    from wisp.server.deps import require_tool_allowed
+
+    import time as _time
+
+    ws = pathlib.Path(tmp_path)
+    bundle = _bundle_to_effective(
+        PolicyBundle(org_id="acme", expires_at=_time.time() + 3600,
+                     approval_matrix={"write_file": "deny"}),
+        "local file")
+
+    class _Cfg:
+        permission_mode = "auto_edit"
+        profile = "default"
+
+    class _Root:
+        config = _Cfg()
+        tool_executor = None
+
+    class _State:
+        root = _Root()
+
+    class _App:
+        state = _State()
+
+    class _Req:
+        app = _App()
+
+    _Req.app.state.root.organization_policy = bundle
+    request = _Req()
+
+    principal = local_principal(workspace=str(ws), profile="default")
+    agent = authorize(principal, "write_file", {"path": "a.py"},
+                      classify_workspace(str(ws)), permission_mode="auto_edit",
+                      effective_policy=bundle)
+    assert not agent.allowed, "floor: the bundle must deny the agent path"
+
+    try:
+        require_tool_allowed(request, "write_file", {"path": "a.py"}, str(ws))
+        rest_denied = False
+    except HTTPException:
+        rest_denied = True
+
+    assert rest_denied, (
+        "REST allowed write_file although the loaded bundle denies it and the "
+        "agent path refuses it — ADR-0059's composition is not in effect"
+    )
 
 
 def test_default_mode_is_the_affected_one():
@@ -479,6 +586,15 @@ def _tool_executor_execute_ast() -> ast.AST:
                         and sub.name == "execute":
                     return sub
     raise AssertionError("ToolExecutor.execute not found — the guard is stale")
+
+
+def _function_ast(path: pathlib.Path, name: str) -> ast.AST:
+    """The named top-level function's AST, or a clear failure (ADR-0059)."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            return node
+    raise AssertionError(f"{name} not found in {path.name} — the guard is stale")
 
 
 def test_tool_executor_gate_chain_order_is_unchanged():

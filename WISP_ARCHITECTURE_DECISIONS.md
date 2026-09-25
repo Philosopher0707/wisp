@@ -6016,6 +6016,184 @@ consistent with it.
 
 ---
 
+## ADR-0059 — The REST gate consults the M2 authority for its denial verdict, and only for that
+
+**Status:** ACCEPTED
+**Phase:** The REST gate's authorization composition (`PHASE_M4_WIRING.md` §4's residual 1;
+`PHASE_10_M4_GOVERNANCE_UNWIRED.md` §11 residual 1)
+**Evidence:** `wisp/server/deps.py` (`require_tool_allowed`, `organization_policy`, `_m2_denial`);
+`wisp/composition.py` (`load_organization_policy`, `self.organization_policy`);
+`tests/reliability/test_rest_authorization_composition.py`;
+`scripts/authorization_parity_measurement.py`; `tests/test_authorization_parity.py`.
+**Decides:** whether the REST gate consults `authorize()`, and for which of its verdicts. **Not** the
+approval composition (rejected on measurement, below), **not** a new flag, and **not** the publish
+route's held bundle (a named residual).
+
+### Context
+
+`PHASE_M4_WIRING.md` §4 pinned this as its own decision:
+
+> *"`require_tool_allowed` consumes `SecurityPolicy.check(action, context)`; **`SecurityPolicy` has no
+> organization slot** … L0 lives inside `authorize()`, which REST does **not** call for these actions.
+> Wiring L0 into REST means adding an `authorize()` call to the REST gate — a change to the gate
+> ADR-0055 measured and pinned — and that is its own decision."*
+
+ADR-0058 wired L0 into the composition root and passed it to `ToolExecutor`, which passes it to
+`authorize()` on the agent path. REST still sees nothing. This decides what REST should see.
+
+### Problem — ADR-0055's measurement does not cover the wired state
+
+ADR-0055 measured **0 path divergences of 36** and that measurement is still correct. It was taken
+with **no organization policy loaded**: `ToolExecutor.policy` was `None` at every construction site,
+so L0 was inert on both paths. ADR-0058 changed that condition.
+
+**Driven with a bundle denying `write_file`, `edit_file` and `run_bash`** — nine REST routes × four
+modes, the agent side run under REST's own condition (`approval_handler=None`):
+
+| route | mode | agent | REST (before) | diverges |
+|---|---|---|---|---|
+| `POST /api/files` | `auto_edit` | DENY (L0) | **ALLOW** | **yes** |
+| `POST /api/files` | `full` | DENY (L0) | **ALLOW** | **yes** |
+| `POST /api/files/edit` | `auto_edit` | DENY (L0) | **ALLOW** | **yes** |
+| `POST /api/files/edit` | `full` | DENY (L0) | **ALLOW** | **yes** |
+| `POST /api/bash` | `full` | DENY (L0) | **ALLOW** | **yes** |
+| … (the remaining rows of the 11) | | | | |
+
+**11 of 36 (route, mode) pairs diverge**, five of them in `auto_edit` — the **default** mode. A bundle
+an operator wrote to deny `write_file` was enforced on the agent path and **silently unenforced on
+REST**. That is the false-assurance shape the M4 finding exists to name (§4 of
+`PHASE_10_M4_GOVERNANCE_UNWIRED.md`), reintroduced by the landing that closed it.
+
+**The brief's Option D table is wrong on its central row.** It shows *"`auto_edit` / `hooks.create` /
+no agent op / ALLOW / ALLOW / none — L0 has no verdict on a non-agent name"*. Driven, `authorize()`
+**does** have a verdict: with `approval_matrix={"hooks.create": "deny"}` it returns
+`allowed=False, controlling_layer="local file"`. The verdict exists; nothing consulted it. D is
+therefore not "accept a harmless divergence" — it is "leave the operator's rule unenforced".
+
+### The measurement that decides it
+
+| question | answer, driven |
+|---|---|
+| do the two models ever disagree on `allowed`? | **No — 0 rows of 36**, with no bundle |
+| where do they disagree? | **`approval_required`, 6 rows of 36** |
+| which 6? | **exactly** `hooks.create` / `mcp.add_server` / `plugins.install` × {`auto_edit`, `ask_all`} |
+| and on agent tool names? | the two models **agree on both fields** in every mode |
+
+So the divergence between the models exists **exactly where the agent has no operation**, and nowhere
+else. Composing on `allowed` composes on the agreement; composing on `approval_required` composes on
+the divergence — and the divergence is not a gap, it is what keeps the client working.
+
+**Option A, driven with no bundle at all, moves 16 of 36 rows** — including `POST /api/hooks`,
+`POST /api/mcp/servers` and `POST /api/plugins/install` in `auto_edit` and `ask_all`, from ALLOW to
+`403(approval)`. `authorize()`'s `risk_for_tool` fail-closes to `EXEC` on those unknown names, so L5
+requires approval; honouring it 403s the shipped desktop client on three config routes in the default
+mode. That is ADR-0055 §Why-not-B, re-measured on the composed gate.
+
+### Decision
+
+> **The REST gate consults the M2 authority for its DENIAL verdict, and only for that.**
+> `require_tool_allowed` calls `authorize()` with the **same `effective_policy` the composition root
+> loaded** and refuses when it denies. It does **not** compose `authorize()`'s `approval_required`:
+> approval stays with `SecurityPolicy.check()`, which is where the mode engine and the hooks layer
+> live. The consult is **conditional on a bundle being loaded**, so with `WISP_POLICY_BUNDLE` unset
+> the gate is today's code **byte-for-byte** — status *and* detail, measured on 40 rows.
+
+**The rules.**
+
+- **R1 — the chain is guard → M2 → mode engine.** The protected-path guard stays first (its message
+  is pinned by `tests/test_protected_path_guard.py:330`); the M2 consult follows it; the mode engine
+  is last. All three narrow, so the denied set is their conjunction and the **order affects only the
+  message**. The M2 consult precedes the mode engine so the **higher authority's** reason is the one
+  reported: a hard denial must not be presented as an approval requirement.
+- **R2 — the consult is conditional.** `organization_policy(request)` returns `None` when no bundle is
+  configured, and `_m2_denial` returns before doing any work. Unset env vars ⇒ today's gate, proved
+  against HEAD's body as a differential (40/40 identical, status and detail) and structurally (the
+  change to `require_tool_allowed`'s body is an **insertion**; the old body is a subsequence of the
+  new one).
+- **R3 — denials only.** `_m2_denial` reads `allowed` and never `approval_required`; a guard parses
+  the function to keep it that way. Honouring the approval shape is Option A, rejected above.
+- **R4 — one principal.** REST authorizes as `executor_principal(root.tool_executor, …)` — the same
+  principal the agent path uses, through the same function that owns the precedence rule. Driven by
+  observing the argument the real call passes.
+- **R5 — one load site.** The policy is read from `root.organization_policy`, which
+  `CompositionRoot` now holds. `wisp/server/deps.py` does not import `wisp.policy` and does not call
+  `load_local`/`load_managed`; a guard asserts both. One load site (ADR-0006), two readers.
+- **R6 — the composition's rule, stated once.** *The two models agree on `allowed`; compose that.
+  They disagree on `approval_required`; leave it where it is.*
+- **R7 — no new flag.** `WISP_POLICY_BUNDLE` non-empty is the switch (ADR-0058 R1). ADR-0002's
+  one-flag-per-concern rule is not a licence to proliferate flags.
+- **R8 — what the gate governs, said plainly.** `require_tool_allowed`'s docstring now names three
+  checks and states which authority supplies each. It keeps ADR-0055's qualification, the sentence
+  *"approval-required verdicts deny"*, and the citation of the measurement instrument — all three are
+  pinned by `test_the_rest_gate_documents_the_approval_contract`.
+
+**Rejected, with reasons.**
+
+- **A — REST consults both in the agent's order.** **Rejected on measurement:** 16 of 36 rows move
+  with **no bundle**, including three config routes in the **default** mode, from ALLOW to 403. It is
+  not a parity fix; it is a client regression with no counterpart on the agent side.
+- **B — REST replaces `SecurityPolicy.check()` with `authorize()`.** **Rejected:** `authorize()` has
+  no mode engine and no hooks layer, so this discards two of the four things `check()` supplies while
+  changing the semantics of every gated route. It also changes what ADR-0055 §4's corrected docstring
+  says the gate does.
+- **C — a *partial* consult.** **Adopted, and this is the narrow form of it.** A consult filtered to
+  L0 alone would need either a stable marker for "this denial came from L0" — which does not exist,
+  because L0's `controlling_layer` is the *provenance value* (`"local file"`, or a managed layer's
+  name) and matching on it would be a fragile string rule — or two `authorize()` calls compared, a
+  derived predicate. Honouring the whole **denial** verdict needs neither: it is one call, it reads one
+  field, and measured it moves **zero** rows that the mode engine already refuses.
+- **D — accept the divergence and change the docstring.** **Rejected, refuted by measurement:** the
+  divergence is real (11 rows), it is in the default mode, and `authorize()` has a verdict on the
+  names the brief said it did not.
+
+### The four non-violations, asserted
+
+1. **`authorize()` is unchanged** — signature, `AuthorizationDecision` fields, the controlling-layer
+   vocabulary observed by driving a matrix wide enough to reach ≥ 2 layers.
+2. **`SecurityPolicy.check()` is unchanged** — `(self, action, context)`, and `dir(SecurityPolicy)`
+   still has **no** policy-shaped attribute. The route this ADR did **not** take is pinned as such: if
+   a slot ever appears, a second design has landed.
+3. **`ToolExecutor.execute`'s gate chain is unchanged** — `policy_hard_deny` → `authorize` →
+   `_get_write_tools`, **parsed, not scanned**.
+4. **`turn_succeeded`, `VerificationFloorGuard` and `goal.PRECEDENCE` are untouched** — `PRECEDENCE`
+   by content (8 rows; row 4 the fatal clause bounded by the no-P3-PASS escape).
+
+### Residuals, named
+
+1. **A bundle's `approve` level is inert on REST.** Measured: `{"write_file": "approve"}` leaves the
+   REST verdict identical to no bundle in every mode. Composing it is Option A, rejected above. The
+   agent path honours it; REST cannot, having no approver. Pinned as a property so that composing it
+   is a deliberate change.
+2. **REST's consult is conditional on a bundle**, so L1 (principal capabilities), L2 (workspace trust)
+   and L3 (sensitivity) are not consulted without one. L1 is unbounded for the local human, L3 needs a
+   `restricted` sensitivity REST never passes, and L2 is the default trust — but **workspace
+   quarantine** is a real pre-existing gap: a quarantined workspace denies non-read tools on the agent
+   path and does not on REST **unless a bundle is loaded**. That divergence predates this ADR and is
+   not created by it.
+3. **REST still reimplements L4.** `require_tool_allowed`'s protected-path guard is the same predicate
+   as `authorize()`'s L4, written inline. Pre-existing; kept because its message is pinned and because
+   removing it is a separate change.
+4. **Two bundle sources.** The env-var path is consumed; the publish route's held
+   `app.state.policy_bundle` (`wisp/server/routes/policy.py`) still has no decision reader. Named, not
+   merged — merging them is a distribution decision.
+5. **The three REST-only names now have an enforced rule and still have no agent operation.** L0's
+   verdict on them is REST's alone. That is the honest end state: the operator's rule fires, and there
+   is no agent path to be at parity with.
+
+### The brief's claims, driven
+
+| claim | result |
+|---|---|
+| *"the brief says ADR-0059"* | **correct this time** — 0058 is the last ADR, so 0059 was free |
+| *"`SecurityPolicy` has no organization slot"* | **TRUE** — `check(self, action, context)`; `dir()` has none |
+| *"`authorize()`'s verdict on those names is a fact about `authorize()`"* (the D table) | **TRUE, and it is the opposite of what the table concludes** — the verdict exists and was unconsulted |
+| *"Option D: none — L0 has no verdict on a non-agent name"* | **FALSE** — `DENY(controlling_layer="local file")` for a bundle that names it |
+| *"ADR-0055's 0/36"* | **TRUE for its condition, silent about this one** — it was measured with no bundle |
+| *"the parity ratchet currently fails on a new divergence, on one that silently disappears, and on the file/shell routes losing parity"* | **TRUE** — three properties, kept |
+| *"the §4 pin … asserts `SecurityPolicy` has no policy-shaped attribute"* | **TRUE**, and it still passes after this ADR — because the ADR does not take that route |
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -6076,4 +6254,5 @@ consistent with it.
 | 0054 | The acceptance gate consumes `verdict_keys_on_declared` at the engine's pre-`done` gate, bounded and defaulting OFF | Acceptance gate enablement | ACCEPTED (supplies the consumer ADR-0053 §10 recorded as missing: the engine asks a read-only callable — `DeclaredCriteriaGate` — at its pre-`done` gate, because a gate acting after `done` withholds nothing; the probe is taken there, cached, and reused at the verdict site; the withholding reuses ADR-0036's bounded replan model and **shares the turn's extension budget**; `WISP_ACCEPTANCE_GATE` defaults **OFF** and is **dependent** on `WISP_TURN_CRITERIA_SOURCE`; ADR-0051 R2–R6's contract is **NOT satisfied** — the population needs ≥ 2 capable models and the environment serves exactly **1** of 13, measured by a committed instrument; `turn_succeeded`, `VerificationFloorGuard` and `goal.PRECEDENCE` unchanged, asserted) |
 | 0055 | The REST gate is at parity with the agent path; the recorded divergence was between two *models*, not two *paths* | Authorization parity (G1) | ACCEPTED (drives the two production paths instead of the two models: **0 path divergences of 36**, **6 model divergences of 36** — the agent and `require_tool_allowed` reach the same outcome on every route in every mode when the agent runs under REST's condition, no approver. Chooses **Option A**: accept, and correct the record. Rejects **B** because it is not a parity fix — it would deny `hooks.create`/`mcp.add_server`/`plugins.install` in modes where the agent denies nothing (those three names are **not agent tools** and have **no `TOOL_RISK_TABLE` row**), i.e. REST stricter than the agent with no counterpart, and it would 403 the shipped client; rejects **C** for this decision as the fix for a *different* problem (REST cannot ask a human), deferred to its own ADR. Corrects `require_tool_allowed`'s docstring to state the control those routes actually have; keeps every ratchet property and **gains a real-path parity guard**; names four residuals (the approval authority is split three ways; three action names are in none of the three sets; REST cannot ask; five further gated routes are unmeasured). States the relationship to finding E without wiring L0. `authorize()`, `SecurityPolicy.check()` and `ToolExecutor.execute`'s gate chain unchanged, asserted by AST-parsed tests) |
 | 0056 | The two criteria flags are independent on the objective path; their interaction is derivation *order*, not flag coupling | Objective-path flag composition (ADR-0050 follow-up 1) | ACCEPTED (decides the last open ADR-0050 follow-up by driving the 2×2 flag matrix rather than reading it: `strict` **alone** withholds on the prose path (criteria 3→4), `use_declaration` **alone** collapses them to the declared set, and a valid declaration **pre-empts** `strict` — `undetermined` is empty either way, so `strict` is recorded and **inert**. Rejects **"dependent"** as measured-false (it would silently disable ADR-0048's fix for the measured false `GOAL_MET`); rejects **"composed"** (a declaration required) as a new policy no measurement supports, which would turn a silent-defect fix into a hard refusal for every objective written before ADR-0050 — and which is **not implemented** (`use_declaration=True` without a block is a no-op). Does not widen `explain_acceptance`'s parameters (ADR-0009): composition is a *policy* at the composition point, not a third parameter. Relates to ADR-0053 R8 — the *reason* does not transfer (one read site here, two parameters), the *decision* does. **No production change**: the measured behaviour already is the decision. Names one residual: `CriteriaDerivation.strict` records `True` when pre-empted) |
-| 0058 | The key-trust model is the operator-supplied organization public key; absence is a configuration, invalidity is a refusal | The key-trust workflow (M4 §6's precondition; `PHASE_10_M4_GOVERNANCE_UNWIRED.md` §9 option B) | ACCEPTED (decides the workflow M4 §5 deferred, grounded in the spec rather than in a general notion of key trust: §0 *"local bundle files remain the authority"*, §3's `local-only` mode — *"no socket use"* — and §5's own *"file perms 0600 + OS keychain for private keys **suffice for M4**"*, which already fixed the storage half. **Driven, the brief's worked example is false**: `WISP_POLICY_PUBKEY` is **base64 key material**, not a path — `load_local(bundle_path, public_key_b64)` → `Ed25519PublicKey.from_public_bytes(base64.b64decode(...))` — which decides the workflow (*"export this value"*, not *"place a file here"*); and **the failure semantics are already implemented** (bad/absent signature → `ValueError`; expired → `trim_expired`, *"never an error, never silent allow"*; no cache → `FileNotFoundError`). Reads the deferred phrase *"device registration + key distribution ceremony"* as the **multi-device / control-plane** item it is listed beside, and records the reading so it cannot be mistaken for the decision. **R1** the trigger is `WISP_POLICY_BUNDLE` non-empty — refining §6's *"both are set"* in the **stricter** direction, because a half-configuration must not be inert. **R2** absence is inert and byte-for-byte today's behaviour; `WISP_POLICY_PUBKEY` alone is inert. **R3** invalidity **refuses to boot** — the loader already raises; the rule added is that the composition root propagates rather than swallows. **R4** expiry **narrows** (`trim_expired`), it does not refuse — a stale-but-honest bundle must not become an outage. **R5** the key is **shared**, not per-device. **R6** offline by construction; `WISP_POLICY_CACHE`/`load_managed` are **not** engaged. **R7** the private key is never Wisp's to hold. **R8** fail-closed here vs ADR-0036 §5's fail-open there, with the difference stated: a missing stagnation predicate is **benign**, a missing policy is an **expected control silently unapplied** — the false-assurance mode §4 names. Rejects **TOFU** (it would pin the first key on a writable path and verify the attacker's bundle against the attacker's key; stateful; first-run semantics differ from every later run), a **signed-key file with a built-in root** (moves trust to a key baked into Wisp, needs a distribution and revocation story the spec never specified, adds a second signature layer, and still requires someone to place the root), and the **registration ceremony** as **out of scope rather than wrong** — it presupposes the control plane §5 deferred in the same sentence. Names four residuals, incl. that **REST does not receive L0** because `SecurityPolicy.check()` has no organization layer and L0 lives inside `authorize()`, so loading a bundle into `request_policy` would be dead data — a new instance of the pattern this finding diagnoses) |
+| 0058 | The key-trust model is the operator-supplied organization public key; absence is a configuration, invalidity is a refusal | The key-trust workflow (M4 §6's precondition; `PHASE_10_M4_GOVERNANCE_UNWIRED.md` §9 option B) | ACCEPTED (decides the workflow M4 §5 deferred, grounded in the spec rather than in a general notion of key trust: §0 *"local bundle files remain the authority"*, §3's `local-only` mode — *"no socket use"* — and §5's own *"file perms 0600 + OS keychain for private keys **suffice for M4**"*, which already fixed the storage half. **Driven, the brief's worked example is false**: `WISP_POLICY_PUBKEY` is **base64 key material**, not a path — `load_local(bundle_path, public_key_b64)` → `Ed25519PublicKey.from_public_bytes(base64.b64decode(...))` — which decides the workflow (*"export this value"*, not *"place a file here"*); and **the failure semantics are already implemented** (bad/absent signature → `ValueError`; expired → `trim_expired`, *"never an error, never silent allow"*; no cache → `FileNotFoundError`). Reads the deferred phrase *"device registration + key distribution ceremony"* as the **multi-device / control-plane** item it is listed beside, and records the reading so it cannot be mistaken for the decision. **R1** the trigger is `WISP_POLICY_BUNDLE` non-empty — refining §6's *"both are set"* in the **stricter** direction, because a half-configuration must not be inert. **R2** absence is inert and byte-for-byte today's behaviour; `WISP_POLICY_PUBKEY` alone is inert. **R3** invalidity **refuses to boot** — the loader already raises; the rule added is that the composition root propagates rather than swallows. **R4** expiry **narrows** (`trim_expired`), it does not refuse — a stale-but-honest bundle must not become an outage. **R5** the key is **shared**, not per-device. **R6** offline by construction; `WISP_POLICY_CACHE`/`load_managed` are **not** engaged. **R7** the private key is never Wisp's to hold. **R8** fail-closed here vs ADR-0036 §5's fail-open there, with the difference stated: a missing stagnation predicate is **benign**, a missing policy is an **expected control silently unapplied** — the false-assurance mode §4 names. Rejects **TOFU** (it would pin the first key on a writable path and verify the attacker's bundle against the attacker's key; stateful; first-run semantics differ from every later run), a **signed-key file with a built-in root** (moves trust to a key baked into Wisp, needs a distribution and revocation story the spec never specified, adds a second signature layer, and still requires someone to place the root), and the **registration ceremony** as **out of scope rather than wrong** — it presupposes the control plane §5 deferred in the same sentence. Names four residuals, incl. that **REST does not receive L0** because `SecurityPolicy.check()` has no organization layer and L0 lives inside `authorize()`, so loading a bundle into `request_policy` would be dead data — a new instance of the pattern this finding diagnoses. **That residual is CLOSED by ADR-0059**, which reaches L0 through the composition root's loaded policy rather than through a `SecurityPolicy` slot — so the reason given here still stands and the gap does not) |
+| 0059 | The REST gate consults the M2 authority for its denial verdict, and only for that | The REST gate's authorization composition (`PHASE_M4_WIRING.md` §4 residual 1) | ACCEPTED (closes the divergence **ADR-0058 created**: ADR-0055's **0 path divergences of 36** was measured with **no organization policy loaded**, and once a bundle is loaded a denial is enforced on the agent path and was silently unenforced on REST — **driven, 11 (route, mode) pairs diverge**, five in the **default** `auto_edit` mode. Decides **Option C in its narrow form**: `require_tool_allowed` consults `authorize()` with the **same `effective_policy` the composition root loaded** and refuses when it **denies**, reading `allowed` and never `approval_required`. The reason is measured, not argued: **the two models agree on `allowed` in all 36 (route, mode) pairs** and disagree only on `approval_required` — in **exactly six** rows, the three REST-only action names × {`auto_edit`, `ask_all`}. So composing `allowed` composes the agreement; composing approval composes the divergence. Rejects **A** (driven with **no bundle**, 16 of 36 rows move, incl. three config routes in the default mode from ALLOW to 403 — ADR-0055 §Why-not-B re-measured on the composed gate); rejects **B** (`authorize()` has no mode engine and no hooks layer, so it discards two of the four things `check()` supplies); rejects **D** as **refuted by measurement** — the brief's D table says *"L0 has no verdict on a non-agent name"*, but `authorize()` returns `DENY(controlling_layer="local file")` for a bundle that names one, so D is not a harmless divergence but an unenforced operator rule. **Conditional on a bundle**, so with `WISP_POLICY_BUNDLE` unset the gate is today's code **byte-for-byte — status and detail**, proved against HEAD's body as a differential (**40/40 identical**) and structurally (the body change is an **insertion**). REST reads `root.organization_policy` — one load site (ADR-0006), two readers; `deps.py` imports no `wisp.policy` and calls no loader. The **§4 pin is inverted**: `SecurityPolicy` still has no policy slot, and its two assertions now say *which route was not taken*. `authorize()`, `SecurityPolicy.check()` and `ToolExecutor.execute`'s chain unchanged, asserted from the AST. Names five residuals, incl. that a bundle's **`approve` level is inert on REST** and that **workspace quarantine** is a pre-existing gap) |

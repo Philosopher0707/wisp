@@ -97,7 +97,7 @@ user's pre-existing WIP, listed in §8. See §0.0.0 and §0.0.1 below.
 **`ade4dc6` is the POST-M13 landing** — 108 files, +26,811/−397, covering ADR-0034 … ADR-0044
 (M13, the POST-M13 chain, F8/F37, and the provider-event chain through ADR-0044). It excludes the
 user's pre-existing WIP, listed in §8.
-**The canonical suite is 1115 tests — 1114 pass, 1 fails.** The failure is
+**The canonical suite is 1453 tests — 1452 pass, 1 fails.** The failure is
 `test_node_identity.py::TestANodeReferencesItsWorkUnit::test_a_parallel_round_is_journaled_as_one_exchange_per_call`,
 finding **F38**: a test that had encoded the F8 environment as the contract (see §11).
 **The full-suite failure set of 129 is STALE.** It was measured while `jsonschema` was missing, so it
@@ -905,7 +905,7 @@ Phase 10's brief asked one question of four subsystems: *"where is the authority
 | **C** | REST policy boundary — 35/41 mutating routes ungated | ✅ **FIXED** (user chose option B) |
 | **C+** | The `.wisp/hooks` protected-path guard was absent from REST — `POST /api/files` wrote a hook the `write_file` *tool* was refused | ✅ **FIXED** (§0b) |
 | **G1** | Authorization parity — **CLOSED by ADR-0055.** Driven, the agent path and the REST gate agree on **every** route in **every** mode (**0 path divergences of 36**); the 6 pinned pairs are a **model** divergence (`authorize()` vs `SecurityPolicy`) on three action names that are **REST-only** — the agent has no operation for them | ✅ **`DECIDED` — Option A** (§0.0.14) |
-| **E** | The M4 organization policy layer is **never loaded** — a governance control that appears to exist and does not | ✅ **CLOSED** — the key-trust decision is **ADR-0058** and the wiring landed (`PHASE_M4_WIRING.md`); the layer is **WIRED**, default **OFF**. **REST still does not receive L0** (named) |
+| **E** | The M4 organization policy layer is **never loaded** — a governance control that appears to exist and does not | ✅ **CLOSED** — the key-trust decision is **ADR-0058** and the wiring landed (`PHASE_M4_WIRING.md`); the layer is **WIRED**, default **OFF**. **REST receives L0** as of **ADR-0059** |
 | **F** | The prior audit's 12 "written-but-unwired controls" were half-remediated and never maintained | ✅ **RE-VERIFIED**; #2 deleted, #7 fixed (§0e) |
 | **R10** | The desktop client's checkpoint-diff request was **unauthenticated** — the one request that bypasses `apiFetch` built its headers from a *second* helper, called with no argument | ✅ **FIXED**; the 26-way duplication measured + ratcheted (§0f) |
 
@@ -1774,7 +1774,7 @@ environmental set in §7. Never quote "the suite passes" — quote the set.
 `jsonschema` absent, so they include F8's effects. The `tests/reliability/` measurement after
 provisioning (24 failures → 0) shows the magnitude of the error. Re-measure before comparing.
 
-### Canonical suites — 1437 tests (1436 pass, 1 fails)
+### Canonical suites — 1453 tests (1452 pass, 1 fails)
 
 ```bash
 env -u PYTHONPATH .venv/bin/python -m pytest \
@@ -1815,6 +1815,7 @@ env -u PYTHONPATH .venv/bin/python -m pytest \
   tests/reliability/test_outcome_classification_delegation.py \
   tests/reliability/test_key_trust_workflow.py \
   tests/reliability/test_m4_policy_wiring.py \
+  tests/reliability/test_rest_authorization_composition.py \
   tests/test_m4_governance_wiring.py -q
 ```
 
@@ -1828,11 +1829,12 @@ update, which requires explicit authorization.
 
 **The heading said "849 tests" until 2026-09-25, "714 tests" before that, "1115 tests" until the
 gate-enablement mission, "1289" until the acceptance-gate-enablement mission, "1314" until its
-Deliverable 2, "1317" until the authorization-parity mission, and "1312" until the
-outcome-classification mission.** None was current for long: the command block had never been extended
-with the POST-M13 files (714 → 849), the four NEXT-mission files and the three 2026-09-25 files
-(849 → 1115), or the guards the later missions added. Finding **F71**. **Do not quote a count from
-prose** — run the block.
+Deliverable 2, "1317" until the authorization-parity mission, "1312" until the
+outcome-classification mission, "1390" until corpus integrity II, and "1437" until the
+REST-authorization-composition mission.** None was current for long: the command block had never been
+extended with the POST-M13 files (714 → 849), the four NEXT-mission files and the three 2026-09-25
+files (849 → 1115), or the guards the later missions added. Finding **F71**. **Do not quote a count
+from prose** — run the block.
 
 **And "1312" was stale within the mission that wrote it (F85).** The corpus-integrity pass measured the
 block in **Deliverable 1** and set both headings; **Deliverable 2** then added **four** tests to
@@ -1895,8 +1897,8 @@ the files to a path **outside the repo** first, then compare.
 | R1 | ~~REST gate — finish option B~~ | ✅ **DONE** (§0) |
 | R2 | ~~Correct the "breaks the client" claim~~ | ✅ **DONE** (§5) |
 | **G0** | ~~REST bypass of the protected-path guard~~ | ✅ **DONE** (§0b) |
-| **E** | **M4 governance layer not wired to the runtime** — `wisp/policy/` was never loaded; `ToolExecutor.policy` was `None` at **all three** construction sites (`composition.py:142`, `acp_session.py:208`, `benchmark/runner.py:82` — the third added by `8a7e9ab` and authorised by ADR-0045's F54 fix; corrected 2026-09-25, `PHASE_CORPUS_INTEGRITY_II.md` §1); `config.py` had no policy setting; `app.state.policy_pubkey` is set only by tests | ✅ **CLOSED 2026-09-25.** The key-trust decision is **ADR-0058** (`PHASE_KEY_TRUST_WORKFLOW.md`) and the wiring landed (`PHASE_M4_WIRING.md`): `config.py` reads `WISP_POLICY_BUNDLE`/`WISP_POLICY_PUBKEY`, `composition.py` loads and passes `policy=` at the single construction site, and a named-but-unverifiable bundle **refuses to boot**. **Default OFF** — unset means byte-for-byte today's behaviour. **Two things stay open and are named:** **REST does not receive L0** (`SecurityPolicy` has no organization slot; a bundle there would be dead data), and `acp_session.py:208`/`benchmark/runner.py:82` do not receive it. Pinned by `tests/test_m4_governance_wiring.py` (25 tests) + `tests/reliability/test_m4_policy_wiring.py` (10). |
-| **G1** | **Authorization parity gap** — the agent composes *both* models (`policy_hard_deny` + `authorize()` + the approval gate); REST consults *only* `SecurityPolicy`. 6 of 36 (route, mode) pairs diverge, all the approval layer, in the **default** `auto_edit` mode. | **OPEN, measured** (§0c). Ratcheted by `tests/test_authorization_parity.py`. Options A/B/C in `PHASE_10_AUTHORIZATION_PARITY.md`; recommended **B now, C as the real fix**. |
+| **E** | **M4 governance layer not wired to the runtime** — `wisp/policy/` was never loaded; `ToolExecutor.policy` was `None` at **all three** construction sites (`composition.py:142`, `acp_session.py:208`, `benchmark/runner.py:82` — the third added by `8a7e9ab` and authorised by ADR-0045's F54 fix; corrected 2026-09-25, `PHASE_CORPUS_INTEGRITY_II.md` §1); `config.py` had no policy setting; `app.state.policy_pubkey` is set only by tests | ✅ **CLOSED 2026-09-25.** The key-trust decision is **ADR-0058** (`PHASE_KEY_TRUST_WORKFLOW.md`) and the wiring landed (`PHASE_M4_WIRING.md`): `config.py` reads `WISP_POLICY_BUNDLE`/`WISP_POLICY_PUBKEY`, `composition.py` loads and passes `policy=` at the single construction site, and a named-but-unverifiable bundle **refuses to boot**. **Default OFF** — unset means byte-for-byte today's behaviour. **Two things stay open and are named:** **REST now receives L0** — **ADR-0059** (`PHASE_REST_AUTHORIZATION_COMPOSITION.md`): `require_tool_allowed` consults `authorize()` with the root's loaded policy for its **denial** verdict only, closing a divergence **ADR-0058 created** (driven, 11 of 36 (route, mode) pairs; ADR-0055's 0-of-36 was measured with no policy loaded). `acp_session.py:208`/`benchmark/runner.py:82` still do not receive it (named). Pinned by `tests/test_m4_governance_wiring.py` (25 tests) + `tests/reliability/test_m4_policy_wiring.py` (10) + `tests/reliability/test_rest_authorization_composition.py` (16). |
+| **G1** | **Authorization parity** — the agent composes *both* models (`policy_hard_deny` + `authorize()` + the approval gate); REST consulted *only* `SecurityPolicy`. 6 of 36 (route, mode) pairs diverge, all the approval layer, in the **default** `auto_edit` mode. | ✅ **CLOSED.** **ADR-0055** drove the real paths: **0 path divergences of 36**; the 6 are a **model** divergence on three REST-only names the agent has no operation for (Option A). **ADR-0059** then closed the **L0 gap ADR-0058 created** — REST now consults `authorize()` for its denial verdict (driven, 11 of 36 pairs had diverged once a bundle was loaded). This row said **OPEN** until 2026-09-25 — **stale since ADR-0055**, and contradicting §0.0's own row (F98). Ratcheted by `tests/test_authorization_parity.py` + `tests/reliability/test_rest_authorization_composition.py`. |
 | R1b | `POST /api/hooks` still accepts an unvalidated `command` | **OPEN — needs a decision.** The gate restricts *who* may register a hook, not *what* it runs. |
 | **R10** | ~~`useApi.ts:368` sends no `Authorization` header~~ | ✅ **FIXED** (§0f) — the functional half. **What remains is a decision:** the 32 pre-existing renderer errors (7 of them in `ErrorBoundary.test.tsx`, i.e. a test file being typechecked by the *build* config); the vacuous `typecheck` script; and whether to canonicalize the 26 re-implementations now that the ratchet records them |
 | **F1** | ~~`metadata["_budget"]` write-only~~ | ✅ **FIXED** (§0e.2) — completes `docs/audit-2026-08-24.md` item 11 |

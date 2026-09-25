@@ -160,10 +160,16 @@ class CompositionRoot:
         # Create ToolRegistry (shared state with module-level TOOL_SCHEMAS/TOOL_IMPLS)
         self.tool_registry = ToolRegistry()
 
+        # The organization policy layer, loaded ONCE, here — the single load site
+        # ADR-0006 names. `None` when unconfigured; raises when a bundle is named
+        # but unverifiable, which is ADR-0058 R3's refusal to boot.
+        #
+        # ADR-0059 R5: held on the root so the *second* consumer — the REST gate —
+        # reads this same instance instead of loading one of its own. One load
+        # site, two readers; not two authorities.
+        self.organization_policy = load_organization_policy(self.config)
+
         # Create ToolExecutor first (subagent_orchestrator wired below).
-        # ADR-0058: the organization policy layer, loaded once, here — the single
-        # construction site ADR-0006 names. `None` when unconfigured; raises when
-        # a bundle is named but unverifiable, which is R3's refusal to boot.
         self.tool_executor = ToolExecutor(
             config=self.config,
             hook_manager=self._tool_hook_manager,
@@ -173,7 +179,7 @@ class CompositionRoot:
             subagent_orchestrator=None,
             extensions=self.extensions,
             run_store=self.run_store,
-            policy=load_organization_policy(self.config),
+            policy=self.organization_policy,
         )
 
         # Create Compactor for LLM-powered summarization

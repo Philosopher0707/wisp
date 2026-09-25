@@ -287,6 +287,11 @@ The finding is closed by two landings, in the order this document's §9 prescrib
 
 1. **REST does not receive L0** (§6.4) — `SecurityPolicy` has no organization slot, and adding one to
    the REST gate is a change to what ADR-0055 measured and pinned. Its own decision.
+   **CLOSED by ADR-0059** — and **not** by adding a slot: `require_tool_allowed` now consults
+   `authorize()` with the policy the composition root loaded, for its **denial** verdict only. The
+   reason this document gives still stands (a bundle loaded into `request_policy` *would* have been
+   dead data), and the gap it left was real: driven, **11 of 36 (route, mode) pairs diverged** once a
+   bundle was loaded, five in the default mode. See `PHASE_REST_AUTHORIZATION_COMPOSITION.md`.
 2. **`acp_session.py:208` and `benchmark/runner.py:82` do not receive the bundle** — the first is
    reached only when there is no composition root, the second is a benchmark harness, not the runtime.
 3. **The M4 policy suite cannot run in this environment** — `cryptography` is declared but absent, so
