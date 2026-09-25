@@ -13,8 +13,16 @@
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is `17130c7`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
+**HEAD is `9d56aec`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
 on top of it and is the authority for the count.
+**`9d56aec` is the objective-path flag-composition landing** — **ADR-0056**: the two criteria flags are
+**independent**, and the one interaction is **derivation order** (a declaration pre-empts `strict`, which
+is then recorded and inert). **No production change** — the measured behaviour already is the decision.
+Found **F82** (the two "canonical" blocks listed different file sets). See §0.0.15 below.
+**`7bb8f8a` is the authorization-parity landing** — **ADR-0055**: the REST gate is **at parity with the
+agent path**; the recorded divergence was between two **models**, not two **paths** (0 path divergences
+of 36). **Option A** — accept, and correct the record. **No production behaviour moves.** Found
+**F78–F81**. See §0.0.14 below.
 **`17130c7` is the pin-guard fix** (Deliverable 2) — the guard now asserts the pinned **content**, not
 that a line exists; it found **nine** stale pins the old check had passed, and `CONTEXT.md` §10's sixth
 instrument-defect instance is **CLOSED**. See `PHASE_GATE_ENABLEMENT_DECISION.md` §11.
@@ -827,7 +835,7 @@ Phase 10's brief asked one question of four subsystems: *"where is the authority
 |---|---|---|
 | **C** | REST policy boundary — 35/41 mutating routes ungated | ✅ **FIXED** (user chose option B) |
 | **C+** | The `.wisp/hooks` protected-path guard was absent from REST — `POST /api/files` wrote a hook the `write_file` *tool* was refused | ✅ **FIXED** (§0b) |
-| **G1** | Authorization parity — the agent composes *both* decision models, REST consults one; 6 of 36 (route, mode) pairs diverge, in the **default** mode | ⚠️ **MEASURED + PINNED, needs a decision** (§0c) |
+| **G1** | Authorization parity — **CLOSED by ADR-0055.** Driven, the agent path and the REST gate agree on **every** route in **every** mode (**0 path divergences of 36**); the 6 pinned pairs are a **model** divergence (`authorize()` vs `SecurityPolicy`) on three action names that are **REST-only** — the agent has no operation for them | ✅ **`DECIDED` — Option A** (§0.0.14) |
 | **E** | The M4 organization policy layer is **never loaded** — a governance control that appears to exist and does not | ✅ false-assurance half **FIXED**; wiring needs a decision (§0d) |
 | **F** | The prior audit's 12 "written-but-unwired controls" were half-remediated and never maintained | ✅ **RE-VERIFIED**; #2 deleted, #7 fixed (§0e) |
 | **R10** | The desktop client's checkpoint-diff request was **unauthenticated** — the one request that bypasses `apiFetch` built its headers from a *second* helper, called with no argument | ✅ **FIXED**; the 26-way duplication measured + ratcheted (§0f) |
@@ -866,7 +874,7 @@ Re-verified 2026-09-21 at session start: `ruff` clean, 186 focused tests passed.
 | Order | Item | Why it needs you |
 |---|---|---|
 | 1 | **E** — wire the M4 policy layer (§0d) | Depends on the **key-distribution ceremony** the M4 spec deferred. Recommended: decide key trust, then wire |
-| 2 | **G1** — authorization parity (§0c) | Option B gives parity but the client 403s on config routes in the default `auto_edit` mode. Recommended: B now, C (route approvals through the existing WebSocket channel) as the real fix |
+| 2 | **G1** — authorization parity | **DECIDED (ADR-0055): Option A.** The recommendation of B rested on a premise the measurement inverted — B is *not* a parity fix (it would make REST stricter than the agent, on names the agent cannot run) and it would 403 the shipped client. C remains the fix for the *real* residual (REST cannot ask a human) and is its own ADR |
 | 3 | **R1b** — `POST /api/hooks` command content | The gate restricts *who* may register a hook, not *what* it runs |
 | 4 | **R10** — desktop client `tsc -b` | ✅ the **functional defect is FIXED** (§0f). What remains is the 32 pre-existing errors and the fact that the `typecheck` script checks nothing — a policy call |
 | 5 | **Commit Phase 10** | Nothing is staged |
@@ -1180,7 +1188,7 @@ Full record: `PHASE_10_CLIENT_AUTH_AUTHORITY.md`.
 | **5. Commit** | `83b10af` | 54 files, +4,891/−210 |
 | **10. Authority closure** | `PHASE_10_AUTHORITY_CLOSURE_AUDIT.md`, `PHASE_10_AUTHORITY_CLOSURE_IMPLEMENTATION.md` | 4 of 4 areas closed; REST needed a decision → **user chose option B, completed** |
 | **10b. The guard** *(found while closing R1b)* | `PHASE_10_PROTECTED_PATH_GUARD.md` | A verified REST privilege-escalation path, closed; the guard canonicalized onto one predicate; a test-isolation defect fixed |
-| **10c. Parity** *(found while auditing the guard's cause)* | `PHASE_10_AUTHORIZATION_PARITY.md` | G1 measured: 9 of 36 (route, mode) pairs diverge; 6 remain, all the approval layer, in the default mode. Ratcheted; **one decision open** |
+| **10c. Parity** *(found while auditing the guard's cause)* | `PHASE_10_AUTHORIZATION_PARITY.md`, `PHASE_AUTHORIZATION_PARITY.md` | G1 measured: 9 of 36 (route, mode) pairs diverge; 6 remain, all the approval layer, in the default mode. Ratcheted. **DECIDED — ADR-0055 (Option A)**: driven against the two real paths the divergence is **0 of 36**; the 6 are a *model* divergence on three **REST-only** action names |
 | **10d. M4 governance** *(found while auditing parity)* | `PHASE_10_M4_GOVERNANCE_UNWIRED.md` | The organization policy layer is **never loaded**. False-assurance half fixed (option C); wiring **open** |
 | **10e. The audit's own list** *(found while auditing M4's pattern)* | `PHASE_10_UNWIRED_CONTROLS_INVENTORY.md` | The prior audit's 12 unwired controls re-verified: **7 wired · 1 deleted · 3 unwired · 1 unidentified**; #2 and #7 fixed |
 
@@ -1261,7 +1269,9 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `800ada0` | `feat:` the turn path's criteria set carries the objective's declared criteria (**ADR-0053**) — satisfies ADR-0051 R1's precondition; the gate's condition is driven to differ from `rejection()` on 2 of 6 cases; flag `WISP_TURN_CRITERIA_SOURCE` default OFF; `CURRENT_AUTHORITIES.md` re-pinned (found the pin guard's blank-line weakness — a 6th instrument-defect instance); excludes the user's WIP (§8) |
 | `5898e0e` | `docs:` name the instrument-defect class once, with its six instances — **documentation only**, no code changed; `CONTEXT.md` §10 + `AGENTS.md`; excludes the user's WIP (§8) |
 | `74ac43b` | `feat:` the acceptance gate consumes `verdict_keys_on_declared` (**ADR-0054**) — the engine's pre-`done` gate asks a read-only callable, bounded by ADR-0036's model and sharing the turn's budget; `WISP_ACCEPTANCE_GATE` default **OFF** (ADR-0051 R2–R6 **not** satisfied: **1** capable model of 13, measured by a committed instrument); the ADR-0051 tripwire fired and was replaced by its inverse; `CURRENT_AUTHORITIES.md` re-pinned; excludes the user's WIP (§8) |
-| `17130c7` | `fix:` the pin guard asserts the pinned **content**, not that a line exists — found **nine** stale pins the old check passed; 3/3 non-vacuity probes caught (NV3 first MISSED because the *probe* replaced only the first occurrence); `CONTEXT.md` §10's sixth instrument-defect instance **CLOSED**; excludes the user's WIP (§8) — **`HEAD`** |
+| `17130c7` | `fix:` the pin guard asserts the pinned **content**, not that a line exists — found **nine** stale pins the old check passed; 3/3 non-vacuity probes caught (NV3 first MISSED because the *probe* replaced only the first occurrence); `CONTEXT.md` §10's sixth instrument-defect instance **CLOSED**; excludes the user's WIP (§8) |
+| `7bb8f8a` | `docs:` the REST gate is **at parity with the agent path** (**ADR-0055**) — **0 path divergences of 36**, 6 **model** divergences; **Option A**; `require_tool_allowed`'s docstring qualified (**+13/−0**, pure); the ratchet keeps all seven properties and gains a **real-path parity guard** (25 tests); committed instrument `scripts/authorization_parity_measurement.py`; found **F78–F81**; `M1` → **`PARTIAL`**; excludes the user's WIP (§8) |
+| `9d56aec` | `docs:` the two criteria flags are **independent** on the objective path (**ADR-0056**) — the interaction is **derivation order** (a declaration pre-empts `strict`); **no production change**; 7-test guard with an AST composition pin; found **F82** (the two canonical blocks listed different file sets — both now 43 files, **1294 tests**); excludes the user's WIP (§8) — **`HEAD`** |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
