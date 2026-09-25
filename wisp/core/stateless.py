@@ -240,6 +240,17 @@ def _capability_missing(tool_name: str, exc: BaseException) -> ValidationFailure
         VALIDATION_CAPABILITY_MISSING)
 
 
+def _is_capability_failure(failure: object) -> bool:
+    """True when a validation failure is a failure of the **host** (ADR-0052).
+
+    Reads the `kind` the failure already carries, so no call site parses prose.
+    `getattr` rather than a cast: a plain `str` (an older caller, or a future one
+    that forgets) is a *data* failure, which is the safe default — it keeps today's
+    denial envelope rather than inventing a capability claim.
+    """
+    return getattr(failure, "kind", None) == VALIDATION_CAPABILITY_MISSING
+
+
 def _denial_display(status: str, tool_name: str, reason: str) -> str:
     """Human line for a denial envelope (13F.1 §16/§17).
 
@@ -631,7 +642,13 @@ class WispAgentCore:
                                         _dry_run=True)
                                     if _schema_error:
                                         tc_event["_blocked"] = _schema_error
-                                        tc_event["_denial"] = "SCHEMA_INVALID"
+                                        # ADR-0052: a host that cannot validate has
+                                        # not denied anything, so only a genuine
+                                        # schema rejection is stamped as a denial.
+                                        if _is_capability_failure(_schema_error):
+                                            tc_event["_capability"] = True
+                                        else:
+                                            tc_event["_denial"] = "SCHEMA_INVALID"
                                         pending_tool_calls.append(tc_event)
                                         tool_results_events_early.append(
                                             self._refusal_result_event(tc_event, session.get("workspace", ".")))
@@ -736,7 +753,11 @@ class WispAgentCore:
                             _dry_run=True)
                         if _schema_error2:
                             normalized["_blocked"] = _schema_error2
-                            normalized["_denial"] = "SCHEMA_INVALID"
+                            # ADR-0052 — same rule as the batch path above.
+                            if _is_capability_failure(_schema_error2):
+                                normalized["_capability"] = True
+                            else:
+                                normalized["_denial"] = "SCHEMA_INVALID"
                             pending_tool_calls.append(normalized)
                             tool_results_events_early.append(
                                 self._refusal_result_event(normalized, session.get("workspace", ".")))
@@ -2535,10 +2556,17 @@ class WispAgentCore:
         (user/timeout/cancel verdicts, role/extension blocks) is logged
         once via AuditLog, best-effort.
         """
-        from wisp.core.events import denial_result
+        from wisp.core.events import capability_failure_result, denial_result
         reason = str(tc.get("_blocked", "blocked"))
-        status = str(tc.get("_denial") or "POLICY_DENIED")
         name = tc.get("name", "")
+        # ADR-0052 — a capability failure is published as a failure of the HOST, not
+        # as a denial. The stamping sites set `_capability` instead of `_denial` for
+        # it, so `status` below is never read on that branch.
+        capability = bool(tc.get("_capability"))
+        status = str(tc.get("_denial") or "POLICY_DENIED")
+        audit_reason = (
+            f"{getattr(tc.get('_blocked'), 'kind', VALIDATION_CAPABILITY_MISSING)}: {reason}"
+            if capability else f"{status}: {reason}")
         if not (tc.get("_src") == "gate" and status == "POLICY_DENIED"):
             try:
                 from pathlib import Path as _Path
@@ -2548,16 +2576,26 @@ class WispAgentCore:
                 _mode = getattr(_mode, "value", _mode)
                 _AuditLog(_Path(str(workspace)).resolve() / ".wisp" / "audit.jsonl").log_blocked(
                     str(name), dict(tc.get("arguments", {}) or {}),
-                    str(workspace), f"{status}: {reason}", str(_mode))
+                    str(workspace), audit_reason, str(_mode))
             except Exception:
                 pass
-        ev = denial_result(
-            name,
-            status,
-            _denial_display(status, name, reason),
-            duration_ms=0,
-            tool_call_id=tc.get("id"),
-        )
+        if capability:
+            ev = capability_failure_result(
+                name,
+                reason,
+                str(getattr(tc.get("_blocked"), "kind", None)
+                    or VALIDATION_CAPABILITY_MISSING),
+                duration_ms=0,
+                tool_call_id=tc.get("id"),
+            )
+        else:
+            ev = denial_result(
+                name,
+                status,
+                _denial_display(status, name, reason),
+                duration_ms=0,
+                tool_call_id=tc.get("id"),
+            )
         flat = _flatten_event(ev)
         flat["tool_call_id"] = tc.get("id", "")
         # Migration M13 — the canonical action identity, on the refusal.

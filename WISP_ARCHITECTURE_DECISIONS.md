@@ -4895,6 +4895,112 @@ Removing R1 and reverting to a bare rate must not be done without superseding th
 
 ---
 
+## ADR-0052 — A capability failure is published as a failure of the host, not as a denial; the denial taxonomy is unchanged
+
+**Status:** ACCEPTED
+**Phase:** F8's published status (post-ADR-0051)
+**Supersedes nothing. Amends no earlier decision.** It completes the half
+`PHASE_F8_ERROR_CLASSIFICATION.md` §4 explicitly left open, and it takes neither of the two shapes
+that report named as needing a decision — it takes a third that the report did not enumerate, and §3
+says why.
+**Evidence:** `tests/reliability/test_f8_published_status.py` (15 tests, 3/3 non-vacuity probes caught);
+`PHASE_F8_PUBLISHED_STATUS.md`; `PHASE_F8_ERROR_CLASSIFICATION.md` §4.
+
+### Context
+
+`_validate_tool_args` produces a `ValidationFailure` whose `kind` distinguishes a **data** failure
+(`SCHEMA_INVALID` — the validator ran and rejected the arguments) from a **system** failure
+(`CAPABILITY_MISSING` — the validator could not run at all). That fix corrected the attribution **where
+the failure is produced**.
+
+The **published** status was left as `SCHEMA_INVALID`. The report enumerated the blast radius:
+
+| Surface | Location | State at this ADR |
+|---|---|---|
+| `_DENIAL_STATUSES` | `wisp/core/events.py:312` | 5 members; no capability kind |
+| `OUTCOME_BY_STATUS` | `wisp/core/events.py:346` | `SCHEMA_INVALID → OutcomeClass.INVALID` |
+| `TERMINAL_OUTCOME_CLASSES` | `wisp/core/events.py:358` | `INVALID` is non-retryable |
+| the prompt's DENIALS-ARE-FINAL list | `wisp/context_assembler.py:157` | the model is told `SCHEMA_INVALID` *"never succeeds on retry"* |
+| `DENIAL_SCHEMA_INVALID` | `wisp/core/recovery.py:48, :154` | consumed by the M12 classifier (ADR-0032) |
+| the two dry-run stamping sites | `wisp/core/stateless.py` (batch + single-call) | `_denial = "SCHEMA_INVALID"`, unconditionally |
+
+### Problem
+
+`SCHEMA_INVALID` is a claim **about the arguments**. Three surfaces say so explicitly:
+
+- `OUTCOME_BY_STATUS` maps it to `OutcomeClass.INVALID`, documented as *"schema/argument rejection"*.
+- `denial_result()`'s payload asserts `authorized=False, executed=False, retryable=False` — three facts
+  about a decision and a call that **never happened**.
+- Its `hint` reads *"Denial is final for these arguments: do not retry the identical call, and do not
+  claim you ran the tool."*
+
+For a missing validator, **no authorization decision was reached and the arguments were never
+examined.** Publishing it as a denial tells the model its input was judged when the host was broken —
+which is F8 itself, one layer up. `PHASE_F8_ERROR_CLASSIFICATION.md` §4 states the residual exactly:
+*"the attribution is correct where it is produced and incorrect where it is published."*
+
+### Decision
+
+**The capability failure is published through a system-failure envelope. The published denial taxonomy
+is not touched.**
+
+> **R1.** A `ValidationFailure` whose `kind` is `CAPABILITY_MISSING` is published with status
+> **`error`** — never with a denial status.
+>
+> **R2.** The failure's `kind` travels in the envelope's `data` under **`kind`**, alongside
+> `capability: "tool_argument_validation"`, so a caller at the published boundary distinguishes a
+> system failure from a data failure **without parsing prose**.
+>
+> **R3.** The published denial taxonomy is **unchanged**: no member is added to `_DENIAL_STATUSES`,
+> `OUTCOME_BY_STATUS` or `TERMINAL_OUTCOME_CLASSES`, and the prompt's DENIALS-ARE-FINAL list is
+> **not edited**. ADR-0052 is therefore **not** a prompt change.
+>
+> **R4.** The two dry-run stamping sites apply **one shared predicate**
+> (`stateless._is_capability_failure`). A site that stamps `_denial` unconditionally is the defect
+> returning, and the predicate **defaults to a data failure** for anything without a `kind`.
+>
+> **R5.** The genuine schema rejection is **unchanged, byte-identical**: same status, same class, same
+> message, same envelope. The denial envelope is exactly right for it.
+>
+> **R6.** `authorized` is **`None`**, not `False` — no authorization decision was reached, and recording
+> "not authorized" would be a claim nothing made. `executed` is `False` and `retryable` is `False`
+> (the *identical* call fails identically until the environment is fixed).
+>
+> **R7.** The envelope's class is `OutcomeClass.ERROR`. It is deliberately **not** added to
+> `TERMINAL_OUTCOME_CLASSES`: unlike a denial, this failure *is* recoverable — by fixing the
+> environment — and `retryable: False` states the narrower, true fact.
+
+### Rejected alternatives
+
+| Alternative | Why rejected |
+|---|---|
+| **A new denial status (`CAPABILITY_MISSING`) in the taxonomy** (the report's Option A) | It is additive but it is a **taxonomy extension** consumed by the M12 classifier, *and* it requires the prompt's DENIALS-ARE-FINAL list to name it — **a behavioural change** (what the model is told) that would need the flag-and-measure treatment. It would also need a new `OutcomeClass`, because none of the eight means *"the host is broken"*; mapping it to `INVALID` keeps the wrong claim and mapping it to `ERROR` abandons the denial framing anyway. |
+| **A different envelope, as a *denial* sub-shape** (a denial that is not `denial_result()`) | Two shapes for one vocabulary: every consumer that treats "a refusal" as "a denial envelope" would have to learn the second. R3's whole point is that the published taxonomy stays single. |
+| **Reusing `SCHEMA_INVALID` and adding a note to the message** (the report's third option) | **This is the shape F8 was** — a system failure wearing a data failure's name. A message note does not change what `OUTCOME_BY_STATUS` says, what the M12 classifier concludes, or what the prompt tells the model. |
+| **Do nothing — the attribution at the point of production is sufficient** | A caller at the published boundary cannot see it: `classify_result(envelope)` returns `INVALID`, and the model is told *"denial is final for these arguments"*. The production-side fix is invisible from where the decision is consumed. Recorded as the residual it would have been. |
+| **Changing `OutcomeClass.INVALID`'s meaning** | It is correct for the data failure, which is the case it was written for. Widening it to cover a host failure would re-create the conflation. |
+
+### Consequence
+
+- **The attribution is now correct where it is produced *and* where it is published.** A caller at
+  either boundary reads `kind` rather than prose.
+- **No prompt change, no taxonomy change, no new flag.** The blast radius is the refusal path.
+- **The residual, named:** the M12 classifier still sees no *denial* for a capability failure, so a turn
+  whose only problem is a broken validator is classified as an ordinary error
+  (`FailureClass.IMPLEMENTATION` by the ADR-0032 precedence) rather than by a denial rule. That is the
+  honest classification — nothing was denied — and it is recorded rather than smoothed over.
+- **`is_denial_text` is unaffected**: `CAPABILITY_MISSING` is not a denial token and the envelope carries
+  no denial status, so nothing reads it as one.
+
+### Reversal condition
+
+Reversed only by a superseding ADR that adds a capability member to the published denial taxonomy
+**and** the prompt's final list — which is a behavioural change requiring the flag-and-measure
+treatment, not a revert. Reverting to `SCHEMA_INVALID` without that re-introduces the exact defect this
+ADR closes, and must not be done without superseding it.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -4950,3 +5056,4 @@ Removing R1 and reverting to a bare rate must not be done without superseding th
 | 0049 | The canonical precedence table is `goal.PRECEDENCE` (eight rows, 0–7); every older numbering is historical and is resolved by content | NEXT (precedence correction) | ACCEPTED (a record update — restates what the code already does; ratifies two cells ADR-0047 moved without stating; scopes ADR-0047 R3 to the no-`PASS` case; edits neither ADR-0035 nor ADR-0047) |
 | 0050 | The objective may carry a declared criteria block; the host validates it against the measurable surface and rejects rather than reinterprets | NEXT (structured criteria) | ACCEPTED (decides what ADR-0048 R6 deferred — the grammar, the validation surface, the rejection behaviour; extends ADR-0048 R1 by one outcome, `DECLARED`; closes MODE A and MODE B **on the declared path only**, flag-gated and defaulting OFF) |
 | 0051 | The acceptance gate's enablement contract is a non-redundancy precondition, not a rate; the `INCONCLUSIVE` rate is not a function of the gate | Gate enablement | ACCEPTED (amends ADR-0016's 3b *condition* — replaces "a measurement period showing how many turns become `INCONCLUSIVE`" with a precondition on the criteria set plus a declared-population `GOAL_MET` measure; measures that the turn path's verdict is a projection of `VerificationFloorGuard`, so the gate is redundant or harmful on today's criteria set; adds no flag, enables nothing, changes no authority) |
+| 0052 | A capability failure is published as a failure of the host, not as a denial; the denial taxonomy is unchanged | F8's published status | ACCEPTED (completes the half `PHASE_F8_ERROR_CLASSIFICATION.md` §4 left open; routes a `CAPABILITY_MISSING` validation failure through a system-failure envelope with the `kind` in `data`, so the attribution is correct where the failure is *published* as well as where it is *produced*; adds no denial status and edits no prompt, so it is not a behavioural change) |

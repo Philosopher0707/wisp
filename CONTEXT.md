@@ -110,6 +110,43 @@ quoting it; §11 says how.
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log).
 **Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0047**).
 
+### 0.0.11 F8 PUBLISHED STATUS (2026-09-25) — ADR-0052: a host failure is not a denial
+
+`PHASE_F8_ERROR_CLASSIFICATION.md` §4 fixed the attribution **where the failure is produced**
+(`ValidationFailure.kind == CAPABILITY_MISSING`) and named what it did not fix: the **published** status
+was still `SCHEMA_INVALID` — a claim about the *arguments*, made about a host that never examined them.
+It enumerated the six surfaces and said the choice needed an ADR. **ADR-0052 is that ADR.**
+
+**The decision — Option B, a system-failure envelope.** A capability failure is published with status
+`error`, carrying its `kind` in the envelope's `data` (plus
+`capability: "tool_argument_validation"`), so a caller at the published boundary distinguishes a system
+failure from a data failure **without parsing prose**. `authorized` is `None` — no decision was reached.
+
+**Why not Option A (a new denial status).** It is additive but it extends a taxonomy the M12 classifier
+consumes **and** requires the prompt's DENIALS-ARE-FINAL list to name the member — **a behavioural
+change** needing the flag-and-measure treatment. It would also need a new `OutcomeClass`, because none
+of the eight means *"the host is broken"*. **Why not the third option** (keep `SCHEMA_INVALID`, add a
+note): that is the shape F8 *was*.
+
+**The blast radius is two of the six surfaces, and neither is a published vocabulary.** `_DENIAL_STATUSES`,
+`OUTCOME_BY_STATUS`, `TERMINAL_OUTCOME_CLASSES`, `recovery.py`'s `DENIAL_SCHEMA_INVALID` and the
+prompt's final list are **all unchanged** — each asserted by a test.
+
+**What landed:** `capability_failure_result()` + `CAPABILITY_FAILURE_STATUS` / `CAPABILITY_KIND_KEY`
+(`core/events.py`); `_is_capability_failure()` and both dry-run stamping sites plus
+`_refusal_result_event`'s capability branch (`core/stateless.py`); the audit line now records the
+failure's `kind` rather than a denial status that never applied.
+
+**Test:** `tests/reliability/test_f8_published_status.py` (15 tests, 4 classes, whole path: the produced
+failure → the stamping rule → the published envelope → `classify_result`). **3/3 non-vacuity probes
+caught.** **NV1 did not falsify on the first attempt** — the helper took a `capability: bool` argument
+and set the flag itself, so breaking the predicate changed nothing; the test was not testing what it
+claimed. Fixed by applying the **real** predicate; the defect is recorded in the helper's docstring.
+
+**Residual, named:** the M12 classifier now sees no *denial* for a capability failure, so such a turn is
+classified as an ordinary error (`FailureClass.IMPLEMENTATION` by ADR-0032's precedence). That is the
+honest classification — nothing was denied.
+
 ### 0.0.10 DAG RETIREMENT (2026-09-25) — M8 surveyed and decided: **deprecate**, not remove
 
 M8's premise was that `multi_agent/dag.py` is *"a duplicate of `wisp/graph/`'s executor — a strictly
