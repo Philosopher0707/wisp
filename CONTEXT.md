@@ -13,14 +13,15 @@
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is `5898e0e`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
+**HEAD is `17130c7`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
 on top of it and is the authority for the count.
-**`5898e0e` names the instrument-defect class once** (Deliverable 2, documentation only) — §10 carries it
-with its **six** instances, and `AGENTS.md`'s testing discipline carries the rules. **No code changed.**
-**`800ada0` is the criteria-source landing** — **ADR-0053**: the turn path's required-criteria set carries
-the objective's declared criteria, so the verdict stops being a projection of the floor guard (ADR-0051
-R1's precondition). Flag `WISP_TURN_CRITERIA_SOURCE`, default **OFF**; the acceptance gate is still **not**
-enabled. See §0.0.12 below.
+**`17130c7` is the pin-guard fix** (Deliverable 2) — the guard now asserts the pinned **content**, not
+that a line exists; it found **nine** stale pins the old check had passed, and `CONTEXT.md` §10's sixth
+instrument-defect instance is **CLOSED**. See `PHASE_GATE_ENABLEMENT_DECISION.md` §11.
+**`74ac43b` is the acceptance-gate-enablement landing** — **ADR-0054**: the gate consumes
+`verdict_keys_on_declared` at the engine's pre-`done` gate, bounded and **defaulting OFF** (ADR-0051
+R2–R6's contract is **not** satisfied: 1 capable model of 13). See §0.0.13 below.
+**`5898e0e` names the instrument-defect class once** (documentation only). See §10.
 **`805eca8` is the F8-published-status landing** — **ADR-0052**: a capability failure is published as a
 failure of the **host**, not a denial; the denial taxonomy and the prompt are **unchanged**. See §0.0.11
 below.
@@ -1186,7 +1187,9 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `1e83e34` | `docs(m8):` survey the `dag.py` retirement and decide **DEPRECATE**, not remove — blocked on a **measured semantic divergence** (which definition of a valid DAG wins); prose-only in `wisp/`; 10-test guard incl. 3 tripwires on the residual; excludes the user's WIP (§8) |
 | `805eca8` | `fix:` publish a capability failure as a **host** failure, not a denial (**ADR-0052**) — a system-failure envelope with the `kind` in `data`; the denial taxonomy and the prompt are unchanged; 15-test whole-path guard; found the helper defect that made NV1 non-falsifying; excludes the user's WIP (§8) |
 | `800ada0` | `feat:` the turn path's criteria set carries the objective's declared criteria (**ADR-0053**) — satisfies ADR-0051 R1's precondition; the gate's condition is driven to differ from `rejection()` on 2 of 6 cases; flag `WISP_TURN_CRITERIA_SOURCE` default OFF; `CURRENT_AUTHORITIES.md` re-pinned (found the pin guard's blank-line weakness — a 6th instrument-defect instance); excludes the user's WIP (§8) |
-| `5898e0e` | `docs:` name the instrument-defect class once, with its six instances — **documentation only**, no code changed; `CONTEXT.md` §10 + `AGENTS.md`; excludes the user's WIP (§8) — **`HEAD`** |
+| `5898e0e` | `docs:` name the instrument-defect class once, with its six instances — **documentation only**, no code changed; `CONTEXT.md` §10 + `AGENTS.md`; excludes the user's WIP (§8) |
+| `74ac43b` | `feat:` the acceptance gate consumes `verdict_keys_on_declared` (**ADR-0054**) — the engine's pre-`done` gate asks a read-only callable, bounded by ADR-0036's model and sharing the turn's budget; `WISP_ACCEPTANCE_GATE` default **OFF** (ADR-0051 R2–R6 **not** satisfied: **1** capable model of 13, measured by a committed instrument); the ADR-0051 tripwire fired and was replaced by its inverse; `CURRENT_AUTHORITIES.md` re-pinned; excludes the user's WIP (§8) |
+| `17130c7` | `fix:` the pin guard asserts the pinned **content**, not that a line exists — found **nine** stale pins the old check passed; 3/3 non-vacuity probes caught (NV3 first MISSED because the *probe* replaced only the first occurrence); `CONTEXT.md` §10's sixth instrument-defect instance **CLOSED**; excludes the user's WIP (§8) — **`HEAD`** |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
@@ -1508,7 +1511,7 @@ environmental set in §7. Never quote "the suite passes" — quote the set.
 `jsonschema` absent, so they include F8's effects. The `tests/reliability/` measurement after
 provisioning (24 failures → 0) shows the magnitude of the error. Re-measure before comparing.
 
-### Canonical suites — 1314 tests (1313 pass, 1 fails)
+### Canonical suites — 1317 tests (1316 pass, 1 fails)
 
 ```bash
 env -u PYTHONPATH .venv/bin/python -m pytest \
@@ -1552,11 +1555,11 @@ Now that calls genuinely dispatch, the grouping rule produces the batch shape it
 update, which requires explicit authorization.
 
 **The heading said "849 tests" until 2026-09-25, "714 tests" before that, "1115 tests" until the
-gate-enablement mission, and "1289" until the acceptance-gate-enablement mission.** None was current for
-long: the command block had never been extended with the POST-M13 files (714 → 849), the four
-NEXT-mission files and the three 2026-09-25 files (849 → 1115), or the five guards the two
-gate-enablement missions added (1115 → 1314). Finding **F71**. **Do not quote a count from prose** — run
-the block.
+gate-enablement mission, "1289" until the acceptance-gate-enablement mission, and "1314" until its
+Deliverable 2.** None was current for long: the command block had never been extended with the POST-M13
+files (714 → 849), the four NEXT-mission files and the three 2026-09-25 files (849 → 1115), or the guards
+the two gate-enablement missions added (1115 → 1317). Finding **F71**. **Do not quote a count from
+prose** — run the block.
 
 ### The regression method — read this before changing anything
 
