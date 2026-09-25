@@ -9,11 +9,12 @@
 > A claim that cannot be pinned is a finding, not a claim. §5 records this page's own findings: the two
 > it could **not** pin are now **decided by ADR-0049** and are kept as a resolution trail.
 >
-> Generated 2026-09-25 at `d57951a` · covers **ADR-0001 … ADR-0060** · supersession chains in §1.1–1.6.
+> Generated 2026-09-25 at `a3a5c09` · covers **ADR-0001 … ADR-0061** · supersession chains in §1.1–1.6.
 > **Regenerated with the header only** — no stated authority changed (ADR-0055 §6's rule, re-applied by
-> ADR-0059 and again by ADR-0060, which states a *boundary* — Layer A drives, the graph records — and adds
-> no authority over completion or recovery), so the body is byte-identical; the range and the commit are
-> the page's own claim about the log's extent, and both were stale (F97).
+> ADR-0059, again by ADR-0060 — a *boundary*, not an authority over completion or recovery — and again by
+> ADR-0061, which decides a transport frame and a hook's input rule and touches neither), so the body is
+> byte-identical; the range and the commit are the page's own claim about the log's extent, and both were
+> stale (F97).
 >
 > **The header's commit and range are checked, not trusted** (`test_current_authorities_pins.py`
 > ::`TestTheProseClaimsAreMechanicallyCheckable`). Until 2026-09-25 the range said `ADR-0049` while the
