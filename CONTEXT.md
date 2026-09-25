@@ -104,6 +104,65 @@ quoting it; §11 says how.
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log).
 **Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0047**).
 
+### 0.0.9 GATE ENABLEMENT (2026-09-25) — ADR-0051, decided; the gate has nothing to gate on
+
+ADR-0016 staged P3 as **3a** (record the verdict) and **3b** (enable the gate *"after a measurement
+period showing how many turns become `INCONCLUSIVE`"*). 3b has been open for the whole migration.
+**ADR-0051 amends 3b's condition** — it does not supersede ADR-0016, whose staging and whose rejection
+of both pre-existing vocabularies still stand.
+
+**The measurement that reframes the question.** The turn path's acceptance verdict is **not an
+independent evaluation**:
+
+```
+runtime.py:1189-1190   _acceptance = floor_guard_verdict(guard).verdict
+verification.py:236    floor_guard_criteria()   <- the ONE producer on the turn path
+verification.py:252    check = (not guard.wrote_code) or guard.resolved()
+stateless.py:911       guard.rejection()        <- ALREADY wired at the pre-`done` gate
+```
+
+Driven over the **192-state** guard space (`scripts/gate_enablement_measurement.py`):
+
+| Claim | Measured |
+|---|---|
+| `verdict == FAIL` ⟺ the guard's own blocking condition | **0 disagreements / 192** |
+| `verdict != PASS` while the guard is *not* blocking | **144** — **96** with the guard *disabled*, **48** read-only turns |
+| `verdict == FAIL` after the guard already surrendered | **8** |
+
+So a gate keyed on this verdict is **redundant** (FAIL-keyed: the identical condition and nudge),
+**harmful** (non-PASS-keyed: withholds `done` on every read-only turn and on every turn of a *disabled*
+guard), or a **second budget** (the 8 surrendered states). **The gate has nothing to gate on.**
+
+**The `INCONCLUSIVE` rate is not the measure, for two independent reasons.** It is **model-dependent**
+(re-derived from the primary records: `nemotron-3-ultra:cloud` 9/14 = **64.3%**, `llama3.2:3b` 7/7 =
+100%, `qwen2.5:0.5b` 7/7 = 100%; pooled 82.1%, which describes no population that exists) — and it is
+**not a function of the gate**, which consumes the verdict and adds rounds, so enabling it *cannot raise*
+the rate. The measure that can move is the `GOAL_MET` rate on a **declared**-objective population, with
+the false-completion rate pinned at 0.
+
+**The decision (R1–R9).** R1: a **non-redundancy precondition** — the turn path's required-criteria set
+must contain ≥1 criterion not derivable from `VerificationFloorGuard`. R2: the measure is changed to the
+declared-objective `GOAL_MET` rate. R3: the population must be declared and **never pooled**. R4: ≥2
+capable models, ≥10 declared objectives, ≥30 turns, 0 excluded. R5: `FALSE_SUCCESS_AFTER = 0`. R6: replay
+100%. R7: `acceptance_gate` / `WISP_ACCEPTANCE_GATE`, default **OFF**, read once — **and not added to
+`config.py` while R1 is unmet**. R8: the three non-violations (`turn_succeeded`, `VerificationFloorGuard`,
+`goal.PRECEDENCE`), asserted by a guard. R9: rollback.
+
+**What is produced:** ADR-0051 + its index row; `scripts/gate_enablement_measurement.py` +
+`scripts/gate_enablement_population.json` (**committed**, so the measurement re-runs from the repo);
+`tests/reliability/test_gate_enablement_contract.py` (12 tests, 4/4 non-vacuity probes caught);
+`PHASE_GATE_ENABLEMENT.md`.
+
+**Finding F75 — the previous mission's instrument was never committed.** `PHASE_STRUCTURED_CRITERIA.md`
+§7 says *"the instrument is committed so it can be re-run."* **It is not:** `.gitignore:98` excludes
+`.workbuddy-ai/`, and `git ls-files .workbuddy-ai/` returns **0**. The ADR-0050 corpus exists only in the
+agent workspace. This deliverable commits its own instrument, and the general lesson is recorded: **an
+instrument that cannot be committed is not a re-runnable measurement.** (The `scripts/next_*.py`
+instruments *are* tracked — `scripts/` is the committed convention.)
+
+**No production change.** No flag is added, nothing is enabled, and the three authorities R8 names are
+untouched.
+
 ### 0.0.8 STRUCTURED CRITERIA (2026-09-25) — ADR-0050, decided and implemented
 
 ADR-0048 R6 decided the objective-declared structured path was **viable** and fixed its boundary, then
@@ -1324,7 +1383,7 @@ M9 was said to block are now complete** — M12, M14, M15, M11, M13.
 | **M14** | The context trust boundary | ✅ **COMPLETE** — ADR-0031. **Found a live T1 violation**: workspace-file content (`CLAUDE.md`) sat *before* the system prompt, unfenced. T2 fencing remains, deliberately staged. |
 | **M15** | The subagent spawn site | ✅ **COMPLETE** — ADR-0030. The P9 tripwire fired and was replaced by its inverse; `execute(principal=…)` carries the child identity per call. |
 | **M16** | The `ESCALATION` record's loss is not fully addressed | ✅ **COMPLETE** — ADR-0028. A state-bearing record is not best-effort in either direction; `reconstruct()` salvages the journal-only records on both paths (F24). |
-| **M1** | P3 stage 3b — enable the acceptance gate | **Blocked on an architecture decision, not on evidence or code.** F8 is fixed, tools genuinely execute, **F37 is fixed** (the contaminated row is gone; the matrix re-measured to 2 PASS / 2 FAIL / 4 INCONCLUSIVE), and a **live-provider** population now exists (28 real turns across 3 models, `FALSE_SUCCESS_AFTER = 0`). But **ADR-0016 is `NOT_YET_DETERMINABLE`**: the contract asks for a *measurement period*, and what exists is a controlled matrix — and the rate proved **model-dependent** (64.3% for the capable model, 100% degenerate for the two small ones). Enabling `stagnation_gate` by default is listed by **ADR-0037** among the things forbidden **without a superseding ADR**. So the next step is an ADR, not a code change. ADR-0016. |
+| **M1** | P3 stage 3b — enable the acceptance gate | **BLOCKED_ON_PRECONDITION — decided, not merely undecided (ADR-0051).** ADR-0016's 3b condition (*"a measurement period showing how many turns become `INCONCLUSIVE`"*) is **replaced** by a two-conjunct contract: (a) a **non-redundancy precondition** on the criteria set, then (b) a declared-population `GOAL_MET` measure with the false-completion rate at 0. **Measured, (a) is UNMET:** the turn path's verdict is `floor_guard_verdict(guard)` — a pure projection of `VerificationFloorGuard` (`runtime.py:1189-1190`) — and over 192 guard states `verdict == FAIL` ⟺ the guard's own blocking condition, which `rejection()` already tests at `stateless.py:911`. So a FAIL-keyed gate duplicates the floor guard, and a non-PASS-keyed gate withholds `done` on 144/192 states (96 with the guard *disabled*, 48 read-only turns). The `INCONCLUSIVE` rate is additionally **not a function of the gate** — the gate consumes the verdict and adds rounds, so enabling it cannot raise the rate. **No flag is added:** `acceptance_gate` / `WISP_ACCEPTANCE_GATE` is named and reserved, because a flag whose gate cannot fire is the written-but-unwired control this repository has already diagnosed as its dominant pathology. The next step is a **non-floor criteria source on the turn path** (ADR-0048/0050's derived criteria), which is its own ADR. Instrument: `scripts/gate_enablement_measurement.py`. Guard: `tests/reliability/test_gate_enablement_contract.py`. **ADR-0051** (amends ADR-0016). |
 | **M2** | Journal-first reconstruction | ✅ **COMPLETE** — `reconstruct()` + `reconstruction_source()`; the pre-P0 hazard and the gap hazard are both handled and pinned. **Five consumers still read the blob** (a tripwire asserts it). |
 | **M3** | Killpoint integration | ✅ **COMPLETE** — `test_kp_session_midtool_then_killed`. One window covered. |
 | **M4** | ADR-0004 revisited | ✅ **COMPLETE** — **ADR-0027**. Found a live defect (M2's journal-first could return a provider-invalid transcript). |

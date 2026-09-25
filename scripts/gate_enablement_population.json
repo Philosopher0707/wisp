@@ -1,0 +1,718 @@
+[
+  {
+    "acceptance": "inconclusive",
+    "elapsed_s": 4.1,
+    "goal": "goal_unverified",
+    "model": "nemotron-3-ultra:cloud",
+    "ok": 1,
+    "policy_denials": 0,
+    "prompt": "Read the file seed.txt and tell me what it says.",
+    "schema_rejections": 0,
+    "shape": "A_read_only",
+    "sid": "nemotron-3-ultra_cloud_0",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "progressing",
+    "statuses": [
+      {
+        "data": "{\"status\": \"ok\", \"tool\": \"read_file\", \"data\": \"--- FILE: seed.txt | LINES: 1 | SHOWING: 1-1 ---\\nthe seed file says hello\\n\", \"metadata\": {\"tool\": \"read_file\", \"args\": {\"path\": \"se",
+        "name": "read_file",
+        "status": "ok"
+      }
+    ],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 0,
+    "tool_results": 1
+  },
+  {
+    "acceptance": "inconclusive",
+    "elapsed_s": 4.1,
+    "goal": "goal_unverified",
+    "model": "nemotron-3-ultra:cloud",
+    "ok": 1,
+    "policy_denials": 0,
+    "prompt": "What is in seed.txt? Use read_file.",
+    "schema_rejections": 0,
+    "shape": "A_read_only",
+    "sid": "nemotron-3-ultra_cloud_1",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "progressing",
+    "statuses": [
+      {
+        "data": "{\"status\": \"ok\", \"tool\": \"read_file\", \"data\": \"--- FILE: seed.txt | LINES: 1 | SHOWING: 1-1 ---\\nthe seed file says hello\\n\", \"metadata\": {\"tool\": \"read_file\", \"args\": {\"path\": \"se",
+        "name": "read_file",
+        "status": "ok"
+      }
+    ],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 0,
+    "tool_results": 1
+  },
+  {
+    "acceptance": "pass",
+    "elapsed_s": 6.9,
+    "goal": "goal_met",
+    "model": "nemotron-3-ultra:cloud",
+    "ok": 2,
+    "policy_denials": 0,
+    "prompt": "Create a file called out.txt containing the word hello, then",
+    "schema_rejections": 0,
+    "shape": "B_mutate_verify",
+    "sid": "nemotron-3-ultra_cloud_2",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "progressing",
+    "statuses": [
+      {
+        "data": "{\"status\": \"ok\", \"tool\": \"write_file\", \"data\": \"\u2713 Wrote 5 bytes to out.txt\", \"metadata\": {\"path\": \"out.txt\", \"size\": 5, \"bytes_written\": 5, \"diff\": \"+1 hello\"}}",
+        "name": "write_file",
+        "status": "ok"
+      },
+      {
+        "data": "{\"status\": \"ok\", \"tool\": \"run_bash\", \"data\": \"hello\", \"metadata\": {\"tool\": \"run_bash\", \"args\": {\"command\": \"cat out.txt\"}, \"result_length\": 5, \"command\": \"cat out.txt\"}}",
+        "name": "run_bash",
+        "status": "ok"
+      }
+    ],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 0,
+    "tool_results": 2
+  },
+  {
+    "acceptance": "fail",
+    "elapsed_s": 13.4,
+    "goal": "goal_failed",
+    "model": "nemotron-3-ultra:cloud",
+    "ok": 2,
+    "policy_denials": 0,
+    "prompt": "Create a file called bad.txt, then run the command `exit 3`.",
+    "schema_rejections": 0,
+    "shape": "C_failed_verification",
+    "sid": "nemotron-3-ultra_cloud_3",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "progressing",
+    "statuses": [
+      {
+        "data": "{\"status\": \"ok\", \"tool\": \"write_file\", \"data\": \"\u2713 Wrote 19 bytes to bad.txt\", \"metadata\": {\"path\": \"bad.txt\", \"size\": 19, \"bytes_written\": 19, \"diff\": \"+1 This is a bad file.\"}}",
+        "name": "write_file",
+        "status": "ok"
+      },
+      {
+        "data": "{\"status\": \"ok\", \"tool\": \"run_bash\", \"data\": \"[exit code: 3]\\n\", \"metadata\": {\"tool\": \"run_bash\", \"args\": {\"command\": \"exit 3\"}, \"result_length\": 15, \"command\": \"exit 3\", \"exit_cod",
+        "name": "run_bash",
+        "status": "ok"
+      }
+    ],
+    "succeeded": false,
+    "terminal": "failed",
+    "tool_errors": 0,
+    "tool_results": 2
+  },
+  {
+    "acceptance": "inconclusive",
+    "elapsed_s": 6.8,
+    "goal": "goal_unverified",
+    "model": "nemotron-3-ultra:cloud",
+    "ok": 0,
+    "policy_denials": 0,
+    "prompt": "Run the command `sleep 5` with a timeout of 1 second.",
+    "schema_rejections": 0,
+    "shape": "D_tool_level_failure",
+    "sid": "nemotron-3-ultra_cloud_4",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "progressing",
+    "statuses": [
+      {
+        "data": "{\"status\": \"error\", \"tool\": \"run_bash\", \"data\": \"ToolError: Command timed out after 1s: sleep 5...\", \"metadata\": {\"tool\": \"run_bash\", \"args\": {\"command\": \"sleep 5\", \"timeout\": 1}, ",
+        "name": "run_bash",
+        "status": "error"
+      }
+    ],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 1,
+    "tool_results": 1
+  },
+  {
+    "acceptance": "inconclusive",
+    "elapsed_s": 4.7,
+    "goal": "goal_unverified",
+    "model": "nemotron-3-ultra:cloud",
+    "ok": 0,
+    "policy_denials": 1,
+    "prompt": "Run the command `echo hello` using run_bash.",
+    "schema_rejections": 0,
+    "shape": "E_policy_denial",
+    "sid": "nemotron-3-ultra_cloud_5",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "progressing",
+    "statuses": [
+      {
+        "data": "{'status': 'POLICY_DENIED', 'authorized': False, 'executed': False, 'retryable': False, 'reason': 'Policy denied: run_bash \u2014 AUTO_EDIT mode blocks run_bash', 'data': 'Policy denied",
+        "name": "run_bash",
+        "status": "POLICY_DENIED"
+      }
+    ],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 0,
+    "tool_results": 1
+  },
+  {
+    "acceptance": "inconclusive",
+    "elapsed_s": 2.6,
+    "goal": "goal_unverified",
+    "model": "nemotron-3-ultra:cloud",
+    "ok": 0,
+    "policy_denials": 0,
+    "prompt": "Read a file, but do not specify which one.",
+    "schema_rejections": 0,
+    "shape": "F_schema_rejection",
+    "sid": "nemotron-3-ultra_cloud_6",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "unknown",
+    "statuses": [],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 0,
+    "tool_results": 0
+  },
+  {
+    "acceptance": "pass",
+    "elapsed_s": 14.4,
+    "goal": "goal_met",
+    "model": "nemotron-3-ultra:cloud",
+    "ok": 2,
+    "policy_denials": 0,
+    "prompt": "Create a file called greet.py that prints hello, then run `p",
+    "schema_rejections": 0,
+    "shape": "G_full_coding",
+    "sid": "nemotron-3-ultra_cloud_7",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "progressing",
+    "statuses": [
+      {
+        "data": "{\"status\": \"ok\", \"tool\": \"write_file\", \"data\": \"\u2713 Wrote 14 bytes to greet.py\", \"metadata\": {\"path\": \"greet.py\", \"size\": 14, \"bytes_written\": 14, \"diff\": \"+1 print(\\\"hello\\\")\"}}",
+        "name": "write_file",
+        "status": "ok"
+      },
+      {
+        "data": "{\"status\": \"ok\", \"tool\": \"run_bash\", \"data\": \"hello\\n\", \"metadata\": {\"tool\": \"run_bash\", \"args\": {\"command\": \"python3 greet.py\"}, \"result_length\": 6, \"command\": \"python3 greet.py\"}",
+        "name": "run_bash",
+        "status": "ok"
+      }
+    ],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 0,
+    "tool_results": 2
+  },
+  {
+    "acceptance": "inconclusive",
+    "elapsed_s": 3.8,
+    "goal": "goal_unverified",
+    "model": "nemotron-3-ultra:cloud",
+    "ok": 1,
+    "policy_denials": 0,
+    "prompt": "Read the file seed.txt and tell me what it says.",
+    "schema_rejections": 0,
+    "shape": "A_read_only",
+    "sid": "nemotron-3-ultra_cloud_8",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "progressing",
+    "statuses": [
+      {
+        "data": "{\"status\": \"ok\", \"tool\": \"read_file\", \"data\": \"--- FILE: seed.txt | LINES: 1 | SHOWING: 1-1 ---\\nthe seed file says hello\\n\", \"metadata\": {\"tool\": \"read_file\", \"args\": {\"path\": \"se",
+        "name": "read_file",
+        "status": "ok"
+      }
+    ],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 0,
+    "tool_results": 1
+  },
+  {
+    "acceptance": "inconclusive",
+    "elapsed_s": 6.7,
+    "goal": "goal_unverified",
+    "model": "nemotron-3-ultra:cloud",
+    "ok": 1,
+    "policy_denials": 0,
+    "prompt": "What is in seed.txt? Use read_file.",
+    "schema_rejections": 0,
+    "shape": "A_read_only",
+    "sid": "nemotron-3-ultra_cloud_9",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "progressing",
+    "statuses": [
+      {
+        "data": "{\"status\": \"ok\", \"tool\": \"read_file\", \"data\": \"--- FILE: seed.txt | LINES: 1 | SHOWING: 1-1 ---\\nthe seed file says hello\\n\", \"metadata\": {\"tool\": \"read_file\", \"args\": {\"path\": \"se",
+        "name": "read_file",
+        "status": "ok"
+      }
+    ],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 0,
+    "tool_results": 1
+  },
+  {
+    "acceptance": "pass",
+    "elapsed_s": 16.9,
+    "goal": "goal_met",
+    "model": "nemotron-3-ultra:cloud",
+    "ok": 2,
+    "policy_denials": 0,
+    "prompt": "Create a file called out.txt containing the word hello, then",
+    "schema_rejections": 0,
+    "shape": "B_mutate_verify",
+    "sid": "nemotron-3-ultra_cloud_10",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "progressing",
+    "statuses": [
+      {
+        "data": "{\"status\": \"ok\", \"tool\": \"write_file\", \"data\": \"\u2713 Wrote 5 bytes to out.txt\", \"metadata\": {\"path\": \"out.txt\", \"size\": 5, \"bytes_written\": 5, \"diff\": \"\"}}",
+        "name": "write_file",
+        "status": "ok"
+      },
+      {
+        "data": "{\"status\": \"ok\", \"tool\": \"run_bash\", \"data\": \"hello\", \"metadata\": {\"tool\": \"run_bash\", \"args\": {\"command\": \"cat out.txt\"}, \"result_length\": 5, \"command\": \"cat out.txt\"}}",
+        "name": "run_bash",
+        "status": "ok"
+      }
+    ],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 0,
+    "tool_results": 2
+  },
+  {
+    "acceptance": "fail",
+    "elapsed_s": 14.1,
+    "goal": "goal_failed",
+    "model": "nemotron-3-ultra:cloud",
+    "ok": 3,
+    "policy_denials": 0,
+    "prompt": "Create a file called bad.txt, then run the command `exit 3`.",
+    "schema_rejections": 0,
+    "shape": "C_failed_verification",
+    "sid": "nemotron-3-ultra_cloud_11",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "progressing",
+    "statuses": [
+      {
+        "data": "{\"status\": \"ok\", \"tool\": \"write_file\", \"data\": \"\u2713 Wrote 19 bytes to bad.txt\", \"metadata\": {\"path\": \"bad.txt\", \"size\": 19, \"bytes_written\": 19, \"diff\": \"\"}}",
+        "name": "write_file",
+        "status": "ok"
+      },
+      {
+        "data": "{\"status\": \"ok\", \"tool\": \"run_bash\", \"data\": \"[exit code: 3]\\n\", \"metadata\": {\"tool\": \"run_bash\", \"args\": {\"command\": \"exit 3\"}, \"result_length\": 15, \"command\": \"exit 3\", \"exit_cod",
+        "name": "run_bash",
+        "status": "ok"
+      },
+      {
+        "data": "{\"status\": \"ok\", \"tool\": \"list_files\", \"data\": \"\ud83d\udcc1 .wisp/\\n\ud83d\udcc1 __pycache__/\\n\ud83d\udcc4 bad.txt (19 bytes)\\n\ud83d\udcc4 greet.py (14 bytes)\\n\ud83d\udcc4 live.db (122,880 bytes)\\n\ud83d\udcc4 live.db-shm (32,768 bytes)\\n\ud83d\udcc4 li",
+        "name": "list_files",
+        "status": "ok"
+      }
+    ],
+    "succeeded": false,
+    "terminal": "failed",
+    "tool_errors": 0,
+    "tool_results": 3
+  },
+  {
+    "acceptance": "inconclusive",
+    "elapsed_s": 24.5,
+    "goal": "goal_unverified",
+    "model": "nemotron-3-ultra:cloud",
+    "ok": 0,
+    "policy_denials": 0,
+    "prompt": "Run the command `sleep 5` with a timeout of 1 second.",
+    "schema_rejections": 0,
+    "shape": "D_tool_level_failure",
+    "sid": "nemotron-3-ultra_cloud_12",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "progressing",
+    "statuses": [
+      {
+        "data": "{\"status\": \"error\", \"tool\": \"run_bash\", \"data\": \"ToolError: Command timed out after 1s: sleep 5...\", \"metadata\": {\"tool\": \"run_bash\", \"args\": {\"command\": \"sleep 5\", \"timeout\": 1}, ",
+        "name": "run_bash",
+        "status": "error"
+      }
+    ],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 1,
+    "tool_results": 1
+  },
+  {
+    "acceptance": "inconclusive",
+    "elapsed_s": 5.0,
+    "goal": "goal_unverified",
+    "model": "nemotron-3-ultra:cloud",
+    "ok": 0,
+    "policy_denials": 1,
+    "prompt": "Run the command `echo hello` using run_bash.",
+    "schema_rejections": 0,
+    "shape": "E_policy_denial",
+    "sid": "nemotron-3-ultra_cloud_13",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "progressing",
+    "statuses": [
+      {
+        "data": "{'status': 'POLICY_DENIED', 'authorized': False, 'executed': False, 'retryable': False, 'reason': 'Policy denied: run_bash \u2014 AUTO_EDIT mode blocks run_bash', 'data': 'Policy denied",
+        "name": "run_bash",
+        "status": "POLICY_DENIED"
+      }
+    ],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 0,
+    "tool_results": 1
+  },
+  {
+    "acceptance": "inconclusive",
+    "elapsed_s": 9.8,
+    "goal": "goal_unverified",
+    "model": "llama3.2:3b",
+    "ok": 1,
+    "policy_denials": 0,
+    "prompt": "Read the file seed.txt and tell me what it says.",
+    "schema_rejections": 0,
+    "shape": "A_read_only",
+    "sid": "llama3.2_3b_0",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "progressing",
+    "statuses": [
+      {
+        "data": "{\"status\": \"ok\", \"tool\": \"read_file\", \"data\": \"--- FILE: seed.txt | LINES: 1 | SHOWING: 1-1 ---\\nthe seed file says hello\\n\", \"metadata\": {\"tool\": \"read_file\", \"args\": {\"path\": \"se",
+        "name": "read_file",
+        "status": "ok"
+      }
+    ],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 0,
+    "tool_results": 1
+  },
+  {
+    "acceptance": "inconclusive",
+    "elapsed_s": 10.2,
+    "goal": "goal_unverified",
+    "model": "llama3.2:3b",
+    "ok": 0,
+    "policy_denials": 0,
+    "prompt": "What is in seed.txt? Use read_file.",
+    "schema_rejections": 1,
+    "shape": "A_read_only",
+    "sid": "llama3.2_3b_1",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "progressing",
+    "statuses": [
+      {
+        "data": "{'status': 'SCHEMA_INVALID', 'authorized': False, 'executed': False, 'retryable': False, 'reason': \"Blocked: read_file \u2014 Schema validation failed for tool 'read_file': 'path' is a ",
+        "name": "read_file",
+        "status": "SCHEMA_INVALID"
+      }
+    ],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 0,
+    "tool_results": 1
+  },
+  {
+    "acceptance": "inconclusive",
+    "elapsed_s": 8.7,
+    "goal": "goal_unverified",
+    "model": "llama3.2:3b",
+    "ok": 1,
+    "policy_denials": 0,
+    "prompt": "Create a file called out.txt containing the word hello, then",
+    "schema_rejections": 0,
+    "shape": "B_mutate_verify",
+    "sid": "llama3.2_3b_2",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "progressing",
+    "statuses": [
+      {
+        "data": "{\"status\": \"ok\", \"tool\": \"capture_skill\", \"data\": {\"ok\": true, \"skill_name\": \"write-to-file\", \"path\": \"/private/var/folders/b_/kq7b8w_x5b7308zq183tq_z00000gn/T/adr0016-live-xcw58lx",
+        "name": "capture_skill",
+        "status": "ok"
+      }
+    ],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 0,
+    "tool_results": 1
+  },
+  {
+    "acceptance": "inconclusive",
+    "elapsed_s": 12.4,
+    "goal": "goal_unverified",
+    "model": "llama3.2:3b",
+    "ok": 3,
+    "policy_denials": 0,
+    "prompt": "Create a file called bad.txt, then run the command `exit 3`.",
+    "schema_rejections": 0,
+    "shape": "C_failed_verification",
+    "sid": "llama3.2_3b_3",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "progressing",
+    "statuses": [
+      {
+        "data": "{\"status\": \"ok\", \"tool\": \"git_status\", \"data\": \"Not a git repository (or git not available).\", \"metadata\": {\"tool\": \"git_status\", \"args\": {}, \"result_length\": 44}}",
+        "name": "git_status",
+        "status": "ok"
+      },
+      {
+        "data": "{\"status\": \"ok\", \"tool\": \"git_commit\", \"data\": \"Error: not a git repository\", \"metadata\": {\"tool\": \"git_commit\", \"args\": {\"message\": \"Create file and exit with error code 3\"}, \"res",
+        "name": "git_commit",
+        "status": "ok"
+      },
+      {
+        "data": "{\"status\": \"ok\", \"tool\": \"git_diff\", \"data\": \"No diff available (not a git repo, file not tracked, or no changes).\", \"metadata\": {\"tool\": \"git_diff\", \"args\": {\"staged\": false, \"pat",
+        "name": "git_diff",
+        "status": "ok"
+      }
+    ],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 0,
+    "tool_results": 3
+  },
+  {
+    "acceptance": "inconclusive",
+    "elapsed_s": 2.8,
+    "goal": "goal_unverified",
+    "model": "llama3.2:3b",
+    "ok": 1,
+    "policy_denials": 0,
+    "prompt": "Run the command `sleep 5` with a timeout of 1 second.",
+    "schema_rejections": 0,
+    "shape": "D_tool_level_failure",
+    "sid": "llama3.2_3b_4",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "progressing",
+    "statuses": [
+      {
+        "data": "{\"status\": \"ok\", \"tool\": \"run_tests\", \"data\": \"## Test Results (0/0 passed)\\n- Duration: 0.00s\\n- Failed: 0, Errors: 0, Skipped: 0\", \"metadata\": {\"tool\": \"run_tests\", \"args\": {\"fil",
+        "name": "run_tests",
+        "status": "ok"
+      }
+    ],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 0,
+    "tool_results": 1
+  },
+  {
+    "acceptance": "inconclusive",
+    "elapsed_s": 4.7,
+    "goal": "goal_unverified",
+    "model": "llama3.2:3b",
+    "ok": 0,
+    "policy_denials": 0,
+    "prompt": "Run the command `echo hello` using run_bash.",
+    "schema_rejections": 1,
+    "shape": "E_policy_denial",
+    "sid": "llama3.2_3b_5",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "progressing",
+    "statuses": [
+      {
+        "data": "{'status': 'SCHEMA_INVALID', 'authorized': False, 'executed': False, 'retryable': False, 'reason': 'Blocked: run_bash \u2014 Schema validation failed for tool \\'run_bash\\': \\'command\\' ",
+        "name": "run_bash",
+        "status": "SCHEMA_INVALID"
+      }
+    ],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 0,
+    "tool_results": 1
+  },
+  {
+    "acceptance": "inconclusive",
+    "elapsed_s": 10.5,
+    "goal": "goal_unverified",
+    "model": "llama3.2:3b",
+    "ok": 1,
+    "policy_denials": 0,
+    "prompt": "Read a file, but do not specify which one.",
+    "schema_rejections": 0,
+    "shape": "F_schema_rejection",
+    "sid": "llama3.2_3b_6",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "progressing",
+    "statuses": [
+      {
+        "data": "{\"status\": \"ok\", \"tool\": \"git_diff\", \"data\": \"No diff available (not a git repo, file not tracked, or no changes).\", \"metadata\": {\"tool\": \"git_diff\", \"args\": {\"path\": \"\", \"staged\":",
+        "name": "git_diff",
+        "status": "ok"
+      }
+    ],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 0,
+    "tool_results": 1
+  },
+  {
+    "acceptance": "inconclusive",
+    "elapsed_s": 4.4,
+    "goal": "goal_unverified",
+    "model": "qwen2.5:0.5b",
+    "ok": 0,
+    "policy_denials": 0,
+    "prompt": "Read the file seed.txt and tell me what it says.",
+    "schema_rejections": 1,
+    "shape": "A_read_only",
+    "sid": "qwen2.5_0.5b_0",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "progressing",
+    "statuses": [
+      {
+        "data": "{'status': 'SCHEMA_INVALID', 'authorized': False, 'executed': False, 'retryable': False, 'reason': \"Blocked: read_file \u2014 Schema validation failed for tool 'read_file': 'path' is a ",
+        "name": "read_file",
+        "status": "SCHEMA_INVALID"
+      }
+    ],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 0,
+    "tool_results": 1
+  },
+  {
+    "acceptance": "inconclusive",
+    "elapsed_s": 2.8,
+    "goal": "goal_unverified",
+    "model": "qwen2.5:0.5b",
+    "ok": 0,
+    "policy_denials": 0,
+    "prompt": "What is in seed.txt? Use read_file.",
+    "schema_rejections": 1,
+    "shape": "A_read_only",
+    "sid": "qwen2.5_0.5b_1",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "progressing",
+    "statuses": [
+      {
+        "data": "{'status': 'SCHEMA_INVALID', 'authorized': False, 'executed': False, 'retryable': False, 'reason': \"Blocked: read_file \u2014 Schema validation failed for tool 'read_file': 'path' is a ",
+        "name": "read_file",
+        "status": "SCHEMA_INVALID"
+      }
+    ],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 0,
+    "tool_results": 1
+  },
+  {
+    "acceptance": "inconclusive",
+    "elapsed_s": 1.2,
+    "goal": "goal_unverified",
+    "model": "qwen2.5:0.5b",
+    "ok": 0,
+    "policy_denials": 0,
+    "prompt": "Create a file called out.txt containing the word hello, then",
+    "schema_rejections": 0,
+    "shape": "B_mutate_verify",
+    "sid": "qwen2.5_0.5b_2",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "unknown",
+    "statuses": [],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 0,
+    "tool_results": 0
+  },
+  {
+    "acceptance": "inconclusive",
+    "elapsed_s": 1.2,
+    "goal": "goal_unverified",
+    "model": "qwen2.5:0.5b",
+    "ok": 0,
+    "policy_denials": 0,
+    "prompt": "Create a file called bad.txt, then run the command `exit 3`.",
+    "schema_rejections": 0,
+    "shape": "C_failed_verification",
+    "sid": "qwen2.5_0.5b_3",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "unknown",
+    "statuses": [],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 0,
+    "tool_results": 0
+  },
+  {
+    "acceptance": "inconclusive",
+    "elapsed_s": 0.4,
+    "goal": "goal_unverified",
+    "model": "qwen2.5:0.5b",
+    "ok": 0,
+    "policy_denials": 0,
+    "prompt": "Run the command `sleep 5` with a timeout of 1 second.",
+    "schema_rejections": 0,
+    "shape": "D_tool_level_failure",
+    "sid": "qwen2.5_0.5b_4",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "unknown",
+    "statuses": [],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 0,
+    "tool_results": 0
+  },
+  {
+    "acceptance": "inconclusive",
+    "elapsed_s": 1.6,
+    "goal": "goal_unverified",
+    "model": "qwen2.5:0.5b",
+    "ok": 0,
+    "policy_denials": 1,
+    "prompt": "Run the command `echo hello` using run_bash.",
+    "schema_rejections": 0,
+    "shape": "E_policy_denial",
+    "sid": "qwen2.5_0.5b_5",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "progressing",
+    "statuses": [
+      {
+        "data": "{'status': 'POLICY_DENIED', 'authorized': False, 'executed': False, 'retryable': False, 'reason': 'Policy denied: run_bash \u2014 AUTO_EDIT mode blocks run_bash', 'data': 'Policy denied",
+        "name": "run_bash",
+        "status": "POLICY_DENIED"
+      }
+    ],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 0,
+    "tool_results": 1
+  },
+  {
+    "acceptance": "inconclusive",
+    "elapsed_s": 2.0,
+    "goal": "goal_unverified",
+    "model": "qwen2.5:0.5b",
+    "ok": 0,
+    "policy_denials": 0,
+    "prompt": "Read a file, but do not specify which one.",
+    "schema_rejections": 1,
+    "shape": "F_schema_rejection",
+    "sid": "qwen2.5_0.5b_6",
+    "stagnation_allows_goal_met": true,
+    "stagnation_verdict": "progressing",
+    "statuses": [
+      {
+        "data": "{'status': 'SCHEMA_INVALID', 'authorized': False, 'executed': False, 'retryable': False, 'reason': \"Blocked: read_file \u2014 Schema validation failed for tool 'read_file': 'path' is a ",
+        "name": "read_file",
+        "status": "SCHEMA_INVALID"
+      }
+    ],
+    "succeeded": true,
+    "terminal": "succeeded",
+    "tool_errors": 0,
+    "tool_results": 1
+  }
+]

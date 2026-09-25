@@ -4721,6 +4721,180 @@ rather than a judgement.
 
 ---
 
+## ADR-0051 — The acceptance gate's enablement contract is a non-redundancy precondition, not a rate; the `INCONCLUSIVE` rate is not a function of the gate
+
+**Status:** ACCEPTED
+**Phase:** Gate enablement (post-ADR-0050)
+**Amends ADR-0016 — it does not supersede it.** ADR-0016's staging (3a records, 3b gates), its reason for a
+**new** three-valued vocabulary, and its "routing is derived" rule all stand. What this ADR replaces is
+**3b's condition**: *"a measurement period showing how many turns become `INCONCLUSIVE`."*
+**Evidence:** **`scripts/gate_enablement_measurement.py`** (+ `scripts/gate_enablement_population.json`) —
+committed, so the measurement is re-runnable from the repository. This is deliberate: the previous
+mission's instrument was **not** committed (`.gitignore:98` excludes `.workbuddy-ai/`; `git ls-files
+.workbuddy-ai/` returns 0), so its "re-run it" instruction could not be followed. Also
+`PHASE_POST-M13_ADR-0016_LIVE_PROVIDER_MEASUREMENT.md` §9/§17 and `PHASE_GATE_ENABLEMENT.md`.
+
+### Context
+
+ADR-0016 staged P3 deliberately: **3a** introduces criteria and evidence and *records* the verdict, and
+**3b** enables the gate *"after a measurement period showing how many turns become `INCONCLUSIVE`."* The
+gate has been at 3a for the whole migration, and the measurement has now been taken — as a **controlled
+matrix**, 28 live turns over 3 models, with `FALSE_SUCCESS_AFTER = 0`. It found the rate **strongly
+model-dependent**:
+
+| provider / model | turns | PASS | FAIL | INCONCLUSIVE | rate | false successes |
+|---|---:|---:|---:|---:|---:|---:|
+| `nemotron-3-ultra:cloud` (550B) | 14 | 3 | 2 | 9 | **64.3%** | 0 |
+| `llama3.2:3b` (3.2B) | 7 | 0 | 0 | 7 | **100%** | 0 |
+| `qwen2.5:0.5b` (0.49B) | 7 | 0 | 0 | 7 | **100%** | 0 |
+| **total** | **28** | 3 | 2 | 23 | 82.1% | **0** |
+
+*(Re-derived from the recorded per-turn JSON, not quoted from prose; `aggregate_rate.py`.)*
+
+Two capabilities have appeared since ADR-0016 was written, and both bear on *what* the gate would gate on:
+**ADR-0048** records the derivation's reasoning, and **ADR-0050** lets an objective declare its criteria.
+
+**The measurement this ADR contributes, and it reframes the question.** The turn path's acceptance verdict
+is **not an independent evaluation**:
+
+```text
+wisp/core/runtime.py:1189-1190   _acceptance = floor_guard_verdict(_guard_for_goal).verdict
+                                 -> evaluate(floor_guard_criteria(g), floor_guard_evidence(g))
+wisp/core/verification.py:236    the ONE criteria producer on the turn path: floor_guard_criteria()
+wisp/core/verification.py:252    whose check is  (not guard.wrote_code) or guard.resolved()
+wisp/core/stateless.py:911       and whose own gate — guard.rejection() — is ALREADY wired
+```
+
+Driven over the reachable guard state space (**192 states**), the projection is exact:
+
+| Claim | Measured |
+|---|---|
+| `verdict == FAIL` ⟺ the guard's own blocking condition | **0 disagreements / 192** |
+| `verdict != PASS` while the guard is *not* blocking | **144** — of which **96** are `enabled=False` (the guard disabled) and **48** are `enabled ∧ ¬wrote_code` (a read-only turn) |
+| `verdict == FAIL` after the guard has already surrendered | **8** |
+
+### Problem
+
+**The `INCONCLUSIVE` rate cannot be the enablement measure, for two independent reasons.**
+
+1. **It is not a property of the gate.** Measured: 64.3% for the one model that can drive the tool
+   surface, 100% for the two that cannot. The degenerate rows are degenerate *by construction* — a model
+   that never mutates leaves the floor criterion vacuously satisfied and unevidenced, which is
+   `INCONCLUSIVE` regardless of any gate. A bare rate therefore characterises the *population*, not the
+   decision under test.
+2. **It is not a function of the gate.** The gate **consumes** `floor_guard_verdict`; it computes no
+   verdict. Its only effect is to add provider rounds before the turn may finish. Enabling it therefore
+   **cannot raise** the `INCONCLUSIVE` rate — it can only let a failing turn be repaired into a passing
+   one. A measure an intervention cannot move in the harmful direction is not a safety measure *for that
+   intervention*.
+
+**And on today's criteria set the gate has nothing to gate on.** The only production producer of
+`AcceptanceCriteria` on the turn path is `floor_guard_criteria` (the objective-derived producers reach
+`converge_on_objective` only, where `ConvergenceController` already evaluates them — ADR-0045). So a gate
+keyed on this verdict is one of:
+
+| Design | Measured consequence |
+|---|---|
+| keyed on `FAIL` | **redundant** — the identical condition `rejection()` already tests, with the identical nudge and budget |
+| keyed on `!= PASS` | **harmful** — withholds `done` on 144/192 states, including every read-only turn and every turn of a *disabled* guard |
+| `FAIL` after surrender | a **second budget** on the same condition, after the first was spent (8/192 states) |
+
+**The honest statement.** The verdict is not useless — it re-expresses the guard's state in one
+vocabulary, and it is what `derive_goal_state` consumes. What it does **not** carry is a *withholding
+condition* the floor guard does not already enforce.
+
+### Decision
+
+**The enablement contract has two conjuncts. The first is a precondition on the criteria set; the second
+is the measurement. The `INCONCLUSIVE` rate is rejected as the measure.**
+
+> **R1 — the non-redundancy precondition.** The gate may be enabled only when the turn path's
+> **required-criteria set contains at least one required criterion that is not derivable from
+> `VerificationFloorGuard`'s own state.** Until then the gate is not enabled, **and the flag is not added
+> to `config.py`** — a flag whose gate cannot fire is a *written-but-unwired control*, which this
+> repository's own audit named as its dominant pathology (`docs/audit-2026-08-24.md:270`, ≥12 instances).
+> **Measured today: the precondition is UNMET.**
+>
+> **R2 — the measure is changed.** Enablement is measured by the **`GOAL_MET` rate on a
+> declared-objective population**, with the **false-completion rate pinned at 0**. The `INCONCLUSIVE`
+> rate is **not** the measure (see §Problem). "Declared" is ADR-0050's sense: an objective that states
+> its criteria, so a no-op cannot satisfy the guards (ADR-0050 R5) and the rate is interpretable.
+>
+> **R3 — the population must be declared, and never pooled.** A population is
+> `{(provider, model)} × {objective set}`; every observation records its model; results are reported
+> **stratified**. A pooled rate across models of different capability is **not** a measurement (measured:
+> pooling gives 82.1%, which describes no population that exists).
+>
+> **R4 — the sample.** At least **2 capable models** and **≥ 10 declared objectives**, **≥ 30 turns**,
+> all valid, **0 excluded**. This is a *stated judgement*, not a measurement: it is chosen so that no
+> single turn can move the rate by more than ~3 points, and it is re-statable.
+>
+> **R5 — the hard invariant.** `FALSE_SUCCESS_AFTER = 0` over the declared population: no turn may record
+> `PASS` while its verification reported a non-zero exit. (Measured 0/28 live + 0/9 control; this is the
+> invariant that must survive enablement.)
+>
+> **R6 — replay.** 100% of the declared population's goal states must be reproducible from the recorded
+> inputs (`derive_goal_state` over the record). Measured 12/12 today.
+>
+> **R7 — the flag.** `acceptance_gate` / `WISP_ACCEPTANCE_GATE`, default **OFF**, read **once** at the
+> composition point (`AgentRuntime.run_turn`), per ADR-0002. **It is not added to `config.py` while R1 is
+> unmet** (R1). When R1 is met it is added in the same change that makes the gate non-redundant, so no
+> release ever ships a flag that gates nothing.
+>
+> **R8 — the three non-violations, asserted not merely stated.** Enablement may not change
+> `turn_succeeded` (ADR-0035 invariant 8, ADR-0042 R2, ADR-0044 R2), may not change
+> `VerificationFloorGuard` or its criterion (ADR-0016, ADR-0017, ADR-0035's rejected alternative), and
+> may not move a cell of `goal.PRECEDENCE` (ADR-0049 R1). Any of these is a **new ADR**.
+>
+> **R9 — the rollback.** Flag off restores today's behaviour exactly, with no code change. The
+> observation that the gate is doing its job is a **rise in the `GOAL_MET` rate on the declared
+> population with the false-completion rate still 0**; the observation that it is not is a **rise in
+> wall-clock or turn timeouts**, or a `GOAL_MET` whose verification failed.
+
+### What this ADR does not decide
+
+Enabling the gate (R1 is unmet, so there is nothing to enable); the *shape* of the criteria source that
+would satisfy R1 (that is the change that makes the gate meaningful, and it is its own ADR); enabling
+`stagnation_gate` (ADR-0037 forbids it without a superseding ADR, and it is a separate concern);
+`recovery_ladder` (ADR-0026/ADR-0035); the F38 test; `productive_continuations` tuning; the two-flag
+composition ADR-0050's follow-up 1 records.
+
+### Rejected alternatives
+
+| Alternative | Why rejected |
+|---|---|
+| **ADR-0016's bare `INCONCLUSIVE` rate** | §Problem 1 and 2 — model-dependent *and* not a function of the gate |
+| **A required sample size, with no population shape** | A large sample of a degenerate population measures the population. §17: two of three models were 100% by construction |
+| **A ceiling alone, on a pooled population** | The pooled figure (82.1%) describes no population that exists; the stratification *is* the result |
+| **Enabling now, behind the flag** | The gate has nothing to gate on: redundant (FAIL-keyed), harmful (non-PASS-keyed), or a second budget (8/192 states). R1 |
+| **Keying the gate on `verdict != PASS`** | Withholds `done` on every read-only turn and on every turn of a disabled guard — 144/192 states. §Problem |
+| **Adding the flag now, unwired, "for later"** | That is precisely the written-but-unwired control the repository has already diagnosed as its dominant pathology. R1 |
+| **Enabling `stagnation_gate` in the same step** | ADR-0037 forbids it without a superseding ADR; different concern, different predicate, different record |
+| **A second verdict authority, or a new vocabulary** | ADR-0035 §3 and ADR-0042 R4: the verdict is an *input*; a second authority for "was this verified" is the defect class this migration removes |
+| **Superseding ADR-0016 outright** | Its 3a/3b staging, its rejection of both existing vocabularies, and its derived-routing rule are all still correct. Only 3b's *condition* is replaced — hence **amend** |
+| **Making the rate the measure but stratifying it** | Stratification fixes the population objection and not the second: the gate still cannot move the rate adversely. R2 |
+
+### Consequence
+
+- **Enablement is blocked by a precondition, not by a number.** The next phase that would move this is
+  one that puts a **non-floor criteria source on the turn path** — ADR-0048/0050's derived criteria —
+  and that change is what makes the gate non-redundant. Until then ADR-0016's `NOT_YET_DETERMINABLE`
+  becomes **`BLOCKED_ON_PRECONDITION`**, which is a different and more actionable state.
+- **`ADR-0016` is not edited** (append-only); this ADR states the amendment.
+- **No production change.** No flag is added, nothing is enabled, and the three authorities named in R8
+  are untouched.
+
+### Reversal condition
+
+Reversed only by a superseding ADR that (a) satisfies R1 by wiring a non-floor criteria source onto the
+turn path, and (b) shows, on a declared population, a measured `GOAL_MET` benefit with the
+false-completion rate still 0. The trigger to revisit is a turn path whose required-criteria set is no
+longer a projection of `VerificationFloorGuard` — which the guard test
+`tests/reliability/test_gate_enablement_contract.py` asserts, and which will fail the moment R1 is met.
+Removing R1 and reverting to a bare rate must not be done without superseding this ADR.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -4775,3 +4949,4 @@ rather than a judgement.
 | 0048 | The acceptance criteria are host-derived from the objective's *stated* conditions; silence is not consent, and an undetermined requirement is `INCONCLUSIVE` | NEXT (criteria authority) | ACCEPTED (names what the host may infer from silence; authorises one additive record and one flag-gated behaviour defaulting to today; declares the objective-declared structured path viable without violating ADR-0045 R1) |
 | 0049 | The canonical precedence table is `goal.PRECEDENCE` (eight rows, 0–7); every older numbering is historical and is resolved by content | NEXT (precedence correction) | ACCEPTED (a record update — restates what the code already does; ratifies two cells ADR-0047 moved without stating; scopes ADR-0047 R3 to the no-`PASS` case; edits neither ADR-0035 nor ADR-0047) |
 | 0050 | The objective may carry a declared criteria block; the host validates it against the measurable surface and rejects rather than reinterprets | NEXT (structured criteria) | ACCEPTED (decides what ADR-0048 R6 deferred — the grammar, the validation surface, the rejection behaviour; extends ADR-0048 R1 by one outcome, `DECLARED`; closes MODE A and MODE B **on the declared path only**, flag-gated and defaulting OFF) |
+| 0051 | The acceptance gate's enablement contract is a non-redundancy precondition, not a rate; the `INCONCLUSIVE` rate is not a function of the gate | Gate enablement | ACCEPTED (amends ADR-0016's 3b *condition* — replaces "a measurement period showing how many turns become `INCONCLUSIVE`" with a precondition on the criteria set plus a declared-population `GOAL_MET` measure; measures that the turn path's verdict is a projection of `VerificationFloorGuard`, so the gate is redundant or harmful on today's criteria set; adds no flag, enables nothing, changes no authority) |
