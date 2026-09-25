@@ -5844,6 +5844,178 @@ vocabulary, residual 1 closes and this ADR's R1 becomes the single frame for bot
 
 ---
 
+## ADR-0058 — The key-trust model is the operator-supplied organization public key; absence is a configuration, invalidity is a refusal
+
+**Status:** ACCEPTED
+**Phase:** The key-trust workflow (M4 §6's precondition; `PHASE_10_M4_GOVERNANCE_UNWIRED.md` §9 option B)
+**Evidence:** `wisp/policy/bundle.py`, `wisp/policy/loader.py`, `wisp/policy/cli.py:26-36`;
+`tests/reliability/test_key_trust_workflow.py`; `PHASE_KEY_TRUST_WORKFLOW.md`.
+**Decides:** the workflow only. **Not** whether to wire (that is the M4 §9 recommendation, and it is
+what `PHASE_M4_WIRING.md` lands), **not** the flag's default (it lands OFF), and **not** the control
+plane, the key-distribution server, or the registration UI.
+
+### Context
+
+`PHASE_10_M4_GOVERNANCE_UNWIRED.md` §6 names the wiring recipe and then says why it was not landed:
+
+> *"`WISP_POLICY_PUBKEY` presupposes that an operator **has** a trusted public key — and the M4 spec
+> explicitly deferred the **'device registration + key distribution ceremony (needs human workflow
+> design)'** (§5). Wiring the bundle before that ceremony exists would make the env vars live while
+> leaving the question of *how a key is trusted* unanswered."*
+
+The M4 spec (`docs/superpowers/specs/2026-09-04-m4-policy-design.md`) is the input, not a general
+notion of key trust. Its own text already fixes more of this than the deferral sentence suggests:
+
+| spec | what it says | what it fixes |
+|---|---|---|
+| §0 | *"local bundle files remain the authority; the API is a distribution convenience"* | the file is the source of truth; the server routes are not |
+| §3 | mode **`local-only`** — *"`load_local()` only; no socket use (test asserts no network via monkeypatched socket)"* | a fully offline mode exists and is tested |
+| §5 | *"file perms 0600 + OS keychain for private keys **suffice for M4**"* | **the storage half is already decided** |
+| §5 | deferred: *"Device registration + key distribution ceremony (needs human workflow design); Postgres control plane; bundle encryption at rest"* | what is actually left open |
+
+### Problem
+
+The deferral sentence names one thing and can be read as two. Either it means
+
+1. *"an operator must be told how to place a key"* — a workflow gap that blocks wiring; or
+2. *"a fleet must learn an organization key without a human touching each host"* — a control-plane
+   problem, listed in the same breath as the Postgres control plane it needs.
+
+**This ADR decides which, and answers (1).** The phrase is read as **(2)**, and the reading is recorded
+here so a future reader cannot mistake the decision for the phrase.
+
+### The code already decides part of this — driven, not read
+
+| claim | measurement |
+|---|---|
+| `WISP_POLICY_PUBKEY` is a **path** | **FALSE.** It is **base64 key material**: `load_local(bundle_path, public_key_b64)` → `verify_bundle(bundle, sig, public_key_b64)` → `Ed25519PublicKey.from_public_bytes(base64.b64decode(public_key_b64))` (`bundle.py:112-113`). `cli.py:8` documents it as *"base64 org public key"* |
+| `WISP_POLICY_BUNDLE` is a **path** | **TRUE** — to `bundle.json`, with a `.sig` sibling read from `_sig_path()` |
+| verification needs a network or a chain | **FALSE.** `bundle.py`'s docstring: *"Verification needs only the org public key — fully offline/air-gap compatible"* |
+| the failure semantics must be invented | **FALSE — they are implemented.** bad/absent signature → `ValueError("policy bundle signature invalid")`; expired → `trim_expired()` (*"Never an error, never silent allow"*: every approval becomes `deny`, network `off`); no cached bundle → `FileNotFoundError`; a managed refresh failure → the cache is served |
+| a registration surface exists | **FALSE.** `generate_keypair()` returns `(private_key, base64_public_key)` and **nothing registers it** |
+
+The commissioning brief's own worked example said `WISP_POLICY_PUBKEY` *"names a file path containing
+the operator's Ed25519 public key"*. **Driven, that is false** — it carries the key itself. The
+distinction decides the workflow: *"export this value"*, not *"place a file here"*.
+
+### Decision
+
+> **The trust model is the operator-supplied organization public key.** `WISP_POLICY_PUBKEY` carries
+> the organization's Ed25519 **public key, base64** (raw 32 bytes); `WISP_POLICY_BUNDLE` carries the
+> **path** to a signed bundle (`bundle.json` plus its `.sig` sibling). The trust boundary is the
+> **operator's own out-of-band channel**: the key is *public*, so its confidentiality is not required —
+> its **integrity** is, and it reaches the host by the same ceremony that produced the bundle's
+> signature. The mode is the spec's **`local-only`**.
+>
+> **Absence is a configuration; invalidity is a refusal.** An unset `WISP_POLICY_BUNDLE` means *no
+> organization policy is configured*, and the runtime is exactly today's. A bundle that is named but
+> cannot be read, has no signature, or fails verification — **including a half-configuration** (a path
+> with no key, or a malformed one) — means the *expected* control cannot be applied, and the runtime
+> **refuses to boot**.
+>
+> **The key is shared, not per-device.** One organization key serves every host; the private half never
+> leaves the operator (spec §5: 0600 file or OS keychain).
+
+### Normative rules
+
+> **R1 — The trigger is `WISP_POLICY_BUNDLE`, not "both set".** The organization layer engages **iff
+> `WISP_POLICY_BUNDLE` is non-empty**. This refines §6's *"if both are set"* in the **stricter**
+> direction, and the refinement is the point: a half-configuration (a path, no key) must not be inert.
+> §6's condition remains *sufficient*; it is not the guard.
+
+> **R2 — Absence is inert, and inert means byte-for-byte today's behaviour.** With
+> `WISP_POLICY_BUNDLE` empty, no bundle is loaded, no `wisp.policy` code runs, `ToolExecutor.policy` is
+> `None`, and `authorize()` receives `effective_policy=None` exactly as before. `WISP_POLICY_PUBKEY`
+> alone is **inert** and named as such — there is no bundle for it to verify, so there is no control it
+> could apply.
+
+> **R3 — Invalidity refuses to boot.** A named bundle that cannot be read, whose `.sig` sibling is
+> missing, or whose signature does not verify, raises at composition time and the process **does not
+> start**. The loader already raises (`ValueError`); the rule this ADR adds is that **the composition
+> root propagates rather than swallows it.** An operator who mistypes the path gets a startup failure
+> naming the path — not a silent ungoverned fleet.
+
+> **R4 — Expiry narrows, it does not refuse.** A bundle that verifies but is past `expires_at` is
+> served **trimmed** (`trim_expired`): every approval in the matrix becomes `deny`, the network mode
+> becomes `off`. This is the loader's own rule and the spec's §3 `disconnected` semantics — *"never an
+> error, never silent allow"*. Refusing to boot on expiry would turn a stale-but-honest bundle into an
+> outage; trimming keeps the control applied while the operator re-issues.
+> *Measured precondition:* this holds for a bundle that **carries** `expires_at`, which §1's format
+> requires. A bundle that omits it reaches `merge_layers` with a falsy value and raises
+> `ValueError("min() iterable argument is empty")` — a separate, latent defect on the malformed-input
+> path, named in `PHASE_KEY_TRUST_WORKFLOW.md` §6 and **not** fixed here (the package is a
+> non-violation of this ADR).
+
+> **R5 — The key is shared.** One organization public key per deployment. Per-device keys are the
+> deferred ceremony's subject (see **Rejected**, third candidate) and are **not** what this decision
+> means by *"device registration"*.
+
+> **R6 — The workflow is offline by construction.** Both inputs are local; verification is
+> `Ed25519PublicKey.verify` over local bytes. No step of R1–R5 requires a network. `WISP_POLICY_CACHE`
+> and `load_managed` — the refresh-then-cache path, which *does* have a network story — are **not**
+> engaged by this decision and are named as a residual.
+
+> **R7 — The private key is never Wisp's to hold.** Wisp reads a **public** key. Generating, storing,
+> rotating and revoking the private half is the operator's, by spec §5's rule (0600 file or OS
+> keychain). No Wisp surface accepts a private key.
+
+> **R8 — Fail-closed here, fail-open there: the difference is what the absence costs.** ADR-0036 §5
+> chose fail-open for a broken *stagnation predicate*, and that remains right: the predicate's absence
+> is **benign** — the model cannot exploit a measurement that is not taken. A policy bundle's absence is
+> the opposite: an **expected** control is **silently** not applied, which is the **false-assurance**
+> failure mode `PHASE_10_M4_GOVERNANCE_UNWIRED.md` §4 names as this finding's whole harm — *"an operator
+> reads the M4 docs, runs `wisp policy dry-run`, sees `denied: run_bash (organization)`, and concludes
+> their fleet is governed."* **R2 is the one place absence is allowed, and it is allowed only when the
+> operator never claimed otherwise.**
+
+### Rejected
+
+| candidate | why not |
+|---|---|
+| **Trust on first use (TOFU)** | TOFU authenticates a channel that has **no prior authentication** — SSH host keys, where there is nothing else to check. Here the bundle is **already signed**, and the entire purpose is to verify it against a key obtained *out of band*. TOFU would pin whichever key arrives **first on a path an attacker may be able to write**, verify the attacker's bundle against the attacker's own key, and report governance. It is also **stateful** — a new trust store to persist, migrate and revoke — for no gain over a value the operator already has, and it makes the first run's semantics differ from every later run, which is the opposite of what a governance control needs |
+| **A signed-key file with a built-in root** | It moves the root of trust to a key **baked into Wisp**, which needs its own distribution and revocation story — and the spec never specified one. It adds a **second signature layer** over a format §0 fixed as *"canonical JSON + detached Ed25519"*. And it does not remove the original problem: someone still has to *place* the root. It relocates trust rather than establishing it |
+| **A registration ceremony** | **Not rejected as wrong — rejected as out of scope, and this is the reading R1–R8 depend on.** It presupposes a control plane, which §5 deferred **in the same sentence** (*"Postgres control plane"*), and it answers a **multi-device** question: *how does host N learn the organization key without the operator typing it?* A single operator on a single host has nothing to register, and the code has no registration surface at all — `generate_keypair()` returns a pair and nothing consumes it. **Recorded so a future reader cannot mistake the decision for the phrase** |
+
+**This is a decision, not a survey.** One candidate is chosen; the other three are rejected on their
+merits; and the scope boundary is stated rather than hedged. The deployment-specific input the brief
+allowed this ADR to stop on **is not needed**: the spec's own §3 `local-only` mode and §5 storage rule
+already describe a single-operator deployment, and that is the deployment the wiring serves.
+
+### Non-violations
+
+1. **`authorize()` is unchanged** — its parameter list, `AuthorizationDecision`'s fields, and the
+   `controlling_layer` vocabulary. L0 remains optional and remains inside `authorize()`.
+2. **`wisp/policy/` is unchanged** — `bundle.py`, `loader.py`, `explain.py`, `cli.py` and the package's
+   `__all__`. This ADR adds a **caller** for `load_local`; it does not change the module.
+3. **`ToolExecutor.__init__`'s `policy` parameter still defaults to `None`.** The tripwire
+   `test_no_tool_executor_is_constructed_with_a_policy` is **not** this deliverable's target; it is
+   inverted by `PHASE_M4_WIRING.md`.
+
+Asserted by `tests/reliability/test_key_trust_workflow.py`.
+
+### Residuals
+
+1. **The multi-device ceremony.** Deferred by the spec, read as such here. A control plane, a
+   key-distribution server and a registration UI remain unspecified.
+2. **`WISP_POLICY_CACHE` and `load_managed` are not engaged.** The managed/disconnected modes have a
+   network story and a cache; this decision wires the `local-only` path only.
+3. **REST does not receive L0.** `SecurityPolicy.check()` has **no organization layer** — driven, it
+   takes `(action, context)` and `dir()` shows no policy slot — while L0 lives inside `authorize()`,
+   which REST does not call for these actions (ADR-0055). Loading a bundle into `request_policy` would
+   be **dead data**, i.e. a new instance of the very pattern this finding diagnoses. `PHASE_M4_WIRING.md`
+   states this.
+4. **Private-key custody is not implemented by Wisp** (R7), by design.
+
+### Reversal condition
+
+If a deployment needs **per-device** keys — e.g. an audit requirement that a stolen host's key can be
+revoked without re-keying the fleet — then R5 is wrong and the deferred ceremony becomes this ADR's
+successor. The signal: a second consumer of `WISP_POLICY_PUBKEY` that expects a *different* value per
+host. Until then, one shared public key is the model, and the wiring in `PHASE_M4_WIRING.md` is
+consistent with it.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -5904,4 +6076,4 @@ vocabulary, residual 1 closes and this ADR's R1 becomes the single frame for bot
 | 0054 | The acceptance gate consumes `verdict_keys_on_declared` at the engine's pre-`done` gate, bounded and defaulting OFF | Acceptance gate enablement | ACCEPTED (supplies the consumer ADR-0053 §10 recorded as missing: the engine asks a read-only callable — `DeclaredCriteriaGate` — at its pre-`done` gate, because a gate acting after `done` withholds nothing; the probe is taken there, cached, and reused at the verdict site; the withholding reuses ADR-0036's bounded replan model and **shares the turn's extension budget**; `WISP_ACCEPTANCE_GATE` defaults **OFF** and is **dependent** on `WISP_TURN_CRITERIA_SOURCE`; ADR-0051 R2–R6's contract is **NOT satisfied** — the population needs ≥ 2 capable models and the environment serves exactly **1** of 13, measured by a committed instrument; `turn_succeeded`, `VerificationFloorGuard` and `goal.PRECEDENCE` unchanged, asserted) |
 | 0055 | The REST gate is at parity with the agent path; the recorded divergence was between two *models*, not two *paths* | Authorization parity (G1) | ACCEPTED (drives the two production paths instead of the two models: **0 path divergences of 36**, **6 model divergences of 36** — the agent and `require_tool_allowed` reach the same outcome on every route in every mode when the agent runs under REST's condition, no approver. Chooses **Option A**: accept, and correct the record. Rejects **B** because it is not a parity fix — it would deny `hooks.create`/`mcp.add_server`/`plugins.install` in modes where the agent denies nothing (those three names are **not agent tools** and have **no `TOOL_RISK_TABLE` row**), i.e. REST stricter than the agent with no counterpart, and it would 403 the shipped client; rejects **C** for this decision as the fix for a *different* problem (REST cannot ask a human), deferred to its own ADR. Corrects `require_tool_allowed`'s docstring to state the control those routes actually have; keeps every ratchet property and **gains a real-path parity guard**; names four residuals (the approval authority is split three ways; three action names are in none of the three sets; REST cannot ask; five further gated routes are unmeasured). States the relationship to finding E without wiring L0. `authorize()`, `SecurityPolicy.check()` and `ToolExecutor.execute`'s gate chain unchanged, asserted by AST-parsed tests) |
 | 0056 | The two criteria flags are independent on the objective path; their interaction is derivation *order*, not flag coupling | Objective-path flag composition (ADR-0050 follow-up 1) | ACCEPTED (decides the last open ADR-0050 follow-up by driving the 2×2 flag matrix rather than reading it: `strict` **alone** withholds on the prose path (criteria 3→4), `use_declaration` **alone** collapses them to the declared set, and a valid declaration **pre-empts** `strict` — `undetermined` is empty either way, so `strict` is recorded and **inert**. Rejects **"dependent"** as measured-false (it would silently disable ADR-0048's fix for the measured false `GOAL_MET`); rejects **"composed"** (a declaration required) as a new policy no measurement supports, which would turn a silent-defect fix into a hard refusal for every objective written before ADR-0050 — and which is **not implemented** (`use_declaration=True` without a block is a no-op). Does not widen `explain_acceptance`'s parameters (ADR-0009): composition is a *policy* at the composition point, not a third parameter. Relates to ADR-0053 R8 — the *reason* does not transfer (one read site here, two parameters), the *decision* does. **No production change**: the measured behaviour already is the decision. Names one residual: `CriteriaDerivation.strict` records `True` when pre-empted) |
-| 0057 | A REST request for an executable-config action asks a human over the WebSocket channel; no client means deny | REST approval through the WebSocket channel (ADR-0055 §7) | ACCEPTED (reading the channel — as the brief required — shows its premise is **half false**: the **answer** direction works and is consistent across both clients, but the **question** direction does not, because `WebSocketTransport.approve()` sends `approval_request`/`{approval_id, tool_call}` and **both shipped clients branch on `tool_approval_request`** reading `call_id`/`name`/`arguments`/`reason`. So the agent path's WS approval prompt has never rendered (residual 1). The ADR adopts the **clients'** vocabulary — `tool_approval_request`, correlated on `call_id` — which makes the client change **zero** (R8, pinned by the guard); a new `ApprovalBridge` owns its own correlation map so it does **not** touch `WebSocketTransport`, `approve()`, or the agent path (R3). Trigger is an explicit per-route/per-mode set (R4): the three executable-config actions in `auto_edit`/`ask_all`; `full` does not ask, `read_only` denies outright. **No client connected ⇒ 403** (R5) — holding would hang and falling through would silently allow, both forbidden; timeout bounded at 30 s (R6). Gate order is policy-then-ask, via a new **async** companion so `require_tool_allowed` keeps its signature (R7). G3 **deferred** as its own ADR (R9). `rest_approval`/`WISP_REST_APPROVAL` default **OFF** (R11). The four non-violations asserted from the AST (R10). Names four residuals, including that reconciling the agent path's dead frame is a real fix this ADR does not make silently) |
+| 0058 | The key-trust model is the operator-supplied organization public key; absence is a configuration, invalidity is a refusal | The key-trust workflow (M4 §6's precondition; `PHASE_10_M4_GOVERNANCE_UNWIRED.md` §9 option B) | ACCEPTED (decides the workflow M4 §5 deferred, grounded in the spec rather than in a general notion of key trust: §0 *"local bundle files remain the authority"*, §3's `local-only` mode — *"no socket use"* — and §5's own *"file perms 0600 + OS keychain for private keys **suffice for M4**"*, which already fixed the storage half. **Driven, the brief's worked example is false**: `WISP_POLICY_PUBKEY` is **base64 key material**, not a path — `load_local(bundle_path, public_key_b64)` → `Ed25519PublicKey.from_public_bytes(base64.b64decode(...))` — which decides the workflow (*"export this value"*, not *"place a file here"*); and **the failure semantics are already implemented** (bad/absent signature → `ValueError`; expired → `trim_expired`, *"never an error, never silent allow"*; no cache → `FileNotFoundError`). Reads the deferred phrase *"device registration + key distribution ceremony"* as the **multi-device / control-plane** item it is listed beside, and records the reading so it cannot be mistaken for the decision. **R1** the trigger is `WISP_POLICY_BUNDLE` non-empty — refining §6's *"both are set"* in the **stricter** direction, because a half-configuration must not be inert. **R2** absence is inert and byte-for-byte today's behaviour; `WISP_POLICY_PUBKEY` alone is inert. **R3** invalidity **refuses to boot** — the loader already raises; the rule added is that the composition root propagates rather than swallows. **R4** expiry **narrows** (`trim_expired`), it does not refuse — a stale-but-honest bundle must not become an outage. **R5** the key is **shared**, not per-device. **R6** offline by construction; `WISP_POLICY_CACHE`/`load_managed` are **not** engaged. **R7** the private key is never Wisp's to hold. **R8** fail-closed here vs ADR-0036 §5's fail-open there, with the difference stated: a missing stagnation predicate is **benign**, a missing policy is an **expected control silently unapplied** — the false-assurance mode §4 names. Rejects **TOFU** (it would pin the first key on a writable path and verify the attacker's bundle against the attacker's key; stateful; first-run semantics differ from every later run), a **signed-key file with a built-in root** (moves trust to a key baked into Wisp, needs a distribution and revocation story the spec never specified, adds a second signature layer, and still requires someone to place the root), and the **registration ceremony** as **out of scope rather than wrong** — it presupposes the control plane §5 deferred in the same sentence. Names four residuals, incl. that **REST does not receive L0** because `SecurityPolicy.check()` has no organization layer and L0 lives inside `authorize()`, so loading a bundle into `request_policy` would be dead data — a new instance of the pattern this finding diagnoses) |
