@@ -13,10 +13,23 @@
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is `aa9d8a8`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
+**HEAD is `2307925`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
 on top of it and is the authority for the count — **F87**: it did not, until 2026-09-25. **Nine**
 "point the handoff" commits had never been listed, so the claim and the table disagreed; backfilled.
 The only exception is the handoff commit that carries *this* line, which the next landing lists.
+**`2307925` is corpus integrity III** — **no new ADR**. 2.1 **CLOSED** (**F89**'s message; the trailing
+`or 0.0` was **unreachable**; 36/36 expiry inputs identical in outcome). 2.2: the dependency table is
+consolidated as **§6.1**, but both offline installs **still fail** — **OPEN**. 2.3: §10's class gains
+sub-cases **5** and **6**. 2.4: ADR-0057's residual 1 becomes §12 row **W1** (**F100**). Found **F97**
+(three stale ADR-range claims) and **F99** (the brief's ledger rows do not exist). See
+`PHASE_CORPUS_INTEGRITY_III.md`.
+**`f35188a` is ADR-0059** — the REST gate now consults the M2 authority for its **denial** verdict.
+It closes a divergence **ADR-0058 created**: ADR-0055's *0 path divergences of 36* was measured with
+**no policy loaded** (**F94**), and once a bundle denies `write_file`/`edit_file`/`run_bash`, **11 of 36
+(route, mode) pairs diverge** — five in the **default** mode. The brief's Option **D** is **refuted by
+measurement** (**F95**). Conditional on a bundle, so unset means today's gate **byte-for-byte** (40/40,
+status *and* detail). The §4 pin is inverted; the non-vacuity probe found a defect in the guard itself
+(**F96**). See `PHASE_REST_AUTHORIZATION_COMPOSITION.md`.
 **`aa9d8a8` is the M4 wiring** — the policy layer is **WIRED**, behind `WISP_POLICY_BUNDLE`, default
 **OFF**. `config.py` reads two string settings; `composition.py` loads via `load_organization_policy`
 and passes `policy=` at the single construction site (ADR-0006); a named-but-unverifiable bundle
@@ -173,8 +186,10 @@ quoting it; §11 says how.
 | corpus integrity II | `COMPLETE` — 2.1 **CLOSED** (count 3, third site authorised by ADR-0045/F54), 2.2 **OPEN** (`httpx`) | `PHASE_CORPUS_INTEGRITY_II.md` |
 | key-trust workflow (**ADR-0058**) | `COMPLETE` — **`DECIDED`**; the operator's public key; absence is a config, invalidity a refusal; found **F88** (the M4 policy suite is red here), **F89**, **F90**, **F91** | `PHASE_KEY_TRUST_WORKFLOW.md` |
 | M4 wiring | `COMPLETE` — the layer is **WIRED**, default OFF; §6 step 3 (REST) deliberately not done; 4 tripwires inverted, **2 repaired** (**F92**); found **F93** | `PHASE_M4_WIRING.md` |
+| REST authorization composition (**ADR-0059**) | `COMPLETE` — **`DECIDED + IMPLEMENTED`**; the gate consults `authorize()` for its **denial** verdict, conditional on a bundle; found **F94/F95/F96/F98/F99** | `PHASE_REST_AUTHORIZATION_COMPOSITION.md` |
+| corpus integrity III | `COMPLETE` — 2.1/2.3/2.4 **closed**, 2.2's installs **OPEN**; found **F97**, **F100** | `PHASE_CORPUS_INTEGRITY_III.md` |
 
-**Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log).
+**Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log — **mind the §0/§23 split**, and note it has **no G1 or governance-layer row**: `CONTEXT.md` §12 is the live open-items table, **F99**).
 **Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0059**).
 
 ### 0.0.16 REST APPROVAL THROUGH THE WEBSOCKET CHANNEL (2026-09-25) — ADR-0057
@@ -1370,7 +1385,10 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `db29a11` | `docs:` point the handoff at `08dd57e`, and backfill §3's commit table (**F87** — nine "point the handoff" commits had never been listed; the checker now reports *every commit is listed*) |
 | `86ab7cb` | `docs:` decide the **key-trust workflow** (**ADR-0058** — the brief said 0059; **F90**) — the operator-supplied organization **public key**; absence is a configuration, invalidity is a refusal; expiry narrows, it does not refuse; the key is shared; offline by construction; the private key is never Wisp's. Rejects TOFU, a built-in root, and the registration ceremony (out of scope, not wrong). **The brief's worked example was wrong and decided the workflow** (**F91**): `WISP_POLICY_PUBKEY` is base64 key material, not a path. Found **F88** (the M4 policy suite is red in this environment — `cryptography` absent: 14 failed, 6 errors, 13 passed, none in the canonical block) and **F89** (a bundle omitting `expires_at` raises `min() iterable argument is empty`); 12-test guard, 9/9 probes caught, incl. **two defects in the guard itself**; excludes the user's WIP (§8) |
 | `1f5f6fc` | `fix:` the **loader-caller tripwire** states its property, not a file list — D1's guard drives `load_local`, so the exact-set assertion fired **for the wrong reason**; repaired (the CLI, and tests, nothing else) and probed in both directions; excludes the user's WIP (§8) |
-| `aa9d8a8` | `feat:` **wire the M4 policy layer** behind `WISP_POLICY_BUNDLE`, default **OFF** (**ADR-0058**) — `config.py` reads two string settings; `composition.py` loads via `load_organization_policy` and passes `policy=` at the single construction site; a named-but-unverifiable bundle refuses to boot. **§6's step 3 (REST) is deliberately not done** — `SecurityPolicy` has no organization slot, so a bundle there would be dead data; pinned. Four tripwires inverted, **two more fired for the wrong reason and were repaired** (**F92**); the canonical block gains three files and is re-measured (**F93**: 1390 → **1437**); 10-test guard, 7/7 probes caught; `PHASE_10_M4_GOVERNANCE_UNWIRED.md` updated in place; excludes the user's WIP (§8) — **`HEAD`** |
+| `aa9d8a8` | `feat:` **wire the M4 policy layer** behind `WISP_POLICY_BUNDLE`, default **OFF** (**ADR-0058**) — `config.py` reads two string settings; `composition.py` loads via `load_organization_policy` and passes `policy=` at the single construction site; a named-but-unverifiable bundle refuses to boot. **§6's step 3 (REST) is deliberately not done** — `SecurityPolicy` has no organization slot, so a bundle there would be dead data; pinned. Four tripwires inverted, **two more fired for the wrong reason and were repaired** (**F92**); the canonical block gains three files and is re-measured (**F93**: 1390 → **1437**); 10-test guard, 7/7 probes caught; `PHASE_10_M4_GOVERNANCE_UNWIRED.md` updated in place; excludes the user's WIP (§8) |
+| `5330a0f` | `docs:` point the handoff at `aa9d8a8` — the previous mission's handoff commit, which §0 said the next landing would list (**F87**'s stated exception); excludes the user's WIP (§8) |
+| `f35188a` | `feat:` the **REST gate consults the M2 authority for its denial verdict** (**ADR-0059**) — closes the divergence **ADR-0058 created** (driven, **11 of 36** (route, mode) pairs; ADR-0055's 0-of-36 was measured with **no policy loaded**); rejects A (16 rows move with no bundle), B, and **D refuted by measurement**; **conditional on a bundle** ⇒ unset is today's gate **byte-for-byte** (40/40, status *and* detail, proved behaviourally *and* structurally); one load site (`root.organization_policy`), one principal; the §4 pin inverted; `AUTHORITY_CONSUMERS` gains `deps.py` (found by running the canonical block); 16-test guard, **10/10 probes caught** — the probe found a defect in the guard itself (**F96**); found **F94/F95/F98/F99**; canonical block 1437 → **1453**; excludes the user's WIP (§8) |
+| `2307925` | `docs:` **corpus integrity III** — 2.1 **CLOSED** (F89's message; the trailing `or 0.0` was **unreachable**; 36/36 expiry inputs identical in outcome), 2.2 **OPEN** (both offline installs still fail; the table is consolidated as §6.1), 2.3 closed (§10 gains sub-cases 5 and 6), 2.4 closed (ADR-0057's residual 1 → §12 row **W1**, **F100**); found **F97** (three stale ADR-range claims) and **F99** (the brief's ledger rows do not exist); excludes the user's WIP (§8) — **`HEAD`** |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
