@@ -283,8 +283,10 @@ class TestThePageIsReproducibleFromItsGenerator:
         fresh = mod.render()
         # The generated-at commit is a property of *when*, not of *what*; normalise it and
         # the date so the comparison is about content. Everything else must be identical.
-        norm = lambda t: re.sub(r"Generated \d{4}-\d{2}-\d{2} at `[0-9a-f]+`",
-                                "Generated <date> at <sha>", t)
+        # The page names its commit twice: in the banner and in §(c)'s measurement line.
+        # Normalising only the banner's made the guard fail on a page that was correct —
+        # a real defect in this guard, found by running it after a commit moved HEAD.
+        norm = lambda t: re.sub(r"`[0-9a-f]{7,40}`", "`<sha>`", t)
         assert norm(fresh) == norm(page_text), (
             "CURRENT_FINDINGS.md does not match what its generator produces — the page has "
             "been hand-edited, or the data table moved without regenerating. Run:\n"
