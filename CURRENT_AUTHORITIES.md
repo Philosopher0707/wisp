@@ -9,10 +9,11 @@
 > A claim that cannot be pinned is a finding, not a claim. §5 records this page's own findings: the two
 > it could **not** pin are now **decided by ADR-0049** and are kept as a resolution trail.
 >
-> Generated 2026-09-25 at `a3a5c09` · covers **ADR-0001 … ADR-0061** · supersession chains in §1.1–1.6.
+> Generated 2026-09-25 at `7a61171` · covers **ADR-0001 … ADR-0061** · supersession chains in §1.1–1.6.
 > **Regenerated with the header only** — no stated authority changed (ADR-0055 §6's rule, re-applied by
 > ADR-0059, again by ADR-0060 — a *boundary*, not an authority over completion or recovery — and again by
-> ADR-0061, which decides a transport frame and a hook's input rule and touches neither), so the body is
+> ADR-0061, which decides a transport frame and a hook's input rule, and by ADR-0060 R5's Layer C
+> relocation, which moves two symbols between layers and changes no authority), so the body is
 > byte-identical; the range and the commit are the page's own claim about the log's extent, and both were
 > stale (F97).
 >
