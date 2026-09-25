@@ -13,8 +13,14 @@
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is `b9af5f0`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
+**HEAD is `d7a55c2`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
 on top of it and is the authority for the count.
+**`d7a55c2` is the F8 error-classification landing** — 6 files, +883/−11, covering F8's second half
+(a missing validator is a system failure, not a schema verdict). See §0.0.3 below.
+**`7023af0` is the criteria-derivation landing** — 6 files, +1,347/−11, covering **ADR-0048** (the
+authority over *"does this objective require a green suite?"*). See §0.0.4 below.
+**`802413a` is the current-authorities landing** — 3 files, +687, adding `CURRENT_AUTHORITIES.md`
+and its guard. See §0.0.5 below.
 **`b9af5f0` is the multi-turn productive recovery landing** — 12 files, +2,208/−93, covering
 ADR-0047 and closing **F60** and **F61** (and fixing **F62**/**F63**). It excludes the user's
 pre-existing WIP, listed in §8. See §0.0.2 below.
@@ -24,7 +30,7 @@ user's pre-existing WIP, listed in §8. See §0.0.0 and §0.0.1 below.
 **`ade4dc6` is the POST-M13 landing** — 108 files, +26,811/−397, covering ADR-0034 … ADR-0044
 (M13, the POST-M13 chain, F8/F37, and the provider-event chain through ADR-0044). It excludes the
 user's pre-existing WIP, listed in §8.
-**The migration suites are 849 tests — 848 pass, 1 fails.** The failure is
+**The canonical suite is 1115 tests — 1114 pass, 1 fails.** The failure is
 `test_node_identity.py::TestANodeReferencesItsWorkUnit::test_a_parallel_round_is_journaled_as_one_exchange_per_call`,
 finding **F38**: a test that had encoded the F8 environment as the contract (see §11).
 **The full-suite failure set of 129 is STALE.** It was measured while `jsonschema` was missing, so it
@@ -82,12 +88,84 @@ quoting it; §11 says how.
 | **NEXT** — live recovery-to-success validation | `COMPLETE` — **`NOT DEMONSTRATED`**; found **F55–F58** | `PHASE_LIVE_RECOVERY_TO_SUCCESS_VALIDATION.md` |
 | **NEXT** — progress-aware recovery (**ADR-0046**) | `COMPLETE` — **`DEMONSTRATED`**; found **F59** (fixed), **F60/F61** (open) | `PHASE_PROGRESS_AWARE_RECOVERY.md` |
 | **NEXT** — multi-turn productive recovery (**ADR-0047**) | `COMPLETE` — **`F60 DEMONSTRATED`**, **`F61 DEMONSTRATED`**, **`CONVERGENCE AUTHORITY: CLOSED`**; **F60/F61 FIXED**, found **F62/F63** (fixed) | `PHASE_MULTI_TURN_PRODUCTIVE_RECOVERY.md` |
+| **NEXT** — current authorities (documentation) | `COMPLETE` — `CURRENT_AUTHORITIES.md` + its guard; found **F64/F65** (the arbitration drift, the row-numbering ambiguity) | `PHASE_CURRENT_AUTHORITIES.md` |
+| **NEXT** — criteria derivation authority (**ADR-0048**) | `COMPLETE` — **`RATIFIED`**; found **F66** (three measured failure modes, MODE A a false `GOAL_MET`), **F67** (the wiring had no test) | `PHASE_CRITERIA_DERIVATION_AUTHORITY.md` |
+| **NEXT** — F8 error classification | `COMPLETE` — **`F8 SECONDARY_DEFECT REMOVED`**; found **F68** (inert retry), **F69** (two classifications for one condition) | `PHASE_F8_ERROR_CLASSIFICATION.md` |
 
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log).
 **Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0047**).
 
-### 0.0.0 NEXT — autonomous coding agent convergence (2026-09-25)
+### 0.0.5 CRITERIA AUTHORITY & CORPUS NAVIGABILITY (2026-09-25) — three deliverables
 
+**1. `CURRENT_AUTHORITIES.md` — the current-state-of-the-authorities page (no decision).**
+The corpus is 48 ADRs; the *reasoning* is in them and the *answers* are scattered across six or more, so
+anyone implementing the next decision re-derives the current state from ADR-0035 → 0036 → 0037 → 0042 →
+0044 → 0047 — and that reconstruction is where drift re-enters. This is the one hazard the append-only
+convention cannot protect against. One page (162 lines): six authorities, each with **owner / cannot-decide
+/ current-ADRs / durable record fields**, 37 code pins plus an ADR section for every claim; the run-level
+aggregation stated once; the precedence matrix as rows 0–7. Declared **regenerated, not edited**, and
+**guarded** by `tests/reliability/test_current_authorities_pins.py` (28) — a page that can rot silently is
+worse than no page.
+
+**Two claims could not be pinned, and are findings rather than assertions:**
+
+- **F64 — the arbitration drifted further than ADR-0047 states.** R1 says *"Only one input combination
+  moved"*. A differential against `b9af5f0^` over all 48 input combinations finds **7 cells changed in three
+  semantic classes**: the documented `fatal`+`PASS` → `GOAL_MET` and the documented `turn_succeeded` demotion
+  — **plus two undocumented ones**: **`INCOMPLETE`+`PASS` moved `GOAL_UNVERIFIED` → `GOAL_MET`** (reachable:
+  a turn that exhausts its budget without emitting `done` while the harness measures every criterion met now
+  reports met), and **`fatal`+`PASS`+`stagnating` moved `GOAL_FAILED` → `GOAL_STAGNATED`** (the cell ADR-0047
+  R3's *"a fatal error must outrank stagnation"* does not cover, because R3's rule is stated without a
+  `PASS`). Not decided — the page states the code's behaviour and points at the finding.
+- **F65 — the precedence table is total only in the code.** ADR-0035's arbiter has rows **0–6** and no
+  fall-through, so `SUCCEEDED` with no verdict matches none of them; the implementation has always had a
+  row 7. ADR-0047 revised the table **without restating it** and renumbered (*"Row 4 is now…"*) against a
+  numbering that exists only in `goal.PRECEDENCE` — so **"row N" is ambiguous between two ADRs and the
+  code**, and the brief for this deliverable inherited the ambiguity. No ADR contradicts another; this is an
+  amendment whose numbering was not restated.
+
+**2. ADR-0048 — the criteria-derivation authority (a decision).** ADR-0047 R5 made the acceptance criteria
+the **sole gate** on `GOAL_MET`, and the input to that gate is *"does this objective's prose imply a green
+suite?"* — answered by three regexes with no negation awareness, no confidence signal, and (before this)
+**no record of what they concluded**. Measured, that mitigation does not close the class:
+
+| Mode | Shape | Measured |
+|---|---|---|
+| **A** | **a false `GOAL_MET`** — the repo's **own benchmark task** `FIX_BUG` (*"Fix the bug in totals.py"*) matches no suite word, so on a red baseline the absolute criterion is advisory and **a no-op satisfies the guards** | `pass` → **`goal_met`**, bug unfixed, suite still failing |
+| **B** | **a false exhaustion** — `_WANTS_FIX_RE` has **no negation awareness**, so *"**Do not** make the tests pass"* matches | `fail` → `goal_failed` on an objective that never asked |
+| **C** | **"I cannot tell"** — no toolchain, no criteria | `inconclusive`/`NO_REQUIRED_CRITERIA` → `goal_unverified` (**already honest**) |
+
+**A and C are opposite outcomes from the same input state, and both cannot be right.** The corpus had
+already decided which: ADR-0035 invariant 1, ADR-0042 and ADR-0045 R4 all say `INCONCLUSIVE` must not be
+collapsed. **C is the established behaviour; A is the collapse.**
+
+**ADR-0048 R1–R7:** the objective is the authority over what is required; the host owns the derivation and
+the validation, never the invention. Silence is not consent — the host may infer *"no regression"* and may
+not infer *"green"*. Three outcomes (`STATED`/`UNSTATED`/`UNDETERMINED`); `UNDETERMINED` **never promotes**
+and, where its absolute criterion is **advisory**, contributes a required **unevidenceable** criterion that
+`evaluate`'s *existing* rule 3 turns into `INCONCLUSIVE` — no new verdict vocabulary, no new rule, no `FAIL`.
+The derivation is **recorded and journalled** (`{"kind": "derivation"}`) so a promotion that cannot cite the
+objective's own words is visible. `derive_acceptance`'s signature is **not widened** (ADR-0009) and
+`criteria_for` is untouched. `WISP_CRITERIA_STRICT_DERIVATION` defaults **OFF** (read once, at the
+composition point). The objective-declared structured path is **decided viable** with its R1 boundary named
+— *not* the model writing the exam — and **not implemented**. **R7: negation is not handled**; the record
+makes it visible, and the grammar was not widened again because widening it is the mitigation this phase
+measures as insufficient.
+
+**3. F8's second half.** `_validate_tool_args` wrapped `import jsonschema` and `jsonschema.validate` in one
+`try`, so a missing validator and a genuine rejection produced the same string and the same denial status.
+Fixed by **one added `except ImportError` clause, placed first** (`ModuleNotFoundError` is an `ImportError`;
+`ValidationError` is not), returning a `ValidationFailure` — a `str` subclass carrying
+`.kind ∈ {SCHEMA_INVALID, CAPABILITY_MISSING}`. The `write_file` retry block's own import was a **second
+door** into the same defect and is closed by the same clause. **The published denial *status* is not
+changed** — that needs a new member in a taxonomy consumed by the M12 classifier and quoted to the model,
+so it is an ADR (the surfaces are enumerated in the report). **The attribution is now correct where the
+failure is produced and still incorrect where it is published.**
+
+**Report:** `PHASE_CURRENT_AUTHORITIES.md`, `PHASE_CRITERIA_DERIVATION_AUTHORITY.md`,
+`PHASE_F8_ERROR_CLASSIFICATION.md`.
+
+### 0.0.0 NEXT — autonomous coding agent convergence (2026-09-25)
 The execution-semantics layer was CLOSED (ADR-0043/0044) but **per-turn**. A survey of the
 live code found the objective level empty: every `run_turn` caller dispatches exactly one
 turn and returns; `acceptance.evaluate` had no criteria producer for a user objective;
@@ -690,7 +768,11 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `ade4dc6` | `feat:` land the POST-M13 execution-semantics work (ADR-0034 – ADR-0044) — 108 files, +26,811/−397; excludes the user's WIP (§8) |
 | `b8dc4ac` | `docs:` point the handoff at `ade4dc6` |
 | `8a7e9ab` | `feat:` land the autonomous-convergence chain (ADR-0045 – ADR-0046) — 21 files, +8,173/−14; excludes the user's WIP (§8) |
-| `b9af5f0` | `feat:` close F60 and F61 (ADR-0047) — a failed turn is not a failed objective — 12 files, +2,208/−93; excludes the user's WIP (§8) — **`HEAD`** |
+| `b9af5f0` | `feat:` close F60 and F61 (ADR-0047) — a failed turn is not a failed objective — 12 files, +2,208/−93; excludes the user's WIP (§8) |
+| `af3a89a` | `docs:` point the handoff at `b9af5f0` |
+| `802413a` | `docs:` add the current-state-of-the-authorities page, and guard it — 3 files, +687; found **F64/F65**; excludes the user's WIP (§8) |
+| `7023af0` | `feat:` decide the criteria-derivation authority (ADR-0048) — 6 files, +1,347/−11; found **F66/F67**; excludes the user's WIP (§8) |
+| `d7a55c2` | `fix:` F8's second half — a missing validator is a system failure, not a schema verdict — 6 files, +883/−11; found **F68/F69**; excludes the user's WIP (§8) — **`HEAD`** |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
@@ -826,7 +908,7 @@ This is the **fifth** instance of the §10 pattern: a conclusion drawn from *rea
 | **mypy version** | `.venv` has none; `uv.lock` pins **2.3.1**. Use `uv run --no-project --with "mypy==2.3.1" mypy` for the true CI verdict. |
 | **`.venv` still lacks some declared deps — `jsonschema` no longer does** | `aiohttp`, `tiktoken`, `prompt_toolkit`, `cryptography` (Phase 10) **+ `numpy`** remain absent. `jsonschema` was the serious one and is **fixed** — see the next row. |
 | **✅ `jsonschema` — FIXED 2026-09-24 (this was F8)** | `_validate_tool_args` (`core/stateless.py:2285-2298`) imports `jsonschema` inside a `try` and converts the `ModuleNotFoundError` into a validation-failure **string**, so while it was missing **every tool call was refused before dispatch** and the failure was misdirected at the tool. It was **never a packaging problem**: the dependency was *declared* in `pyproject.toml` and *locked* in `uv.lock` — the venv simply lacked it. Provisioned **offline** from the uv cache at exactly the locked versions, with **0 production changes** and the lockfile/manifest byte-identical. **Tools really execute now** — a real read, a real write on disk, and an approved `run_bash` with captured stdout. **Install recipe:** `env -u PYTHONPATH UV_OFFLINE=1 ~/.local/bin/uv pip install --python .venv/bin/python --offline '<pkg>==<locked-version>'` (`uv` is **not on `PATH`** but lives at `~/.local/bin/uv`). **Two traps:** the interpreter has **no CA path** (`ssl.get_default_verify_paths()` → `cafile: None`), so `pip`/`urllib` fail TLS even though the machine has egress — `SSL_CERT_FILE=<certifi>/cacert.pem` fixes it; and **`.venv/bin/pip` has a broken pre-move shebang**, so use `python -m pip` or `uv`. The **error-classification** half of F8 is still unfixed — see F8's resolution row in the ledger. |
-| **Editable install is a MetaPathFinder** | `__editable___wisp_0_1_0_finder` resolves `wisp` ahead of `sys.path`, so **`PYTHONPATH` cannot override which package is imported**. To compare against a baseline you must change the files in place. |
+| **⚠️ CORRECTED 2026-09-25 — the editable install is a NO-OP, and the old claim was INVERTED** | This row used to read: *"`__editable___wisp_0_1_0_finder` resolves `wisp` ahead of `sys.path`, so **`PYTHONPATH` cannot override which package is imported**."* **Measured, that is backwards.** The finder's `MAPPING` resolves `wisp` to `/Users/philosopher/Documents/wisp/wisp` — the **pre-move** path — and **that directory does not exist**, so the finder returns nothing and `import wisp` from a foreign cwd raises `ModuleNotFoundError: No module named 'wisp'`. With `PYTHONPATH` pointed at the repo root it imports fine, so **`PYTHONPATH` CAN override**. What actually resolves `wisp` is the **cwd** (`./wisp`, because `python -m pytest` puts the cwd first). **The practical rule is unchanged** — change files in place to compare against a baseline — but for a different reason, and the real hazard is the one the old row did not name: **run from anywhere but the repo root and `wisp` resolves to nothing**, or to a foreign tree if one is on `PYTHONPATH`. Finding **F70**; reported, not repaired (repairing the venv is an environment change, and §9 keeps F8's env work separate from architecture). |
 | **`git stash` is the wrong baseline tool here** | The tree has pre-existing uncommitted work in the same files. Stashing only your files reverts them to HEAD and discards it — producing false "regressions". Snapshot to a path outside the repo instead. Finding F12. |
 | **BSD `grep` via Bash is unreliable here** | `--include` silently matches nothing (caused a false "tiktoken is unused"), and a plain `grep -n "a\|b" file` returned empty with exit 1 for a pattern that plainly exists. **Use the Grep tool, not the shell.** |
 | **Long background runs get reaped** | The harness kills long pytest runs without writing a summary. Report per-subsystem results; **do not claim a full-suite pass.** |
@@ -928,9 +1010,15 @@ input comes from.**
 ## 11. Verification commands that actually work
 
 ```bash
-# Gates (both must be green)
-/opt/anaconda3/envs/litllm/bin/ruff check wisp/
-uv run --no-project --with "mypy==2.3.1" mypy
+# Gates — ⚠️ NEITHER IS GREEN AT HEAD, corrected 2026-09-25 (F71)
+/opt/anaconda3/envs/litllm/bin/ruff check wisp/          # 11 errors, all pre-existing
+uv run --no-project --with "mypy==2.3.1" mypy wisp/      # 1844 errors in 228 files
+
+# This block used to say "Gates (both must be green)". Neither is. Measured at d7a55c2: ruff reports
+# 11 errors (incl. an F821 undefined name in wisp/auth/principal.py and wisp/context_assembler.py),
+# and the pinned mypy reports 1844 errors in 228 files — not zero. Every phase that claimed a green
+# lint/type criterion claimed something untrue. Both sets are UNCHANGED by the 2026-09-25 chain
+# (verified by set diff: 0 new, 0 gone), so the chain neither caused nor repaired them. Finding F71.
 
 # Phase 10 tests — the full set (245 passed)
 env -u PYTHONPATH .venv/bin/python -m pytest \
@@ -973,7 +1061,7 @@ environmental set in §7. Never quote "the suite passes" — quote the set.
 `jsonschema` absent, so they include F8's effects. The `tests/reliability/` measurement after
 provisioning (24 failures → 0) shows the magnitude of the error. Re-measure before comparing.
 
-### Migration suites — 849 tests (848 pass, 1 fails)
+### Canonical suites — 1115 tests (1114 pass, 1 fails)
 
 ```bash
 env -u PYTHONPATH .venv/bin/python -m pytest \
@@ -993,18 +1081,28 @@ env -u PYTHONPATH .venv/bin/python -m pytest \
   tests/reliability/test_post_m13_completion_enforcement.py \
   tests/reliability/test_post_m13_stagnation_gate_validation.py \
   tests/reliability/test_f8_tool_execution_restored.py \
-  tests/reliability/test_verification_evidence_adapter.py -q
+  tests/reliability/test_verification_evidence_adapter.py \
+  tests/reliability/test_next_convergence_controller.py \
+  tests/reliability/test_next_autonomous_wiring.py \
+  tests/reliability/test_progress_aware_recovery.py \
+  tests/reliability/test_multi_turn_productive_recovery.py \
+  tests/reliability/test_current_authorities_pins.py \
+  tests/reliability/test_criteria_derivation_authority.py \
+  tests/reliability/test_f8_error_classification.py -q
 ```
 
-**Measured 2026-09-25, after the F37 evidence-adapter repair: 849 tests — 848 pass, 1 fails.** The failure is
+**Measured 2026-09-25, after the F8 error-classification landing: 1115 tests — 1114 pass, 1 fails.** The
+failure is
 `test_node_identity.py::TestANodeReferencesItsWorkUnit::test_a_parallel_round_is_journaled_as_one_exchange_per_call`
 (**F38**): it pinned the exchange ordering that only existed because F8 refused every call pre-dispatch.
 Now that calls genuinely dispatch, the grouping rule produces the batch shape it explicitly supports
 (`call:c0+c1`). The production behaviour is *more* correct, not less — the test needs a one-line contract
 update, which requires explicit authorization.
 
-**This heading said "714 tests" until 2026-09-25** — that figure was the *pre-enforcement* count and the
-command below it had never been extended with the POST-M13 files.
+**The heading said "849 tests" until 2026-09-25, and "714 tests" before that.** Neither was current: the
+command block had never been extended with the POST-M13 files (714 → 849) or with the four NEXT-mission
+files and the three 2026-09-25 files (849 → 1115). Finding **F71**. **Do not quote a count from prose** —
+run the block.
 
 ### The regression method — read this before changing anything
 
