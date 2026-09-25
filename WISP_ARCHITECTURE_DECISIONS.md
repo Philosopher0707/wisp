@@ -6607,6 +6607,212 @@ human prompt (a machine approver would need its own bound).
 
 ---
 
+## ADR-0062 — The corpus's editorial decisions: one register, one vocabulary, one reading rule
+
+**Status:** ACCEPTED
+**Phase:** The corpus governance layer, II (`PHASE_CORPUS_GOVERNANCE.md` §3's findings F105–F114)
+**Decides the eight editorial findings the first corpus-governance mission reported and did not
+repair. Every decision is about the corpus's *artifacts* — a ledger, a vocabulary, a citation, a
+method — and none is about the product: no flag default, no gate, no authority's scope, no `wisp/`
+file. The ADR is append-only; the edits it authorises are applied separately and cite its sections.**
+**Evidence:** `PHASE_CORPUS_GOVERNANCE.md` §3 (the ten findings), §5.1 (the nine instrument defects);
+`CURRENT_FINDINGS.md`, `CURRENT_OPEN_ITEMS.md`, `CURRENT_FLAGS.md` (the three registers and their
+`§Findings`); `WISP_MIGRATION_STATUS.md:41` (the ledger's own vocabulary); `CONTEXT.md:215` (the `F77`
+citation); `PHASE_DAG_RETIREMENT.md` §7.1 and §9.
+
+### Context
+
+The corpus-governance mission built four derived registers and their guards. It also found **ten
+defects in the corpus's own artifacts** and **repaired none**, because each needs an editorial
+decision and a derived page may not decide. That was the right call and it left the corpus with a
+governance layer that is **built but not complete**: a register that cites three homes for one
+finding's status, two id namespaces sharing a letter, three state vocabularies, a paraphrased rule
+that would decide the wrong way, two flag names that exist nowhere, a measurement method that
+silently returns a wrong answer, and the pattern's founding page with no generator.
+
+**These are decisions about documents.** That is why they are one ADR rather than eight: they share
+one subject — *the corpus's own shape* — and one property: none of them changes what the product
+does. Stated separately they would each be a paragraph; stated together they are a policy.
+
+**What this ADR does not do.** It does not decide what `F77` was (that is a measurement, recorded
+in `PHASE_CORPUS_GOVERNANCE_II.md` §4). It does not give the ledger the thirty missing rows. It does
+not renumber or create a finding. It does not decide any production meaning.
+
+### Decision
+
+**R1 — `CURRENT_FINDINGS.md` is the canonical register for a finding's status; the ledger's split is
+historical. (`F106`)**
+
+The status of `Fn` is recorded in **one** place: `CURRENT_FINDINGS.md`, which already carries all 104
+rows, each pinned to a source with the source's own words quoted. `WISP_MIGRATION_STATUS.md` stays
+**append-only and un-backfilled** — its §23 table keeps `F1`–`F44` and `F64`–`F74`, its §0 keeps
+`F45`–`F63`, and `F75`–`F104` gain no ledger row — but its §23 note is **corrected** to name the
+register as canonical and to state its own actual range (`F64`–`F74`, not `F64`–`F71`).
+
+*Why not backfill.* Thirty rows would be duplicated across two append-only files, and a duplicate is
+a second producer of one fact — the defect class this corpus names most often. The register exists
+precisely so the ledger does not have to be total.
+
+*Reversal trigger.* A consumer that reads the ledger and cannot be pointed at the register — i.e. a
+tool that parses `WISP_MIGRATION_STATUS.md` for a finding's status. If one is built, the register's
+canonicity is re-decided, because a canonical source no consumer can reach is a citation, not a
+source.
+
+**R2 — A finding id and an open-item id are disambiguated by prefix; the collision is tolerated, not
+renamed. (`F107`)**
+
+`CONTEXT.md` §12's `F1`–`F5` are **open items** (Phase 10's defect ledger). The findings log's
+`F1`–`F104` are **findings**. They are different namespaces and both are historical records, so
+neither is renumbered. The rule is a **prefix in prose**: a citation writes `FIND-F7` for a finding
+and `ITEM-F1` for §12's rows, and `CURRENT_FINDINGS.md`'s §Findings records the collision once. The
+three meanings of `M4` — §12's *ADR-0004 revisited*, the **governance layer** (which §12 carries as
+row `E`), and `WISP_MIGRATION_STATUS.md:2041`'s row — are **annotated once** at §12, with the three
+meanings named and the row that carries each.
+
+*Why not rename.* Renaming either namespace rewrites a historical record and breaks every existing
+citation. A stated rule costs one paragraph and loses nothing.
+
+*Reversal trigger.* A tool or a test that must resolve an id mechanically rather than by reading the
+source — a prefix that only prose carries cannot be parsed. If one is needed, the namespaces are
+renamed and the citations updated in one change.
+
+**R3 — One state vocabulary and one reason column. `DECIDED` is a reason; `BLOCKED` is a state with
+no members. (`F108`)**
+
+The **ledger's six words govern**, verbatim from `WISP_MIGRATION_STATUS.md:41`:
+`NOT STARTED · IN PROGRESS · COMPLETE · BLOCKED · PARTIAL · SUPERSEDED`. Three rules follow:
+
+1. **A state word says *that*; a reason column says *why*.** `CONTEXT.md` §12's `DECIDED` values move
+   to a stated reason (the ADR that decided the item), and the state becomes `COMPLETE`. `DECIDED`
+   names *why* an item is finished — it is not a state, and a register that accepts it as one has two
+   vocabularies for one column.
+2. **`BLOCKED` is kept as a state**, and the fact that no item is currently in it is recorded as
+   **"no item is currently in this state"** — not as "the word is unused". A defined word with no
+   members is a vocabulary, not a defect; removing it would be the editorial change this corpus has
+   already declined, and it would make a future blocked item unrepresentable.
+3. **The reason column is `blocked_by`**, and it is where a blocker, a dependency and a decision
+   citation all go. A register may not coin a state word for any of them.
+
+*Reversal trigger.* A state that the six words cannot express and that is not a reason — if one is
+found, the vocabulary is extended by a superseding ADR rather than by a register's convenience.
+
+**R4 — The reading rule for a rollback flag is ADR-0002's, recorded verbatim; the paraphrase that
+has circulated is named as the defect. (`F109`)**
+
+> **The reading rule.** *A rollback flag is **read at the consumption site**, as
+> `getattr(config, name, <safe default>)`, and is resolvable from the environment (`WISP_*`) via
+> `get_setting`. One flag per concern.*
+
+The rule has **three** parts and ADR-0002 states all three. The paraphrase *"read once, at the
+composition point"* is **not** the rule and this ADR records it as a defect, so the next brief cannot
+inherit it. **Where the paraphrase came from, measured:** ADR-0056's Consequences says *"Both flags
+still default OFF, read once, independently"* — a **local** statement about the objective path, which
+reads both of *its* flags at one composition point. The paraphrase conflates that local description
+with ADR-0002's **general** rule. The distinction is load-bearing: under the paraphrase,
+`verification_loop`'s two read sites (`wisp/core/stateless.py:505`, `:1439`) and `turn_spans`'s two
+(`wisp/composition.py:310`, `wisp/core/runtime.py:1409`) each become a violation of a rule the corpus
+does not have.
+
+*Reversal trigger.* ADR-0002 is superseded by a later decision that changes the reading rule. Until
+then, any document that states the rule differently is wrong, and a citation of it resolves here.
+
+**R5 — `verification_gate` and `graph_mutation` are wrong names, not aliases and not deprecated
+names. (`F110`)**
+
+Neither string appears anywhere in `wisp/`. The flags are **`verification_loop`**
+(`WISP_VERIFICATION_LOOP`, default **ON**, read at `wisp/core/stateless.py:505` and `:1439`) and
+**`task_graph`** (`WISP_TASK_GRAPH`, default **OFF**, read at `wisp/core/runtime.py:676`). They are
+recorded as corrections so a future brief cannot re-introduce them. This ADR adds **no alias**: an
+alias for a name that was never real would create the second vocabulary R3 forbids.
+
+**R6 — No two pytest processes run concurrently against this repository, and the block is run with a
+private `--basetemp`. (`F112`)**
+
+Two concurrent pytest processes race on the shared base directory
+(`/private/var/folders/…/T/pytest-of-<user>`) and fail at fixture setup with
+`PermissionError: EEXIST: mkdir '…/T/pytest-of-philosopher'` — **869 errors from one overlapping
+run**, which reads as a code failure and is not. Two rules follow, and they live in `CONTEXT.md` §6
+and §11:
+
+1. **A measurement run is exclusive.** No second pytest process starts while the canonical block or a
+   two-run baseline is in flight. The rule is a **method rule**, not a code change.
+2. **A block run passes `--basetemp`** to a per-run directory. This is a change to the *method*, not
+   to the product: no `wisp/` file is touched and no test is modified. It removes the race rather
+   than relying on discipline alone, and the two rules together are why this decision is stated here
+   and not left to a gotcha row.
+
+*Why the corpus's own diagnosis is corrected.* `CONTEXT.md` §6 attributed the failure to *"the
+WorkBuddy shim blocks pytest's temp `mkdir`"*. The measured cause is **contention between
+processes**; the shim row stays (it is a real hazard for a single run) and the contention is stated
+separately, because a wrong cause makes the rule unlearnable.
+
+*Reversal trigger.* pytest gains a base directory that is safe under concurrency (a per-process
+default), or the corpus moves to a test runner that does not share one.
+
+**R7 — A phase report enters the document index in the change that creates it; the omission of
+`PHASE_EXTERNAL_INPUT_PATH.md` is recorded as `F104`'s class. (`F114`)**
+
+A report that exists and is not in `CONTEXT.md` §13 is unreachable from the index a reader is sent
+to. The row was added by the corpus-governance landing; this ADR states the **class** — the same one
+`F104` names (ADR-0057 had no decision-index row) and `F97` names (three stale range claims) — and
+makes the rule explicit: **a landing that creates a report adds its index row in the same commit.**
+A record that exists and is not listed is the same defect as a record that is listed and does not
+exist.
+
+*Reversal trigger.* §13 stops being the document index, or a generated index replaces it — in which
+case the rule attaches to the generator.
+
+**R8 — A derived page must have a committed generator. (`F113`, policy half)**
+
+A page that declares *"REGENERATE, DO NOT EDIT IN PLACE"* and whose regeneration is **by hand** has a
+rule it cannot honour — **F75**'s class, one level up. The rule: **every derived page has a committed
+generator, and its guard's reproducibility property asserts that regenerating reproduces the page
+byte-for-byte, modulo the commit it names.** `CURRENT_AUTHORITIES.md` is the current exception, and
+it is the exception this mission closes.
+
+*What the rule does not require.* It does not require every page to be *fully* generated. A page may
+carry a section that is **append-only and emitted unchanged** — `CURRENT_AUTHORITIES.md` §5, its own
+record of what it could not pin — provided the guard asserts that section is unchanged and the
+generator refuses to invent it.
+
+*Reversal trigger.* A derived page whose source cannot be read mechanically at all — in which case it
+is not a derived page but a document, and it must stop saying it is regenerated.
+
+### Consequences
+
+- **No production behaviour changes.** No `wisp/` file is touched by any rule here. R6 changes how a
+  measurement is *run*, not what it measures.
+- **The corpus's own artifacts are governed by the same discipline as its code**: a decision (this
+  ADR), an edit citing it, a guard asserting it, and a report.
+- **The four registers are regenerated** after their sources change, per R8. Their reproducibility
+  guards enforce it, so a hand edit fails rather than drifting.
+- **`F105`, `F111` and the `F113` build half are not decided here.** `F105` is a measurement
+  (`PHASE_CORPUS_GOVERNANCE_II.md` §4). `F111` is a *host condition*, not a corpus defect — its
+  disposition is the rule already in `CONTEXT.md` §11 (do not quote a count from a block run on a
+  starved host), and this ADR adds only R6's part of it. `F113`'s build half is the generator.
+- **One reversal is cheap and one is not.** R2 and R5 reverse by editing a paragraph; R1 and R3
+  reverse by rewriting rows. That asymmetry is the reason each is stated with its trigger rather than
+  left to a later reader's judgement.
+
+### The brief's claims, driven
+
+| claim | result |
+|---|---|
+| *"eight of the ten findings are editorial"* | **true** — `F106`–`F110`, `F112`, `F114`, and `F113`'s policy half |
+| *"`F77`'s referent is that report's §7.1"* | **not determinable** — the report contains **three** finding-shaped statements, not one. See `PHASE_CORPUS_GOVERNANCE_II.md` §4 |
+| *"the brief's paraphrase is the defect"* | **true, and it has a source**: ADR-0056's *"read once, independently"* (R4) |
+| *"`verification_gate` and `graph_mutation` are wrong names"* | **true** — neither string occurs in `wisp/` (R5) |
+| *"`BLOCKED` is defined and used by no source"* | **true**, and this ADR **keeps** it (R3.2) — the brief's own recommendation, adopted |
+
+### Reversal condition
+
+Each rule carries its own trigger, above. Collectively: if the corpus acquires a **tool** that
+resolves an id, a state or a citation mechanically, R2's prose prefixes and R1's canonical register
+are re-decided together — a machine-readable corpus wants different answers than a read one. Until
+then, the answers here are the ones a reader needs.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -6672,3 +6878,4 @@ human prompt (a machine approver would need its own bound).
 | 0059 | The REST gate consults the M2 authority for its denial verdict, and only for that | The REST gate's authorization composition (`PHASE_M4_WIRING.md` §4 residual 1) | ACCEPTED (closes the divergence **ADR-0058 created**: ADR-0055's **0 path divergences of 36** was measured with **no organization policy loaded**, and once a bundle is loaded a denial is enforced on the agent path and was silently unenforced on REST — **driven, 11 (route, mode) pairs diverge**, five in the **default** `auto_edit` mode. Decides **Option C in its narrow form**: `require_tool_allowed` consults `authorize()` with the **same `effective_policy` the composition root loaded** and refuses when it **denies**, reading `allowed` and never `approval_required`. The reason is measured, not argued: **the two models agree on `allowed` in all 36 (route, mode) pairs** and disagree only on `approval_required` — in **exactly six** rows, the three REST-only action names × {`auto_edit`, `ask_all`}. So composing `allowed` composes the agreement; composing approval composes the divergence. Rejects **A** (driven with **no bundle**, 16 of 36 rows move, incl. three config routes in the default mode from ALLOW to 403 — ADR-0055 §Why-not-B re-measured on the composed gate); rejects **B** (`authorize()` has no mode engine and no hooks layer, so it discards two of the four things `check()` supplies); rejects **D** as **refuted by measurement** — the brief's D table says *"L0 has no verdict on a non-agent name"*, but `authorize()` returns `DENY(controlling_layer="local file")` for a bundle that names one, so D is not a harmless divergence but an unenforced operator rule. **Conditional on a bundle**, so with `WISP_POLICY_BUNDLE` unset the gate is today's code **byte-for-byte — status and detail**, proved against HEAD's body as a differential (**40/40 identical**) and structurally (the body change is an **insertion**). REST reads `root.organization_policy` — one load site (ADR-0006), two readers; `deps.py` imports no `wisp.policy` and calls no loader. The **§4 pin is inverted**: `SecurityPolicy` still has no policy slot, and its two assertions now say *which route was not taken*. `authorize()`, `SecurityPolicy.check()` and `ToolExecutor.execute`'s chain unchanged, asserted from the AST. Names five residuals, incl. that a bundle's **`approve` level is inert on REST** and that **workspace quarantine** is a pre-existing gap) |
 | 0060 | Layer A is the driver and Layer B is a record; the boundary is permanent | The Layer B boundary (M8 + M11) | ACCEPTED (decides the one question M11 and M8 name from opposite sides: *is Layer B's executor the driver, or a record?* **Driven, Position B is not expressible** — `wisp.graph.types.Graph` is `frozen=True` so a node cannot be appended mid-run, `GraphExecutor`'s whole public surface is `run`/`resume`/`cancel`/`register_function` with **no** growth API, `run()` refuses an empty graph before doing any work, and **no `TaskGraph → Graph` lowering exists** (`compat.py` lowers `TaskDAG`, not Layer A's graph). The turn loop discovers its work as the model streams, so *"every tool call is a node transition"* needs an executor that grows a graph **while driving it**. **This is a different blocker from ADR-0029's and does not mention payload**: ADR-0029 found the transcript-from-the-graph reading inexpressible; this finds the graph itself unknowable before the turn and immutable during it. **R1** Layer A is the driver. **R2** the boundary is **permanent, not an open item** — *"the graph drives execution"* is rejected as a target, and `test_the_graph_still_does_not_drive_execution` becomes the contract with its reversal condition stated in the test. **R3** the executor has four named callers and none is the turn loop. **R4** `multi_agent/dag.py` stays the deprecated legacy entry point and its `empty`/`disconnected` divergence is an **accepted difference** — the removal is not owed, and choosing which definition of a valid DAG wins is a change to a live model-callable tool, hence its own decision. Rejects B on three independent measured costs, incl. that it would put `GraphStore`'s **second** SQLite database on the turn path, which ADR-0019 exists to prevent. **A record update — no production behaviour moves**; the only `wisp/` change is a docstring correction. Corrects **four** corpus citations, incl. that ADR-0021's *"the safety net does not exist"* was **false when written** (all three files are tracked, added 152 commits before the P5 landing) and that **ADR-0057 had no index row**). **R5 — Layer C's disposition:** ADR-0001 named `wisp/core/graph/` *disowned* and it was **not** — the live turn path imported `OscillationTrap` and `diff_hash` from it via `core/stagnation.py` (M13) and `core/runtime.py`, the *disowned-but-consumed* drift. Both symbols are **relocated to `wisp/core/oscillation.py`** (Layer A) and re-exported from `loop.py`, so `wisp/core/graph/__init__.py` — which carries the user's uncommitted WIP — needs **no edit**. **The rule is a direction: a disowned layer may import from Layer A; the live path may never import from a disowned layer.** The dead part (`ExecutionGraph`, `phases.py`) is **kept as a reference implementation**, not deleted: deleting it would edit the WIP file, and the user's own uncommitted note there says *"Keep for reference; delete if no caller appears"* — and a caller **did** appear. Guarded so a future wiring is a decision, not a silent supersession) |
 | 0061 | The external input path: the approval frame is the clients' vocabulary, and a hook's `command` is not content-validated | The external input path (W1 + G3) | ACCEPTED (two decisions on one route family, sharing one principle. **W1, driven:** `approve()` sent `approval_request`/`{approval_id, tool_call}` while **all three** shipped clients — the desktop renderer, the TUI *and* the VS Code extension — branch on `tool_approval_request` and read `call_id`/`name`/`arguments`/`reason`; the prompt had never rendered, so every request hit the 60 s bound and denied. **R1** the frame is the clients' vocabulary (client change **zero**). **R2** the correlation key is `call_id` and it **IS** the `_approvals` key — the old frame carried no `call_id` at all, so a recognising client would still have echoed an empty id; pinned by a two-concurrent-approval test that resolves the **second** by its own id. **R3** the bound **stays 60 s** — ADR-0057's 30 s is REST's, because a REST request holds an HTTP connection open; this path holds nothing open, and ADR-0036's bounded delay is the nearest *shape*, not duration. **R4** no client ⇒ **DENY**, with `NO_CLIENT_REASON` a named constant so "nobody is connected" ≠ "the human said no"; *waiting* and *silent fail-closed* rejected; `WISP_WS_AUTO_APPROVE` stays the one explicit opt-in; no new flag. **G3:** `command` is **not** content-validated and the route's docstring now says so — **the gate restricts WHO may register a hook, it does not restrict WHAT the hook runs** — because a shell command's target is not determinable from its text (G2); a runnable check, a metacharacter blocklist and an allow-list are each rejected with reasons. **Two decisions, not one**, because the brief's candidate principle (*"does not execute what it has not validated"*) is **false** for the hook path. **ADR-0059 residual 1 moves**: driven over the six pinned pairs, **6 of 6** now ask a human — its stated *reason* ("REST cannot, having no approver") is no longer true — while the *mechanism* stays a hand-written set (**closed in effect, un-composed in mechanism**); the bundle half stands, cited, because `cryptography` is absent (F88, F94). Six tests that pinned the old frame are **updated with reasoning**, one of which previously resolved only via the single-pending fallback; 16-test guard, **8/8 probes caught**; the gate chain is unchanged, so the gate-order corpus is **not** re-written. Corrects ADR-0057's *"both shipped clients"* — there are **three**) |
+| 0062 | The corpus's editorial decisions: one register, one vocabulary, one reading rule | The corpus governance layer, II (F105–F114) | ACCEPTED (decides the eight **editorial** findings the first corpus-governance mission reported and did not repair. **Every decision is about an artifact**, not the product: no flag default, no gate, no authority's scope, no `wisp/` file. **R1 `CURRENT_FINDINGS.md` is the canonical register for a finding's status** (`F106`) — the ledger stays append-only and **un-backfilled**; its §23 note is corrected to name the register and to state its own actual range (`F64`–`F74`, not `F64`–`F71`); *why not backfill* — thirty rows duplicated across two append-only files is a second producer of one fact. **R2 the id namespaces are disambiguated by prose prefix** (`F107`) — `FIND-F7` vs `ITEM-F1`, and the three meanings of `M4` annotated once; *why not rename* — a rename rewrites a historical record and breaks every citation. **R3 the ledger's six words govern, with one reason column** (`F108`) — `DECIDED` is a **reason** and moves to it, the state becoming `COMPLETE`; **`BLOCKED` is kept as a state** and its emptiness is recorded as *"no item is currently in this state"*, because a defined word with no members is a vocabulary, not a defect. **R4 the reading rule is ADR-0002's, recorded verbatim** (`F109`) — *read at the **consumption site***, not the circulated paraphrase *"read once, at the composition point"*, and the ADR **names the paraphrase's source**: ADR-0056's local *"read once, independently"* about the objective path, conflated with ADR-0002's general rule; under the paraphrase `verification_loop`'s two read sites and `turn_spans`'s two become violations of a rule the corpus does not have. **R5 `verification_gate` and `graph_mutation` are wrong names, not aliases** (`F110`) — neither string occurs anywhere in `wisp/`; the flags are `verification_loop` and `task_graph`, and this ADR adds **no alias**, because an alias for a name that was never real is the second vocabulary R3 forbids. **R6 no two pytest processes run concurrently, and a block run passes `--basetemp`** (`F112`) — two concurrent processes race on the shared base dir and produce **869 `PermissionError: EEXIST` errors** from one overlapping run, which reads as a code failure and is not; a **method** rule and a method flag, not a code change, and it **corrects the corpus's own diagnosis** (§6 attributed it to the shim; the measured cause is contention). **R7 a phase report enters the document index in the change that creates it** (`F114`) — `F104`'s class, and a record that exists and is not listed is the same defect as one listed and not existing. **R8 a derived page must have a committed generator** (`F113`, policy half) — **F75**'s class one level up; a page may still carry an **append-only** section the generator emits unchanged, provided the guard asserts it. **`F105` is NOT decided here** — it is a measurement (`PHASE_CORPUS_GOVERNANCE_II.md` §4), and the report is that the referent is **not determinable**: `PHASE_DAG_RETIREMENT.md` contains **three** finding-shaped statements, not one. `F111` is a host condition whose rule already lives in `CONTEXT.md` §11) |
