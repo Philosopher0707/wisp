@@ -346,6 +346,9 @@ until they are re-pinned. It is one self-contained follow-up: re-pin the twelve 
    three rows this deliverable touched are re-pinned to their real lines; the other 55 are not rows
    ADR-0062 authorises editing. **Together with §4's twelve, this is one follow-up**: give both
    generators' source checks a content check with a floor, and re-pin the 67 rows it fails.
+6. **§3's commit table missed one commit again** — `a73bc44`, the handoff after `a3a5c09`, was
+   never listed: F87's *"the next landing lists it"* exception was not honoured by the next landing.
+   Found by checking every commit since `83b10af` against §3 during the handoff; row added.
 
 ### The guard — `tests/reliability/test_corpus_editorial_decisions.py`
 
