@@ -22,11 +22,18 @@ class TestWebSocketTransportApproval:
 
     @pytest.mark.asyncio
     async def test_approve_sends_request_and_waits_for_response(self, transport):
-        """approve() sends an approval_request event and blocks until resolved."""
+        """approve() sends the CLIENTS' approval frame and blocks until resolved.
+
+        **Contract update, ADR-0061 R1.** This asserted `approval_request` /
+        `{approval_id, tool_call}` — the shape *no client reads*. All three shipped
+        clients branch on `tool_approval_request` and read `call_id`, `name`,
+        `arguments`, `reason`, so the old frame never rendered and every request hit
+        the 60 s bound and denied (W1). The update is the fix, not a relaxation.
+        """
         mock_ws = AsyncMock()
         transport._current_ws = mock_ws
 
-        # approve() should send approval_request and then wait
+        # approve() should send the clients' frame and then wait
         approval_task = asyncio.create_task(
             transport.approve({"name": "write_file", "arguments": {"path": "x"}})
         )
@@ -35,8 +42,10 @@ class TestWebSocketTransportApproval:
         await asyncio.sleep(0.01)
         mock_ws.send_json.assert_awaited_once()
         sent = mock_ws.send_json.await_args[0][0]
-        assert sent["type"] == "approval_request"
-        assert sent["tool_call"]["name"] == "write_file"
+        assert sent["type"] == "tool_approval_request"
+        assert sent["name"] == "write_file"
+        assert sent["arguments"] == {"path": "x"}
+        assert "call_id" in sent, "the correlation key clients echo is absent"
 
         # Resolve the approval
         transport.resolve_approval(True)
@@ -105,8 +114,12 @@ class TestWebSocketTransportApproval:
         await transport.receive_message(mock_ws, {"type": "user", "text": "hello"})
 
     @pytest.mark.asyncio
-    async def test_approval_request_event_structure(self, transport):
-        """The approval_request event must contain the tool_call dict."""
+    async def test_approval_frame_structure(self, transport):
+        """The approval frame carries the four fields the clients read (ADR-0061 R1).
+
+        Renamed from `test_approval_request_event_structure`: it asserted
+        `approval_request` / `tool_call`, the shape no client reads.
+        """
         mock_ws = AsyncMock()
         transport._current_ws = mock_ws
 
@@ -116,12 +129,16 @@ class TestWebSocketTransportApproval:
         )
         await asyncio.sleep(0.01)
 
-        # Verify the approval_request event structure
+        # Verify the frame structure the clients parse
         mock_ws.send_json.assert_awaited_once()
         sent = mock_ws.send_json.await_args[0][0]
-        assert sent["type"] == "approval_request"
-        assert sent["tool_call"]["name"] == "edit"
-        assert sent["tool_call"]["arguments"]["path"] == "a.py"
+        assert sent["type"] == "tool_approval_request"
+        assert sent["name"] == "edit"
+        assert sent["arguments"]["path"] == "a.py"
+        assert set(sent) == {"type", "call_id", "name", "arguments", "reason"}, (
+            f"the frame's key set moved: {sorted(sent)} — clients read exactly "
+            f"call_id/name/arguments/reason"
+        )
 
         # Resolve so the task can complete
         transport.resolve_approval(True)
@@ -154,12 +171,14 @@ class TestWebSocketPerKeyApprovals:
         assert not task2.done()
         sent1 = ws1.send_json.await_args[0][0]
         sent2 = ws2.send_json.await_args[0][0]
-        assert sent1["type"] == "approval_request"
-        assert sent2["type"] == "approval_request"
-        assert sent1["approval_id"] != sent2["approval_id"]
+        assert sent1["type"] == "tool_approval_request"
+        assert sent2["type"] == "tool_approval_request"
+        # ADR-0061 R2: the correlation key is `call_id` — what the clients echo as
+        # `id` and what the route resolves on. It IS the `_approvals` key.
+        assert sent1["call_id"] != sent2["call_id"]
 
-        transport.resolve_approval(True, approval_id=sent1["approval_id"])
-        transport.resolve_approval(False, approval_id=sent2["approval_id"])
+        transport.resolve_approval(True, approval_id=sent1["call_id"])
+        transport.resolve_approval(False, approval_id=sent2["call_id"])
 
         assert await asyncio.wait_for(task1, timeout=1.0) is True
         assert await asyncio.wait_for(task2, timeout=1.0) is False
@@ -203,8 +222,12 @@ class TestWebSocketPerKeyApprovals:
         assert elapsed < 5.0
 
     @pytest.mark.asyncio
-    async def test_approval_request_carries_approval_id(self, transport):
-        """approval_request gains approval_id; resolving by it completes the call."""
+    async def test_approval_frame_carries_the_correlation_key(self, transport):
+        """The frame carries `call_id`; resolving by it completes the call (ADR-0061 R2).
+
+        Renamed from `test_approval_request_carries_approval_id`: the key moved from
+        `approval_id` to `call_id`, which is what the clients echo back as `id`.
+        """
         mock_ws = AsyncMock()
         transport._current_ws = mock_ws
 
@@ -214,11 +237,15 @@ class TestWebSocketPerKeyApprovals:
         await asyncio.sleep(0.01)
         mock_ws.send_json.assert_awaited_once()
         sent = mock_ws.send_json.await_args[0][0]
-        assert sent["type"] == "approval_request"
-        assert sent["tool_call"]["name"] == "edit"
-        assert "approval_id" in sent
+        assert sent["type"] == "tool_approval_request"
+        assert sent["name"] == "edit"
+        assert "call_id" in sent
+        assert "approval_id" not in sent, (
+            "the old key returned — no client echoes `approval_id`, so the round-trip "
+            "would miss and fall back to 'single pending'"
+        )
 
-        transport.resolve_approval(True, approval_id=sent["approval_id"])
+        transport.resolve_approval(True, approval_id=sent["call_id"])
         assert await asyncio.wait_for(task, timeout=1.0) is True
 
 
@@ -272,7 +299,7 @@ class TestResolveApprovalUnknownIdFallback:
         # Cleanup: resolve both by real id so tasks do not hang.
         sent1 = ws1.send_json.await_args[0][0]
         sent2 = ws2.send_json.await_args[0][0]
-        assert transport.resolve_approval(True, approval_id=sent1["approval_id"]) is True
-        assert transport.resolve_approval(True, approval_id=sent2["approval_id"]) is True
+        assert transport.resolve_approval(True, approval_id=sent1["call_id"]) is True
+        assert transport.resolve_approval(True, approval_id=sent2["call_id"]) is True
         assert await asyncio.wait_for(task1, timeout=1.0) is True
         assert await asyncio.wait_for(task2, timeout=1.0) is True

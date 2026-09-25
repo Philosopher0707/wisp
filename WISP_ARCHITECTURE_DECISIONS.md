@@ -6369,6 +6369,217 @@ failure message says so, so the reversal cannot be discovered by accident.
 
 ---
 
+## ADR-0061 — The external input path: the approval frame is the clients' vocabulary, and a hook's `command` is not content-validated
+
+**Status:** ACCEPTED
+**Phase:** The external input path (W1 + G3)
+**Evidence:** `wisp/transport/websocket.py`; `wisp/server/routes/hooks.py`;
+`tests/reliability/test_external_input_path.py` (16 tests, **8/8 non-vacuity probes caught**, tree
+restored byte-identical); `PHASE_EXTERNAL_INPUT_PATH.md`.
+
+### Context — two residuals naming the same gap
+
+**W1** (`CONTEXT.md` §12; ADR-0057 residual 1):
+
+> *"The agent path's WebSocket approval prompt has never rendered. `approve()` sends a frame no client
+> reads, so it always timed out (60 s) and denied."*
+
+**G3** (Phase 10's R1b, unchanged through every subsequent phase):
+
+> *"`POST /api/hooks` still accepts an unvalidated `command`. The gate restricts *who* may register a
+> hook, not *what* it runs."*
+
+Both are *"external input reaches the runtime without a boundary"*, and both touch the same routes.
+
+### W1 — the frame, driven
+
+`WebSocketTransport.approve()` sent `{"type": "approval_request", "approval_id": …, "tool_call": {…}}`.
+Driven against a stub client (`.workbuddy-ai/memory/post-m13-external-input/w1_probe.py`):
+
+| | |
+|---|---|
+| the frame `approve()` sends | `approval_request` / `{approval_id, tool_call}` |
+| the frame the desktop renderer branches on | `tool_approval_request` / reads `call_id`, `name`, `arguments`, `reason` |
+| the frame the TUI branches on | `tool_approval_request` / the same four |
+| the frame the VS Code extension branches on | `tool_approval_request` / the same four |
+| a client that never answers | `approve()` → **False** at the bound |
+| no client at all | `approve()` → **False** |
+
+**All three clients mismatch.** The prompt has never rendered, and every request has hit the 60 s bound
+and denied.
+
+**One correction to the record, and it strengthens the decision.** ADR-0057 says *"both shipped
+clients"*. There are **three** — `vscode-extension/src/wispClient.ts` branches on the same frame and
+reads the same four fields. The decision (adopt the clients' vocabulary, client change zero) is
+unchanged; the count was low.
+
+**The correlation key is worse than mis-named.** The clients echo `call_id` back as `id`, and
+`server/routes/agents.py:239` resolves on `msg["id"]`. The old frame carried **no `call_id` at all**, so
+a client that somehow recognised it would still send back an empty id — the field the clients echo did
+not exist.
+
+### Decision
+
+> **R1 — the frame is the clients' vocabulary.** `tool_approval_request`, carrying `call_id`, `name`,
+> `arguments`, `reason`. Chosen because all three shipped clients already read exactly that, so the
+> client change is **zero** — ADR-0057 R1/R8's decision, applied to the path it deferred. Rejected: the
+> old `approval_request` / `{approval_id, tool_call}`, which no client reads (measured, above).
+>
+> **R2 — the correlation key is `call_id`, and it IS the `_approvals` key.** It is what the clients
+> echo as `id` and what the route resolves on, so it must equal the key `approve()` registered the
+> future under — `approval_id`, not the bare tool-call id. Anything else misses and falls back to
+> "single pending" (ADR-0057 residual 2), which crosses under concurrency. Pinned by a two-concurrent
+> -approval test that resolves the *second* by its own id and asserts the first stays pending.
+>
+> **R3 — the bound stays at 60 s, and the reason is the shape of the wait, not its length.**
+> ADR-0057 R6 bounded REST's approval at 30 s because a REST request is **holding an HTTP connection
+> open**. This path holds nothing open: it waits on a human reading a prompt over a persistent socket.
+> ADR-0036's bounded delay is the nearest *shape* — the delay is bounded and the fallback is deny,
+> never "assume yes" — not the nearest duration. A human prompt is a different kind of bound, and
+> shortening it would convert a slow human into a denial.
+>
+> **R4 — no client ⇒ DENY, with a named and distinguishable reason.** `NO_CLIENT_REASON` is a
+> module constant, so the decision is an artifact a guard pins rather than a log string. Rejected:
+> **waiting**, which holds the turn open on a condition that cannot change without a client — the "must
+> not hang" ADR-0057 R5 rejected for REST; and **failing closed silently**, which makes "nobody is
+> connected" indistinguishable from "the human said no", the one distinction an operator needs.
+> `WISP_WS_AUTO_APPROVE=true` remains the **one explicit opt-in**: default off, logged at warning
+> level, and the operator saying so — not a silent fall-through. No new flag is added (ADR-0002).
+>
+> **R5 — the `approve()` half of the round-trip is the change; the answer half is untouched.**
+> `resolve_approval`, `resolve_decision`, `disconnect`'s fail-closed sweep and `receive_message` keep
+> their behaviour. `receive_message`'s own `tool_approval` branch still resolves without an id — the
+> route intercepts first, and that branch is the old-protocol fallback ADR-0057 residual 2 names.
+
+### G3 — `command` is not validated, and that is the decision
+
+> **R6 — `POST /api/hooks` does not content-validate `command`, and the route's docstring says so.**
+>
+> **The gate restricts WHO may register a hook. It does not restrict WHAT the hook runs.**
+>
+> The reason is **G2's**, applied to the same kind of input: *a shell command's target is not
+> determinable from its text.* `$(...)`, pipes, `;`, variable expansion, aliases, `env`, an interpreter
+> argument or an absolute path all mean any check on the *string* is either bypassable or rejects
+> legitimate commands — which is exactly why `run_bash`'s verb scan is a separate, non-authoritative
+> mechanism. Rejected alternatives, each with its reason:
+>
+> | candidate | why rejected |
+> |---|---|
+> | **reject unknown executables** (a runnable check) | the target is not determinable from the text; the check would read the first token, which `env`, `$(…)`, an alias or an absolute path defeats |
+> | **reject shell metacharacters** | metacharacters *are* the feature — hooks exist to run arbitrary commands — and a syntax blocklist is both evadable and false-positive-prone |
+> | **allow-list** | not a validation but a **new policy surface**: a configured set of permitted commands with no owner, which would still have to define "the same command" (`rm  -rf` vs `rm -rf`). The controls that work are authorization, and they already exist: an API key, `require_tool_allowed`, and — with `WISP_REST_APPROVAL` on — a human |
+> | **no validation, and say so** | **CHOSEN** |
+>
+> `name` **is** validated (a path-traversal allowlist) and stays validated. The asymmetry is the
+> decision. **G3 closes by naming what the gate does not do, not by inventing a check.**
+
+### Are these one decision or two?
+
+**Two decisions, one shared principle, and the principle is not the one the brief offered.**
+
+The brief proposed *"the runtime does not execute what it has not validated"* as the possible shared
+boundary. **That principle is false for the hook path** — the runtime *does* execute a hook command it
+has not validated, and R6 decides that it must. So the two are not one boundary, and the ADR says why:
+
+* **W1** is a **broken authorization path**. A human *is* supposed to be asked, the mechanism exists,
+  and the frame prevented the question from ever being put. The fix is a wire protocol.
+* **G3** is an **absent content check**, decided to stay absent. The authorization for a hook is
+  already there and works; what does not exist, and cannot, is a check on the command's text.
+
+The principle they *do* share: **the runtime's control over external input is authorization-based, and
+it is not content-inspection-based.** W1 repairs the authorization path; G3 states that content
+inspection is not the mechanism and never was.
+
+### ADR-0059 residual 1 moves — its stated reason is no longer true
+
+Residual 1 read: *"A bundle's `approve` level is inert on REST. … The agent path honours it; **REST
+cannot, having no approver.**"*
+
+Driven over the six pinned pairs (ADR-0055 §1.3) — the three REST-only names × `{auto_edit, ask_all}`:
+
+| action | mode | `authorize()` | REST asks a human? |
+|---|---|---|---|
+| `hooks.create` | `auto_edit` / `ask_all` | ALLOW **+ approval** | **True** |
+| `mcp.add_server` | `auto_edit` / `ask_all` | ALLOW **+ approval** | **True** |
+| `plugins.install` | `auto_edit` / `ask_all` | ALLOW **+ approval** | **True** |
+
+**6 of 6.** ADR-0057's trigger set *is* the six pairs — `REST_APPROVAL_ACTIONS` is those three names
+and `REST_APPROVAL_MODES` is `{auto_edit, ask_all}` — and it does **not** over-fire in `read_only`
+(denies outright) or `full` (does not ask).
+
+So the residual's **reason** is now false: REST has an approver and consults it in exactly the six
+pairs. What does **not** move is the **mechanism** — REST reads a hand-written set, not
+`authorize().approval_required`, deliberately (ADR-0057 R4: the three names have no agent operation, so
+reading the agent's model would make REST's trigger a function of a model for actions only REST has).
+**The divergence is closed in effect, left un-composed in mechanism**, and that distinction is the
+residual's new statement. A guard asserts `approval_required` does not appear in `approval_bridge.py`,
+so composing it later is a deliberate change.
+
+The **bundle** half of residual 1 (`{"write_file": "approve"}` inert on REST) **stands** and is
+**cited, not re-measured**: it needs a verifiable bundle and `cryptography` is absent on this host
+(F88). The condition is named rather than left implicit (F94).
+
+### The four non-violations, asserted
+
+1. **`authorize()` is unchanged** — its first three parameters, from both `inspect` and the AST.
+2. **`SecurityPolicy.check()` is unchanged** — `(self, action, context)`, and no organization slot
+   (ADR-0059's structural pin).
+3. **`ToolExecutor.execute`'s chain is unchanged** — `policy_hard_deny` → `authorize` →
+   `_get_write_tools`, from the AST.
+4. **`turn_succeeded`, `VerificationFloorGuard` and `goal.PRECEDENCE` are untouched.**
+
+Each is pinned in `tests/reliability/test_external_input_path.py` and each was checked by breaking its
+property (8/8 caught).
+
+### Consequences
+
+- **The agent path's WebSocket approval prompt now renders.** That is a **live-path behaviour change**
+  and the point of the ADR: a turn that previously auto-denied at 60 s now waits for a human.
+- **Six tests that pinned the old frame are updated with reasoning** — `test_websocket.py` (5) and
+  `test_ws_control_plane.py` (1). The last one previously answered with a hard-coded `id: "x"` and
+  resolved only via the single-pending fallback; it now echoes the frame's own `call_id`, so it
+  exercises the real correlation.
+- **The gate-order corpus is NOT re-written RED-first.** The gate *chain* is unchanged (non-violation
+  3, asserted); this ADR changes a transport frame and a docstring, not a gate.
+- **No flag is added.** The existing env var (`WISP_WS_AUTO_APPROVE`) is the switch (ADR-0002).
+
+### The brief's claims, driven
+
+| claim | result |
+|---|---|
+| *"`approve()` sends a frame no client reads, so it always timed out (60 s) and denied"* | **TRUE**, driven: the frame type and all three clients' branch types mismatch; a silent client denies at the bound |
+| *"both shipped clients branch on `tool_approval_request`"* | **TRUE, and there are three** — the VS Code extension reads the same frame (the count was low, not the decision) |
+| *"the agent path's WS approval prompt has never rendered"* | **TRUE** |
+| *"`POST /api/hooks` still accepts an unvalidated `command`"* | **TRUE** — `HookCreateRequest.command` has only `min_length=1`; `name` has a traversal allowlist |
+| *"the gate restricts who may register a hook, not what it runs"* | **TRUE**, and it is now the route's docstring |
+| *"ADR-0059 residual 1: a bundle's `approve` level is inert on REST"* | **the EFFECT is closed (6/6); the MECHANISM is deliberately not composed** |
+| *"the timeout of 60 s is today's value"* | **TRUE** — `_APPROVAL_TIMEOUT = 60.0`, unchanged |
+| *"`G2`'s precedent: a shell command's target is not determinable from its text"* | **TRUE** — it is the reason R6 gives |
+
+### Residuals, named
+
+1. **The round-trip is pinned against a stub channel, not a live client.** No real desktop/TUI/VS Code
+   client runs on this host, so the *frame shape* and the *no-client behaviour* are driven and the
+   end-to-end render is not. The route-level round-trip **is** driven
+   (`test_ws_control_plane.py::test_approval_frame_resolves_mid_turn`), which is the strongest
+   available proxy.
+2. **`receive_message`'s own `tool_approval` branch still ignores `msg["id"]`** (it calls
+   `resolve_approval(approved)` with no id). The route intercepts first, so this is the old-protocol
+   fallback — ADR-0057 residual 2, unchanged here. R5 names it rather than silently fixing it.
+3. **A multi-client deployment still asks every registered channel** and takes the first response
+   (ADR-0057 residual 4), unchanged.
+4. **The bundle half of ADR-0059 residual 1 is un-measurable here** (`cryptography` absent, F88).
+
+### Reversal condition
+
+R1/R2 reverse if a client stops branching on `tool_approval_request` or stops echoing `call_id` — the
+guard fails in exactly that case, because it reads the branch out of each client's source rather than
+asserting the string once. R6 reverses if a phase finds a content check on `command` that is
+*determinable* — i.e. one that does not read the shell string. R3 reverses if the wait stops being a
+human prompt (a machine approver would need its own bound).
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -6433,3 +6644,4 @@ failure message says so, so the reversal cannot be discovered by accident.
 | 0058 | The key-trust model is the operator-supplied organization public key; absence is a configuration, invalidity is a refusal | The key-trust workflow (M4 §6's precondition; `PHASE_10_M4_GOVERNANCE_UNWIRED.md` §9 option B) | ACCEPTED (decides the workflow M4 §5 deferred, grounded in the spec rather than in a general notion of key trust: §0 *"local bundle files remain the authority"*, §3's `local-only` mode — *"no socket use"* — and §5's own *"file perms 0600 + OS keychain for private keys **suffice for M4**"*, which already fixed the storage half. **Driven, the brief's worked example is false**: `WISP_POLICY_PUBKEY` is **base64 key material**, not a path — `load_local(bundle_path, public_key_b64)` → `Ed25519PublicKey.from_public_bytes(base64.b64decode(...))` — which decides the workflow (*"export this value"*, not *"place a file here"*); and **the failure semantics are already implemented** (bad/absent signature → `ValueError`; expired → `trim_expired`, *"never an error, never silent allow"*; no cache → `FileNotFoundError`). Reads the deferred phrase *"device registration + key distribution ceremony"* as the **multi-device / control-plane** item it is listed beside, and records the reading so it cannot be mistaken for the decision. **R1** the trigger is `WISP_POLICY_BUNDLE` non-empty — refining §6's *"both are set"* in the **stricter** direction, because a half-configuration must not be inert. **R2** absence is inert and byte-for-byte today's behaviour; `WISP_POLICY_PUBKEY` alone is inert. **R3** invalidity **refuses to boot** — the loader already raises; the rule added is that the composition root propagates rather than swallows. **R4** expiry **narrows** (`trim_expired`), it does not refuse — a stale-but-honest bundle must not become an outage. **R5** the key is **shared**, not per-device. **R6** offline by construction; `WISP_POLICY_CACHE`/`load_managed` are **not** engaged. **R7** the private key is never Wisp's to hold. **R8** fail-closed here vs ADR-0036 §5's fail-open there, with the difference stated: a missing stagnation predicate is **benign**, a missing policy is an **expected control silently unapplied** — the false-assurance mode §4 names. Rejects **TOFU** (it would pin the first key on a writable path and verify the attacker's bundle against the attacker's key; stateful; first-run semantics differ from every later run), a **signed-key file with a built-in root** (moves trust to a key baked into Wisp, needs a distribution and revocation story the spec never specified, adds a second signature layer, and still requires someone to place the root), and the **registration ceremony** as **out of scope rather than wrong** — it presupposes the control plane §5 deferred in the same sentence. Names four residuals, incl. that **REST does not receive L0** because `SecurityPolicy.check()` has no organization layer and L0 lives inside `authorize()`, so loading a bundle into `request_policy` would be dead data — a new instance of the pattern this finding diagnoses. **That residual is CLOSED by ADR-0059**, which reaches L0 through the composition root's loaded policy rather than through a `SecurityPolicy` slot — so the reason given here still stands and the gap does not) |
 | 0059 | The REST gate consults the M2 authority for its denial verdict, and only for that | The REST gate's authorization composition (`PHASE_M4_WIRING.md` §4 residual 1) | ACCEPTED (closes the divergence **ADR-0058 created**: ADR-0055's **0 path divergences of 36** was measured with **no organization policy loaded**, and once a bundle is loaded a denial is enforced on the agent path and was silently unenforced on REST — **driven, 11 (route, mode) pairs diverge**, five in the **default** `auto_edit` mode. Decides **Option C in its narrow form**: `require_tool_allowed` consults `authorize()` with the **same `effective_policy` the composition root loaded** and refuses when it **denies**, reading `allowed` and never `approval_required`. The reason is measured, not argued: **the two models agree on `allowed` in all 36 (route, mode) pairs** and disagree only on `approval_required` — in **exactly six** rows, the three REST-only action names × {`auto_edit`, `ask_all`}. So composing `allowed` composes the agreement; composing approval composes the divergence. Rejects **A** (driven with **no bundle**, 16 of 36 rows move, incl. three config routes in the default mode from ALLOW to 403 — ADR-0055 §Why-not-B re-measured on the composed gate); rejects **B** (`authorize()` has no mode engine and no hooks layer, so it discards two of the four things `check()` supplies); rejects **D** as **refuted by measurement** — the brief's D table says *"L0 has no verdict on a non-agent name"*, but `authorize()` returns `DENY(controlling_layer="local file")` for a bundle that names one, so D is not a harmless divergence but an unenforced operator rule. **Conditional on a bundle**, so with `WISP_POLICY_BUNDLE` unset the gate is today's code **byte-for-byte — status and detail**, proved against HEAD's body as a differential (**40/40 identical**) and structurally (the body change is an **insertion**). REST reads `root.organization_policy` — one load site (ADR-0006), two readers; `deps.py` imports no `wisp.policy` and calls no loader. The **§4 pin is inverted**: `SecurityPolicy` still has no policy slot, and its two assertions now say *which route was not taken*. `authorize()`, `SecurityPolicy.check()` and `ToolExecutor.execute`'s chain unchanged, asserted from the AST. Names five residuals, incl. that a bundle's **`approve` level is inert on REST** and that **workspace quarantine** is a pre-existing gap) |
 | 0060 | Layer A is the driver and Layer B is a record; the boundary is permanent | The Layer B boundary (M8 + M11) | ACCEPTED (decides the one question M11 and M8 name from opposite sides: *is Layer B's executor the driver, or a record?* **Driven, Position B is not expressible** — `wisp.graph.types.Graph` is `frozen=True` so a node cannot be appended mid-run, `GraphExecutor`'s whole public surface is `run`/`resume`/`cancel`/`register_function` with **no** growth API, `run()` refuses an empty graph before doing any work, and **no `TaskGraph → Graph` lowering exists** (`compat.py` lowers `TaskDAG`, not Layer A's graph). The turn loop discovers its work as the model streams, so *"every tool call is a node transition"* needs an executor that grows a graph **while driving it**. **This is a different blocker from ADR-0029's and does not mention payload**: ADR-0029 found the transcript-from-the-graph reading inexpressible; this finds the graph itself unknowable before the turn and immutable during it. **R1** Layer A is the driver. **R2** the boundary is **permanent, not an open item** — *"the graph drives execution"* is rejected as a target, and `test_the_graph_still_does_not_drive_execution` becomes the contract with its reversal condition stated in the test. **R3** the executor has four named callers and none is the turn loop. **R4** `multi_agent/dag.py` stays the deprecated legacy entry point and its `empty`/`disconnected` divergence is an **accepted difference** — the removal is not owed, and choosing which definition of a valid DAG wins is a change to a live model-callable tool, hence its own decision. Rejects B on three independent measured costs, incl. that it would put `GraphStore`'s **second** SQLite database on the turn path, which ADR-0019 exists to prevent. **A record update — no production behaviour moves**; the only `wisp/` change is a docstring correction. Corrects **four** corpus citations, incl. that ADR-0021's *"the safety net does not exist"* was **false when written** (all three files are tracked, added 152 commits before the P5 landing) and that **ADR-0057 had no index row**) |
+| 0061 | The external input path: the approval frame is the clients' vocabulary, and a hook's `command` is not content-validated | The external input path (W1 + G3) | ACCEPTED (two decisions on one route family, sharing one principle. **W1, driven:** `approve()` sent `approval_request`/`{approval_id, tool_call}` while **all three** shipped clients — the desktop renderer, the TUI *and* the VS Code extension — branch on `tool_approval_request` and read `call_id`/`name`/`arguments`/`reason`; the prompt had never rendered, so every request hit the 60 s bound and denied. **R1** the frame is the clients' vocabulary (client change **zero**). **R2** the correlation key is `call_id` and it **IS** the `_approvals` key — the old frame carried no `call_id` at all, so a recognising client would still have echoed an empty id; pinned by a two-concurrent-approval test that resolves the **second** by its own id. **R3** the bound **stays 60 s** — ADR-0057's 30 s is REST's, because a REST request holds an HTTP connection open; this path holds nothing open, and ADR-0036's bounded delay is the nearest *shape*, not duration. **R4** no client ⇒ **DENY**, with `NO_CLIENT_REASON` a named constant so "nobody is connected" ≠ "the human said no"; *waiting* and *silent fail-closed* rejected; `WISP_WS_AUTO_APPROVE` stays the one explicit opt-in; no new flag. **G3:** `command` is **not** content-validated and the route's docstring now says so — **the gate restricts WHO may register a hook, it does not restrict WHAT the hook runs** — because a shell command's target is not determinable from its text (G2); a runnable check, a metacharacter blocklist and an allow-list are each rejected with reasons. **Two decisions, not one**, because the brief's candidate principle (*"does not execute what it has not validated"*) is **false** for the hook path. **ADR-0059 residual 1 moves**: driven over the six pinned pairs, **6 of 6** now ask a human — its stated *reason* ("REST cannot, having no approver") is no longer true — while the *mechanism* stays a hand-written set (**closed in effect, un-composed in mechanism**); the bundle half stands, cited, because `cryptography` is absent (F88, F94). Six tests that pinned the old frame are **updated with reasoning**, one of which previously resolved only via the single-pending fallback; 16-test guard, **8/8 probes caught**; the gate chain is unchanged, so the gate-order corpus is **not** re-written. Corrects ADR-0057's *"both shipped clients"* — there are **three**) |

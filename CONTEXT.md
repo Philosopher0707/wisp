@@ -201,6 +201,7 @@ quoting it; §11 says how.
 | REST authorization composition (**ADR-0059**) | `COMPLETE` — **`DECIDED + IMPLEMENTED`**; the gate consults `authorize()` for its **denial** verdict, conditional on a bundle; found **F94/F95/F96/F98/F99** | `PHASE_REST_AUTHORIZATION_COMPOSITION.md` |
 | corpus integrity III | `COMPLETE` — 2.1/2.3/2.4 **closed**, 2.2's installs **OPEN**; found **F97**, **F100** | `PHASE_CORPUS_INTEGRITY_III.md` |
 | Layer B boundary (**ADR-0060**) | `COMPLETE` — **`DECIDED`**: Position **A**, Layer A is the driver and Layer B is a record, **permanently**; Position B rejected on measurement (`Graph` frozen, no growth API, complete-graph-up-front, no lowering); found **F101** (a probe that checked the wrong paths), **F102** (ADR-0021's stated blocker was **false when written**), **F103**, **F104** (ADR-0057 had no index row) | `PHASE_LAYER_B_BOUNDARY.md` |
+| external input path (**ADR-0061**) | `COMPLETE` — **`DECIDED + IMPLEMENTED`**: the approval frame is the **clients'** vocabulary (W1 **fixed**; all **three** clients read it, not two), and a hook's `command` is **not** content-validated (G3 **closed by naming the boundary**); ADR-0059 residual 1 **closed in effect, un-composed in mechanism** (6/6 pinned pairs) | `PHASE_EXTERNAL_INPUT_PATH.md` |
 
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log — **mind the §0/§23 split**, and note it has **no G1 or governance-layer row**: `CONTEXT.md` §12 is the live open-items table, **F99**).
 **Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0059**).
@@ -1865,7 +1866,7 @@ environmental set in §7. Never quote "the suite passes" — quote the set.
 `jsonschema` absent, so they include F8's effects. The `tests/reliability/` measurement after
 provisioning (24 failures → 0) shows the magnitude of the error. Re-measure before comparing.
 
-### Canonical suites — 1471 tests (1470 pass, 1 fails)
+### Canonical suites — 1487 tests (1486 pass, 1 fails)
 
 ```bash
 env -u PYTHONPATH .venv/bin/python -m pytest \
@@ -1898,6 +1899,7 @@ env -u PYTHONPATH .venv/bin/python -m pytest \
   tests/reliability/test_gate_enablement_contract.py \
   tests/reliability/test_dag_retirement_contract.py \
   tests/reliability/test_layer_b_boundary.py \
+  tests/reliability/test_external_input_path.py \
   tests/reliability/test_f8_published_status.py \
   tests/reliability/test_criteria_source_on_turn_path.py \
   tests/reliability/test_acceptance_gate_enablement.py \
@@ -1932,8 +1934,9 @@ from prose** — run the block.
 **"1453" was itself stale by 2 before the Layer B mission touched anything.** Measured at that
 mission's baseline, the same block collected **1455** — two tests had been added to a block member
 after the count was taken, which is **F85** again (an instance, not a new finding). The Layer B
-boundary mission then added one file (+16) and re-measured: **1471**. Both headings
-(`CONTEXT.md` §11 and `AGENTS.md`) were re-measured in the same change that added the file (F85).
+boundary mission then added one file (+16) and re-measured **1471**; the external-input-path mission
+added one more (+16) and re-measured **1487**. Both headings (`CONTEXT.md` §11 and `AGENTS.md`) are
+re-measured in the same change that adds each file (F85).
 
 **And "1312" was stale within the mission that wrote it (F85).** The corpus-integrity pass measured the
 block in **Deliverable 1** and set both headings; **Deliverable 2** then added **four** tests to
@@ -1998,8 +2001,8 @@ the files to a path **outside the repo** first, then compare.
 | **G0** | ~~REST bypass of the protected-path guard~~ | ✅ **DONE** (§0b) |
 | **E** | **M4 governance layer not wired to the runtime** — `wisp/policy/` was never loaded; `ToolExecutor.policy` was `None` at **all three** construction sites (`composition.py:142`, `acp_session.py:208`, `benchmark/runner.py:82` — the third added by `8a7e9ab` and authorised by ADR-0045's F54 fix; corrected 2026-09-25, `PHASE_CORPUS_INTEGRITY_II.md` §1); `config.py` had no policy setting; `app.state.policy_pubkey` is set only by tests | ✅ **CLOSED 2026-09-25.** The key-trust decision is **ADR-0058** (`PHASE_KEY_TRUST_WORKFLOW.md`) and the wiring landed (`PHASE_M4_WIRING.md`): `config.py` reads `WISP_POLICY_BUNDLE`/`WISP_POLICY_PUBKEY`, `composition.py` loads and passes `policy=` at the single construction site, and a named-but-unverifiable bundle **refuses to boot**. **Default OFF** — unset means byte-for-byte today's behaviour. **Two things stay open and are named:** **REST now receives L0** — **ADR-0059** (`PHASE_REST_AUTHORIZATION_COMPOSITION.md`): `require_tool_allowed` consults `authorize()` with the root's loaded policy for its **denial** verdict only, closing a divergence **ADR-0058 created** (driven, 11 of 36 (route, mode) pairs; ADR-0055's 0-of-36 was measured with no policy loaded). `acp_session.py:208`/`benchmark/runner.py:82` still do not receive it (named). Pinned by `tests/test_m4_governance_wiring.py` (25 tests) + `tests/reliability/test_m4_policy_wiring.py` (10) + `tests/reliability/test_rest_authorization_composition.py` (16). |
 | **G1** | **Authorization parity** — the agent composes *both* models (`policy_hard_deny` + `authorize()` + the approval gate); REST consulted *only* `SecurityPolicy`. 6 of 36 (route, mode) pairs diverge, all the approval layer, in the **default** `auto_edit` mode. | ✅ **CLOSED.** **ADR-0055** drove the real paths: **0 path divergences of 36**; the 6 are a **model** divergence on three REST-only names the agent has no operation for (Option A). **ADR-0059** then closed the **L0 gap ADR-0058 created** — REST now consults `authorize()` for its denial verdict (driven, 11 of 36 pairs had diverged once a bundle was loaded). This row said **OPEN** until 2026-09-25 — **stale since ADR-0055**, and contradicting §0.0's own row (F98). Ratcheted by `tests/test_authorization_parity.py` + `tests/reliability/test_rest_authorization_composition.py`. |
-| R1b | `POST /api/hooks` still accepts an unvalidated `command` | **OPEN — needs a decision.** The gate restricts *who* may register a hook, not *what* it runs. |
-| **W1** | **The agent path's WebSocket approval prompt has never rendered.** `WebSocketTransport.approve()` sends `approval_request` / `{approval_id, tool_call}` while **both shipped clients branch on `tool_approval_request`** reading `call_id` / `name` / `arguments` / `reason`. So the agent path's WS prompt always timed out (60 s) and denied. **ADR-0057 residual 1**; finding **F83**. | **OPEN — needs its own ADR.** Reconciling it onto ADR-0057 R1's vocabulary would *fix* it and would change a **live** path's behaviour, so ADR-0057 names it rather than making it silently. Pinned by `test_the_frame_is_the_one_both_clients_read`, which fails if either client changes. **This row exists because a residual named in an ADR is not automatically a live item** — §12 is the handoff's open-items authority and did not carry it (F100). |
+| R1b | `POST /api/hooks` still accepts an unvalidated `command` | ✅ **CLOSED 2026-09-25 (ADR-0061 R6 / G3).** `command` is **not** content-validated, and that is the decision: a shell command's target is not determinable from its text (G2), so a runnable check, a metacharacter blocklist and an allow-list are each rejected with reasons. **The gate restricts WHO may register a hook; it does not restrict WHAT the hook runs** — now stated in the route's own docstring. `name` **is** validated (path traversal); the asymmetry is the decision. Driven: a hostile command is accepted, a traversing name is refused. |
+| **W1** | **The agent path's WebSocket approval prompt had never rendered.** `WebSocketTransport.approve()` sent `approval_request` / `{approval_id, tool_call}` while **all three** clients branch on `tool_approval_request` reading `call_id` / `name` / `arguments` / `reason` (ADR-0057 said *both*; there are three — the VS Code extension reads the same frame). So the prompt never rendered and every request timed out (60 s) and denied. **ADR-0057 residual 1**; finding **F83**. | ✅ **CLOSED 2026-09-25 (ADR-0061).** The frame is now the **clients'** vocabulary, correlated on `call_id`, which **is** the `_approvals` key — the old frame carried no `call_id` at all, so even a recognising client would have echoed an empty id. The bound **stays 60 s** (ADR-0057's 30 s is REST's, because a REST request holds an HTTP connection open; this path holds nothing open). **No client ⇒ deny with a named, distinguishable reason** (`NO_CLIENT_REASON`), so "nobody is connected" ≠ "the human said no"; `WISP_WS_AUTO_APPROVE` stays the one explicit opt-in. Six tests that pinned the old frame are updated **with reasoning**. Guard: `tests/reliability/test_external_input_path.py` (16, **8/8 probes caught**). Report: `PHASE_EXTERNAL_INPUT_PATH.md`. |
 | **R10** | ~~`useApi.ts:368` sends no `Authorization` header~~ | ✅ **FIXED** (§0f) — the functional half. **What remains is a decision:** the 32 pre-existing renderer errors (7 of them in `ErrorBoundary.test.tsx`, i.e. a test file being typechecked by the *build* config); the vacuous `typecheck` script; and whether to canonicalize the 26 re-implementations now that the ratchet records them |
 | **F1** | ~~`metadata["_budget"]` write-only~~ | ✅ **FIXED** (§0e.2) — completes `docs/audit-2026-08-24.md` item 11 |
 | **F2** | ~~`_SENSITIVE_ENV_KEYS` has no consumer~~ | ✅ **FIXED** (§0e.1) — deleted as superseded |
@@ -2101,6 +2104,7 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_M12_REPORT.md` | The failure path reaches the taxonomy (ADR-0032) |
 | `PHASE_M11_REPORT.md` | A node references its work unit; the ratchet classifies fields, not names (ADR-0033) |
 | `PHASE_LAYER_B_BOUNDARY.md` | **The Layer B boundary (ADR-0060)** — the five driver questions by measurement, the transition named, Position A decided, and findings F101–F104 |
+| `PHASE_EXTERNAL_INPUT_PATH.md` | **The external input path (ADR-0061)** — W1's frame driven, G3's boundary named, the two-decisions-or-one answer, and ADR-0059 residual 1 re-driven |
 | `PHASE_M13_REPORT.md` | The stagnation detector on the live turn path (ADR-0034) |
 
 **Guards added by the migration:**

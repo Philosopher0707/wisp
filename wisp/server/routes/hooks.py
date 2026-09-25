@@ -79,6 +79,23 @@ async def hook_logs():
 
 @router.post("/api/hooks", dependencies=[Depends(verify_api_key), Depends(RATE_LIMITER)])
 async def create_hook(req: HookCreateRequest, request: Request):
+    """Register a hook.
+
+    **Authority boundary (ADR-0061 R6 / G3).** This route restricts *who* may
+    register a hook — an API key, the policy gate (`require_tool_allowed`), and,
+    with `WISP_REST_APPROVAL` on, a human over the WebSocket channel. It does
+    **not** restrict *what* the hook runs.
+
+    **`command` is not validated, and that is the decision, not an omission.** A
+    shell command's target is not determinable from its text (G2): `$(...)`, pipes,
+    `;`, variable expansion, aliases, `env`, an interpreter argument or an absolute
+    path all mean any check on the string is either bypassable or rejects legitimate
+    commands. An allow-list would be a new policy surface — a configured set of
+    permitted commands — with no owner, and it would still have to define "the same
+    command". `name` **is** validated (a path-traversal allowlist); `command` is
+    stored as given and executed later, with no further approval. The controls that
+    do work are the ones above, and they are authorization, not content inspection.
+    """
     # Authority: a hook persists a command that is later executed as a shell
     # hook with no further approval, so creating one is an executable-config
     # mutation. It passes the same policy gate as file writes — READ_ONLY
