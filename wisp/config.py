@@ -426,6 +426,39 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "env_var": "WISP_REST_APPROVAL",
     },
+    "policy_bundle": {
+        "type": str,
+        "default": "",
+        "description": (
+            "ADR-0058: the path to a signed organization policy bundle "
+            "(`bundle.json`, with its `.sig` sibling beside it). Read together "
+            "with `policy_pubkey`, and the organization layer engages **iff this "
+            "is non-empty** (R1). Defaults empty — with it unset no `wisp.policy` "
+            "code runs and the runtime is byte-for-byte today's behaviour (R2). A "
+            "bundle that is named but cannot be read, has no signature, or fails "
+            "verification REFUSES TO BOOT (R3): an expected control that is "
+            "silently not applied is the false-assurance failure mode the M4 "
+            "finding names, so absence is a configuration and invalidity is an "
+            "error. An expired-but-verifying bundle is served TRIMMED, not "
+            "refused (R4)."
+        ),
+        "env_var": "WISP_POLICY_BUNDLE",
+    },
+    "policy_pubkey": {
+        "type": str,
+        "default": "",
+        "description": (
+            "ADR-0058: the organization's Ed25519 PUBLIC key, base64 (raw 32 "
+            "bytes) — the KEY ITSELF, not a path to it. "
+            "`wisp.policy.bundle.generate_keypair()` returns it; the private half "
+            "is never Wisp's to hold (0600 file or OS keychain, M4 spec §5). "
+            "Required by `policy_bundle`: a bundle named with no key, or a "
+            "malformed one, fails verification and refuses to boot. Inert on its "
+            "own — with `policy_bundle` empty there is no bundle for it to verify "
+            "(R2)."
+        ),
+        "env_var": "WISP_POLICY_PUBKEY",
+    },
     "acceptance_gate": {
         "type": bool,
         "default": False,
@@ -756,6 +789,13 @@ class WispConfig:
     #: WebSocket channel for a human decision. Defaults OFF: with it off the REST
     #: gate is today's code exactly.
     rest_approval: bool
+    #: ADR-0058. The organization policy bundle: a path to `bundle.json` plus its
+    #: `.sig` sibling. The organization layer engages iff this is non-empty;
+    #: defaults empty, i.e. no bundle is loaded and the runtime is today's.
+    policy_bundle: str
+    #: ADR-0058. The organization's Ed25519 public key, base64 — the key itself,
+    #: not a path. Required by `policy_bundle`; inert on its own.
+    policy_pubkey: str
 
     # ── Modes & permissions ───────────────────────────────────────
     permission_mode: PermissionMode | str
@@ -1056,6 +1096,8 @@ class WispConfig:
         object.__setattr__(self, "rest_approval",
             _parse_bool(get_setting("rest_approval", "false"), False)
         )
+        object.__setattr__(self, "policy_bundle", get_setting("policy_bundle", ""))
+        object.__setattr__(self, "policy_pubkey", get_setting("policy_pubkey", ""))
 
     def load_context_files(self) -> str:
         """Load and concatenate context files from workspace root.

@@ -1746,7 +1746,7 @@ environmental set in §7. Never quote "the suite passes" — quote the set.
 `jsonschema` absent, so they include F8's effects. The `tests/reliability/` measurement after
 provisioning (24 failures → 0) shows the magnitude of the error. Re-measure before comparing.
 
-### Canonical suites — 1390 tests (1389 pass, 1 fails)
+### Canonical suites — 1437 tests (1436 pass, 1 fails)
 
 ```bash
 env -u PYTHONPATH .venv/bin/python -m pytest \
@@ -1784,7 +1784,10 @@ env -u PYTHONPATH .venv/bin/python -m pytest \
   tests/reliability/test_objective_flag_composition.py \
   tests/reliability/test_rest_approval.py \
   tests/test_outcome_classification_authority.py \
-  tests/reliability/test_outcome_classification_delegation.py -q
+  tests/reliability/test_outcome_classification_delegation.py \
+  tests/reliability/test_key_trust_workflow.py \
+  tests/reliability/test_m4_policy_wiring.py \
+  tests/test_m4_governance_wiring.py -q
 ```
 
 **Measured 2026-09-25, after the F8 error-classification landing: 1115 tests — 1114 pass, 1 fails.** The

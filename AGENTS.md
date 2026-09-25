@@ -447,7 +447,7 @@ python3 -m pytest tests/test_contracts_*.py tests/test_auth_*.py tests/test_runs
 # Durable record + proposal boundary + verdicts + task graph
 # (migration P0-P9 + M2/M3/M4/M16/M9/M15/M14/M12/M11/M13 + POST-M13 + ADR-0035/0036/0037
 #  + the NEXT chain ADR-0045/0046/0047/0048)
-# 1390 tests — 1389 pass, 1 fails (F38: a test that encoded the pre-F8 exchange ordering).
+# 1437 tests — 1436 pass, 1 fails (F38: a test that encoded the pre-F8 exchange ordering).
 # The block below was extended with the four NEXT-mission files, the five
 # documentation-authority / criteria-authority / F8-classification / precedence /
 # structured-criteria files, the four 2026-09-25-mission files (gate-enablement,
@@ -492,7 +492,10 @@ python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_
   tests/reliability/test_objective_flag_composition.py \
   tests/reliability/test_rest_approval.py \
   tests/test_outcome_classification_authority.py \
-  tests/reliability/test_outcome_classification_delegation.py -q
+  tests/reliability/test_outcome_classification_delegation.py \
+  tests/reliability/test_key_trust_workflow.py \
+  tests/reliability/test_m4_policy_wiring.py \
+  tests/test_m4_governance_wiring.py -q
 ```
 
 ### The environment will fight you

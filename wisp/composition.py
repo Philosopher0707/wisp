@@ -33,6 +33,28 @@ from wisp.multi_agent.subagent_orchestrator import SubagentOrchestrator
 logger = logging.getLogger(__name__)
 
 
+def load_organization_policy(config: Any) -> Any:
+    """ADR-0058 R1–R3. The organization policy bundle, or `None` when unconfigured.
+
+    **The single load site** (ADR-0006). `None` when `WISP_POLICY_BUNDLE` is
+    empty: absence is a configuration, and the runtime is then byte-for-byte
+    today's behaviour — `ToolExecutor.policy` is `None` and `authorize()`'s L0
+    receives nothing (R2). A bundle that is named but cannot be read, has no
+    `.sig` sibling, or fails verification **raises**, so the process does not
+    start with an expected control missing (R3). An expired-but-verifying bundle
+    is served *trimmed* by the loader, not refused (R4).
+
+    `policy_pubkey` is the key itself, base64 — not a path (ADR-0058 §Problem).
+    """
+    bundle_path = str(getattr(config, "policy_bundle", "") or "")
+    if not bundle_path:
+        return None
+    from wisp.policy.loader import load_local
+
+    pubkey = str(getattr(config, "policy_pubkey", "") or "")
+    return load_local(bundle_path, pubkey)
+
+
 @dataclass
 class CompositionRoot:
     """Creates and wires all services."""
@@ -138,7 +160,10 @@ class CompositionRoot:
         # Create ToolRegistry (shared state with module-level TOOL_SCHEMAS/TOOL_IMPLS)
         self.tool_registry = ToolRegistry()
 
-        # Create ToolExecutor first (subagent_orchestrator wired below)
+        # Create ToolExecutor first (subagent_orchestrator wired below).
+        # ADR-0058: the organization policy layer, loaded once, here — the single
+        # construction site ADR-0006 names. `None` when unconfigured; raises when
+        # a bundle is named but unverifiable, which is R3's refusal to boot.
         self.tool_executor = ToolExecutor(
             config=self.config,
             hook_manager=self._tool_hook_manager,
@@ -148,6 +173,7 @@ class CompositionRoot:
             subagent_orchestrator=None,
             extensions=self.extensions,
             run_store=self.run_store,
+            policy=load_organization_policy(self.config),
         )
 
         # Create Compactor for LLM-powered summarization
