@@ -387,6 +387,26 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "env_var": "WISP_STAGNATION_GATE",
     },
+    "turn_criteria_source": {
+        "type": bool,
+        "default": False,
+        "description": (
+            "ADR-0053: let the TURN path's required-criteria set carry the "
+            "objective's DECLARED criteria (ADR-0050) in addition to the "
+            "verification floor guard's own criterion. Satisfies ADR-0051 R1's "
+            "precondition — measured there, the turn's verdict was a pure "
+            "projection of the floor guard (verdict == FAIL agreed with "
+            "guard.rejection() 192/192 times), so an acceptance gate keyed on it "
+            "was redundant or harmful. With this ON and a declaration at the head "
+            "of the prompt, the verdict can be FAIL for a reason the floor guard "
+            "does not enforce, and a declared failure lands GOAL_FAILED (row 3) "
+            "where a floor-only verdict landed GOAL_UNVERIFIED. Defaults OFF, and "
+            "it is deliberately NOT coupled to "
+            "`WISP_CRITERIA_STRUCTURED_DECLARATION`, which gates the "
+            "objective-level derivation: one flag per concern (ADR-0002)."
+        ),
+        "env_var": "WISP_TURN_CRITERIA_SOURCE",
+    },
     "tool_pool_size": {
         "type": int,
         "default": 8,
@@ -690,6 +710,9 @@ class WispConfig:
     #: Migration POST-M13 (ADR-0036). Enforcement only — M13 keeps observing
     #: and recording when this is OFF; only the replan intervention stops.
     stagnation_gate: bool
+    #: ADR-0053. The turn path's criteria set gains the objective's declared
+    #: criteria. Defaults OFF: with it off the verdict site is today's code.
+    turn_criteria_source: bool
 
     # ── Modes & permissions ───────────────────────────────────────
     permission_mode: PermissionMode | str
@@ -980,6 +1003,9 @@ class WispConfig:
         )
         object.__setattr__(self, "stagnation_gate",
             _parse_bool(get_setting("stagnation_gate", "false"), False)
+        )
+        object.__setattr__(self, "turn_criteria_source",
+            _parse_bool(get_setting("turn_criteria_source", "false"), False)
         )
 
     def load_context_files(self) -> str:

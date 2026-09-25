@@ -236,8 +236,11 @@ real executor reachable only from the interactive REPL.
 
 Critical path: **P0 → P1 → P2 → P4 → P5 → P6**. P8 is independent and may start at any time.
 The `M` rows are the plan's **deferred prerequisites**, worked after the phases. **M9, M11 and M13 are
-complete**; what remains is **M1** (its `jsonschema` blocker is gone — see PM-12) and **M8** (its blocker
-is *also* gone: the fanout suite is **green** after F8 provisioning — `test_13j1` 13→0, `test_13j` 5→0) —
+complete**; what remains is **M1** (**`BLOCKED`** — its `jsonschema` blocker is gone, and ADR-0051 R1's
+precondition is now satisfied by **ADR-0053**; what blocks enablement is the missing declared turn
+population) and **M8** (**`DEPRECATE`** decided — its blocker
+is *also* gone: the fanout suite is **green** after F8 provisioning — `test_13j1` 13→0, `test_13j` 5→0 —
+but the removal is blocked on a measured semantic divergence) —
 see §12 and `CONTEXT.md` §0.
 
 ---
@@ -1691,7 +1694,7 @@ future engine that batches its tool events changes the node count visibly, not s
 | Item | Now needs |
 |---|---|
 | **M13** | the progress signal reads *which* nodes completed, not how many — now expressible |
-| **M1** | still blocked on a working tool path (`jsonschema`) — unchanged |
+| **M1** | **`BLOCKED`** — the `jsonschema` blocker is long gone, and **ADR-0051 R1's precondition is now SATISFIED by ADR-0053** (the turn path's required-criteria set carries the objective's declared criteria). What blocks **enablement** is R2's measure: it needs a **declared turn population**, and none exists. `acceptance_gate` / `WISP_ACCEPTANCE_GATE` is still not added |
 | **M8** | **SURVEYED AND DECIDED 2026-09-25 — `DEPRECATE`, not remove.** The fanout suite is green (`test_13j1` 13→0, `test_13j` 5→0; 107 passed here), so the retirement was attempted and driven. It is blocked on a **measured semantic divergence**, not on work: `wisp/graph/` requires a non-empty graph with every node reachable from the entrypoint, `TaskDAG` is a general partial order — so re-pointing `orchestrate_dag` onto `validate_graph` would **reject inputs it accepts today**. `dag_to_graph` is test-only; `TaskDAG.validate()` mis-reports an unknown dependency as a cycle. Choosing which definition wins is its own decision. Guard: `tests/reliability/test_dag_retirement_contract.py`. Report: `PHASE_DAG_RETIREMENT.md` |
 
 Only M13 depended on M11, and M11's precondition is now met. **The graph driving execution** — M11's

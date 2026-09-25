@@ -44,6 +44,7 @@ Guidance for AI coding agents working in the Wisp codebase.
 | `wisp/tools/primitives.py` | Thin harness surface | `exec_sandbox` / `fs_mutate` / `git_checkpoint` (pydantic args, delegate to bash/filesystem/checkpoints); `PRIMITIVE_SCHEMAS`; core opts in via `thin_tools` config (schemas + prompt menu + dispatcher) |
 | `wisp/core/verification.py` | Completion gate | `VerificationFloorGuard`: blocks finish until exit-0 postdates last mutation or grind floor (`min_turns` + nudges) exhausts; `HARNESS_REJECTION` text; `resolved()` triggers auto-capture. **Also projects itself onto the acceptance model** via `floor_guard_criteria/evidence/verdict()` — read-only; the guard's own behaviour is unchanged |
 | `wisp/core/acceptance.py` | Acceptance verdicts (P3, stage 3a) | `Verdict` (`PASS`/`FAIL`/`INCONCLUSIVE`), `CriterionKind`, `AcceptanceCriteria`, `Evidence` (content-addressed, with `producer` + `observations`), `CompletionVerdict`, `evaluate()`, `invalidate()`, `route_for()`. **Records; does not gate** — routing is *derived* from the verdict so the graph vocabulary stays an output, not a competitor |
+| `wisp/core/turn_criteria.py` | The turn path's criteria set (**ADR-0053**) | `turn_criteria(guard, prompt, workspace, enabled=)` — `floor_guard_criteria(guard)` **unioned with** the objective's declared criteria (`convergence.explain_acceptance(..., use_declaration=True)`) and the declaration's `CommandProbe` evidence; `turn_acceptance_verdict()`; `verdict_keys_on_declared()` — **the gate's condition**: a `FAIL` whose every named criterion is non-floor. Re-implements nothing: the floor producer, the derivation, the probe and `acceptance.evaluate` are all consumed unchanged. With `enabled=False` it returns exactly `floor_only(guard)` |
 | `wisp/core/goal.py` | Goal-state arbiter (**ADR-0035**, POST-M13) | `TerminalOutcome` (3), `GoalState` (6), `PRECEDENCE` (ADR-0035's ordered table **as data**, so the contract can be compared against the code without reverse-engineering branches), `derive_goal_state()` — **pure and total** (the final `return` is reachable, so no input combination raises or falls through), `already_recorded_from()`, `goal_state_from_record()` (fails **loud** on absence: "missing" and "unreadable" are different facts). **`GOAL_MET` is reachable only through row 6**, which requires `turn_succeeded` **and** an acceptance `PASS` — so a terminal `done` alone can never become goal success, and an absent verdict yields `GOAL_UNVERIFIED` rather than an optimistic pass. Completion lives here; recovery lives in `core/recovery.py`, and **completion is evaluated first** |
 | `wisp/auth/principal.py` | Principals (P9) | `local_principal()`, `derive_subagent()` (narrows; raises on widening), and **`child_principal(parent, contract)`** — the caller-shaped wrapper that reads the contract's declared tools. `["all"]` against a **bounded** parent inherits that set; against an **unbounded** parent it is **refused** (there is no universe to subset, and both guesses are wrong). `ToolExecutor(principal=…)` authorizes as it; **the spawn site does not pass one yet** (M15) |
 | `wisp/core/context_trust.py` | Context trust boundary (P8) | `TrustTag` (SYSTEM/OPERATOR/REPOSITORY/TOOL_OUTPUT/EXTERNAL), `Influence`, `may_influence()` (**the single authority** for T3), `ContextItem` (tag + **required** `Provenance`), `assemble()` → `Context` with a **structured** `dropped` list. T1–T4 enforced structurally; untrusted content is always fenced as `<<UNTRUSTED:TAG source=…>>`. **Defaults to tagging-only**; nothing on the live path produces tagged items yet (M14) |
@@ -88,6 +89,7 @@ goes stale on the next flag while the table does not.
 | `stagnation_gate` | `WISP_STAGNATION_GATE` | **enforcement**: lets M13 withhold `done` for a bounded replan. **Defaults `false`** — observation and recording are unaffected, so it is a *separate* concern from `graph_oscillation_guard`, which disables the detector itself |
 | `strict_derivation` | `WISP_CRITERIA_STRICT_DERIVATION` | **ADR-0048 R5** — lets the acceptance-criteria derivation decline to complete an objective whose requirement it could not determine. **Defaults `false`**, i.e. today's behaviour: the derivation's reasoning is journalled and acted on by nothing. Read at the composition point (`wisp/autonomous.py`), not inside the pure function |
 | `structured_declaration` | `WISP_CRITERIA_STRUCTURED_DECLARATION` | **ADR-0050 R8** — lets an objective carry a `--- criteria ---` block that *states* its acceptance conditions. **Defaults `false`**, i.e. no declaration is parsed and every caller keeps ADR-0048's behaviour. ON, a malformed or unmeasurable declaration **raises** `CriteriaDeclarationRejected` and the run stops — it never falls back to the prose grammar. Read once, at the same composition point |
+| `turn_criteria_source` | `WISP_TURN_CRITERIA_SOURCE` | **ADR-0053 R7** — lets the **turn path's** required-criteria set carry the objective's declared criteria, unioned with `floor_guard_criteria(guard)`. **Defaults `false`**: with it off the verdict site is `floor_guard_verdict(guard)` unchanged, and the set is exactly `['floor:verification']`. ON, a declaration at the head of the prompt adds its criteria and the declaration's own probe evidence (`CommandProbe`, bounded by `spec.timeout_s`), so the verdict can be `FAIL` for a reason the floor guard does not enforce. **Deliberately independent of `structured_declaration`** — that flag gates the objective-level derivation; coupling them would put two read sites on one concern (ADR-0002). Read once, at `AgentRuntime.run_turn`'s entry |
 
 Three rules that are easy to get wrong:
 
@@ -354,6 +356,29 @@ Fix the bug in app.py.
 - **`derive_acceptance` never sees a declaration** — its signature is frozen (ADR-0009) and it calls
   `explain_acceptance(..., use_declaration=False)`.
 
+### The turn path's criteria set is the floor's criterion plus the declaration's (ADR-0053)
+
+`wisp/core/turn_criteria.py` is the **only** place the turn's criteria set is built. With
+`turn_criteria_source` off it returns exactly `floor_only(guard)` — today's behaviour, byte-for-byte.
+With it on and a declaration at the head of the prompt, the declared criteria and the declaration's own
+probe evidence join the set.
+
+**The gate's condition is `verdict_keys_on_declared(verdict)`** — a `FAIL` whose every named criterion is
+a non-floor one. That is *not* `guard.rejection()` under another name, and the difference is drivable: a
+mutation-verified turn satisfies the floor guard completely (floor-only: `PASS`/`GOAL_MET`) while a
+declared `symbol_defined` criterion fails (declared: `FAIL`/`GOAL_FAILED`). A `FAIL` the floor guard
+already enforces returns `False` from that predicate, so a gate keyed on it cannot duplicate the floor
+guard.
+
+**The failure routing is `derive_goal_state`, not the `done` gate.** The verdict is computed *after* the
+engine has emitted `done`, so the turn-level withholding gate (ADR-0036) cannot act on it; a declared
+failure lands `GOAL_FAILED` (row 3) where a floor-only verdict landed `GOAL_UNVERIFIED` or `GOAL_MET`.
+The ladder is unchanged. Making a declared failure *repairable within the turn* means moving the probe
+into the engine — a separate decision.
+
+**A malformed declaration at the head of the prompt raises out of `run_turn`** (ADR-0050 R4 — loud, never
+a fallback). A block that is not at the head is not a declaration at all, so it never reaches that path.
+
 ## Common patterns
 
 ### Adding a tool
@@ -410,10 +435,12 @@ python3 -m pytest tests/test_contracts_*.py tests/test_auth_*.py tests/test_runs
 # Durable record + proposal boundary + verdicts + task graph
 # (migration P0-P9 + M2/M3/M4/M16/M9/M15/M14/M12/M11/M13 + POST-M13 + ADR-0035/0036/0037
 #  + the NEXT chain ADR-0045/0046/0047/0048)
-# 1197 tests — 1196 pass, 1 fails (F38: a test that encoded the pre-F8 exchange ordering).
-# The block below was extended with the four NEXT-mission files and the five
+# 1289 tests — 1288 pass, 1 fails (F38: a test that encoded the pre-F8 exchange ordering).
+# The block below was extended with the four NEXT-mission files, the five
 # documentation-authority / criteria-authority / F8-classification / precedence /
-# structured-criteria files; the earlier "849 tests" figure was the pre-NEXT count.
+# structured-criteria files, and the four 2026-09-25-mission files (gate-enablement,
+# dag-retirement, F8-published-status, criteria-source); the earlier "849 tests" figure
+# was the pre-NEXT count. NEVER quote a count from prose — run the block.
 python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_incremental.py \
   tests/test_action_idempotency_key.py tests/test_proposal_boundary_records.py \
   tests/test_proposal_boundary_no_bypass.py tests/test_verdict_layer_recorded.py \
@@ -439,7 +466,11 @@ python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_
   tests/reliability/test_criteria_derivation_authority.py \
   tests/reliability/test_f8_error_classification.py \
   tests/reliability/test_precedence_canonical.py \
-  tests/reliability/test_structured_criteria.py -q
+  tests/reliability/test_structured_criteria.py \
+  tests/reliability/test_gate_enablement_contract.py \
+  tests/reliability/test_dag_retirement_contract.py \
+  tests/reliability/test_f8_published_status.py \
+  tests/reliability/test_criteria_source_on_turn_path.py -q
 ```
 
 ### The environment will fight you

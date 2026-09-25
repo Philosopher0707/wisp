@@ -1355,7 +1355,7 @@ environmental set in §7. Never quote "the suite passes" — quote the set.
 `jsonschema` absent, so they include F8's effects. The `tests/reliability/` measurement after
 provisioning (24 failures → 0) shows the magnitude of the error. Re-measure before comparing.
 
-### Canonical suites — 1115 tests (1114 pass, 1 fails)
+### Canonical suites — 1289 tests (1288 pass, 1 fails)
 
 ```bash
 env -u PYTHONPATH .venv/bin/python -m pytest \
@@ -1382,7 +1382,11 @@ env -u PYTHONPATH .venv/bin/python -m pytest \
   tests/reliability/test_multi_turn_productive_recovery.py \
   tests/reliability/test_current_authorities_pins.py \
   tests/reliability/test_criteria_derivation_authority.py \
-  tests/reliability/test_f8_error_classification.py -q
+  tests/reliability/test_f8_error_classification.py \
+  tests/reliability/test_gate_enablement_contract.py \
+  tests/reliability/test_dag_retirement_contract.py \
+  tests/reliability/test_f8_published_status.py \
+  tests/reliability/test_criteria_source_on_turn_path.py -q
 ```
 
 **Measured 2026-09-25, after the F8 error-classification landing: 1115 tests — 1114 pass, 1 fails.** The
@@ -1393,10 +1397,11 @@ Now that calls genuinely dispatch, the grouping rule produces the batch shape it
 (`call:c0+c1`). The production behaviour is *more* correct, not less — the test needs a one-line contract
 update, which requires explicit authorization.
 
-**The heading said "849 tests" until 2026-09-25, and "714 tests" before that.** Neither was current: the
-command block had never been extended with the POST-M13 files (714 → 849) or with the four NEXT-mission
-files and the three 2026-09-25 files (849 → 1115). Finding **F71**. **Do not quote a count from prose** —
-run the block.
+**The heading said "849 tests" until 2026-09-25, "714 tests" before that, and "1115 tests" until the
+2026-09-25 gate-enablement mission.** None was current for long: the command block had never been
+extended with the POST-M13 files (714 → 849), the four NEXT-mission files and the three 2026-09-25 files
+(849 → 1115), or the four guards the gate-enablement mission added (1115 → 1289). Finding **F71**. **Do
+not quote a count from prose** — run the block.
 
 ### The regression method — read this before changing anything
 
@@ -1478,7 +1483,7 @@ M9 was said to block are now complete** — M12, M14, M15, M11, M13.
 | **M14** | The context trust boundary | ✅ **COMPLETE** — ADR-0031. **Found a live T1 violation**: workspace-file content (`CLAUDE.md`) sat *before* the system prompt, unfenced. T2 fencing remains, deliberately staged. |
 | **M15** | The subagent spawn site | ✅ **COMPLETE** — ADR-0030. The P9 tripwire fired and was replaced by its inverse; `execute(principal=…)` carries the child identity per call. |
 | **M16** | The `ESCALATION` record's loss is not fully addressed | ✅ **COMPLETE** — ADR-0028. A state-bearing record is not best-effort in either direction; `reconstruct()` salvages the journal-only records on both paths (F24). |
-| **M1** | P3 stage 3b — enable the acceptance gate | **BLOCKED_ON_PRECONDITION — decided, not merely undecided (ADR-0051).** ADR-0016's 3b condition (*"a measurement period showing how many turns become `INCONCLUSIVE`"*) is **replaced** by a two-conjunct contract: (a) a **non-redundancy precondition** on the criteria set, then (b) a declared-population `GOAL_MET` measure with the false-completion rate at 0. **Measured, (a) is UNMET:** the turn path's verdict is `floor_guard_verdict(guard)` — a pure projection of `VerificationFloorGuard` (`runtime.py:1189-1190`) — and over 192 guard states `verdict == FAIL` ⟺ the guard's own blocking condition, which `rejection()` already tests at `stateless.py:911`. So a FAIL-keyed gate duplicates the floor guard, and a non-PASS-keyed gate withholds `done` on 144/192 states (96 with the guard *disabled*, 48 read-only turns). The `INCONCLUSIVE` rate is additionally **not a function of the gate** — the gate consumes the verdict and adds rounds, so enabling it cannot raise the rate. **No flag is added:** `acceptance_gate` / `WISP_ACCEPTANCE_GATE` is named and reserved, because a flag whose gate cannot fire is the written-but-unwired control this repository has already diagnosed as its dominant pathology. The next step is a **non-floor criteria source on the turn path** (ADR-0048/0050's derived criteria), which is its own ADR. Instrument: `scripts/gate_enablement_measurement.py`. Guard: `tests/reliability/test_gate_enablement_contract.py`. **ADR-0051** (amends ADR-0016). |
+| **M1** | P3 stage 3b — enable the acceptance gate | **`BLOCKED`** — and the reason is no longer the precondition. ADR-0051 replaced 3b's condition with a two-conjunct contract; **R1 (the non-redundancy precondition) is now SATISFIED by ADR-0053**: the turn path's required-criteria set carries the objective's declared criteria, so the verdict can be `FAIL` for a reason `guard.rejection()` does not enforce — driven, a mutation-verified turn is floor-only `PASS`/`GOAL_MET` and declared `FAIL`/`GOAL_FAILED`. What still blocks **enablement** is R2's measure: it needs a **declared turn population**, and none exists (the declaration flag is OFF in every production caller, and the corpus holds 13 objectives). The flag `acceptance_gate` / `WISP_ACCEPTANCE_GATE` is still **not added** — a flag whose gate cannot fire is the written-but-unwired control this repo already diagnosed. **ADR-0051** (amends ADR-0016) + **ADR-0053**. |
 | **M2** | Journal-first reconstruction | ✅ **COMPLETE** — `reconstruct()` + `reconstruction_source()`; the pre-P0 hazard and the gap hazard are both handled and pinned. **Five consumers still read the blob** (a tripwire asserts it). |
 | **M3** | Killpoint integration | ✅ **COMPLETE** — `test_kp_session_midtool_then_killed`. One window covered. |
 | **M4** | ADR-0004 revisited | ✅ **COMPLETE** — **ADR-0027**. Found a live defect (M2's journal-first could return a provider-invalid transcript). |

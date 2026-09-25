@@ -693,6 +693,16 @@ class AgentRuntime:
             goal_state_recording = bool(
                 getattr(getattr(self, "config", None), "goal_state", False)
                 and self.session_repo is not None)
+            # ADR-0053: let the turn's required-criteria set carry the objective's
+            # DECLARED criteria (ADR-0050), so the verdict stops being a projection of
+            # the floor guard — ADR-0051 R1's precondition. Defaults OFF, and it is
+            # deliberately NOT gated on `WISP_CRITERIA_STRUCTURED_DECLARATION`: that
+            # flag gates the OBJECTIVE-LEVEL derivation, and coupling them would make
+            # the turn path's behaviour depend on a flag read at another composition
+            # point (ADR-0002 — one flag per concern, read once). With this off, the
+            # verdict site below is byte-for-byte today's code.
+            turn_criteria_source_enabled = bool(
+                getattr(getattr(self, "config", None), "turn_criteria_source", False))
             # Migration POST-M13 (ADR-0036), ENFORCEMENT: let M13's predicate
             # withhold `done` for a bounded replan. Defaults OFF, and separate
             # from `graph_oscillation_guard` (which disables the detector
@@ -1182,9 +1192,27 @@ class AgentRuntime:
 
                 # P3's verdict, read from the guard the engine published
                 # (ADR-0018) — the ONE floor implementation, not a second one.
+                #
+                # ADR-0053: with `turn_criteria_source` on, the criteria set is the
+                # floor guard's criterion UNIONED with the objective's declared
+                # criteria (ADR-0050) and the declaration's own probe evidence. The
+                # parse and the probe sit OUTSIDE the guard below on purpose: a
+                # rejected declaration must propagate (ADR-0050 R4 — loud, never a
+                # fallback) rather than be swallowed as "verdict unavailable", which
+                # would silently measure the floor while the caller declared more.
                 _acceptance = None
                 _guard_for_goal = getattr(core, "_last_guard", None)
-                if _guard_for_goal is not None:
+                if _guard_for_goal is not None and turn_criteria_source_enabled:
+                    from wisp.core.turn_criteria import turn_acceptance_verdict
+
+                    _turn_verdict, _turn_criteria = turn_acceptance_verdict(
+                        _guard_for_goal, prompt, session.get("workspace", "."),
+                        enabled=True)
+                    _acceptance = _turn_verdict.verdict
+                    if _turn_criteria.declared:
+                        logger.debug("turn criteria: floor + declared %s",
+                                     _turn_criteria.declared_ids)
+                elif _guard_for_goal is not None:
                     try:
                         from wisp.core.verification import floor_guard_verdict
                         _acceptance = floor_guard_verdict(

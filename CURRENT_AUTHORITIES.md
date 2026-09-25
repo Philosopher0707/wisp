@@ -27,10 +27,10 @@ provider terminal → stream state → turn predicate → acceptance verdict
 
 | | |
 |---|---|
-| **Current owner** | `goal.terminal_outcome_from_evidence` (`wisp/core/goal.py:132`); `turn_succeeded` is a **projection** of it, computed once per turn (`wisp/core/runtime.py:952-954`) |
+| **Current owner** | `goal.terminal_outcome_from_evidence` (`wisp/core/goal.py:132`); `turn_succeeded` is a **projection** of it, computed once per turn (`wisp/core/runtime.py:964`) |
 | **Cannot decide** | goal state · recovery · verification |
 | **Current ADRs** | **ADR-0035** §Decision 2 (turn level remains terminal evidence) → **ADR-0044** R1/R2 (the *only* implementation; the flag is a projection) → **ADR-0047** R2 (no longer an arbitration input; still recorded) |
-| **Durable record fields** | `terminal_outcome`, `turn_succeeded` — the goal-state record (`wisp/core/runtime.py:1274`, `wisp/core/runtime.py:1289`); `terminal_outcome`, `turn_succeeded` — the attempt journal line `{"kind":"attempt"}` (`wisp/core/convergence.py:931-932`) |
+| **Durable record fields** | `terminal_outcome`, `turn_succeeded` — the goal-state record (`wisp/core/runtime.py:1302`, `wisp/core/runtime.py:1317`); `terminal_outcome`, `turn_succeeded` — the attempt journal line `{"kind":"attempt"}` (`wisp/core/convergence.py:931-932`) |
 
 ### 1.2 stream state
 
@@ -48,7 +48,7 @@ provider terminal → stream state → turn predicate → acceptance verdict
 | **Current owner** | `acceptance.evaluate` (`wisp/core/acceptance.py:213`) |
 | **Cannot decide** | goal state · recovery · **whether to gate** (the gate is a separate, flag-controlled consumer) |
 | **Current ADRs** | **ADR-0016** (two stages; stage 3a does not gate) · **ADR-0017** (the floor criterion is an *implication*) · **ADR-0018** (the engine publishes the guard; the runtime only reads it) · **ADR-0042** (the verdict is an **input**, not a second authority) |
-| **Durable record fields** | `verdict` in the verdict envelope (ADR-0013, `wisp/core/acceptance.py:204`) · `acceptance_verdict` in the goal-state record (`wisp/core/runtime.py:1275`) · `verdict`, `unmet`, `evidence_ids` in the attempt journal (`wisp/core/convergence.py:937-938`) |
+| **Durable record fields** | `verdict` in the verdict envelope (ADR-0013, `wisp/core/acceptance.py:204`) · `acceptance_verdict` in the goal-state record (`wisp/core/runtime.py:1303`) · `verdict`, `unmet`, `evidence_ids` in the attempt journal (`wisp/core/convergence.py:937-938`) |
 
 ### 1.4 progress verdict
 
@@ -66,7 +66,7 @@ provider terminal → stream state → turn predicate → acceptance verdict
 | **Current owner** | `goal.derive_goal_state` (`wisp/core/goal.py:146`); the contract as data is `goal.PRECEDENCE` (`wisp/core/goal.py:108-117`), 8 rows |
 | **Cannot decide** | recovery rung · **whether `done` was withheld** |
 | **Current ADRs** | **ADR-0035** (the contract; rows 0–6) → **ADR-0036** (amends ADR-0035 by reconciling its two clauses; adds the predicate to the goal record) → **ADR-0037** (completes ADR-0036) → **ADR-0042** (states the relation ADR-0035 left implicit; no behaviour change) → **ADR-0044** (removes the duplicated predicate) → **ADR-0047** R1–R5 (rows 3–6 revised) → **ADR-0049** (makes this table canonical at eight rows; resolves older numbering by content; ratifies two cells) |
-| **Durable record fields** | `SessionEvent.goal_state_event` (`wisp/core/runtime.py:1271`), 9 keys: `goal_state`, `terminal_outcome`, `acceptance_verdict`, `stagnation_verdict`, `stagnation_allows_goal_met`, `turn_succeeded`, `cancelled`, `escalated`, `failure_code` (`wisp/core/runtime.py:1273-1292`). **`stagnation_allows_goal_met` is the one replay must read** — `stagnation_verdict` ignores `trap_fired` (F35, ADR-0036 §6) |
+| **Durable record fields** | `SessionEvent.goal_state_event` (`wisp/core/runtime.py:1299`), 9 keys: `goal_state`, `terminal_outcome`, `acceptance_verdict`, `stagnation_verdict`, `stagnation_allows_goal_met`, `turn_succeeded`, `cancelled`, `escalated`, `failure_code` (`wisp/core/runtime.py:1301-1321`). **`stagnation_allows_goal_met` is the one replay must read** — `stagnation_verdict` ignores `trap_fired` (F35, ADR-0036 §6) |
 
 ### 1.6 recovery ladder state
 

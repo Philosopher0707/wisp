@@ -4878,8 +4878,11 @@ composition ADR-0050's follow-up 1 records.
 
 - **Enablement is blocked by a precondition, not by a number.** The next phase that would move this is
   one that puts a **non-floor criteria source on the turn path** — ADR-0048/0050's derived criteria —
-  and that change is what makes the gate non-redundant. Until then ADR-0016's `NOT_YET_DETERMINABLE`
-  becomes **`BLOCKED_ON_PRECONDITION`**, which is a different and more actionable state.
+  and that change is what makes the gate non-redundant. Until then the ledger state is **`BLOCKED`**,
+  using `WISP_MIGRATION_STATUS.md`'s own vocabulary (`NOT STARTED · IN PROGRESS · COMPLETE · BLOCKED ·
+  PARTIAL · SUPERSEDED`), with the precondition recorded as the *reason*. **A reason is not a state**:
+  coining a state word for one leaves two vocabularies in the ledger, and the next reader has to decide
+  which one governs.
 - **`ADR-0016` is not edited** (append-only); this ADR states the amendment.
 - **No production change.** No flag is added, nothing is enabled, and the three authorities named in R8
   are untouched.
@@ -5001,6 +5004,183 @@ ADR closes, and must not be done without superseding it.
 
 ---
 
+## ADR-0053 — The turn path's required-criteria set carries the objective's declared criteria; the gate keys on a FAIL the floor guard does not enforce
+
+**Status:** ACCEPTED
+**Phase:** The criteria source on the turn path (post-ADR-0052)
+**Satisfies ADR-0051 R1's precondition.** Supersedes nothing and amends no earlier decision: it supplies
+the change ADR-0051 §"What this ADR does not decide" named as its own ADR.
+**Evidence:** `scripts/turn_criteria_measurement.py` (committed, re-runnable — F75's lesson);
+`tests/reliability/test_criteria_source_on_turn_path.py` (25 tests, 3/3 non-vacuity probes caught);
+`PHASE_CRITERIA_SOURCE.md`.
+
+### Context
+
+ADR-0051 R1 states the enablement precondition: *the gate may be enabled only when the turn path's
+required-criteria set contains at least one required criterion not derivable from
+`VerificationFloorGuard`'s own state.* ADR-0051 then **measured** that it did not:
+
+```text
+runtime.py:1189-1190   _acceptance = floor_guard_verdict(_guard_for_goal).verdict
+verification.py:236    floor_guard_criteria()   <- the ONE producer on the turn path
+verification.py:252    check = (not guard.wrote_code) or guard.resolved()
+stateless.py:911       guard.rejection()        <- ALREADY wired at the pre-`done` gate
+```
+
+Over the 192-state guard space, `verdict == FAIL` agreed with `guard.rejection()` **192/192** times. The
+objective-derived criteria (ADR-0048's derivation, ADR-0050's declaration) reached
+`converge_on_objective` **only**, where `ConvergenceController` evaluates them itself.
+
+### Problem
+
+**The turn path has exactly one criteria producer, and it is the floor guard.** So the turn's verdict is
+a *re-expression* of the guard's state, and an acceptance gate keyed on it is redundant (FAIL-keyed:
+the identical condition `rejection()` already tests) or harmful (non-PASS-keyed: it would withhold
+`done` on every read-only turn and on every turn of a *disabled* guard — 144/192 states).
+
+The missing piece is not a *gate*: it is a **criteria source**.
+
+### Decision
+
+**The turn's required-criteria set is the floor guard's criterion UNIONED with the criteria of the
+objective's declared block, when the prompt carries one and the flag is on. The gate keys on a `FAIL`
+whose deciding criterion is not the floor's.**
+
+> **R1 — the source.** The turn's required-criteria set is
+> `floor_guard_criteria(guard) ∪ derivation.criteria`, where `derivation` is
+> `convergence.explain_acceptance(prompt, workspace, use_declaration=True)` — **the same derivation the
+> objective-level loop uses**, so the two levels cannot disagree about what a declaration means.
+>
+> **R2 — where it reaches the turn.** At `AgentRuntime.run_turn`'s verdict site, through one new module
+> (`wisp/core/turn_criteria.py`). The **parse and the probe sit outside** the `except Exception` that
+> guards "verdict unavailable" (R6).
+>
+> **R3 — the evidence.** `convergence.CommandProbe(declaration.specs).measure(workspace)` — **the ONE
+> probe**, the same object the loop uses, bounded by each spec's own `timeout_s`. Both declared kinds are
+> carried: `symbol_defined` is checked in-process; `command_succeeds` runs the command.
+>
+> **R4 — the gate's condition.** `verdict_keys_on_declared(v)` is `True` iff `v` is `FAIL` **and every
+> criterion it names is a non-floor one**. A `FAIL` the floor guard already enforces returns `False`: a
+> gate keyed on *that* is the redundancy ADR-0051 measured.
+>
+> **R5 — the routing.** Through **neither** the `done` gate nor the ladder, and that is deliberate: the
+> verdict is computed **after** the engine has emitted `done`, so the turn-level withholding gate
+> (ADR-0036) cannot act on it. The consumption point is `goal.derive_goal_state`, which already reads the
+> verdict — a declared failure lands `GOAL_FAILED` (row 3) where a floor-only verdict landed
+> `GOAL_UNVERIFIED` or `GOAL_MET`. The ladder is unchanged (it runs at the turn boundary only for
+> `¬turn_succeeded`, and a declared failure leaves `turn_succeeded` True).
+>
+> **R6 — a rejected declaration is loud.** `CriteriaDeclarationRejected` **propagates** out of `run_turn`;
+> it is never swallowed into a floor-only verdict. Measuring the floor while the caller declared more is
+> exactly the silent downgrade ADR-0050 R4 forbids. A block that is **not at the head** is not a
+> declaration at all (the parser returns `None`), so only a malformed *head* block raises.
+>
+> **R7 — the flag.** `turn_criteria_source` / `WISP_TURN_CRITERIA_SOURCE`, default **OFF**, read **once**
+> at `run_turn`'s entry beside the other per-concern flags (ADR-0002). With it off the verdict site is
+> today's code, and `turn_criteria(..., enabled=False)` returns exactly `floor_only(guard)`.
+>
+> **R8 — the two-flag composition, decided explicitly.** `WISP_TURN_CRITERIA_SOURCE` is **independent of**
+> `WISP_CRITERIA_STRUCTURED_DECLARATION`. That flag gates the *objective-level* derivation; the turn path
+> makes its own call. Coupling them would make the turn path's behaviour depend on a flag read at another
+> composition point — the "read once" rule with two sites, which is the disagreement ADR-0002 forbids.
+> This answers ADR-0050's follow-up question 1 for the turn path.
+>
+> **R9 — no new authority.** The criteria flow through `acceptance.evaluate`; the verdict through
+> `goal.derive_goal_state`; neither is re-implemented. `derive_acceptance`'s signature is frozen
+> (ADR-0009) and `criteria_for` is untouched — this ADR adds a *caller*, not a producer.
+>
+> **R10 — the three non-violations** (ADR-0051 R8, carried forward), asserted by tests:
+> `turn_succeeded` is unchanged (a projection of `terminal_outcome_from_evidence`); `VerificationFloorGuard`
+> is unchanged (its criterion, its `rejection()`, its `resolved()`); `goal.PRECEDENCE` is unchanged in
+> content and count.
+
+### The measurement — the gate has something to gate on
+
+Driven over six cases (`scripts/turn_criteria_measurement.py`; the flag OFF is today's behaviour):
+
+| case | OFF verdict | OFF goal | ON verdict | ON goal | gate? |
+|---|---|---|---|---|---|
+| plain prompt, no mutation | `inconclusive` | `goal_unverified` | `inconclusive` | `goal_unverified` | False |
+| plain prompt, verified mutation | `pass` | `goal_met` | `pass` | `goal_met` | False |
+| declared symbol **present**, no mutation | `inconclusive` | `goal_unverified` | `inconclusive` | `goal_unverified` | False |
+| **declared symbol ABSENT, no mutation** | `inconclusive` | `goal_unverified` | **`fail`** | **`goal_failed`** | **True** |
+| **declared symbol ABSENT, verified mutation** | **`pass`** | **`goal_met`** | **`fail`** | **`goal_failed`** | **True** |
+| declared symbol ABSENT, FAILED verification | `fail` | `goal_failed` | `fail` | `goal_failed` | **False** |
+
+**Two discriminating cases, and the fifth is the point of the whole ADR.** A mutation-verified turn
+satisfies the floor guard *completely* — `rejection()` returns `None`, the floor-only verdict is `PASS`,
+the floor-only goal is `GOAL_MET` — while the declared criterion fails. With the declaration the same
+turn is `FAIL` / `GOAL_FAILED`. **The two conditions are not the same condition**: the floor guard never
+sees a declared criterion.
+
+The criteria sets, measured: OFF → `['floor:verification']`; ON → `['floor:verification',
+'declared:symbol0']`. The sixth row is the control that keeps R4 honest — when the `FAIL` is the floor
+guard's own, `verdict_keys_on_declared` returns **False**.
+
+### The measure, and why the objective-level measure does not transfer unchanged
+
+ADR-0051 R2 chose the **`GOAL_MET` rate on a declared-objective population** with
+`FALSE_SUCCESS_AFTER = 0` for the objective-level loop. **At the turn level the same measure applies in
+form but not in population**, and the difference is stated rather than assumed:
+
+- The objective-level rate is measured over *attempts within a run*, where the controller chooses a rung
+  between them. The turn level has no rung: a declared failure at the turn level is **terminal for that
+  turn** (R5), so the rate is over *turns*, and its denominator is "turns whose prompt carried a
+  declaration" — a population that does not exist in the corpus yet.
+- `FALSE_SUCCESS_AFTER = 0` **does** transfer unchanged, and is the invariant that matters: no turn may
+  record `PASS`/`GOAL_MET` while a required criterion — floor or declared — has failed evidence.
+
+**Produced here:** the verdict/goal table above (six cases, deterministic, re-runnable). **Not produced:**
+a `GOAL_MET` *rate* over a declared turn population, because **no such population exists** — the
+corpus contains 13 objectives, and the declaration flag is OFF in every production caller. What would
+produce it: a population of turns whose prompts carry declarations, accumulated with the flag on. That is
+stated as a residual rather than papered over (ADR-0048's error was an under-specified reversal
+condition, and this ADR does not repeat it).
+
+### Rejected alternatives
+
+| Alternative | Why rejected |
+|---|---|
+| **A new parameter on `core.turn()`** | It widens a signature ADR-0009 pins, for a concern the engine does not act on: the verdict is computed **after** `done`, so the engine has nothing to do with the criteria. The `completion_gate` precedent passes a *predicate the engine consumes*; these criteria are consumed by the runtime. |
+| **A new field on a "turn request" object** | No such object exists. `run_turn(session, prompt, approval_handler)` carries the prompt, and the prompt **is** the objective — the declaration is already in the right place. |
+| **Resolving it inside `stateless.py`** | The engine has no workspace probe and no need for one; giving it one would put a subprocess at the pre-`done` gate and hand the engine a second completion authority. |
+| **Gating on `verdict != PASS`** | Withholds `done` on every read-only turn — 144/192 states (ADR-0051 §Problem). |
+| **Gating on any `FAIL`** | That is the floor guard's condition under another name; the sixth row of the table is the control that shows R4 excludes it. |
+| **Falling back to floor-only on a rejected declaration** | ADR-0050 R4's forbidden silent downgrade: measuring the floor while the caller declared more, while appearing to measure the declaration. |
+| **Coupling the flag to `WISP_CRITERIA_STRUCTURED_DECLARATION`** | Two read sites for one concern (R8). |
+| **Making the engine withhold `done` on a declared failure** | Would move the probe inside the engine loop (a subprocess per iteration), duplicate the ADR-0036 gate, and change what `done` means — a bigger decision than R1 needs. Named as the residual. |
+| **Consulting the prose grammar (`derive_acceptance`) on the turn path** | That is the three-regex inference with no negation awareness (ADR-0048 R7) — the failure mode ADR-0048/0050 exist to replace. The turn path consults a **declaration** or nothing. |
+
+### Consequence
+
+- **ADR-0051 R1 is satisfied.** The turn path's required-criteria set contains a required criterion the
+  floor guard does not own, whenever the flag is on and the prompt declares one. A gate keyed on R4's
+  condition now has something to gate on that `rejection()` does not already enforce.
+- **This is not enablement.** ADR-0051 R7 is untouched: `acceptance_gate` / `WISP_ACCEPTANCE_GATE` is
+  still not added to `config.py`, and ADR-0051's R2–R6 measurement contract still gates that decision.
+  Satisfying the precondition is what makes the contract *askable*.
+- **`turn_succeeded`, `VerificationFloorGuard` and `goal.PRECEDENCE` are untouched**, asserted by tests.
+- **`CURRENT_AUTHORITIES.md` is re-pinned** — `runtime.py`'s line numbers moved, and its guard caught it.
+  No *stated authority* changed: §1.1–1.6's owners are the same objects.
+
+### Residuals, named
+
+1. **No declared turn population exists**, so the `GOAL_MET` rate ADR-0051 R2 specifies cannot be produced
+   yet. The form of the measure is stated above; the population is the missing input.
+2. **A declared failure does not produce a replan.** It is recorded (`GOAL_FAILED`) rather than repaired
+   within the turn, because the verdict is computed after `done`. Making it repairable means moving the
+   probe into the engine — a separate decision with its own cost (a subprocess per iteration).
+3. **`command_succeeds` on the turn path runs the declared command after `done`**, once per declared turn,
+   bounded by `spec.timeout_s`. That cost is real and is the reason the flag defaults OFF.
+
+### Reversal condition
+
+`turn_criteria_source` off restores today's behaviour exactly, with no code change and no other flag's
+state involved. Reverting the *source* (removing the union) re-opens ADR-0051 R1's precondition and
+therefore returns the acceptance gate to `BLOCKED`; that must not be done without superseding this ADR.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -5057,3 +5237,4 @@ ADR closes, and must not be done without superseding it.
 | 0050 | The objective may carry a declared criteria block; the host validates it against the measurable surface and rejects rather than reinterprets | NEXT (structured criteria) | ACCEPTED (decides what ADR-0048 R6 deferred — the grammar, the validation surface, the rejection behaviour; extends ADR-0048 R1 by one outcome, `DECLARED`; closes MODE A and MODE B **on the declared path only**, flag-gated and defaulting OFF) |
 | 0051 | The acceptance gate's enablement contract is a non-redundancy precondition, not a rate; the `INCONCLUSIVE` rate is not a function of the gate | Gate enablement | ACCEPTED (amends ADR-0016's 3b *condition* — replaces "a measurement period showing how many turns become `INCONCLUSIVE`" with a precondition on the criteria set plus a declared-population `GOAL_MET` measure; measures that the turn path's verdict is a projection of `VerificationFloorGuard`, so the gate is redundant or harmful on today's criteria set; adds no flag, enables nothing, changes no authority) |
 | 0052 | A capability failure is published as a failure of the host, not as a denial; the denial taxonomy is unchanged | F8's published status | ACCEPTED (completes the half `PHASE_F8_ERROR_CLASSIFICATION.md` §4 left open; routes a `CAPABILITY_MISSING` validation failure through a system-failure envelope with the `kind` in `data`, so the attribution is correct where the failure is *published* as well as where it is *produced*; adds no denial status and edits no prompt, so it is not a behavioural change) |
+| 0053 | The turn path's required-criteria set carries the objective's declared criteria; the gate keys on a `FAIL` the floor guard does not enforce | The criteria source on the turn path | ACCEPTED (satisfies ADR-0051 R1's precondition by unioning the floor guard's criterion with the objective's declared criteria at `AgentRuntime.run_turn`'s verdict site, behind `WISP_TURN_CRITERIA_SOURCE` default OFF; the gate's condition is `FAIL` **and every named criterion is non-floor**, measured to differ from `rejection()` on two of six driven cases; adds no authority — the criteria flow through `acceptance.evaluate` and the verdict through `goal.derive_goal_state`, both unchanged; does not enable the acceptance gate, which remains ADR-0051's separate decision) |
