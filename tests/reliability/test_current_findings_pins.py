@@ -219,13 +219,22 @@ class TestTheVocabularyIsStatedAndUsed:
             f"the register uses status word(s) {stray} that §(a) does not define — either "
             "define it or fix the row; a second vocabulary is the defect this page catches")
 
-    def test_every_defined_word_is_used(self, page_text, rows):
+    def test_every_defined_word_is_used_or_stated_empty(self, page_text, rows):
+        """A defined word with no members is a vocabulary, not a defect — if the page SAYS so.
+
+        This asserted every word had a member until corpus governance II pinned F77 and
+        `UNRESOLVED` emptied: a guard on a **state** (F92). ADR-0062 R3.2 decided the same case
+        for the ledger's `BLOCKED`. The defect F81 names is silent drift, so the property is: an
+        unused word is stated as *"no finding is currently in this state"*.
+        """
         vocab = {"OPEN", "FIXED", "CLOSED", "SUPERSEDED", "DECIDED", "DEFECT-PIN", "UNRESOLVED"}
         used = {s.strip().strip("`") for _f, _t, s, _c, _d, _sr, _tr in rows}
-        unused = sorted(vocab - used)
-        assert not unused, (
-            f"§(a) defines {unused} and no row uses them — a vocabulary that has drifted "
-            "from its own register is the F81 class")
+        assert len(used & vocab) >= 5, f"floor: only {sorted(used & vocab)} are in use"
+        silent = sorted(w for w in vocab - used
+                        if f"**`{w}`** — no finding is currently in this state" not in page_text)
+        assert not silent, (
+            f"§(a) defines {silent}, no row uses them, and the page does not say so — a "
+            "vocabulary silently drifting from its own register is the F81 class")
 
     def test_it_maps_the_sources_own_words(self, page_text):
         assert "the source writes" in page_text, (
@@ -308,11 +317,27 @@ class TestFindingsSectionRecordsWhatCouldNotBePinned:
             "the page must carry its own findings section, or an unpinnable claim has "
             "nowhere to go and gets guessed instead")
 
-    def test_it_records_the_unpinnable_finding(self, page_text):
+    def test_every_unresolved_row_has_a_findings_entry(self, page_text, rows):
+        """A claim that cannot be pinned is a §Findings entry, not a guess.
+
+        This asserted the literal `"F77" in section` until corpus governance II pinned F77 —
+        a guard on a **state** (F92), which would have fired on the correct page. The property
+        it stood for: every `UNRESOLVED` row has an entry, and the unpinnable list is not empty
+        (the F75–F104 ledger gap stands), so the check cannot pass by finding nothing.
+        """
         section = page_text.split("## §Findings", 1)[1]
-        assert "F77" in section, (
-            "F77 is cited by CONTEXT.md:215 as found by PHASE_DAG_RETIREMENT.md, which does "
-            "not contain it; the page must record that rather than invent a statement")
+        unpinnable = section.split("### Claims that cannot be pinned", 1)
+        assert len(unpinnable) == 2, "§Findings lost its 'Claims that cannot be pinned' list"
+        # Scoped to THIS list: "Claims pinned since" also names findings, and an entry there
+        # must not satisfy an UNRESOLVED row (found by the D3 self-review, before probing).
+        listed = unpinnable[1].split("\n### ", 1)[0]
+        entries = re.findall(r"^- \*\*([^*]+)\.\*\*", listed, re.M)
+        assert entries, "floor: the unpinnable list is empty — the check would pass vacuously"
+        unresolved = [r[0] for r in rows if r[2].strip("` ") == "UNRESOLVED"]
+        missing = [f for f in unresolved if f not in entries]
+        assert not missing, (
+            f"{missing} are UNRESOLVED with no §Findings entry — an unpinnable claim must be "
+            "recorded, never silently carried")
 
     def test_it_records_the_missing_ledger_rows(self, page_text):
         section = page_text.split("## §Findings", 1)[1]

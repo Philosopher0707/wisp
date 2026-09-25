@@ -158,3 +158,97 @@ duplicate it.
 | the four register guards + entry point + `test_doc_drift.py` | **179 passed** in one process (`--basetemp`, alone — ADR-0062 R6) |
 | **non-vacuity** | **7/7**: NV1 hand-edit of §1, NV2 edit of §5, NV3 hand-edit of the range → **CAUGHT** by the guard; NV4 a finding dropped from `SECTION_5` and regenerated → **CAUGHT** (append-only); NV5 a stale pin, NV6 a chain omitting `ADR-0043`, NV7 the arbiter's row-6 branch returning `GOAL_FAILED` → **REFUSED** by the generator, **page not written**. Tree restored **byte-identical** (sha256) after each |
 | production code | **none touched** — NV7 mutated `wisp/core/goal.py` and restored it byte-identical |
+
+---
+
+## §4 — Deliverable 3: `F77`'s disposition (`F105`)
+
+**Commit:** `docs: F77 is PHASE_DAG_RETIREMENT.md §7.1's instrument defect — the reference made explicit (corpus governance II, D3)`.
+**Outcome: 1** — `F77` is §7.1's defect. The reference is made explicit; **no number is coined**.
+
+### The measurement
+
+**1. The citation.** `CONTEXT.md:255` (the brief, `F105` and ADR-0062 all say `:215` — **the line
+drifted by 40** when *"The derived registers"* was inserted above it, and the register's own F77 source
+cell carried the stale `:215`). It reads, in full, *"M8 DAG retirement | … found **F77** |
+`PHASE_DAG_RETIREMENT.md`"*. **It makes no claim about what F77 is** — so "does §7.1 describe what the
+citation claims" cannot be answered from the citation alone.
+
+**2. The report.** `PHASE_DAG_RETIREMENT.md` contains no `F`-number and **three** finding-shaped
+statements, which is why ADR-0062 recorded the referent as *"not determinable"* from the report:
+
+| candidate | where | what it is now |
+|---|---|---|
+| a bare string scan read a docstring as a caller of `dag_to_graph` | §7.1 (`:141-151`) | repaired — *"Rewritten with `ast`"* |
+| `TaskDAG.validate()` mis-reports an unknown dependency as a cycle | §3, §6 | an open item: `PHASE_DAG_RETIREMENT R1` |
+| `dag_to_graph` has no production caller | §6 | an open item: `PHASE_DAG_RETIREMENT R2` |
+
+**3. The records outside the report — found by searching every file and every commit message for
+`F77`, not by reading the citation.** Two describe its content, and both describe candidate 1:
+
+| record | committed? | when | what it says |
+|---|---|---|---|
+| `tests/reliability/test_outcome_classification_delegation.py:61` | **yes** (`6ec0f48`) | 2026-09-25 15:33 | *"a `"is_error_outcome" in src` string scan would have been satisfied by the docstring that names it (`CONTEXT.md` §10 — **F77's shape**)"* |
+| `.workbuddy-ai/memory/2026-09-25.md:1657` — the M8 mission's working notes | **no** (`.gitignore:98`) | written between the M8 landing (`1e83e34`, 13:01) and the next mission (13:20) | *"**F77 — a string scan reads docstrings as code.** M8's `dag_to_graph`-caller tripwire was a bare string scan and failed on its first full run, because the deliverable's own new docstring *names* the symbol. Rewritten with `ast`"* |
+
+The *"found **F77**"* row entered `CONTEXT.md` at `9d56aec` (14:31), **after** the notes that name it.
+**No record anywhere ties `F77` to candidate 2 or 3.**
+
+**4. Driven.** §7.1's claim, against today's tree: a string scan over `wisp/**/*.py` (excluding
+`compat.py`) reports **`wisp/multi_agent/dag.py`** as a caller of `dag_to_graph` — its docstring names
+it — while the AST check reports **none**. The defect reproduces exactly as §7.1 describes it, and the
+repair holds (`test_the_graph_lowering_has_no_production_caller`, AST-based).
+
+**The decision, by the brief's rule.** The only statements of *what F77 is* — one committed, one the
+mission's own contemporaneous record — describe §7.1's defect, and nothing describes any other
+candidate. **Outcome 1.** ADR-0062 is not contradicted: it measured the report alone and deferred the
+disposition here. **The honest boundary:** the committed identification is a test docstring's
+cross-reference; the fuller statement is in notes that `.gitignore` excludes (F75's class — so it is
+quoted in the register rather than merely cited).
+
+### The edits
+
+| artifact | edit |
+|---|---|
+| `CONTEXT.md:255` | *"found **F77**"* → *"found **F77** — §7.1: a bare string scan over `wisp/**/*.py` read the deliverable's own docstring as a caller of `dag_to_graph`, rewritten with `ast`"* |
+| `CURRENT_FINDINGS.md` `F77` row (regenerated) | `UNRESOLVED`/`record-gap` → **`FIXED`/`instrument-defect`**; source `PHASE_DAG_RETIREMENT.md:150`, quoting §7.1's repair, and naming the test that carries the number; tripwire `tests/reliability/test_dag_retirement_contract.py` |
+| class index (derived from the row) | `instrument-defect` 11 → 12; the `1–3` sub-case gains `F77`; `record-gap` keeps its definition and reads *"no finding is currently in this class"* |
+| §Findings | the F77 entry leaves *"Claims that cannot be pinned"* for a new *"Claims pinned since"* list, with the evidence — so a reader who met the old entry sees what resolved it |
+| counts (derived) | not closed **16 → 15**; `UNRESOLVED` **1 → 0**, stated as *"no finding is currently in this state"* (ADR-0062 R3.2's rule, applied to the register's vocabulary) |
+
+**No other finding's row changed** — the page diff touches row `F77` and nothing else in the register.
+**`F105` is closed** by making the reference explicit.
+
+### Two guards that pinned the old state, repaired to their property (F92)
+
+Both would have gone red on the correct page, which is the *"pins a state, not a property"* class:
+
+1. `test_it_records_the_unpinnable_finding` asserted `"F77" in §Findings`. It is now
+   `test_every_unresolved_row_has_a_findings_entry` — every `UNRESOLVED` row is listed under *"Claims
+   that cannot be pinned"*, with a floor (the list is non-empty). **The first rewrite was itself
+   vacuous for this case**: it searched all of §Findings, so the new *"Claims pinned since"* entry would
+   have satisfied a row flipped back to `UNRESOLVED`. Found in self-review; scoped to the list; NV1 below
+   is the probe that shows it now bites.
+2. `test_every_defined_word_is_used` required every status word to have a member. It is now
+   `test_every_defined_word_is_used_or_stated_empty`, with a floor of five words in use.
+
+### Verification
+
+| check | result |
+|---|---|
+| the four register guards + entry point + `test_dag_retirement_contract.py` + `test_outcome_classification_delegation.py` + `test_doc_drift.py` | **195 passed**, one process, `--basetemp`, alone |
+| **non-vacuity** | **3/4.** NV1 F77 flipped back to `UNRESOLVED` with no unpinnable entry → **CAUGHT**; NV2 the empty-word statement dropped → **CAUGHT**; NV3 F77's row hand-edited → **CAUGHT**; **NV4 F77's source moved to `PHASE_DAG_RETIREMENT.md:1` → MISSED.** Tree restored **byte-identical** after each |
+
+### NV4 missed — a defect in D1's generator, measured and recorded
+
+`derive_current_findings.py::_check_sources` checks that a source's file exists and its line is **in
+range**, not that the quoted words are **on** it — the weakness `test_current_authorities_pins.py` had
+until `17130c7` (`CONTEXT.md` §10's sixth instance), recurring in a sibling. It is how `CONTEXT.md:215`
+went stale unnoticed. **Measured over all 104 rows:** of the 101 quoted sources, **83** quote their
+cited line, **6** are within ±3 lines, and **12** are not — `F75`, `F79`, `F80`, `F82`, `F87`, `F88`,
+`F89`, `F97`, `F101`, `F102`, `F103`, `F104`. For ten of them the quoted words sit **3–54 lines** from
+the cited line (e.g. `F87` cites `:123`, the words are at `:177`); two were not located by prefix and
+may be wrapped. **Recorded, not repaired, and not numbered**: re-pinning those twelve rows would
+change rows this deliverable may not change, and adding a quote-at-line check would fail the build
+until they are re-pinned. It is one self-contained follow-up: re-pin the twelve and give
+`_check_sources` a content check with a floor, as `17130c7` did for the authorities page.

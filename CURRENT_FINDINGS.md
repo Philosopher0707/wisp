@@ -14,7 +14,7 @@
 > `CURRENT_OPEN_ITEMS.md` (what is open), `CURRENT_FLAGS.md` (every rollback flag and its
 > default). All four are derived; none may decide.
 >
-> Generated 2026-09-25 at `8854907` · **104 findings** (F1–F104) · **16 not closed** · vocabulary in §(a), classes in §(b).
+> Generated 2026-09-25 at `7d06321` · **104 findings** (F1–F104) · **15 not closed** · vocabulary in §(a), classes in §(b).
 
 ---
 
@@ -98,7 +98,7 @@
 | **F74** | A declared-path test was vacuous with respect to the promotion it claimed to test | `FIXED` | instrument-defect | — | WISP_MIGRATION_STATUS.md:1892 — “**FIXED** — the baseline's criteria id is now a parameter” | tests/reliability/test_structured_criteria.py |
 | **F75** | The previous mission's instrument was never committed, so its measurement cannot be re-run | `OPEN` | measurement-method | — | PHASE_GATE_ENABLEMENT.md:160 — “**Not repaired** (that is ADR-0050's record …)” | — |
 | **F76** | The brief's own framing assumed the `INCONCLUSIVE` rate was the question | `CLOSED` | model-vs-path | ADR-0051 | PHASE_GATE_ENABLEMENT.md:181 — “Driven, that framing does not survive contact with the code” | tests/reliability/test_gate_enablement_contract.py |
-| **F77** | Cited by `CONTEXT.md` as found by `PHASE_DAG_RETIREMENT.md` — which does not contain it | `UNRESOLVED` | record-gap | — | CONTEXT.md:215 — “found **F77**” with `PHASE_DAG_RETIREMENT.md` as the report; **that report contains no `F77`** (§7.1 records an instrument defect under no number) | — |
+| **F77** | A bare string scan over a Python tree read a docstring as a caller — M8's `dag_to_graph` tripwire | `FIXED` | instrument-defect | — | PHASE_DAG_RETIREMENT.md:150 — “Rewritten with `ast`: only an `ImportFrom` of the name, or a `Call` to it, counts.” The report does not number it; the number is `tests/reliability/test_outcome_classification_delegation.py:61`'s (“F77's shape”), resolved by `PHASE_CORPUS_GOVERNANCE_II.md` §4 | tests/reliability/test_dag_retirement_contract.py |
 | **F78** | A model is not a path — the parity ratchet compared two decision models and concluded about two paths | `CLOSED` | model-vs-path | ADR-0055 | PHASE_AUTHORIZATION_PARITY.md:201 — “**F78 — a model is not a path.**” corrected in place | tests/test_authorization_parity.py |
 | **F79** | A check that passes by finding nothing, again — none of the ratchet's seven properties compared the two paths | `FIXED` | instrument-defect | — | PHASE_AUTHORIZATION_PARITY.md:208 — “The new guard parses the AST.” | tests/test_authorization_parity.py |
 | **F80** | `tests/test_protected_path_guard.py` cannot run in this environment (`httpx` absent) | `OPEN` | — | — | PHASE_AUTHORIZATION_PARITY.md:214 — “Not repaired: installing a dependency is an environment change” | — |
@@ -170,7 +170,7 @@ only points at it.
 
 **`instrument-defect`** — `CONTEXT.md` §10 — six sub-cases; the instrument reports its own defect as a result about the subject
 
-- Members (11): `F30`, `F41`, `F54`, `F67`, `F73`, `F74`, `F79`, `F86`, `F92`, `F96`, `F101`
+- Members (12): `F30`, `F41`, `F54`, `F67`, `F73`, `F74`, `F77`, `F79`, `F86`, `F92`, `F96`, `F101`
 
 **`model-vs-path`** — `CONTEXT.md` §10 sub-case 4 — a right answer about the wrong subject
 
@@ -200,9 +200,9 @@ only points at it.
 
 - Members (10): `F2`, `F6`, `F23`, `F25`, `F29`, `F35`, `F40`, `F42`, `F43`, `F69`
 
-**`record-gap`** — a finding cited whose source does not record it (F77)
+**`record-gap`** — a finding cited whose source does not record it (F77, until `PHASE_CORPUS_GOVERNANCE_II.md` §4 pinned it)
 
-- Members (1): `F77`
+- Members (0): no finding is currently in this class
 
 ### The instrument-defect class, by sub-case
 
@@ -211,7 +211,7 @@ have an `F`-number; two are recorded as instances only. This is the index of whi
 
 | # | sub-case | stated at | instances |
 |---|---|---|---|
-| 1–3 | a broken instrument: it ran, and its result was not what its claim said | `CONTEXT.md` §10 | `F41` (a double that raised from `post()`), `F54` (a fixture that built the core another way), `F73` (an over-broad tripwire) |
+| 1–3 | a broken instrument: it ran, and its result was not what its claim said | `CONTEXT.md` §10 | `F41` (a double that raised from `post()`), `F54` (a fixture that built the core another way), `F73` (an over-broad tripwire), `F77` (a string scan that read a docstring as a caller) |
 | 4 | **the instrument's SUBJECT was the wrong thing** — a right answer about the wrong subject | `CONTEXT.md` §10, added 2026-09-25 | `F78`, `F82`, `F86` |
 | 5 | **a raise that does not discriminate** — `pytest.raises(X)` is satisfied by any `X` | `CONTEXT.md` §10, added 2026-09-25 | NV1 (`PHASE_KEY_TRUST_WORKFLOW.md:163`), and the inverse fix in `PHASE_CORPUS_INTEGRITY_III.md` §2.1 |
 | 6 | **a guard that pins a STATE rather than a PROPERTY** — it fails for the wrong reason | `CONTEXT.md` §10, added 2026-09-25 | `F92` (twice), `F96`, `F101` |
@@ -227,15 +227,17 @@ below. A count is canonical only if it is measured after the LAST change to any 
 | status | count |
 |---|---|
 | `OPEN` | 15 |
-| `FIXED` | 49 |
+| `FIXED` | 50 |
 | `CLOSED` | 34 |
 | `SUPERSEDED` | 1 |
 | `DECIDED` | 3 |
 | `DEFECT-PIN` | 1 |
-| `UNRESOLVED` | 1 |
+| `UNRESOLVED` | 0 |
 | **total** | **104** |
 
-**Not closed** — `OPEN` + `UNRESOLVED` — **16** of 104. **6** of them are the **host**, not the architecture: `F11`, `F17`, `F36`, `F75`, `F80`, `F88`.
+**`UNRESOLVED`** — no finding is currently in this state (ADR-0062 R3.2's rule).
+
+**Not closed** — `OPEN` + `UNRESOLVED` — **15** of 104. **6** of them are the **host**, not the architecture: `F11`, `F17`, `F36`, `F75`, `F80`, `F88`.
 Each is a declared dependency that cannot be installed here (`F11`, `F80`, `F88`), a resource
 limit (`F36`), a flaky test (`F17`), or an instrument that cannot be committed (`F75`). The
 remaining `OPEN` findings are architectural and are the ones a decision would move.
@@ -257,13 +259,16 @@ the *artifacts*, not a new finding — no `F`-number is coined here.
 
 ### Claims that cannot be pinned
 
-- **F77.** **The source does not exist.** `CONTEXT.md:215` names `PHASE_DAG_RETIREMENT.md` as the report that found F77. That report contains no `F77` and no findings section; §7.1 records an instrument defect (a bare string scan over `wisp/**/*.py` counting a docstring as a caller) under no number. F77 is therefore cited and undefined. **Not resolved here** — assigning it a statement would be coining a finding, which this page may not do.
 - **F75–F104.** **No ledger row.** `WISP_MIGRATION_STATUS.md` §23's note says the log runs F1–F44 with “**F64–F71 resume here**”; measured, its table actually runs F1–F44 **and F64–F74**, §0 carries F45–F63, and **F75–F104 have no ledger row at all** — they exist only in `CONTEXT.md` §0's phase table and in the phase reports. A reader told the ledger is the findings log will not find 30 of the 104.
 - **F64–F71.** **Two homes.** These eight exist twice: at `WISP_MIGRATION_STATUS.md:112-119` (the criteria-authority §0 section, statuses “RECORDED, NOT DECIDED”) and at `:1882-1889` (§23, statuses “DECIDED — ADR-0049”). The §0 copies are stale. The ledger itself flags this at `:64-68` as *“the navigability defect this chain was about and should not be extended”* — and then extended it.
 
+### Claims pinned since
+
+- **F77.** **Pinned by measurement** (`PHASE_CORPUS_GOVERNANCE_II.md` §4, closing **F105**). `CONTEXT.md`'s phase table cited F77 as found by `PHASE_DAG_RETIREMENT.md`, which never numbers it. Its content is §7.1's instrument defect: a committed test names that defect *“F77's shape”* (`tests/reliability/test_outcome_classification_delegation.py:61`), and the mission's contemporaneous working notes state *“F77 — a string scan reads docstrings as code”*. The report's two other finding-shaped statements are open items, not F77 (`CURRENT_OPEN_ITEMS.md`'s `PHASE_DAG_RETIREMENT` R1/R2). No number was coined.
+
 ### What this page did not do
 
-- **No new finding was created.** Three defects in the artifacts are recorded above; none is
+- **No new finding was created.** The defects in the artifacts recorded above are listed, not
   numbered, because numbering a finding is a decision about the corpus's log and this page
   introduces no decision.
 - **No conflict was resolved.** `F8`, `F19`, `F37`, `F39` and `F89` each carry two recorded

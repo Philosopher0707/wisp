@@ -252,7 +252,7 @@ quoting it; §11 says how.
 | **NEXT** — precedence correction (**ADR-0049**) | `COMPLETE` — **`RECORD UPDATE`**; F-1/F-2 from the authorities page **DECIDED**; found the brief's **inverted numbering claim** | `PHASE_PRECEDENCE_CORRECTION.md` |
 | **NEXT** — structured criteria (**ADR-0050**) | `COMPLETE` — **`RATIFIED + IMPLEMENTED`**; found **F72** (the error rate is a function of the workspace, not the objective) and **F73** (an over-broad tripwire) | `PHASE_STRUCTURED_CRITERIA.md` |
 | gate enablement (**ADR-0051**) | `COMPLETE` — **`DECIDED`**; the gate has nothing to gate on; found **F75** (an uncommittable instrument), **F76** | `PHASE_GATE_ENABLEMENT.md` |
-| M8 DAG retirement | `COMPLETE` — **`DEPRECATE` decided**, blocked on a measured semantic divergence; found **F77** | `PHASE_DAG_RETIREMENT.md` |
+| M8 DAG retirement | `COMPLETE` — **`DEPRECATE` decided**, blocked on a measured semantic divergence; found **F77** — §7.1: a bare string scan over `wisp/**/*.py` read the deliverable's own docstring as a caller of `dag_to_graph`, rewritten with `ast` | `PHASE_DAG_RETIREMENT.md` |
 | F8 published status (**ADR-0052**) | `COMPLETE` — a host failure is not a denial | `PHASE_F8_PUBLISHED_STATUS.md` |
 | criteria source on the turn path (**ADR-0053**) | `COMPLETE` — ADR-0051 R1 satisfied; found the pin guard's blank-line weakness (the 6th instrument defect) | `PHASE_CRITERIA_SOURCE.md` |
 | acceptance gate enablement (**ADR-0054**) | `PARTIAL` — the mechanism is built and driven; the population is short by one capable model | `PHASE_GATE_ENABLEMENT_DECISION.md` |

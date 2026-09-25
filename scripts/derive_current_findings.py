@@ -45,7 +45,7 @@ CLASSES: dict[str, str] = {
     "duplicated-authority":
         "two producers of one structure (F6/F23/F25/F42)",
     "record-gap":
-        "a finding cited whose source does not record it (F77)",
+        "a finding cited whose source does not record it (F77, until `PHASE_CORPUS_GOVERNANCE_II.md` §4 pinned it)",
 }
 
 #: `(id, title, status, class, decided_by, source, tripwire)`.
@@ -213,8 +213,9 @@ ROWS: list[tuple[str, str, str, str, str, str, str]] = [
      "OPEN", "measurement-method", "—", "PHASE_GATE_ENABLEMENT.md:160 — “**Not repaired** (that is ADR-0050's record …)”", "—"),
     ("F76", "The brief's own framing assumed the `INCONCLUSIVE` rate was the question",
      "CLOSED", "model-vs-path", "ADR-0051", "PHASE_GATE_ENABLEMENT.md:181 — “Driven, that framing does not survive contact with the code”", "tests/reliability/test_gate_enablement_contract.py"),
-    ("F77", "Cited by `CONTEXT.md` as found by `PHASE_DAG_RETIREMENT.md` — which does not contain it",
-     "UNRESOLVED", "record-gap", "—", "CONTEXT.md:215 — “found **F77**” with `PHASE_DAG_RETIREMENT.md` as the report; **that report contains no `F77`** (§7.1 records an instrument defect under no number)", "—"),
+    ("F77", "A bare string scan over a Python tree read a docstring as a caller — M8's `dag_to_graph` tripwire",
+     "FIXED", "instrument-defect", "—", "PHASE_DAG_RETIREMENT.md:150 — “Rewritten with `ast`: only an `ImportFrom` of the name, or a `Call` to it, counts.” The report does not number it; the number is `tests/reliability/test_outcome_classification_delegation.py:61`'s (“F77's shape”), resolved by `PHASE_CORPUS_GOVERNANCE_II.md` §4",
+     "tests/reliability/test_dag_retirement_contract.py"),
     ("F78", "A model is not a path — the parity ratchet compared two decision models and concluded about two paths",
      "CLOSED", "model-vs-path", "ADR-0055", "PHASE_AUTHORIZATION_PARITY.md:201 — “**F78 — a model is not a path.**” corrected in place", "tests/test_authorization_parity.py"),
     ("F79", "A check that passes by finding nothing, again — none of the ratchet's seven properties compared the two paths",
@@ -289,14 +290,20 @@ CONFLICTS: list[tuple[str, str]] = [
             "commits. Recorded as `SUPERSEDED` here; the ledger row is unamended."),
 ]
 
+#: Claims this page once could not pin, and the measurement that pinned each. Kept, so a reader
+#: who met the old entry can see what resolved it.
+RESOLVED: list[tuple[str, str]] = [
+    ("F77", "**Pinned by measurement** (`PHASE_CORPUS_GOVERNANCE_II.md` §4, closing **F105**). "
+            "`CONTEXT.md`'s phase table cited F77 as found by `PHASE_DAG_RETIREMENT.md`, which never "
+            "numbers it. Its content is §7.1's instrument defect: a committed test names that defect "
+            "*“F77's shape”* (`tests/reliability/test_outcome_classification_delegation.py:61`), and "
+            "the mission's contemporaneous working notes state *“F77 — a string scan reads docstrings "
+            "as code”*. The report's two other finding-shaped statements are open items, not F77 "
+            "(`CURRENT_OPEN_ITEMS.md`'s `PHASE_DAG_RETIREMENT` R1/R2). No number was coined."),
+]
+
 #: Claims in the artifacts that cannot be pinned. A finding, never a guess.
 UNPINNABLE: list[tuple[str, str]] = [
-    ("F77", "**The source does not exist.** `CONTEXT.md:215` names `PHASE_DAG_RETIREMENT.md` as the "
-            "report that found F77. That report contains no `F77` and no findings section; §7.1 "
-            "records an instrument defect (a bare string scan over `wisp/**/*.py` counting a "
-            "docstring as a caller) under no number. F77 is therefore cited and undefined. **Not "
-            "resolved here** — assigning it a statement would be coining a finding, which this page "
-            "may not do."),
     ("F75–F104", "**No ledger row.** `WISP_MIGRATION_STATUS.md` §23's note says the log runs F1–F44 "
                  "with “**F64–F71 resume here**”; measured, its table actually runs F1–F44 **and "
                  "F64–F74**, §0 carries F45–F63, and **F75–F104 have no ledger row at all** — they "
@@ -472,7 +479,8 @@ def render() -> str:
         members = [fid for fid, _t, _s, c, _d, _sr, _tr in ROWS if c == cls]
         A(f"**`{cls}`** — {where}")
         A("")
-        A(f"- Members ({len(members)}): " + ", ".join(f"`{m}`" for m in members))
+        A(f"- Members ({len(members)}): " + (", ".join(f"`{m}`" for m in members)
+                                              or "no finding is currently in this class"))
         A("")
     A("### The instrument-defect class, by sub-case")
     A("")
@@ -483,7 +491,7 @@ def render() -> str:
     A("|---|---|---|---|")
     A("| 1–3 | a broken instrument: it ran, and its result was not what its claim said | `CONTEXT.md` §10 | "
       "`F41` (a double that raised from `post()`), `F54` (a fixture that built the core another way), "
-      "`F73` (an over-broad tripwire) |")
+      "`F73` (an over-broad tripwire), `F77` (a string scan that read a docstring as a caller) |")
     A("| 4 | **the instrument's SUBJECT was the wrong thing** — a right answer about the wrong subject | "
       "`CONTEXT.md` §10, added 2026-09-25 | `F78`, `F82`, `F86` |")
     A("| 5 | **a raise that does not discriminate** — `pytest.raises(X)` is satisfied by any `X` | "
@@ -506,6 +514,11 @@ def render() -> str:
         A(f"| `{word}` | {counts[word]} |")
     A(f"| **total** | **{total}** |")
     A("")
+    # ADR-0062 R3.2: a defined word with no members stays defined, and its emptiness is stated.
+    for word in VOCABULARY:
+        if counts[word] == 0:
+            A(f"**`{word}`** — no finding is currently in this state (ADR-0062 R3.2's rule).")
+            A("")
     A(f"**Not closed** — `OPEN` + `UNRESOLVED` — **{openish}** of {total}. "
       f"**{len(ENVIRONMENTAL)}** of them are the **host**, not the architecture: "
       + ", ".join(f"`{e}`" for e in ENVIRONMENTAL) + ".")
@@ -530,9 +543,14 @@ def render() -> str:
     for fid, text in UNPINNABLE:
         A(f"- **{fid}.** {text}")
     A("")
+    A("### Claims pinned since")
+    A("")
+    for fid, text in RESOLVED:
+        A(f"- **{fid}.** {text}")
+    A("")
     A("### What this page did not do")
     A("")
-    A("- **No new finding was created.** Three defects in the artifacts are recorded above; none is")
+    A("- **No new finding was created.** The defects in the artifacts recorded above are listed, not")
     A("  numbered, because numbering a finding is a decision about the corpus's log and this page")
     A("  introduces no decision.")
     A("- **No conflict was resolved.** `F8`, `F19`, `F37`, `F39` and `F89` each carry two recorded")
