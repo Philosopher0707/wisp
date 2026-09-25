@@ -4857,7 +4857,8 @@ Enabling the gate (R1 is unmet, so there is nothing to enable); the *shape* of t
 would satisfy R1 (that is the change that makes the gate meaningful, and it is its own ADR); enabling
 `stagnation_gate` (ADR-0037 forbids it without a superseding ADR, and it is a separate concern);
 `recovery_ladder` (ADR-0026/ADR-0035); the F38 test; `productive_continuations` tuning; the two-flag
-composition ADR-0050's follow-up 1 records.
+composition ADR-0050's follow-up 1 records (**decided since — ADR-0056**, which answers it for the
+objective path as ADR-0053 R8 answered it for the turn path).
 
 ### Rejected alternatives
 
@@ -5520,6 +5521,150 @@ this ADR's R2 classification must be re-examined: `authorize()` would then be de
 and the question *"should REST approve what the agent approves?"* becomes answerable. That is the
 condition under which Option B is re-opened, and it is stated here so it is not re-derived.
 
+## ADR-0056 — The two criteria flags are independent on the objective path; their interaction is derivation *order*, not flag coupling
+
+**Status:** ACCEPTED
+**Phase:** Objective-path flag composition (ADR-0050 follow-up 1 — the last open follow-up)
+**Decides a question that has been open since ADR-0050. Authorises no production change: the measured
+behaviour already *is* the decision, and this ADR says so rather than leaving it implicit.**
+**Evidence:** `.workbuddy-ai/memory/post-m13-gate-enablement/flag_composition_probe.py` + its recorded
+output (the 2×2 matrix, driven); `tests/reliability/test_objective_flag_composition.py`;
+`PHASE_OBJECTIVE_FLAG_COMPOSITION.md`.
+
+### Context
+
+ADR-0050's follow-up 1 asked:
+
+> *"Should the derivation require a declaration when the objective names a verification command but
+> states no requirement? That is `UNDETERMINED` → refuse, which is ADR-0048's strict mode. **The two
+> flags are independent today; whether they should compose is not decided here.**"*
+
+ADR-0053 R8 had already decided the same question for the **turn** path — **independent** — for a
+specific reason:
+
+> *"Coupling them would make the turn path's behaviour depend on a flag read at a different composition
+> point — two read sites for one concern."*
+
+### Problem
+
+**ADR-0053 R8's *reason* does not transfer verbatim.** The objective path reads **both** flags at the
+**same** composition point:
+
+```
+wisp/autonomous.py:307   strict          = _strict_derivation_enabled()
+wisp/autonomous.py:308   use_declaration = _structured_declaration_enabled()
+wisp/autonomous.py:318   explain_acceptance(objective_text, workspace, strict=strict,
+                                            use_declaration=use_declaration)
+```
+
+One read site, two parameters. So "two read sites for one concern" is not the argument here. The
+question is whether the *decision* transfers when its reason does not.
+
+### Measurement — the 2×2 matrix, driven
+
+`explain_acceptance` on this repository's own MODE A objective (ADR-0048's defect-pin), on a red
+baseline, over both flags:
+
+| objective | `strict` | `use_declaration` | reason(s) | `undetermined` | criteria |
+|---|---|---|---|---|---|
+| no declaration | F | F | `undetermined` | `[]` | 3 |
+| no declaration | F | **T** | `undetermined` | `[]` | 3 |
+| no declaration | **T** | F | `undetermined` | **`['verify:cmd0']`** | 4 |
+| no declaration | **T** | **T** | `undetermined` | **`['verify:cmd0']`** | 4 |
+| declared | F | F | `undetermined` | `[]` | 3 |
+| declared | F | **T** | **`declared`** | `[]` | 1 |
+| declared | **T** | F | `undetermined` | `['verify:cmd0']` | 4 |
+| declared | **T** | **T** | **`declared`** | `[]` | 1 |
+
+Four facts follow, each read off the table rather than inferred:
+
+1. **`strict` alone changes behaviour** (row 3 vs row 1): it adds
+   `verify:cmd0:requirement_declared`, a required criterion nothing can evidence.
+2. **`use_declaration` alone changes behaviour** (row 6): the criteria collapse to the single declared
+   one (`declared:symbol0`) and the reason is `DECLARED`.
+3. **A declaration pre-empts `strict`** (row 8 == row 6): `undetermined` is empty either way. This is
+   `explain_acceptance`'s early return (`convergence.py:1029-1041`) — a declaration is **authoritative**,
+   so the prose grammar is not consulted and the `UNDETERMINED` machinery never runs. `strict` is
+   *recorded* on the derivation (`derivation.strict is True`) and **inert**.
+4. **`use_declaration=True` without a block is a no-op** (row 4 == row 3): `parse_criteria_declaration`
+   returns `None`, the early return does not fire, and the prose grammar runs exactly as with the flag
+   off.
+
+### Decision
+
+> **R1 — Independent.** `WISP_CRITERIA_STRICT_DERIVATION` gates the `strict=` parameter of
+> `explain_acceptance`; `WISP_CRITERIA_STRUCTURED_DECLARATION` gates its `use_declaration=` parameter.
+> Each is read **once**, at the same composition point (`autonomous.py:307-308`). Neither implies the
+> other; a caller may set both, one, or none.
+>
+> **R2 — The interaction that exists is *derivation order*, and it is a property of
+> `explain_acceptance`, not of the flags.** When a valid declaration is present the derivation returns
+> early: the objective has *stated* its criteria, so there is nothing to infer and nothing for strict
+> mode to withhold. `strict` remains a recorded fact about the call and is **inert** (measurement 3).
+> This is stated as the normative reading so a future reader does not discover it as a surprise.
+>
+> **R3 — "Dependent" is rejected, on measurement.** The reading *"`strict_derivation` is only meaningful
+> when `structured_declaration` is on, because `UNDETERMINED` presupposes a declaration was possible"*
+> is **false as written**: measurement 1 shows `strict` alone withholds on the prose path, changing the
+> criteria set from 3 to 4. Making `strict` conditional on the declaration flag would silently disable
+> ADR-0048's fix — which is the fix for a *measured false `GOAL_MET`* — for every caller that does not
+> also enable declarations.
+>
+> **R4 — "Composed" is rejected, and is not implemented.** The reading *"a declaration is required when
+> the objective names a command but states no requirement"* is a **new policy** ("objectives must
+> declare") that no measurement supports. It would make `structured_declaration` mandatory whenever
+> `strict` is on, and it would turn a *silent-defect* fix into a **hard refusal** for every objective
+> that does not carry a block — which is every objective written before ADR-0050. It is also not what
+> the code does: measurement 4 shows `use_declaration=True` with no block is a no-op, not a refusal.
+> ADR-0050's follow-up is therefore answered *"no"*, and the answer is measured rather than asserted.
+>
+> **R5 — `explain_acceptance`'s parameters are not widened** (ADR-0009). Composition is a **policy**
+> expressed at the composition point, not a parameter. A third parameter naming the composition — the
+> `compose_flags=…` shape — would put a flag-reading concern inside a pure function, which is what
+> ADR-0048 R5 and ADR-0050 R8 exist to prevent.
+>
+> **R6 — `derive_acceptance` is unaffected.** Its signature is frozen (ADR-0009) and it calls
+> `explain_acceptance(..., strict=False)` without ever passing `use_declaration`. Neither flag reaches
+> it, and this ADR does not change that.
+>
+> **R7 — The relationship to ADR-0053 R8.** The *reason* does not transfer — the turn path has two read
+> sites for one concern, the objective path has one read site and two parameters. The *decision* does,
+> and for a stronger reason: the two flags gate **different parameters**, so coupling them would not
+> remove a read site; it would add a rule that no measurement supports (R4). **The turn path's R8 and
+> this R1 are the same answer reached by different arguments**, and a future reader should not treat
+> one as the other's precedent without checking which argument applies.
+>
+> **R8 — The non-violations are asserted by tests.** `explain_acceptance`'s signature; the two
+> read sites at `autonomous.py:307-308` (parsed, not scanned); `derive_acceptance`'s signature and its
+> `strict=False` call; and ADR-0048's MODE A / MODE B defect-pins unchanged.
+>
+> **R9 — Rollback.** None is needed: no production change is authorised, because the measured behaviour
+> already is the decision. The observation that shows the decision is still in force is the 2×2 guard —
+> it fails if `strict` becomes dependent (measurement 1 breaks) or if a declaration stops pre-empting
+> `strict` (measurement 3 breaks). The observation that shows it is not: a declaration path that starts
+> producing `undetermined` entries.
+
+### Consequences
+
+- **ADR-0050's follow-up list is now empty.** Every follow-up ADR-0050 raised has a decision: the
+  composition (here), and the turn path's composition (ADR-0053 R8).
+- **A behaviour that was implicit is now normative.** The declaration pre-empting `strict` was already
+  true; it was not decided, and a reader could have read `derivation.strict is True` on a
+  declaration-derived result as evidence that strict acted.
+- **Nothing is enabled.** Both flags still default **OFF**, read once, independently.
+- **One residual is named.** `CriteriaDerivation.strict` records `True` when the declaration path
+  pre-empted it, so the record cannot distinguish *"strict was on and acted"* from *"strict was on and
+  had nothing to act on"*. The `reasons` tuple distinguishes them for a reader who looks (the reason is
+  `DECLARED`, not `UNDETERMINED`), but the boolean does not. Making that distinction explicit is a
+  record change and is its own decision.
+
+### Reversal condition
+
+If a future ADR decides that objectives **must** declare — a policy decision with its own evidence —
+then R4's rejection is revisited: at that point `structured_declaration` becomes mandatory and the
+composition is no longer a choice between independent flags. That is the condition, and it is stated so
+the question is not re-derived from the follow-up text alone.
+
 ---
 
 ## Decision index
@@ -5581,3 +5726,4 @@ condition under which Option B is re-opened, and it is stated here so it is not 
 | 0053 | The turn path's required-criteria set carries the objective's declared criteria; the gate keys on a `FAIL` the floor guard does not enforce | The criteria source on the turn path | ACCEPTED (satisfies ADR-0051 R1's precondition by unioning the floor guard's criterion with the objective's declared criteria at `AgentRuntime.run_turn`'s verdict site, behind `WISP_TURN_CRITERIA_SOURCE` default OFF; the gate's condition is `FAIL` **and every named criterion is non-floor**, measured to differ from `rejection()` on two of six driven cases; adds no authority — the criteria flow through `acceptance.evaluate` and the verdict through `goal.derive_goal_state`, both unchanged; does not enable the acceptance gate, which remains ADR-0051's separate decision) |
 | 0054 | The acceptance gate consumes `verdict_keys_on_declared` at the engine's pre-`done` gate, bounded and defaulting OFF | Acceptance gate enablement | ACCEPTED (supplies the consumer ADR-0053 §10 recorded as missing: the engine asks a read-only callable — `DeclaredCriteriaGate` — at its pre-`done` gate, because a gate acting after `done` withholds nothing; the probe is taken there, cached, and reused at the verdict site; the withholding reuses ADR-0036's bounded replan model and **shares the turn's extension budget**; `WISP_ACCEPTANCE_GATE` defaults **OFF** and is **dependent** on `WISP_TURN_CRITERIA_SOURCE`; ADR-0051 R2–R6's contract is **NOT satisfied** — the population needs ≥ 2 capable models and the environment serves exactly **1** of 13, measured by a committed instrument; `turn_succeeded`, `VerificationFloorGuard` and `goal.PRECEDENCE` unchanged, asserted) |
 | 0055 | The REST gate is at parity with the agent path; the recorded divergence was between two *models*, not two *paths* | Authorization parity (G1) | ACCEPTED (drives the two production paths instead of the two models: **0 path divergences of 36**, **6 model divergences of 36** — the agent and `require_tool_allowed` reach the same outcome on every route in every mode when the agent runs under REST's condition, no approver. Chooses **Option A**: accept, and correct the record. Rejects **B** because it is not a parity fix — it would deny `hooks.create`/`mcp.add_server`/`plugins.install` in modes where the agent denies nothing (those three names are **not agent tools** and have **no `TOOL_RISK_TABLE` row**), i.e. REST stricter than the agent with no counterpart, and it would 403 the shipped client; rejects **C** for this decision as the fix for a *different* problem (REST cannot ask a human), deferred to its own ADR. Corrects `require_tool_allowed`'s docstring to state the control those routes actually have; keeps every ratchet property and **gains a real-path parity guard**; names four residuals (the approval authority is split three ways; three action names are in none of the three sets; REST cannot ask; five further gated routes are unmeasured). States the relationship to finding E without wiring L0. `authorize()`, `SecurityPolicy.check()` and `ToolExecutor.execute`'s gate chain unchanged, asserted by AST-parsed tests) |
+| 0056 | The two criteria flags are independent on the objective path; their interaction is derivation *order*, not flag coupling | Objective-path flag composition (ADR-0050 follow-up 1) | ACCEPTED (decides the last open ADR-0050 follow-up by driving the 2×2 flag matrix rather than reading it: `strict` **alone** withholds on the prose path (criteria 3→4), `use_declaration` **alone** collapses them to the declared set, and a valid declaration **pre-empts** `strict` — `undetermined` is empty either way, so `strict` is recorded and **inert**. Rejects **"dependent"** as measured-false (it would silently disable ADR-0048's fix for the measured false `GOAL_MET`); rejects **"composed"** (a declaration required) as a new policy no measurement supports, which would turn a silent-defect fix into a hard refusal for every objective written before ADR-0050 — and which is **not implemented** (`use_declaration=True` without a block is a no-op). Does not widen `explain_acceptance`'s parameters (ADR-0009): composition is a *policy* at the composition point, not a third parameter. Relates to ADR-0053 R8 — the *reason* does not transfer (one read site here, two parameters), the *decision* does. **No production change**: the measured behaviour already is the decision. Names one residual: `CriteriaDerivation.strict` records `True` when pre-empted) |

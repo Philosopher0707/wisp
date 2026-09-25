@@ -116,9 +116,81 @@ quoting it; §11 says how.
 | **NEXT** — F8 error classification | `COMPLETE` — **`F8 SECONDARY_DEFECT REMOVED`**; found **F68** (inert retry), **F69** (two classifications for one condition) | `PHASE_F8_ERROR_CLASSIFICATION.md` |
 | **NEXT** — precedence correction (**ADR-0049**) | `COMPLETE` — **`RECORD UPDATE`**; F-1/F-2 from the authorities page **DECIDED**; found the brief's **inverted numbering claim** | `PHASE_PRECEDENCE_CORRECTION.md` |
 | **NEXT** — structured criteria (**ADR-0050**) | `COMPLETE` — **`RATIFIED + IMPLEMENTED`**; found **F72** (the error rate is a function of the workspace, not the objective) and **F73** (an over-broad tripwire) | `PHASE_STRUCTURED_CRITERIA.md` |
+| gate enablement (**ADR-0051**) | `COMPLETE` — **`DECIDED`**; the gate has nothing to gate on; found **F75** (an uncommittable instrument), **F76** | `PHASE_GATE_ENABLEMENT.md` |
+| M8 DAG retirement | `COMPLETE` — **`DEPRECATE` decided**, blocked on a measured semantic divergence; found **F77** | `PHASE_DAG_RETIREMENT.md` |
+| F8 published status (**ADR-0052**) | `COMPLETE` — a host failure is not a denial | `PHASE_F8_PUBLISHED_STATUS.md` |
+| criteria source on the turn path (**ADR-0053**) | `COMPLETE` — ADR-0051 R1 satisfied; found the pin guard's blank-line weakness (the 6th instrument defect) | `PHASE_CRITERIA_SOURCE.md` |
+| acceptance gate enablement (**ADR-0054**) | `PARTIAL` — the mechanism is built and driven; the population is short by one capable model | `PHASE_GATE_ENABLEMENT_DECISION.md` |
+| authorization parity (**ADR-0055**) | `COMPLETE` — **`DECIDED`**, Option A; found **F78** (a model is not a path), **F79**, **F80**, **F81** | `PHASE_AUTHORIZATION_PARITY.md` |
+| objective-path flag composition (**ADR-0056**) | `COMPLETE` — **`DECIDED`**, independent; the interaction is derivation order | `PHASE_OBJECTIVE_FLAG_COMPOSITION.md` |
 
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log).
-**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0047**).
+**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0056**).
+
+### 0.0.15 THE OBJECTIVE-PATH FLAG COMPOSITION (2026-09-25) — ADR-0056
+
+**The last open ADR-0050 follow-up, decided.** ADR-0050 asked whether
+`WISP_CRITERIA_STRICT_DERIVATION` and `WISP_CRITERIA_STRUCTURED_DECLARATION` compose on the objective
+path. ADR-0053 R8 had answered the same question for the **turn** path — independent — because coupling
+would create *two read sites for one concern*. **That reason does not transfer:** the objective path
+reads both flags at **one** composition point (`autonomous.py:307-308`), as two parameters of
+`explain_acceptance`.
+
+**Driven, not read** (the 2×2 matrix on this repository's own MODE A objective, red baseline):
+
+| objective | `strict` | `decl` | reason | `undetermined` | criteria |
+|---|---|---|---|---|---|
+| no declaration | T | F | `undetermined` | `['verify:cmd0']` | 4 |
+| no declaration | T | T | `undetermined` | `['verify:cmd0']` | 4 |
+| declared | F | T | `declared` | `[]` | 1 |
+| declared | T | T | `declared` | `[]` | 1 |
+
+**Independent.** `strict` **alone** withholds (rows 1–2 identical) — so the "dependent" reading is
+**measured false**, and making `strict` conditional would silently disable ADR-0048's fix for the measured
+false `GOAL_MET`. A declaration **pre-empts** `strict` (rows 3–4 identical): the early return at
+`convergence.py:1029-1041` means `strict` is *recorded and inert*. **That interaction is derivation
+order, not flag coupling.** The "composed" reading (a declaration required) is rejected — a policy no
+measurement supports, and **not implemented**: `use_declaration=True` with no block is a no-op. No
+parameter is added to `explain_acceptance` (ADR-0009). **No production change.** Guard:
+`tests/reliability/test_objective_flag_composition.py` (7 tests, 4/4 non-vacuity probes caught).
+Residual: `CriteriaDerivation.strict` records `True` when pre-empted.
+
+### 0.0.14 AUTHORIZATION PARITY (2026-09-25) — ADR-0055: the divergence was between two models, not two paths
+
+**G1 closed as a decision, and its three-phase-old claim was false.** `PHASE_10_AUTHORIZATION_PARITY.md`
+concluded *"out of the box, REST permits registering a hook, an MCP server, or a plugin **without the
+approval the agent path requires for the same operation**."* That is a claim about **paths**, derived
+from a comparison of two **models** — the ratchet compares `authorize()` to `SecurityPolicy` and calls the
+first "the agent's verdict".
+
+**Driven** (`scripts/authorization_parity_measurement.py`, committed): the agent
+(`ToolExecutor.execute` with `approval_handler=None` — REST's own condition) and
+`require_tool_allowed` agree on **every route in every mode**: **0 path divergences of 36**, **6 model
+divergences of 36**.
+
+**Why the claim fails.** `hooks.create`, `mcp.add_server`, `plugins.install` are **REST-only action
+names** — not in `TOOL_IMPLS` (42), not plugin tools, and with **no `TOOL_RISK_TABLE` row** (41 rows).
+`risk_for_tool` returns `EXEC` only because it **fail-closes on an unknown name**; driving
+`ToolExecutor.execute` with them answers `Unknown tool`. **The agent has no operation for them.** And the
+agent's approval model is not `authorize().approval_required` at all — `ToolExecutor.execute` forks on
+`not _decision.allowed` alone (`:755`) and takes its approval set from `_get_write_tools` (`:827`) plus
+`_needs_forced_approval` (`:1324`). The discarded field **is** consumed, by the *direct registry* path
+(`tools/registry.py:951`). **Three approval models; the ratchet compared two of them.**
+
+**Option A — accept, and correct the record.** **B is rejected because it is not a parity fix**: its only
+effect is to deny those three names in `auto_edit`/`ask_all` — modes where the agent denies *nothing* —
+i.e. REST **stricter than the agent**, a divergence created by a change meant to remove one; it would
+also 403 the shipped client on three config routes whose own comments state the intended design. **C** is
+the right fix for a *different* problem (REST cannot ask a human) and is its own ADR. The docstring is
+qualified (`+13/−0`, pure), the ratchet keeps all seven properties and **gains a real-path parity
+guard** (25 tests, 4/4 probes caught). Four residuals named. **No production behaviour moves.**
+
+**Findings:** **F78** a model is not a path; **F79** a check that passes by finding nothing (the ratchet
+had seven properties and *none* compared the two paths it was named for; its "agent consults both" test
+was a string scan over a Python tree); **F80** `tests/test_protected_path_guard.py` **cannot run in this
+environment** (`fastapi.testclient` needs `httpx`, not installed) — Phase 10's 26-test guard for the
+adjacent finding is un-runnable here; **F81** `CURRENT_AUTHORITIES.md` §4 carried a superseded
+disposition (`NOT_YET_DETERMINABLE`), corrected.
 
 ### 0.0.13 ACCEPTANCE GATE ENABLEMENT (2026-09-25) — ADR-0054
 
@@ -1511,7 +1583,7 @@ environmental set in §7. Never quote "the suite passes" — quote the set.
 `jsonschema` absent, so they include F8's effects. The `tests/reliability/` measurement after
 provisioning (24 failures → 0) shows the magnitude of the error. Re-measure before comparing.
 
-### Canonical suites — 1317 tests (1316 pass, 1 fails)
+### Canonical suites — 1294 tests (1293 pass, 1 fails)
 
 ```bash
 env -u PYTHONPATH .venv/bin/python -m pytest \
@@ -1539,11 +1611,14 @@ env -u PYTHONPATH .venv/bin/python -m pytest \
   tests/reliability/test_current_authorities_pins.py \
   tests/reliability/test_criteria_derivation_authority.py \
   tests/reliability/test_f8_error_classification.py \
+  tests/reliability/test_precedence_canonical.py \
+  tests/reliability/test_structured_criteria.py \
   tests/reliability/test_gate_enablement_contract.py \
   tests/reliability/test_dag_retirement_contract.py \
   tests/reliability/test_f8_published_status.py \
   tests/reliability/test_criteria_source_on_turn_path.py \
-  tests/reliability/test_acceptance_gate_enablement.py -q
+  tests/reliability/test_acceptance_gate_enablement.py \
+  tests/reliability/test_objective_flag_composition.py -q
 ```
 
 **Measured 2026-09-25, after the F8 error-classification landing: 1115 tests — 1114 pass, 1 fails.** The
@@ -1555,11 +1630,16 @@ Now that calls genuinely dispatch, the grouping rule produces the batch shape it
 update, which requires explicit authorization.
 
 **The heading said "849 tests" until 2026-09-25, "714 tests" before that, "1115 tests" until the
-gate-enablement mission, "1289" until the acceptance-gate-enablement mission, and "1314" until its
-Deliverable 2.** None was current for long: the command block had never been extended with the POST-M13
-files (714 → 849), the four NEXT-mission files and the three 2026-09-25 files (849 → 1115), or the guards
-the two gate-enablement missions added (1115 → 1317). Finding **F71**. **Do not quote a count from
-prose** — run the block.
+gate-enablement mission, "1289" until the acceptance-gate-enablement mission, "1314" until its
+Deliverable 2, and "1317" until the authorization-parity mission.** None was current for long: the
+command block had never been extended with the POST-M13 files (714 → 849), the four NEXT-mission files
+and the three 2026-09-25 files (849 → 1115), or the guards the later missions added. Finding **F71**.
+**Do not quote a count from prose** — run the block.
+
+**The two blocks were out of sync (F82).** Until the authorization-parity mission, `AGENTS.md`'s block
+listed **two files this one did not** — `test_precedence_canonical.py` and `test_structured_criteria.py` —
+so the two "canonical" counts described different suites and neither was the intersection. Both now list
+the same **43 files**, and both headings carry the count measured from that block.
 
 ### The regression method — read this before changing anything
 

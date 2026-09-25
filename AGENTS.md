@@ -87,8 +87,8 @@ goes stale on the next flag while the table does not.
 | `recovery_ladder` | `WISP_RECOVERY_LADDER` | the recovery consumer at the turn boundary (`RECOVERY`, plus `ESCALATION` when exhausted). **Defaults `false`** |
 | `goal_state` | `WISP_GOAL_STATE` | the derived goal state (`GOAL_STATE` record). **Defaults `false`** — records only; nothing acts on it |
 | `stagnation_gate` | `WISP_STAGNATION_GATE` | **enforcement**: lets M13 withhold `done` for a bounded replan. **Defaults `false`** — observation and recording are unaffected, so it is a *separate* concern from `graph_oscillation_guard`, which disables the detector itself |
-| `strict_derivation` | `WISP_CRITERIA_STRICT_DERIVATION` | **ADR-0048 R5** — lets the acceptance-criteria derivation decline to complete an objective whose requirement it could not determine. **Defaults `false`**, i.e. today's behaviour: the derivation's reasoning is journalled and acted on by nothing. Read at the composition point (`wisp/autonomous.py`), not inside the pure function |
-| `structured_declaration` | `WISP_CRITERIA_STRUCTURED_DECLARATION` | **ADR-0050 R8** — lets an objective carry a `--- criteria ---` block that *states* its acceptance conditions. **Defaults `false`**, i.e. no declaration is parsed and every caller keeps ADR-0048's behaviour. ON, a malformed or unmeasurable declaration **raises** `CriteriaDeclarationRejected` and the run stops — it never falls back to the prose grammar. Read once, at the same composition point |
+| `strict_derivation` | `WISP_CRITERIA_STRICT_DERIVATION` | **ADR-0048 R5** — lets the acceptance-criteria derivation decline to complete an objective whose requirement it could not determine. **Defaults `false`**, i.e. today's behaviour: the derivation's reasoning is journalled and acted on by nothing. Read at the composition point (`wisp/autonomous.py`), not inside the pure function. **Independent of `structured_declaration`** (ADR-0056 R1) — it withholds on the prose path with that flag OFF, and making it conditional would silently disable ADR-0048's fix for the measured false `GOAL_MET` |
+| `structured_declaration` | `WISP_CRITERIA_STRUCTURED_DECLARATION` | **ADR-0050 R8** — lets an objective carry a `--- criteria ---` block that *states* its acceptance conditions. **Defaults `false`**, i.e. no declaration is parsed and every caller keeps ADR-0048's behaviour. ON, a malformed or unmeasurable declaration **raises** `CriteriaDeclarationRejected` and the run stops — it never falls back to the prose grammar. Read once, at the same composition point. **A valid declaration pre-empts `strict_derivation`** (ADR-0056 R2): the derivation returns early, so `strict` is *recorded and inert* — there is nothing to withhold when the objective has said. `use_declaration=True` with **no** block is a no-op |
 | `turn_criteria_source` | `WISP_TURN_CRITERIA_SOURCE` | **ADR-0053 R7** — lets the **turn path's** required-criteria set carry the objective's declared criteria, unioned with `floor_guard_criteria(guard)`. **Defaults `false`**: with it off the verdict site is `floor_guard_verdict(guard)` unchanged, and the set is exactly `['floor:verification']`. ON, a declaration at the head of the prompt adds its criteria and the declaration's own probe evidence (`CommandProbe`, bounded by `spec.timeout_s`), so the verdict can be `FAIL` for a reason the floor guard does not enforce. **Deliberately independent of `structured_declaration`** — that flag gates the objective-level derivation; coupling them would put two read sites on one concern (ADR-0002). Read once, at `AgentRuntime.run_turn`'s entry |
 | `acceptance_gate` | `WISP_ACCEPTANCE_GATE` | **ADR-0054 R6** — the **acceptance gate**: the engine's pre-`done` gate asks a read-only callable (`turn_criteria.DeclaredCriteriaGate`) and withholds `done` by ADR-0036's bounded delay-not-veto model when the objective's declared criteria are not satisfied. **Defaults `false`**, and the reason is measured: ADR-0051 R4 requires **≥ 2 capable models** and this environment serves exactly **1** of 13 (`scripts/acceptance_gate_population.py`). **Dependent on `turn_criteria_source`** — with the source off there are no declared criteria, so the gate would withhold on a verdict the record does not carry. Read once, at `AgentRuntime.run_turn`'s entry |
 
@@ -444,12 +444,14 @@ python3 -m pytest tests/test_contracts_*.py tests/test_auth_*.py tests/test_runs
 # Durable record + proposal boundary + verdicts + task graph
 # (migration P0-P9 + M2/M3/M4/M16/M9/M15/M14/M12/M11/M13 + POST-M13 + ADR-0035/0036/0037
 #  + the NEXT chain ADR-0045/0046/0047/0048)
-# 1317 tests — 1316 pass, 1 fails (F38: a test that encoded the pre-F8 exchange ordering).
+# 1294 tests — 1293 pass, 1 fails (F38: a test that encoded the pre-F8 exchange ordering).
 # The block below was extended with the four NEXT-mission files, the five
 # documentation-authority / criteria-authority / F8-classification / precedence /
-# structured-criteria files, and the four 2026-09-25-mission files (gate-enablement,
-# dag-retirement, F8-published-status, criteria-source); the earlier "849 tests" figure
-# was the pre-NEXT count. NEVER quote a count from prose — run the block.
+# structured-criteria files, the four 2026-09-25-mission files (gate-enablement,
+# dag-retirement, F8-published-status, criteria-source), and the two later
+# 2026-09-25 files (acceptance-gate-enablement, objective-flag-composition);
+# the earlier "849 tests" figure was the pre-NEXT count.
+# NEVER quote a count from prose — run the block.
 python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_incremental.py \
   tests/test_action_idempotency_key.py tests/test_proposal_boundary_records.py \
   tests/test_proposal_boundary_no_bypass.py tests/test_verdict_layer_recorded.py \
@@ -480,7 +482,8 @@ python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_
   tests/reliability/test_dag_retirement_contract.py \
   tests/reliability/test_f8_published_status.py \
   tests/reliability/test_criteria_source_on_turn_path.py \
-  tests/reliability/test_acceptance_gate_enablement.py -q
+  tests/reliability/test_acceptance_gate_enablement.py \
+  tests/reliability/test_objective_flag_composition.py -q
 ```
 
 ### The environment will fight you
