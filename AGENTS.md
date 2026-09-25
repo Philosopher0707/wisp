@@ -497,6 +497,7 @@ python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_
   tests/reliability/test_layer_b_boundary.py \
   tests/reliability/test_layer_c_disposition.py \
   tests/reliability/test_external_input_path.py \
+  tests/reliability/test_current_findings_pins.py \
   tests/reliability/test_f8_published_status.py \
   tests/reliability/test_criteria_source_on_turn_path.py \
   tests/reliability/test_acceptance_gate_enablement.py \

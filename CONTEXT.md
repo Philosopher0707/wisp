@@ -1895,7 +1895,7 @@ environmental set in §7. Never quote "the suite passes" — quote the set.
 `jsonschema` absent, so they include F8's effects. The `tests/reliability/` measurement after
 provisioning (24 failures → 0) shows the magnitude of the error. Re-measure before comparing.
 
-### Canonical suites — 1505 tests (1504 pass, 1 fails)
+### Canonical suites — 1505 tests (1504 pass, 1 fails) — ⚠️ NOT MEASURABLE ON THIS HOST (see below)
 
 ```bash
 env -u PYTHONPATH .venv/bin/python -m pytest \
@@ -1930,6 +1930,7 @@ env -u PYTHONPATH .venv/bin/python -m pytest \
   tests/reliability/test_layer_b_boundary.py \
   tests/reliability/test_layer_c_disposition.py \
   tests/reliability/test_external_input_path.py \
+  tests/reliability/test_current_findings_pins.py \
   tests/reliability/test_f8_published_status.py \
   tests/reliability/test_criteria_source_on_turn_path.py \
   tests/reliability/test_acceptance_gate_enablement.py \
@@ -1968,6 +1969,32 @@ boundary mission then added one file (+16) and re-measured **1471**; the externa
 added one more (+16) and re-measured **1487**; the Layer C disposition added one more (+18) and
 re-measured **1505**. Both headings (`CONTEXT.md` §11 and `AGENTS.md`) are re-measured in the same change
 that adds each file (F85).
+
+**⚠️ THE COUNT IS NOT MEASURABLE ON THIS HOST AS OF 2026-09-25 — do not quote one (F94, F36).** The
+corpus-governance mission re-measured the block in every one of its four changes, as F85 requires, and
+the measurement **does not reproduce**. Measured, in this order:
+
+| run | what else was running | result |
+|---|---|---|
+| the pre-change baseline | nothing | **1505 tests — 1504 pass, 1 fails** (F38) |
+| the block + the new guard (55 files) | nothing | **154 failed, 1379 passed** in 359 s |
+| the block **without** the new guard (54 files) | nothing | **154 failed, 1351 passed** in 406 s |
+| the three files the block failed, in isolation | nothing | **114 passed in 2.6 s** |
+
+**The same 154 failures occur with and without the new guard**, and the failing files pass in
+isolation — so the failures are **the host, not the change**. Free memory measured at 60–87 MB of
+16 GB, and the block's wall time tripled (118 s → 360 s). **F36** describes the milder half of this:
+it says the kernel *kills* the run (`exit=137`). Here the run **completes and reports a wrong
+answer** — 154 failures that do not exist — which is the instrument-defect class one level up: *the
+instrument reports its own defect as a result about the subject.* So §11's rule is necessary but not
+sufficient: **never quote a count from prose — and never quote one from a block run on a starved
+host.** A count's *scope* includes the host's free memory (F94).
+
+**A second host condition, also found by running:** two **concurrent** pytest processes race on the
+shared `pytest-of-<user>` temp directory and produce
+`PermissionError: EEXIST: mkdir '…/T/pytest-of-philosopher'` at fixture setup — **869 errors** from
+one overlapping run. §6 says *"The WorkBuddy shim blocks pytest's temp `mkdir`"*; the measured cause
+is contention between processes, not the shim. **Run the block alone.**
 
 **And "1312" was stale within the mission that wrote it (F85).** The corpus-integrity pass measured the
 block in **Deliverable 1** and set both headings; **Deliverable 2** then added **four** tests to
