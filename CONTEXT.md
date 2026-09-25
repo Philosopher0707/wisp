@@ -13,8 +13,11 @@
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is `1e83e34`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
+**HEAD is `805eca8`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
 on top of it and is the authority for the count.
+**`805eca8` is the F8-published-status landing** — **ADR-0052**: a capability failure is published as a
+failure of the **host**, not a denial; the denial taxonomy and the prompt are **unchanged**. See §0.0.11
+below.
 **`1e83e34` is the M8 DAG-retirement landing** — `multi_agent/dag.py`'s ownership is declared and its
 retirement is **decided as `DEPRECATE`**, blocked on a measured semantic divergence. **Prose-only** in
 `wisp/` (docstring-stripped AST byte-identical). See §0.0.10 below.
@@ -1062,7 +1065,8 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `0bc4f22` | `docs:` point the handoff at `3298894`, and record F64/F65 as DECIDED |
 | `3f9e639` | `feat:` let an objective declare its criteria (**ADR-0050**), and reject rather than reinterpret — 7 files, +1,332/−30; flag `WISP_CRITERIA_STRUCTURED_DECLARATION` default OFF; found **F72/F73**; excludes the user's WIP (§8) |
 | `3990313` | `docs:` decide the acceptance gate's enablement contract (**ADR-0051**) — the gate has nothing to gate on — 6 files; **no production change**; the instrument is **committed** (`scripts/`), fixing the class F75 names; found **F75/F76**; excludes the user's WIP (§8) |
-| `1e83e34` | `docs(m8):` survey the `dag.py` retirement and decide **DEPRECATE**, not remove — blocked on a **measured semantic divergence** (which definition of a valid DAG wins); prose-only in `wisp/`; 10-test guard incl. 3 tripwires on the residual; excludes the user's WIP (§8) — **`HEAD`** |
+| `1e83e34` | `docs(m8):` survey the `dag.py` retirement and decide **DEPRECATE**, not remove — blocked on a **measured semantic divergence** (which definition of a valid DAG wins); prose-only in `wisp/`; 10-test guard incl. 3 tripwires on the residual; excludes the user's WIP (§8) |
+| `805eca8` | `fix:` publish a capability failure as a **host** failure, not a denial (**ADR-0052**) — a system-failure envelope with the `kind` in `data`; the denial taxonomy and the prompt are unchanged; 15-test whole-path guard; found the helper defect that made NV1 non-falsifying; excludes the user's WIP (§8) — **`HEAD`** |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
