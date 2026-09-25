@@ -144,6 +144,14 @@ class TestModeAFalseGoalMet:
     Reproduces ADR-0048 MODE A: the bug is unfixed, the suite still fails, and
     the objective is reported met. **When the derivation is fixed, this class goes
     red and must be rewritten** — it is the bug's documentation, not coverage.
+
+    **Updated by ADR-0050 (structured criteria).** The class still passes, and
+    that is the honest result: the declared path does not change what the *prose*
+    grammar does, so an objective carrying **no** declaration keeps this defect.
+    What ADR-0050 adds is a way for the objective to stop being silent —
+    `test_structured_criteria.py::TestModeA` drives the same objective **with** a
+    declaration and shows the false `GOAL_MET` close. The pin stays because the
+    residual it records is still reachable, and the report says so.
     """
 
     def test_the_grammar_does_not_see_a_suite_requirement(self, tmp_path):
@@ -238,6 +246,13 @@ class TestModeBFalsePromotion:
 
     ADR-0048 R7 states this residual rather than hiding it: R1–R6 do **not** fix
     it, and the record is what makes it visible.
+
+    **Updated by ADR-0050 (structured criteria).** Still reachable — and, unlike
+    MODE A, closed **structurally** on the declared path rather than by a new
+    capability: when the objective declares its criteria the prose is not
+    consulted, so a prohibition inside the prose cannot be read as a requirement.
+    See `test_structured_criteria.py::TestModeB`. The pin stays because the
+    negation defect is still live for every objective that declares nothing.
     """
 
     def test_a_prohibition_is_read_as_a_requirement(self, tmp_path):
@@ -502,18 +517,56 @@ class TestR5TheFlagDefaultsOff:
 class TestR6NoModelChannel:
     """ADR-0045 R1 stands: the model may not declare criteria. Tripwire."""
 
-    def test_no_function_takes_criteria_from_model_output(self):
-        """`explain_acceptance` takes prose + a workspace, and nothing else.
+    def test_no_parameter_can_carry_model_authored_criteria(self):
+        """`explain_acceptance` takes prose, a workspace, and scalar switches.
 
         A parameter accepting model-authored criteria would be the judged writing
-        the exam. If one appears, this fails.
+        the exam. **The property is that no parameter CAN carry criteria — not that
+        the parameter set is frozen.**
+
+        Two earlier versions of this test were wrong in the same way, and both were
+        found by mutation probes rather than by reading:
+
+        * set *equality* — adding `use_declaration: bool` tripped it, though a boolean
+          switch cannot carry criteria;
+        * an explicit allow-list — a harmless `verbose: bool` tripped it too, which
+          trains the reader to extend the list without thinking, defeating the check.
+
+        So it now tests the two things that actually make a channel: an **annotation
+        that can hold criteria**, and a **channel-shaped name on a non-scalar**.
         """
         import inspect
+        import re
 
-        params = set(inspect.signature(explain_acceptance).parameters)
-        assert params == {"goal", "workspace", "baseline", "strict"}, (
-            f"explain_acceptance gained {params - {'goal','workspace','baseline','strict'}} "
-            "— a model-authored criteria channel is exactly what ADR-0045 R1 forbids")
+        criteria_types = re.compile(r"Criteria|MeasureSpec|Sequence|Iterable|list\[|tuple\[|set\[")
+        channel_name = re.compile(r"criteria|specs?|declar", re.I)
+        scalar = {"bool", "str", "int", "float", "None"}
+
+        for name, param in inspect.signature(explain_acceptance).parameters.items():
+            annotation = str(param.annotation)
+            assert not criteria_types.search(annotation), (
+                f"{name!r} is annotated {annotation!r}, which can carry criteria — a "
+                "parameter that can carry criteria is the model writing the exam "
+                "(ADR-0045 R1)")
+            if channel_name.search(name):
+                assert annotation in scalar, (
+                    f"{name!r} is named like a criteria channel and is annotated "
+                    f"{annotation!r}. A criteria channel must be a scalar switch "
+                    "(e.g. `use_declaration: bool`) or not exist at all (ADR-0045 R1)")
+
+    def test_the_channel_check_would_catch_a_real_channel(self):
+        """Non-vacuity for the test above: the two shapes it looks for must trip it."""
+        import re
+
+        criteria_types = re.compile(r"Criteria|MeasureSpec|Sequence|Iterable|list\[|tuple\[|set\[")
+        channel_name = re.compile(r"criteria|specs?|declar", re.I)
+
+        assert criteria_types.search("tuple[AcceptanceCriteria, ...]"), (
+            "a criteria-typed annotation would slip past the check")
+        assert channel_name.search("declared_specs"), (
+            "a channel-shaped name would slip past the check")
+        assert not criteria_types.search("bool") and not channel_name.search("verbose"), (
+            "the check is over-broad — a harmless scalar switch would trip it")
 
     def test_the_derivation_reads_no_provider(self):
         """Structural: `convergence.py` must not import a provider module."""

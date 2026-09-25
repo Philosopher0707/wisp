@@ -51,7 +51,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
+import shlex
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -637,13 +640,17 @@ def criteria_for(specs: Iterable[MeasureSpec], *,
 class DerivationReason(StrEnum):
     """What the host concluded about the objective's *stated* requirements.
 
-    ADR-0048 R1. The three outcomes exist because two were not enough: the
+    ADR-0048 R1. The three inferred outcomes exist because two were not enough: the
     derivation's input is prose, and a closed grammar over prose has a third
     answer besides "the requirement is stated" and "it is not" — **"I cannot
     tell"**. Collapsing that into "it is not" is a false success (a no-op
     satisfies guards-only criteria); collapsing it into "it is stated" is a
     false failure (a requirement the user never gave). Neither is a decision
     the host is entitled to make on the objective's behalf.
+
+    ADR-0050 R5 adds a **fourth** outcome, `DECLARED`, which is not inferred at
+    all. It **precedes** the three above: when the objective carries a valid
+    declaration there is nothing to infer, so the prose grammar is not consulted.
     """
 
     #: The objective states the requirement in words the grammar recognises.
@@ -658,6 +665,208 @@ class DerivationReason(StrEnum):
     #: no basis for either answer, so it records that fact and — under strict
     #: derivation — declines to complete the objective.
     UNDETERMINED = "undetermined"
+    #: The objective **declared** its acceptance conditions (ADR-0050). Not an
+    #: inference: the host validated the declaration against the measurable
+    #: surface and used it. The prose grammar is not consulted.
+    DECLARED = "declared"
+
+
+class CriteriaDeclarationRejected(Exception):
+    """A declaration was present and could not be used (ADR-0050 R4).
+
+    Raised rather than downgraded, and that is the whole point: ADR-0048 R6 states
+    that a **silent downgrade is MODE A** — the caller believes the criteria they
+    declared are being measured while the host measures something else. So a
+    rejected declaration stops the derivation; it never falls back to the prose
+    grammar.
+
+    `reason` names which of the five rejected shapes fired, `line` is the
+    offending source line (empty when the fault is structural), and the message
+    is written for the caller rather than for a log.
+    """
+
+    def __init__(self, reason: str, detail: str, *, line: str = "") -> None:
+        self.reason = reason
+        self.detail = detail
+        self.line = line
+        where = f" at line {line!r}" if line else ""
+        super().__init__(
+            f"criteria declaration rejected ({reason}){where}: {detail}. The "
+            f"declaration is NOT ignored and the prose grammar is NOT used — "
+            f"fix the declaration or remove the block to fall back to the prose "
+            f"derivation.")
+
+
+@dataclass(frozen=True)
+class CriteriaDeclaration:
+    """A parsed, validated declaration (ADR-0050 R2/R3).
+
+    `specs` are the `MeasureSpec`s the declaration names; `entries` are the raw
+    `(kind, spec)` pairs, kept so the record can show what the caller wrote
+    rather than only what the host made of it.
+    """
+
+    specs: tuple[MeasureSpec, ...] = ()
+    entries: tuple[tuple[str, str], ...] = ()
+
+
+#: The declaration's delimiters (ADR-0050 R1). The block must be **at the head**
+#: of the objective: an objective that discusses declarations must not
+#: accidentally carry one.
+DECLARATION_OPEN = "--- criteria ---"
+DECLARATION_CLOSE = "--- /criteria ---"
+
+#: The closed grammar's kinds (ADR-0050 R2). Exactly two, and an unknown kind is
+#: rejected rather than ignored.
+DECLARATION_KINDS = ("command_succeeds", "symbol_defined")
+
+
+def _resolvable_argv(argv: tuple[str, ...], workspace: str) -> bool:
+    """True when `argv[0]` resolves — workspace-relative, or on PATH.
+
+    ADR-0050 R3: the host validates **runnability, never outcome**. Validating
+    that the command will succeed would be the host pre-judging the exam.
+    """
+    if not argv:
+        return False
+    program = argv[0]
+    candidate = Path(workspace) / program
+    try:
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            return True
+    except OSError:
+        pass
+    return shutil.which(program) is not None
+
+
+def _resolvable_symbol(path: str, symbol: str, workspace: str) -> tuple[bool, str]:
+    """True when `path::symbol` is measurable. Returns `(ok, why_not)`.
+
+    Inside the workspace, the file exists, and the symbol is a Python identifier —
+    ADR-0050 R3. The containment check is the same fail-closed rule the rest of
+    the tree uses: a declaration may not name a file outside the workspace.
+    """
+    if not symbol.isidentifier():
+        return False, f"{symbol!r} is not a Python identifier"
+    try:
+        root = Path(workspace).resolve()
+        target = (root / path).resolve()
+    except OSError as exc:
+        return False, f"{path!r} could not be resolved ({exc})"
+    if target != root and root not in target.parents:
+        return False, f"{path!r} resolves outside the workspace"
+    if not target.exists():
+        return False, f"{path!r} does not exist in the workspace"
+    return True, ""
+
+
+def parse_criteria_declaration(objective: str, workspace: str) -> "CriteriaDeclaration | None":
+    """Parse and validate a declaration, or return `None` when there is none.
+
+    `None` means *the objective carries no declaration* — R7's absent case, which
+    leaves the prose grammar to run unchanged. Anything else that goes wrong
+    **raises** `CriteriaDeclarationRejected`; there is no third answer, because a
+    third answer is the silent downgrade ADR-0048 R6 forbids.
+
+    The grammar is closed and hand-rolled (ADR-0050, "Alternatives rejected"): a
+    general YAML parser accepts sequences, nested maps, anchors and non-string
+    scalars, and **every shape it accepts is a shape the host must then
+    interpret.** A grammar that rejects what it does not understand cannot
+    silently reinterpret.
+    """
+    text = (objective or "").lstrip()
+    if not text.startswith(DECLARATION_OPEN):
+        return None
+
+    lines = text.splitlines()
+    if lines[0].strip() != DECLARATION_OPEN:
+        raise CriteriaDeclarationRejected(
+            "malformed-open",
+            f"the opening delimiter must be exactly {DECLARATION_OPEN!r} on its own line",
+            line=lines[0])
+
+    body: list[str] = []
+    for line in lines[1:]:
+        if line.strip() == DECLARATION_CLOSE:
+            break
+        body.append(line)
+    else:
+        raise CriteriaDeclarationRejected(
+            "unterminated",
+            f"the block opened with {DECLARATION_OPEN!r} and never closed with "
+            f"{DECLARATION_CLOSE!r}")
+
+    entries: list[tuple[str, str]] = []
+    for raw in body:
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        kind, sep, spec = stripped.partition(":")
+        kind, spec = kind.strip(), spec.strip()
+        # An EMPTY kind is a malformed line, not an unknown kind: "you wrote no kind"
+        # and "you wrote a kind I do not know" are different mistakes with different
+        # fixes, and collapsing them makes the message less actionable than it can be.
+        if not sep or not kind or not spec:
+            raise CriteriaDeclarationRejected(
+                "malformed-line",
+                "a declaration line must be `<kind>: <spec>` with a non-empty kind and spec",
+                line=raw)
+        if kind not in DECLARATION_KINDS:
+            raise CriteriaDeclarationRejected(
+                "unknown-kind",
+                f"{kind!r} is not one of {DECLARATION_KINDS}; an unknown kind is "
+                f"rejected rather than ignored",
+                line=raw)
+        entries.append((kind, spec))
+
+    if not entries:
+        raise CriteriaDeclarationRejected(
+            "empty",
+            "the block declares no criteria — an empty declaration would leave the "
+            "objective unexamined while appearing to state its conditions")
+
+    specs: list[MeasureSpec] = []
+    for index, (kind, spec) in enumerate(entries):
+        if kind == "command_succeeds":
+            try:
+                argv = tuple(shlex.split(spec))
+            except ValueError as exc:
+                raise CriteriaDeclarationRejected(
+                    "unmeasurable-spec",
+                    f"the command could not be split ({exc})", line=spec) from exc
+            if not _resolvable_argv(argv, workspace):
+                raise CriteriaDeclarationRejected(
+                    "unmeasurable-spec",
+                    f"`{spec}` is not runnable here — argv[0] {argv[0] if argv else ''!r} "
+                    f"resolves neither inside the workspace nor on PATH",
+                    line=spec)
+            specs.append(CommandSpec(
+                criteria_id=f"declared:cmd{index}",
+                argv=argv,
+                description=f"`{spec}` exits 0 (declared)",
+                require_collected=True,
+                inputs=("tests", "test_*.py", "*_test.py", "conftest.py",
+                        "pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini"),
+            ))
+        else:  # symbol_defined
+            path, sep, symbol = spec.partition("::")
+            if not sep or not path.strip() or not symbol.strip():
+                raise CriteriaDeclarationRejected(
+                    "malformed-line",
+                    "`symbol_defined` takes `<path>::<symbol>`", line=spec)
+            ok, why = _resolvable_symbol(path.strip(), symbol.strip(), workspace)
+            if not ok:
+                raise CriteriaDeclarationRejected(
+                    "unmeasurable-spec",
+                    f"`{spec}` is not measurable: {why}", line=spec)
+            specs.append(SymbolSpec(
+                criteria_id=f"declared:symbol{index}",
+                path=path.strip(),
+                symbol=symbol.strip(),
+                description=f"{path.strip()} defines {symbol.strip()}() (declared)",
+            ))
+
+    return CriteriaDeclaration(specs=tuple(specs), entries=tuple(entries))
 
 
 @dataclass(frozen=True)
@@ -771,7 +980,8 @@ def derive_acceptance(goal: str, workspace: str, *,
 
 def explain_acceptance(goal: str, workspace: str, *,
                        baseline: "Measurement | None" = None,
-                       strict: bool = False) -> "CriteriaDerivation":
+                       strict: bool = False,
+                       use_declaration: bool = False) -> "CriteriaDerivation":
     """Derive the criteria **and record what the host concluded about the objective**.
 
     ADR-0048. The derivation asks a question about *meaning* — "does this
@@ -781,7 +991,15 @@ def explain_acceptance(goal: str, workspace: str, *,
     on which words. A promotion that cannot cite the objective's own text is an
     inference the record now shows to be unfounded.
 
-    Three outcomes per command spec (ADR-0048 R1):
+    **`use_declaration=True` consults the objective's declared criteria block
+    first (ADR-0050).** A valid declaration yields reason `DECLARED` and the prose
+    grammar is **not consulted** — there is nothing to infer when the objective
+    has said. A malformed or unmeasurable declaration **raises**
+    `CriteriaDeclarationRejected`; it never falls back, because a silent downgrade
+    is MODE A. The parameter defaults `False`, so `derive_acceptance` — which
+    never passes it — is unaffected (ADR-0009).
+
+    Three inferred outcomes per command spec (ADR-0048 R1):
 
     | Outcome | Condition | Consequence |
     |---|---|---|
@@ -808,6 +1026,20 @@ def explain_acceptance(goal: str, workspace: str, *,
     still unhandled (ADR-0048 R7): *"do not make the tests pass"* matches the
     grammar, and the recorded span is how a reader sees it.
     """
+    if use_declaration:
+        declaration = parse_criteria_declaration(goal, workspace)
+        if declaration is not None:
+            criteria = criteria_for(declaration.specs, baseline=baseline,
+                                    promote_absolute=True)
+            return CriteriaDerivation(
+                criteria=tuple(criteria), specs=declaration.specs,
+                reasons=tuple(
+                    (spec.criteria_id, DerivationReason.DECLARED.value,
+                     f"{kind}: {spec_text}")
+                    for spec, (kind, spec_text) in zip(declaration.specs,
+                                                       declaration.entries)),
+                strict=strict, undetermined=())
+
     specs: list[MeasureSpec] = []
 
     # 1. The project's own verification commands.

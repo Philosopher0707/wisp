@@ -4538,6 +4538,189 @@ reversal trigger.
 
 ---
 
+## ADR-0050 — The objective may carry a declared criteria block; the host validates it against the measurable surface and rejects rather than reinterprets
+
+**Status:** ACCEPTED (structured-criteria mission). Decides what **ADR-0048 R6** deferred — *"the
+grammar, the validation surface, and the rejection behaviour are not [decided]. That is a separate
+decision."* Extends ADR-0048 R1's enumeration by one outcome (`DECLARED`). Changes nothing when its flag
+is off.
+
+### Context
+
+ADR-0048 R6 decided the objective-declared structured path was **viable** and fixed its boundary: *"a
+declaration carried by the objective, **validated by the host** against the workspace's verification
+commands and the symbol grammar, and **failing closed** on anything the harness cannot measure, keeps the
+exam with the user and the grading with the host; the model gains **no** channel."*
+
+ADR-0048 also named the residual it left: **MODE A remains reachable with its flag off** — a measured
+false `GOAL_MET` on this repository's own benchmark task. And it named its own reversal condition as
+needing numbers nobody had: *"a measurement shows that a `UNDETERMINED` classification is reached for an
+objective whose requirement WAS determinable from its own words."*
+
+**Those numbers now exist.** The corpus is every objective in the repository, collected by AST
+(`.workbuddy-ai/memory/post-m13-structured/corpus.py`): 13 distinct objectives, 11 hand-labelled as
+decidable, measured on a **red** baseline (the only baseline on which the promotion decision exists).
+
+| | |
+|---|---|
+| required when it should be | **4** |
+| required when it should **not** (MODE B) | **1** |
+| **not** required when it should be (**MODE A**) | **1** |
+| correctly not required | **5** |
+| **accuracy on labelled, decidable objectives** | **9/11 = 82%** |
+
+**Two findings from the measurement, both load-bearing for this decision.**
+
+**1. The classifier's answer is a function of `(objective, workspace)`, not of the objective alone.**
+A `symbol_defined` criterion is derivable only when the named file **exists**, so three objectives move
+from `UNDETERMINED` to `UNSTATED` when measured against a workspace containing their fixture file — and
+`UNSTATED` is the **correct** answer for all three. Against the repository as the workspace they are
+`UNDETERMINED` and under-counted. **Corrected for each objective's own workspace the accuracy is
+12/14 = 86%.** ADR-0048's reversal condition is therefore under-specified: *"determinable from its own
+words"* is not a property of the words.
+
+**2. The one false negative is the one that matters.** MODE A's single instance is `FIX_BUG`, whose
+verifier runs the suite and whose prose never says so. The classifier reaches `UNDETERMINED` — honestly,
+by its own rules — and on a red baseline that means the absolute criterion is advisory, so **a no-op
+satisfies the guards and the objective reports `goal_met`.** The classifier is not wrong about the
+objective; **the objective is incomplete, and there is no way for it to say so.** That is precisely the
+gap a declaration fills.
+
+### Decision
+
+> **The declaration is a fenced block at the head of the objective, introduced by `--- criteria ---` and
+> closed by `--- /criteria ---`, containing one YAML-shaped line per criterion of the form
+> `<kind>: <spec>`. `<kind>` is one of exactly two: `command_succeeds` or `symbol_defined`. The host
+> validates each spec against the measurable surface; a declaration that names an unmeasurable spec is
+> **rejected** with `CriteriaDeclarationRejected`, surfaced to the caller and journalled, and a rejected
+> declaration does **not** fall back to the prose grammar. `WISP_CRITERIA_STRUCTURED_DECLARATION` gates
+> the path and defaults **OFF**, in which case the derivation runs exactly as it does today.**
+
+**R1 — Placement is "at the head", and that is decidable.** The objective must **begin** with the opening
+fence, after optional leading whitespace. A block quoted mid-prose is not a declaration: an objective that
+discusses declarations must not accidentally carry one, and a reader must be able to see that the block
+governs the whole objective.
+
+**R2 — The grammar is closed, and it is two kinds.** `<kind>` is exactly `command_succeeds` or
+`symbol_defined`; any other kind is rejected, not ignored. Blank lines and lines whose first
+non-space character is `#` are comments. A line that is neither a comment nor a well-formed declaration is
+**rejected** — the grammar does not skip what it does not understand.
+
+**R3 — The validation surface is the two measurable specs, and it is decidable.**
+`command_succeeds: <argv>` is accepted iff `<argv>` splits to a non-empty argv whose `argv[0]` resolves —
+as a workspace-relative path that exists and is executable, or on `PATH`. `symbol_defined: <path>::<symbol>`
+is accepted iff `<path>` resolves **inside the workspace**, the file exists, and `<symbol>` is a valid
+Python identifier. **The host validates runnability, never outcome**: validating that a command will
+succeed would be the host pre-judging the exam, and validating that a symbol *will be* defined would be
+worse.
+
+**R4 — Rejection is loud, and there is no fallback.** `CriteriaDeclarationRejected` is raised, the
+rejection is journalled (`{"kind": "declaration_rejected"}` with the offending line), and the derivation
+**stops**. It does not silently degrade to the prose grammar. ADR-0048 R6 states the reason: *a silent
+downgrade **is** MODE A* — the caller believes the criteria they declared are being measured while the
+host measures something else. The five rejected shapes: an unterminated block; an empty body; an unknown
+kind; a malformed line; a spec that fails R3.
+
+**R5 — The declaration precedes the inference.** A valid declaration yields a fourth derivation outcome,
+`DECLARED`, and **the prose grammar is not consulted**. There is nothing to infer when the objective has
+said. This extends ADR-0048 R1's enumeration by one; ADR-0048 R6 explicitly deferred the grammar that
+would need it.
+
+**R6 — The model gains no channel, and this is structural, not promised.** The objective is authored by
+the **caller** (`converge_on_objective(objective_text, …)` takes it as an argument); the declaration lives
+inside it; the **host** validates; the **harness** measures. The model may not author, weaken, reinterpret
+or satisfy a declaration — and it has no path to any of those, because it never supplies the objective and
+never supplies evidence. What the model *does* see is the resulting criteria, which ADR-0045 R13 already
+requires it to be shown; **the declaration exposes nothing new.**
+
+**R7 — The declaration is optional, and absence is today's behaviour.** No block → the prose grammar runs,
+unchanged. This is what makes the flag's blast radius exactly the declared path.
+
+**R8 — The flag is `WISP_CRITERIA_STRUCTURED_DECLARATION`, default OFF**, read **once** at the composition
+point (`wisp/autonomous.py`) as ADR-0048 R5 established. `derive_acceptance`'s signature is **not widened**
+(ADR-0009): it calls `explain_acceptance(..., use_declaration=False)` and therefore never sees a
+declaration. `criteria_for` is untouched.
+
+#### What this does to MODE A and MODE B
+
+| Mode | Without a declaration | With a valid declaration |
+|---|---|---|
+| **A** — a required suite silently advisory | **unchanged — still reachable.** `FIX_BUG`'s prose says nothing, so `UNDETERMINED` → guards-only → a no-op reports `goal_met` | **CLOSED.** `DECLARED` makes the suite criterion **required**, so a no-op cannot pass |
+| **B** — a prohibition read as a requirement | **unchanged** — the grammar has no negation awareness | **CLOSED, structurally.** The prose is not consulted, so a prohibition inside the prose cannot be read as a requirement |
+
+**This is the trade, stated plainly: the declaration does not make the classifier better, it makes the
+objective complete.** An objective that states its conditions gets them measured; one that does not keeps
+today's behaviour and today's defect. That is the honest boundary, and it is why the flag defaults OFF.
+
+### Behaviour change
+
+| | |
+|---|---|
+| **Flag OFF (default)** | **None.** `derive_acceptance` and `explain_acceptance` behave exactly as ADR-0048 left them; no declaration is parsed |
+| **Flag ON, no declaration in the objective** | **None** — R7 |
+| **Flag ON, valid declaration** | the criteria come from the declared specs; the derivation reason is `DECLARED` |
+| **Flag ON, invalid declaration** | `CriteriaDeclarationRejected` raised, journalled; **the run stops** |
+
+### Alternatives rejected
+
+- **A separate well-known file** (e.g. `.wisp/criteria.yaml`). Rejected: it puts the acceptance conditions
+  somewhere other than the objective, so an objective could be run against criteria written for a different
+  one — and nothing in the run would show it. The declaration must travel with the thing it declares.
+- **Parse the block with a YAML library.** Rejected: `pyyaml` **is** declared and available, so this is a
+  design choice rather than a constraint. A general YAML parser accepts far more than the grammar defines
+  — sequences, nested maps, anchors, non-string scalars — and every shape it accepts is a shape the host
+  must then interpret. **A closed grammar that rejects what it does not understand cannot silently
+  reinterpret**, which is R4's whole point.
+- **Fall back to the prose grammar on a malformed declaration.** Rejected: R4. This is MODE A reintroduced
+  as a feature.
+- **Let the model emit a declaration.** Rejected: ADR-0045 R1 and ADR-0048 R6 — the judged writing the
+  exam. R6's structural argument is the reason this is not merely forbidden but unreachable.
+- **Validate that a declared command will succeed.** Rejected: R3 — the host validates runnability, not
+  outcome. Pre-judging would make the declaration a second completion authority.
+- **Reject an objective that carries no declaration under the flag.** Rejected: R7. It would turn the flag
+  from "a new source" into "a new requirement", breaking every existing caller.
+- **Extend `derive_acceptance` to take the declaration.** Rejected: ADR-0009 and ADR-0048 R4. It has three
+  callers and a wide test surface; the extension point is `explain_acceptance`.
+
+### Risks
+
+- **A declaration can be wrong about the objective.** The host validates *measurability*, not *intent*. An
+  objective declaring `command_succeeds: true` — a command that always exits 0 — is well-formed and
+  measures nothing. The mitigation is that the declaration is visible in the objective and recorded in the
+  derivation, so the mismatch is reviewable; the host cannot detect it.
+- **The corpus is small.** 13 objectives, 11 labelled, one workspace each. The 82%/86% figures are a
+  measurement, not an estimate, and they are **not** a confidence interval. A larger corpus could move
+  them; the instrument is committed so it can be re-run.
+- **`DECLARED` short-circuits the prose, including prose that states a *stronger* requirement.** An
+  objective whose declaration is weaker than its prose is measured against the declaration. That is the
+  intended reading of "the objective has said", but it is a way to under-specify.
+- **`CriteriaDeclarationRejected` is a new exception on a path that previously could not raise.** Callers
+  that do not expect it will see a traceback. That is deliberate — R4 — but it is a caller-visible change
+  the flag's default protects against.
+
+### Rollback / reversal
+
+Revert the flag to OFF: `WISP_CRITERIA_STRUCTURED_DECLARATION` defaults to `false`, so the path is inert by
+construction and every existing caller keeps ADR-0048's behaviour.
+
+**This ADR is reversed if** the corpus measurement shows the declared path does not close MODE A where it
+claims to — i.e. if an objective with a valid declaration still reaches `GOAL_MET` on a no-op. The
+committed test `TestTheDeclaredPath` drives exactly that case, so the reversal trigger is a test failure
+rather than a judgement.
+
+### Follow-up questions
+
+1. **Should the derivation *require* a declaration when the objective names a verification command but
+   states no requirement?** That is `UNDETERMINED` → refuse, which is ADR-0048's strict mode. The two flags
+   are independent today; whether they should compose is not decided here.
+2. **Should a declaration be able to *weaken* a stated requirement?** Today it can, because it replaces the
+   prose. A rule forbidding a declaration weaker than the prose would need a comparison the host cannot
+   make without reading the prose — which is the thing the declaration exists to avoid.
+3. **Should the corpus grow to cover objectives from real runs?** The 82%/86% figures are the best
+   available and the corpus is committed; a live corpus would be better and is not collected anywhere yet.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -4591,3 +4774,4 @@ reversal trigger.
 | 0047 | A failed turn is not a failed objective, and R5's unit is the strategy, not the rung | NEXT (multi-turn productive recovery) | ACCEPTED (amends ADR-0035 rows 3–6 — one input combination moves; refines ADR-0046's use of R5 under a new dedicated budget) |
 | 0048 | The acceptance criteria are host-derived from the objective's *stated* conditions; silence is not consent, and an undetermined requirement is `INCONCLUSIVE` | NEXT (criteria authority) | ACCEPTED (names what the host may infer from silence; authorises one additive record and one flag-gated behaviour defaulting to today; declares the objective-declared structured path viable without violating ADR-0045 R1) |
 | 0049 | The canonical precedence table is `goal.PRECEDENCE` (eight rows, 0–7); every older numbering is historical and is resolved by content | NEXT (precedence correction) | ACCEPTED (a record update — restates what the code already does; ratifies two cells ADR-0047 moved without stating; scopes ADR-0047 R3 to the no-`PASS` case; edits neither ADR-0035 nor ADR-0047) |
+| 0050 | The objective may carry a declared criteria block; the host validates it against the measurable surface and rejects rather than reinterprets | NEXT (structured criteria) | ACCEPTED (decides what ADR-0048 R6 deferred — the grammar, the validation surface, the rejection behaviour; extends ADR-0048 R1 by one outcome, `DECLARED`; closes MODE A and MODE B **on the declared path only**, flag-gated and defaulting OFF) |

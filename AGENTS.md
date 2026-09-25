@@ -86,6 +86,7 @@ goes stale on the next flag while the table does not.
 | `goal_state` | `WISP_GOAL_STATE` | the derived goal state (`GOAL_STATE` record). **Defaults `false`** — records only; nothing acts on it |
 | `stagnation_gate` | `WISP_STAGNATION_GATE` | **enforcement**: lets M13 withhold `done` for a bounded replan. **Defaults `false`** — observation and recording are unaffected, so it is a *separate* concern from `graph_oscillation_guard`, which disables the detector itself |
 | `strict_derivation` | `WISP_CRITERIA_STRICT_DERIVATION` | **ADR-0048 R5** — lets the acceptance-criteria derivation decline to complete an objective whose requirement it could not determine. **Defaults `false`**, i.e. today's behaviour: the derivation's reasoning is journalled and acted on by nothing. Read at the composition point (`wisp/autonomous.py`), not inside the pure function |
+| `structured_declaration` | `WISP_CRITERIA_STRUCTURED_DECLARATION` | **ADR-0050 R8** — lets an objective carry a `--- criteria ---` block that *states* its acceptance conditions. **Defaults `false`**, i.e. no declaration is parsed and every caller keeps ADR-0048's behaviour. ON, a malformed or unmeasurable declaration **raises** `CriteriaDeclarationRejected` and the run stops — it never falls back to the prose grammar. Read once, at the same composition point |
 
 Three rules that are easy to get wrong:
 
@@ -319,6 +320,39 @@ words that drove it.
   satisfies the guards. `tests/reliability/test_criteria_derivation_authority.py` pins it as a defect, and
   that class goes red when the derivation is fixed.
 
+### An objective may declare its own criteria — and a rejected declaration stops the run
+
+ADR-0050. `explain_acceptance(..., use_declaration=True)` consults a **declared block** before inferring
+anything, and a valid declaration yields reason `DECLARED` with **the prose grammar not consulted**:
+
+```text
+--- criteria ---
+command_succeeds: python -m pytest tests/ -q
+symbol_defined: app.py::parse_duration
+# comments and blank lines are allowed
+--- /criteria ---
+Fix the bug in app.py.
+```
+
+- **The block must be at the HEAD** of the objective. A block quoted mid-prose is not a declaration.
+- **The grammar is closed and hand-rolled** — exactly two kinds, `command_succeeds` and `symbol_defined`.
+  An unknown kind and a malformed line are **rejected**, not skipped. `pyyaml` is declared and available;
+  it is deliberately *not* used, because a parser that accepts more than the grammar defines accepts
+  shapes the host must then interpret.
+- **The host validates runnability, never outcome**: `argv[0]` must resolve (workspace-relative executable
+  or on `PATH`); `<path>::<symbol>` must be inside the workspace, exist, and be an identifier.
+- **Rejection is loud and there is no fallback.** `CriteriaDeclarationRejected` is journalled
+  (`{"kind": "declaration_rejected"}`) and raised. Falling back would measure something other than what
+  the caller declared while appearing to measure it — which ADR-0048 R6 states *is* MODE A.
+- **The model gains no channel, structurally.** The objective is supplied by the **caller**; the host
+  validates; the harness measures. The model already sees the resulting criteria (ADR-0045 R13), so
+  nothing new is exposed.
+- **What it fixes, and what it does not:** MODE A and MODE B both close **on the declared path only**. An
+  objective that declares nothing keeps today's behaviour and today's defects. The declaration does not
+  make the classifier better; it makes the *objective* complete.
+- **`derive_acceptance` never sees a declaration** — its signature is frozen (ADR-0009) and it calls
+  `explain_acceptance(..., use_declaration=False)`.
+
 ## Common patterns
 
 ### Adding a tool
@@ -375,10 +409,10 @@ python3 -m pytest tests/test_contracts_*.py tests/test_auth_*.py tests/test_runs
 # Durable record + proposal boundary + verdicts + task graph
 # (migration P0-P9 + M2/M3/M4/M16/M9/M15/M14/M12/M11/M13 + POST-M13 + ADR-0035/0036/0037
 #  + the NEXT chain ADR-0045/0046/0047/0048)
-# 1143 tests — 1142 pass, 1 fails (F38: a test that encoded the pre-F8 exchange ordering).
-# The block below was extended with the four NEXT-mission files and the four
-# documentation-authority / criteria-authority / F8-classification / precedence files;
-# the earlier "849 tests" figure was the pre-NEXT count.
+# 1197 tests — 1196 pass, 1 fails (F38: a test that encoded the pre-F8 exchange ordering).
+# The block below was extended with the four NEXT-mission files and the five
+# documentation-authority / criteria-authority / F8-classification / precedence /
+# structured-criteria files; the earlier "849 tests" figure was the pre-NEXT count.
 python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_incremental.py \
   tests/test_action_idempotency_key.py tests/test_proposal_boundary_records.py \
   tests/test_proposal_boundary_no_bypass.py tests/test_verdict_layer_recorded.py \
@@ -403,7 +437,8 @@ python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_
   tests/reliability/test_current_authorities_pins.py \
   tests/reliability/test_criteria_derivation_authority.py \
   tests/reliability/test_f8_error_classification.py \
-  tests/reliability/test_precedence_canonical.py -q
+  tests/reliability/test_precedence_canonical.py \
+  tests/reliability/test_structured_criteria.py -q
 ```
 
 ### The environment will fight you
