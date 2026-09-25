@@ -128,8 +128,12 @@ the **attempt** rather than the **objective**.
 
 - **Enforcement.** Every flag above defaults **OFF** — `goal_state`/`WISP_GOAL_STATE`,
   `recovery_ladder`/`WISP_RECOVERY_LADDER`, `stagnation_gate`/`WISP_STAGNATION_GATE` (ADR-0035 §9;
-  ADR-0037). This page describes *semantics*; enablement is ADR-0016's question and remains
-  `NOT_YET_DETERMINABLE`.
+  ADR-0037). This page describes *semantics*; enablement was ADR-0016's question, and **ADR-0051
+  replaced its condition** with a precondition on the criteria set (satisfied by ADR-0053) plus a
+  declared-population measure. M1's state is **`PARTIAL`** — the mechanism is built and driven, and
+  the population is short by one capable model (ADR-0054). *(Corrected 2026-09-25: this line said
+  "remains `NOT_YET_DETERMINABLE`" until the authorization-parity phase, which is after ADR-0051
+  superseded it. The page's guard checks `path:line` pins, not prose, so it could not catch it.)*
 - **History.** Why a row reads the way it does is in the ADR, not here.
 - **The graph.** `core/task_graph.py` journals per-turn node status; `runtime.py` states plainly that it
   is *"RECORDED, not enforced"*. It is a consumer of the turn predicate, not an authority over it.

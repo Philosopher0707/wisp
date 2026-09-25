@@ -389,6 +389,19 @@ def require_tool_allowed(request: Request, action_name: str, args: dict,
     REST has no human to approve, so approval-required verdicts deny —
     same as ApprovalGate with no handler. Call BEFORE any side effect.
 
+    **What that sentence covers, and what it does not (ADR-0055).** It
+    describes the verdict this gate *consumes*: `SecurityPolicy.check()`.
+    For the executable-config routes (`hooks.create`, `mcp.add_server`,
+    `plugins.install`) `SecurityPolicy` reports no approval requirement in
+    any mode, so the clause cannot fire for them — and it does not need to,
+    because **the agent has no equivalent operation**: those three names are
+    not agent tools and have no row in `TOOL_RISK_TABLE`. Measured, the two
+    paths reach the same outcome on **every** route in **every** mode once
+    the agent is driven under REST's own condition (no approver); see
+    `scripts/authorization_parity_measurement.py`. The control on those
+    routes is therefore the API key, the `read_only` denial and the
+    protected-path guard below — **not** an approval prompt.
+
     Two checks, in order:
 
     1. **Protected-path guard** — a non-read action whose target lies in a

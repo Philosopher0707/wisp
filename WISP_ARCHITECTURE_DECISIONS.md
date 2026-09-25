@@ -5332,6 +5332,194 @@ the mechanism is demonstrated; only the *population* is missing.
 additionally removes the criteria the gate acts on. Reverting the *default* (to ON) requires ADR-0051
 R2–R6 satisfied by a produced measurement — which needs the missing capable model, not a code change.
 
+## ADR-0055 — The REST gate is at parity with the agent path; the recorded divergence was between two *models*, not two *paths*
+
+**Status:** ACCEPTED
+**Phase:** Authorization parity (G1)
+**Closes G1 as a *decision*. Corrects a three-phase-old claim that did not survive being driven. Authorises
+no production behaviour change: no gate moves, no mode changes, no client change.**
+**Evidence:** `scripts/authorization_parity_measurement.py` (committed, re-runnable — drives both
+production paths); `tests/test_authorization_parity.py` (updated, plus a real-path guard);
+`PHASE_AUTHORIZATION_PARITY.md`.
+
+### Context
+
+`PHASE_10_AUTHORIZATION_PARITY.md` §2 measured every REST route's `(action, args)` through **both models**
+in all four modes and found 9 of 36 `(route, mode)` pairs divergent. Three were the protected-path
+instance, closed by `PHASE_10_PROTECTED_PATH_GUARD.md`. Six remained, all the same shape — `authorize()`
+returns `ALLOW+APPR`, `SecurityPolicy.check()` returns `ALLOW`:
+
+| action | `authorize()` | `SecurityPolicy` | REST gate |
+|---|---|---|---|
+| `hooks.create` in `auto_edit` / `ask_all` | ALLOW **+ approval** | ALLOW | **ALLOW** |
+| `mcp.add_server` in `auto_edit` / `ask_all` | ALLOW **+ approval** | ALLOW | **ALLOW** |
+| `plugins.install` in `auto_edit` / `ask_all` | ALLOW **+ approval** | ALLOW | **ALLOW** |
+
+From that the report drew a conclusion about **paths**:
+
+> *"out of the box, REST permits registering a hook, an MCP server, or a plugin **without the approval the
+> agent path requires for the same operation**."*
+
+and `require_tool_allowed`'s docstring was read as an unreachable contract:
+
+> *"REST has no human to approve, so approval-required verdicts deny — same as ApprovalGate with no
+> handler."*
+
+**Both sentences are claims about the agent *path*. Neither was measured against it.** The ratchet
+compares `authorize()` to `SecurityPolicy` and treats the first as "the agent's verdict". A model is not a
+path.
+
+### Problem — what driving the paths changes
+
+The instrument drives the two production surfaces rather than the two models:
+
+```
+the agent   ToolExecutor.execute(tool, args, ws, approval_handler=None)
+            — `None` because REST *has* no approver; that is REST's condition
+REST        require_tool_allowed(request, action, args, workspace)
+```
+
+**36 rows: 0 path divergences. 6 model divergences.** The agent and the REST gate agree on **every route
+in every mode**, on the outcome (`ALLOW` vs `DENY`), as soon as the agent is driven under REST's own
+condition. Where the two `DENY`s differ in mechanism (`DENY(guard)` vs `DENY(403)`) the outcome is the
+same and that is what parity is about.
+
+Three further measurements decide the shape of the answer.
+
+**1. The three actions have no agent path at all.** `hooks.create`, `mcp.add_server` and `plugins.install`
+are **not** agent tools — absent from `TOOL_IMPLS` (42 names) and from the plugin set — and have **no row**
+in `TOOL_RISK_TABLE` (41 rows). `risk_for_tool` returns `ToolRisk.EXEC` for them only because it
+**fail-closes on an unknown name**; the table itself has no row, so `_non_read_table_tools()` does not
+contain them and `_get_write_tools()` does not gate them. Driving `ToolExecutor.execute` with those names
+returns `Unknown tool`. **There is no agent operation for them to be at parity *with*.** `authorize()`'s
+verdict on those three names is a fact about `authorize()` — it is not a fact about the agent.
+
+**2. The agent's approval model is not `authorize().approval_required`.** `ToolExecutor.execute` consults
+`authorize()` and forks on **`not _decision.allowed` alone** (`tool_executor.py:755`); the decision's
+`approval_required` is **discarded**. The turn path's approval requirement is a *third* set —
+`func_name in _get_write_tools(config)` (`:827`) combined with `_needs_forced_approval` (`:1324`), both
+derived from the risk table. `authorize().approval_required` **is** consumed, by a different agent
+surface: `registry.execute_tool` (`tools/registry.py:951`), the direct-registry path, where it denies.
+
+So the corpus has **three** approval models, and the ratchet was comparing two of them:
+
+| Surface | Approval source |
+|---|---|
+| `ToolExecutor.execute` (the turn path) | `_get_write_tools` + `_needs_forced_approval` |
+| `registry.execute_tool` (direct registry) | `authorize().approval_required` |
+| `ApprovalGate`, `require_tool_allowed` (REST) | `SecurityPolicy.check().approval_required` |
+
+**3. The agent's no-approver path is permissive, and that is a separate observation.** Driven with
+`approval_handler=None`, a `write_file` in `auto_edit` **runs** — the approval branch is entered, the
+handler is absent, `forced_approval` is `False`, and control falls through. The comment there reads
+*"auto_approve=True + no handler + not forced = pass through"*, but the enclosing guard is
+`not auto_approve`, so the comment does not describe the branch it sits in. This is **not** repaired here
+(see R8): it is a fact about the agent's no-approver behaviour, and it is *why* path parity holds.
+
+### Decision
+
+> **R1 — Parity is a property of the paths, and it holds.** For every REST route and every permission mode,
+> the outcome of the agent path (driven with no approver — REST's condition) and the outcome of
+> `require_tool_allowed` are the same. The instrument asserts this; the guard re-drives it. A future change
+> that breaks it fails the guard, which is the property the parity table was written to protect and did not
+> measure.
+>
+> **R2 — The six pinned pairs are reclassified as a *model* divergence, and stay pinned.** They remain in
+> `KNOWN_MODEL_DIVERGENCES`, keyed by `(route, mode)`, with the reason corrected: they record that
+> `authorize()` and `SecurityPolicy` disagree about `approval_required` for three action names **that only
+> REST uses**. They are not evidence that REST is weaker, and the test that fails on a new divergence stays
+> exactly as strict.
+>
+> **R3 — Option A is chosen: accept, and correct the record.** Rejected alternatives:
+>
+> * **Option B (the REST gate also consults `authorize()`, honouring its approval requirement) is
+>   rejected** because the measurement makes it *not a parity fix*: it would deny `hooks.create`,
+>   `mcp.add_server` and `plugins.install` in `auto_edit`/`ask_all` — modes in which **the agent denies
+>   nothing** (it cannot even run those names). B would therefore create a divergence in the opposite
+>   direction: REST stricter than the agent, with no agent counterpart. It would also 403 the shipped
+>   desktop client on three config routes, and the three routes' own comments state the intended design
+>   (*"the policy allows this action in full / auto_edit / ask_all and denies only in read_only"*).
+> * **Option C (route approvals through the WebSocket channel) is rejected *for this decision*, not on the
+>   merits.** It is the correct fix for a **different** problem — REST cannot ask a human, so a REST caller
+>   gets the agent's no-approver behaviour rather than its approver behaviour. That gap is real (R6) and it
+>   is its own ADR; adopting it here would change default-mode behaviour of a shipped client, which is a
+>   feature decision, not a parity correction.
+>
+> **R4 — `require_tool_allowed`'s docstring states what its control actually is.** The
+> "approval-required verdicts deny" sentence is **kept** — it correctly describes the verdict the gate
+> consumes. It is **qualified**: for the executable-config routes `SecurityPolicy` reports no approval
+> requirement in any mode, so the clause cannot fire for them, and the agent has no equivalent operation.
+> The docstring names the control those routes actually have — the API key, the `read_only` denial, and the
+> protected-path guard — and cites the instrument.
+>
+> **R5 — The ratchet is updated, not weakened.** It keeps every property it had (a new divergence fails; a
+> divergence that silently disappears fails; the file/shell routes stay at model parity; a non-approval-
+> shaped divergence is a worse class; the agent still consults both models; the default mode is still the
+> affected one) and **gains the one it lacked**: a guard that drives the real paths and asserts path
+> parity, with a non-empty floor on the route list.
+>
+> **R6 — The residuals are named, not smoothed over.**
+>
+> 1. **The approval authority is split three ways** (Problem §2). Unifying it is its own ADR; this one does
+>    not touch any of the three.
+> 2. **Three action names are in none of the three approval sets** — `hooks.create`, `mcp.add_server`,
+>    `plugins.install` have no `TOOL_RISK_TABLE` row, so no approval model governs them on either path.
+>    Their control over REST is the API key plus the `read_only` denial. Adding rows is inert today (no
+>    consumer reads the table for a name that is not an agent tool) and is not this ADR's change.
+> 3. **REST cannot ask a human.** A REST caller gets the agent's *no-approver* behaviour, including its
+>    permissive fall-through for `auto_edit` writes (Problem §3). Option C is the fix; it is deferred.
+> 4. **Five further gated routes are not in the parity table** — `hooks.test`, `mcp.test_server`,
+>    `mcp.remove_server`, `plugins.toggle`, `plugins.uninstall`. They pass through the same gate, and
+>    `mcp.test_server` executes a server command. They are unmeasured here and are named so the next
+>    reader does not assume the table is exhaustive.
+>
+> **R7 — The relationship to finding E is stated, and E is not wired.** `PHASE_10_M4_GOVERNANCE_UNWIRED.md`
+> records that `ToolExecutor.policy` is `None` at both construction sites, so `authorize()`'s **L0**
+> organization-policy slot is never filled. The two findings share a shape — *an authority that exists and
+> is not consulted* — but they are not one fix: E is a slot that exists and is unfilled; G1 was a claim
+> about paths that the paths do not support. **Wiring L0 would not have prevented G1** (L0 sits inside
+> `authorize()`, which REST does not call for these names anyway), and G1's resolution does not supply the
+> key-distribution ceremony E's prerequisite needs. E remains its own ADR.
+>
+> **R8 — The three non-violations are asserted by tests, not merely stated.**
+>
+> * **`authorize()` is unchanged** — its parameter list and the seven-name `controlling_layer` vocabulary
+>   (`principal`, `workspace`, `capability`, `arguments`, `sensitivity`, `approval`, `allow`, plus an
+>   organization layer supplied by L0) are pinned.
+> * **`SecurityPolicy.check()` is unchanged** — its signature and the two mode block-sets it owns
+>   (`_ASK_ALL_BLOCK_TOOLS`, `_AUTO_EDIT_BLOCK_TOOLS`) are pinned by content.
+> * **`ToolExecutor.execute`'s gate chain is unchanged** — parsed, not scanned: the AST of `execute` is
+>   walked and the first line of each of `policy_hard_deny(...)`, `authorize(...)` and the
+>   `_get_write_tools(...)` approval assignment must be in that order. A string scan would read the
+>   docstring that *describes* the order.
+>
+> **R9 — Rollback.** No production behaviour moves, so rollback is the revert of a documentation and test
+> change. The observation that shows the record is doing its job: the real-path guard fails if any route's
+> outcome diverges between the two paths. The observation that shows it is not: the model-divergence set
+> changes without a corresponding change in the paths.
+
+### Consequences
+
+- **G1 is closed as a decision.** The audit's one-line debt (*"REST uses the weaker one"*) is answered:
+  REST does not use a weaker model — it uses a different model, and on every route it reaches the same
+  outcome the agent reaches under REST's own condition.
+- **The corpus gains a measurement discipline**: *drive the paths, not the models.* Three phases of this
+  finding rested on a model-vs-model comparison, and the sentence drawn from it was false in its subject.
+- **A four-line docstring claim is retired.** `require_tool_allowed` no longer implies an approval prompt
+  the executable-config routes never see.
+- **Nothing is enabled, no mode changes, no client changes.** The six pairs stay pinned; their
+  classification changes from *path divergence* to *model divergence*.
+- **Four residuals are open and named** (R6), one of them (`mcp.test_server` executing a command outside
+  the table) recorded for the first time.
+
+### Reversal condition
+
+If a future change makes `hooks.create`, `mcp.add_server` or `plugins.install` **agent tools** — giving them
+`TOOL_RISK_TABLE` rows and implementations — then the three model divergences become path-relevant, and
+this ADR's R2 classification must be re-examined: `authorize()` would then be describing a real operation,
+and the question *"should REST approve what the agent approves?"* becomes answerable. That is the
+condition under which Option B is re-opened, and it is stated here so it is not re-derived.
+
 ---
 
 ## Decision index
@@ -5392,3 +5580,4 @@ R2–R6 satisfied by a produced measurement — which needs the missing capable 
 | 0052 | A capability failure is published as a failure of the host, not as a denial; the denial taxonomy is unchanged | F8's published status | ACCEPTED (completes the half `PHASE_F8_ERROR_CLASSIFICATION.md` §4 left open; routes a `CAPABILITY_MISSING` validation failure through a system-failure envelope with the `kind` in `data`, so the attribution is correct where the failure is *published* as well as where it is *produced*; adds no denial status and edits no prompt, so it is not a behavioural change) |
 | 0053 | The turn path's required-criteria set carries the objective's declared criteria; the gate keys on a `FAIL` the floor guard does not enforce | The criteria source on the turn path | ACCEPTED (satisfies ADR-0051 R1's precondition by unioning the floor guard's criterion with the objective's declared criteria at `AgentRuntime.run_turn`'s verdict site, behind `WISP_TURN_CRITERIA_SOURCE` default OFF; the gate's condition is `FAIL` **and every named criterion is non-floor**, measured to differ from `rejection()` on two of six driven cases; adds no authority — the criteria flow through `acceptance.evaluate` and the verdict through `goal.derive_goal_state`, both unchanged; does not enable the acceptance gate, which remains ADR-0051's separate decision) |
 | 0054 | The acceptance gate consumes `verdict_keys_on_declared` at the engine's pre-`done` gate, bounded and defaulting OFF | Acceptance gate enablement | ACCEPTED (supplies the consumer ADR-0053 §10 recorded as missing: the engine asks a read-only callable — `DeclaredCriteriaGate` — at its pre-`done` gate, because a gate acting after `done` withholds nothing; the probe is taken there, cached, and reused at the verdict site; the withholding reuses ADR-0036's bounded replan model and **shares the turn's extension budget**; `WISP_ACCEPTANCE_GATE` defaults **OFF** and is **dependent** on `WISP_TURN_CRITERIA_SOURCE`; ADR-0051 R2–R6's contract is **NOT satisfied** — the population needs ≥ 2 capable models and the environment serves exactly **1** of 13, measured by a committed instrument; `turn_succeeded`, `VerificationFloorGuard` and `goal.PRECEDENCE` unchanged, asserted) |
+| 0055 | The REST gate is at parity with the agent path; the recorded divergence was between two *models*, not two *paths* | Authorization parity (G1) | ACCEPTED (drives the two production paths instead of the two models: **0 path divergences of 36**, **6 model divergences of 36** — the agent and `require_tool_allowed` reach the same outcome on every route in every mode when the agent runs under REST's condition, no approver. Chooses **Option A**: accept, and correct the record. Rejects **B** because it is not a parity fix — it would deny `hooks.create`/`mcp.add_server`/`plugins.install` in modes where the agent denies nothing (those three names are **not agent tools** and have **no `TOOL_RISK_TABLE` row**), i.e. REST stricter than the agent with no counterpart, and it would 403 the shipped client; rejects **C** for this decision as the fix for a *different* problem (REST cannot ask a human), deferred to its own ADR. Corrects `require_tool_allowed`'s docstring to state the control those routes actually have; keeps every ratchet property and **gains a real-path parity guard**; names four residuals (the approval authority is split three ways; three action names are in none of the three sets; REST cannot ask; five further gated routes are unmeasured). States the relationship to finding E without wiring L0. `authorize()`, `SecurityPolicy.check()` and `ToolExecutor.execute`'s gate chain unchanged, asserted by AST-parsed tests) |
