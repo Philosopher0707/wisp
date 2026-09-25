@@ -13,8 +13,11 @@
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is `8a7e9ab`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
+**HEAD is `b9af5f0`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
 on top of it and is the authority for the count.
+**`b9af5f0` is the multi-turn productive recovery landing** — 12 files, +2,208/−93, covering
+ADR-0047 and closing **F60** and **F61** (and fixing **F62**/**F63**). It excludes the user's
+pre-existing WIP, listed in §8. See §0.0.2 below.
 **`8a7e9ab` is the autonomous-convergence landing** — 21 files, +8,173/−14, covering ADR-0045
 (the objective-level convergence loop) and ADR-0046 (progress-aware recovery). It excludes the
 user's pre-existing WIP, listed in §8. See §0.0.0 and §0.0.1 below.
@@ -686,7 +689,8 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `7c15626` | `docs(m11):` record the M11 phase; findings F29–F31; repair the commit table |
 | `ade4dc6` | `feat:` land the POST-M13 execution-semantics work (ADR-0034 – ADR-0044) — 108 files, +26,811/−397; excludes the user's WIP (§8) |
 | `b8dc4ac` | `docs:` point the handoff at `ade4dc6` |
-| `8a7e9ab` | `feat:` land the autonomous-convergence chain (ADR-0045 – ADR-0046) — 21 files, +8,173/−14; excludes the user's WIP (§8) — **`HEAD`** |
+| `8a7e9ab` | `feat:` land the autonomous-convergence chain (ADR-0045 – ADR-0046) — 21 files, +8,173/−14; excludes the user's WIP (§8) |
+| `b9af5f0` | `feat:` close F60 and F61 (ADR-0047) — a failed turn is not a failed objective — 12 files, +2,208/−93; excludes the user's WIP (§8) — **`HEAD`** |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
