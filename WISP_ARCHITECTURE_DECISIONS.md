@@ -4102,6 +4102,245 @@ derived state.*
 
 ---
 
+## ADR-0048 — The acceptance criteria are host-derived from the objective's *stated* conditions; silence is not consent, and an undetermined requirement is `INCONCLUSIVE`
+
+**Status:** ACCEPTED (criteria-authority mission). Amends ADR-0045 R1's *source* list by naming what
+the host may infer from silence; authorises one additive record and one flag-gated behaviour. Changes
+nothing when the flag is off. Supersedes no ADR.
+
+### Context
+
+ADR-0047 R5 made the acceptance criteria the **sole gate** on `GOAL_MET`: before it, a turn timeout
+accidentally masked weak criteria, and after it a `PASS` completes the run. R5's mitigation was to widen
+`_WANTS_FIX_RE` from one phrasing to three, so that *"an objective that plainly requires a green suite
+must state that"*.
+
+That mitigation was measured in this phase, and it does not close the class. The derivation has three
+failure modes, and **all three reproduce on the real `derive_acceptance`** — see the phase report's
+`three_modes.py` output, reproduced in §Behaviour change below.
+
+**What the authority question actually is.** `derive_acceptance` reads two sources: the workspace's
+declared verification commands (`environment.collect_environment`) and a closed grammar over the
+objective text. The first answers *"what can be checked here?"*; the second is the host's attempt to
+answer *"what does this objective require?"* — and the second is a **judgement about meaning**, made by
+three regexes with no negation awareness, no confidence signal, and no record of what it concluded.
+
+So the single most load-bearing input to the completion authority is a regex's opinion, and that opinion
+is currently **unobservable**: nothing records whether the absolute criterion was promoted or left
+advisory, or why.
+
+### Problem
+
+Three shapes, each measured end to end through `derive_acceptance` → `criteria_for` →
+`acceptance.evaluate` → `goal.derive_goal_state`:
+
+**MODE A — a false `GOAL_MET`.** The repository's **own benchmark task** `FIX_BUG`:
+
+> *"totals.py defines `sum_to(n)` which should sum integers 1..n inclusive, but it is off by one:
+> `sum_to(5)` returns 10 instead of 15. **Fix the bug** in totals.py."*
+
+`_WANTS_FIX_RE` returns **no match** — there is no suite word within 40 characters of the repair verb.
+On a red baseline the absolute criterion is therefore **advisory** and only the two guards are required:
+
+```
+advisory  verify:cmd0                      `python -m pytest tests/ -x -q` exits 0
+REQUIRED  verify:cmd0:no_regression        ... reports no more failures than the baseline (1)
+REQUIRED  verify:cmd0:inputs_unchanged     ... its inputs are unchanged
+```
+
+An attempt that changes **nothing** satisfies both guards. Measured verdict: **`pass`** →
+**`goal_met`**, with the bug unfixed and the suite still failing. This is the F37 shape (a false
+success) arriving through the criteria rather than through the evidence adapter, and ADR-0047 R5 named
+the risk without closing it.
+
+**MODE B — a false exhaustion.** The regex has **no negation awareness**:
+
+> *"**Do not** make the tests pass by editing them; instead add a missing type annotation to
+> models.py."*
+
+`_WANTS_FIX_RE` matches `'make the tests'`. The absolute criterion is promoted to **required** on a red
+baseline, the objective never asked for a green suite, and the run ends `fail` / `goal_failed`. The
+prohibition was read as a requirement. (Other measured false positives: *"Make the linter pass"*,
+*"CI will pass without any test changes"*.)
+
+**MODE C — "I cannot tell".** An objective on a workspace that declares no verification commands yields
+**no criteria at all**:
+
+```
+criteria -> (none)
+verdict  -> inconclusive   reason=['NO_REQUIRED_CRITERIA']
+goal     -> goal_unverified
+```
+
+This branch is **already honest** — `acceptance.evaluate` rule 1 returns `INCONCLUSIVE` for "no required
+criteria", and `derive_goal_state` maps it to `GOAL_UNVERIFIED`, never to `MET`. Its cost is that
+`GOAL_MET` is **unreachable**, so the objective can never complete. That is a consequence to be managed,
+not a defect.
+
+**The distinction the code cannot currently make.** MODE A and MODE C produce *opposite* outcomes from
+the *same* input state — the host could not determine what the objective requires. MODE A treats that as
+"nothing is required, so a no-op passes"; MODE C treats it as "nothing is required, so nothing is
+verified". **Both cannot be right.** The corpus already decided which: ADR-0035 invariant 1, ADR-0042 and
+ADR-0045 R4 all say that absence of evidence is not evidence, and `INCONCLUSIVE` must not be collapsed
+into either a pass or a failure. MODE C is the established behaviour; MODE A is the collapse.
+
+### Decision
+
+> **The objective is the authority over what is required. The host owns the *derivation* and the
+> *validation*, never the *invention*. Where the objective is silent, the host may infer "no
+> regression" and may not infer "green". Where the host cannot tell whether the objective is silent or
+> simply unparsed, it must say so, and the answer is `INCONCLUSIVE`.**
+
+**R1 — Three derivation outcomes, not two.** Each command spec is classified:
+
+| Outcome | Condition | Consequence |
+|---|---|---|
+| `STATED` | `_WANTS_FIX_RE` matches the objective | the absolute criterion is promoted to required (today's `promote_absolute=True`) |
+| `UNSTATED` | no match, **and** the objective yields at least one other machine-checkable requirement (a `SymbolSpec`) | guards-only is correct: the objective asked for something checkable, and a green suite is not part of it. ADR-0047 R5's no-regression objective stands, and `GOAL_MET` on it means **"nothing got worse"** |
+| `UNDETERMINED` | no match, **and** nothing else machine-checkable is named | the host has **no basis**; it may neither promote nor silently degrade |
+
+**R2 — `UNDETERMINED` is `INCONCLUSIVE`, and it never promotes.** An `UNDETERMINED` spec whose
+absolute criterion ended up **advisory** contributes a **required criterion the harness cannot
+evidence** — `verify:cmdN:requirement_declared` — whose description states the question the host
+declined to answer. `acceptance.evaluate`'s existing **rule 3** ("a required criterion with no valid
+evidence → `INCONCLUSIVE`") turns it into `INCONCLUSIVE` with that criterion named in `unmet_criteria`.
+**No new verdict vocabulary, no new rule, and no `FAIL`**: the absence of a determination is not a
+determination of failure. This is the mechanism the corpus already uses for exactly this shape.
+
+The **advisory** qualifier is the rule, not an optimisation. On a green baseline `criteria_for` requires
+the absolute criterion anyway, so the derivation decided nothing and there is nothing for strict mode to
+withhold. `UNDETERMINED` **and** `advisory` together are the entire blast radius, and that is exactly the
+case where a no-op would otherwise pass — which is what keeps the flag from breaking objectives it has no
+business touching.
+
+**R3 — The derivation is recorded, and durably.** `explain_acceptance()` returns a `CriteriaDerivation`
+carrying, per command spec, the outcome and the **matched span** (or the empty string), and the
+convergence loop journals it **once, beside the baseline**, as a `{"kind": "derivation"}` line. A reader —
+or a replay — can therefore answer *"did the host think this objective required a green suite, and on what
+words?"* without re-running a regex. **A promotion that cannot cite the objective's own words is an
+inference the record shows to be unfounded.** The record is read by nothing on the decision path; it is a
+record, and that is the point — the answer stops being invisible.
+
+**R4 — `derive_acceptance`'s signature is not widened** (ADR-0009). It becomes a thin caller of
+`explain_acceptance(..., strict=False)` and keeps returning `(criteria, specs)`. `criteria_for` is
+**untouched**, so its ~40 call sites are unaffected. The record is reached by calling the new function.
+
+**R5 — Strict derivation is behind a flag, and the flag defaults to today.** `WISP_CRITERIA_STRICT_DERIVATION`
+(default **OFF**). When off, `STATED` and `UNSTATED` behave exactly as today and `UNDETERMINED` is
+recorded but not acted on. When on, `UNDETERMINED` yields the R2 criterion. The flag is read at the
+composition point (`wisp/autonomous.py`), not inside the pure function.
+
+**R6 — A structured-criteria path is viable, and it is not the model writing the exam.** ADR-0045 R1
+forbids *model-declared* criteria, and that stands. The distinction that makes a structured path legal:
+
+| | Who writes the criterion | Who validates | Who measures |
+|---|---|---|---|
+| **forbidden** — model-declared | the **model** | nobody | the harness |
+| **permitted** — objective-declared | the **user's objective** | the **host**, against the measurable surface | the harness |
+
+A declaration carried by the objective, **validated by the host** against the workspace's verification
+commands and the symbol grammar, and **failing closed** on anything the harness cannot measure, keeps the
+exam with the user and the grading with the host. The model gains **no** channel: it may not add, weaken,
+reinterpret, or satisfy a declaration, and R2's criterion is unevidenceable by construction.
+
+**The trade, named.** A declaration is a **new input surface** and therefore a new way to be wrong — a
+malformed or unmeasurable declaration must be **rejected loudly**, never silently downgraded, because a
+silent downgrade *is* MODE A. It also moves work onto the caller: an objective that states its acceptance
+conditions is more verbose than one that does not. The benefit is the property MODE A lacks — a wrong
+answer becomes **visible** (the host rejected the declaration) instead of **silent** (a no-op passed).
+This ADR **decides that the path is viable and fixes its boundary**; it does **not** implement it, and
+the follow-up question below records that.
+
+**R7 — Negation is not handled, and the record must not pretend otherwise.** `_WANTS_FIX_RE` reads
+*"Do not make the tests pass"* as a requirement (MODE B). R3's matched span makes this **visible** — a
+reader sees the promotion cited `'make the tests'` inside a prohibition — but R1–R6 do not fix it.
+Natural-language negation is not a closed grammar, and widening the regex again would be the same
+mitigation R5 already tried and this ADR measures as insufficient. **The residual is stated, not
+hidden.**
+
+### Behaviour change
+
+Measured on the real chain (`three_modes.py`, and the 55 tests in
+`tests/reliability/test_criteria_derivation_authority.py`), **flag OFF** (today) and **flag ON**:
+
+| Mode | Objective | Flag OFF | Flag ON |
+|---|---|---|---|
+| A | `FIX_BUG` — *"Fix the bug in totals.py"*, red baseline, nothing changed | `pass` → **`goal_met`** | `inconclusive` → **`goal_unverified`** |
+| B | *"Do not make the tests pass…"* | `fail` → `goal_failed` | `fail` → `goal_failed` **(unchanged — R7)** |
+| C | an objective with no criteria and no toolchain | `inconclusive` → `goal_unverified` | **identical** |
+
+The only behaviour that moves is **MODE A**, and it moves from a false success to an honest
+`INCONCLUSIVE`. Measured blast radius, by R2's advisory qualifier:
+
+| Objective | Baseline | `verify:cmd0` | Strict withholds? |
+|---|---|---|---|
+| `STATED` | red | required (promoted) | no — the objective said so |
+| `STATED` | green | required | no |
+| `UNSTATED` | red | advisory + `symbol:*` required | no — the objective asked for something checkable |
+| `UNDETERMINED` | **red** | **advisory** | **yes — this is MODE A** |
+| `UNDETERMINED` | green | required | no — the derivation decided nothing |
+| `UNDETERMINED` | no baseline | required | no |
+
+With the flag off, **nothing** moves — the new record is journalled and read by nothing.
+
+### Alternatives rejected
+
+- **Widen `_WANTS_FIX_RE` again** (the ADR-0047 R5 shape). Rejected: **measured insufficient.** `FIX_BUG`
+  carries no suite word to match, and MODE B shows a fourth phrasing would also match a *prohibition*.
+  A regex over prose is the wrong instrument for a question about meaning, and every widening trades a
+  false negative for a false positive.
+- **Let the model declare the criteria.** Rejected: ADR-0045 R1 — the judged writing the exam. R6's
+  objective-declared path is the legal alternative and is a different thing.
+- **Make `UNDETERMINED` a `FAIL`.** Rejected: it asserts a failure the evidence does not support, which is
+  the error `acceptance.evaluate` exists to refuse (rule 3's comment, ADR-0035 invariant 1). A timeout was
+  once read as a failure for exactly this reason (F60).
+- **Make `UNDETERMINED` promote conservatively.** Rejected: it *is* MODE B — inventing a requirement the
+  user did not state, and failing an objective that never asked for it.
+- **Record the derivation as prose in the attempt prompt only.** Rejected: prose cannot be asserted on,
+  counted, or replayed — F21's finding, and the same distinction as F7's `controlling_layer`.
+- **Widen `derive_acceptance` to return the record.** Rejected: ADR-0009 forbids widening a pinned
+  internal signature to carry a new concern, and `derive_acceptance` has three callers plus a test surface.
+
+### Risks
+
+- **The strict mode makes some objectives uncompletable.** `UNDETERMINED` is terminal until the objective
+  is clarified. This is deliberate and is MODE C's existing behaviour generalised — but it *is* a real
+  cost, and it is why the flag defaults off.
+- **The classification is still a heuristic.** `UNSTATED` is inferred from the presence of a `SymbolSpec`,
+  which is a proxy for "the objective stated something checkable". An objective that names a symbol *and*
+  requires a green suite without saying so lands in `UNSTATED` and keeps MODE A's shape.
+- **`UNDETERMINED` can be reached by a well-formed objective** whose wording the grammar does not know.
+  The record makes it visible; it does not make it right.
+
+### Rollback / reversal
+
+Revert the flag to OFF: `WISP_CRITERIA_STRICT_DERIVATION` defaults to `false`, so the behavioural half is
+inert by construction. The record (`explain_acceptance`, `CriteriaDerivation`, `DerivationReason`) is
+**additive and read by nothing on the decision path**, so it may remain with no effect.
+
+**This ADR is reversed if** a measurement shows that a `UNDETERMINED` classification is reached for an
+objective whose requirement *was* determinable from its own words — i.e. if the classifier's
+false-`UNDETERMINED` rate makes more objectives uncompletable than MODE A's false-`GOAL_MET` rate makes
+them wrongly complete. That trade is not currently measured, and **is the residual this ADR leaves**:
+the classifier's error rates on real objectives are unknown, and MODE A remains reachable with the flag
+off.
+
+### Follow-up questions
+
+1. **Implement the objective-declared structured path (R6).** The contract is named here; the grammar,
+   the validation surface, and the rejection behaviour are not. That is a separate decision, and it is
+   the one that would make a *wrong* answer visible rather than silent.
+2. **Measure the classifier's error rates.** The reversal condition above needs numbers this ADR does
+   not have. The three-mode probe is the instrument; it needs a corpus of real objectives.
+3. **Should `UNDETERMINED` be reachable at all for an objective that names a file?** `FIX_BUG` names
+   `totals.py` and no symbol, so it is `UNDETERMINED` under R1. A third outcome keyed on "the objective
+   names a path and a defect" is conceivable and is **not** taken here.
+4. **Does `GOAL_MET` on a guards-only set need to be *reported* differently?** ADR-0047 R5 calls it an
+   honest no-regression objective. It is honest about what it checked and silent about what it did not;
+   whether the operator should be told which one they got is an interface question.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -4153,3 +4392,4 @@ derived state.*
 | 0045 | Convergence is an objective-level loop that consumes the turn-level authorities and re-implements none of them | NEXT | ACCEPTED (adds the loop the turn-level closure left missing; changes no existing contract) |
 | 0046 | Objective-relative progress is a second input to the recovery decision, not a re-classification of the failure | NEXT (progress-aware recovery) | ACCEPTED (widens one class's legal rungs on measurable progress; amends no earlier decision, and changes no caller that does not pass `progress`) |
 | 0047 | A failed turn is not a failed objective, and R5's unit is the strategy, not the rung | NEXT (multi-turn productive recovery) | ACCEPTED (amends ADR-0035 rows 3–6 — one input combination moves; refines ADR-0046's use of R5 under a new dedicated budget) |
+| 0048 | The acceptance criteria are host-derived from the objective's *stated* conditions; silence is not consent, and an undetermined requirement is `INCONCLUSIVE` | NEXT (criteria authority) | ACCEPTED (names what the host may infer from silence; authorises one additive record and one flag-gated behaviour defaulting to today; declares the objective-declared structured path viable without violating ADR-0045 R1) |

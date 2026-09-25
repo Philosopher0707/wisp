@@ -15,7 +15,10 @@ Guidance for AI coding agents working in the Wisp codebase.
 | Module | Purpose | Key exports |
 |--------|---------|-------------|
 | `wisp/core/stateless.py` | Stateless turn engine | `WispAgentCore.turn(session, prompt, approval_handler)` → `AsyncIterator[dict]`; env-tuned stream knobs (`FIRST_TOKEN_DEADLINE_S`, `CHUNK_DEADLINE_S`) live here |
-| `wisp/core/provider_stream.py` | Provider stream guard | `guarded_provider_stream()`: first-token + mid-chunk stall deadlines, transient-error/empty-stream retry with backoff, honest truncation notice; all deps injected (stream opener, normalizer, deadlines) so it is testable without a core |
+| `wisp/core/provider_stream.py` | Provider stream guard | `guarded_provider_stream()`: first-token + mid-chunk stall deadlines, transient-error/empty-stream retry with backoff, honest truncation notice; all deps injected (stream opener, normalizer, deadlines) so it is testable without a core. Owns **recovery**, not canonicalization (ADR-0039 R5), and decides meaningfulness from an event's **payload** for every type (ADR-0043) |
+| `wisp/core/convergence.py` | The objective-level loop (**ADR-0045**) | `ConvergenceController` (derive acceptance → run a turn → measure with a harness probe → `acceptance.evaluate` → `goal.derive_goal_state` → `recovery.classify_failure*` → `RecoveryLadder.decide` → repeat; bounded, journalled, resumable), `Objective`, `CommandSpec`/`SymbolSpec`, `CommandProbe`, `Measurement`, `derive_acceptance` / `explain_acceptance` (**ADR-0048**), `WITNESS_FIELDS` / `witness_digest`. Consumes every existing authority and re-implements none |
+| `wisp/core/progress.py` | Objective-relative progress (**ADR-0046**) | `evaluate_progress(before, after, criteria)` → `NO_PROGRESS` / `MEANINGFUL_PROGRESS` / `PROGRESS_UNDETERMINABLE`; `PROGRESS_CONTINUATION_RUNGS` (total; `ENVIRONMENT` gains exactly `REPAIR`; empty for `SECURITY`/`REPEATED`/`STAGNATION`). Host-owned, deterministic, reads no model text. A moved `inputs_digest` disqualifies the criterion **first** |
+| `wisp/autonomous.py` | The convergence wiring (**ADR-0045**) | `converge_on_objective`, `observe_turn` (delegates the turn predicate to `terminal_outcome_from_evidence` — never re-derives it), `compose_attempt_prompt`, `workspace_fingerprint`, `changed_files`. Reads `WISP_CRITERIA_STRICT_DERIVATION` at this composition point (ADR-0048 R5) |
 | `wisp/core/engine.py` | Back-compat shim | Re-exports `WispAgentCore` from `stateless.py` |
 | `wisp/core/events.py` | Event system | `AgentEvent`, 12 factory functions (`thinking()`, `tool_call()`, etc.), `EventType` enum |
 | `wisp/core/runtime.py` | Session management | `AgentRuntime`: session CRUD, per-session locks; `_get_core(session_id)` caches one `WispAgentCore` per (session, fingerprint), FIFO-bounded (`MAX_SESSION_CORES`); `invalidate_core_cache()` on config change |
@@ -82,6 +85,7 @@ goes stale on the next flag while the table does not.
 | `recovery_ladder` | `WISP_RECOVERY_LADDER` | the recovery consumer at the turn boundary (`RECOVERY`, plus `ESCALATION` when exhausted). **Defaults `false`** |
 | `goal_state` | `WISP_GOAL_STATE` | the derived goal state (`GOAL_STATE` record). **Defaults `false`** — records only; nothing acts on it |
 | `stagnation_gate` | `WISP_STAGNATION_GATE` | **enforcement**: lets M13 withhold `done` for a bounded replan. **Defaults `false`** — observation and recording are unaffected, so it is a *separate* concern from `graph_oscillation_guard`, which disables the detector itself |
+| `strict_derivation` | `WISP_CRITERIA_STRICT_DERIVATION` | **ADR-0048 R5** — lets the acceptance-criteria derivation decline to complete an objective whose requirement it could not determine. **Defaults `false`**, i.e. today's behaviour: the derivation's reasoning is journalled and acted on by nothing. Read at the composition point (`wisp/autonomous.py`), not inside the pure function |
 
 Three rules that are easy to get wrong:
 
@@ -281,6 +285,40 @@ a `GOAL_MET`. `min_consecutive` gates the **verdict** only, not the predicate �
 **1**. Read ADR-0037 and `PHASE_POST_M13_COMPLETION_ENFORCEMENT_IMPLEMENTATION.md` §15.1 before relying on
 enforcement.
 
+### The acceptance criteria are host-derived, and silence is not consent
+
+ADR-0048. `derive_acceptance` answers *"does this objective require a green suite?"* from the objective's
+own prose, and that answer is the sole gate on `GOAL_MET` (ADR-0047 R5). Use
+**`explain_acceptance(goal, workspace, *, baseline=None, strict=False)`** when the *reasoning* matters: it
+returns a `CriteriaDerivation` carrying, per command spec, one of three outcomes and the objective's own
+words that drove it.
+
+| Outcome | Condition | Consequence |
+|---|---|---|
+| `STATED` | the objective states the requirement | the absolute criterion is promoted to required |
+| `UNSTATED` | silent, but the objective states *something else* checkable (a `SymbolSpec`) | guards-only — an honest no-regression objective |
+| `UNDETERMINED` | silent, and nothing else checkable is named | the host has no basis; it neither promotes nor silently degrades |
+
+- **`derive_acceptance`'s signature is frozen** (ADR-0009). It is a thin caller of `explain_acceptance`
+  with `strict=False`, so its ~40 `criteria_for` call sites and three callers are unaffected. Call
+  `explain_acceptance` directly to reach the record.
+- **Silence is never consent.** An `UNDETERMINED` spec is recorded, and under
+  `WISP_CRITERIA_STRICT_DERIVATION` it also contributes a required, **unevidenceable** criterion that
+  `evaluate`'s rule 3 turns into `INCONCLUSIVE` — never a promotion (that would invent a requirement the
+  user did not state) and never a `FAIL` (that would assert a failure the evidence does not support).
+- **Strict mode withholds only where the derivation actually chose** — `UNDETERMINED` **and** an
+  *advisory* absolute criterion. On a green baseline the criterion is required anyway, so nothing is
+  withheld and the flag cannot break an objective it has no business touching.
+- **The derivation is journalled** once, beside the baseline, as a `{"kind": "derivation"}` line. It is
+  read by nothing on the decision path; its purpose is that the host's answer stops being invisible.
+- **Negation is not handled (R7).** *"Do not make the tests pass"* matches the grammar. The recorded span
+  is how a reader sees it; the grammar was not widened again, because widening it is the mitigation
+  ADR-0048 measures as insufficient.
+- **A measured false `GOAL_MET` is still reachable with the flag off**: the repo's own benchmark task
+  `FIX_BUG` ("Fix the bug in totals.py") has no suite word to match, so on a red baseline a no-op
+  satisfies the guards. `tests/reliability/test_criteria_derivation_authority.py` pins it as a defect, and
+  that class goes red when the derivation is fixed.
+
 ## Common patterns
 
 ### Adding a tool
@@ -335,8 +373,11 @@ python3 -m pytest tests/test_contracts_*.py tests/test_auth_*.py tests/test_runs
   tests/test_task_*.py tests/test_release_*.py tests/test_no_bypass.py -q
 
 # Durable record + proposal boundary + verdicts + task graph
-# (migration P0-P9 + M2/M3/M4/M16/M9/M15/M14/M12/M11/M13 + POST-M13 + ADR-0035/0036/0037)
-# 849 tests — 848 pass, 1 fails (F38: a test that encoded the pre-F8 exchange ordering).
+# (migration P0-P9 + M2/M3/M4/M16/M9/M15/M14/M12/M11/M13 + POST-M13 + ADR-0035/0036/0037
+#  + the NEXT chain ADR-0045/0046/0047/0048)
+# 1090 tests — 1089 pass, 1 fails (F38: a test that encoded the pre-F8 exchange ordering).
+# The block below was extended with the four NEXT-mission files and the two
+# documentation-authority guards; the earlier "849 tests" figure was the pre-NEXT count.
 python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_incremental.py \
   tests/test_action_idempotency_key.py tests/test_proposal_boundary_records.py \
   tests/test_proposal_boundary_no_bypass.py tests/test_verdict_layer_recorded.py \
@@ -353,7 +394,13 @@ python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_
   tests/reliability/test_post_m13_completion_enforcement.py \
   tests/reliability/test_post_m13_stagnation_gate_validation.py \
   tests/reliability/test_f8_tool_execution_restored.py \
-  tests/reliability/test_verification_evidence_adapter.py -q
+  tests/reliability/test_verification_evidence_adapter.py \
+  tests/reliability/test_next_convergence_controller.py \
+  tests/reliability/test_next_autonomous_wiring.py \
+  tests/reliability/test_progress_aware_recovery.py \
+  tests/reliability/test_multi_turn_productive_recovery.py \
+  tests/reliability/test_current_authorities_pins.py \
+  tests/reliability/test_criteria_derivation_authority.py -q
 ```
 
 ### The environment will fight you

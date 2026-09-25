@@ -55,6 +55,7 @@ import re
 import subprocess
 import time
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable, Protocol
 
@@ -163,6 +164,11 @@ class Objective:
     #: is how a bound stops being a bound.
     max_attempts: int = 0
     allow_rollback: bool = False
+    #: ADR-0048 R3 — the criteria derivation's reasoning, `(criteria_id, reason,
+    #: matched_span)` per command spec. Journalled once, beside the baseline, so
+    #: the host's answer to *"does this objective require a green suite?"* is
+    #: reviewable instead of invisible. Read by nothing on the decision path.
+    derivation: tuple[tuple[str, str, str], ...] = ()
 
 
 # ── Measurement specs (host-owned, deterministic) ───────────────────────
@@ -628,6 +634,69 @@ def criteria_for(specs: Iterable[MeasureSpec], *,
 
 # ── Objective → acceptance derivation (host-owned) ──────────────────────
 
+class DerivationReason(StrEnum):
+    """What the host concluded about the objective's *stated* requirements.
+
+    ADR-0048 R1. The three outcomes exist because two were not enough: the
+    derivation's input is prose, and a closed grammar over prose has a third
+    answer besides "the requirement is stated" and "it is not" — **"I cannot
+    tell"**. Collapsing that into "it is not" is a false success (a no-op
+    satisfies guards-only criteria); collapsing it into "it is stated" is a
+    false failure (a requirement the user never gave). Neither is a decision
+    the host is entitled to make on the objective's behalf.
+    """
+
+    #: The objective states the requirement in words the grammar recognises.
+    STATED = "stated"
+    #: The objective is silent about the command, but it states *something else*
+    #: machine-checkable (a named symbol in a named file). Silence here is
+    #: informative: the objective expressed its requirement, and a green suite
+    #: is not part of it. Guards-only is then an honest no-regression
+    #: objective (ADR-0047 R5).
+    UNSTATED = "unstated"
+    #: The objective is silent **and** names nothing else checkable. The host has
+    #: no basis for either answer, so it records that fact and — under strict
+    #: derivation — declines to complete the objective.
+    UNDETERMINED = "undetermined"
+
+
+@dataclass(frozen=True)
+class CriteriaDerivation:
+    """The criteria, plus **why** the host derived them (ADR-0048 R3).
+
+    `reasons` is one `(criteria_id, reason, matched_span)` triple per command
+    spec. The span is the objective's **own words** that produced the promotion,
+    or `""` when there were none — so a reader can tell a promotion the user
+    stated from an inference the host made.
+
+    Read by nothing on the decision path: this is a record, and it is what makes
+    the derivation's answer reviewable instead of invisible.
+    """
+
+    criteria: tuple[AcceptanceCriteria, ...] = ()
+    specs: tuple[MeasureSpec, ...] = ()
+    reasons: tuple[tuple[str, str, str], ...] = ()
+    strict: bool = False
+    #: The specs whose requirement the host could not determine. Non-empty only
+    #: under `strict=True`, where each one also contributes a required,
+    #: unevidenceable criterion — see `explain_acceptance`.
+    undetermined: tuple[str, ...] = ()
+
+    def reason_for(self, criteria_id: str) -> str:
+        """The outcome for one command spec, or `""` if it has none."""
+        for cid, reason, _span in self.reasons:
+            if cid == criteria_id:
+                return reason
+        return ""
+
+    def span_for(self, criteria_id: str) -> str:
+        """The objective's own words that drove the decision, or `""`."""
+        for cid, _reason, span in self.reasons:
+            if cid == criteria_id:
+                return span
+        return ""
+
+
 #: The closed grammar for "define a named symbol in a named file". It is
 #: deliberately conservative: an objective it cannot parse confidently
 #: yields NO criterion, and the controller then reports INCONCLUSIVE rather
@@ -673,6 +742,11 @@ def derive_acceptance(goal: str, workspace: str, *,
         tuple[AcceptanceCriteria, ...], tuple[MeasureSpec, ...]]:
     """Derive host-owned acceptance criteria from an objective.
 
+    Thin caller of `explain_acceptance(..., strict=False)`, kept at this signature
+    because three callers and a wide test surface depend on it (ADR-0009 forbids
+    widening a pinned internal signature to carry a new concern — ADR-0048 R4).
+    Call `explain_acceptance` directly when the derivation's *reasoning* matters.
+
     Two sources, both machine-checkable and neither mediated by a model:
 
     1. **The workspace's own declared verification commands**
@@ -690,6 +764,49 @@ def derive_acceptance(goal: str, workspace: str, *,
     derivation usable on a repository whose suite is already red. Without it
     the absolute criterion is required, which is only correct when the
     command currently succeeds.
+    """
+    d = explain_acceptance(goal, workspace, baseline=baseline)
+    return d.criteria, d.specs
+
+
+def explain_acceptance(goal: str, workspace: str, *,
+                       baseline: "Measurement | None" = None,
+                       strict: bool = False) -> "CriteriaDerivation":
+    """Derive the criteria **and record what the host concluded about the objective**.
+
+    ADR-0048. The derivation asks a question about *meaning* — "does this
+    objective require a green suite?" — and answers it from the objective's own
+    words. Until this function existed, that answer was **unobservable**: nothing
+    recorded whether the absolute criterion had been promoted or left advisory, or
+    on which words. A promotion that cannot cite the objective's own text is an
+    inference the record now shows to be unfounded.
+
+    Three outcomes per command spec (ADR-0048 R1):
+
+    | Outcome | Condition | Consequence |
+    |---|---|---|
+    | `STATED` | the objective states the requirement | the absolute criterion is promoted |
+    | `UNSTATED` | silent, but the objective states *something else* checkable | guards-only — an honest no-regression objective (ADR-0047 R5) |
+    | `UNDETERMINED` | silent, and nothing else checkable is named | the host has no basis; it may neither promote nor silently degrade |
+
+    **Silence is not consent.** With `strict=False` (the default, and the only mode
+    `derive_acceptance` uses) an `UNDETERMINED` spec behaves exactly as today: it is
+    recorded and not acted on. With `strict=True` it contributes a **required
+    criterion the harness cannot evidence** (ADR-0048 R2), which `evaluate`'s
+    existing rule 3 — "a required criterion with no valid evidence" — turns into
+    `INCONCLUSIVE`. No new verdict vocabulary and no `FAIL`: the absence of a
+    determination is not a determination of failure.
+
+    **Strict mode withholds only where the derivation actually chose.** A spec
+    whose absolute criterion is required anyway — because the baseline is green,
+    or because the objective stated the requirement — is untouched: the host
+    decided nothing, so there is nothing to withhold. `UNDETERMINED` and
+    `advisory` together are the whole blast radius, which is exactly the case
+    where a no-op would otherwise pass.
+
+    This does not make a wrong answer *right*; it makes it **visible**. Negation is
+    still unhandled (ADR-0048 R7): *"do not make the tests pass"* matches the
+    grammar, and the recorded span is how a reader sees it.
     """
     specs: list[MeasureSpec] = []
 
@@ -729,10 +846,57 @@ def derive_acceptance(goal: str, workspace: str, *,
                 description=f"{target} defines {m.group(1)}()",
             ))
 
+    # ── the derivation's own reasoning (ADR-0048 R3) ────────────────────
+    match = _WANTS_FIX_RE.search(goal or "")
+    span = match.group(0) if match else ""
+    names_something_checkable = any(isinstance(s, SymbolSpec) for s in specs)
+    if match:
+        reason = DerivationReason.STATED
+    elif names_something_checkable:
+        reason = DerivationReason.UNSTATED
+    else:
+        reason = DerivationReason.UNDETERMINED
+
     criteria = criteria_for(
         specs, baseline=baseline,
-        promote_absolute=bool(_WANTS_FIX_RE.search(goal or "")))
-    return criteria, tuple(specs)
+        promote_absolute=(reason is DerivationReason.STATED))
+
+    reasons: list[tuple[str, str, str]] = []
+    undetermined: list[str] = []
+    #: Only a spec whose absolute criterion ended up **advisory** represents an
+    #: undetermined *choice*. On a green baseline `criteria_for` requires the
+    #: absolute criterion anyway, so the derivation decided nothing and there is
+    #: nothing for strict mode to withhold — which is what keeps the flag's blast
+    #: radius to the one case that is actually MODE A.
+    advisory = {c.criteria_id for c in criteria if not c.required}
+    for spec in specs:
+        if isinstance(spec, CommandSpec):
+            reasons.append((spec.criteria_id, reason.value, span))
+            if (strict and reason is DerivationReason.UNDETERMINED
+                    and spec.criteria_id in advisory):
+                undetermined.append(spec.criteria_id)
+
+    if undetermined:
+        # R2 — a required criterion nothing can evidence. `evaluate` rule 3
+        # turns it into INCONCLUSIVE with the criterion named in
+        # `unmet_criteria`; `check=None` keeps rule 2 from reading it as FAIL.
+        extra = tuple(
+            AcceptanceCriteria(
+                criteria_id=f"{cid}:requirement_declared",
+                description=(
+                    f"the objective does not state whether `{cid}` must hold, and "
+                    "the host will not decide that on the objective's behalf — "
+                    "state the acceptance condition explicitly"),
+                required=True,
+                check=None,
+            )
+            for cid in undetermined)
+        criteria = tuple(criteria) + extra
+
+    return CriteriaDerivation(
+        criteria=tuple(criteria), specs=tuple(specs),
+        reasons=tuple(reasons), strict=strict,
+        undetermined=tuple(undetermined))
 
 
 def _first_existing_path(goal: str, workspace: str) -> str:
@@ -1090,6 +1254,14 @@ class ConvergenceController:
             self._baseline = self._journal_baseline
         elif self._baseline is not None and not self.attempts:
             self._write_baseline(self._baseline)
+
+        # ADR-0048 R3 — record WHY these criteria are the criteria. Written once,
+        # beside the baseline, and only when the caller supplied a derivation:
+        # "did the host think this objective required a green suite, and on what
+        # words?" is then answerable from the journal instead of re-run. The
+        # record is read by nothing on the decision path.
+        if objective.derivation and not self.attempts:
+            self._write_derivation(objective.derivation)
 
         # The baseline snapshot is taken BEFORE the first mutation so the
         # Rollback rung has something to restore to. Taken once, and only
@@ -1482,6 +1654,22 @@ class ConvergenceController:
         self._append_line({"kind": "baseline",
                            "measurement": baseline.to_dict()})
         self._journal_baseline = baseline
+
+    def _write_derivation(self, reasons: tuple[tuple[str, str, str], ...]) -> None:
+        """Record the criteria derivation's reasoning, once (ADR-0048 R3).
+
+        One line per command spec: the criteria id, the outcome, and the
+        objective's **own words** that drove it. A promotion whose span is empty
+        is an inference with no citation, and this line is what makes that
+        visible rather than silent.
+        """
+        if self._journal is None:
+            return
+        self._append_line({
+            "kind": "derivation",
+            "reasons": [{"criteria_id": cid, "reason": reason, "span": span}
+                        for cid, reason, span in reasons],
+        })
 
     def _append_line(self, payload: dict[str, Any]) -> None:
         if self._journal is None:

@@ -35,7 +35,7 @@ from wisp.core.convergence import (
     TurnObservation,
     WorkspaceSnapshot,
     criteria_for,
-    derive_acceptance,
+    explain_acceptance,
     read_journal_baseline,
 )
 from wisp.core.goal import TerminalOutcome, terminal_outcome_from_evidence
@@ -43,6 +43,25 @@ from wisp.core.goal import TerminalOutcome, terminal_outcome_from_evidence
 logger = logging.getLogger(__name__)
 
 MAX_TRACKED_FILES = 4000
+
+#: ADR-0048 R5 — strict criteria derivation. Read at this composition point, not
+#: inside the pure function, so `explain_acceptance` stays testable without env.
+#:
+#: **Default OFF**, i.e. today's behaviour: an `UNDETERMINED` requirement is
+#: recorded and not acted on. ON, it yields a required criterion the harness
+#: cannot evidence, which `acceptance.evaluate`'s rule 3 turns into
+#: `INCONCLUSIVE` — so an objective whose acceptance condition the host cannot
+#: determine stops completing on a no-op. That is the fix for the measured false
+#: `GOAL_MET` (ADR-0048 MODE A), and it is off by default because it also makes
+#: such objectives uncompletable until they are clarified.
+STRICT_DERIVATION_ENV = "WISP_CRITERIA_STRICT_DERIVATION"
+
+
+def _strict_derivation_enabled() -> bool:
+    """True when `WISP_CRITERIA_STRICT_DERIVATION` is set truthy."""
+    import os
+    return str(os.environ.get(STRICT_DERIVATION_ENV, "")).strip().lower() in (
+        "1", "true", "yes", "on")
 
 
 def _event_field(event: Any, key: str, default: Any = None) -> Any:
@@ -238,13 +257,23 @@ async def converge_on_objective(
     # already moved, so a fresh measurement would be a baseline of the mutated
     # state — a different exam for attempt N than attempt 0 was given.
     resumed_baseline = (read_journal_baseline(journal_path) if resume else None)
-    if criteria is None:
-        _, derived_specs = derive_acceptance(objective_text, workspace)
+    criteria_derived = criteria is None
+    derivation = None
+    if criteria_derived:
+        strict = _strict_derivation_enabled()
+        _, derived_specs = explain_acceptance(objective_text, workspace,
+                                              strict=strict)
         specs = derived_specs if specs is None else specs
         probe = CommandProbe(specs)
         baseline = resumed_baseline or probe.measure(workspace)
-        criteria, _ = derive_acceptance(objective_text, workspace,
-                                        baseline=baseline)
+        derivation = explain_acceptance(objective_text, workspace,
+                                        baseline=baseline, strict=strict)
+        criteria = derivation.criteria
+        logger.info(
+            "criteria derivation (strict=%s): %s", strict,
+            ", ".join(f"{cid}={reason}"
+                      + (f" on {span!r}" if span else "")
+                      for cid, reason, span in derivation.reasons) or "none")
     else:
         probe = CommandProbe(specs or ())
         baseline = resumed_baseline or (probe.measure(workspace)
@@ -253,6 +282,7 @@ async def converge_on_objective(
         goal=objective_text, workspace=workspace,
         criteria=tuple(criteria or ()), max_attempts=max_attempts,
         allow_rollback=allow_rollback,
+        derivation=derivation.reasons if criteria_derived else (),
     )
 
     own_root = root is None
