@@ -21,12 +21,21 @@ callback), kept in memory — no temp-dir lifecycle to leak.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
 from wisp.core.graph.phases import Phase, is_terminal, next_phase
+# ADR-0060 R5 — Layer C's disposition. `diff_hash` and `OscillationTrap` are LIVE
+# symbols (the turn path uses them through `core/stagnation.py` and
+# `core/runtime.py`), so they were relocated to Layer A's `wisp/core/oscillation.py`
+# and are re-exported here. That leaves Layer C with **zero live consumers** and
+# makes ADR-0001's "disowned" claim true, while keeping this module's public surface
+# unchanged — `wisp/core/graph/__init__.py` re-exports both names and needs no edit.
+#
+# The direction matters and is guarded: a disowned layer may import from Layer A;
+# the live path may never import from a disowned layer.
+from wisp.core.oscillation import OscillationTrap, diff_hash  # noqa: F401  (re-export)
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +79,6 @@ ReadFile = Callable[[str], str | None]
 WriteFile = Callable[[str, str], None]
 
 
-def diff_hash(diff: str) -> str:
-    """Stable identity of a produced diff for oscillation detection."""
-    return hashlib.sha256(diff.encode("utf-8", errors="ignore")).hexdigest()
-
-
 class Snapshot:
     """In-memory pre-run copy of caller-tracked files with revert."""
 
@@ -107,22 +111,6 @@ class Snapshot:
             except Exception:
                 logger.warning("snapshot revert failed for %s", path, exc_info=True)
         return tuple(reverted)
-
-
-class OscillationTrap:
-    """Detects 1-cycle repeats and 2-cycle oscillations of diff hashes."""
-
-    def __init__(self) -> None:
-        self._hashes: list[str] = []
-
-    def observe(self, digest: str) -> str | None:
-        """Record a diff hash; return 'repeat' | 'cycle' | None."""
-        self._hashes.append(digest)
-        if len(self._hashes) >= 2 and self._hashes[-1] == self._hashes[-2]:
-            return "repeat"
-        if len(self._hashes) >= 3 and self._hashes[-1] == self._hashes[-3]:
-            return "cycle"
-        return None
 
 
 class ExecutionGraph:

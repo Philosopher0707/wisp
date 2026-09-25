@@ -883,7 +883,7 @@ class AgentRuntime:
                         if stagnation_detector is not None:
                             try:
                                 from wisp.core.action_key import action_key
-                                from wisp.core.graph.loop import diff_hash
+                                from wisp.core.oscillation import diff_hash
                                 # The action identity, from whichever producer
                                 # saw the call: the engine stamps it on a
                                 # refusal (a refused call emits no call event),

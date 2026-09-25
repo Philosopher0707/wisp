@@ -142,6 +142,78 @@ would change a live tool's accepted inputs.
 
 ---
 
+## 3.5 Layer C's disposition (ADR-0060 R5)
+
+This was added to the mission's acceptance criteria after the first landing, and it is the one part of
+Position A that needed a **code** change rather than a record change.
+
+**The drift.** ADR-0001 named Layer C — `wisp/core/graph/` — *"disowned"*. It was not. The **live turn
+path** imported from it:
+
+| symbol | consumer | layer |
+|---|---|---|
+| `OscillationTrap` | `core/stagnation.py` (wired at M13/ADR-0034) | Layer A |
+| `diff_hash` | `core/stagnation.py`, `core/runtime.py` | Layer A |
+| `ExecutionGraph`, `phases.py` (`Phase`, `next_phase`, `is_terminal`) | **none** | — |
+
+So the corpus carried a **disowned-but-consumed** layer: the claim and the code had drifted, which is the
+pattern this repository keeps finding.
+
+**The decision — relocate the live symbols, retain the dead part.**
+
+- `diff_hash` and `OscillationTrap` **moved** to `wisp/core/oscillation.py` (Layer A).
+- `core/stagnation.py` and `core/runtime.py` import from there.
+- `core/graph/loop.py` imports and **re-exports** both, so `wisp/core/graph/`'s public surface is
+  unchanged and **`wisp/core/graph/__init__.py` needs no edit** — which matters, because that file
+  carries the user's uncommitted WIP.
+
+**The normative rule is a direction:**
+
+> **A disowned layer may import from Layer A; the live path may never import from a disowned layer.**
+
+That is what makes the disposition mechanical rather than a prose claim, and it is asserted by
+`test_layer_c_disposition.py` over the turn path's transitive import closure.
+
+**Why the dead part is kept, not deleted.** `ExecutionGraph` and `phases.py` have **zero** production
+callers. Deleting them was rejected for two stated reasons:
+
+1. It requires editing `wisp/core/graph/__init__.py`, which carries the **user's uncommitted WIP** — and
+   the repo's rule is not to interleave work with it.
+2. **The user's own note in that uncommitted docstring says:** *"Experimental — NOT wired into
+   `WispAgentCore.turn` … **Keep for reference; delete if no caller appears** (history preserves it)."*
+   The condition it names is *"delete if no caller appears"* — and a caller **did** appear, for
+   `OscillationTrap`. So the note's own condition resolves to **keep**.
+
+The disposition is therefore: **Layer C is permanently disowned, and the retention is a decision with a
+named reason, not neglect.** A guard pins that it has no production caller, so a future wiring is a
+decision rather than a silent supersession.
+
+**The move is proven to be a move, not a copy** — by **identity**:
+`wisp.core.graph.loop.OscillationTrap is wisp.core.oscillation.OscillationTrap`, and the same for
+`diff_hash`. An equality check would pass for a re-implementation; identity does not.
+
+**ADR-0037's monotonicity is preserved**, and the guard drives it rather than asserting it: the trap has
+**no reset at all** (which is *how* the monotonicity is achieved), and the guard fails if one appears.
+
+### 3.5.1 One guard was rewritten, and it was the right kind of failure
+
+`tests/test_stagnation_detection.py::test_the_detector_reuses_the_existing_trap` asserted:
+
+```python
+assert "from wisp.core.graph.loop import" in src
+```
+
+That is a **bare string scan pinning an import path** — two defects in one line (`CONTEXT.md` §10
+instance 5 is the string-scan class). When the symbol moved, the guard **failed while its own claim still
+held**: the detector still reuses the one trap and still defines none of its own. It is now AST-based and
+path-agnostic — the import of the *name*, the absence of a second definition, and identity with the object
+the live module exports.
+
+**This is the difference between a tripwire and a nuisance.** The guard was pinning a *path*, and the
+property was about *reuse*; the relocation exposed the gap.
+
+---
+
 ## 4. The four non-violations, asserted
 
 Each is pinned in `tests/reliability/test_layer_b_boundary.py`, and each was checked by
@@ -259,12 +331,19 @@ both headings are re-measured in this change (§7).
 
 | | |
 |---|---|
-| **The new guard** | `test_layer_b_boundary.py` — **16 passed** |
-| **Non-vacuity** | **10/10 CAUGHT**, tree restored byte-identical, control green |
+| **The new guards** | `test_layer_b_boundary.py` — **16 passed**; `test_layer_c_disposition.py` — **18 passed** |
+| **Non-vacuity** | Layer B **10/10 CAUGHT**; Layer C **9/9 by mutation + 1 in-process = 10/10**, tree restored byte-identical, controls green |
 | **`task_graph.py` is prose-only** | docstring-stripped AST **identical**; recursive `co_code` **identical** |
 | **The affected set** (6 files) | **169 tests — 168 passed, 1 failed** — the failure is **F38**, pre-existing |
+| **The Layer C affected set** (6 files) | **132 passed, 0 failed** — `test_stagnation_detection`, `test_stagnation_live_wiring`, `test_architectural_upgrade`, `test_post_m13_completion_enforcement`, `test_module_orphans`, `test_layer_direction` |
 | **Regression** | §7.1 |
 | **Gates** | `ruff check wisp/` → **11 errors**, unchanged (F71). `mypy` not re-run (F71: 1844 in 228 files, unchanged by every recent chain) |
+
+**One guard is deliberately NOT probed by mutation.** `test_layer_cs_public_surface_is_unchanged` reads
+`wisp/core/graph/__init__.py`, which carries the **user's uncommitted WIP**; writing to it — even with a
+guaranteed byte-identical restore — risks work that is not mine and not committed. It is probed
+**in-process** instead (the same `hasattr` predicate, driven against a name the package does not export,
+proving it discriminates), and the exclusion is reported rather than hidden.
 
 ### 7.1 Regression
 
@@ -285,7 +364,8 @@ and is stated as such.
 | | |
 |---|---|
 | **before this change** | **1455 tests — 1454 passed, 1 failed** (F38) |
-| **after** | **1471 tests — 1470 passed, 1 failed** (F38) — **+16**, all in the new file |
+| **after the Layer B landing** | **1471 tests — 1470 passed, 1 failed** (F38) — **+16** |
+| **after the Layer C disposition** | **1505 tests — 1504 passed, 1 failed** (F38) — **+18** |
 | **new failures** | **none**; **now-passing**: none |
 
 The block gains one file (`tests/reliability/test_layer_b_boundary.py`), and **both** headings
@@ -317,3 +397,11 @@ causes: a stale-by-2 count (F85 instance, above) and this phase's +16.
   durable run per call (re-verified: `executor.py:137`) and enforces workspace containment
   (read), and that `validate_graph` returns more error classes. They come from
   `PHASE_DAG_RETIREMENT.md` §4 and are cited, not re-measured.
+- **Layer C's dead part is retained, so it is still *in* the tree.** The decision is that it is a
+  disowned reference implementation with a named reason and a guard, not that it is gone. A future phase
+  that wants it deleted must edit `wisp/core/graph/__init__.py` — which carries the user's WIP — and that
+  is a change the owner of that WIP should make, not this mission.
+- **The relocation was proven by identity and by the existing suites, not by a differential.** There is no
+  before/after bytecode comparison for the moved symbols, because they were moved **verbatim** and the
+  guard asserts `is`-identity with the module the live path imports. A `prove_prose_only`-style
+  instrument would be stronger; it was not needed here, and saying so is better than implying it ran.

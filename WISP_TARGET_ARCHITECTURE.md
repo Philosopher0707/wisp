@@ -176,6 +176,13 @@ GOAL_OPEN ─► PLANNING ─► GRAPH_READY ─► EXECUTING ─┬─► VERIF
 terminal: GOAL_MET · GOAL_FAILED · BUDGET_EXHAUSTED · CANCELLED · ESCALATED_TO_HUMAN
 ```
 
+> **Annotated 2026-09-25 (ADR-0060).** This is the **target**, and its arrows are directional:
+> `GRAPH_READY ─► EXECUTING` reads as *the graph drives execution*. **The implemented model is
+> Position A** — the turn loop (`WispAgentCore.turn` / `AgentRuntime.run_turn`) is the driver and
+> the graph is a durable record. ADR-0060 R2 records the graph-driven reading as **rejected**, with
+> the reversal condition under which it would return. Read the diagram as the target, not as the
+> system; nothing above is rewritten.
+
 ### 5.2 Node states
 
 ```
@@ -360,6 +367,13 @@ Immutable Event Journal  ──materialize──►  Graph State  ──project�
 - The journal is the source of truth for *what happened*.
 - Graph rows are the materialized state for *what is true now*.
 - The message list and UI are **views** projected from both.
+
+> **Annotated 2026-09-25 (ADR-0029, ADR-0060).** The third bullet is the one the migration corrected:
+> the message list is a view projected from the **journal**, not from the graph — the graph carries
+> **no transcript payload** (`TaskNode` has no payload field, and `PAYLOAD` is a declared kind with no
+> member; ADR-0029). The graph contributes status and structure, not content. And the second bullet's
+> `materialize` step runs **after** the turn, over the work the turn observably did — the graph is a
+> **record**, not the driver (ADR-0060 R1/R2). Nothing above is rewritten.
 
 **Concretely:** extend the already-wired `SessionRepository` (`core/session_repo.py`) and the existing
 `graph_events` table; make `Session.apply` (`core/session.py:84-117`) handle `TOOL_CALL`; and give

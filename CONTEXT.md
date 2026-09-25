@@ -1882,7 +1882,7 @@ environmental set in §7. Never quote "the suite passes" — quote the set.
 `jsonschema` absent, so they include F8's effects. The `tests/reliability/` measurement after
 provisioning (24 failures → 0) shows the magnitude of the error. Re-measure before comparing.
 
-### Canonical suites — 1487 tests (1486 pass, 1 fails)
+### Canonical suites — 1505 tests (1504 pass, 1 fails)
 
 ```bash
 env -u PYTHONPATH .venv/bin/python -m pytest \
@@ -1915,6 +1915,7 @@ env -u PYTHONPATH .venv/bin/python -m pytest \
   tests/reliability/test_gate_enablement_contract.py \
   tests/reliability/test_dag_retirement_contract.py \
   tests/reliability/test_layer_b_boundary.py \
+  tests/reliability/test_layer_c_disposition.py \
   tests/reliability/test_external_input_path.py \
   tests/reliability/test_f8_published_status.py \
   tests/reliability/test_criteria_source_on_turn_path.py \
@@ -1951,8 +1952,9 @@ from prose** — run the block.
 mission's baseline, the same block collected **1455** — two tests had been added to a block member
 after the count was taken, which is **F85** again (an instance, not a new finding). The Layer B
 boundary mission then added one file (+16) and re-measured **1471**; the external-input-path mission
-added one more (+16) and re-measured **1487**. Both headings (`CONTEXT.md` §11 and `AGENTS.md`) are
-re-measured in the same change that adds each file (F85).
+added one more (+16) and re-measured **1487**; the Layer C disposition added one more (+18) and
+re-measured **1505**. Both headings (`CONTEXT.md` §11 and `AGENTS.md`) are re-measured in the same change
+that adds each file (F85).
 
 **And "1312" was stale within the mission that wrote it (F85).** The corpus-integrity pass measured the
 block in **Deliverable 1** and set both headings; **Deliverable 2** then added **four** tests to
@@ -2057,6 +2059,7 @@ M9 was said to block are now complete** — M12, M14, M15, M11, M13.
 | **M7** | `change_tracker.py` not wired into evidence | **OPEN** — deferred with 3b. |
 | **M8** | `multi_agent/dag.py` not retired into `wisp/graph/` | **SURVEYED AND DECIDED 2026-09-25 — `DEPRECATE`, not remove**, and **RE-SCOPED by ADR-0060**: the divergence is no longer a blocker awaiting reconciliation but the **boundary** between two different tools. The fanout suite is green (107 passed), so the retirement was attempted and **driven**. The measured semantic divergence stands — `wisp/graph/` requires a non-empty graph with every node reachable from the entrypoint, `TaskDAG` is a general partial order — so re-pointing `orchestrate_dag` onto `validate_graph` would **reject inputs it accepts today** (a behaviour change to a live, model-callable tool). Also measured: `TaskDAG.validate()` mis-reports an unknown dependency as a cycle, and `compat.dag_to_graph` is test-only. **The removal is not owed**: choosing which definition of a valid DAG wins is a change to a live tool and is its own decision. **The residual stays open and tripwired** (3 tripwires). Guard: `tests/reliability/test_dag_retirement_contract.py`. Reports: `PHASE_DAG_RETIREMENT.md`, `PHASE_LAYER_B_BOUNDARY.md`. |
 | **M10** | The materialized graph is a **lower bound** on iterations | **OPEN — by design.** One node per closed tool exchange + one terminal; iteration boundaries are not observable. |
+| **Layer C** | **`wisp/core/graph/` — ADR-0001 named it *disowned*, and it was not.** The live turn path imported `OscillationTrap` and `diff_hash` from it (`core/stagnation.py` since M13, and `core/runtime.py`) — the *disowned-but-consumed* drift. **This row did not exist**; §12 is the live open-items authority and carried no Layer C entry (F100's class). | ✅ **DECIDED 2026-09-25 (ADR-0060 R5).** The live symbols **moved** to `wisp/core/oscillation.py` (Layer A) and are re-exported from `loop.py`, so `wisp/core/graph/__init__.py` — the user's WIP — needs **no edit**. **The rule is a direction:** a disowned layer may import from Layer A; the live path may never import from a disowned layer. The dead part (`ExecutionGraph`, `phases.py`, **zero** production callers) is **retained as a reference implementation** — deleting it would edit the WIP file, and the user's own uncommitted note there says *"Keep for reference; delete if no caller appears"*, and a caller **did** appear. Guard: `tests/reliability/test_layer_c_disposition.py` (18). Report: `PHASE_LAYER_B_BOUNDARY.md`. |
 
 **Committed.** Phase 10 and migration P0–P9 + M2/M3/M4 are committed (§3). The remaining uncommitted
 files are the user's pre-existing WIP (§8) plus foreign-session test files.
