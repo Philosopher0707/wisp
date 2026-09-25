@@ -13,8 +13,11 @@
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is `7c15626`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
-on top of it (**34**) and is the authority for the count.
+**HEAD is `ade4dc6`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
+on top of it (**35**) and is the authority for the count.
+**`ade4dc6` is the POST-M13 landing** — 108 files, +26,811/−397, covering ADR-0034 … ADR-0044
+(M13, the POST-M13 chain, F8/F37, and the provider-event chain through ADR-0044). It excludes the
+user's pre-existing WIP, listed in §8.
 **The migration suites are 849 tests — 848 pass, 1 fails.** The failure is
 `test_node_identity.py::TestANodeReferencesItsWorkUnit::test_a_parallel_round_is_journaled_as_one_exchange_per_call`,
 finding **F38**: a test that had encoded the F8 environment as the contract (see §11).
@@ -593,7 +596,8 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `43015ea` | `fix(m12):` bridge the failure path to the taxonomy; engine refusals are denials — 33 tests |
 | `e2b6f10` | `docs(m12):` record the M12 commit in the handoff table |
 | `0fdcdea` | `feat(m11):` give graph nodes a work-unit identity; the ratchet classifies fields, not names — 24 tests |
-| `7c15626` | `docs(m11):` record the M11 phase; findings F29–F31; repair the commit table — **`HEAD`** |
+| `7c15626` | `docs(m11):` record the M11 phase; findings F29–F31; repair the commit table |
+| `ade4dc6` | `feat:` land the POST-M13 execution-semantics work (ADR-0034 – ADR-0044) — 108 files, +26,811/−397; excludes the user's WIP (§8) — **`HEAD`** |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
@@ -601,6 +605,10 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 > work** from before the migration. It is included because it is interleaved with the migration's changes
 > in the same hunks; the commit bodies say so. It could not be separated without reverse-engineering
 > changes the migration did not make.
+>
+> **Resolved by `ade4dc6` (2026-09-25).** The whole POST-M13 chain is now committed, so the
+> interleaving above no longer applies. What remains uncommitted is exactly §8's list — the user's
+> own WIP — which was excluded deliberately and file-by-file.
 
 ### What `83b10af` itself contained (Phase 9/10)
 

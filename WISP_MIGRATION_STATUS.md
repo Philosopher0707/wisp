@@ -13,10 +13,12 @@
 
 ### Commits
 
-**34 commits** on top of `83b10af` (`git rev-list --count 83b10af..HEAD`). The full table is in
+**35 commits** on top of `83b10af` (`git rev-list --count 83b10af..HEAD`). The full table is in
 `CONTEXT.md` §3; the first three and the most recent three are listed here for orientation. This count is
-**prose and goes stale on the next commit** — §3 is the authority, and it is now complete: until
-2026-09-24 it was missing its own last row (`7c15626`, `HEAD`).
+**prose and goes stale on the next commit** — §3 is the authority, and it is now complete.
+
+**`ade4dc6` (2026-09-25) is the POST-M13 landing** — 108 files, +26,811/−397, ADR-0034 … ADR-0044.
+It excludes the user's pre-existing WIP (`CONTEXT.md` §8) deliberately and file-by-file.
 
 | Commit | Scope |
 |---|---|
@@ -26,7 +28,8 @@
 | … | one commit per phase thereafter — see `CONTEXT.md` §3 |
 | `e2b6f10` | `docs(m12):` record the M12 commit in the handoff table |
 | `0fdcdea` | `feat(m11):` give graph nodes a work-unit identity; the ratchet classifies fields, not names — 24 tests |
-| `7c15626` | `docs(m11):` record the M11 phase; findings F29–F31; repair the commit table — **`HEAD`** |
+| `7c15626` | `docs(m11):` record the M11 phase; findings F29–F31; repair the commit table |
+| `ade4dc6` | `feat:` land the POST-M13 execution-semantics work (ADR-0034 – ADR-0044) — 108 files, +26,811/−397 — **`HEAD`** |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
