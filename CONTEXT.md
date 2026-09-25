@@ -188,6 +188,7 @@ quoting it; §11 says how.
 | M4 wiring | `COMPLETE` — the layer is **WIRED**, default OFF; §6 step 3 (REST) deliberately not done; 4 tripwires inverted, **2 repaired** (**F92**); found **F93** | `PHASE_M4_WIRING.md` |
 | REST authorization composition (**ADR-0059**) | `COMPLETE` — **`DECIDED + IMPLEMENTED`**; the gate consults `authorize()` for its **denial** verdict, conditional on a bundle; found **F94/F95/F96/F98/F99** | `PHASE_REST_AUTHORIZATION_COMPOSITION.md` |
 | corpus integrity III | `COMPLETE` — 2.1/2.3/2.4 **closed**, 2.2's installs **OPEN**; found **F97**, **F100** | `PHASE_CORPUS_INTEGRITY_III.md` |
+| Layer B boundary (**ADR-0060**) | `COMPLETE` — **`DECIDED`**: Position **A**, Layer A is the driver and Layer B is a record, **permanently**; Position B rejected on measurement (`Graph` frozen, no growth API, complete-graph-up-front, no lowering); found **F101** (a probe that checked the wrong paths), **F102** (ADR-0021's stated blocker was **false when written**), **F103**, **F104** (ADR-0057 had no index row) | `PHASE_LAYER_B_BOUNDARY.md` |
 
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log — **mind the §0/§23 split**, and note it has **no G1 or governance-layer row**: `CONTEXT.md` §12 is the live open-items table, **F99**).
 **Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0059**).
@@ -1850,7 +1851,7 @@ environmental set in §7. Never quote "the suite passes" — quote the set.
 `jsonschema` absent, so they include F8's effects. The `tests/reliability/` measurement after
 provisioning (24 failures → 0) shows the magnitude of the error. Re-measure before comparing.
 
-### Canonical suites — 1453 tests (1452 pass, 1 fails)
+### Canonical suites — 1471 tests (1470 pass, 1 fails)
 
 ```bash
 env -u PYTHONPATH .venv/bin/python -m pytest \
@@ -1882,6 +1883,7 @@ env -u PYTHONPATH .venv/bin/python -m pytest \
   tests/reliability/test_structured_criteria.py \
   tests/reliability/test_gate_enablement_contract.py \
   tests/reliability/test_dag_retirement_contract.py \
+  tests/reliability/test_layer_b_boundary.py \
   tests/reliability/test_f8_published_status.py \
   tests/reliability/test_criteria_source_on_turn_path.py \
   tests/reliability/test_acceptance_gate_enablement.py \
@@ -1906,11 +1908,18 @@ update, which requires explicit authorization.
 **The heading said "849 tests" until 2026-09-25, "714 tests" before that, "1115 tests" until the
 gate-enablement mission, "1289" until the acceptance-gate-enablement mission, "1314" until its
 Deliverable 2, "1317" until the authorization-parity mission, "1312" until the
-outcome-classification mission, "1390" until corpus integrity II, and "1437" until the
-REST-authorization-composition mission.** None was current for long: the command block had never been
+outcome-classification mission, "1390" until corpus integrity II, "1437" until the
+REST-authorization-composition mission, and "1453" until the Layer B boundary mission.**
+None was current for long: the command block had never been
 extended with the POST-M13 files (714 → 849), the four NEXT-mission files and the three 2026-09-25
 files (849 → 1115), or the guards the later missions added. Finding **F71**. **Do not quote a count
 from prose** — run the block.
+
+**"1453" was itself stale by 2 before the Layer B mission touched anything.** Measured at that
+mission's baseline, the same block collected **1455** — two tests had been added to a block member
+after the count was taken, which is **F85** again (an instance, not a new finding). The Layer B
+boundary mission then added one file (+16) and re-measured: **1471**. Both headings
+(`CONTEXT.md` §11 and `AGENTS.md`) were re-measured in the same change that added the file (F85).
 
 **And "1312" was stale within the mission that wrote it (F85).** The corpus-integrity pass measured the
 block in **Deliverable 1** and set both headings; **Deliverable 2** then added **four** tests to
@@ -2000,7 +2009,7 @@ M9 was said to block are now complete** — M12, M14, M15, M11, M13.
 | # | Item | Nature |
 |---|---|---|
 | **M9** | The execution view | ✅ **COMPLETE** — ADR-0029. **The strong reading was the wrong target** (the graph carries no payload), and the projection that exists was **not faithful** (now fixed and asserted). |
-| **M11** | The graph does not drive execution | ✅ **COMPLETE as node identity** — ADR-0033. `TaskNode.work_unit` references the work unit (F29/F30: M9's own ratchet forbade the fix and was evadable by naming — replaced by field classification). **The graph driving execution is still open**, pinned by `test_the_graph_still_does_not_drive_execution`. |
+| **M11** | The graph does not drive execution | ✅ **COMPLETE — and DECIDED, not deferred.** ADR-0033 landed **node identity** (`TaskNode.work_unit`; F29/F30: M9's own ratchet forbade the fix and was evadable by naming — replaced by field classification). **ADR-0060 closes the second half:** Layer A is the driver and `wisp/graph/` is a record, **permanently**. *"The graph drives execution"* is **rejected as a target**, on measurement — `wisp.graph.types.Graph` is `frozen=True`, `GraphExecutor`'s public surface is `run`/`resume`/`cancel`/`register_function` with **no growth API**, `run()` refuses a graph that is not complete up front, and **no `TaskGraph → Graph` lowering exists**; a turn's node set is produced by the model *during* the turn. `test_the_graph_still_does_not_drive_execution` is now the **contract**, with its reversal condition stated in the test. Guard: `tests/reliability/test_layer_b_boundary.py` (16). Report: `PHASE_LAYER_B_BOUNDARY.md`. |
 | **M12** | The failure path | ✅ **COMPLETE** — ADR-0032. The ladder can be driven from a real failure now, and engine refusals are denials (F28: they were being retried). Enforcement deferred. |
 | **M13** | The stagnation detector is not constructed by the turn loop | ✅ **COMPLETE** — ADR-0034. The detector now runs per turn on the live path, gated by `config.graph_oscillation_guard`. **Found two defects**: an empty signal (both inputs are opt-in, so it is empty by default) declared every multi-turn session stagnant (F32), and the runtime cannot see a refused call's arguments (F33). **Enforcement deferred**: routing and goal-met gating are tripwired. |
 | **M14** | The context trust boundary | ✅ **COMPLETE** — ADR-0031. **Found a live T1 violation**: workspace-file content (`CLAUDE.md`) sat *before* the system prompt, unfenced. T2 fencing remains, deliberately staged. |
@@ -2013,7 +2022,7 @@ M9 was said to block are now complete** — M12, M14, M15, M11, M13.
 | **M5** | Foreground-turn `RunRecord` lifecycle | **OPEN** — proven end-to-end for background runs only. |
 | **M6** | `PolicyDecisionEnvelope` producer-less and consumer-less | **OPEN** — the last unwired contract. |
 | **M7** | `change_tracker.py` not wired into evidence | **OPEN** — deferred with 3b. |
-| **M8** | `multi_agent/dag.py` not retired into `wisp/graph/` | **SURVEYED AND DECIDED 2026-09-25 — `DEPRECATE`, not remove.** The fanout suite is green (107 passed), so the retirement was attempted and **driven**. It is blocked on a **measured semantic divergence**: `wisp/graph/` requires a non-empty graph with every node reachable from the entrypoint, `TaskDAG` is a general partial order — so re-pointing `orchestrate_dag` onto `validate_graph` would **reject inputs it accepts today** (a behaviour change to a live, model-callable tool). Also measured: `TaskDAG.validate()` mis-reports an unknown dependency as a cycle, and `compat.dag_to_graph` is test-only. Choosing which definition of a valid DAG wins is its own decision. **The residual is open and tripwired** (3 tripwires). Guard: `tests/reliability/test_dag_retirement_contract.py`. Report: `PHASE_DAG_RETIREMENT.md`. |
+| **M8** | `multi_agent/dag.py` not retired into `wisp/graph/` | **SURVEYED AND DECIDED 2026-09-25 — `DEPRECATE`, not remove**, and **RE-SCOPED by ADR-0060**: the divergence is no longer a blocker awaiting reconciliation but the **boundary** between two different tools. The fanout suite is green (107 passed), so the retirement was attempted and **driven**. The measured semantic divergence stands — `wisp/graph/` requires a non-empty graph with every node reachable from the entrypoint, `TaskDAG` is a general partial order — so re-pointing `orchestrate_dag` onto `validate_graph` would **reject inputs it accepts today** (a behaviour change to a live, model-callable tool). Also measured: `TaskDAG.validate()` mis-reports an unknown dependency as a cycle, and `compat.dag_to_graph` is test-only. **The removal is not owed**: choosing which definition of a valid DAG wins is a change to a live tool and is its own decision. **The residual stays open and tripwired** (3 tripwires). Guard: `tests/reliability/test_dag_retirement_contract.py`. Reports: `PHASE_DAG_RETIREMENT.md`, `PHASE_LAYER_B_BOUNDARY.md`. |
 | **M10** | The materialized graph is a **lower bound** on iterations | **OPEN — by design.** One node per closed tool exchange + one terminal; iteration boundaries are not observable. |
 
 **Committed.** Phase 10 and migration P0–P9 + M2/M3/M4 are committed (§3). The remaining uncommitted
@@ -2077,6 +2086,7 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_M14_REPORT.md` | Prompt sections are classified, and T1 holds (ADR-0031) |
 | `PHASE_M12_REPORT.md` | The failure path reaches the taxonomy (ADR-0032) |
 | `PHASE_M11_REPORT.md` | A node references its work unit; the ratchet classifies fields, not names (ADR-0033) |
+| `PHASE_LAYER_B_BOUNDARY.md` | **The Layer B boundary (ADR-0060)** — the five driver questions by measurement, the transition named, Position A decided, and findings F101–F104 |
 | `PHASE_M13_REPORT.md` | The stagnation detector on the live turn path (ADR-0034) |
 
 **Guards added by the migration:**

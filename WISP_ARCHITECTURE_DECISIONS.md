@@ -6194,6 +6194,181 @@ mode. That is ADR-0055 §Why-not-B, re-measured on the composed gate.
 
 ---
 
+## ADR-0060 — Layer A is the driver and Layer B is a record; the boundary is permanent
+
+**Status:** ACCEPTED
+**Phase:** The Layer B boundary (M8 + M11)
+
+**Context.** Two residuals name one question from opposite sides.
+
+**M11's original wording** (P5 item 5; re-scoped by M9 to *node identity* in ADR-0033) is *"the graph does
+not drive execution"*, pinned by `test_the_graph_still_does_not_drive_execution`. The node identity landed
+(ADR-0033); the change of control did not, and the ledger's M11 row says so.
+
+**M8** (`PHASE_DAG_RETIREMENT.md` §3) is blocked on a measured semantic divergence: `wisp/graph/` requires
+a non-empty graph with every node reachable from the entrypoint, while `TaskDAG` is a general partial order
+that permits disconnected components — so re-pointing `orchestrate_dag` onto `validate_graph` would reject
+inputs it accepts today.
+
+They are not two decisions. If Layer B's executor drives the turn loop, `multi_agent/dag.py` must retire —
+there cannot be two executors on one path. If Layer A stays the driver, `dag.py`'s retirement is a
+**deprecation** and M11's tripwire is the permanent statement of the boundary. This ADR decides which.
+
+### The driver questions, answered by measurement
+
+Driven by an AST import-graph probe over `wisp/**`
+(`.workbuddy-ai/memory/post-m13-layer-b/reachability_probe.py`) that classifies every edge **module-level or
+function-level**, because the reachability here is **lazy** — a probe that did not separate them would
+report the same graph for a top-level import and a call-time one, and those mean different things.
+
+**Q1 — what does `wisp/graph/executor.py` call today, and from where?**
+
+| importer of a Layer B module | site | what it is |
+|---|---|---|
+| `wisp/core/doctor.py` | `_check_graph_integrity()` | a **diagnostic** — imports `GraphExecutor` to assert it is importable and `validate_graph` callable |
+| `wisp/graph/runner.py` | `default_executor()` | the constructor, and the only one |
+| `wisp/graph/cli.py` | `_main()` | `wisp graph run\|resume\|execute` |
+| `wisp/sdk.py` | `execute_proposal()` | the SDK path |
+| `wisp/coding.py` | `run_coding_template()` | the coding template path |
+
+`GraphExecutor` is imported **exactly once inside `wisp/`** — by `core/doctor.py`. Everything that
+*constructs* one goes through `graph/runner.py::default_executor`, which is reached from `graph/cli.py`,
+`sdk.py` and `coding.py`.
+
+**ADR-0019 and ADR-0021's claim.** Both say *"Layer B's executor has **zero** references from
+`core/runtime.py` or `core/stateless.py`."* Measured at HEAD: **true for `stateless.py`** — its import
+closure contains no `wisp.graph.*` module at all — and **false as literally worded for `runtime.py`**,
+which reaches `wisp.graph.executor` through `get_doctor_report()` → `core.doctor.last_report` →
+`_check_graph_integrity()`. That is a pre-flight report for UI layers, not the turn loop. **The substantive
+claim survives; the literal one does not**, and the difference is stated here so the next reader does not
+re-derive it (F103).
+
+**Q2 — what does the executor's `run()` produce, and does the message list come from it?**
+
+`GraphExecutor.run` is `async` and returns `_drive(...)` → `_final(...)`, a dict of
+`{run_id, graph_id, status, error, …}` (`executor.py:1046`). Parsed, the module contains **no identifier
+and no string literal** naming `messages`, `transcript`, `history` or `conversation` — only a comment at
+`:806` recording that inputs are *"explicit mapping + artifact refs, never whole transcripts"*. **The
+executor produces no message list.** ADR-0029's constraint is intact, re-driven rather than cited.
+
+**Q5 — is Layer A's graph the same object as Layer B's executor?**
+
+No. `core/task_graph.py` imports `wisp.graph.types` and nothing else from Layer B, and does not reference
+`GraphExecutor`. Layer A journals a `TaskGraph` through `UnifiedStore` (ADR-0019); Layer B drives a `Graph`
+through its own `GraphStore`. They share a **vocabulary** — `NodeStatus`, superset by ADR-0021 — and no
+mechanism.
+
+### The substantive question — the transition, named
+
+Position B says *"the turn loop becomes a graph node dispatcher; every tool call is a node transition."*
+Driven (`.workbuddy-ai/memory/post-m13-layer-b/transition_probe.py`):
+
+| | |
+|---|---|
+| `wisp.graph.types.Graph` is `frozen=True` | a node **cannot** be appended mid-run — `FrozenInstanceError` |
+| `GraphExecutor`'s public surface | `run`, `resume`, `cancel`, `register_function` — **no** growth API, by name or by AST |
+| `GraphExecutor.run(empty_graph)` | **refused** — `invalid graph: graph has no nodes`, before any work |
+| `TaskGraph → Graph` lowering in `wisp/` | **none.** `compat.py` lowers `TaskDAG → Graph`; there is no lowering from Layer A's graph |
+
+**The turn loop discovers its work as the model streams** — it cannot know which tools it will call before
+the model speaks. `GraphExecutor.run(graph, inputs)` requires the **complete, validated** graph up front,
+and `Graph` is immutable with no mid-run growth. So *"every tool call is a node transition"* requires an
+executor that grows a graph **while driving it**, and this tree does not have one.
+
+**This is a different blocker from ADR-0029's, and it is stronger.** ADR-0029 found the *strong reading*
+("the transcript projects from the graph") inexpressible because the graph carries no payload. This finds
+Position B inexpressible because **the graph cannot be known before the turn and cannot change during it**.
+ADR-0029's constraint is a second, independent reason — a naive B would also have to copy the transcript
+into the nodes — but the first reason is structural and does not mention payload at all.
+
+### Decision
+
+**R1 — Layer A is the driver.** The iteration belongs to `WispAgentCore.turn` /
+`AgentRuntime.run_turn`. Layer B's executor is not consulted for what to run, and no module on the turn
+path constructs one.
+
+**R2 — the boundary is permanent, not an open item.** *"The graph drives execution"* is **rejected as a
+target**, not deferred. `test_the_graph_still_does_not_drive_execution` stops being a tripwire on
+unfinished work and becomes the **contract**, and its reversal condition is stated in the test itself.
+
+**R3 — Layer B's executor has four callers, all named, and none is the turn loop.** `graph/cli.py` (the
+`graph` verb), `sdk.execute_proposal`, `coding.run_coding_template`, and `core.doctor`'s integrity check. A
+new caller that is not one of these is a decision, not an edit.
+
+**R4 — `multi_agent/dag.py` remains the deprecated legacy entry point**, as `PHASE_DAG_RETIREMENT.md`
+decided, and its divergence from `wisp/graph/` is an **accepted difference**: `empty` and `disconnected`
+inputs are legal for `orchestrate_dag` and illegal for a compiled single-entrypoint graph, because the two
+answer different questions. **The removal is not owed by this decision**, and the divergence is not a
+blocker to be reconciled. A future phase that wants one engine must decide **which definition of a valid
+DAG wins for `orchestrate_dag`** — a change to a live, model-callable tool, and therefore its own decision.
+
+### Rationale — why B is rejected rather than deferred
+
+Three measured costs, each independent of the others:
+
+1. **The transition is not expressible.** B is not "more work" — it is a different executor. `GraphExecutor`
+   drives a frozen graph whose node set is fixed before the run; the turn loop's node set is produced by
+   the model during it.
+2. **It would need Layer A's mutation vocabulary inside Layer B.** Runtime growth lives in
+   `core/task_graph.py` (`create_node`/`expand`/`invalidate`/`supersede`) together with seven node states
+   ADR-0021 deliberately kept out of Layer B's `NodeStatus` — because `graph/scheduler.py::is_finished`
+   (`:132-134`) and `_predicates_satisfied` (`:103-106`) list the settled statuses **explicitly**, so a new
+   terminal status makes `is_finished` return `False` forever. Re-verified at HEAD; that hazard is real and
+   is unaffected by the correction in F102.
+3. **It would put a second durable record on the turn path.** `GraphExecutor.run` calls
+   `store.create_run(...)` (`executor.py:137`) into `GraphStore`'s **own** SQLite database
+   (`graph/store.py:112-127`), and enforces a workspace-containment check the tool does not have. ADR-0019
+   exists precisely to keep one append-only journal; B would re-open it.
+
+### Consequences
+
+- **M11 closes as *node identity* (ADR-0033), and its second half is decided rather than deferred.** The
+  ledger's *"the graph driving execution is still open"* becomes false and is corrected.
+- **M8's residual is re-scoped.** The removal is not blocked on a divergence; the divergence **is** the
+  boundary. `PHASE_DAG_RETIREMENT.md`'s three tripwires stay — they pin the current state, which is
+  unchanged — and the two behavioural residuals it names stay open as **its own** items.
+- **The four non-violations are asserted, not stated** (below).
+- **No production behaviour moves.** Like ADR-0049, this is a **record update**: no flag, no gate, no code
+  path. The only `wisp/` change is a docstring correction (F102).
+
+### The four non-violations, asserted
+
+1. **`turn_succeeded`, `VerificationFloorGuard` and `goal.PRECEDENCE` are untouched** — this ADR adds no
+   authority and no gate.
+2. **ADR-0029's constraint holds** — the graph carries no transcript payload, and the transcript projects
+   from the journal.
+3. **Every gate's authority is unchanged** — `ToolExecutor.execute`'s chain is `policy_hard_deny` →
+   `authorize()` → approval, in that order.
+4. **The four durable record kinds are unchanged** — `PROPOSAL`/`OUTCOME`/`VERDICT`/`TASK_GRAPH`/
+   `NODE_TRANSITION` remain audit-only; none appends to `messages`.
+
+Each is pinned in `tests/reliability/test_layer_b_boundary.py`, and each was checked by **breaking its
+property** and confirming the guard fails (`test_layer_b_boundary_nonvacuity.py`).
+
+### The brief's claims, driven
+
+| claim | result |
+|---|---|
+| *"ADR-0019 said Layer B's executor has zero references from `core/runtime.py` or `core/stateless.py` — is that still true?"* | **half true** — zero from `stateless.py`; `runtime.py` reaches it through the doctor's pre-flight report (F103) |
+| *"ADR-0029 measured that the graph cannot project the transcript"* | **TRUE**, re-driven: the executor holds no message/transcript identifier or literal |
+| *"`wisp/graph/` requires a non-empty graph and every node reachable from the entrypoint"* | **TRUE** — `validate_graph` refuses `graph has no nodes`; the `disconnected` case is pinned in `test_dag_retirement_contract.py` |
+| *"`multi_agent/dag.py` is on the live `fanout` path"* | **TRUE** — `subagent_orchestrator.py:1307` and `tools/orchestration.py:166` |
+| *"`test_the_graph_still_does_not_drive_execution` pins it"* | **TRUE, and narrower than the boundary** — it scans `runtime.py` for `.ready_ids`/`.ready_nodes` only |
+| *"the P4 graph is materialized **after** the turn"* | **TRUE** — `runtime.py:1077-1135`, comment *"RECORDED, not enforced"* |
+| *"Position B … requires the executor's reachability from every caller"* | **already true** — the executor is reachable from four production entry points; reachability was never what blocked B |
+| *"the next free ADR number"* | **0060** — verified: 0059 is the last heading. (ADR-0057, however, has **no index row** — F104) |
+| *"the plan's safety net for editing Layer B's `NodeStatus` does not exist"* (ADR-0021) | **FALSE, and it was false when written** — all three files are tracked, added 2026-09-10, 152 commits before the P5 landing (F102) |
+
+### Reversal condition
+
+The decision is that Layer A is the driver **given that no incremental executor exists**. It reverses if a
+phase builds one and wants it on the turn path: an executor that (a) accepts a graph that **grows during
+the drive**, (b) journals through `UnifiedStore` rather than `GraphStore`, and (c) is measured against the
+same gate chain. At that point M11's tripwire inverts and this ADR is superseded — and the tripwire's own
+failure message says so, so the reversal cannot be discovered by accident.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -6254,5 +6429,7 @@ mode. That is ADR-0055 §Why-not-B, re-measured on the composed gate.
 | 0054 | The acceptance gate consumes `verdict_keys_on_declared` at the engine's pre-`done` gate, bounded and defaulting OFF | Acceptance gate enablement | ACCEPTED (supplies the consumer ADR-0053 §10 recorded as missing: the engine asks a read-only callable — `DeclaredCriteriaGate` — at its pre-`done` gate, because a gate acting after `done` withholds nothing; the probe is taken there, cached, and reused at the verdict site; the withholding reuses ADR-0036's bounded replan model and **shares the turn's extension budget**; `WISP_ACCEPTANCE_GATE` defaults **OFF** and is **dependent** on `WISP_TURN_CRITERIA_SOURCE`; ADR-0051 R2–R6's contract is **NOT satisfied** — the population needs ≥ 2 capable models and the environment serves exactly **1** of 13, measured by a committed instrument; `turn_succeeded`, `VerificationFloorGuard` and `goal.PRECEDENCE` unchanged, asserted) |
 | 0055 | The REST gate is at parity with the agent path; the recorded divergence was between two *models*, not two *paths* | Authorization parity (G1) | ACCEPTED (drives the two production paths instead of the two models: **0 path divergences of 36**, **6 model divergences of 36** — the agent and `require_tool_allowed` reach the same outcome on every route in every mode when the agent runs under REST's condition, no approver. Chooses **Option A**: accept, and correct the record. Rejects **B** because it is not a parity fix — it would deny `hooks.create`/`mcp.add_server`/`plugins.install` in modes where the agent denies nothing (those three names are **not agent tools** and have **no `TOOL_RISK_TABLE` row**), i.e. REST stricter than the agent with no counterpart, and it would 403 the shipped client; rejects **C** for this decision as the fix for a *different* problem (REST cannot ask a human), deferred to its own ADR. Corrects `require_tool_allowed`'s docstring to state the control those routes actually have; keeps every ratchet property and **gains a real-path parity guard**; names four residuals (the approval authority is split three ways; three action names are in none of the three sets; REST cannot ask; five further gated routes are unmeasured). States the relationship to finding E without wiring L0. `authorize()`, `SecurityPolicy.check()` and `ToolExecutor.execute`'s gate chain unchanged, asserted by AST-parsed tests) |
 | 0056 | The two criteria flags are independent on the objective path; their interaction is derivation *order*, not flag coupling | Objective-path flag composition (ADR-0050 follow-up 1) | ACCEPTED (decides the last open ADR-0050 follow-up by driving the 2×2 flag matrix rather than reading it: `strict` **alone** withholds on the prose path (criteria 3→4), `use_declaration` **alone** collapses them to the declared set, and a valid declaration **pre-empts** `strict` — `undetermined` is empty either way, so `strict` is recorded and **inert**. Rejects **"dependent"** as measured-false (it would silently disable ADR-0048's fix for the measured false `GOAL_MET`); rejects **"composed"** (a declaration required) as a new policy no measurement supports, which would turn a silent-defect fix into a hard refusal for every objective written before ADR-0050 — and which is **not implemented** (`use_declaration=True` without a block is a no-op). Does not widen `explain_acceptance`'s parameters (ADR-0009): composition is a *policy* at the composition point, not a third parameter. Relates to ADR-0053 R8 — the *reason* does not transfer (one read site here, two parameters), the *decision* does. **No production change**: the measured behaviour already is the decision. Names one residual: `CriteriaDerivation.strict` records `True` when pre-empted) |
+| 0057 | A REST request for an executable-config action asks a human over the WebSocket channel; no client means deny | REST approval through the WebSocket channel (ADR-0055 §7's own decision) | ACCEPTED (drives the brief's premise and finds it **half true, with the false half deciding the shape**: the channel's **answer** path works and both shipped clients already send `tool_approval`/`{id, approved}`, but `WebSocketTransport.approve()` sends `approval_request`/`{approval_id, tool_call}` while **both clients branch on `tool_approval_request`** reading `call_id`/`name`/`arguments`/`reason` — so the agent path's prompt has never rendered. Adopts the **clients'** vocabulary, which makes the client change **zero** (ADR-0055 §Why-not-B's precedent). `ApprovalBridge` owns its own correlation map so `WebSocketTransport`, `approve()` and the agent path are untouched by construction. Trigger stated as a set: `REST_APPROVAL_ACTIONS` = the three executable-config names, `REST_APPROVAL_MODES` = `{auto_edit, ask_all}`; **no client ⇒ 403**, and `REST_APPROVAL_TIMEOUT_S = 30.0` bounded by ADR-0036's precedent with deny as the fallback. `require_rest_approval` is a separate async companion called **after** the policy gate, so a denying mode never prompts. Flag `WISP_REST_APPROVAL` default **OFF** — OFF, every caller sees today's behaviour exactly. **G3 deferred as its own ADR** (R9): *who may register* is not *what it runs*. Names four residuals, incl. **the agent path's own frame (W1)** and that `resolve_approval` still falls back to "first pending" on an id miss) | **MISSING UNTIL 2026-09-25 — see ADR-0060 F104.** This row did not exist; the index jumped 0056 → 0058 |
 | 0058 | The key-trust model is the operator-supplied organization public key; absence is a configuration, invalidity is a refusal | The key-trust workflow (M4 §6's precondition; `PHASE_10_M4_GOVERNANCE_UNWIRED.md` §9 option B) | ACCEPTED (decides the workflow M4 §5 deferred, grounded in the spec rather than in a general notion of key trust: §0 *"local bundle files remain the authority"*, §3's `local-only` mode — *"no socket use"* — and §5's own *"file perms 0600 + OS keychain for private keys **suffice for M4**"*, which already fixed the storage half. **Driven, the brief's worked example is false**: `WISP_POLICY_PUBKEY` is **base64 key material**, not a path — `load_local(bundle_path, public_key_b64)` → `Ed25519PublicKey.from_public_bytes(base64.b64decode(...))` — which decides the workflow (*"export this value"*, not *"place a file here"*); and **the failure semantics are already implemented** (bad/absent signature → `ValueError`; expired → `trim_expired`, *"never an error, never silent allow"*; no cache → `FileNotFoundError`). Reads the deferred phrase *"device registration + key distribution ceremony"* as the **multi-device / control-plane** item it is listed beside, and records the reading so it cannot be mistaken for the decision. **R1** the trigger is `WISP_POLICY_BUNDLE` non-empty — refining §6's *"both are set"* in the **stricter** direction, because a half-configuration must not be inert. **R2** absence is inert and byte-for-byte today's behaviour; `WISP_POLICY_PUBKEY` alone is inert. **R3** invalidity **refuses to boot** — the loader already raises; the rule added is that the composition root propagates rather than swallows. **R4** expiry **narrows** (`trim_expired`), it does not refuse — a stale-but-honest bundle must not become an outage. **R5** the key is **shared**, not per-device. **R6** offline by construction; `WISP_POLICY_CACHE`/`load_managed` are **not** engaged. **R7** the private key is never Wisp's to hold. **R8** fail-closed here vs ADR-0036 §5's fail-open there, with the difference stated: a missing stagnation predicate is **benign**, a missing policy is an **expected control silently unapplied** — the false-assurance mode §4 names. Rejects **TOFU** (it would pin the first key on a writable path and verify the attacker's bundle against the attacker's key; stateful; first-run semantics differ from every later run), a **signed-key file with a built-in root** (moves trust to a key baked into Wisp, needs a distribution and revocation story the spec never specified, adds a second signature layer, and still requires someone to place the root), and the **registration ceremony** as **out of scope rather than wrong** — it presupposes the control plane §5 deferred in the same sentence. Names four residuals, incl. that **REST does not receive L0** because `SecurityPolicy.check()` has no organization layer and L0 lives inside `authorize()`, so loading a bundle into `request_policy` would be dead data — a new instance of the pattern this finding diagnoses. **That residual is CLOSED by ADR-0059**, which reaches L0 through the composition root's loaded policy rather than through a `SecurityPolicy` slot — so the reason given here still stands and the gap does not) |
 | 0059 | The REST gate consults the M2 authority for its denial verdict, and only for that | The REST gate's authorization composition (`PHASE_M4_WIRING.md` §4 residual 1) | ACCEPTED (closes the divergence **ADR-0058 created**: ADR-0055's **0 path divergences of 36** was measured with **no organization policy loaded**, and once a bundle is loaded a denial is enforced on the agent path and was silently unenforced on REST — **driven, 11 (route, mode) pairs diverge**, five in the **default** `auto_edit` mode. Decides **Option C in its narrow form**: `require_tool_allowed` consults `authorize()` with the **same `effective_policy` the composition root loaded** and refuses when it **denies**, reading `allowed` and never `approval_required`. The reason is measured, not argued: **the two models agree on `allowed` in all 36 (route, mode) pairs** and disagree only on `approval_required` — in **exactly six** rows, the three REST-only action names × {`auto_edit`, `ask_all`}. So composing `allowed` composes the agreement; composing approval composes the divergence. Rejects **A** (driven with **no bundle**, 16 of 36 rows move, incl. three config routes in the default mode from ALLOW to 403 — ADR-0055 §Why-not-B re-measured on the composed gate); rejects **B** (`authorize()` has no mode engine and no hooks layer, so it discards two of the four things `check()` supplies); rejects **D** as **refuted by measurement** — the brief's D table says *"L0 has no verdict on a non-agent name"*, but `authorize()` returns `DENY(controlling_layer="local file")` for a bundle that names one, so D is not a harmless divergence but an unenforced operator rule. **Conditional on a bundle**, so with `WISP_POLICY_BUNDLE` unset the gate is today's code **byte-for-byte — status and detail**, proved against HEAD's body as a differential (**40/40 identical**) and structurally (the body change is an **insertion**). REST reads `root.organization_policy` — one load site (ADR-0006), two readers; `deps.py` imports no `wisp.policy` and calls no loader. The **§4 pin is inverted**: `SecurityPolicy` still has no policy slot, and its two assertions now say *which route was not taken*. `authorize()`, `SecurityPolicy.check()` and `ToolExecutor.execute`'s chain unchanged, asserted from the AST. Names five residuals, incl. that a bundle's **`approve` level is inert on REST** and that **workspace quarantine** is a pre-existing gap) |
+| 0060 | Layer A is the driver and Layer B is a record; the boundary is permanent | The Layer B boundary (M8 + M11) | ACCEPTED (decides the one question M11 and M8 name from opposite sides: *is Layer B's executor the driver, or a record?* **Driven, Position B is not expressible** — `wisp.graph.types.Graph` is `frozen=True` so a node cannot be appended mid-run, `GraphExecutor`'s whole public surface is `run`/`resume`/`cancel`/`register_function` with **no** growth API, `run()` refuses an empty graph before doing any work, and **no `TaskGraph → Graph` lowering exists** (`compat.py` lowers `TaskDAG`, not Layer A's graph). The turn loop discovers its work as the model streams, so *"every tool call is a node transition"* needs an executor that grows a graph **while driving it**. **This is a different blocker from ADR-0029's and does not mention payload**: ADR-0029 found the transcript-from-the-graph reading inexpressible; this finds the graph itself unknowable before the turn and immutable during it. **R1** Layer A is the driver. **R2** the boundary is **permanent, not an open item** — *"the graph drives execution"* is rejected as a target, and `test_the_graph_still_does_not_drive_execution` becomes the contract with its reversal condition stated in the test. **R3** the executor has four named callers and none is the turn loop. **R4** `multi_agent/dag.py` stays the deprecated legacy entry point and its `empty`/`disconnected` divergence is an **accepted difference** — the removal is not owed, and choosing which definition of a valid DAG wins is a change to a live model-callable tool, hence its own decision. Rejects B on three independent measured costs, incl. that it would put `GraphStore`'s **second** SQLite database on the turn path, which ADR-0019 exists to prevent. **A record update — no production behaviour moves**; the only `wisp/` change is a docstring correction. Corrects **four** corpus citations, incl. that ADR-0021's *"the safety net does not exist"* was **false when written** (all three files are tracked, added 152 commits before the P5 landing) and that **ADR-0057 had no index row**) |

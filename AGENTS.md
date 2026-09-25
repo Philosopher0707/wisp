@@ -39,7 +39,7 @@ Guidance for AI coding agents working in the Wisp codebase.
 | `wisp/multi_agent/` | Subagent system | `SubagentOrchestrator`, `SubagentRunner`, `WorktreeManager`, `BackgroundAgentManager`, `SubagentTelemetryBuffer` |
 | `wisp/multi_agent/background.py` | Background agent registry | `BackgroundAgentManager`: launch/send/cancel, lifecycle pub-sub (`agent_started/progress/settled`); publishes all lifecycle + chained TASK_* events into `telemetry` rings; `prune()` drops rings |
 | `wisp/multi_agent/telemetry.py` | Per-agent telemetry rings | `SubagentTelemetryBuffer`: dual-bounded (events + bytes) per-worker rings, replay (`transcript`) + cursor poll, settle-status mapping; `mask_text()` producer-boundary secret masking |
-| `wisp/multi_agent/dag.py` | **Legacy DAG entry point (M8) — `wisp/graph/` is the graph engine** | `TaskNode` / `TaskDAG` / `DAGScheduler` / `DAGResult`. Kept for the two live callers (`orchestrate_dag`, `SubagentOrchestrator.run_dag`); **not** the canonical graph implementation. Its retirement is **blocked on a measured semantic divergence** — `wisp/graph/` requires a single reachable entrypoint and `TaskDAG` is a general partial order, so a re-point would reject inputs `orchestrate_dag` accepts today. Guard: `tests/reliability/test_dag_retirement_contract.py` |
+| `wisp/multi_agent/dag.py` | **Legacy DAG entry point (M8) — `wisp/graph/` is the graph engine** | `TaskNode` / `TaskDAG` / `DAGScheduler` / `DAGResult`. Kept for the two live callers (`orchestrate_dag`, `SubagentOrchestrator.run_dag`); **not** the canonical graph implementation. **ADR-0060 re-scopes its divergence from a blocker to a boundary**: `wisp/graph/` requires a single reachable entrypoint and `TaskDAG` is a general partial order, so the two answer different questions and a re-point would reject inputs `orchestrate_dag` accepts today. The removal is **not owed**; choosing which definition of a valid DAG wins is a change to a live model-callable tool. Guards: `tests/reliability/test_dag_retirement_contract.py`, `tests/reliability/test_layer_b_boundary.py` |
 | `wisp/tools/checkpoints.py` | File checkpoints | `CheckpointStore` (bounded per-workspace snapshots), `snapshot_before_mutation()`, `tool_rewind` (list/restore, rewindable rewind); auto-hooked in write/edit/edit_multi with drop-on-failed-mutation |
 | `wisp/tui/screens/subagents.py` | Worker monitor screen | `SubagentMonitorScreen` (roster + live transcript, `]`/`[` cycle — never Tab — `c` cancel, `q`/`Ctrl+O`/`Esc` exit) + `SubagentMonitorApp` standalone host for the REPL bridge |
 | `wisp/sandbox/` | Command confinement | Package (`__init__` = providers); `router.py`: `SandboxRouter` (Docker → `PtySandbox` → `NoopSandbox`, TTL-cached decision, silent failover) + `get_router()`; legacy `get_sandbox()` unchanged |
@@ -248,14 +248,18 @@ a false record, not a lost observation. ADR-0028.
 If you add a kind to that set, add an ADR first. The set is pinned by a test parametrized over every other
 event kind, so widening it fails the suite rather than passing quietly.
 
-### The graph does not drive execution
+### The graph does not drive execution — and that is now a DECISION, not a gap
 
 `wisp/core/task_graph.py` can create, expand, invalidate and supersede nodes — but **nothing on the live
-turn path calls those functions yet**. The turn loop executes tools directly, and the graph is a
-*record* of that work, not its driver. M11 landed the **precondition** (node identity, ADR-0033); making
-the graph drive execution is still open — a change of **control** (the point at which the message list
-stops being authoritative), pinned by `test_the_graph_still_does_not_drive_execution`. Do not assume
-the graph is authoritative — it is not.
+turn path calls those functions**. The turn loop executes tools directly, and the graph is a *record* of
+that work, not its driver. M11 landed the **precondition** (node identity, ADR-0033); **ADR-0060 decided
+the second half**: Layer A is the driver and Layer B is a record, **permanently**. *"The graph drives
+execution"* is rejected as a target, not deferred — `wisp.graph.types.Graph` is `frozen=True`,
+`GraphExecutor` has no mid-run growth API, `run()` refuses a graph that is not complete up front, and no
+`TaskGraph → Graph` lowering exists, while a turn's node set is produced by the model *during* the turn.
+`test_the_graph_still_does_not_drive_execution` is the **contract**, with its reversal condition stated
+in the test; the wider property is in `tests/reliability/test_layer_b_boundary.py`. Do not assume the
+graph is authoritative — it is not, and that is the decision.
 
 ### Stage 3a of the verification gate does NOT gate
 
@@ -447,7 +451,7 @@ python3 -m pytest tests/test_contracts_*.py tests/test_auth_*.py tests/test_runs
 # Durable record + proposal boundary + verdicts + task graph
 # (migration P0-P9 + M2/M3/M4/M16/M9/M15/M14/M12/M11/M13 + POST-M13 + ADR-0035/0036/0037
 #  + the NEXT chain ADR-0045/0046/0047/0048)
-# 1453 tests — 1452 pass, 1 fails (F38: a test that encoded the pre-F8 exchange ordering).
+# 1471 tests — 1470 pass, 1 fails (F38: a test that encoded the pre-F8 exchange ordering).
 # The block below was extended with the four NEXT-mission files, the five
 # documentation-authority / criteria-authority / F8-classification / precedence /
 # structured-criteria files, the four 2026-09-25-mission files (gate-enablement,
@@ -456,8 +460,8 @@ python3 -m pytest tests/test_contracts_*.py tests/test_auth_*.py tests/test_runs
 # outcome-classification pair (the taxonomy guard + its delegation guard, added by the
 # outcome-classification mission so the guard that was RED for four phases is now in a
 # block that actually runs), and the M4 pair (the wiring guard, which was in NO running
-# block until F93, and the REST-composition guard, ADR-0059); the earlier "849 tests"
-# figure was the pre-NEXT count.
+# block until F93, and the REST-composition guard, ADR-0059), and the Layer B boundary
+# guard (ADR-0060); the earlier "849 tests" figure was the pre-NEXT count.
 # NEVER quote a count from prose — run the block. (F85: measure it after the LAST change
 # to any member, not after the change that motivated measuring.)
 python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_incremental.py \
@@ -488,6 +492,7 @@ python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_
   tests/reliability/test_structured_criteria.py \
   tests/reliability/test_gate_enablement_contract.py \
   tests/reliability/test_dag_retirement_contract.py \
+  tests/reliability/test_layer_b_boundary.py \
   tests/reliability/test_f8_published_status.py \
   tests/reliability/test_criteria_source_on_turn_path.py \
   tests/reliability/test_acceptance_gate_enablement.py \

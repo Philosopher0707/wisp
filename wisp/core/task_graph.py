@@ -51,12 +51,19 @@ class TaskNodeState(StrEnum):
     terminal statuses **explicitly**. A new terminal state there would make
     `is_finished` return False forever — a run that never completes.
 
-    The plan's own safety net for that change (`test_graph_fuzz.py`,
-    `test_graph_races.py`, `test_graph_resume.py`) **does not exist in the
-    repository**, and Layer B's executor has **zero** references from
-    `core/runtime.py` or `core/stateless.py` — it is not on the live turn path.
-    So the states are added where the live loop's graph lives, and Layer B is
-    left alone until its safety net is real.
+    The plan's safety net for that change **does** exist: `tests/security/`'s
+    `test_graph_fuzz.py`, `test_graph_races.py` and `test_graph_resume.py` are all
+    tracked, and all three were added 152 commits **before** the P5 landing
+    (ADR-0060 F102 — this paragraph said the opposite until 2026-09-25, and the
+    claim was already false when it was written). What still blocks editing
+    `NodeStatus` is the `is_finished` hazard above, which is independent of the
+    safety net.
+
+    Layer B's executor is **not** on the live turn path, and that is now a decision
+    rather than an observation: `core/stateless.py` has no Layer B import at any
+    depth, and `core/runtime.py` reaches it only through `core/doctor.py`'s
+    integrity check — a diagnostic, not a driver (ADR-0060 R1/R3, F103). So the
+    states are added where the live loop's graph lives, and Layer B is left alone.
     """
 
     # ── the NodeStatus values, unchanged ──

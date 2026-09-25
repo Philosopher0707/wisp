@@ -552,7 +552,7 @@ recomputation.
 | 2 | Map each turn's work to `GraphNode`s, one `AGENT` node per iteration | `COMPLETE` | `build_turn_graph()`; the runtime materializes one node per **closed tool exchange** + one terminal node, and says so — iteration boundaries are not observable, so the count is a lower bound |
 | 3 | Materialize `READY` rather than recomputing it | `COMPLETE` | `ready` is a stored field; `divergences()` detects staleness; `apply_transition` re-materializes |
 | 4 | `NodeTransition` as the only write path for node state | `COMPLETE` | AST-pinned in-module **and** tree-wide |
-| 5 | Retire `multi_agent/dag.py` into `wisp/graph/` | `SCOPED` — see **M8** | **surveyed and decided 2026-09-25** (`PHASE_DAG_RETIREMENT.md`): **deprecate, do not remove** — the removal is blocked on a *measured semantic divergence* (which definition of a valid DAG wins), not on work. §6.4 |
+| 5 | Retire `multi_agent/dag.py` into `wisp/graph/` | `SCOPED` — see **M8** | **surveyed and decided 2026-09-25** (`PHASE_DAG_RETIREMENT.md`): **deprecate, do not remove** — the removal is blocked on a *measured semantic divergence* (which definition of a valid DAG wins), not on work. **Re-scoped by ADR-0060**: the divergence is the **boundary** between two tools, not a blocker, so the removal is **not owed**. §6.4 |
 
 ### 6.4 Item 5 deferred, with reason
 
@@ -578,6 +578,15 @@ retirement was attempted and **driven**. It is blocked on a *semantic* divergenc
 They **agree** on cycle detection and unknown-dependency detection, so the duplicate is real; they
 **diverge** on the entrypoint/reachability rule, so the duplicate is not interchangeable. Choosing which
 definition wins is its own decision.
+
+**UPDATE 2026-09-25 (2) — ADR-0060 answers the owed decision, and the answer is that neither definition
+"wins".** Layer A is the driver and Layer B is a record (`PHASE_LAYER_B_BOUNDARY.md`), so the divergence is
+**the boundary between two tools** — a general partial order for `orchestrate_dag`, and a compiled
+single-entrypoint graph for the engine — rather than a blocker awaiting reconciliation. **The removal is
+not owed by this decision**: choosing which definition of a valid DAG wins *for `orchestrate_dag`* is a
+change to a live, model-callable tool, and is therefore its own decision. The three tripwires stay (they
+pin the current state, which is unchanged); the two behavioural residuals above stay open as **M8's own**
+items, not as blockers. Guard: `tests/reliability/test_layer_b_boundary.py`.
 
 **What landed instead:** `wisp/multi_agent/dag.py`'s module docstring now declares the ownership boundary
 and names the blocker (a **prose-only** change — docstring-stripped AST byte-identical); the divergences,
@@ -648,6 +657,16 @@ projection of the graph) rather than before it. Recorded as item **M11**.
 **Resolved (M11, §21):** M9 re-scoped M11 to its precondition — **node identity** — and it is done
 (ADR-0033): a node now references its work unit. The change of *control* described above remains open
 and is pinned by a tripwire (`test_the_graph_still_does_not_drive_execution`).
+
+**CLOSED 2026-09-25 (ADR-0060).** The change of *control* is no longer open: it is **rejected as a
+target**, not deferred. Driven, Position B is not expressible in this tree — `wisp.graph.types.Graph` is
+`frozen=True` (a node cannot be appended mid-run), `GraphExecutor`'s public surface is
+`run`/`resume`/`cancel`/`register_function` with **no** growth API, `run()` refuses a graph that is not
+complete up front, and there is **no `TaskGraph → Graph` lowering** — while the turn loop discovers its
+work as the model streams. So `test_the_graph_still_does_not_drive_execution` becomes the **contract**
+(with its reversal condition stated in the test) and the wider property is pinned by
+`tests/reliability/test_layer_b_boundary.py` (16). This is a different blocker from ADR-0029's and does
+not mention payload. Report: `PHASE_LAYER_B_BOUNDARY.md`.
 
 ---
 
