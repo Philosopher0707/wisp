@@ -30,7 +30,7 @@ provider terminal → stream state → turn predicate → acceptance verdict
 | **Current owner** | `goal.terminal_outcome_from_evidence` (`wisp/core/goal.py:132`); `turn_succeeded` is a **projection** of it, computed once per turn (`wisp/core/runtime.py:992`) |
 | **Cannot decide** | goal state · recovery · verification |
 | **Current ADRs** | **ADR-0035** §Decision 2 (turn level remains terminal evidence) → **ADR-0044** R1/R2 (the *only* implementation; the flag is a projection) → **ADR-0047** R2 (no longer an arbitration input; still recorded) |
-| **Durable record fields** | `terminal_outcome`, `turn_succeeded` — the goal-state record (`wisp/core/runtime.py:1334`, `wisp/core/runtime.py:1349`); `terminal_outcome`, `turn_succeeded` — the attempt journal line `{"kind":"attempt"}` (`wisp/core/convergence.py:931-932`) |
+| **Durable record fields** | `terminal_outcome`, `turn_succeeded` — the goal-state record (`wisp/core/runtime.py:1334`, `wisp/core/runtime.py:1349`); `terminal_outcome`, `turn_succeeded` — the attempt journal line `{"kind":"attempt"}` (`wisp/core/convergence.py:1323`) |
 
 ### 1.2 stream state
 
@@ -48,16 +48,16 @@ provider terminal → stream state → turn predicate → acceptance verdict
 | **Current owner** | `acceptance.evaluate` (`wisp/core/acceptance.py:213`) |
 | **Cannot decide** | goal state · recovery · **whether to gate** (the gate is a separate, flag-controlled consumer) |
 | **Current ADRs** | **ADR-0016** (two stages; stage 3a does not gate) · **ADR-0017** (the floor criterion is an *implication*) · **ADR-0018** (the engine publishes the guard; the runtime only reads it) · **ADR-0042** (the verdict is an **input**, not a second authority) |
-| **Durable record fields** | `verdict` in the verdict envelope (ADR-0013, `wisp/core/acceptance.py:204`) · `acceptance_verdict` in the goal-state record (`wisp/core/runtime.py:1335`) · `verdict`, `unmet`, `evidence_ids` in the attempt journal (`wisp/core/convergence.py:937-938`) |
+| **Durable record fields** | `verdict` in the verdict envelope (ADR-0013, `wisp/core/acceptance.py:204`) · `acceptance_verdict` in the goal-state record (`wisp/core/runtime.py:1335`) · `verdict`, `unmet`, `evidence_ids` in the attempt journal (`wisp/core/convergence.py:1333-1334`) |
 
 ### 1.4 progress verdict
 
 | | |
 |---|---|
-| **Current owner** | `progress.evaluate_progress` (`wisp/core/progress.py:155`); verdicts `NO_PROGRESS` / `MEANINGFUL_PROGRESS` / `PROGRESS_UNDETERMINABLE` (`wisp/core/progress.py:50`) |
+| **Current owner** | `progress.evaluate_progress` (`wisp/core/progress.py:155`); verdicts `NO_PROGRESS` / `MEANINGFUL_PROGRESS` / `PROGRESS_UNDETERMINABLE` (`wisp/core/progress.py:50-63`) |
 | **Cannot decide** | acceptance · goal state · **which rung** |
 | **Current ADRs** | **ADR-0046** R1–R11 (a second *input* to the recovery decision, not a re-classification of the failure) → **ADR-0047** R6 (it is the witness that the state changed) and R8 (a regression, a tampered input, or an unmeasurable attempt cannot unlock it) |
-| **Durable record fields** | `progress`, `progress_signals` (`wisp/core/convergence.py:909-910`, `wisp/core/convergence.py:944`) · `measurement_observations` + `measurement_digest` — the raw payloads, digested over `WITNESS_FIELDS` only (F63; `wisp/core/convergence.py:796-809`) |
+| **Durable record fields** | `progress`, `progress_signals` (`wisp/core/convergence.py:1305-1306`, `wisp/core/convergence.py:1340-1341`) · `measurement_observations` + `measurement_digest` — the raw payloads, digested over `WITNESS_FIELDS` only (F63; `wisp/core/convergence.py:1192-1205`) |
 
 ### 1.5 goal state
 
@@ -75,7 +75,7 @@ provider terminal → stream state → turn predicate → acceptance verdict
 | **Current owner** | `RecoveryLadder.ladder_state` (`wisp/core/recovery.py:742`) — **renamed** from `terminal_outcome` |
 | **Cannot decide** | completion · goal state |
 | **Current ADRs** | **ADR-0024** (denial enforced by CLASS) · **ADR-0025** (an unsafe rollback escalates) · **ADR-0026** (a mechanism, not yet consulted by the turn loop) → **ADR-0044** R6 (the rename, which removed a cross-layer name collision) → **ADR-0046** (progress widens one class's legal rungs) → **ADR-0047** R6–R13 (R5's unit is the *strategy*, not the rung) |
-| **Durable record fields** | `RecoveryDecision.seq` and `ladder_history` (`wisp/core/recovery.py:541`, `wisp/core/recovery.py:556`) · `AttemptRecord.rung`, `.directive`, `.failure_class` (`wisp/core/convergence.py:928-929`, `wisp/core/convergence.py:942`) · `BudgetGovernor.snapshot()` — reports `productive_continuations` (`wisp/core/recovery.py:472`) |
+| **Durable record fields** | `RecoveryDecision.seq` and `ladder_history` (`wisp/core/recovery.py:541`, `wisp/core/recovery.py:556`) · `AttemptRecord.rung`, `.directive`, `.failure_class` (`wisp/core/convergence.py:1277-1278`, `wisp/core/convergence.py:1299`) · `BudgetGovernor.snapshot()` — reports `productive_continuations` (`wisp/core/recovery.py:472`) |
 
 ---
 
@@ -84,7 +84,7 @@ provider terminal → stream state → turn predicate → acceptance verdict
 > **A run's state is the ladder's escalation if it surrendered, otherwise the last attempt's derived state.**
 
 Source: **ADR-0047 R13**; `goal.derive_goal_state`'s row 2 consumes `escalated` (`wisp/core/goal.py:195`), and the
-convergence loop reads the last `AttemptRecord.goal_state` (`wisp/core/convergence.py:885`). This is the *only*
+convergence loop reads the last `AttemptRecord.goal_state` (`wisp/core/convergence.py:1281`). This is the *only*
 place the aggregation is stated; a second statement would be a second authority for one question.
 
 ---

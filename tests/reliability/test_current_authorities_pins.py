@@ -9,10 +9,12 @@ arbiter, or the page stops declaring itself derived.
 
 Three properties, each independently falsifiable:
 
-1. **Every `path:line` pin resolves.** A pin is a *claim that a specific line says a
-   specific thing*. This test does not re-read the prose — it asserts the pin's line
-   exists and is not blank, so a refactor that moves the code cannot leave a stale
-   citation behind.
+1. **Every `path:line` pin resolves — and names the symbol it claims.** A pin is a *claim
+   that a specific line says a specific thing*. Two checks, because the weaker one alone
+   was not enough: the line must exist and not be blank, **and** the window around it
+   must contain an identifier the page's prose names on that line. The second check was
+   added after the first caught **one of five** stale pins when `runtime.py` moved, the
+   other four being found by reading (ADR-0053 §6, recurring in ADR-0054).
 2. **The §3 matrix is the arbiter's.** Row-by-row, the page's condition → result mapping
    is compared against `goal.PRECEDENCE` and against `derive_goal_state` itself. The table
    is therefore *reproduced*, not paraphrased: change a row in the code and the page fails.
@@ -34,6 +36,15 @@ PAGE = REPO / "CURRENT_AUTHORITIES.md"
 
 #: `path/to/module.py:123` or `path/to/module.py:123-145`, inside backticks.
 PIN_RE = re.compile(r"`([A-Za-z0-9_./-]+\.py):(\d+)(?:-(\d+))?`")
+
+#: Identifiers long enough to be a code symbol rather than a word.
+IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{3,}")
+
+#: How far a pin may drift before the content check calls it stale. A pin may
+#: legitimately move a line or two when code moves around it; requiring the exact line
+#: would make the guard a nuisance rather than a check. Four pins drifted by a few lines
+#: in one mission and the old check caught **one** of them (ADR-0053 §6).
+PIN_WINDOW = 2
 
 #: The six authorities the page must document, in chain order.
 AUTHORITY_HEADINGS = (
@@ -149,6 +160,75 @@ class TestEveryPinResolves:
         assert not shorthand, (
             "unqualified pin shorthands cannot be verified mechanically:\n  "
             + "\n  ".join(shorthand))
+
+    def test_every_pin_names_the_symbol_it_claims(self, page_text):
+        """Property 1, strengthened — the check the test's name already claimed.
+
+        The check above asserts a pin points at a **non-blank** line. That is weaker than
+        the claim: a pin is a claim that a *specific line says a specific thing*, and a
+        stale pin that lands on unrelated code passes a non-emptiness test. **Measured:
+        when `runtime.py` moved, it caught one stale pin of five, and four were found by
+        reading** (ADR-0053 §6, and again in ADR-0054).
+
+        So the assertion is on the **content**: the window `±PIN_WINDOW` around the pin
+        must contain an identifier the page's own prose names on that line. The page
+        writes `symbol` … (`path:line`), so the other backticked spans on the line are the
+        expectation set.
+
+        Two boundaries, both stated rather than silent:
+
+        * **The window is a window.** A pin that drifts by one or two lines is not stale;
+          one that drifts further is, and fails.
+        * **A line with no other backticked span is not content-checkable** — a §3 matrix
+          row names its result in plain prose, not a symbol. Those pins are counted
+          separately, and the check asserts enough of them ARE checkable, so it cannot
+          quietly become vacuous.
+        """
+        # Identifiers that come from the pin PATHS themselves are noise — `wisp`, `core`,
+        # `goal` and `py` appear in almost any line of almost any file.
+        path_noise = {m for path, _s, _e in PIN_RE.findall(page_text)
+                      for m in IDENT_RE.findall(path)}
+
+        checkable = 0
+        checked = 0
+        broken = []
+        for page_line, raw in enumerate(page_text.splitlines(), 1):
+            pins = PIN_RE.findall(raw)
+            if not pins:
+                continue
+            spans = [s for s in re.findall(r"`([^`]+)`", raw)
+                     if not PIN_RE.fullmatch(f"`{s}`")]
+            expected = {m for s in spans for m in IDENT_RE.findall(s)} - path_noise
+            for path, start, end in pins:
+                if not expected:
+                    continue                      # not content-checkable; counted below
+                checkable += 1
+                f = REPO / path
+                if not f.exists():
+                    continue                      # the existence test reports this
+                lines = f.read_text(encoding="utf-8").splitlines()
+                lo = int(start) - 1
+                # A RANGE pin claims its whole span, so the whole span is the window;
+                # a single-line pin gets `±PIN_WINDOW`. Checking only the start of a
+                # range would call a range stale whose content is one line below it.
+                hi = (int(end) - 1) if end else lo
+                window = " ".join(lines[max(0, lo - PIN_WINDOW):hi + PIN_WINDOW + 1])
+                if any(name in window for name in expected):
+                    checked += 1
+                else:
+                    broken.append(
+                        f"{path}:{start} — none of {sorted(expected)} appears within "
+                        f"±{PIN_WINDOW} lines (page line {page_line})")
+
+        assert checkable >= 15, (
+            f"only {checkable} pins are content-checkable — the page's pin format drifted "
+            "and this check has gone vacuous; the non-emptiness test above would still "
+            "pass, which is exactly the weakness this test exists to close")
+        assert not broken, (
+            f"{len(broken)} pin(s) name a symbol that is not where the page says:\n  "
+            + "\n  ".join(broken))
+        assert checked == checkable, (
+            f"{checked}/{checkable} content-checkable pins resolved — a pin was skipped")
 
 
 class TestTheMatrixIsTheArbiter:

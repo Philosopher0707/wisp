@@ -1432,7 +1432,7 @@ test that failed for a reason someone noticed. None was found by looking for it.
 | 3 | `PHASE_STRUCTURED_CRITERIA.md` §5 | a size-preserving mutation left stale bytecode; a same-second restore reported a **false control failure** | the harness reported its own defect as the subject's |
 | 4 | `PHASE_PRECEDENCE_CORRECTION.md` §5, §6 (**P5**, **Q1**) | a helper that returned the wrong section; a regex `+` group that let an emptied finding skip the check | two checks that could pass by **finding nothing** |
 | 5 | `PHASE_DAG_RETIREMENT.md` §7.1 | a bare string scan over `wisp/**/*.py` | it counted a **docstring** as a caller |
-| 6 | `PHASE_CRITERIA_SOURCE.md` §6 | `test_current_authorities_pins.py` checks a pinned line is **non-blank** | it caught **1 of 5** stale pins and passed four that had moved onto other, non-blank lines |
+| 6 | `PHASE_CRITERIA_SOURCE.md` §6 | `test_current_authorities_pins.py` checks a pinned line is **non-blank** | it caught **1 of 5** stale pins and passed four that had moved onto other, non-blank lines — **CLOSED** by `PHASE_GATE_ENABLEMENT_DECISION.md` §11 (the check now asserts the pinned **content**: the window around the pin must contain an identifier the page's prose names on that line, and the checkable-pin count has a floor) |
 
 **The class, stated once:** *the instrument does not reproduce the production control flow, or does not
 fail when the subject fails, and reports its own defect as a result about the subject.*

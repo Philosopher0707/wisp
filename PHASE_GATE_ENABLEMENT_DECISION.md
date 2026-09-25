@@ -182,3 +182,72 @@ than a two-run intersection and is stated as such.
   `__call__`, pinned by test. `evaluations` is observability only — nothing reads it in production.
 - **`mypy` was not re-run.** Three `wisp/` files changed; the count is 1844 at HEAD and this phase does
   not claim it moved. Stating that is weaker than measuring it.
+
+---
+
+# §11 — Deliverable 2: the pin-guard fix
+
+**Why.** ADR-0053 §6 recorded the sixth instrument-defect instance: the pin guard's name (*"every pin
+names a real line"*) was stronger than its check, which asserted a pinned line was **non-blank**. It
+caught **one of five** stale pins when `runtime.py` moved; four were found by reading. It recurred in
+this mission's Deliverable 1.
+
+**The fix — the assertion is now on the pinned CONTENT.**
+
+```python
+# before — the line exists and is not blank
+assert lines[int(start) - 1].strip()
+
+# after — the window around the pin contains an identifier the page's prose names
+spans = [s for s in re.findall(r"`([^`]+)`", raw) if not PIN_RE.fullmatch(f"`{s}`")]
+expected = {m for s in spans for m in IDENT_RE.findall(s)} - path_noise
+window = " ".join(lines[max(0, lo - PIN_WINDOW):hi + PIN_WINDOW + 1])
+assert any(name in window for name in expected)
+```
+
+The page writes `symbol` … (`path:line`), so the **other backticked spans on the line** are the
+expectation set. Three boundaries, all stated in the guard's docstring rather than left implicit:
+
+| Boundary | Rule |
+|---|---|
+| **The window** | `±2` lines, so a pin may legitimately drift a little when code moves around it. A drift of 6 lines **fails** (NV1). |
+| **A range pin** | the whole span is the window, plus `±2`. Checking only the start of a range would call a range stale whose content is one line below it — which is exactly what `progress.py:50` was. |
+| **A line with no other backticked span** | not content-checkable (a §3 matrix row names its result in plain prose). Those pins are counted separately, and `assert checkable >= 15` fails if the page's pin format drifts and the check goes vacuous (NV3). |
+
+**The fix found nine stale pins the old guard had passed.** Eight were genuinely stale — all in
+`wisp/core/convergence.py`, drifted since ADR-0050 — and every one landed on a **non-blank** line, which
+is precisely why the old check passed them:
+
+| page claim | old pin | real line |
+|---|---|---|
+| the attempt journal line `{"kind":"attempt"}` | `convergence.py:931-932` | **1323** |
+| `verdict`/`unmet`/`evidence_ids` in the attempt journal | `convergence.py:937-938` | **1333-1334** |
+| `progress`, `progress_signals` | `convergence.py:909-910`, `:944` | **1305-1306**, **1340-1341** |
+| `measurement_observations` + `measurement_digest` over `WITNESS_FIELDS` | `convergence.py:796-809` | **1192-1205** |
+| `AttemptRecord.rung`, `.directive`, `.failure_class` | `convergence.py:928-929`, `:942` | **1277-1278**, **1299** |
+| the last `AttemptRecord.goal_state` | `convergence.py:885` | **1281** |
+
+The ninth (`progress.py:50`) was a range artifact, not staleness: the class is at 50 and its members at
+61-63, so the pin became `50-63` **and** the check learned to honour ranges.
+
+**Non-vacuity** — the brief's probe plus two more, each restoring the tree byte-identically:
+
+| probe | break | result |
+|---|---|---|
+| **NV1** | a pinned symbol drifts 6 lines | **CAUGHT** — 1 failed |
+| **NV2** | a stale pin is restored in the page | **CAUGHT** — 1 failed |
+| **NV3** | the page's pin format drifts (the floor) | **CAUGHT** — 3 failed |
+
+### The probe was wrong first — the same class, one level up
+
+**NV3 MISSED on its first run**, and the cause was the *probe*, not the guard: it called
+`str.replace(old, new, 1)`, so only the **first** pin was reformatted and the other ~36 stayed valid —
+the guard correctly passed. **A probe that does not falsify is a finding that the test is not testing
+what you think** — and here the probe was the test. Fixed by giving `probe()` a `count` parameter
+(`-1` = all), and the defect is recorded in that function's docstring so it is not "simplified" back.
+
+That is the third time in two missions that a non-falsifying probe turned out to be the instrument's own
+defect (ADR-0052's NV1, ADR-0053's NV1, and now this one). It is the discipline `CONTEXT.md` §10 now
+names, applied to the tooling that enforces it.
+
+**`CONTEXT.md` §10's sixth instance is marked CLOSED** with a citation to this section.
