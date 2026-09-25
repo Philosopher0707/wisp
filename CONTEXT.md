@@ -13,8 +13,10 @@
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is `800ada0`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
+**HEAD is `5898e0e`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
 on top of it and is the authority for the count.
+**`5898e0e` names the instrument-defect class once** (Deliverable 2, documentation only) — §10 carries it
+with its **six** instances, and `AGENTS.md`'s testing discipline carries the rules. **No code changed.**
 **`800ada0` is the criteria-source landing** — **ADR-0053**: the turn path's required-criteria set carries
 the objective's declared criteria, so the verdict stops being a projection of the floor guard (ADR-0051
 R1's precondition). Flag `WISP_TURN_CRITERIA_SOURCE`, default **OFF**; the acceptance gate is still **not**
@@ -1136,7 +1138,8 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `3990313` | `docs:` decide the acceptance gate's enablement contract (**ADR-0051**) — the gate has nothing to gate on — 6 files; **no production change**; the instrument is **committed** (`scripts/`), fixing the class F75 names; found **F75/F76**; excludes the user's WIP (§8) |
 | `1e83e34` | `docs(m8):` survey the `dag.py` retirement and decide **DEPRECATE**, not remove — blocked on a **measured semantic divergence** (which definition of a valid DAG wins); prose-only in `wisp/`; 10-test guard incl. 3 tripwires on the residual; excludes the user's WIP (§8) |
 | `805eca8` | `fix:` publish a capability failure as a **host** failure, not a denial (**ADR-0052**) — a system-failure envelope with the `kind` in `data`; the denial taxonomy and the prompt are unchanged; 15-test whole-path guard; found the helper defect that made NV1 non-falsifying; excludes the user's WIP (§8) |
-| `800ada0` | `feat:` the turn path's criteria set carries the objective's declared criteria (**ADR-0053**) — satisfies ADR-0051 R1's precondition; the gate's condition is driven to differ from `rejection()` on 2 of 6 cases; flag `WISP_TURN_CRITERIA_SOURCE` default OFF; `CURRENT_AUTHORITIES.md` re-pinned (found the pin guard's blank-line weakness — a 6th instrument-defect instance); excludes the user's WIP (§8) — **`HEAD`** |
+| `800ada0` | `feat:` the turn path's criteria set carries the objective's declared criteria (**ADR-0053**) — satisfies ADR-0051 R1's precondition; the gate's condition is driven to differ from `rejection()` on 2 of 6 cases; flag `WISP_TURN_CRITERIA_SOURCE` default OFF; `CURRENT_AUTHORITIES.md` re-pinned (found the pin guard's blank-line weakness — a 6th instrument-defect instance); excludes the user's WIP (§8) |
+| `5898e0e` | `docs:` name the instrument-defect class once, with its six instances — **documentation only**, no code changed; `CONTEXT.md` §10 + `AGENTS.md`; excludes the user's WIP (§8) — **`HEAD`** |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
