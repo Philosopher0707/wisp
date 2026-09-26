@@ -18,10 +18,37 @@ profile=str(getattr(self._parent_config, "profile", None)   # AttributeError
 run through the runtime raised**, was retried three times by the orchestrator, and failed — which is
 exactly what the session showed.
 
-**Fixed.** Verification is **AST-level**, not behavioural: the underscore now appears in no executable
-position, and the attribute has one name everywhere else. I could not find a test that reaches `:808` —
-tests *name* `_child_principal` and `_run_via_runtime`, but nothing failed on the typo. **That is a
-weaker verification than this session's standard, and it is stated rather than glossed.**
+**Fixed, and then VERIFIED BEHAVIOURALLY — four consecutive runs.**
+
+The first version of this section said the fix was *"AST-level, not behavioural"*, because no test
+reaches `:808`. That was true when written and is no longer. `wisp swarm` drives exactly this path:
+
+```
+🐝 Starting swarm with 4 agent(s) across 4 role(s)...
+   Roles: coder, reviewer, tester, researcher
+✓ Swarm execution complete        ⏱ 11.4s
+```
+
+**Four runs, four completions, no `AttributeError`:**
+
+| run | result | time |
+|---|---|---|
+| 1 | complete | 15.1s |
+| 2 | complete | 11.4s |
+| 3 | complete | 2.8s |
+| 4 | complete — `` `add(a, b)` takes two arguments and returns their sum (`a + b`) `` | 5.8s |
+
+One run also showed the retry path working under a flaky provider:
+
+```
+[WARNING] Provider stream closed without any content [sse_lines=6 usable=3 finish=tool_calls]
+          (attempt 1/3) — retrying        … then (attempt 2/3) … then success
+```
+
+**That is the provider, not wisp** — and it is worth connecting to §1 of the earlier truncation fix:
+a stream that closes with `finish=tool_calls` and no usable content is exactly the condition that
+produced the `{"_raw": …}` truncated-argument path. The two are likely the same root cause seen from
+two sides.
 
 ## §2 — The inbound wiring is complete
 
