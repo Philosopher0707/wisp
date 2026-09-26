@@ -47,7 +47,7 @@ what their §Findings sections are for.
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is `f57-dotenv`'s landing** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
+**HEAD is the workspace `.env`'s landing** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
 on top of it and is the authority for the count — **F87**: it did not, until 2026-09-25. **Nine**
 "point the handoff" commits had never been listed, so the claim and the table disagreed; backfilled.
 The only exception is the handoff commit that carries *this* line, which the next landing lists.
@@ -280,9 +280,28 @@ quoting it; §11 says how.
 | corpus governance II — **D4** the decisions applied | `COMPLETE` — every edit cites its rule; 27-test guard, **10/10** caught, **3/3** legitimate additions silent; found R2's third `M4` never existed | `PHASE_CORPUS_GOVERNANCE_II.md` §5 |
 | register source pins | `COMPLETE` — **no ADR.** `17130c7`'s content check in both register generators (one rule, `scripts/register_pins.py`, ±3); measured **12** and **37** stale, re-pinned **12** and **37**; the brief's 55 was an over-count in corpus governance II's own measurement; `ITEM-F3`'s missing `…` marked | `PHASE_REGISTER_SOURCE_PINS.md` |
 | F57 — `~/.config/wisp/.env` is read | `COMPLETE` — **F57 FIXED**, no ADR: `wisp/user_env.py` loads it as `main()`'s first statement; environment wins, absence is a no-op, invalidity warns; 11-test guard, 2/2 probes, 374/374 differential | `PHASE_F57_DOTENV.md` |
+| the workspace `.env` | `COMPLETE` — **no ADR** (not read, so nothing a repository carries reaches the process): measured, a cloned repository's `WISP_API_BASE` / `WISP_OLLAMA_URL` would send the operator's key / prompt to its endpoint if the file were read; **the writer removed**; 7-test guard, RED 4, **2/2** probes, behaviour differential byte-identical, 425/425 | `PHASE_WORKSPACE_DOTENV.md` |
 
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log — **mind the §0/§23 split**, and note it has **no G1 or governance-layer row**: `CONTEXT.md` §12 is the live open-items table, **F99**).
 **Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0062**).
+
+### 0.0.21 THE WORKSPACE `.env` IS NOT READ, AND NO LONGER WRITTEN (2026-09-26) — no ADR; F57's scope extended
+
+**`_persist_env` wrote `WISP_PROVIDER`, `WISP_MODEL`, `WISP_API_BASE` and `WISP_OLLAMA_URL` to
+`<workspace>/.env`, and nothing read that file.** F57's report named it as the same class and a
+different decision. **Measured first** (`scripts/workspace_dotenv_measurement.py`, a private `HOME`,
+local listeners): read even *after* the operator's own file, a cloned repository's `WISP_API_BASE`
+sends **the operator's API key** to the repository's endpoint, and its `WISP_OLLAMA_URL` sends **the
+prompt**. Both are "non-secret" keys, so **secret versus non-secret is the wrong line; a key that
+names where data goes is the vector.** Decided: **not read, and the writer removed.** No ADR, because
+nothing a repository carries reaches the process, before or after. `_persist_env` now writes
+`~/.config/wisp/.env` only, through F57's `user_env_path()`, and three hints that said `./.env` now
+name that file. **A bare `wisp` resolves the same provider and model** (behaviour differential over 6
+`persist`/`store_key` scenarios, byte-identical). Guard `tests/test_workspace_dotenv_not_written.py`
+(7): RED 4 failed / 3 passed, **2/2** probes; **425/425** over 24 files, the same 3 pre-existing
+sandbox failures both sides. **Existing workspace `.env` files are left alone.** One written before
+`b657e21` (2026-09-14) can hold keys, and this repository's does. Findings, not fixed: `store_key`'s
+`key_<provider>` makes `config.json`'s save fail. Report: `PHASE_WORKSPACE_DOTENV.md`.
 
 ### 0.0.20 F57 — `~/.config/wisp/.env` IS READ (2026-09-26) — no ADR; F57 FIXED
 
@@ -1611,7 +1630,12 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `74e3ccf` | `docs:` point the handoff at `242e90e` — §0.0.19, the phase table, this table, the report's §1; the `CONTEXT.md` §12 pins re-pinned **by id** after §0.0.19 moved them, as the new check required. Excludes the user's WIP (§8) |
 | `db3baec` | `fix:` PR #30's CI — an undeclared policy bundle loads nothing (a `MagicMock` config made `CompositionRoot` open a file named after the mock), and `test-python` checks out full history for the corpus guards; excludes the user's WIP (§8) |
 | `9691614` | merge `corpus-governance-ii` (the CI fix) into `register-source-pins` |
-| *(this commit)* | `fix:` **F57 — `~/.config/wisp/.env` is read** — `wisp/user_env.py`, called first in `main()`; 11-test guard; the ledger's F57 status cell and the register re-pinned; `CONTEXT.md` §12 pins re-pinned by id after §0.0.20 moved them. Excludes the user's WIP (§8) — **the commit that carries §0's `HEAD` line** |
+| `1c24a72` | `fix:` **F57 — `~/.config/wisp/.env` is read** — `wisp/user_env.py`, called first in `main()`; 11-test guard; the ledger's F57 status cell and the register re-pinned; `CONTEXT.md` §12 pins re-pinned by id after §0.0.20 moved them. Excludes the user's WIP (§8) |
+| `e97d22f` | `fix:` re-pin `CURRENT_FLAGS.md`'s two `composition.py` read sites that `db3baec` moved (PR #30's CI fix shifted them) |
+| `083ec71` | merge `corpus-governance-ii` (the re-pin) into `register-source-pins` |
+| `d1e5921` | merge `register-source-pins` into `f57-dotenv` |
+| `7a8fe8b` | `docs:` **the workspace `.env` — measured, and decided** (deliverable 1): `scripts/workspace_dotenv_measurement.py`; a repository's `WISP_API_BASE` / `WISP_OLLAMA_URL` would carry the operator's key / prompt away if the file were read; decided not read, writer to be removed, no ADR; `PHASE_WORKSPACE_DOTENV.md` §2, indexed in §13 (R7) |
+| *(this commit)* | `fix:` **the workspace `.env` is no longer written** (deliverable 2) — `_persist_env` writes `~/.config/wisp/.env` only; three `./.env` hints corrected; 7-test guard; the ledger's F57 row and `CURRENT_FINDINGS.md` §Findings record the extension; §0.0.21. Excludes the user's WIP (§8) — **the commit that carries §0's `HEAD` line** |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,

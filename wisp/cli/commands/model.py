@@ -301,7 +301,7 @@ def _ensure_api_key(agent, name: str) -> bool:
                 print(success(f"✓ API key verified for '{name}' — {detail or 'health check passed'}"))
             else:
                 print(warning(f"⚠ Key entered but health check failed: {detail}"))
-                print(dim("  Saving anyway — you can update via /provider or set WISP_API_KEY in .env"))
+                print(dim("  Saving anyway — you can update via /provider or set WISP_API_KEY in ~/.config/wisp/.env"))
         except Exception as exc:
             print(warning(f"⚠ Could not verify key: {exc}"))
             print(dim("  Saving anyway — will verify on next turn."))

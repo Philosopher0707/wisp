@@ -205,11 +205,11 @@ class OpenAIProvider(Provider):
             if resp.status_code != 200:
                 body = resp.text[:500]
                 # Make 401 actionable: tell the user how to fix it via /provider
-                # and that the key is saved to .env so they don't have to re-enter
+                # and that the key is saved to ~/.config/wisp/.env so they don't have to re-enter
                 # it every REPL restart (taki baar baar change na karna pade).
                 hint = ""
                 if resp.status_code == 401:
-                    hint = " — check WISP_API_KEY / provider API key. Run /provider <name> and enter the key when prompted; it will be verified and saved to ~/.config/wisp/config.json and ./.env"
+                    hint = " — check WISP_API_KEY / provider API key. Run /provider <name> and enter the key when prompted; it will be verified and saved to ~/.config/wisp/.env"
                 # NVIDIA NIM gateway returns 404 with body
                 #   {"status":404,"title":"Not Found",
                 #    "detail":"Function '<uuid>': Not found for account '<id>'"}

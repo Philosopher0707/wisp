@@ -10,7 +10,36 @@ the two follow-ups are still open). The tree is the user's WIP from `CONTEXT.md`
 
 ## §1 — In one page
 
-*Written when deliverable 2 lands (§3).*
+**For the operator: a bare `wisp` uses the same provider and model it used before.** Nothing ever
+read `<workspace>/.env`, so removing its writer changes no process's configuration. That is measured:
+across 6 `persist()` / `store_key()` scenarios, the resolved `WispConfig`, the environment, the
+operator's `~/.config/wisp/.env` and `config.json` are **byte-identical** before and after.
+
+**What does change:** `/provider`, `/model`, the setup wizard and the server's model route no longer
+write `WISP_PROVIDER` / `WISP_MODEL` / `WISP_API_BASE` / `WISP_OLLAMA_URL` into the project you are
+working in. Until now they appended those lines to the project's own `.env`, and changed the file's
+mode to `0600`. **Existing workspace `.env` files are left as they are.** One written before
+2026-09-14 may hold **API keys**; this repository's does. Check any project where you ran `/provider`
+before then.
+
+**The decision** (§2, deliverable 1, `7a8fe8b`): **not read, writer removed.** Measured:
+
+- If the file were read, even after the operator's own file, a cloned repository's `WISP_API_BASE`
+  sent the operator's API key to the repository's endpoint.
+- Its `WISP_OLLAMA_URL` sent the prompt there.
+- Both keys are "non-secret". The line that matters is not secret versus non-secret but **whether a
+  key names where data goes**.
+
+No ADR: nothing a repository carries reaches the process, before or after.
+
+**The change** (§3, deliverable 2): `_persist_env` writes `~/.config/wisp/.env` only. It takes the
+path from `user_env.user_env_path()`, so the writer and F57's reader name one file. The change also
+touches three user-facing strings that pointed at `./.env` and one test that pinned the old write.
+
+- Guard: `tests/test_workspace_dotenv_not_written.py` (7). **RED-first: 4 failed, 3 passed.**
+- **2/2** mutation probes caught.
+- Test differential over 24 files: **425 passed** before and after, the same 3 pre-existing
+  failures both sides.
 
 ---
 
@@ -161,3 +190,77 @@ writes into the server's workspace.
    `save_config` refuses unknown settings: *"Cannot save config with invalid values: Unknown
    setting: 'key_openai'"* (driven, §1). So `config.json` is not updated on that call, and only the
    `.env` files are. This is out of scope; it is the F57 file's concern, not the workspace file's.
+
+---
+
+## §3 — Deliverable 2: the writer, removed
+
+### The change
+
+| file | change |
+|---|---|
+| `wisp/provider_select.py` | `_persist_env` writes `user_env_path()` (`~/.config/wisp/.env`) and nothing else. Gone: the workspace block (the `KEY` filter, the four-step workspace resolution, the second `_upsert_env_file`). The docstrings of `persist`, `_persist_env` and `store_key` name the one file. |
+| `wisp/providers/openai.py:212` | the 401 hint said a key *"will be … saved to ~/.config/wisp/config.json and ./.env"*. Both halves were wrong: a key never reached `./.env` after `b657e21`, and for the three providers with a key slot `store_key`'s `config.json` save fails (§2, finding 2). It now names `~/.config/wisp/.env`. |
+| `wisp/repl/commands/provider.py:374`, `wisp/cli/commands/model.py:304` | *"set WISP_API_KEY in .env"* now reads *"… in ~/.config/wisp/.env"*, the file that is read. |
+| `tests/test_provider_select.py` | `test_persist_env_writes_both_env_files` pinned the removed write. It is now `test_persist_env_writes_only_the_operators_env_file`: the operator's file gets prefs and keys, and the workspace gets nothing. |
+
+That is the whole change. `_upsert_env_file` keeps its behaviour: one caller, and its `0600` mode is
+right for the operator's file.
+
+### The guard — `tests/test_workspace_dotenv_not_written.py`
+
+| test | holds |
+|---|---|
+| `test_a_named_workspace_gets_no_env` | `update["workspace"]`: no `.env` there or in the cwd |
+| `test_the_workspace_from_the_environment_gets_no_env` | `WISP_WORKSPACE`: no `.env` |
+| `test_a_projects_own_env_is_left_byte_identical` | a project's `.env` at `0644` keeps its bytes and its mode |
+| `test_store_key_writes_only_the_operators_file` | the key path, through `persist()` |
+| `test_no_file_is_created_outside_the_operators_config` | **the whole temp tree**, not a list of expected paths, so a new write site anywhere is caught |
+| `test_load_user_env_is_called_without_a_path` | the reader half: F57's load site (AST, F73) passes no path, so no workspace file becomes a configuration source |
+| `test_the_default_path_is_the_operators_own` | `user_env_path()` resolves under `HOME` |
+
+- **Observation point** (F96): the real `persist()` / `store_key()`, run in a subprocess with a
+  private `HOME`.
+- **Floor** (F81): every write test asserts that `~/.config/wisp/.env` *was* written with the keys
+  passed, so a `persist()` that wrote nothing cannot pass "no workspace file" vacuously. The AST test
+  asserts it found the load site.
+- **Silent on a legitimate change** (F92): the tests observe the disk, not `_persist_env`'s spelling.
+
+### Verification — the sets
+
+| check | result |
+|---|---|
+| RED, before the change | **4 failed, 3 passed**. The 4 are the workspace writes. The 3 hold already: `store_key` only ever wrote `KEY` variables, which the old filter kept out of the workspace; the reader passes no path; and the default path. |
+| GREEN | **7 passed**; with `test_provider_select.py` and F57's `test_dotenv_is_read.py`, **50 passed** |
+| **behaviour differential** | `persist()` / `store_key()` in 6 scenarios (every key, a provider switch, two `store_key` sequences, an explicit workspace, a cleared key). Each records `persist()`'s return, the environment delta, the resolved `WispConfig`, the operator's `.env` and `config.json` bytes, and stderr. **Before** (a clean worktree of `7a8fe8b`) and **after**: **byte-identical**, 2863 bytes. |
+| **test differential** | 24 files (F57's 21-file families, plus `test_dotenv_is_read`, `test_setup_wizard`, `test_v04_subsystems_integration`), one pytest at a time with `--basetemp`. Before: **425 passed, 3 failed**. After: **425 passed, 3 failed**. The failure sets are **identical**: `test_v04_subsystems_integration.py::TestScenarioBSandboxAndServerAuth::{test_benign_command_routes_strictly_through_provider, test_traversal_shaped_command_still_confined, test_unconfined_fallback_is_loud}`, the sandbox scenario, which does not touch `.env`. *(My first comparison was garbage: the `rtk` wrapper rewrote `grep`'s output. It was redone in Python, stripping ANSI codes.)* |
+| **the measurement, re-run** | `writer.workspace_env`: 4 keys → **absent**. The project's own `.env`: `0600` plus two appended lines → **`0644`, untouched**. The cwd fallback: written → **absent**. The cloned-repository and keyless rows: **identical**. The file was never read, so the removal cannot move them. |
+| **probes** | (1) re-add a workspace `_upsert_env_file` in `_persist_env` → **CAUGHT** (5 failed). (2) `main()` calls `load_user_env(Path.cwd() / ".env")` → **CAUGHT** (the AST test). Both files restored **byte-identical** (sha256), `__pycache__` purged, no bytecode written (`PHASE_REGISTER_SOURCE_PINS.md` §4). |
+| **the corpus guards** | the four register suites, the entry point, ADR-0062's editorial guard, PR #30's review fixes, this guard, F57's guard and `test_provider_select.py`, in one pytest with `--basetemp`: **263 passed** |
+| `ruff` | the 4 production files and 2 generators: **0 → 0** each (against the `7a8fe8b` worktree); the new guard and the measurement script: clean |
+| **the canonical block** | **not run.** The host had about 136 MB free (8,726 pages), starved under F111. |
+
+### The records
+
+- **`WISP_MIGRATION_STATUS.md:178`**, the `F57` row. Its status cell is unchanged (`FIXED`, still
+  true of the file it names). The row gains the workspace file's sentence: *writer REMOVED
+  2026-09-26, the file deliberately not read*.
+- **`CURRENT_FINDINGS.md`** has a new §Findings subsection, *"Findings whose scope a later landing
+  extended"*: `F57`, the workspace file, the same `unwired-control` class, `FIXED` by removal,
+  tripwire named. **No `F`-number was coined.** The register is total over `F1`–`F104`, and numbering
+  a finding is a decision about the log (the page's own rule). This is F57's writer's other file,
+  named by F57's own report.
+- **`CURRENT_OPEN_ITEMS.md`**: no row, because the item never had one (like F57, `PHASE_F57_DOTENV.md`
+  §2 finding 3). None was invented.
+- **`CONTEXT.md`**: §0.0.21, the phase table, §3 and §13 (the §13 row landed with the report in
+  `7a8fe8b`, R7). §3 also backfills `1c24a72`, `e97d22f`, `083ec71` and `d1e5921`.
+- **`CURRENT_OPEN_ITEMS.md`'s 38 `CONTEXT.md` §12 pins** moved when §0.0.21 was inserted, and
+  were re-pinned. The source check's own suggestions disagreed: shifts of 21, 23 and 24, because
+  `locate` picks the nearest copy of repeated words. So the pins were mapped through the diff of
+  `CONTEXT.md` (`difflib`, equal blocks only): 38 moved, 0 unmapped, every one a source pin.
+
+### Not done
+
+- **No workspace `.env` was deleted.** Not on this machine, and not by code. The files are the
+  operator's.
+- **`store_key`'s `config.json` failure** (§2, finding 2) is recorded, not fixed.

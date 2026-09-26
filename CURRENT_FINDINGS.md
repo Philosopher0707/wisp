@@ -14,7 +14,7 @@
 > `CURRENT_OPEN_ITEMS.md` (what is open), `CURRENT_FLAGS.md` (every rollback flag and its
 > default). All four are derived; none may decide.
 >
-> Generated 2026-09-25 at `1c24a72` · **104 findings** (F1–F104) · **14 not closed** · vocabulary in §(a), classes in §(b).
+> Generated 2026-09-25 at `7a8fe8b` · **104 findings** (F1–F104) · **14 not closed** · vocabulary in §(a), classes in §(b).
 
 ---
 
@@ -266,6 +266,10 @@ the *artifacts*, not a new finding — no `F`-number is coined here.
 ### Claims pinned since
 
 - **F77.** **Pinned by measurement** (`PHASE_CORPUS_GOVERNANCE_II.md` §4, closing **F105**). `CONTEXT.md`'s phase table cited F77 as found by `PHASE_DAG_RETIREMENT.md`, which never numbers it. Its content is §7.1's instrument defect: a committed test names that defect *“F77's shape”* (`tests/reliability/test_outcome_classification_delegation.py:61`), and the mission's contemporaneous working notes state *“F77 — a string scan reads docstrings as code”*. The report's two other finding-shaped statements are open items, not F77 (`CURRENT_OPEN_ITEMS.md`'s `PHASE_DAG_RETIREMENT` R1/R2). No number was coined.
+
+### Findings whose scope a later landing extended
+
+- **F57.** **The workspace `.env` — the same writer's other file, the same `unwired-control` class.** `_persist_env` also wrote `WISP_PROVIDER`, `WISP_MODEL`, `WISP_API_BASE` and `WISP_OLLAMA_URL` to `<workspace>/.env`, and nothing read it (`PHASE_F57_DOTENV.md` §2, finding 2). **Not the same decision:** a repository can carry that file. Driven (`PHASE_WORKSPACE_DOTENV.md` §2): read even after the operator's file, a cloned repository's `WISP_API_BASE` sends the operator's key to the repository's endpoint. Decided *not read*; **the writer was removed** (`FIXED` by removal, 2026-09-26), as `F47`'s artifact was. Recorded in the ledger's `F57` row, `WISP_MIGRATION_STATUS.md:178`. Tripwire: `tests/test_workspace_dotenv_not_written.py`.
 
 ### What this page did not do
 

@@ -302,6 +302,20 @@ RESOLVED: list[tuple[str, str]] = [
             "(`CURRENT_OPEN_ITEMS.md`'s `PHASE_DAG_RETIREMENT` R1/R2). No number was coined."),
 ]
 
+#: A finding whose scope a later landing extended, without coining a number: the same defect, the
+#: same writer, a second file. The row keeps its first status and tripwire; the extension is here.
+EXTENDED: list[tuple[str, str]] = [
+    ("F57", "**The workspace `.env` — the same writer's other file, the same `unwired-control` class.** "
+            "`_persist_env` also wrote `WISP_PROVIDER`, `WISP_MODEL`, `WISP_API_BASE` and "
+            "`WISP_OLLAMA_URL` to `<workspace>/.env`, and nothing read it (`PHASE_F57_DOTENV.md` §2, "
+            "finding 2). **Not the same decision:** a repository can carry that file. Driven "
+            "(`PHASE_WORKSPACE_DOTENV.md` §2): read even after the operator's file, a cloned "
+            "repository's `WISP_API_BASE` sends the operator's key to the repository's endpoint. "
+            "Decided *not read*; **the writer was removed** (`FIXED` by removal, 2026-09-26), as "
+            "`F47`'s artifact was. Recorded in the ledger's `F57` row, `WISP_MIGRATION_STATUS.md:178`. "
+            "Tripwire: `tests/test_workspace_dotenv_not_written.py`."),
+]
+
 #: Claims in the artifacts that cannot be pinned. A finding, never a guess.
 UNPINNABLE: list[tuple[str, str]] = [
     ("F75–F104", "**No ledger row — kept on purpose.** `WISP_MIGRATION_STATUS.md`'s table runs F1–F44 "
@@ -573,6 +587,11 @@ def render() -> str:
     A("### Claims pinned since")
     A("")
     for fid, text in RESOLVED:
+        A(f"- **{fid}.** {text}")
+    A("")
+    A("### Findings whose scope a later landing extended")
+    A("")
+    for fid, text in EXTENDED:
         A(f"- **{fid}.** {text}")
     A("")
     A("### What this page did not do")
