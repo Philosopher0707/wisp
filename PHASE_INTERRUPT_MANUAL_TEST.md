@@ -41,7 +41,14 @@ REPL was idle, and exiting cleanly was **correct behaviour**, not a bug.
 **So the turn-cancel branch remains untested — and I am not going to claim otherwise.** What blocks the
 test is §3.
 
-## §3 — THE FINDING: the REPL cannot complete a turn on this configuration
+## §3 — ⚠️ CORRECTED — see `PHASE_OPENROUTER_CONFIG_CORRECTION.md`
+
+> **The claim below was too strong and is retracted.** The same configuration completes turns in both
+> headless and REPL mode (`ok: true`, `Turn 1 · 1 tools · 5.3s`). The variable not isolated was this
+> sandbox's HTTP proxy. The budget arithmetic is real; "every turn fails" is not. Kept unedited below
+> so the reasoning that produced it is still auditable.
+
+## §3 — (as written) THE FINDING: the REPL cannot complete a turn on this configuration
 
 `Prompt tokens limit exceeded: 17706 > 8517`. Measured, with `tiktoken` over the real schema list:
 
