@@ -36,6 +36,43 @@ class _WsApprovalChannel:
         await self._ws.send_json(frame)
 
 
+#: The decision keys that approve *this* call (`AgentRuntime.apply_approval_decision`'s own
+#: once-verdict). A REST approval is one-shot, so `Y`/`a` approve it without folding memory.
+_APPROVING_KEYS = frozenset({"y", "Y", "a"})
+
+
+def _resolve_tool_approval(msg: dict, bridge: Any, transport: Any) -> tuple[Any, bool]:
+    """Resolve one `tool_approval` frame; return `(call_id, approved)`.
+
+    **The REST bridge is asked first, whichever form the client answers in.** The desktop
+    and VS Code clients send `approved`; the TUI sends a `decision` key (`y`/`n`/`Y`/…). Until
+    PR #30's review the `decision` form went straight to `resolve_decision`, whose unknown-id
+    fallback resolves the *single pending agent approval* — so a "yes" to a REST hook
+    registration approved an unrelated agent tool call, and the REST request timed out to 403.
+    `bridge.resolve` only acts on an id the bridge issued, so asking it first cannot touch an
+    agent approval.
+    """
+    call_id = msg.get("id")
+    decision = msg.get("decision")
+    if decision is not None:
+        approved = str(decision).strip() in _APPROVING_KEYS
+    else:
+        approved = bool(msg.get("approved", False))
+    # ADR-0057: a REST-originated approval is resolved by the bridge, which owns its own
+    # correlation map. Checked FIRST: the transport has no entry for a `rest:` id, and its
+    # fallback would resolve the wrong approval.
+    if bridge is not None and call_id and bridge.resolve(call_id, approved):
+        return call_id, approved
+    if decision is not None and transport is not None:
+        # Full y/Y/n/N/a/d/c contract: memory folds into the
+        # session server-side; verdict comes back from there.
+        return call_id, transport.resolve_decision(decision, approval_id=call_id)
+    if transport is not None:
+        resolved = transport.resolve_approval(approved, approval_id=call_id)
+        approved = approved and resolved
+    return call_id, approved
+
+
 async def _turn_task_body(
     transport: WebSocketTransport,
     ws: Any,
@@ -219,25 +256,7 @@ async def agent_websocket(websocket: WebSocket):
                 continue
 
             if msg_type == "tool_approval":
-                call_id = msg.get("id")
-                decision = msg.get("decision")
-                if decision is not None and transport is not None:
-                    # Full y/Y/n/N/a/d/c contract: memory folds into the
-                    # session server-side; verdict comes back from there.
-                    approved = transport.resolve_decision(decision, approval_id=msg.get("id"))
-                else:
-                    approved = bool(msg.get("approved", False))
-                    # ADR-0057: a REST-originated approval is resolved by the
-                    # bridge, which owns its own correlation map. Checked FIRST:
-                    # the transport has no entry for a `rest:` id, so falling
-                    # through would turn a real approval into a denial.
-                    if bridge is not None and call_id and bridge.resolve(call_id, approved):
-                        await websocket.send_json(
-                            {"type": "tool_approved", "id": call_id, "approved": approved})
-                        continue
-                    if transport is not None:
-                        resolved = transport.resolve_approval(approved, approval_id=msg.get("id"))
-                        approved = approved and resolved
+                call_id, approved = _resolve_tool_approval(msg, bridge, transport)
                 await websocket.send_json({"type": "tool_approved", "id": call_id, "approved": approved})
                 continue
 

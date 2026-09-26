@@ -41,7 +41,7 @@ ROWS: list[tuple[str, str, str, str, str, str, str, str]] = [
      "journal `assistant_message` / `tool_call` / `tool_result` so replay can reconstruct a turn",
      "—", "ADR-0002", "—"),
     ("turn_spans", "WISP_TURN_SPANS", "ON",
-     "`wisp/composition.py:310`, `wisp/core/runtime.py:1409`",
+     "`wisp/composition.py:310`, `wisp/core/runtime.py:1418`",
      "emit a trace span per turn and per tool call", "—", "ADR-0002", "—"),
 
     # ── P1–P4 ───────────────────────────────────────────────────────────────
@@ -65,7 +65,7 @@ ROWS: list[tuple[str, str, str, str, str, str, str, str]] = [
     ("goal_state", "WISP_GOAL_STATE", "OFF", "`wisp/core/runtime.py:694`",
      "derive and record the goal state as a journal-only `GOAL_STATE` record — **records only**",
      "—", "ADR-0035", "tests/test_acceptance_verdict.py"),
-    ("stagnation_gate", "WISP_STAGNATION_GATE", "OFF", "`wisp/core/runtime.py:728`",
+    ("stagnation_gate", "WISP_STAGNATION_GATE", "OFF", "`wisp/core/runtime.py:736`",
      "let the stagnation predicate withhold `done` for a bounded number of replan interventions",
      "graph_oscillation_guard (the two are the **recording** and **enforcing** levels of one concern)",
      "ADR-0036", "tests/reliability/test_post_m13_stagnation_gate_validation.py"),
@@ -74,10 +74,10 @@ ROWS: list[tuple[str, str, str, str, str, str, str, str]] = [
      "—", "ADR-0034", "tests/test_stagnation_detection.py"),
 
     # ── The criteria and gate chain ─────────────────────────────────────────
-    ("turn_criteria_source", "WISP_TURN_CRITERIA_SOURCE", "OFF", "`wisp/core/runtime.py:705`",
+    ("turn_criteria_source", "WISP_TURN_CRITERIA_SOURCE", "OFF", "`wisp/core/runtime.py:712`",
      "let the turn path's required-criteria set carry the objective's declared criteria",
      "—", "ADR-0053", "tests/reliability/test_criteria_source_on_turn_path.py"),
-    ("acceptance_gate", "WISP_ACCEPTANCE_GATE", "OFF", "`wisp/core/runtime.py:719`",
+    ("acceptance_gate", "WISP_ACCEPTANCE_GATE", "OFF", "`wisp/core/runtime.py:727`",
      "withhold `done` at the engine's pre-`done` gate when the declared criteria are unsatisfied",
      "**turn_criteria_source** — with the source off there are no declared criteria in the set",
      "ADR-0054", "tests/reliability/test_acceptance_gate_enablement.py"),
@@ -305,7 +305,7 @@ def render() -> str:
     A("   apply to them, and a test double cannot opt out by setting an attribute.")
     A("2. **`verification_loop` has two consumption sites on the turn path**")
     A("   (`wisp/core/stateless.py:505` and `:1439`) and `turn_spans` has two")
-    A("   (`wisp/composition.py:310`, `wisp/core/runtime.py:1409`). ADR-0002 says *\"read at the")
+    A("   (`wisp/composition.py:310`, `wisp/core/runtime.py:1418`). ADR-0002 says *\"read at the")
     A("   consumption site\"* — **plural sites are consistent with the rule**, so this is")
     A("   recorded as a fact rather than a violation. It is worth stating because the brief for")
     A("   this mission paraphrases the rule as *\"read once, at the composition point\"*, which")

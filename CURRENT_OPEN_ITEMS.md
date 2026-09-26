@@ -13,7 +13,7 @@
 > `CURRENT_FINDINGS.md` (every recorded finding and its status), `CURRENT_FLAGS.md` (every
 > rollback flag and its default). All four are derived; none may decide.
 >
-> Generated 2026-09-25 at `69d1580` · **102 items** · **64 open**, 38 closed (kept, in §The closed items).
+> Generated 2026-09-25 at `fbca83f` · **102 items** · **64 open**, 38 closed (kept, in §The closed items).
 
 ---
 
@@ -109,15 +109,15 @@ reopens would simply vanish from the open table with nothing to compare against.
 | **M2** | Journal-first reconstruction | `COMPLETE` | — | tests/test_session_reconstruction.py | CONTEXT.md:2067 — “✅ **COMPLETE** … **Five consumers still read the blob** (a tripwire asserts it)” |
 | **M3** | Killpoint integration | `COMPLETE` | — | tests/reliability/test_killpoints.py | CONTEXT.md:2068 — “✅ **COMPLETE** — `test_kp_session_midtool_then_killed`. One window covered.” |
 | **M4** | ADR-0004 revisited | `COMPLETE` | — | — | CONTEXT.md:2069 — “✅ **COMPLETE** — **ADR-0027**. Found a live defect” |
-| **M8** | `multi_agent/dag.py` not retired into `wisp/graph/` | `COMPLETE` | — (re-scoped by ADR-0060: the divergence is the *boundary*, not a blocker; the removal is **not owed**) | tests/reliability/test_dag_retirement_contract.py | CONTEXT.md:2247 — “✅ **COMPLETE.** *Reason:* surveyed and decided 2026-09-25 — **`DEPRECATE`, not remove** — and **re-scoped by ADR-0060**” |
+| **M8** | `multi_agent/dag.py` not retired into `wisp/graph/` | `COMPLETE` | — (re-scoped by ADR-0060: the divergence is the *boundary*, not a blocker; the removal is **not owed**) | tests/reliability/test_dag_retirement_contract.py | CONTEXT.md:2248 — “✅ **COMPLETE.** *Reason:* surveyed and decided 2026-09-25 — **`DEPRECATE`, not remove** — and **re-scoped by ADR-0060**” |
 | **M9** | The execution view | `COMPLETE` | — | — | CONTEXT.md:2059 — “✅ **COMPLETE** — ADR-0029.” |
-| **M11** | The graph does not drive execution | `COMPLETE` | — | tests/reliability/test_layer_b_boundary.py | CONTEXT.md:2234 — “✅ **COMPLETE.** *Reason:* **decided, not deferred** (ADR-0060; ADR-0062 R3). ADR-0033 … **ADR-0060 closes the second half**” |
+| **M11** | The graph does not drive execution | `COMPLETE` | — | tests/reliability/test_layer_b_boundary.py | CONTEXT.md:2235 — “✅ **COMPLETE.** *Reason:* **decided, not deferred** (ADR-0060; ADR-0062 R3). ADR-0033 … **ADR-0060 closes the second half**” |
 | **M12** | The failure path | `COMPLETE` | — | — | CONTEXT.md:2061 — “✅ **COMPLETE** — ADR-0032.” |
 | **M13** | The stagnation detector is not constructed by the turn loop | `COMPLETE` | — | tests/test_stagnation_live_wiring.py | CONTEXT.md:2062 — “✅ **COMPLETE** — ADR-0034. … **Enforcement deferred**: routing and goal-met gating are tripwired.” |
 | **M14** | The context trust boundary | `COMPLETE` | — | tests/test_prompt_section_trust.py | CONTEXT.md:2063 — “✅ **COMPLETE** — ADR-0031. … T2 fencing remains, deliberately staged.” |
 | **M15** | The subagent spawn site | `COMPLETE` | — | tests/test_child_principal_wired.py | CONTEXT.md:2064 — “✅ **COMPLETE** — ADR-0030.” |
 | **M16** | The `ESCALATION` record's loss is not fully addressed | `COMPLETE` | — | — | CONTEXT.md:2065 — “✅ **COMPLETE** — ADR-0028.” |
-| **Layer C** | `wisp/core/graph/` — named *disowned* and consumed by the live path | `COMPLETE` | — | tests/reliability/test_layer_c_disposition.py | CONTEXT.md:2249 — “✅ **COMPLETE.** *Reason:* decided 2026-09-25 by **ADR-0060 R5** (ADR-0062 R3). The live symbols **moved**” |
+| **Layer C** | `wisp/core/graph/` — named *disowned* and consumed by the live path | `COMPLETE` | — | tests/reliability/test_layer_c_disposition.py | CONTEXT.md:2250 — “✅ **COMPLETE.** *Reason:* decided 2026-09-25 by **ADR-0060 R5** (ADR-0062 R3). The live symbols **moved**” |
 | **P0 · item 6** | A normal turn creates a `RunRecord` row | `COMPLETE` | — | — | WISP_MIGRATION_STATUS.md:293 — “`DEFERRED to P1`”; P1 is `COMPLETE` (`:193`) |
 | **P1 · item 3** | Journal replaces the snapshot as the primary record | `COMPLETE` | — | — | WISP_MIGRATION_STATUS.md:380 — “`DEFERRED to P2`”; P2 is `COMPLETE` (`:194`) |
 | **P5 · item 5** | Extend the executor to accept a mid-run node | `COMPLETE` | — (ADR-0060 measured it inexpressible and rejected Position B) | — | WISP_MIGRATION_STATUS.md:635 — “`NOT DONE` — **deferred** — §7.5”; §7.5's target was **rejected** by ADR-0060 |
@@ -195,7 +195,7 @@ the brief's six (`OPEN`, `DECIDED`, `CLOSED`) are absent from it, and two of the
 
 ## (c) The open count, by state
 
-Measured 2026-09-25 at `69d1580` over the 102 rows below. A count is canonical
+Measured 2026-09-25 at `fbca83f` over the 102 rows below. A count is canonical
 only if it is measured after the LAST change to any member (**F85**), which is why the
 generator recomputes it rather than the page stating it.
 

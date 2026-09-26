@@ -701,8 +701,16 @@ class AgentRuntime:
             # the turn path's behaviour depend on a flag read at another composition
             # point (ADR-0002 — one flag per concern, read once). With this off, the
             # verdict site below is byte-for-byte today's code.
+            #
+            # A MODEL-authored prompt (a delegated subagent's task) is never read for a
+            # declaration: a `command_succeeds` spec is run by the host's probe, outside
+            # ToolExecutor's approval and sandbox, and ADR-0050 R6's "the objective comes from
+            # the caller" does not hold when the caller is the model (PR #30 review).
+            from wisp.core.turn_criteria import MODEL_AUTHORED_PROMPT_KEY
+
             turn_criteria_source_enabled = bool(
-                getattr(getattr(self, "config", None), "turn_criteria_source", False))
+                getattr(getattr(self, "config", None), "turn_criteria_source", False)
+                and not session.get(MODEL_AUTHORED_PROMPT_KEY))
             # ADR-0054: the ACCEPTANCE GATE — withholds `done` (bounded, by ADR-0036's
             # model) when the objective's declared criteria are not satisfied. This is
             # the consumer ADR-0053 §10 recorded as missing.
@@ -1238,7 +1246,8 @@ class AgentRuntime:
                         enabled=True,
                         # Reuse the gate's probe when it ran: the declared command is the
                         # expensive part, and one turn pays for it once (ADR-0054 R3).
-                        measurement=(declared_gate.last_measurement
+                        # Only a probe that let `done` through: a withheld one is stale.
+                        measurement=(declared_gate.final_measurement
                                      if declared_gate is not None else None))
                     _acceptance = _turn_verdict.verdict
                     if _turn_criteria.declared:

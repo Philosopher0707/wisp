@@ -82,6 +82,13 @@ class TurnCriteria:
                      if c.criteria_id != FLOOR_CRITERION_ID)
 
 
+#: The session key that marks a turn's prompt as written by a model — a delegated subagent's
+#: task. ADR-0050 R6 lets a declaration drive a host-run probe **because the objective comes
+#: from the caller**; when the caller is the model that premise is false, so the runtime reads
+#: no declaration from such a prompt (PR #30 review). Set by `SubagentRunner`.
+MODEL_AUTHORED_PROMPT_KEY = "model_authored_prompt"
+
+
 def floor_only(guard: Any) -> TurnCriteria:
     """Today's criteria set: the floor guard's one criterion, and its evidence."""
     return TurnCriteria(criteria=tuple(floor_guard_criteria(guard)),
@@ -184,21 +191,37 @@ class DeclaredCriteriaGate:
         self._specs = tuple(specs)
         self._workspace = workspace
         self.last_measurement: Any = None
+        self._final: Any = None
         #: How many times the engine asked. Observability only; nothing reads it.
         self.evaluations = 0
+
+    @property
+    def final_measurement(self) -> Any:
+        """The probe taken when the gate let `done` through, or `None` — what the verdict
+        site may reuse.
+
+        A **withheld** `done` is followed by more work, and the engine skips this gate once
+        the shared budget is spent or on the last iteration, so `last_measurement` can
+        describe a workspace the turn has since changed (PR #30 review). A *passing* probe
+        is followed directly by `done`, so reusing it keeps ADR-0054 R3's one probe per turn.
+        """
+        return self._final
 
     def __call__(self) -> bool:
         """True when the declared criteria are satisfied — the engine's question."""
         from wisp.core.convergence import CommandProbe
 
         self.evaluations += 1
+        self._final = None          # a raise below leaves nothing reusable
         self.last_measurement = CommandProbe(self._specs).measure(self._workspace)
         verdict = evaluate(self._criteria, self.last_measurement.evidence,
                            self.last_measurement.observations)
         # The declared criteria are the WHOLE set here, so a FAIL whose named criterion
         # is non-floor is exactly "a declared criterion failed" — ADR-0053 R4's condition,
         # asked of a declared-only set.
-        return not verdict_keys_on_declared(verdict)
+        satisfied = not verdict_keys_on_declared(verdict)
+        self._final = self.last_measurement if satisfied else None
+        return satisfied
 
 
 def declared_criteria_gate(prompt: str, workspace: str) -> "DeclaredCriteriaGate | None":

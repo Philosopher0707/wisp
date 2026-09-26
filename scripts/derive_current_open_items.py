@@ -106,7 +106,7 @@ ROWS: list[tuple[str, str, str, str, str, str]] = [
     ("M8", "`multi_agent/dag.py` not retired into `wisp/graph/`", "COMPLETE",
      "— (re-scoped by ADR-0060: the divergence is the *boundary*, not a blocker; the removal is **not owed**)",
      "tests/reliability/test_dag_retirement_contract.py",
-     "CONTEXT.md:2247 — “✅ **COMPLETE.** *Reason:* surveyed and decided 2026-09-25 — **`DEPRECATE`, not remove** — and **re-scoped by ADR-0060**”"),
+     "CONTEXT.md:2248 — “✅ **COMPLETE.** *Reason:* surveyed and decided 2026-09-25 — **`DEPRECATE`, not remove** — and **re-scoped by ADR-0060**”"),
     ("M9", "The execution view", "COMPLETE", "—", "—",
      "CONTEXT.md:2059 — “✅ **COMPLETE** — ADR-0029.”"),
     ("M10", "The materialized graph is a lower bound on iterations", "NOT STARTED",
@@ -114,7 +114,7 @@ ROWS: list[tuple[str, str, str, str, str, str]] = [
      "CONTEXT.md:2074 — “**OPEN — by design.**”"),
     ("M11", "The graph does not drive execution", "COMPLETE", "—",
      "tests/reliability/test_layer_b_boundary.py",
-     "CONTEXT.md:2234 — “✅ **COMPLETE.** *Reason:* **decided, not deferred** (ADR-0060; ADR-0062 R3). ADR-0033 … **ADR-0060 closes the second half**”"),
+     "CONTEXT.md:2235 — “✅ **COMPLETE.** *Reason:* **decided, not deferred** (ADR-0060; ADR-0062 R3). ADR-0033 … **ADR-0060 closes the second half**”"),
     ("M12", "The failure path", "COMPLETE", "—", "—",
      "CONTEXT.md:2061 — “✅ **COMPLETE** — ADR-0032.”"),
     ("M13", "The stagnation detector is not constructed by the turn loop", "COMPLETE", "—",
@@ -128,7 +128,7 @@ ROWS: list[tuple[str, str, str, str, str, str]] = [
      "CONTEXT.md:2065 — “✅ **COMPLETE** — ADR-0028.”"),
     ("Layer C", "`wisp/core/graph/` — named *disowned* and consumed by the live path", "COMPLETE", "—",
      "tests/reliability/test_layer_c_disposition.py",
-     "CONTEXT.md:2249 — “✅ **COMPLETE.** *Reason:* decided 2026-09-25 by **ADR-0060 R5** (ADR-0062 R3). The live symbols **moved**”"),
+     "CONTEXT.md:2250 — “✅ **COMPLETE.** *Reason:* decided 2026-09-25 by **ADR-0060 R5** (ADR-0062 R3). The live symbols **moved**”"),
 
     # ── WISP_MIGRATION_STATUS.md — the phase ledger's non-COMPLETE rows ──────
     ("P0 · item 6", "A normal turn creates a `RunRecord` row", "COMPLETE", "—", "—",

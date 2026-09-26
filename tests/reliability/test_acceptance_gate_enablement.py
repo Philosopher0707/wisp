@@ -194,8 +194,15 @@ class TestThePredicateTheEngineAsks:
         assert isinstance(gate, DeclaredCriteriaGate)
         assert callable(gate)
         public = {n for n in dir(gate) if not n.startswith("_")}
-        assert public == {"last_measurement", "evaluations"}, (
+        # `final_measurement` was added by the PR #30 review (a withheld probe is stale); it
+        # is a setter-less property, so the surface is still read-only — which is the claim.
+        assert public == {"last_measurement", "evaluations", "final_measurement"}, (
             f"the gate exposes more than a read-only surface: {sorted(public)}")
+        prop = getattr(type(gate), "final_measurement")
+        assert isinstance(prop, property) and prop.fset is None, (
+            "final_measurement must be read-only")
+        assert not any(callable(getattr(gate, n)) for n in public), (
+            "the gate exposes a callable member — the engine could act through it")
 
     def test_the_cached_measurement_is_reused(self, tmp_path):
         """One turn pays for the declared command once: the gate's measurement is what

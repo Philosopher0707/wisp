@@ -392,3 +392,34 @@ R3.2 actually names.
 | **the canonical block** | **not measured as one run** — free memory was **118 MB of 16 GB** at the time (F111's condition; F111's 154 phantom failures appeared at 60–87 MB). Run instead as **8 sequential chunks** of ≤8 files, alone, each with its own `--basetemp`, over the block's **58 files + this mission's new guard**: **1665 tests — 1664 passed, 1 failed**, the one failure `test_node_identity.py::TestANodeReferencesItsWorkUnit::test_a_parallel_round_is_journaled_as_one_exchange_per_call` (**F38**, pre-existing). **The method is weaker than a single block run and weaker than a two-run intersection**, and the number is a chunked set, **not** a canonical count to quote (F111, F85) |
 | `ruff` / `mypy` | not re-run — no Python file under `wisp/` changed; both gates are red at HEAD for pre-existing reasons (**F71**), and this mission neither caused nor repaired that |
 | the user's WIP | `wisp/core/graph/__init__.py` still the only modified tracked file, diff unchanged; no untracked WIP staged |
+
+---
+
+## §6 — The PR #30 review: three production defects, fixed
+
+The review of PR #30 read the production code the branch carries — mostly the **earlier, unpushed
+missions'** (ADR-0054, ADR-0057), not this mission's — and found three defects. Each is fixed RED-first
+and guarded by `tests/reliability/test_pr30_review_fixes.py` (11 tests).
+
+| # | defect | fix |
+|---|---|---|
+| 1 | **A decision-key approval bypassed the REST bridge** (`wisp/server/routes/agents.py`). The TUI answers `{id, decision: "y"}`; the route sent every `decision` frame to `transport.resolve_decision`, whose unknown-id fallback resolves the single pending **agent** approval — so a "yes" to a REST hook registration approved an unrelated agent tool call, and the REST request timed out to 403. **Driven RED:** the REST request stayed unresolved. | The `tool_approval` branch is now one helper, `_resolve_tool_approval`, which asks the bridge **first** in both forms; a `decision` key approves a REST call iff it is `y`/`Y`/`a` (the once-verdict `apply_approval_decision` uses), without folding session memory — a REST approval is one-shot. |
+| 2 | **The verdict reused a stale probe** (`wisp/core/turn_criteria.py`). `DeclaredCriteriaGate.last_measurement` was reused at the verdict site, but a **withheld** `done` is followed by more work, and the engine skips the gate once the shared budget is spent — so a turn that fixed the code after a withhold was recorded `FAIL`. | `final_measurement`: the probe taken when the gate **let `done` through**, else `None`; the runtime hands over only that, and re-probes otherwise. A passing probe is still reused, so ADR-0054 R3's one-probe-per-turn holds on the passing path. |
+| 3 | **A model-authored prompt reached the host's command probe** (`wisp/core/runtime.py`). A subagent's task is written by the parent model and runs through `run_turn` (`wisp/multi_agent/_runner.py`); a `--- criteria ---` head block in it made the host `subprocess.run` its `command_succeeds` argv, outside ToolExecutor's approval and sandbox. **Driven RED:** the host created a sentinel file from a model-authored declaration. ADR-0050 R6's *"the objective comes from the caller"* does not hold when the caller is the model. | `MODEL_AUTHORED_PROMPT_KEY`: `SubagentRunner` marks the delegated session, and the runtime reads **no declaration** from a marked prompt — `turn_criteria_source` (and so `acceptance_gate`) is off for that turn. A caller-authored declaration is still measured (the control test). |
+
+**Verification.** RED first — **8 failed, 3 passed** (the three controls) once the helper was
+extracted *unchanged*; then **11 passed**. **5/5 reverts caught**: each fix undone on its own
+(the bridge check moved back behind the `decision` branch; a withheld probe marked final; the
+runtime reading `last_measurement`; the runtime ignoring the marker; the runner not setting it),
+tree restored byte-identical. Related suites (the gate, the criteria source, REST approval, the
+external input path, the WebSocket transport and control plane, structured delegation, child
+principals, structured criteria, flag composition, the four registers, the editorial guard, the
+entry point, doc drift): **440 passed**, one process, alone, `--basetemp`. `ruff` on the six changed
+files: **0 errors, before and after**.
+
+**Two guards did their job on the way.** `test_the_gate_is_a_bare_callable` pinned the gate's
+public surface to two names; it now admits `final_measurement` and asserts the property it stood
+for — setter-less, no callable member. And the edit to `runtime.py` moved nine pinned lines: the
+authorities and flags generators **refused** until they were re-pinned — by mapping each old line
+through the actual diff, not by typing numbers (`705→712`, `719→727`, `728→736`, `1409→1418`,
+`992→1000`, `1331–1353→1340–1362`).

@@ -14,7 +14,7 @@
 > `CURRENT_FINDINGS.md` (every recorded finding and its status), `CURRENT_OPEN_ITEMS.md`
 > (what is open). All four are derived; none may decide.
 >
-> Generated 2026-09-25 at `69d1580` · **26 switches** (23 `bool` settings in `WispConfig` + 3 read from the environment) · **11 ON**, 15 OFF.
+> Generated 2026-09-25 at `fbca83f` · **26 switches** (23 `bool` settings in `WispConfig` + 3 read from the environment) · **11 ON**, 15 OFF.
 
 ---
 
@@ -24,17 +24,17 @@
 |---|---|---|---|---|---|---|---|
 | `durable_runs` | `WISP_DURABLE_RUNS` | **ON** | `wisp/composition.py:290` | persist a durable `RunRecord` per turn and give `BackgroundAgentManager` its SQLite store | — | ADR-0002 | — |
 | `session_event_fidelity` | `WISP_SESSION_EVENT_FIDELITY` | **ON** | `wisp/core/runtime.py:654` | journal `assistant_message` / `tool_call` / `tool_result` so replay can reconstruct a turn | — | ADR-0002 | — |
-| `turn_spans` | `WISP_TURN_SPANS` | **ON** | `wisp/composition.py:310`, `wisp/core/runtime.py:1409` | emit a trace span per turn and per tool call | — | ADR-0002 | — |
+| `turn_spans` | `WISP_TURN_SPANS` | **ON** | `wisp/composition.py:310`, `wisp/core/runtime.py:1418` | emit a trace span per turn and per tool call | — | ADR-0002 | — |
 | `turn_journal` | `WISP_TURN_JOURNAL` | **ON** | `wisp/core/runtime.py:656` | journal each tool exchange the moment it closes, so a crash mid-turn keeps it | — | ADR-0010 | — |
 | `proposal_boundary` | `WISP_PROPOSAL_BOUNDARY` | **ON** | `wisp/core/runtime.py:663` | record a `ToolRequest` proposal and a `ToolResult` outcome for every call, rejections included | — | ADR-0011 | tests/test_proposal_boundary_records.py |
 | `record_verdict` | `WISP_RECORD_VERDICT` | **OFF** | `wisp/core/runtime.py:669` | record a completion verdict (PASS/FAIL/INCONCLUSIVE) at turn end — **records only** | — | ADR-0016 | tests/test_verdict_layer_recorded.py |
 | `task_graph` | `WISP_TASK_GRAPH` | **OFF** | `wisp/core/runtime.py:676` | materialize each turn as a task graph of `AGENT` nodes, recorded as `TASK_GRAPH` + `NODE_TRANSITION` | — | ADR-0019 | tests/test_task_graph_materialization.py |
 | `recovery_ladder` | `WISP_RECOVERY_LADDER` | **OFF** | `wisp/core/runtime.py:685` | consult the recovery ladder at the turn boundary and journal the rung it chooses | — | ADR-0035 | tests/test_recovery_ladder.py |
 | `goal_state` | `WISP_GOAL_STATE` | **OFF** | `wisp/core/runtime.py:694` | derive and record the goal state as a journal-only `GOAL_STATE` record — **records only** | — | ADR-0035 | tests/test_acceptance_verdict.py |
-| `stagnation_gate` | `WISP_STAGNATION_GATE` | **OFF** | `wisp/core/runtime.py:728` | let the stagnation predicate withhold `done` for a bounded number of replan interventions | graph_oscillation_guard (the two are the **recording** and **enforcing** levels of one concern) | ADR-0036 | tests/reliability/test_post_m13_stagnation_gate_validation.py |
+| `stagnation_gate` | `WISP_STAGNATION_GATE` | **OFF** | `wisp/core/runtime.py:736` | let the stagnation predicate withhold `done` for a bounded number of replan interventions | graph_oscillation_guard (the two are the **recording** and **enforcing** levels of one concern) | ADR-0036 | tests/reliability/test_post_m13_stagnation_gate_validation.py |
 | `graph_oscillation_guard` | `WISP_GRAPH_OSCILLATION_GUARD` | **ON** | `wisp/core/stagnation.py:235` | construct the oscillation detector at all — the **recording** level of the stagnation concern | — | ADR-0034 | tests/test_stagnation_detection.py |
-| `turn_criteria_source` | `WISP_TURN_CRITERIA_SOURCE` | **OFF** | `wisp/core/runtime.py:705` | let the turn path's required-criteria set carry the objective's declared criteria | — | ADR-0053 | tests/reliability/test_criteria_source_on_turn_path.py |
-| `acceptance_gate` | `WISP_ACCEPTANCE_GATE` | **OFF** | `wisp/core/runtime.py:719` | withhold `done` at the engine's pre-`done` gate when the declared criteria are unsatisfied | **turn_criteria_source** — with the source off there are no declared criteria in the set | ADR-0054 | tests/reliability/test_acceptance_gate_enablement.py |
+| `turn_criteria_source` | `WISP_TURN_CRITERIA_SOURCE` | **OFF** | `wisp/core/runtime.py:712` | let the turn path's required-criteria set carry the objective's declared criteria | — | ADR-0053 | tests/reliability/test_criteria_source_on_turn_path.py |
+| `acceptance_gate` | `WISP_ACCEPTANCE_GATE` | **OFF** | `wisp/core/runtime.py:727` | withhold `done` at the engine's pre-`done` gate when the declared criteria are unsatisfied | **turn_criteria_source** — with the source off there are no declared criteria in the set | ADR-0054 | tests/reliability/test_acceptance_gate_enablement.py |
 | `rest_approval` | `WISP_REST_APPROVAL` | **OFF** | `wisp/server/deps.py:554` | route a REST request for an executable-config action through the WebSocket channel for a human decision | — | ADR-0057 | tests/reliability/test_rest_approval.py |
 | `verification_loop` | `WISP_VERIFICATION_LOOP` | **ON** | `wisp/core/stateless.py:505`, `wisp/core/stateless.py:1439` | require an exit-0 verification after code edits before a turn may complete | — | ADR-0016 | — |
 | `criteria_strict_derivation` | `WISP_CRITERIA_STRICT_DERIVATION` | **OFF** | `wisp/autonomous.py:58` | make an undeterminable acceptance requirement `INCONCLUSIVE` instead of promoting it — closes ADR-0048's MODE A on the derived path. Read by `_strict_derivation_enabled()` (`wisp/autonomous.py:77-79`), which names it through the `STRICT_DERIVATION_ENV` constant | — | ADR-0048 | tests/reliability/test_criteria_derivation_authority.py |
@@ -82,7 +82,7 @@ a decision, and this page introduces none.
    apply to them, and a test double cannot opt out by setting an attribute.
 2. **`verification_loop` has two consumption sites on the turn path**
    (`wisp/core/stateless.py:505` and `:1439`) and `turn_spans` has two
-   (`wisp/composition.py:310`, `wisp/core/runtime.py:1409`). ADR-0002 says *"read at the
+   (`wisp/composition.py:310`, `wisp/core/runtime.py:1418`). ADR-0002 says *"read at the
    consumption site"* — **plural sites are consistent with the rule**, so this is
    recorded as a fact rather than a violation. It is worth stating because the brief for
    this mission paraphrases the rule as *"read once, at the composition point"*, which
