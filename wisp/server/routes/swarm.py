@@ -64,10 +64,26 @@ async def run_swarm(req: SwarmRunRequest):
     try:
         from wisp.multi_agent.orchestrator import SwarmOrchestrator
     except ImportError:
+        # `wisp/multi_agent/orchestrator.py` HAS NEVER EXISTED. `multi_agent/cli.py:17` says so
+        # outright — "SwarmOrchestrator is not yet implemented — use SubagentOrchestrator as
+        # fallback" — and it has that fallback. This route did not, so the endpoint returned 503
+        # "Swarm subsystem unavailable" forever, which reads like a CONFIGURATION problem rather
+        # than a missing implementation. Same standard as the AUTO_EDIT denial and the truncated
+        # tool call: name the real cause, not a symptom.
+        #
+        # No fallback is wired here on purpose: `cli.py:74` records that "SubagentOrchestrator has
+        # a different API than SwarmOrchestrator", and this route calls
+        # `SwarmOrchestrator(config, max_parallel=...)`. Substituting one for the other needs an
+        # adapter, and inventing that here would be a design decision, not a fix.
         from fastapi.responses import JSONResponse
         return JSONResponse(
-            status_code=503,
-            content={"error": "Swarm subsystem unavailable"},
+            status_code=501,
+            content={
+                "error": "Swarm orchestration is NOT IMPLEMENTED",
+                "detail": "wisp.multi_agent.orchestrator (SwarmOrchestrator) has never existed. "
+                          "multi_agent/cli.py falls back to SubagentOrchestrator; this route has "
+                          "no adapter for it. Use POST /api/subagents, or the `wisp agents` CLI.",
+            },
         )
 
     orch = SwarmOrchestrator(config, max_parallel=req.max_parallel)
