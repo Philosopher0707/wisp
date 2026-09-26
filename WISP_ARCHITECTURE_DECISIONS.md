@@ -7186,9 +7186,9 @@ review, which is the argument for making these scans parse.
    instead. They are agent tools with an agent counterpart, so they belong to `SecurityPolicy`'s
    question — but the consequence is that the two gates cover **disjoint** route sets, and a reader
    asking "is this route gated?" must first know which question applies.
-2. **The set is still a hand-written literal.** R3 edited a `frozenset`. A route added without a
-   corresponding entry is **silent** — nothing enumerates the routes and asserts each is classified.
-   That guard is what would make this set self-maintaining, and it is not built here.
+2. **The set is a hand-written literal — now guarded.** `tests/reliability/test_route_gate_classification.py`
+   (2026-09-27) enumerates every `require_tool_allowed` call and asserts each action is classified exactly
+   once — human-gated, or policy-only **with its reason** — and that every set member's route really asks.
 3. **`ADR-0059 R1`'s pinned-pair count moved** from six to ten. Its "closed in effect" reading was
    measured over six pairs and is now measured over ten; the measurement is owed again, and R3's
    coherence argument (`authorize()` already returns `approval_required` for both) is the reason it is
