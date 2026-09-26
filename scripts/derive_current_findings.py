@@ -371,7 +371,28 @@ def _check_sources() -> list[str]:
         lines = (REPO / path).read_text(encoding="utf-8").splitlines()
         if not (1 <= n <= len(lines)):
             broken.append(f"{fid}: {path}:{n} is out of range ({len(lines)} lines)")
-    return broken
+    return broken + _source_quote_problems()
+
+
+#: A check that found nothing to check has not run (F81). 97 of the 104 sources quote their
+#: line today; the floor sits well below that so a legitimate row without a quote cannot trip it.
+QUOTE_FLOOR = 60
+
+
+def _source_quote_problems() -> list[str]:
+    """The quoted words must be on the cited line, ±3 (`scripts/register_pins.py`).
+
+    Range was all `_check_sources` checked until the register-source-pins mission, so a pin
+    could drift onto unrelated text and pass — 12 had (`PHASE_REGISTER_SOURCE_PINS.md` §2).
+    """
+    sys.path.insert(0, str(REPO / "scripts"))
+    from register_pins import source_quote_problems
+
+    problems, checkable = source_quote_problems([(r[0], r[5]) for r in ROWS], REPO)
+    if checkable < QUOTE_FLOOR:
+        problems.append(f"only {checkable} sources carry a checkable quote (floor "
+                        f"{QUOTE_FLOOR}) — the quote grammar drifted and the check went vacuous")
+    return problems
 
 
 def _counts() -> dict[str, int]:

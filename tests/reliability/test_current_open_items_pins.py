@@ -313,3 +313,60 @@ class TestFindingsSectionRecordsTheDisagreements:
             assert phrase not in section, (
                 f"§Findings contains {phrase!r} — a derived page may record a disagreement, "
                 "never resolve one")
+
+
+# ── the source pin carries its quoted words (register-source-pins mission) ──
+#
+# Until this mission the generator checked a source's line was IN RANGE, not that it said what
+# the row quotes — so pins drifted onto unrelated text and passed (`PHASE_REGISTER_SOURCE_PINS.md`).
+# The rule lives once, in `scripts/register_pins.py`, for both registers.
+
+
+def _pins():
+    import sys as _sys
+
+    _sys.path.insert(0, str(REPO / "scripts"))
+    import register_pins
+
+    return register_pins
+
+
+class TestEverySourcePinCarriesItsQuote:
+    def test_every_quoted_source_is_on_its_line(self):
+        problems = _generator()._source_quote_problems()
+        assert problems == [], (
+            "CURRENT_OPEN_ITEMS.md cites line(s) that no longer carry the quoted words:\n  "
+            + "\n  ".join(problems))
+
+    def test_the_check_has_a_floor(self):
+        mod, pins = _generator(), _pins()
+        _problems, checkable = pins.source_quote_problems([(r[0], r[5]) for r in mod.ROWS], REPO)
+        assert checkable >= mod.QUOTE_FLOOR, (
+            f"only {checkable} sources carry a checkable quote — the check has gone vacuous")
+
+    def _a_pinned_row(self):
+        mod, pins = _generator(), _pins()
+        for r in mod.ROWS:
+            pin = pins.pinned_quote(r[5])
+            if pin is None:
+                continue
+            path, line, frags = pin
+            lines = (REPO / path).read_text(encoding="utf-8").splitlines()
+            if (pins.quote_is_at(lines, line, frags, 0) and line + 40 <= len(lines)
+                    and not pins.quote_is_at(lines, line + 40, frags)):
+                return r, path, line, pins
+        raise AssertionError("floor: no row is pinned exactly to its quote")
+
+    def test_a_pin_moved_past_the_window_is_refused(self):
+        row, path, line, pins = self._a_pinned_row()
+        moved = row[5].replace(f"{path}:{line} —", f"{path}:{line + 40} —", 1)
+        problems, _ = pins.source_quote_problems([(row[0], moved)], REPO)
+        assert problems, (
+            f"{row[0]}'s pin moved 40 lines onto other text and the check accepted it")
+
+    def test_a_shift_inside_the_window_is_silent(self):
+        """F92: a heading added a line or two above a row is not drift."""
+        row, path, line, pins = self._a_pinned_row()
+        shifted = row[5].replace(f"{path}:{line} —", f"{path}:{line + 2} —", 1)
+        problems, _ = pins.source_quote_problems([(row[0], shifted)], REPO)
+        assert not problems, f"a 2-line shift was called stale: {problems}"

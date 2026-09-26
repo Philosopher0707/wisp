@@ -2332,6 +2332,7 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_CURRENT_FLAGS.md` | **Corpus governance D3** — the flags register; the brief's ADR-0002 paraphrase is wrong |
 | `PHASE_CORPUS_GOVERNANCE.md` | **Corpus governance D4** — the entry point, and the mission's report |
 | `PHASE_CORPUS_GOVERNANCE_II.md` | **Corpus governance II** — ADR-0062's eight editorial decisions, `CURRENT_AUTHORITIES.md`'s generator, `F77`'s disposition, and the decisions applied |
+| `PHASE_REGISTER_SOURCE_PINS.md` | **The register source pins** — `17130c7`'s content check applied to the findings and open-items generators (one rule, `scripts/register_pins.py`), and the stale pins it found re-pinned |
 | `PHASE_EXTERNAL_INPUT_PATH.md` | **The external input path (ADR-0061)** — W1's frame driven, G3's boundary named, the two-decisions-or-one answer, and ADR-0059 residual 1 re-driven |
 | `PHASE_M13_REPORT.md` | The stagnation detector on the live turn path (ADR-0034) |
 
