@@ -281,6 +281,14 @@ TOOL_RISK_TABLE: dict[str, ToolRisk] = {
     "web_search": ToolRisk.NETWORK,
     "recall": ToolRisk.READ,
     "remember": ToolRisk.WRITE,
+    # `rewind` restores a checkpoint — it MUTATES the workspace (`_safe_write_text`; a checkpoint
+    # whose content is None *deletes*). It was absent from this table, so `risk_for_tool` returned
+    # its default, `EXEC` — the same class a nonexistent tool gets. Found by
+    # `scripts/tool_wiring_audit.py`, and pinned by
+    # `tests/reliability/test_tool_wiring_completeness.py` so the next tool cannot arrive
+    # unclassified. EXEC was the *conservative* default rather than a dangerous one, but it is
+    # semantically wrong: EXEC is denied on `restricted` data, which is a rule about execution.
+    "rewind": ToolRisk.WRITE,
     "write_file": ToolRisk.WRITE,
     "edit_file": ToolRisk.WRITE,
     "edit_file_multi": ToolRisk.WRITE,
