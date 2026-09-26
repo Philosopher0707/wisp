@@ -47,7 +47,7 @@ what their §Findings sections are for.
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is `242e90e`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
+**HEAD is `f57-dotenv`'s landing** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
 on top of it and is the authority for the count — **F87**: it did not, until 2026-09-25. **Nine**
 "point the handoff" commits had never been listed, so the claim and the table disagreed; backfilled.
 The only exception is the handoff commit that carries *this* line, which the next landing lists.
@@ -279,9 +279,24 @@ quoting it; §11 says how.
 | corpus governance II — **D3** `F77`'s disposition | `COMPLETE` — **outcome 1**, measured and driven: F77 is §7.1's instrument defect; **F105 closed**; found the register's sources are range-checked only | `PHASE_CORPUS_GOVERNANCE_II.md` §4 |
 | corpus governance II — **D4** the decisions applied | `COMPLETE` — every edit cites its rule; 27-test guard, **10/10** caught, **3/3** legitimate additions silent; found R2's third `M4` never existed | `PHASE_CORPUS_GOVERNANCE_II.md` §5 |
 | register source pins | `COMPLETE` — **no ADR.** `17130c7`'s content check in both register generators (one rule, `scripts/register_pins.py`, ±3); measured **12** and **37** stale, re-pinned **12** and **37**; the brief's 55 was an over-count in corpus governance II's own measurement; `ITEM-F3`'s missing `…` marked | `PHASE_REGISTER_SOURCE_PINS.md` |
+| F57 — `~/.config/wisp/.env` is read | `COMPLETE` — **F57 FIXED**, no ADR: `wisp/user_env.py` loads it as `main()`'s first statement; environment wins, absence is a no-op, invalidity warns; 11-test guard, 2/2 probes, 374/374 differential | `PHASE_F57_DOTENV.md` |
 
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log — **mind the §0/§23 split**, and note it has **no G1 or governance-layer row**: `CONTEXT.md` §12 is the live open-items table, **F99**).
 **Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0062**).
+
+### 0.0.20 F57 — `~/.config/wisp/.env` IS READ (2026-09-26) — no ADR; F57 FIXED
+
+**The file `provider_select.store_key()` writes was never read**, so a key placed there did nothing
+(an operator's valid OpenRouter key got `401 User not found`). `wisp/user_env.py::load_user_env` now
+loads it as the **first statement of the console entry point** — before any `WispConfig` or provider
+reads the environment; measured, importing `wisp.__main__` reads none of the writer's variables.
+**Exported variables win; an absent file is a no-op; an unreadable file or a malformed line warns and
+never raises; no value is logged.** Two production files (the reader, the call site); the SDK does not
+load it. Guard `tests/test_dotenv_is_read.py` (11), RED-first, **2/2** probes, and **374/374** before
+and after over 21 CLI/provider/config suites. **A real `~/.config/wisp/.env` on this machine now
+supplies six variables to every `wisp` run** (see the report's §1). Findings, not fixed: the file now
+outranks `config.json`; the workspace `.env` is still write-only; F57 never had an open-items row.
+Report: `PHASE_F57_DOTENV.md`.
 
 ### 0.0.19 THE REGISTER SOURCE PINS (2026-09-26) — no ADR; an instrument repaired
 
@@ -1593,7 +1608,10 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `dbc6a39` | `test:` **the register generators check a source's quoted words**, not just its line range (register source pins, D1) — `scripts/register_pins.py`, ±3, floor 60; RED by design: **12** and **37** stale; excludes the user's WIP (§8) |
 | `d4afcd9` | `docs:` re-pin `CURRENT_FINDINGS.md`'s **12** stale sources (D2) — only line numbers moved, every quotation byte-identical; excludes the user's WIP (§8) |
 | `242e90e` | `docs:` re-pin `CURRENT_OPEN_ITEMS.md`'s **37** stale sources (D3) — §12 rows by id; `ITEM-F3`'s elision marked; a stale-`.pyc` defect in the probe harness found and fixed; excludes the user's WIP (§8) |
-| *(this commit)* | `docs:` point the handoff at `242e90e` — §0.0.19, the phase table, this table, the report's §1; the `CONTEXT.md` §12 pins re-pinned **by id** after §0.0.19 moved them, as the new check required. Excludes the user's WIP (§8) — **the handoff commit that carries §0's `HEAD` line** |
+| `74e3ccf` | `docs:` point the handoff at `242e90e` — §0.0.19, the phase table, this table, the report's §1; the `CONTEXT.md` §12 pins re-pinned **by id** after §0.0.19 moved them, as the new check required. Excludes the user's WIP (§8) |
+| `db3baec` | `fix:` PR #30's CI — an undeclared policy bundle loads nothing (a `MagicMock` config made `CompositionRoot` open a file named after the mock), and `test-python` checks out full history for the corpus guards; excludes the user's WIP (§8) |
+| `9691614` | merge `corpus-governance-ii` (the CI fix) into `register-source-pins` |
+| *(this commit)* | `fix:` **F57 — `~/.config/wisp/.env` is read** — `wisp/user_env.py`, called first in `main()`; 11-test guard; the ledger's F57 status cell and the register re-pinned; `CONTEXT.md` §12 pins re-pinned by id after §0.0.20 moved them. Excludes the user's WIP (§8) — **the commit that carries §0's `HEAD` line** |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
@@ -2351,6 +2369,7 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_CORPUS_GOVERNANCE.md` | **Corpus governance D4** — the entry point, and the mission's report |
 | `PHASE_CORPUS_GOVERNANCE_II.md` | **Corpus governance II** — ADR-0062's eight editorial decisions, `CURRENT_AUTHORITIES.md`'s generator, `F77`'s disposition, and the decisions applied |
 | `PHASE_REGISTER_SOURCE_PINS.md` | **The register source pins** — `17130c7`'s content check applied to the findings and open-items generators (one rule, `scripts/register_pins.py`), and the stale pins it found re-pinned |
+| `PHASE_F57_DOTENV.md` | **F57** — `~/.config/wisp/.env` read at `main()`'s first statement; the semantics, the differential, and four bounded findings |
 | `PHASE_EXTERNAL_INPUT_PATH.md` | **The external input path (ADR-0061)** — W1's frame driven, G3's boundary named, the two-decisions-or-one answer, and ADR-0059 residual 1 re-driven |
 | `PHASE_M13_REPORT.md` | The stagnation detector on the live turn path (ADR-0034) |
 

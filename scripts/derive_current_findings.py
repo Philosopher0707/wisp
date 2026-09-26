@@ -170,7 +170,7 @@ ROWS: list[tuple[str, str, str, str, str, str, str]] = [
     ("F56", "Resume lost the recovery strategy — in two parts",
      "FIXED", "", "—", "WISP_MIGRATION_STATUS.md:177 — “**FIXED** … Tests: `test_resume_preserves_the_recovery_strategy`, `test_the_ladder_history_survives_a_resume`”", "tests/reliability/test_next_convergence_controller.py"),
     ("F57", "`~/.config/wisp/.env` is WRITE-ONLY — nothing in `wisp/` ever reads it",
-     "OPEN", "unwired-control", "—", "WISP_MIGRATION_STATUS.md:178 — “**OPEN, recorded**”", "—"),
+     "FIXED", "unwired-control", "—", "WISP_MIGRATION_STATUS.md:178 — “**FIXED 2026-09-26** (was *OPEN, recorded*)”", "tests/test_dotenv_is_read.py"),
     ("F58", "The acceptance criterion was tamperable: a live agent rewrote the contract and the loop reported `goal_met`",
      "FIXED", "false-success", "—", "WISP_MIGRATION_STATUS.md:179 — “**FIXED** … `verify:cmdN:inputs_unchanged` is a **required** criterion”", "tests/reliability/test_next_autonomous_wiring.py"),
     ("F59", "A timeout that made real progress had no recovery that could continue the work",

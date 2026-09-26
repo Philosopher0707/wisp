@@ -1,5 +1,6 @@
 """CLI entry point for Wisp — the local Ollama-powered coding agent."""
 
+from wisp.user_env import load_user_env  # F57 — called first in main()
 import os
 
 # ── Early cwd recovery (before any import that calls getcwd) ──────────
@@ -1152,6 +1153,10 @@ def _convert_sigterm_to_interrupt() -> None:
 
 
 def main():
+    # F57: `~/.config/wisp/.env` is written by `provider_select.store_key()`; load it FIRST, before
+    # any `WispConfig` or provider reads the environment. Exported variables win; an absent file
+    # is a no-op. The one load site — `tests/test_dotenv_is_read.py` pins it.
+    load_user_env()
     _register_stack_dumper()
     _convert_sigterm_to_interrupt()
     argv = list(sys.argv[1:])

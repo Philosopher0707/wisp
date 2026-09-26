@@ -14,7 +14,7 @@
 > `CURRENT_OPEN_ITEMS.md` (what is open), `CURRENT_FLAGS.md` (every rollback flag and its
 > default). All four are derived; none may decide.
 >
-> Generated 2026-09-25 at `242e90e` · **104 findings** (F1–F104) · **15 not closed** · vocabulary in §(a), classes in §(b).
+> Generated 2026-09-25 at `9691614` · **104 findings** (F1–F104) · **14 not closed** · vocabulary in §(a), classes in §(b).
 
 ---
 
@@ -78,7 +78,7 @@
 | **F54** | The mutating tool surface is unreachable on any path that builds a `WispAgentCore` by hand | `FIXED` | instrument-defect | ADR-0045 | WISP_MIGRATION_STATUS.md:175 — “**FIXED** … One-line fix (wire a `ToolExecutor`) plus two tripwires” | tests/reliability/test_next_autonomous_wiring.py |
 | **F55** | `wisp converge` declared `--model`/`--workspace`, but those are global flags stripped before the handler runs | `FIXED` | — | — | WISP_MIGRATION_STATUS.md:176 — “**REPAIRED** … a test asserts the parser does not re-declare them” | tests/reliability/test_next_convergence_controller.py |
 | **F56** | Resume lost the recovery strategy — in two parts | `FIXED` | — | — | WISP_MIGRATION_STATUS.md:177 — “**FIXED** … Tests: `test_resume_preserves_the_recovery_strategy`, `test_the_ladder_history_survives_a_resume`” | tests/reliability/test_next_convergence_controller.py |
-| **F57** | `~/.config/wisp/.env` is WRITE-ONLY — nothing in `wisp/` ever reads it | `OPEN` | unwired-control | — | WISP_MIGRATION_STATUS.md:178 — “**OPEN, recorded**” | — |
+| **F57** | `~/.config/wisp/.env` is WRITE-ONLY — nothing in `wisp/` ever reads it | `FIXED` | unwired-control | — | WISP_MIGRATION_STATUS.md:178 — “**FIXED 2026-09-26** (was *OPEN, recorded*)” | tests/test_dotenv_is_read.py |
 | **F58** | The acceptance criterion was tamperable: a live agent rewrote the contract and the loop reported `goal_met` | `FIXED` | false-success | — | WISP_MIGRATION_STATUS.md:179 — “**FIXED** … `verify:cmdN:inputs_unchanged` is a **required** criterion” | tests/reliability/test_next_autonomous_wiring.py |
 | **F59** | A timeout that made real progress had no recovery that could continue the work | `FIXED` | — | ADR-0046 | WISP_MIGRATION_STATUS.md:180 — “**FIXED (ADR-0046)**” | tests/reliability/test_progress_aware_recovery.py |
 | **F60** | A run whose every acceptance criterion PASSES was reported `goal_failed` when its last turn was cut off | `FIXED` | — | ADR-0047 | WISP_MIGRATION_STATUS.md:181 — “**FIXED (ADR-0047)**” | tests/reliability/test_precedence_canonical.py |
@@ -226,8 +226,8 @@ below. A count is canonical only if it is measured after the LAST change to any 
 
 | status | count |
 |---|---|
-| `OPEN` | 15 |
-| `FIXED` | 50 |
+| `OPEN` | 14 |
+| `FIXED` | 51 |
 | `CLOSED` | 34 |
 | `SUPERSEDED` | 1 |
 | `DECIDED` | 3 |
@@ -237,7 +237,7 @@ below. A count is canonical only if it is measured after the LAST change to any 
 
 **`UNRESOLVED`** — no finding is currently in this state (ADR-0062 R3.2's rule).
 
-**Not closed** — `OPEN` + `UNRESOLVED` — **15** of 104. **6** of them are the **host**, not the architecture: `F11`, `F17`, `F36`, `F75`, `F80`, `F88`.
+**Not closed** — `OPEN` + `UNRESOLVED` — **14** of 104. **6** of them are the **host**, not the architecture: `F11`, `F17`, `F36`, `F75`, `F80`, `F88`.
 Each is a declared dependency that cannot be installed here (`F11`, `F80`, `F88`), a resource
 limit (`F36`), a flaky test (`F17`), or an instrument that cannot be committed (`F75`). The
 remaining `OPEN` findings are architectural and are the ones a decision would move.
