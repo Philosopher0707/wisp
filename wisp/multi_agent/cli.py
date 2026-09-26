@@ -68,7 +68,22 @@ def cmd_swarm(goal: str, roles: list[str] | None = None, model: str | None = Non
         print(dim(f"   Retries: up to {max_retries} per task"))
     print()
 
-    orch = SwarmOrchestrator(config=config, workspace=Path(config.workspace))
+    # `tool_executor` must be passed. Without it the runner's `_tool_executor` is None and every
+    # subagent loses `run_bash` — reported from a live session, by a subagent, accurately:
+    #
+    #   "`run_bash` was denied (no wired ToolExecutor on the fallback path)"
+    #
+    # `composition.py:215` wires it ("tool_executor wired at construction time"); this path did
+    # not, so the CLI swarm ran with a degraded tool surface. `SubagentOrchestrator.__init__` has
+    # accepted `tool_executor` all along (`:359`) and forwards it to the runner (`:405`) — the
+    # parameter was there and simply not used here.
+    #
+    # NOTE: this is now a SECOND construction site. `composition.py` is the one that owns the
+    # wiring, and a root built here would keep it single-sourced; that is a larger change and this
+    # is the smaller correct one. Recorded so the next reader knows which it is.
+    from wisp.tool_executor import ToolExecutor
+    orch = SwarmOrchestrator(config=config, workspace=Path(config.workspace),
+                             tool_executor=ToolExecutor(config))
     _last_orchestrator = orch
     try:
         # SubagentOrchestrator has a different API than SwarmOrchestrator
