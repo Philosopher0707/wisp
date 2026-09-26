@@ -10,7 +10,7 @@ import getpass
 import hashlib
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import FrozenSet, Optional
+from typing import Any, FrozenSet, Optional
 
 
 class PrincipalKind(StrEnum):

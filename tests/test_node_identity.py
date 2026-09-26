@@ -232,18 +232,28 @@ class TestANodeReferencesItsWorkUnit:
         assert len(set(refs)) == len(refs), f"references collide: {refs}"
 
     def test_a_parallel_round_is_journaled_as_one_exchange_per_call(self, tmp_path):
-        """A provider round carrying TWO tool calls becomes two work units, not
-        one.
+        """A provider round carrying TWO tool calls becomes ONE batched work unit.
 
-        `_group_exchanges` supports a genuine batch (`callA callB replyA
-        replyB` → one exchange), and `turn_work_units` names it `call:c0+c1` —
-        see `test_a_parallel_batch_names_all_of_its_ids`. But the live engine
-        dispatches each call and streams its reply before the next call
-        arrives, so the sequence it emits is `callA replyA callB replyB` and
-        the grouping rule closes after each reply.
+        **F38's closure.** This test previously asserted two separate work units
+        (`call:c0`, `call:c1`) and pinned the *ordering* it rested on as fact: *"the
+        live engine dispatches each call and streams its reply before the next call
+        arrives, so the sequence it emits is `callA replyA callB replyB`"*. That
+        ordering existed only because **F8 refused every tool call pre-dispatch** —
+        with tools genuinely dispatching, the engine emits `callA callB replyA
+        replyB`, which is the batch `_group_exchanges` documents and
+        `turn_work_units` names `call:c0+c1`.
 
-        Asserted rather than assumed: the node count depends on this ordering,
-        so the ordering is pinned here too.
+        So the production behaviour is *more* correct, not less, and this is a
+        **contract update, not a repair** — the test had encoded a broken environment
+        as the contract (`TEST_ASSUMED_BROKEN_ENVIRONMENT`, F38). The batch shape is
+        already covered by `test_a_parallel_batch_names_all_of_its_ids`; what this
+        test adds is that the *live turn* reaches it.
+
+        **The name is historical and deliberately not changed.** It says *"one exchange
+        per call"*, which the assertion below no longer claims — but twenty-odd phase
+        reports and the findings register cite this test by name, and a historical
+        record is not amended to match a later change (ADR-0062 R2). Renaming it would
+        have orphaned every one of those citations to buy a better label.
         """
         session, repo = _run_turn(
             tmp_path,
@@ -253,15 +263,18 @@ class TestANodeReferencesItsWorkUnit:
         )
         graph, events = _persisted_graph(repo)
 
-        # The ordering this rests on: each reply closes its own exchange.
+        # Both calls are answered, in call order — this part is unchanged and still worth
+        # pinning, because the *node count* below depends on both replies arriving.
         replies = [e.payload.get("tool_call_id") for e in events
                    if e.event_type == SessionEventType.TOOL_RESULT]
         assert replies == ["c0", "c1"], (
-            "the engine now batches its tool events; the exchange count — and "
-            f"so the node count — changed: {replies}")
+            f"both parallel calls must be answered, in order: {replies}")
 
+        # The round's two calls group into ONE work unit, and the batch names both ids.
         assert [n["work_unit"] for n in graph["nodes"]] == [
-            "call:c0", "call:c1", "output"]
+            "call:c0+c1", "output"], (
+            "a genuine batch no longer groups into one work unit — re-check F38's closure "
+            "and `_group_exchanges`'s documented rule")
 
 
 # ══════════════════════════════════════════════════════════════════════════

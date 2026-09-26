@@ -35,7 +35,6 @@ from wisp.core.convergence import (
     TurnObservation,
     WorkspaceSnapshot,
     CriteriaDeclarationRejected,
-    criteria_for,
     explain_acceptance,
     read_journal_baseline,
 )

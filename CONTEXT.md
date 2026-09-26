@@ -2079,15 +2079,15 @@ what it observes is the production path, not a reconstruction beside it.
 ## 11. Verification commands that actually work
 
 ```bash
-# Gates — ⚠️ NEITHER IS GREEN AT HEAD, corrected 2026-09-25 (F71)
-/opt/anaconda3/envs/litllm/bin/ruff check wisp/          # 11 errors, all pre-existing
-uv run --no-project --with "mypy==2.3.1" mypy wisp/      # 1844 errors in 228 files
+# Gates — ✅ ruff is GREEN as of 2026-09-27; mypy is NOT (F71)
+/opt/anaconda3/envs/litllm/bin/ruff check wisp/          # ✅ All checks passed! (was 11 errors)
+uv run --no-project --with "mypy==2.3.1" mypy wisp/      # 1844 errors in 228 files — unchanged
 
-# This block used to say "Gates (both must be green)". Neither is. Measured at d7a55c2: ruff reports
-# 11 errors (incl. an F821 undefined name in wisp/auth/principal.py and wisp/context_assembler.py),
-# and the pinned mypy reports 1844 errors in 228 files — not zero. Every phase that claimed a green
-# lint/type criterion claimed something untrue. Both sets are UNCHANGED by the 2026-09-25 chain
-# (verified by set diff: 0 new, 0 gone), so the chain neither caused nor repaired them. Finding F71.
+# This block read "NEITHER IS GREEN AT HEAD" (F71, at d7a55c2); half of that is now false. ruff went
+# 11 → 0: the four F821s are fixed — `Any` used in three `auth/principal.py` signatures and never
+# imported, `TrustTag` named in `context_assembler.py`'s `SECTION_TRUST` annotation while its runtime
+# import stayed local (now a `TYPE_CHECKING` block). Neither was a runtime `NameError` — both use
+# `from __future__ import annotations` — but `get_type_hints(executor_principal)` raised before it.
 
 # Phase 10 tests — MEASURED, and the block had to be repaired to run at all.
 #

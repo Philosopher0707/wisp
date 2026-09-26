@@ -32,7 +32,7 @@ tag items without `WISP_CONTEXT_TRUST`; the rules are enforced when it is on.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any, Iterable
 

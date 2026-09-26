@@ -29,6 +29,7 @@ import re
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from wisp.core.verification import INVARIANT_STATEMENT
 
@@ -59,7 +60,14 @@ INSTRUCTION_PRIORITY = 0
 #: `sections.append((...))` calls by AST and fails on a name missing here, so a
 #: new section cannot arrive without someone answering "may repository content
 #: sit there?".
-SECTION_TRUST: dict[str, "TrustTag"] = {}   # populated below, after the import
+if TYPE_CHECKING:  # pragma: no cover — no runtime import; the real one is local, below
+    # `SECTION_TRUST`'s annotation names `TrustTag`, and the runtime import lives inside
+    # `_build_section_trust` — so this is the only place a checker can see the name. It is not a
+    # cycle guard: `wisp/core/context_trust.py` imports only the standard library.
+    from wisp.core.context_trust import TrustTag
+
+
+SECTION_TRUST: dict[str, TrustTag] = {}   # populated by `_build_section_trust()`, below
 
 
 def _build_section_trust() -> dict:

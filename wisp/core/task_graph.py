@@ -27,7 +27,7 @@ between the graph and the scheduler becomes visible instead of silent.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any, Iterable
 

@@ -130,7 +130,7 @@ ROWS: list[tuple[str, str, str, str, str, str, str]] = [
     ("F37", "A mutation followed by a *failing* verification was recorded P3 `PASS` / `GOAL_MET` — a false success",
      "FIXED", "false-success", "—", "WISP_MIGRATION_STATUS.md:1874 — headline “**NOT FIXED — newly exposed**”, root-caused there as *the evidence adapter*; **repaired** — `CONTEXT.md` §0 phase table records “**F37 evidence-adapter repair** — `COMPLETE` — **F37 FIXED**”", "tests/reliability/test_verification_evidence_adapter.py"),
     ("F38", "A test encoded the F8 environment as the contract",
-     "DEFECT-PIN", "", "—", "WISP_MIGRATION_STATUS.md:1875 — “**NOT FIXED — `TEST_ASSUMED_BROKEN_ENVIRONMENT`**”", "tests/test_node_identity.py::TestANodeReferencesItsWorkUnit::test_a_parallel_round_is_journaled_as_one_exchange_per_call"),
+     "CLOSED", "TEST_ASSUMED_BROKEN_ENVIRONMENT", "—", "WISP_MIGRATION_STATUS.md:1875 — “**CLOSED 2026-09-27 — `TEST_ASSUMED_BROKEN_ENVIRONMENT`.**”", "tests/test_node_identity.py::TestANodeReferencesItsWorkUnit::test_a_parallel_round_is_journaled_as_one_exchange_per_call"),
     ("F39", "The Ollama client sends `num_predict` without negotiating the model's real limit, so a class of models fails outright",
      "CLOSED", "unwired-control", "ADR-0038", "WISP_MIGRATION_STATUS.md:1876 — headline “**NOT FIXED**”, root-caused there as `ADR_REQUIRED: YES`; **decided** — `CONTEXT.md` §0 phase table records “F39 token-budget boundary (**ADR-0038**)” as `COMPLETE` / “**`RATIFIED`**”, then “**`ADR-0038 SATISFIED`**”", "—"),
     ("F40", "The iteration wrap-up loop consumes RAW provider events and assumes dicts, so the wrap-up summary is lost",
