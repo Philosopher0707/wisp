@@ -4102,6 +4102,2717 @@ derived state.*
 
 ---
 
+## ADR-0048 — The acceptance criteria are host-derived from the objective's *stated* conditions; silence is not consent, and an undetermined requirement is `INCONCLUSIVE`
+
+**Status:** ACCEPTED (criteria-authority mission). Amends ADR-0045 R1's *source* list by naming what
+the host may infer from silence; authorises one additive record and one flag-gated behaviour. Changes
+nothing when the flag is off. Supersedes no ADR.
+
+### Context
+
+ADR-0047 R5 made the acceptance criteria the **sole gate** on `GOAL_MET`: before it, a turn timeout
+accidentally masked weak criteria, and after it a `PASS` completes the run. R5's mitigation was to widen
+`_WANTS_FIX_RE` from one phrasing to three, so that *"an objective that plainly requires a green suite
+must state that"*.
+
+That mitigation was measured in this phase, and it does not close the class. The derivation has three
+failure modes, and **all three reproduce on the real `derive_acceptance`** — see the phase report's
+`three_modes.py` output, reproduced in §Behaviour change below.
+
+**What the authority question actually is.** `derive_acceptance` reads two sources: the workspace's
+declared verification commands (`environment.collect_environment`) and a closed grammar over the
+objective text. The first answers *"what can be checked here?"*; the second is the host's attempt to
+answer *"what does this objective require?"* — and the second is a **judgement about meaning**, made by
+three regexes with no negation awareness, no confidence signal, and no record of what it concluded.
+
+So the single most load-bearing input to the completion authority is a regex's opinion, and that opinion
+is currently **unobservable**: nothing records whether the absolute criterion was promoted or left
+advisory, or why.
+
+### Problem
+
+Three shapes, each measured end to end through `derive_acceptance` → `criteria_for` →
+`acceptance.evaluate` → `goal.derive_goal_state`:
+
+**MODE A — a false `GOAL_MET`.** The repository's **own benchmark task** `FIX_BUG`:
+
+> *"totals.py defines `sum_to(n)` which should sum integers 1..n inclusive, but it is off by one:
+> `sum_to(5)` returns 10 instead of 15. **Fix the bug** in totals.py."*
+
+`_WANTS_FIX_RE` returns **no match** — there is no suite word within 40 characters of the repair verb.
+On a red baseline the absolute criterion is therefore **advisory** and only the two guards are required:
+
+```
+advisory  verify:cmd0                      `python -m pytest tests/ -x -q` exits 0
+REQUIRED  verify:cmd0:no_regression        ... reports no more failures than the baseline (1)
+REQUIRED  verify:cmd0:inputs_unchanged     ... its inputs are unchanged
+```
+
+An attempt that changes **nothing** satisfies both guards. Measured verdict: **`pass`** →
+**`goal_met`**, with the bug unfixed and the suite still failing. This is the F37 shape (a false
+success) arriving through the criteria rather than through the evidence adapter, and ADR-0047 R5 named
+the risk without closing it.
+
+**MODE B — a false exhaustion.** The regex has **no negation awareness**:
+
+> *"**Do not** make the tests pass by editing them; instead add a missing type annotation to
+> models.py."*
+
+`_WANTS_FIX_RE` matches `'make the tests'`. The absolute criterion is promoted to **required** on a red
+baseline, the objective never asked for a green suite, and the run ends `fail` / `goal_failed`. The
+prohibition was read as a requirement. (Other measured false positives: *"Make the linter pass"*,
+*"CI will pass without any test changes"*.)
+
+**MODE C — "I cannot tell".** An objective on a workspace that declares no verification commands yields
+**no criteria at all**:
+
+```
+criteria -> (none)
+verdict  -> inconclusive   reason=['NO_REQUIRED_CRITERIA']
+goal     -> goal_unverified
+```
+
+This branch is **already honest** — `acceptance.evaluate` rule 1 returns `INCONCLUSIVE` for "no required
+criteria", and `derive_goal_state` maps it to `GOAL_UNVERIFIED`, never to `MET`. Its cost is that
+`GOAL_MET` is **unreachable**, so the objective can never complete. That is a consequence to be managed,
+not a defect.
+
+**The distinction the code cannot currently make.** MODE A and MODE C produce *opposite* outcomes from
+the *same* input state — the host could not determine what the objective requires. MODE A treats that as
+"nothing is required, so a no-op passes"; MODE C treats it as "nothing is required, so nothing is
+verified". **Both cannot be right.** The corpus already decided which: ADR-0035 invariant 1, ADR-0042 and
+ADR-0045 R4 all say that absence of evidence is not evidence, and `INCONCLUSIVE` must not be collapsed
+into either a pass or a failure. MODE C is the established behaviour; MODE A is the collapse.
+
+### Decision
+
+> **The objective is the authority over what is required. The host owns the *derivation* and the
+> *validation*, never the *invention*. Where the objective is silent, the host may infer "no
+> regression" and may not infer "green". Where the host cannot tell whether the objective is silent or
+> simply unparsed, it must say so, and the answer is `INCONCLUSIVE`.**
+
+**R1 — Three derivation outcomes, not two.** Each command spec is classified:
+
+| Outcome | Condition | Consequence |
+|---|---|---|
+| `STATED` | `_WANTS_FIX_RE` matches the objective | the absolute criterion is promoted to required (today's `promote_absolute=True`) |
+| `UNSTATED` | no match, **and** the objective yields at least one other machine-checkable requirement (a `SymbolSpec`) | guards-only is correct: the objective asked for something checkable, and a green suite is not part of it. ADR-0047 R5's no-regression objective stands, and `GOAL_MET` on it means **"nothing got worse"** |
+| `UNDETERMINED` | no match, **and** nothing else machine-checkable is named | the host has **no basis**; it may neither promote nor silently degrade |
+
+**R2 — `UNDETERMINED` is `INCONCLUSIVE`, and it never promotes.** An `UNDETERMINED` spec whose
+absolute criterion ended up **advisory** contributes a **required criterion the harness cannot
+evidence** — `verify:cmdN:requirement_declared` — whose description states the question the host
+declined to answer. `acceptance.evaluate`'s existing **rule 3** ("a required criterion with no valid
+evidence → `INCONCLUSIVE`") turns it into `INCONCLUSIVE` with that criterion named in `unmet_criteria`.
+**No new verdict vocabulary, no new rule, and no `FAIL`**: the absence of a determination is not a
+determination of failure. This is the mechanism the corpus already uses for exactly this shape.
+
+The **advisory** qualifier is the rule, not an optimisation. On a green baseline `criteria_for` requires
+the absolute criterion anyway, so the derivation decided nothing and there is nothing for strict mode to
+withhold. `UNDETERMINED` **and** `advisory` together are the entire blast radius, and that is exactly the
+case where a no-op would otherwise pass — which is what keeps the flag from breaking objectives it has no
+business touching.
+
+**R3 — The derivation is recorded, and durably.** `explain_acceptance()` returns a `CriteriaDerivation`
+carrying, per command spec, the outcome and the **matched span** (or the empty string), and the
+convergence loop journals it **once, beside the baseline**, as a `{"kind": "derivation"}` line. A reader —
+or a replay — can therefore answer *"did the host think this objective required a green suite, and on what
+words?"* without re-running a regex. **A promotion that cannot cite the objective's own words is an
+inference the record shows to be unfounded.** The record is read by nothing on the decision path; it is a
+record, and that is the point — the answer stops being invisible.
+
+**R4 — `derive_acceptance`'s signature is not widened** (ADR-0009). It becomes a thin caller of
+`explain_acceptance(..., strict=False)` and keeps returning `(criteria, specs)`. `criteria_for` is
+**untouched**, so its ~40 call sites are unaffected. The record is reached by calling the new function.
+
+**R5 — Strict derivation is behind a flag, and the flag defaults to today.** `WISP_CRITERIA_STRICT_DERIVATION`
+(default **OFF**). When off, `STATED` and `UNSTATED` behave exactly as today and `UNDETERMINED` is
+recorded but not acted on. When on, `UNDETERMINED` yields the R2 criterion. The flag is read at the
+composition point (`wisp/autonomous.py`), not inside the pure function.
+
+**R6 — A structured-criteria path is viable, and it is not the model writing the exam.** ADR-0045 R1
+forbids *model-declared* criteria, and that stands. The distinction that makes a structured path legal:
+
+| | Who writes the criterion | Who validates | Who measures |
+|---|---|---|---|
+| **forbidden** — model-declared | the **model** | nobody | the harness |
+| **permitted** — objective-declared | the **user's objective** | the **host**, against the measurable surface | the harness |
+
+A declaration carried by the objective, **validated by the host** against the workspace's verification
+commands and the symbol grammar, and **failing closed** on anything the harness cannot measure, keeps the
+exam with the user and the grading with the host. The model gains **no** channel: it may not add, weaken,
+reinterpret, or satisfy a declaration, and R2's criterion is unevidenceable by construction.
+
+**The trade, named.** A declaration is a **new input surface** and therefore a new way to be wrong — a
+malformed or unmeasurable declaration must be **rejected loudly**, never silently downgraded, because a
+silent downgrade *is* MODE A. It also moves work onto the caller: an objective that states its acceptance
+conditions is more verbose than one that does not. The benefit is the property MODE A lacks — a wrong
+answer becomes **visible** (the host rejected the declaration) instead of **silent** (a no-op passed).
+This ADR **decides that the path is viable and fixes its boundary**; it does **not** implement it, and
+the follow-up question below records that.
+
+**R7 — Negation is not handled, and the record must not pretend otherwise.** `_WANTS_FIX_RE` reads
+*"Do not make the tests pass"* as a requirement (MODE B). R3's matched span makes this **visible** — a
+reader sees the promotion cited `'make the tests'` inside a prohibition — but R1–R6 do not fix it.
+Natural-language negation is not a closed grammar, and widening the regex again would be the same
+mitigation R5 already tried and this ADR measures as insufficient. **The residual is stated, not
+hidden.**
+
+### Behaviour change
+
+Measured on the real chain (`three_modes.py`, and the 55 tests in
+`tests/reliability/test_criteria_derivation_authority.py`), **flag OFF** (today) and **flag ON**:
+
+| Mode | Objective | Flag OFF | Flag ON |
+|---|---|---|---|
+| A | `FIX_BUG` — *"Fix the bug in totals.py"*, red baseline, nothing changed | `pass` → **`goal_met`** | `inconclusive` → **`goal_unverified`** |
+| B | *"Do not make the tests pass…"* | `fail` → `goal_failed` | `fail` → `goal_failed` **(unchanged — R7)** |
+| C | an objective with no criteria and no toolchain | `inconclusive` → `goal_unverified` | **identical** |
+
+The only behaviour that moves is **MODE A**, and it moves from a false success to an honest
+`INCONCLUSIVE`. Measured blast radius, by R2's advisory qualifier:
+
+| Objective | Baseline | `verify:cmd0` | Strict withholds? |
+|---|---|---|---|
+| `STATED` | red | required (promoted) | no — the objective said so |
+| `STATED` | green | required | no |
+| `UNSTATED` | red | advisory + `symbol:*` required | no — the objective asked for something checkable |
+| `UNDETERMINED` | **red** | **advisory** | **yes — this is MODE A** |
+| `UNDETERMINED` | green | required | no — the derivation decided nothing |
+| `UNDETERMINED` | no baseline | required | no |
+
+With the flag off, **nothing** moves — the new record is journalled and read by nothing.
+
+### Alternatives rejected
+
+- **Widen `_WANTS_FIX_RE` again** (the ADR-0047 R5 shape). Rejected: **measured insufficient.** `FIX_BUG`
+  carries no suite word to match, and MODE B shows a fourth phrasing would also match a *prohibition*.
+  A regex over prose is the wrong instrument for a question about meaning, and every widening trades a
+  false negative for a false positive.
+- **Let the model declare the criteria.** Rejected: ADR-0045 R1 — the judged writing the exam. R6's
+  objective-declared path is the legal alternative and is a different thing.
+- **Make `UNDETERMINED` a `FAIL`.** Rejected: it asserts a failure the evidence does not support, which is
+  the error `acceptance.evaluate` exists to refuse (rule 3's comment, ADR-0035 invariant 1). A timeout was
+  once read as a failure for exactly this reason (F60).
+- **Make `UNDETERMINED` promote conservatively.** Rejected: it *is* MODE B — inventing a requirement the
+  user did not state, and failing an objective that never asked for it.
+- **Record the derivation as prose in the attempt prompt only.** Rejected: prose cannot be asserted on,
+  counted, or replayed — F21's finding, and the same distinction as F7's `controlling_layer`.
+- **Widen `derive_acceptance` to return the record.** Rejected: ADR-0009 forbids widening a pinned
+  internal signature to carry a new concern, and `derive_acceptance` has three callers plus a test surface.
+
+### Risks
+
+- **The strict mode makes some objectives uncompletable.** `UNDETERMINED` is terminal until the objective
+  is clarified. This is deliberate and is MODE C's existing behaviour generalised — but it *is* a real
+  cost, and it is why the flag defaults off.
+- **The classification is still a heuristic.** `UNSTATED` is inferred from the presence of a `SymbolSpec`,
+  which is a proxy for "the objective stated something checkable". An objective that names a symbol *and*
+  requires a green suite without saying so lands in `UNSTATED` and keeps MODE A's shape.
+- **`UNDETERMINED` can be reached by a well-formed objective** whose wording the grammar does not know.
+  The record makes it visible; it does not make it right.
+
+### Rollback / reversal
+
+Revert the flag to OFF: `WISP_CRITERIA_STRICT_DERIVATION` defaults to `false`, so the behavioural half is
+inert by construction. The record (`explain_acceptance`, `CriteriaDerivation`, `DerivationReason`) is
+**additive and read by nothing on the decision path**, so it may remain with no effect.
+
+**This ADR is reversed if** a measurement shows that a `UNDETERMINED` classification is reached for an
+objective whose requirement *was* determinable from its own words — i.e. if the classifier's
+false-`UNDETERMINED` rate makes more objectives uncompletable than MODE A's false-`GOAL_MET` rate makes
+them wrongly complete. That trade is not currently measured, and **is the residual this ADR leaves**:
+the classifier's error rates on real objectives are unknown, and MODE A remains reachable with the flag
+off.
+
+### Follow-up questions
+
+1. **Implement the objective-declared structured path (R6).** The contract is named here; the grammar,
+   the validation surface, and the rejection behaviour are not. That is a separate decision, and it is
+   the one that would make a *wrong* answer visible rather than silent.
+2. **Measure the classifier's error rates.** The reversal condition above needs numbers this ADR does
+   not have. The three-mode probe is the instrument; it needs a corpus of real objectives.
+3. **Should `UNDETERMINED` be reachable at all for an objective that names a file?** `FIX_BUG` names
+   `totals.py` and no symbol, so it is `UNDETERMINED` under R1. A third outcome keyed on "the objective
+   names a path and a defect" is conceivable and is **not** taken here.
+4. **Does `GOAL_MET` on a guards-only set need to be *reported* differently?** ADR-0047 R5 calls it an
+   honest no-regression objective. It is honest about what it checked and silent about what it did not;
+   whether the operator should be told which one they got is an interface question.
+
+---
+
+## ADR-0049 — The canonical precedence table is `goal.PRECEDENCE` (eight rows, 0–7); every older numbering is historical and is resolved by content
+
+**Status:** ACCEPTED (precedence-correction mission). **A record update: it restates what the code
+already does.** Changes no behaviour, changes no code, and edits neither ADR-0035 nor ADR-0047 —
+both are named as **historical** for the numbering. Supersedes nothing.
+
+### Context
+
+`CURRENT_AUTHORITIES.md` §5 recorded two findings it could not decide, because a derived page is not
+authorised to change a decision. This ADR decides them.
+
+**The numbering defect.** ADR-0035 §Precedence states an ordered arbiter with rows **0–6** and **no
+fall-through**. The implementation has always had a row 7, so **the ADR's table was never total** — the
+combination `terminal_outcome = SUCCEEDED` with no acceptance verdict matches none of ADR-0035's rows.
+ADR-0047 then revised the table **without restating it**: R1 reads *"Row 4 is now «fatal terminal error,
+**and no P3 PASS**»"*, against a numbering that exists only in `goal.PRECEDENCE`, which has eight rows.
+
+So **"row 4" resolves to three different rows depending on which document is read**, and the next
+implementer reasons from one and gets a different answer than the one who reads another.
+
+**The measurement, and an inverted claim in circulation.** The mapping below was **driven**, not read:
+ADR-0035's conditions were evaluated in order over the full 48-combination input space and the result
+compared with what `derive_goal_state` actually returns
+(`.workbuddy-ai/memory/post-m13-precedence/row_mapping.py`).
+
+| ADR-0035 §Precedence row | Its condition | Covers canonical row(s) |
+|---|---|---|
+| 3 | `P3 FAIL ∨ fatal terminal error` | **3** (×12), **4** (×8), **5** (×2), **6** (×2) — the `∨ fatal` term reaches four rows |
+| **4** | `may_report_goal_met() is False` (**stagnation**) | **5** (×12) |
+| 5 | `P3 INCONCLUSIVE ∨ terminal outcome INCOMPLETE` | **6** (×2), **7** (×6) |
+| 6 | `turn_succeeded ∧ P3 PASS` | **6** (×1) |
+
+**ADR-0035's table is silent for 3 of 48 combinations** — quantified here for the first time:
+`succeeded`+`pass`+`turn_succeeded=False` (canonical row 6 answers it) and
+`succeeded`+no-verdict in both `turn_succeeded` states (canonical row 7 answers them).
+
+**The specific correction.** The mission brief that commissioned this ADR carried a pinned claim that
+ADR-0035's row 4 and ADR-0047 R1's "row 4" *"name the same row by content (stagnation)"*, that the
+canonical table *"expresses as row 4 as well"*, and that ADR-0047's revised row 4 *"corresponds to the
+canonical row 5"*. **All three are inverted**, and the measurement above is the authority:
+
+- ADR-0035's row 4 is **stagnation** → canonical row **5**.
+- ADR-0047 R1's "row 4" is **the fatal clause** → canonical row **4**.
+- They are **different content**, not the same row.
+
+This is recorded because it is the defect R1 exists to close: a numbering that reads plausibly and
+resolves wrongly. **Had the claim been adopted, R1 would have written a rule that maps the fatal clause
+to stagnation.**
+
+### Decision
+
+**R1 — `goal.PRECEDENCE` is the canonical table, and it has eight rows (0–7).**
+The table is defined at `wisp/core/goal.py:108-117` and evaluated by `derive_goal_state`
+(`wisp/core/goal.py:146-215`; the arbitration body is `:190-213`). ADR-0035 §Precedence's rows 0–6 and
+ADR-0047's renumbering are **historical**: they SHALL be read as statements about the same table at an
+earlier revision, never as a competing table. **"Row N" in either older document SHALL be resolved
+against the canonical table by CONTENT, not by number.** The canonical table is restated in full in
+§The canonical table below; a reader needs no other document to resolve any row.
+
+**R2 — `terminal_outcome == INCOMPLETE` is not a row condition, and the two cells it moved are
+ratified.** ADR-0035's row 5 carried an `∨ terminal outcome INCOMPLETE` term. The canonical table has
+**no such term in any row**: an `INCOMPLETE` turn is routed **by its verdict**, exactly like any other
+turn. The routing, measured:
+
+| `INCOMPLETE` turn | Canonical row | Result |
+|---|---|---|
+| `PASS`, not stagnating | **6** | `GOAL_MET` ← **the ratified cells** |
+| `PASS`, stagnating | **5** | `GOAL_STAGNATED` |
+| `FAIL` | **3** | `GOAL_FAILED` |
+| `INCONCLUSIVE` or absent verdict, not stagnating | **7** | `GOAL_UNVERIFIED` |
+| `INCONCLUSIVE` or absent verdict, stagnating | **5** | `GOAL_STAGNATED` |
+
+**The two cells this moves — `INCOMPLETE + PASS → GOAL_MET`, in both `turn_succeeded` states — are
+RATIFIED.** The rationale is ADR-0047's own principle, applied to `INCOMPLETE` rather than `FAILED`:
+*the objective's evidence decides where it is decisive; the attempt's outcome decides only where it is
+not.* A turn that exhausted its iteration budget without emitting `done`, while the harness measured
+**every** objective criterion satisfied, is the same shape as a turn that timed out — and ADR-0047 R1
+already ratified that one. The alternative reading (an exhausted turn can never reach `GOAL_MET` even
+when the objective is proven satisfied) would let the *attempt's* budget veto the *objective's* evidence,
+which is the defect ADR-0047 removed.
+
+**R3 — ADR-0047 R3 is SCOPED, not changed.** R3 reads *"a fatal error must outrank stagnation, so a
+heuristic cannot soften a fact."* That rule holds for a fatal error **with no `PASS`** — the case R3's own
+test (`test_a_fatal_error_with_a_closed_predicate_stays_goal_failed`) exercises, and the case canonical
+row 4 expresses as *"fatal terminal error, **and no P3 PASS**"*. A fatal error **with** a `PASS` is
+**not fatal**: by R1's own qualifier the cell reduces to `PASS` + stagnation, which canonical row 5
+answers. So **`fatal + PASS + stagnating → GOAL_STAGNATED` is the correct cell**, and it is not a
+softening of a fact by a heuristic — the fact was qualified before the heuristic was consulted.
+
+**R3 does not reopen ADR-0047.** It restates R3's scope to match the qualifier R1 already introduced.
+ADR-0047's decision, its rejected alternatives and its test are untouched.
+
+#### The canonical table
+
+Verbatim from `goal.PRECEDENCE` (`wisp/core/goal.py:108-117`) — the Condition and Result columns are the
+table's own strings, so a reader can compare the contract against the code without reverse-engineering
+branches, and a test can compare them mechanically.
+
+| # | Condition | Result |
+|---|---|---|
+| 0 | `already-recorded terminal state` | `frozen — never rewritten (ADR-0020)` |
+| 1 | `operator cancellation` | `CANCELLED` |
+| 2 | `ladder exhausted / human escalation` | `ESCALATED_TO_HUMAN` |
+| 3 | `P3 FAIL` | `GOAL_FAILED` |
+| 4 | `fatal terminal error, and no P3 PASS` | `GOAL_FAILED` |
+| 5 | `may_report_goal_met() is False` | `GOAL_STAGNATED` |
+| 6 | `P3 PASS` | `GOAL_MET` |
+| 7 | `otherwise — no decisive verdict` | `GOAL_UNVERIFIED` |
+
+**Cells ratified by this ADR** — marked `← ADR-0049`:
+
+| # | Ratified cells | Why |
+|---|---|---|
+| 5 | `INCOMPLETE + PASS + stagnating` (row 5, not row 6) | stagnation vetoes goal-met; canonical row 5 outranks row 6 by construction |
+| 6 | `INCOMPLETE + PASS`, **both** `turn_succeeded` states ← ADR-0049 | R2 — the objective's evidence decides where it is decisive |
+| 4 | `fatal + PASS + stagnating` resolves to **row 5**, not row 4 ← ADR-0049 | R3 — a fatal error *with* a `PASS` is not fatal |
+
+#### Resolution rules, stated once
+
+1. **Resolve by content.** Find the row whose *condition* holds; never by number.
+2. **First match wins**, and the order is the table's order — row 3 before row 4, row 4 before row 5,
+   row 5 before row 6, row 6 before row 7.
+3. **Row 0 is a prior state, not a condition.** It is selected by `already_recorded is not None`
+   (`wisp/core/goal.py:190-191`), before any condition is evaluated.
+4. **Row 7 is the fall-through.** It is reached by *exhaustion*, not by a matching condition — which is
+   what makes the table total where ADR-0035's was not.
+5. **A citation of "row 4" from ADR-0035 or ADR-0047 is resolved by the condition it quotes**, not by
+   the number. ADR-0035's row 4 quotes `may_report_goal_met() is False` → canonical row 5.
+   ADR-0047 R1's "Row 4" quotes *"fatal terminal error, and no P3 PASS"* → canonical row 4.
+
+### Behaviour change
+
+**None.** This ADR ratifies the code; it does not move it. Measured, not asserted: the 48-combination
+differential of `derive_goal_state` was produced **before** this ADR landed and reproduced **after**,
+and the two digests are identical.
+
+| | |
+|---|---|
+| **Digest before** | `bb8b54e638a0d1304c5200ad28a0b2ab0bf9616baa1482646ddbbb0d37f1a139` |
+| **Digest after** | *(identical — see `PHASE_PRECEDENCE_CORRECTION.md` §4)* |
+| **State census (both runs)** | `goal_failed` 20 · `goal_met` 6 · `goal_stagnated` 14 · `goal_unverified` 8 |
+| **Delta vs `b9af5f0^`** | 7 of 48 cells, in three classes — (a) `FAILED`+`PASS` → `GOAL_MET` (ADR-0047 R1); (b) `turn_succeeded` demotion (ADR-0047 R2); (c) the cells R2/R3 ratify here |
+
+The code is unchanged because **no code was changed**: `wisp/core/goal.py` is byte-identical before and
+after. The digest is the evidence that the *documentation* did not smuggle in a behaviour claim.
+
+### Alternatives rejected
+
+- **Edit ADR-0035's table in place to add row 7.** Rejected: the decision log is append-only. An
+  in-place edit destroys the record of what was decided when, and the whole point of R1 is that a
+  reader can tell which revision a row number belongs to.
+- **Edit ADR-0047 R1 to restate the table.** Rejected for the same reason, and because ADR-0047's
+  renumbering is itself evidence: it shows a numbering can be introduced implicitly and then misread.
+- **Renumber `goal.PRECEDENCE` to match ADR-0035.** Rejected: the code's numbering is the one the tests,
+  the docstrings and the derived page already cite, and `PRECEDENCE`'s row numbers are part of the
+  contract it documents. Renumbering would be a behaviour-adjacent change to satisfy a document.
+- **Treat the numbering ambiguity as harmless.** Rejected by measurement: the commissioned brief's own
+  pinned claim was inverted, and it is a competent reader's claim. The ambiguity is not theoretical.
+- **Ratify `INCOMPLETE + PASS → GOAL_UNVERIFIED`** (the pre-ADR-0047 behaviour). Rejected under R2: it
+  lets the attempt's budget veto the objective's evidence, which is exactly the defect ADR-0047 removed
+  for `FAILED`. A different decision here would be a *reversal* of ADR-0047, and nothing measured
+  supports one.
+
+### Risks
+
+- **A historical row number still reads plausibly.** R1 makes the resolution rule explicit but cannot
+  rewrite the older documents, so a reader who skips R1 will still resolve "row 4" wrongly. The
+  mitigation is that the canonical table is restated **in full** here and pinned by a test, so the
+  answer is reachable without either older document.
+- **R2's ratification is a judgement, not a measurement.** The two cells' *behaviour* is measured; the
+  claim that it is *correct* is an argument from ADR-0047's principle. It is stated as an argument so a
+  future reader can attack the argument rather than the code.
+- **`goal.PRECEDENCE` is documentation-as-data**, so it can drift from `derive_goal_state`. Mitigated by
+  `tests/reliability/test_precedence_canonical.py`, which drives each row through the real arbiter.
+
+### Rollback / reversal
+
+This ADR is a record update with no behaviour and no code, so there is nothing to roll back
+operationally. **It is reversed if** a measurement shows the canonical table's numbering cannot be
+resolved by content for a real citation — i.e. if two rows' conditions are ever satisfied by the same
+input in a way that makes "the row whose condition holds" ambiguous. The table is a total order with
+first-match-wins, so that cannot happen by construction; a future row that breaks it would be the
+reversal trigger.
+
+### Follow-up questions
+
+1. **Should ADR-0035's table carry an in-place pointer to this ADR?** Append-only forbids editing its
+   text; a one-line *"superseded for numbering by ADR-0049"* banner is not an edit to the decision. Not
+   taken here — it is an editorial question about the log's convention.
+2. **Should `PRECEDENCE` be derived from the code rather than transcribed beside it?** The table is
+   already documentation-as-data in the same module as the arbiter; generating it would remove the last
+   transcription. Out of scope.
+3. **Is `INCOMPLETE` reachable with `PASS` in practice?** R2 ratifies the cell; how often a turn
+   exhausts its budget while every criterion measures satisfied is a measurement nobody has taken.
+
+---
+
+## ADR-0050 — The objective may carry a declared criteria block; the host validates it against the measurable surface and rejects rather than reinterprets
+
+**Status:** ACCEPTED (structured-criteria mission). Decides what **ADR-0048 R6** deferred — *"the
+grammar, the validation surface, and the rejection behaviour are not [decided]. That is a separate
+decision."* Extends ADR-0048 R1's enumeration by one outcome (`DECLARED`). Changes nothing when its flag
+is off.
+
+### Context
+
+ADR-0048 R6 decided the objective-declared structured path was **viable** and fixed its boundary: *"a
+declaration carried by the objective, **validated by the host** against the workspace's verification
+commands and the symbol grammar, and **failing closed** on anything the harness cannot measure, keeps the
+exam with the user and the grading with the host; the model gains **no** channel."*
+
+ADR-0048 also named the residual it left: **MODE A remains reachable with its flag off** — a measured
+false `GOAL_MET` on this repository's own benchmark task. And it named its own reversal condition as
+needing numbers nobody had: *"a measurement shows that a `UNDETERMINED` classification is reached for an
+objective whose requirement WAS determinable from its own words."*
+
+**Those numbers now exist.** The corpus is every objective in the repository, collected by AST
+(`.workbuddy-ai/memory/post-m13-structured/corpus.py`): 13 distinct objectives, 11 hand-labelled as
+decidable, measured on a **red** baseline (the only baseline on which the promotion decision exists).
+
+| | |
+|---|---|
+| required when it should be | **4** |
+| required when it should **not** (MODE B) | **1** |
+| **not** required when it should be (**MODE A**) | **1** |
+| correctly not required | **5** |
+| **accuracy on labelled, decidable objectives** | **9/11 = 82%** |
+
+**Two findings from the measurement, both load-bearing for this decision.**
+
+**1. The classifier's answer is a function of `(objective, workspace)`, not of the objective alone.**
+A `symbol_defined` criterion is derivable only when the named file **exists**, so three objectives move
+from `UNDETERMINED` to `UNSTATED` when measured against a workspace containing their fixture file — and
+`UNSTATED` is the **correct** answer for all three. Against the repository as the workspace they are
+`UNDETERMINED` and under-counted. **Corrected for each objective's own workspace the accuracy is
+12/14 = 86%.** ADR-0048's reversal condition is therefore under-specified: *"determinable from its own
+words"* is not a property of the words.
+
+**2. The one false negative is the one that matters.** MODE A's single instance is `FIX_BUG`, whose
+verifier runs the suite and whose prose never says so. The classifier reaches `UNDETERMINED` — honestly,
+by its own rules — and on a red baseline that means the absolute criterion is advisory, so **a no-op
+satisfies the guards and the objective reports `goal_met`.** The classifier is not wrong about the
+objective; **the objective is incomplete, and there is no way for it to say so.** That is precisely the
+gap a declaration fills.
+
+### Decision
+
+> **The declaration is a fenced block at the head of the objective, introduced by `--- criteria ---` and
+> closed by `--- /criteria ---`, containing one YAML-shaped line per criterion of the form
+> `<kind>: <spec>`. `<kind>` is one of exactly two: `command_succeeds` or `symbol_defined`. The host
+> validates each spec against the measurable surface; a declaration that names an unmeasurable spec is
+> **rejected** with `CriteriaDeclarationRejected`, surfaced to the caller and journalled, and a rejected
+> declaration does **not** fall back to the prose grammar. `WISP_CRITERIA_STRUCTURED_DECLARATION` gates
+> the path and defaults **OFF**, in which case the derivation runs exactly as it does today.**
+
+**R1 — Placement is "at the head", and that is decidable.** The objective must **begin** with the opening
+fence, after optional leading whitespace. A block quoted mid-prose is not a declaration: an objective that
+discusses declarations must not accidentally carry one, and a reader must be able to see that the block
+governs the whole objective.
+
+**R2 — The grammar is closed, and it is two kinds.** `<kind>` is exactly `command_succeeds` or
+`symbol_defined`; any other kind is rejected, not ignored. Blank lines and lines whose first
+non-space character is `#` are comments. A line that is neither a comment nor a well-formed declaration is
+**rejected** — the grammar does not skip what it does not understand.
+
+**R3 — The validation surface is the two measurable specs, and it is decidable.**
+`command_succeeds: <argv>` is accepted iff `<argv>` splits to a non-empty argv whose `argv[0]` resolves —
+as a workspace-relative path that exists and is executable, or on `PATH`. `symbol_defined: <path>::<symbol>`
+is accepted iff `<path>` resolves **inside the workspace**, the file exists, and `<symbol>` is a valid
+Python identifier. **The host validates runnability, never outcome**: validating that a command will
+succeed would be the host pre-judging the exam, and validating that a symbol *will be* defined would be
+worse.
+
+**R4 — Rejection is loud, and there is no fallback.** `CriteriaDeclarationRejected` is raised, the
+rejection is journalled (`{"kind": "declaration_rejected"}` with the offending line), and the derivation
+**stops**. It does not silently degrade to the prose grammar. ADR-0048 R6 states the reason: *a silent
+downgrade **is** MODE A* — the caller believes the criteria they declared are being measured while the
+host measures something else. The five rejected shapes: an unterminated block; an empty body; an unknown
+kind; a malformed line; a spec that fails R3.
+
+**R5 — The declaration precedes the inference.** A valid declaration yields a fourth derivation outcome,
+`DECLARED`, and **the prose grammar is not consulted**. There is nothing to infer when the objective has
+said. This extends ADR-0048 R1's enumeration by one; ADR-0048 R6 explicitly deferred the grammar that
+would need it.
+
+**R6 — The model gains no channel, and this is structural, not promised.** The objective is authored by
+the **caller** (`converge_on_objective(objective_text, …)` takes it as an argument); the declaration lives
+inside it; the **host** validates; the **harness** measures. The model may not author, weaken, reinterpret
+or satisfy a declaration — and it has no path to any of those, because it never supplies the objective and
+never supplies evidence. What the model *does* see is the resulting criteria, which ADR-0045 R13 already
+requires it to be shown; **the declaration exposes nothing new.**
+
+**R7 — The declaration is optional, and absence is today's behaviour.** No block → the prose grammar runs,
+unchanged. This is what makes the flag's blast radius exactly the declared path.
+
+**R8 — The flag is `WISP_CRITERIA_STRUCTURED_DECLARATION`, default OFF**, read **once** at the composition
+point (`wisp/autonomous.py`) as ADR-0048 R5 established. `derive_acceptance`'s signature is **not widened**
+(ADR-0009): it calls `explain_acceptance(..., use_declaration=False)` and therefore never sees a
+declaration. `criteria_for` is untouched.
+
+#### What this does to MODE A and MODE B
+
+| Mode | Without a declaration | With a valid declaration |
+|---|---|---|
+| **A** — a required suite silently advisory | **unchanged — still reachable.** `FIX_BUG`'s prose says nothing, so `UNDETERMINED` → guards-only → a no-op reports `goal_met` | **CLOSED.** `DECLARED` makes the suite criterion **required**, so a no-op cannot pass |
+| **B** — a prohibition read as a requirement | **unchanged** — the grammar has no negation awareness | **CLOSED, structurally.** The prose is not consulted, so a prohibition inside the prose cannot be read as a requirement |
+
+**This is the trade, stated plainly: the declaration does not make the classifier better, it makes the
+objective complete.** An objective that states its conditions gets them measured; one that does not keeps
+today's behaviour and today's defect. That is the honest boundary, and it is why the flag defaults OFF.
+
+### Behaviour change
+
+| | |
+|---|---|
+| **Flag OFF (default)** | **None.** `derive_acceptance` and `explain_acceptance` behave exactly as ADR-0048 left them; no declaration is parsed |
+| **Flag ON, no declaration in the objective** | **None** — R7 |
+| **Flag ON, valid declaration** | the criteria come from the declared specs; the derivation reason is `DECLARED` |
+| **Flag ON, invalid declaration** | `CriteriaDeclarationRejected` raised, journalled; **the run stops** |
+
+### Alternatives rejected
+
+- **A separate well-known file** (e.g. `.wisp/criteria.yaml`). Rejected: it puts the acceptance conditions
+  somewhere other than the objective, so an objective could be run against criteria written for a different
+  one — and nothing in the run would show it. The declaration must travel with the thing it declares.
+- **Parse the block with a YAML library.** Rejected: `pyyaml` **is** declared and available, so this is a
+  design choice rather than a constraint. A general YAML parser accepts far more than the grammar defines
+  — sequences, nested maps, anchors, non-string scalars — and every shape it accepts is a shape the host
+  must then interpret. **A closed grammar that rejects what it does not understand cannot silently
+  reinterpret**, which is R4's whole point.
+- **Fall back to the prose grammar on a malformed declaration.** Rejected: R4. This is MODE A reintroduced
+  as a feature.
+- **Let the model emit a declaration.** Rejected: ADR-0045 R1 and ADR-0048 R6 — the judged writing the
+  exam. R6's structural argument is the reason this is not merely forbidden but unreachable.
+- **Validate that a declared command will succeed.** Rejected: R3 — the host validates runnability, not
+  outcome. Pre-judging would make the declaration a second completion authority.
+- **Reject an objective that carries no declaration under the flag.** Rejected: R7. It would turn the flag
+  from "a new source" into "a new requirement", breaking every existing caller.
+- **Extend `derive_acceptance` to take the declaration.** Rejected: ADR-0009 and ADR-0048 R4. It has three
+  callers and a wide test surface; the extension point is `explain_acceptance`.
+
+### Risks
+
+- **A declaration can be wrong about the objective.** The host validates *measurability*, not *intent*. An
+  objective declaring `command_succeeds: true` — a command that always exits 0 — is well-formed and
+  measures nothing. The mitigation is that the declaration is visible in the objective and recorded in the
+  derivation, so the mismatch is reviewable; the host cannot detect it.
+- **The corpus is small.** 13 objectives, 11 labelled, one workspace each. The 82%/86% figures are a
+  measurement, not an estimate, and they are **not** a confidence interval. A larger corpus could move
+  them; the instrument is committed so it can be re-run.
+- **`DECLARED` short-circuits the prose, including prose that states a *stronger* requirement.** An
+  objective whose declaration is weaker than its prose is measured against the declaration. That is the
+  intended reading of "the objective has said", but it is a way to under-specify.
+- **`CriteriaDeclarationRejected` is a new exception on a path that previously could not raise.** Callers
+  that do not expect it will see a traceback. That is deliberate — R4 — but it is a caller-visible change
+  the flag's default protects against.
+
+### Rollback / reversal
+
+Revert the flag to OFF: `WISP_CRITERIA_STRUCTURED_DECLARATION` defaults to `false`, so the path is inert by
+construction and every existing caller keeps ADR-0048's behaviour.
+
+**This ADR is reversed if** the corpus measurement shows the declared path does not close MODE A where it
+claims to — i.e. if an objective with a valid declaration still reaches `GOAL_MET` on a no-op. The
+committed test `TestTheDeclaredPath` drives exactly that case, so the reversal trigger is a test failure
+rather than a judgement.
+
+### Follow-up questions
+
+1. **Should the derivation *require* a declaration when the objective names a verification command but
+   states no requirement?** That is `UNDETERMINED` → refuse, which is ADR-0048's strict mode. The two flags
+   are independent today; whether they should compose is not decided here.
+2. **Should a declaration be able to *weaken* a stated requirement?** Today it can, because it replaces the
+   prose. A rule forbidding a declaration weaker than the prose would need a comparison the host cannot
+   make without reading the prose — which is the thing the declaration exists to avoid.
+3. **Should the corpus grow to cover objectives from real runs?** The 82%/86% figures are the best
+   available and the corpus is committed; a live corpus would be better and is not collected anywhere yet.
+
+---
+
+## ADR-0051 — The acceptance gate's enablement contract is a non-redundancy precondition, not a rate; the `INCONCLUSIVE` rate is not a function of the gate
+
+**Status:** ACCEPTED
+**Phase:** Gate enablement (post-ADR-0050)
+**Amends ADR-0016 — it does not supersede it.** ADR-0016's staging (3a records, 3b gates), its reason for a
+**new** three-valued vocabulary, and its "routing is derived" rule all stand. What this ADR replaces is
+**3b's condition**: *"a measurement period showing how many turns become `INCONCLUSIVE`."*
+**Evidence:** **`scripts/gate_enablement_measurement.py`** (+ `scripts/gate_enablement_population.json`) —
+committed, so the measurement is re-runnable from the repository. This is deliberate: the previous
+mission's instrument was **not** committed (`.gitignore:98` excludes `.workbuddy-ai/`; `git ls-files
+.workbuddy-ai/` returns 0), so its "re-run it" instruction could not be followed. Also
+`PHASE_POST-M13_ADR-0016_LIVE_PROVIDER_MEASUREMENT.md` §9/§17 and `PHASE_GATE_ENABLEMENT.md`.
+
+### Context
+
+ADR-0016 staged P3 deliberately: **3a** introduces criteria and evidence and *records* the verdict, and
+**3b** enables the gate *"after a measurement period showing how many turns become `INCONCLUSIVE`."* The
+gate has been at 3a for the whole migration, and the measurement has now been taken — as a **controlled
+matrix**, 28 live turns over 3 models, with `FALSE_SUCCESS_AFTER = 0`. It found the rate **strongly
+model-dependent**:
+
+| provider / model | turns | PASS | FAIL | INCONCLUSIVE | rate | false successes |
+|---|---:|---:|---:|---:|---:|---:|
+| `nemotron-3-ultra:cloud` (550B) | 14 | 3 | 2 | 9 | **64.3%** | 0 |
+| `llama3.2:3b` (3.2B) | 7 | 0 | 0 | 7 | **100%** | 0 |
+| `qwen2.5:0.5b` (0.49B) | 7 | 0 | 0 | 7 | **100%** | 0 |
+| **total** | **28** | 3 | 2 | 23 | 82.1% | **0** |
+
+*(Re-derived from the recorded per-turn JSON, not quoted from prose; `aggregate_rate.py`.)*
+
+Two capabilities have appeared since ADR-0016 was written, and both bear on *what* the gate would gate on:
+**ADR-0048** records the derivation's reasoning, and **ADR-0050** lets an objective declare its criteria.
+
+**The measurement this ADR contributes, and it reframes the question.** The turn path's acceptance verdict
+is **not an independent evaluation**:
+
+```text
+wisp/core/runtime.py:1189-1190   _acceptance = floor_guard_verdict(_guard_for_goal).verdict
+                                 -> evaluate(floor_guard_criteria(g), floor_guard_evidence(g))
+wisp/core/verification.py:236    the ONE criteria producer on the turn path: floor_guard_criteria()
+wisp/core/verification.py:252    whose check is  (not guard.wrote_code) or guard.resolved()
+wisp/core/stateless.py:911       and whose own gate — guard.rejection() — is ALREADY wired
+```
+
+Driven over the reachable guard state space (**192 states**), the projection is exact:
+
+| Claim | Measured |
+|---|---|
+| `verdict == FAIL` ⟺ the guard's own blocking condition | **0 disagreements / 192** |
+| `verdict != PASS` while the guard is *not* blocking | **144** — of which **96** are `enabled=False` (the guard disabled) and **48** are `enabled ∧ ¬wrote_code` (a read-only turn) |
+| `verdict == FAIL` after the guard has already surrendered | **8** |
+
+### Problem
+
+**The `INCONCLUSIVE` rate cannot be the enablement measure, for two independent reasons.**
+
+1. **It is not a property of the gate.** Measured: 64.3% for the one model that can drive the tool
+   surface, 100% for the two that cannot. The degenerate rows are degenerate *by construction* — a model
+   that never mutates leaves the floor criterion vacuously satisfied and unevidenced, which is
+   `INCONCLUSIVE` regardless of any gate. A bare rate therefore characterises the *population*, not the
+   decision under test.
+2. **It is not a function of the gate.** The gate **consumes** `floor_guard_verdict`; it computes no
+   verdict. Its only effect is to add provider rounds before the turn may finish. Enabling it therefore
+   **cannot raise** the `INCONCLUSIVE` rate — it can only let a failing turn be repaired into a passing
+   one. A measure an intervention cannot move in the harmful direction is not a safety measure *for that
+   intervention*.
+
+**And on today's criteria set the gate has nothing to gate on.** The only production producer of
+`AcceptanceCriteria` on the turn path is `floor_guard_criteria` (the objective-derived producers reach
+`converge_on_objective` only, where `ConvergenceController` already evaluates them — ADR-0045). So a gate
+keyed on this verdict is one of:
+
+| Design | Measured consequence |
+|---|---|
+| keyed on `FAIL` | **redundant** — the identical condition `rejection()` already tests, with the identical nudge and budget |
+| keyed on `!= PASS` | **harmful** — withholds `done` on 144/192 states, including every read-only turn and every turn of a *disabled* guard |
+| `FAIL` after surrender | a **second budget** on the same condition, after the first was spent (8/192 states) |
+
+**The honest statement.** The verdict is not useless — it re-expresses the guard's state in one
+vocabulary, and it is what `derive_goal_state` consumes. What it does **not** carry is a *withholding
+condition* the floor guard does not already enforce.
+
+### Decision
+
+**The enablement contract has two conjuncts. The first is a precondition on the criteria set; the second
+is the measurement. The `INCONCLUSIVE` rate is rejected as the measure.**
+
+> **R1 — the non-redundancy precondition.** The gate may be enabled only when the turn path's
+> **required-criteria set contains at least one required criterion that is not derivable from
+> `VerificationFloorGuard`'s own state.** Until then the gate is not enabled, **and the flag is not added
+> to `config.py`** — a flag whose gate cannot fire is a *written-but-unwired control*, which this
+> repository's own audit named as its dominant pathology (`docs/audit-2026-08-24.md:270`, ≥12 instances).
+> **Measured today: the precondition is UNMET.**
+>
+> **R2 — the measure is changed.** Enablement is measured by the **`GOAL_MET` rate on a
+> declared-objective population**, with the **false-completion rate pinned at 0**. The `INCONCLUSIVE`
+> rate is **not** the measure (see §Problem). "Declared" is ADR-0050's sense: an objective that states
+> its criteria, so a no-op cannot satisfy the guards (ADR-0050 R5) and the rate is interpretable.
+>
+> **R3 — the population must be declared, and never pooled.** A population is
+> `{(provider, model)} × {objective set}`; every observation records its model; results are reported
+> **stratified**. A pooled rate across models of different capability is **not** a measurement (measured:
+> pooling gives 82.1%, which describes no population that exists).
+>
+> **R4 — the sample.** At least **2 capable models** and **≥ 10 declared objectives**, **≥ 30 turns**,
+> all valid, **0 excluded**. This is a *stated judgement*, not a measurement: it is chosen so that no
+> single turn can move the rate by more than ~3 points, and it is re-statable.
+>
+> **R5 — the hard invariant.** `FALSE_SUCCESS_AFTER = 0` over the declared population: no turn may record
+> `PASS` while its verification reported a non-zero exit. (Measured 0/28 live + 0/9 control; this is the
+> invariant that must survive enablement.)
+>
+> **R6 — replay.** 100% of the declared population's goal states must be reproducible from the recorded
+> inputs (`derive_goal_state` over the record). Measured 12/12 today.
+>
+> **R7 — the flag.** `acceptance_gate` / `WISP_ACCEPTANCE_GATE`, default **OFF**, read **once** at the
+> composition point (`AgentRuntime.run_turn`), per ADR-0002. **It is not added to `config.py` while R1 is
+> unmet** (R1). When R1 is met it is added in the same change that makes the gate non-redundant, so no
+> release ever ships a flag that gates nothing.
+>
+> **R8 — the three non-violations, asserted not merely stated.** Enablement may not change
+> `turn_succeeded` (ADR-0035 invariant 8, ADR-0042 R2, ADR-0044 R2), may not change
+> `VerificationFloorGuard` or its criterion (ADR-0016, ADR-0017, ADR-0035's rejected alternative), and
+> may not move a cell of `goal.PRECEDENCE` (ADR-0049 R1). Any of these is a **new ADR**.
+>
+> **R9 — the rollback.** Flag off restores today's behaviour exactly, with no code change. The
+> observation that the gate is doing its job is a **rise in the `GOAL_MET` rate on the declared
+> population with the false-completion rate still 0**; the observation that it is not is a **rise in
+> wall-clock or turn timeouts**, or a `GOAL_MET` whose verification failed.
+
+### What this ADR does not decide
+
+Enabling the gate (R1 is unmet, so there is nothing to enable); the *shape* of the criteria source that
+would satisfy R1 (that is the change that makes the gate meaningful, and it is its own ADR); enabling
+`stagnation_gate` (ADR-0037 forbids it without a superseding ADR, and it is a separate concern);
+`recovery_ladder` (ADR-0026/ADR-0035); the F38 test; `productive_continuations` tuning; the two-flag
+composition ADR-0050's follow-up 1 records (**decided since — ADR-0056**, which answers it for the
+objective path as ADR-0053 R8 answered it for the turn path).
+
+### Rejected alternatives
+
+| Alternative | Why rejected |
+|---|---|
+| **ADR-0016's bare `INCONCLUSIVE` rate** | §Problem 1 and 2 — model-dependent *and* not a function of the gate |
+| **A required sample size, with no population shape** | A large sample of a degenerate population measures the population. §17: two of three models were 100% by construction |
+| **A ceiling alone, on a pooled population** | The pooled figure (82.1%) describes no population that exists; the stratification *is* the result |
+| **Enabling now, behind the flag** | The gate has nothing to gate on: redundant (FAIL-keyed), harmful (non-PASS-keyed), or a second budget (8/192 states). R1 |
+| **Keying the gate on `verdict != PASS`** | Withholds `done` on every read-only turn and on every turn of a disabled guard — 144/192 states. §Problem |
+| **Adding the flag now, unwired, "for later"** | That is precisely the written-but-unwired control the repository has already diagnosed as its dominant pathology. R1 |
+| **Enabling `stagnation_gate` in the same step** | ADR-0037 forbids it without a superseding ADR; different concern, different predicate, different record |
+| **A second verdict authority, or a new vocabulary** | ADR-0035 §3 and ADR-0042 R4: the verdict is an *input*; a second authority for "was this verified" is the defect class this migration removes |
+| **Superseding ADR-0016 outright** | Its 3a/3b staging, its rejection of both existing vocabularies, and its derived-routing rule are all still correct. Only 3b's *condition* is replaced — hence **amend** |
+| **Making the rate the measure but stratifying it** | Stratification fixes the population objection and not the second: the gate still cannot move the rate adversely. R2 |
+
+### Consequence
+
+- **Enablement is blocked by a precondition, not by a number.** The next phase that would move this is
+  one that puts a **non-floor criteria source on the turn path** — ADR-0048/0050's derived criteria —
+  and that change is what makes the gate non-redundant. Until then the ledger state is **`BLOCKED`**,
+  using `WISP_MIGRATION_STATUS.md`'s own vocabulary (`NOT STARTED · IN PROGRESS · COMPLETE · BLOCKED ·
+  PARTIAL · SUPERSEDED`), with the precondition recorded as the *reason*. **A reason is not a state**:
+  coining a state word for one leaves two vocabularies in the ledger, and the next reader has to decide
+  which one governs.
+- **`ADR-0016` is not edited** (append-only); this ADR states the amendment.
+- **No production change.** No flag is added, nothing is enabled, and the three authorities named in R8
+  are untouched.
+
+### Reversal condition
+
+Reversed only by a superseding ADR that (a) satisfies R1 by wiring a non-floor criteria source onto the
+turn path, and (b) shows, on a declared population, a measured `GOAL_MET` benefit with the
+false-completion rate still 0. The trigger to revisit is a turn path whose required-criteria set is no
+longer a projection of `VerificationFloorGuard` — which the guard test
+`tests/reliability/test_gate_enablement_contract.py` asserts, and which will fail the moment R1 is met.
+Removing R1 and reverting to a bare rate must not be done without superseding this ADR.
+
+---
+
+## ADR-0052 — A capability failure is published as a failure of the host, not as a denial; the denial taxonomy is unchanged
+
+**Status:** ACCEPTED
+**Phase:** F8's published status (post-ADR-0051)
+**Supersedes nothing. Amends no earlier decision.** It completes the half
+`PHASE_F8_ERROR_CLASSIFICATION.md` §4 explicitly left open, and it takes neither of the two shapes
+that report named as needing a decision — it takes a third that the report did not enumerate, and §3
+says why.
+**Evidence:** `tests/reliability/test_f8_published_status.py` (15 tests, 3/3 non-vacuity probes caught);
+`PHASE_F8_PUBLISHED_STATUS.md`; `PHASE_F8_ERROR_CLASSIFICATION.md` §4.
+
+### Context
+
+`_validate_tool_args` produces a `ValidationFailure` whose `kind` distinguishes a **data** failure
+(`SCHEMA_INVALID` — the validator ran and rejected the arguments) from a **system** failure
+(`CAPABILITY_MISSING` — the validator could not run at all). That fix corrected the attribution **where
+the failure is produced**.
+
+The **published** status was left as `SCHEMA_INVALID`. The report enumerated the blast radius:
+
+| Surface | Location | State at this ADR |
+|---|---|---|
+| `_DENIAL_STATUSES` | `wisp/core/events.py:312` | 5 members; no capability kind |
+| `OUTCOME_BY_STATUS` | `wisp/core/events.py:346` | `SCHEMA_INVALID → OutcomeClass.INVALID` |
+| `TERMINAL_OUTCOME_CLASSES` | `wisp/core/events.py:358` | `INVALID` is non-retryable |
+| the prompt's DENIALS-ARE-FINAL list | `wisp/context_assembler.py:157` | the model is told `SCHEMA_INVALID` *"never succeeds on retry"* |
+| `DENIAL_SCHEMA_INVALID` | `wisp/core/recovery.py:48, :154` | consumed by the M12 classifier (ADR-0032) |
+| the two dry-run stamping sites | `wisp/core/stateless.py` (batch + single-call) | `_denial = "SCHEMA_INVALID"`, unconditionally |
+
+### Problem
+
+`SCHEMA_INVALID` is a claim **about the arguments**. Three surfaces say so explicitly:
+
+- `OUTCOME_BY_STATUS` maps it to `OutcomeClass.INVALID`, documented as *"schema/argument rejection"*.
+- `denial_result()`'s payload asserts `authorized=False, executed=False, retryable=False` — three facts
+  about a decision and a call that **never happened**.
+- Its `hint` reads *"Denial is final for these arguments: do not retry the identical call, and do not
+  claim you ran the tool."*
+
+For a missing validator, **no authorization decision was reached and the arguments were never
+examined.** Publishing it as a denial tells the model its input was judged when the host was broken —
+which is F8 itself, one layer up. `PHASE_F8_ERROR_CLASSIFICATION.md` §4 states the residual exactly:
+*"the attribution is correct where it is produced and incorrect where it is published."*
+
+### Decision
+
+**The capability failure is published through a system-failure envelope. The published denial taxonomy
+is not touched.**
+
+> **R1.** A `ValidationFailure` whose `kind` is `CAPABILITY_MISSING` is published with status
+> **`error`** — never with a denial status.
+>
+> **R2.** The failure's `kind` travels in the envelope's `data` under **`kind`**, alongside
+> `capability: "tool_argument_validation"`, so a caller at the published boundary distinguishes a
+> system failure from a data failure **without parsing prose**.
+>
+> **R3.** The published denial taxonomy is **unchanged**: no member is added to `_DENIAL_STATUSES`,
+> `OUTCOME_BY_STATUS` or `TERMINAL_OUTCOME_CLASSES`, and the prompt's DENIALS-ARE-FINAL list is
+> **not edited**. ADR-0052 is therefore **not** a prompt change.
+>
+> **R4.** The two dry-run stamping sites apply **one shared predicate**
+> (`stateless._is_capability_failure`). A site that stamps `_denial` unconditionally is the defect
+> returning, and the predicate **defaults to a data failure** for anything without a `kind`.
+>
+> **R5.** The genuine schema rejection is **unchanged, byte-identical**: same status, same class, same
+> message, same envelope. The denial envelope is exactly right for it.
+>
+> **R6.** `authorized` is **`None`**, not `False` — no authorization decision was reached, and recording
+> "not authorized" would be a claim nothing made. `executed` is `False` and `retryable` is `False`
+> (the *identical* call fails identically until the environment is fixed).
+>
+> **R7.** The envelope's class is `OutcomeClass.ERROR`. It is deliberately **not** added to
+> `TERMINAL_OUTCOME_CLASSES`: unlike a denial, this failure *is* recoverable — by fixing the
+> environment — and `retryable: False` states the narrower, true fact.
+
+### Rejected alternatives
+
+| Alternative | Why rejected |
+|---|---|
+| **A new denial status (`CAPABILITY_MISSING`) in the taxonomy** (the report's Option A) | It is additive but it is a **taxonomy extension** consumed by the M12 classifier, *and* it requires the prompt's DENIALS-ARE-FINAL list to name it — **a behavioural change** (what the model is told) that would need the flag-and-measure treatment. It would also need a new `OutcomeClass`, because none of the eight means *"the host is broken"*; mapping it to `INVALID` keeps the wrong claim and mapping it to `ERROR` abandons the denial framing anyway. |
+| **A different envelope, as a *denial* sub-shape** (a denial that is not `denial_result()`) | Two shapes for one vocabulary: every consumer that treats "a refusal" as "a denial envelope" would have to learn the second. R3's whole point is that the published taxonomy stays single. |
+| **Reusing `SCHEMA_INVALID` and adding a note to the message** (the report's third option) | **This is the shape F8 was** — a system failure wearing a data failure's name. A message note does not change what `OUTCOME_BY_STATUS` says, what the M12 classifier concludes, or what the prompt tells the model. |
+| **Do nothing — the attribution at the point of production is sufficient** | A caller at the published boundary cannot see it: `classify_result(envelope)` returns `INVALID`, and the model is told *"denial is final for these arguments"*. The production-side fix is invisible from where the decision is consumed. Recorded as the residual it would have been. |
+| **Changing `OutcomeClass.INVALID`'s meaning** | It is correct for the data failure, which is the case it was written for. Widening it to cover a host failure would re-create the conflation. |
+
+### Consequence
+
+- **The attribution is now correct where it is produced *and* where it is published.** A caller at
+  either boundary reads `kind` rather than prose.
+- **No prompt change, no taxonomy change, no new flag.** The blast radius is the refusal path.
+- **The residual, named:** the M12 classifier still sees no *denial* for a capability failure, so a turn
+  whose only problem is a broken validator is classified as an ordinary error
+  (`FailureClass.IMPLEMENTATION` by the ADR-0032 precedence) rather than by a denial rule. That is the
+  honest classification — nothing was denied — and it is recorded rather than smoothed over.
+- **`is_denial_text` is unaffected**: `CAPABILITY_MISSING` is not a denial token and the envelope carries
+  no denial status, so nothing reads it as one.
+
+### Reversal condition
+
+Reversed only by a superseding ADR that adds a capability member to the published denial taxonomy
+**and** the prompt's final list — which is a behavioural change requiring the flag-and-measure
+treatment, not a revert. Reverting to `SCHEMA_INVALID` without that re-introduces the exact defect this
+ADR closes, and must not be done without superseding it.
+
+---
+
+## ADR-0053 — The turn path's required-criteria set carries the objective's declared criteria; the gate keys on a FAIL the floor guard does not enforce
+
+**Status:** ACCEPTED
+**Phase:** The criteria source on the turn path (post-ADR-0052)
+**Satisfies ADR-0051 R1's precondition.** Supersedes nothing and amends no earlier decision: it supplies
+the change ADR-0051 §"What this ADR does not decide" named as its own ADR.
+**Evidence:** `scripts/turn_criteria_measurement.py` (committed, re-runnable — F75's lesson);
+`tests/reliability/test_criteria_source_on_turn_path.py` (25 tests, 3/3 non-vacuity probes caught);
+`PHASE_CRITERIA_SOURCE.md`.
+
+### Context
+
+ADR-0051 R1 states the enablement precondition: *the gate may be enabled only when the turn path's
+required-criteria set contains at least one required criterion not derivable from
+`VerificationFloorGuard`'s own state.* ADR-0051 then **measured** that it did not:
+
+```text
+runtime.py:1189-1190   _acceptance = floor_guard_verdict(_guard_for_goal).verdict
+verification.py:236    floor_guard_criteria()   <- the ONE producer on the turn path
+verification.py:252    check = (not guard.wrote_code) or guard.resolved()
+stateless.py:911       guard.rejection()        <- ALREADY wired at the pre-`done` gate
+```
+
+Over the 192-state guard space, `verdict == FAIL` agreed with `guard.rejection()` **192/192** times. The
+objective-derived criteria (ADR-0048's derivation, ADR-0050's declaration) reached
+`converge_on_objective` **only**, where `ConvergenceController` evaluates them itself.
+
+### Problem
+
+**The turn path has exactly one criteria producer, and it is the floor guard.** So the turn's verdict is
+a *re-expression* of the guard's state, and an acceptance gate keyed on it is redundant (FAIL-keyed:
+the identical condition `rejection()` already tests) or harmful (non-PASS-keyed: it would withhold
+`done` on every read-only turn and on every turn of a *disabled* guard — 144/192 states).
+
+The missing piece is not a *gate*: it is a **criteria source**.
+
+### Decision
+
+**The turn's required-criteria set is the floor guard's criterion UNIONED with the criteria of the
+objective's declared block, when the prompt carries one and the flag is on. The gate keys on a `FAIL`
+whose deciding criterion is not the floor's.**
+
+> **R1 — the source.** The turn's required-criteria set is
+> `floor_guard_criteria(guard) ∪ derivation.criteria`, where `derivation` is
+> `convergence.explain_acceptance(prompt, workspace, use_declaration=True)` — **the same derivation the
+> objective-level loop uses**, so the two levels cannot disagree about what a declaration means.
+>
+> **R2 — where it reaches the turn.** At `AgentRuntime.run_turn`'s verdict site, through one new module
+> (`wisp/core/turn_criteria.py`). The **parse and the probe sit outside** the `except Exception` that
+> guards "verdict unavailable" (R6).
+>
+> **R3 — the evidence.** `convergence.CommandProbe(declaration.specs).measure(workspace)` — **the ONE
+> probe**, the same object the loop uses, bounded by each spec's own `timeout_s`. Both declared kinds are
+> carried: `symbol_defined` is checked in-process; `command_succeeds` runs the command.
+>
+> **R4 — the gate's condition.** `verdict_keys_on_declared(v)` is `True` iff `v` is `FAIL` **and every
+> criterion it names is a non-floor one**. A `FAIL` the floor guard already enforces returns `False`: a
+> gate keyed on *that* is the redundancy ADR-0051 measured.
+>
+> **R5 — the routing.** Through **neither** the `done` gate nor the ladder, and that is deliberate: the
+> verdict is computed **after** the engine has emitted `done`, so the turn-level withholding gate
+> (ADR-0036) cannot act on it. The consumption point is `goal.derive_goal_state`, which already reads the
+> verdict — a declared failure lands `GOAL_FAILED` (row 3) where a floor-only verdict landed
+> `GOAL_UNVERIFIED` or `GOAL_MET`. The ladder is unchanged (it runs at the turn boundary only for
+> `¬turn_succeeded`, and a declared failure leaves `turn_succeeded` True).
+>
+> **R6 — a rejected declaration is loud.** `CriteriaDeclarationRejected` **propagates** out of `run_turn`;
+> it is never swallowed into a floor-only verdict. Measuring the floor while the caller declared more is
+> exactly the silent downgrade ADR-0050 R4 forbids. A block that is **not at the head** is not a
+> declaration at all (the parser returns `None`), so only a malformed *head* block raises.
+>
+> **R7 — the flag.** `turn_criteria_source` / `WISP_TURN_CRITERIA_SOURCE`, default **OFF**, read **once**
+> at `run_turn`'s entry beside the other per-concern flags (ADR-0002). With it off the verdict site is
+> today's code, and `turn_criteria(..., enabled=False)` returns exactly `floor_only(guard)`.
+>
+> **R8 — the two-flag composition, decided explicitly.** `WISP_TURN_CRITERIA_SOURCE` is **independent of**
+> `WISP_CRITERIA_STRUCTURED_DECLARATION`. That flag gates the *objective-level* derivation; the turn path
+> makes its own call. Coupling them would make the turn path's behaviour depend on a flag read at another
+> composition point — the "read once" rule with two sites, which is the disagreement ADR-0002 forbids.
+> This answers ADR-0050's follow-up question 1 for the turn path.
+>
+> **R9 — no new authority.** The criteria flow through `acceptance.evaluate`; the verdict through
+> `goal.derive_goal_state`; neither is re-implemented. `derive_acceptance`'s signature is frozen
+> (ADR-0009) and `criteria_for` is untouched — this ADR adds a *caller*, not a producer.
+>
+> **R10 — the three non-violations** (ADR-0051 R8, carried forward), asserted by tests:
+> `turn_succeeded` is unchanged (a projection of `terminal_outcome_from_evidence`); `VerificationFloorGuard`
+> is unchanged (its criterion, its `rejection()`, its `resolved()`); `goal.PRECEDENCE` is unchanged in
+> content and count.
+
+### The measurement — the gate has something to gate on
+
+Driven over six cases (`scripts/turn_criteria_measurement.py`; the flag OFF is today's behaviour):
+
+| case | OFF verdict | OFF goal | ON verdict | ON goal | gate? |
+|---|---|---|---|---|---|
+| plain prompt, no mutation | `inconclusive` | `goal_unverified` | `inconclusive` | `goal_unverified` | False |
+| plain prompt, verified mutation | `pass` | `goal_met` | `pass` | `goal_met` | False |
+| declared symbol **present**, no mutation | `inconclusive` | `goal_unverified` | `inconclusive` | `goal_unverified` | False |
+| **declared symbol ABSENT, no mutation** | `inconclusive` | `goal_unverified` | **`fail`** | **`goal_failed`** | **True** |
+| **declared symbol ABSENT, verified mutation** | **`pass`** | **`goal_met`** | **`fail`** | **`goal_failed`** | **True** |
+| declared symbol ABSENT, FAILED verification | `fail` | `goal_failed` | `fail` | `goal_failed` | **False** |
+
+**Two discriminating cases, and the fifth is the point of the whole ADR.** A mutation-verified turn
+satisfies the floor guard *completely* — `rejection()` returns `None`, the floor-only verdict is `PASS`,
+the floor-only goal is `GOAL_MET` — while the declared criterion fails. With the declaration the same
+turn is `FAIL` / `GOAL_FAILED`. **The two conditions are not the same condition**: the floor guard never
+sees a declared criterion.
+
+The criteria sets, measured: OFF → `['floor:verification']`; ON → `['floor:verification',
+'declared:symbol0']`. The sixth row is the control that keeps R4 honest — when the `FAIL` is the floor
+guard's own, `verdict_keys_on_declared` returns **False**.
+
+### The measure, and why the objective-level measure does not transfer unchanged
+
+ADR-0051 R2 chose the **`GOAL_MET` rate on a declared-objective population** with
+`FALSE_SUCCESS_AFTER = 0` for the objective-level loop. **At the turn level the same measure applies in
+form but not in population**, and the difference is stated rather than assumed:
+
+- The objective-level rate is measured over *attempts within a run*, where the controller chooses a rung
+  between them. The turn level has no rung: a declared failure at the turn level is **terminal for that
+  turn** (R5), so the rate is over *turns*, and its denominator is "turns whose prompt carried a
+  declaration" — a population that does not exist in the corpus yet.
+- `FALSE_SUCCESS_AFTER = 0` **does** transfer unchanged, and is the invariant that matters: no turn may
+  record `PASS`/`GOAL_MET` while a required criterion — floor or declared — has failed evidence.
+
+**Produced here:** the verdict/goal table above (six cases, deterministic, re-runnable). **Not produced:**
+a `GOAL_MET` *rate* over a declared turn population, because **no such population exists** — the
+corpus contains 13 objectives, and the declaration flag is OFF in every production caller. What would
+produce it: a population of turns whose prompts carry declarations, accumulated with the flag on. That is
+stated as a residual rather than papered over (ADR-0048's error was an under-specified reversal
+condition, and this ADR does not repeat it).
+
+### Rejected alternatives
+
+| Alternative | Why rejected |
+|---|---|
+| **A new parameter on `core.turn()`** | It widens a signature ADR-0009 pins, for a concern the engine does not act on: the verdict is computed **after** `done`, so the engine has nothing to do with the criteria. The `completion_gate` precedent passes a *predicate the engine consumes*; these criteria are consumed by the runtime. |
+| **A new field on a "turn request" object** | No such object exists. `run_turn(session, prompt, approval_handler)` carries the prompt, and the prompt **is** the objective — the declaration is already in the right place. |
+| **Resolving it inside `stateless.py`** | The engine has no workspace probe and no need for one; giving it one would put a subprocess at the pre-`done` gate and hand the engine a second completion authority. |
+| **Gating on `verdict != PASS`** | Withholds `done` on every read-only turn — 144/192 states (ADR-0051 §Problem). |
+| **Gating on any `FAIL`** | That is the floor guard's condition under another name; the sixth row of the table is the control that shows R4 excludes it. |
+| **Falling back to floor-only on a rejected declaration** | ADR-0050 R4's forbidden silent downgrade: measuring the floor while the caller declared more, while appearing to measure the declaration. |
+| **Coupling the flag to `WISP_CRITERIA_STRUCTURED_DECLARATION`** | Two read sites for one concern (R8). |
+| **Making the engine withhold `done` on a declared failure** | Would move the probe inside the engine loop (a subprocess per iteration), duplicate the ADR-0036 gate, and change what `done` means — a bigger decision than R1 needs. Named as the residual. |
+| **Consulting the prose grammar (`derive_acceptance`) on the turn path** | That is the three-regex inference with no negation awareness (ADR-0048 R7) — the failure mode ADR-0048/0050 exist to replace. The turn path consults a **declaration** or nothing. |
+
+### Consequence
+
+- **ADR-0051 R1 is satisfied.** The turn path's required-criteria set contains a required criterion the
+  floor guard does not own, whenever the flag is on and the prompt declares one. A gate keyed on R4's
+  condition now has something to gate on that `rejection()` does not already enforce.
+- **This is not enablement.** ADR-0051 R7 is untouched: `acceptance_gate` / `WISP_ACCEPTANCE_GATE` is
+  still not added to `config.py`, and ADR-0051's R2–R6 measurement contract still gates that decision.
+  Satisfying the precondition is what makes the contract *askable*.
+- **`turn_succeeded`, `VerificationFloorGuard` and `goal.PRECEDENCE` are untouched**, asserted by tests.
+- **`CURRENT_AUTHORITIES.md` is re-pinned** — `runtime.py`'s line numbers moved, and its guard caught it.
+  No *stated authority* changed: §1.1–1.6's owners are the same objects.
+
+### Residuals, named
+
+1. **No declared turn population exists**, so the `GOAL_MET` rate ADR-0051 R2 specifies cannot be produced
+   yet. The form of the measure is stated above; the population is the missing input.
+2. **A declared failure does not produce a replan.** It is recorded (`GOAL_FAILED`) rather than repaired
+   within the turn, because the verdict is computed after `done`. Making it repairable means moving the
+   probe into the engine — a separate decision with its own cost (a subprocess per iteration).
+3. **`command_succeeds` on the turn path runs the declared command after `done`**, once per declared turn,
+   bounded by `spec.timeout_s`. That cost is real and is the reason the flag defaults OFF.
+
+### Reversal condition
+
+`turn_criteria_source` off restores today's behaviour exactly, with no code change and no other flag's
+state involved. Reverting the *source* (removing the union) re-opens ADR-0051 R1's precondition and
+therefore returns the acceptance gate to `BLOCKED`; that must not be done without superseding this ADR.
+
+---
+
+## ADR-0054 — The acceptance gate consumes `verdict_keys_on_declared` at the engine's pre-`done` gate, bounded and defaulting OFF
+
+**Status:** ACCEPTED
+**Phase:** Acceptance gate enablement (post-ADR-0053)
+**Consumes ADR-0053's predicate; supplies the consumer ADR-0053 §10 recorded as missing. Amends
+ADR-0051's R7 staging by *adding the flag* — and states that R2–R6's measurement contract is **not
+satisfied**, so the flag defaults OFF.**
+**Evidence:** `scripts/acceptance_gate_population.py` (committed, re-runnable);
+`tests/reliability/test_acceptance_gate_enablement.py` (24 tests, 3/3 non-vacuity probes caught, one
+class driving a **real turn**); `PHASE_GATE_ENABLEMENT_DECISION.md`.
+
+### Context
+
+ADR-0051 R1 stated the enablement precondition and **measured that it was unmet** — the turn path's
+verdict was a pure projection of `VerificationFloorGuard`, `verdict == FAIL` agreeing with
+`guard.rejection()` **192/192** times over the guard state space. **ADR-0053 satisfied it**: the turn's
+required-criteria set is now `floor_guard_criteria(guard) ∪` the objective's declared criteria, and the
+gate's condition is `verdict_keys_on_declared` — `FAIL` **and every named criterion non-floor** — which
+ADR-0053 drove to differ from `rejection()` on two of six cases.
+
+ADR-0053 §10 then recorded the remaining gap:
+
+> *"`verdict_keys_on_declared` is a **predicate**, and nothing calls it in production. It is the ADR's
+> named condition and its guard's subject; ADR-0051's enablement decision is what would consume it."*
+
+And ADR-0053 §9's residual 2 stated the obstacle to consuming it:
+
+> *"A declared failure does not produce a replan. It is recorded (`GOAL_FAILED`), not repaired within the
+> turn, because the verdict is computed **after** `done`."*
+
+### Problem
+
+**A gate that acts after `done` cannot withhold anything.** The turn-level completion gate lives in the
+engine (`stateless.py`), before `done` is emitted; the runtime computes the verdict afterwards, from
+`core._last_guard`. So "enable the gate" cannot mean "the runtime acts on the verdict" — that is what
+already happens, and it changes nothing.
+
+**Enforcement therefore requires asking *before* `done`** — and at that moment the workspace is final, so
+a probe taken there is valid. That is the decision this ADR takes.
+
+### Decision
+
+> **R1 — the consumer.** The engine's pre-`done` gate asks a **read-only callable** the runtime builds.
+> The engine receives no criteria, no specs and no probe — the ADR-0036 shape exactly. The callable is
+> `turn_criteria.DeclaredCriteriaGate`.
+>
+> **R2 — the gate's condition.** The callable answers `verdict_keys_on_declared` (ADR-0053 R4) asked of a
+> **declared-only** criteria set: a `FAIL` whose named criterion is non-floor is, on that set, exactly *"a
+> declared criterion failed"*. The condition is **not redefined**.
+>
+> **R3 — the probe, and its cost.** `CommandProbe(specs).measure(workspace)`, taken at the gate — bounded
+> by each spec's own `timeout_s`. The measurement is **cached on the callable** and the runtime's verdict
+> site **reuses** it, so one turn pays for the declared command **once**.
+>
+> **R4 — the intervention: delay, never a veto.** Withholding reuses **ADR-0036's bounded replan model**:
+> at most `_MAX_STAGNATION_INTERVENTIONS` interventions, never on the last iteration, then an honest
+> surrender. It **shares the turn's extension budget** with the stagnation gate, because the bound is on
+> the **turn**, not on the concern — two gates spending from one pool keeps the total extension bounded,
+> which is the property ADR-0036 §4 established. The nudge text lives in the criteria source's own module
+> (`compose_declared_nudge`, GH#27), so the intervention cannot drift from the signal.
+>
+> **R5 — fail open.** A predicate that raises permits `done`. A broken predicate must not become a hung
+> turn (ADR-0036 §5).
+>
+> **R6 — the flag.** `acceptance_gate` / `WISP_ACCEPTANCE_GATE`, default **OFF**, read **once** at
+> `run_turn`'s entry (ADR-0002). It is **dependent on `turn_criteria_source`**: with the source off there
+> are no declared criteria in the set, so the gate would withhold on a verdict the goal record does not
+> carry — two answers to one question. A malformed declaration raises **when the gate is built, before the
+> turn**, outside any handler (ADR-0050 R4 / ADR-0053 R6).
+>
+> **R7 — the measurement, and why the default is OFF.** ADR-0051 R2–R6's contract is **NOT satisfied**.
+> See §The measurement.
+>
+> **R8 — the three non-violations**, asserted by tests: `turn_succeeded` is unchanged — and in particular
+> the gate is **not** a `turn_gated` flag, because the withheld turn still ends with `done`; the floor
+> guard's semantics are unchanged; `goal.PRECEDENCE` is unchanged in content and count.
+>
+> **R9 — no new authority.** The criteria flow through `acceptance.evaluate`; the verdict through
+> `goal.derive_goal_state`; neither is re-implemented (ADR-0053 R9). The engine gains a **predicate and a
+> text**, never a criteria source.
+
+### The measurement — the contract is not satisfiable, and this is measured
+
+ADR-0051 R4 requires **≥ 2 capable models**. `scripts/acceptance_gate_population.py` enumerates every model
+the local daemon serves (2026-09-25):
+
+| model | class | probe |
+|---|---|---|
+| `nemotron-3-ultra:cloud` | **CAPABLE** | recorded: 5/5 schema-valid tool calls |
+| `llama3.2:3b` · `qwen2.5:0.5b` | degenerate | recorded: cannot drive the tool surface |
+| `qwen3.5:cloud` · `deepseek-v4-flash:cloud` · `gemini-3-flash-preview:cloud` · `kimi-k2.5:cloud` · `glm-5.1:cloud` | retired | *"was retired at …"* |
+| `glm-5.2:cloud` · `kimi-k3:cloud` · `minimax-m2.7:cloud` · `deepseek-v4-pro:cloud` · `kimi-k2.6:cloud` | paywalled | *"not included in your free usage"* |
+
+```text
+capable 1 · degenerate 2 · retired 5 · paywalled 5 · unclassified 0   (of 13 served)
+```
+
+**Exactly one capable model.** So:
+
+- **the flag ships default OFF** — not by preference, but because the contract's population does not
+  exist;
+- the `GOAL_MET` rate ADR-0051 R2 specifies is **not produced**, and cannot be: a rate over one model is
+  the model-dependent artefact ADR-0051 §Problem already measured (64.3% vs 100%);
+- **what would produce it**: a second capable model that is neither retired nor paywalled, or a
+  provider key. The instrument is committed, so the check re-runs and the enumeration cannot go stale
+  silently.
+
+**What IS produced:** the withholding is **driven end to end through a real turn** — a failing declaration
+withholds `done` exactly **twice** (the shared budget), the nudge appears, and the turn still finishes. So
+the mechanism is demonstrated; only the *population* is missing.
+
+### Rejected alternatives
+
+| Alternative | Why rejected |
+|---|---|
+| **The runtime acts on the verdict after the turn** | That is what already happens (the verdict reaches `derive_goal_state`), and it withholds nothing. It would be a flag that changes no behaviour. |
+| **Moving the whole verdict computation into the engine** | It would move the criteria source, the probe and `derive_goal_state`'s input into the engine, and the engine would then hold criteria — the coupling R1 avoids. |
+| **An unbounded gate, or a veto** | ADR-0036's rejected alternatives: a veto runs the turn to the iteration budget, whose wrap-up emits a fatal `CODE_ITERATION_BUDGET`, converting a criteria failure into a turn failure. |
+| **A second, separate intervention budget** | The bound is on the turn's extension, not on the concern. Two pools would let one turn be extended four times — a weaker bound than ADR-0036 established. |
+| **An independent flag (not dependent on `turn_criteria_source`)** | The gate would withhold on a verdict the goal record does not carry — the record and the gate disagreeing about one question. |
+| **Re-measuring the declared command at the verdict site** | The command is the expensive part; the gate's measurement is valid (the workspace is final at the pre-`done` gate) and is reused. |
+| **Enabling by default anyway, with the population short** | ADR-0051 R4 is part of the contract this ADR is asked to satisfy. Enabling without it would be the manufactured closure the brief forbids. |
+| **Replacing ADR-0036's budget constant with a turn-level name** | ADR-0036's AST ratchets pin `_MAX_STAGNATION_INTERVENTIONS` and `stagnation_interventions_used` **by name**; renaming would weaken pins that are not this ADR's to move. The sharing is documented at the site instead. |
+
+### Consequence
+
+- **`verdict_keys_on_declared` now has a production consumer**, and the withholding is real, bounded and
+  demonstrated — but **not enabled**.
+- **`turn_succeeded` is untouched.** The withheld turn still ends with `done`; the goal state still comes
+  from `derive_goal_state` reading the unchanged verdict. The gate is an *extension*, not a success signal.
+- **`CONTEXT.md` §12's M1 row moves from `BLOCKED` to `IN_PROGRESS`** in the ledger's own vocabulary: the
+  precondition is satisfied and the mechanism is built and driven; what remains is the population.
+- **No authority moved.** `CURRENT_AUTHORITIES.md` is unchanged — no stated authority's owner changed.
+
+### Residuals, named
+
+1. **The population is short by one capable model.** This is the only thing between the contract and the
+   enablement decision, and it is an *environment* fact, not a design one.
+2. **The declared command runs once per declared turn** (at the gate; reused at the verdict site). With
+   `command_succeeds` that is a real cost, and it is why the flag defaults OFF.
+3. **The gate shares the stagnation gate's budget**, so a stagnating turn can spend the declared gate's
+   extensions. That is the intended reading of a turn-level bound, and it is stated rather than discovered.
+4. **`stagnation_gate` is untouched** (ADR-0037 forbids enabling it without a superseding ADR). The two
+   gates are now both wired and both default OFF, independently.
+
+### Reversal condition
+
+`acceptance_gate` off restores today's behaviour exactly, with no code change; `turn_criteria_source` off
+additionally removes the criteria the gate acts on. Reverting the *default* (to ON) requires ADR-0051
+R2–R6 satisfied by a produced measurement — which needs the missing capable model, not a code change.
+
+## ADR-0055 — The REST gate is at parity with the agent path; the recorded divergence was between two *models*, not two *paths*
+
+**Status:** ACCEPTED
+**Phase:** Authorization parity (G1)
+**Closes G1 as a *decision*. Corrects a three-phase-old claim that did not survive being driven. Authorises
+no production behaviour change: no gate moves, no mode changes, no client change.**
+**Evidence:** `scripts/authorization_parity_measurement.py` (committed, re-runnable — drives both
+production paths); `tests/test_authorization_parity.py` (updated, plus a real-path guard);
+`PHASE_AUTHORIZATION_PARITY.md`.
+
+### Context
+
+`PHASE_10_AUTHORIZATION_PARITY.md` §2 measured every REST route's `(action, args)` through **both models**
+in all four modes and found 9 of 36 `(route, mode)` pairs divergent. Three were the protected-path
+instance, closed by `PHASE_10_PROTECTED_PATH_GUARD.md`. Six remained, all the same shape — `authorize()`
+returns `ALLOW+APPR`, `SecurityPolicy.check()` returns `ALLOW`:
+
+| action | `authorize()` | `SecurityPolicy` | REST gate |
+|---|---|---|---|
+| `hooks.create` in `auto_edit` / `ask_all` | ALLOW **+ approval** | ALLOW | **ALLOW** |
+| `mcp.add_server` in `auto_edit` / `ask_all` | ALLOW **+ approval** | ALLOW | **ALLOW** |
+| `plugins.install` in `auto_edit` / `ask_all` | ALLOW **+ approval** | ALLOW | **ALLOW** |
+
+From that the report drew a conclusion about **paths**:
+
+> *"out of the box, REST permits registering a hook, an MCP server, or a plugin **without the approval the
+> agent path requires for the same operation**."*
+
+and `require_tool_allowed`'s docstring was read as an unreachable contract:
+
+> *"REST has no human to approve, so approval-required verdicts deny — same as ApprovalGate with no
+> handler."*
+
+**Both sentences are claims about the agent *path*. Neither was measured against it.** The ratchet
+compares `authorize()` to `SecurityPolicy` and treats the first as "the agent's verdict". A model is not a
+path.
+
+### Problem — what driving the paths changes
+
+The instrument drives the two production surfaces rather than the two models:
+
+```
+the agent   ToolExecutor.execute(tool, args, ws, approval_handler=None)
+            — `None` because REST *has* no approver; that is REST's condition
+REST        require_tool_allowed(request, action, args, workspace)
+```
+
+**36 rows: 0 path divergences. 6 model divergences.** The agent and the REST gate agree on **every route
+in every mode**, on the outcome (`ALLOW` vs `DENY`), as soon as the agent is driven under REST's own
+condition. Where the two `DENY`s differ in mechanism (`DENY(guard)` vs `DENY(403)`) the outcome is the
+same and that is what parity is about.
+
+Three further measurements decide the shape of the answer.
+
+**1. The three actions have no agent path at all.** `hooks.create`, `mcp.add_server` and `plugins.install`
+are **not** agent tools — absent from `TOOL_IMPLS` (42 names) and from the plugin set — and have **no row**
+in `TOOL_RISK_TABLE` (41 rows). `risk_for_tool` returns `ToolRisk.EXEC` for them only because it
+**fail-closes on an unknown name**; the table itself has no row, so `_non_read_table_tools()` does not
+contain them and `_get_write_tools()` does not gate them. Driving `ToolExecutor.execute` with those names
+returns `Unknown tool`. **There is no agent operation for them to be at parity *with*.** `authorize()`'s
+verdict on those three names is a fact about `authorize()` — it is not a fact about the agent.
+
+**2. The agent's approval model is not `authorize().approval_required`.** `ToolExecutor.execute` consults
+`authorize()` and forks on **`not _decision.allowed` alone** (`tool_executor.py:755`); the decision's
+`approval_required` is **discarded**. The turn path's approval requirement is a *third* set —
+`func_name in _get_write_tools(config)` (`:827`) combined with `_needs_forced_approval` (`:1324`), both
+derived from the risk table. `authorize().approval_required` **is** consumed, by a different agent
+surface: `registry.execute_tool` (`tools/registry.py:951`), the direct-registry path, where it denies.
+
+So the corpus has **three** approval models, and the ratchet was comparing two of them:
+
+| Surface | Approval source |
+|---|---|
+| `ToolExecutor.execute` (the turn path) | `_get_write_tools` + `_needs_forced_approval` |
+| `registry.execute_tool` (direct registry) | `authorize().approval_required` |
+| `ApprovalGate`, `require_tool_allowed` (REST) | `SecurityPolicy.check().approval_required` |
+
+**3. The agent's no-approver path is permissive, and that is a separate observation.** Driven with
+`approval_handler=None`, a `write_file` in `auto_edit` **runs** — the approval branch is entered, the
+handler is absent, `forced_approval` is `False`, and control falls through. The comment there reads
+*"auto_approve=True + no handler + not forced = pass through"*, but the enclosing guard is
+`not auto_approve`, so the comment does not describe the branch it sits in. This is **not** repaired here
+(see R8): it is a fact about the agent's no-approver behaviour, and it is *why* path parity holds.
+
+### Decision
+
+> **R1 — Parity is a property of the paths, and it holds.** For every REST route and every permission mode,
+> the outcome of the agent path (driven with no approver — REST's condition) and the outcome of
+> `require_tool_allowed` are the same. The instrument asserts this; the guard re-drives it. A future change
+> that breaks it fails the guard, which is the property the parity table was written to protect and did not
+> measure.
+>
+> **R2 — The six pinned pairs are reclassified as a *model* divergence, and stay pinned.** They remain in
+> `KNOWN_MODEL_DIVERGENCES`, keyed by `(route, mode)`, with the reason corrected: they record that
+> `authorize()` and `SecurityPolicy` disagree about `approval_required` for three action names **that only
+> REST uses**. They are not evidence that REST is weaker, and the test that fails on a new divergence stays
+> exactly as strict.
+>
+> **R3 — Option A is chosen: accept, and correct the record.** Rejected alternatives:
+>
+> * **Option B (the REST gate also consults `authorize()`, honouring its approval requirement) is
+>   rejected** because the measurement makes it *not a parity fix*: it would deny `hooks.create`,
+>   `mcp.add_server` and `plugins.install` in `auto_edit`/`ask_all` — modes in which **the agent denies
+>   nothing** (it cannot even run those names). B would therefore create a divergence in the opposite
+>   direction: REST stricter than the agent, with no agent counterpart. It would also 403 the shipped
+>   desktop client on three config routes, and the three routes' own comments state the intended design
+>   (*"the policy allows this action in full / auto_edit / ask_all and denies only in read_only"*).
+> * **Option C (route approvals through the WebSocket channel) is rejected *for this decision*, not on the
+>   merits.** It is the correct fix for a **different** problem — REST cannot ask a human, so a REST caller
+>   gets the agent's no-approver behaviour rather than its approver behaviour. That gap is real (R6) and it
+>   is its own ADR; adopting it here would change default-mode behaviour of a shipped client, which is a
+>   feature decision, not a parity correction.
+>
+> **R4 — `require_tool_allowed`'s docstring states what its control actually is.** The
+> "approval-required verdicts deny" sentence is **kept** — it correctly describes the verdict the gate
+> consumes. It is **qualified**: for the executable-config routes `SecurityPolicy` reports no approval
+> requirement in any mode, so the clause cannot fire for them, and the agent has no equivalent operation.
+> The docstring names the control those routes actually have — the API key, the `read_only` denial, and the
+> protected-path guard — and cites the instrument.
+>
+> **R5 — The ratchet is updated, not weakened.** It keeps every property it had (a new divergence fails; a
+> divergence that silently disappears fails; the file/shell routes stay at model parity; a non-approval-
+> shaped divergence is a worse class; the agent still consults both models; the default mode is still the
+> affected one) and **gains the one it lacked**: a guard that drives the real paths and asserts path
+> parity, with a non-empty floor on the route list.
+>
+> **R6 — The residuals are named, not smoothed over.**
+>
+> 1. **The approval authority is split three ways** (Problem §2). Unifying it is its own ADR; this one does
+>    not touch any of the three.
+> 2. **Three action names are in none of the three approval sets** — `hooks.create`, `mcp.add_server`,
+>    `plugins.install` have no `TOOL_RISK_TABLE` row, so no approval model governs them on either path.
+>    Their control over REST is the API key plus the `read_only` denial. Adding rows is inert today (no
+>    consumer reads the table for a name that is not an agent tool) and is not this ADR's change.
+> 3. **REST cannot ask a human.** A REST caller gets the agent's *no-approver* behaviour, including its
+>    permissive fall-through for `auto_edit` writes (Problem §3). Option C is the fix; it is deferred.
+> 4. **Five further gated routes are not in the parity table** — `hooks.test`, `mcp.test_server`,
+>    `mcp.remove_server`, `plugins.toggle`, `plugins.uninstall`. They pass through the same gate, and
+>    `mcp.test_server` executes a server command. They are unmeasured here and are named so the next
+>    reader does not assume the table is exhaustive.
+>
+> **R7 — The relationship to finding E is stated, and E is not wired.** `PHASE_10_M4_GOVERNANCE_UNWIRED.md`
+> records that `ToolExecutor.policy` is `None` at both construction sites, so `authorize()`'s **L0**
+> organization-policy slot is never filled. The two findings share a shape — *an authority that exists and
+> is not consulted* — but they are not one fix: E is a slot that exists and is unfilled; G1 was a claim
+> about paths that the paths do not support. **Wiring L0 would not have prevented G1** (L0 sits inside
+> `authorize()`, which REST does not call for these names anyway), and G1's resolution does not supply the
+> key-distribution ceremony E's prerequisite needs. E remains its own ADR.
+>
+> **R8 — The three non-violations are asserted by tests, not merely stated.**
+>
+> * **`authorize()` is unchanged** — its parameter list and the seven-name `controlling_layer` vocabulary
+>   (`principal`, `workspace`, `capability`, `arguments`, `sensitivity`, `approval`, `allow`, plus an
+>   organization layer supplied by L0) are pinned.
+> * **`SecurityPolicy.check()` is unchanged** — its signature and the two mode block-sets it owns
+>   (`_ASK_ALL_BLOCK_TOOLS`, `_AUTO_EDIT_BLOCK_TOOLS`) are pinned by content.
+> * **`ToolExecutor.execute`'s gate chain is unchanged** — parsed, not scanned: the AST of `execute` is
+>   walked and the first line of each of `policy_hard_deny(...)`, `authorize(...)` and the
+>   `_get_write_tools(...)` approval assignment must be in that order. A string scan would read the
+>   docstring that *describes* the order.
+>
+> **R9 — Rollback.** No production behaviour moves, so rollback is the revert of a documentation and test
+> change. The observation that shows the record is doing its job: the real-path guard fails if any route's
+> outcome diverges between the two paths. The observation that shows it is not: the model-divergence set
+> changes without a corresponding change in the paths.
+
+### Consequences
+
+- **G1 is closed as a decision.** The audit's one-line debt (*"REST uses the weaker one"*) is answered:
+  REST does not use a weaker model — it uses a different model, and on every route it reaches the same
+  outcome the agent reaches under REST's own condition.
+- **The corpus gains a measurement discipline**: *drive the paths, not the models.* Three phases of this
+  finding rested on a model-vs-model comparison, and the sentence drawn from it was false in its subject.
+- **A four-line docstring claim is retired.** `require_tool_allowed` no longer implies an approval prompt
+  the executable-config routes never see.
+- **Nothing is enabled, no mode changes, no client changes.** The six pairs stay pinned; their
+  classification changes from *path divergence* to *model divergence*.
+- **Four residuals are open and named** (R6), one of them (`mcp.test_server` executing a command outside
+  the table) recorded for the first time.
+
+### Reversal condition
+
+If a future change makes `hooks.create`, `mcp.add_server` or `plugins.install` **agent tools** — giving them
+`TOOL_RISK_TABLE` rows and implementations — then the three model divergences become path-relevant, and
+this ADR's R2 classification must be re-examined: `authorize()` would then be describing a real operation,
+and the question *"should REST approve what the agent approves?"* becomes answerable. That is the
+condition under which Option B is re-opened, and it is stated here so it is not re-derived.
+
+## ADR-0056 — The two criteria flags are independent on the objective path; their interaction is derivation *order*, not flag coupling
+
+**Status:** ACCEPTED
+**Phase:** Objective-path flag composition (ADR-0050 follow-up 1 — the last open follow-up)
+**Decides a question that has been open since ADR-0050. Authorises no production change: the measured
+behaviour already *is* the decision, and this ADR says so rather than leaving it implicit.**
+**Evidence:** `.workbuddy-ai/memory/post-m13-gate-enablement/flag_composition_probe.py` + its recorded
+output (the 2×2 matrix, driven); `tests/reliability/test_objective_flag_composition.py`;
+`PHASE_OBJECTIVE_FLAG_COMPOSITION.md`.
+
+### Context
+
+ADR-0050's follow-up 1 asked:
+
+> *"Should the derivation require a declaration when the objective names a verification command but
+> states no requirement? That is `UNDETERMINED` → refuse, which is ADR-0048's strict mode. **The two
+> flags are independent today; whether they should compose is not decided here.**"*
+
+ADR-0053 R8 had already decided the same question for the **turn** path — **independent** — for a
+specific reason:
+
+> *"Coupling them would make the turn path's behaviour depend on a flag read at a different composition
+> point — two read sites for one concern."*
+
+### Problem
+
+**ADR-0053 R8's *reason* does not transfer verbatim.** The objective path reads **both** flags at the
+**same** composition point:
+
+```
+wisp/autonomous.py:307   strict          = _strict_derivation_enabled()
+wisp/autonomous.py:308   use_declaration = _structured_declaration_enabled()
+wisp/autonomous.py:318   explain_acceptance(objective_text, workspace, strict=strict,
+                                            use_declaration=use_declaration)
+```
+
+One read site, two parameters. So "two read sites for one concern" is not the argument here. The
+question is whether the *decision* transfers when its reason does not.
+
+### Measurement — the 2×2 matrix, driven
+
+`explain_acceptance` on this repository's own MODE A objective (ADR-0048's defect-pin), on a red
+baseline, over both flags:
+
+| objective | `strict` | `use_declaration` | reason(s) | `undetermined` | criteria |
+|---|---|---|---|---|---|
+| no declaration | F | F | `undetermined` | `[]` | 3 |
+| no declaration | F | **T** | `undetermined` | `[]` | 3 |
+| no declaration | **T** | F | `undetermined` | **`['verify:cmd0']`** | 4 |
+| no declaration | **T** | **T** | `undetermined` | **`['verify:cmd0']`** | 4 |
+| declared | F | F | `undetermined` | `[]` | 3 |
+| declared | F | **T** | **`declared`** | `[]` | 1 |
+| declared | **T** | F | `undetermined` | `['verify:cmd0']` | 4 |
+| declared | **T** | **T** | **`declared`** | `[]` | 1 |
+
+Four facts follow, each read off the table rather than inferred:
+
+1. **`strict` alone changes behaviour** (row 3 vs row 1): it adds
+   `verify:cmd0:requirement_declared`, a required criterion nothing can evidence.
+2. **`use_declaration` alone changes behaviour** (row 6): the criteria collapse to the single declared
+   one (`declared:symbol0`) and the reason is `DECLARED`.
+3. **A declaration pre-empts `strict`** (row 8 == row 6): `undetermined` is empty either way. This is
+   `explain_acceptance`'s early return (`convergence.py:1029-1041`) — a declaration is **authoritative**,
+   so the prose grammar is not consulted and the `UNDETERMINED` machinery never runs. `strict` is
+   *recorded* on the derivation (`derivation.strict is True`) and **inert**.
+4. **`use_declaration=True` without a block is a no-op** (row 4 == row 3): `parse_criteria_declaration`
+   returns `None`, the early return does not fire, and the prose grammar runs exactly as with the flag
+   off.
+
+### Decision
+
+> **R1 — Independent.** `WISP_CRITERIA_STRICT_DERIVATION` gates the `strict=` parameter of
+> `explain_acceptance`; `WISP_CRITERIA_STRUCTURED_DECLARATION` gates its `use_declaration=` parameter.
+> Each is read **once**, at the same composition point (`autonomous.py:307-308`). Neither implies the
+> other; a caller may set both, one, or none.
+>
+> **R2 — The interaction that exists is *derivation order*, and it is a property of
+> `explain_acceptance`, not of the flags.** When a valid declaration is present the derivation returns
+> early: the objective has *stated* its criteria, so there is nothing to infer and nothing for strict
+> mode to withhold. `strict` remains a recorded fact about the call and is **inert** (measurement 3).
+> This is stated as the normative reading so a future reader does not discover it as a surprise.
+>
+> **R3 — "Dependent" is rejected, on measurement.** The reading *"`strict_derivation` is only meaningful
+> when `structured_declaration` is on, because `UNDETERMINED` presupposes a declaration was possible"*
+> is **false as written**: measurement 1 shows `strict` alone withholds on the prose path, changing the
+> criteria set from 3 to 4. Making `strict` conditional on the declaration flag would silently disable
+> ADR-0048's fix — which is the fix for a *measured false `GOAL_MET`* — for every caller that does not
+> also enable declarations.
+>
+> **R4 — "Composed" is rejected, and is not implemented.** The reading *"a declaration is required when
+> the objective names a command but states no requirement"* is a **new policy** ("objectives must
+> declare") that no measurement supports. It would make `structured_declaration` mandatory whenever
+> `strict` is on, and it would turn a *silent-defect* fix into a **hard refusal** for every objective
+> that does not carry a block — which is every objective written before ADR-0050. It is also not what
+> the code does: measurement 4 shows `use_declaration=True` with no block is a no-op, not a refusal.
+> ADR-0050's follow-up is therefore answered *"no"*, and the answer is measured rather than asserted.
+>
+> **R5 — `explain_acceptance`'s parameters are not widened** (ADR-0009). Composition is a **policy**
+> expressed at the composition point, not a parameter. A third parameter naming the composition — the
+> `compose_flags=…` shape — would put a flag-reading concern inside a pure function, which is what
+> ADR-0048 R5 and ADR-0050 R8 exist to prevent.
+>
+> **R6 — `derive_acceptance` is unaffected.** Its signature is frozen (ADR-0009) and it calls
+> `explain_acceptance(..., strict=False)` without ever passing `use_declaration`. Neither flag reaches
+> it, and this ADR does not change that.
+>
+> **R7 — The relationship to ADR-0053 R8.** The *reason* does not transfer — the turn path has two read
+> sites for one concern, the objective path has one read site and two parameters. The *decision* does,
+> and for a stronger reason: the two flags gate **different parameters**, so coupling them would not
+> remove a read site; it would add a rule that no measurement supports (R4). **The turn path's R8 and
+> this R1 are the same answer reached by different arguments**, and a future reader should not treat
+> one as the other's precedent without checking which argument applies.
+>
+> **R8 — The non-violations are asserted by tests.** `explain_acceptance`'s signature; the two
+> read sites at `autonomous.py:307-308` (parsed, not scanned); `derive_acceptance`'s signature and its
+> `strict=False` call; and ADR-0048's MODE A / MODE B defect-pins unchanged.
+>
+> **R9 — Rollback.** None is needed: no production change is authorised, because the measured behaviour
+> already is the decision. The observation that shows the decision is still in force is the 2×2 guard —
+> it fails if `strict` becomes dependent (measurement 1 breaks) or if a declaration stops pre-empting
+> `strict` (measurement 3 breaks). The observation that shows it is not: a declaration path that starts
+> producing `undetermined` entries.
+
+### Consequences
+
+- **ADR-0050's follow-up list is now empty.** Every follow-up ADR-0050 raised has a decision: the
+  composition (here), and the turn path's composition (ADR-0053 R8).
+- **A behaviour that was implicit is now normative.** The declaration pre-empting `strict` was already
+  true; it was not decided, and a reader could have read `derivation.strict is True` on a
+  declaration-derived result as evidence that strict acted.
+- **Nothing is enabled.** Both flags still default **OFF**, read once, independently.
+- **One residual is named.** `CriteriaDerivation.strict` records `True` when the declaration path
+  pre-empted it, so the record cannot distinguish *"strict was on and acted"* from *"strict was on and
+  had nothing to act on"*. The `reasons` tuple distinguishes them for a reader who looks (the reason is
+  `DECLARED`, not `UNDETERMINED`), but the boolean does not. Making that distinction explicit is a
+  record change and is its own decision.
+
+### Reversal condition
+
+If a future ADR decides that objectives **must** declare — a policy decision with its own evidence —
+then R4's rejection is revisited: at that point `structured_declaration` becomes mandatory and the
+composition is no longer a choice between independent flags. That is the condition, and it is stated so
+the question is not re-derived from the follow-up text alone.
+
+## ADR-0057 — A REST request for an executable-config action asks a human over the WebSocket channel; no client means deny
+
+**Status:** ACCEPTED
+**Phase:** REST approval through the WebSocket channel (ADR-0055 §7's own decision)
+**Flag-gated by `rest_approval` / `WISP_REST_APPROVAL`, default OFF — with it off, every caller sees
+today's behaviour exactly.**
+**Evidence:** `wisp/server/approval_bridge.py`; `tests/reliability/test_rest_approval.py` (18 tests,
+**5/5 non-vacuity probes caught**, tree restored byte-identical); `PHASE_REST_APPROVAL.md`.
+
+### Context
+
+ADR-0055 §7 named this as its own decision:
+
+> *"Not whether REST should be able to register a hook with only an API key. … Option C … is the correct
+> fix for a **different** problem: REST cannot ask a human, so a REST caller gets the agent's
+> *no-approver* behaviour rather than its *approver* behaviour."*
+
+ADR-0055 §3 residual 3 measured the gap: driven with `approval_handler=None`, a `write_file` in
+`auto_edit` **runs** — the approval branch is entered, the handler is absent, `forced_approval` is
+`False`, and control falls through.
+
+The commissioning brief then stated, as a premise:
+
+> *"The WebSocket channel already implements bidirectional approval flow (`wisp/transport/websocket.py`,
+> wired through `wisp/server/routes/agents.py`). The REST routes just don't use it."*
+
+**Reading the channel before designing the round-trip — as the brief required — shows the premise is
+half true, and the half that is false decides the shape of this ADR.**
+
+### Problem — the channel is wired in one direction, not two
+
+`WebSocketTransport.approve()` (`websocket.py:159-163`) sends:
+
+```
+{"type": "approval_request", "approval_id": …, "tool_call": {…}}
+```
+
+Both shipped clients branch on **a different type and read different fields**:
+
+| client | branches on | reads |
+|---|---|---|
+| `wisp-desktop/src/renderer/hooks/useWebSocket.ts:103` | `tool_approval_request` | `call_id`, `name`, `arguments`, `reason` |
+| `wisp/tui/data/ws_client.py:127` | `tool_approval_request` | `call_id`, `name`, `arguments`, `reason` |
+
+**No client recognises the frame the server sends**, so the agent path's WebSocket approval prompt has
+never rendered. The **response** direction, by contrast, already works and is consistent across both
+clients (`ApprovalPrompt.tsx:31`, `useKeybindings.ts:117`, `ws_client.py:157`):
+
+```
+{"type": "tool_approval", "id": <call_id>, "approved": <bool>, "reason"?: …}
+```
+
+and `wisp/server/routes/agents.py:196-208` already resolves it, **already correlated on `id`**.
+
+So the channel is **half-wired**: the answer path works, the question path does not.
+
+**Two consequences decide this ADR.** First, *"wire REST into the existing channel"* cannot be done as
+stated — there is no working question path to wire into. Second, and more usefully, **the clients'
+vocabulary is already a de-facto contract**: adopting *it* needs **no client change**, whereas adopting
+the server's current frame would need one in both clients.
+
+### Decision
+
+> **R1 — the frame is the clients' vocabulary.** `tool_approval_request`, carrying `call_id`, `name`,
+> `arguments`, `reason`. Chosen because both shipped clients already read exactly that, so the client
+> change is **zero**. Rejected: the server's current `approval_request` / `{approval_id, tool_call}`,
+> which no client reads — measured, above.
+>
+> **R2 — the correlation key is `call_id`.** It is what the clients already echo back as `id`, and
+> `agents.py:196-208` already resolves on it. A response therefore reaches the request it belongs to
+> rather than whichever happened to be first.
+>
+> **R3 — the bridge owns its own correlation map.** `ApprovalBridge` does **not** touch
+> `WebSocketTransport`, its `_approvals` map, or `approve()`. That is what makes R10's non-violations
+> hold *by construction* rather than by care, and it is the smallest viable seam: the agent path cannot
+> be perturbed by a REST-only feature.
+>
+> **R4 — the trigger is per-route and per-mode, stated as a set.** `REST_APPROVAL_ACTIONS` =
+> `{hooks.create, mcp.add_server, plugins.install}` — the **executable-config** actions, which persist
+> something Wisp later *executes*. `REST_APPROVAL_MODES` = `{auto_edit, ask_all}`. **`full` does not
+> ask** (it relaxes approval, and always did); **`read_only` denies outright** and never reaches the
+> bridge. A file write does not ask.
+>
+> **R5 — the no-client case is DENY.** No connected client ⇒ `403`. Rejected alternatives, with reasons:
+> *holding* would hold an HTTP connection open on a condition that cannot change, which is the "must not
+> hang" the brief forbids; *falling through with a warning* would **silently allow** an executable-config
+> mutation, which the brief forbids outright. Deny is also what the channel's own `approve()` already
+> does with no client (`websocket.py:119-123`), so the two paths agree.
+>
+> **R6 — the timeout is bounded, named, and defaulted.** `REST_APPROVAL_TIMEOUT_S = 30.0`, shorter than
+> the channel's own 60 s because a REST request is holding an HTTP connection. ADR-0036's bounded delay
+> is the precedent: **the delay is bounded and the fallback is deny**, never "assume yes".
+>
+> **R7 — the gate order is policy first, then ask.** `require_rest_approval` is a separate **async**
+> companion to `require_tool_allowed`, called *after* it, so a mode that denies outright never prompts.
+> `require_tool_allowed` keeps its signature and its behaviour, and ADR-0055 §4's corrected docstring is
+> unchanged.
+>
+> **R8 — the client change is ZERO, and that is a claim the guard pins.** Because R1 adopts the
+> vocabulary the clients already read and R2 uses the correlation field they already send, **no client
+> change is authorised by this ADR**. The guard fails if either client stops reading that frame or the
+> desktop client stops sending that response — at which point this becomes a client change and a new
+> decision. *This is ADR-0055 §Why-not-B's precedent applied: a client change is real and is stated,
+> never made silently.*
+>
+> **R9 — G3 is DEFERRED, as its own ADR.** `POST /api/hooks` accepting an unvalidated `command` is a
+> question about **what a hook may run**; this ADR is about **who may register one**. They share a route
+> and not a decision: G3's answer would be a content restriction on `command`, and hooks exist precisely
+> to run arbitrary commands, so it needs its own evidence. ADR-0055 §7 already assigned it that way and
+> this ADR does not absorb it.
+>
+> **R10 — the four non-violations, asserted by tests, not merely stated.**
+>
+> * **R10.1** `ToolExecutor.execute`'s gate chain — `policy_hard_deny` → `authorize()` → the approval
+>   test — in that order. Asserted from the **AST** of `execute`.
+> * **R10.2** `authorize()` and `SecurityPolicy.check()` — signatures and decision fields.
+> * **R10.3** the turn path's approval model — `_get_write_tools` + `_needs_forced_approval`, the third
+>   model ADR-0055 §1.3 named, including that the three REST-only names are **still absent** from it.
+> * **R10.4** `turn_succeeded`, `VerificationFloorGuard`, and `goal.PRECEDENCE` — the precedence table
+>   by **content** (eight rows, indices 0–7, and its eight outcomes), the guard's `rejection` /
+>   `resolved` / `wrote_code`, and that `turn_succeeded` is still derived from
+>   `terminal_outcome_from_evidence`.
+>
+> **R11 — the flag is read once, at the gate.** `rest_approval` / `WISP_REST_APPROVAL`, default **OFF**.
+> OFF, `require_rest_approval` returns before doing anything, so **every existing caller sees today's
+> behaviour exactly** — asserted by a test. ADR-0002's one-flag-per-concern rule: this flag gates REST
+> approval and nothing else; it is not coupled to `stagnation_gate`, `turn_criteria_source`, or
+> `acceptance_gate`.
+
+### Consequences
+
+- **The gap ADR-0055 named is closed for the three routes**, behind a flag defaulting OFF.
+- **The corpus gains the measured shape of the channel**: half-wired, with the answer path working and
+  the question path not. That is a **finding**, and it means ADR-0055 §Context's *"the WebSocket
+  transport implements bidirectional approval flow (Issue 8)"* is **half false** — the answer direction
+  is bidirectional; the question direction never reached a client.
+- **The three routes' comments change**, because the behaviour they describe changes: *"the desktop
+  client keeps working because the policy allows this action in full / auto_edit / ask_all"* becomes
+  *"…and, with `WISP_REST_APPROVAL` on, it asks in `auto_edit`/`ask_all` and denies when no client is
+  connected."* Stated as a decision, not as docstring drift.
+- **A REST caller with no client connected is now denied those three actions when the flag is on.** That
+  is the intended cost of not silently allowing, and it is why the flag defaults OFF.
+- **Nothing is enabled by default.** No mode changes, no client change, no gate chain change.
+
+### Rejected alternatives
+
+| Alternative | Why rejected |
+|---|---|
+| **Reuse the server's current frame** (`approval_request` / `{approval_id, tool_call}`) | No client reads it (measured). Adopting it would make the REST round-trip need a client change in both clients — the opposite of R8 |
+| **Route the REST request through `WebSocketTransport.approve()`** | It resolves its connection from the turn's `ContextVar` / `_current_ws`, which a REST request does not have. Reaching in would couple the agent path to a REST-only feature and put R10.1's chain at risk for no gain |
+| **Hold the request until a client connects** | Holds an HTTP connection open on a condition that may never change — the "must not hang" the brief forbids |
+| **Fall through with a warning** | **Silently allows** an executable-config mutation. The brief forbids it outright |
+| **Change `SecurityPolicy`'s block sets so it reports `approval_required`** | ADR-0055 §1.3 measured that the three names have no `TOOL_RISK_TABLE` row; adding them to a mode block-set would change a model REST *and* `ApprovalGate` share, for a REST-only concern. R4's explicit set is narrower and readable |
+| **Absorb G3 (validate `command`)** | A content restriction, not an authorization decision; hooks exist to run arbitrary commands. Its own ADR (R9) |
+| **Reconcile the agent path's frame onto R1's vocabulary in the same step** | It would change a **live** path's behaviour (the agent's WS prompt would start rendering, where today it times out to deny). That is a real fix and a real change; this ADR names it as a residual and does not make it silently |
+
+### Residuals, named
+
+1. **The agent path's WebSocket approval prompt has never rendered.** `approve()` sends a frame no
+   client reads, so it always timed out (60 s) and denied. Reconciling it onto R1's vocabulary would
+   *fix* it — and would change a live path's behaviour, so it is its own ADR. Pinned by
+   `test_the_frame_is_the_one_both_clients_read`, which fails if either client changes.
+2. **`resolve_approval` still ignores the client's `id` when the transport resolves it** (the route
+   passes it; `WebSocketTransport.resolve_approval` falls back to "first pending" when the id does not
+   match). The bridge correlates correctly; the transport's path is weaker. Not changed here — it is
+   the agent path's resolver.
+3. **G3 remains open** (R9).
+4. **A multi-client deployment asks every registered channel** and takes the first response. Fine for
+   the shipped single-client desktop model; a per-client routing decision is its own ADR.
+
+### Reversal condition
+
+If the desktop client is changed to read a different frame, or stops sending `tool_approval`, then R8's
+"the client change is zero" is no longer true and the round-trip must be re-decided — the guard fails
+in exactly that case, which is the signal. If a future ADR reconciles the agent path's frame onto R1's
+vocabulary, residual 1 closes and this ADR's R1 becomes the single frame for both paths.
+
+---
+
+## ADR-0058 — The key-trust model is the operator-supplied organization public key; absence is a configuration, invalidity is a refusal
+
+**Status:** ACCEPTED
+**Phase:** The key-trust workflow (M4 §6's precondition; `PHASE_10_M4_GOVERNANCE_UNWIRED.md` §9 option B)
+**Evidence:** `wisp/policy/bundle.py`, `wisp/policy/loader.py`, `wisp/policy/cli.py:26-36`;
+`tests/reliability/test_key_trust_workflow.py`; `PHASE_KEY_TRUST_WORKFLOW.md`.
+**Decides:** the workflow only. **Not** whether to wire (that is the M4 §9 recommendation, and it is
+what `PHASE_M4_WIRING.md` lands), **not** the flag's default (it lands OFF), and **not** the control
+plane, the key-distribution server, or the registration UI.
+
+### Context
+
+`PHASE_10_M4_GOVERNANCE_UNWIRED.md` §6 names the wiring recipe and then says why it was not landed:
+
+> *"`WISP_POLICY_PUBKEY` presupposes that an operator **has** a trusted public key — and the M4 spec
+> explicitly deferred the **'device registration + key distribution ceremony (needs human workflow
+> design)'** (§5). Wiring the bundle before that ceremony exists would make the env vars live while
+> leaving the question of *how a key is trusted* unanswered."*
+
+The M4 spec (`docs/superpowers/specs/2026-09-04-m4-policy-design.md`) is the input, not a general
+notion of key trust. Its own text already fixes more of this than the deferral sentence suggests:
+
+| spec | what it says | what it fixes |
+|---|---|---|
+| §0 | *"local bundle files remain the authority; the API is a distribution convenience"* | the file is the source of truth; the server routes are not |
+| §3 | mode **`local-only`** — *"`load_local()` only; no socket use (test asserts no network via monkeypatched socket)"* | a fully offline mode exists and is tested |
+| §5 | *"file perms 0600 + OS keychain for private keys **suffice for M4**"* | **the storage half is already decided** |
+| §5 | deferred: *"Device registration + key distribution ceremony (needs human workflow design); Postgres control plane; bundle encryption at rest"* | what is actually left open |
+
+### Problem
+
+The deferral sentence names one thing and can be read as two. Either it means
+
+1. *"an operator must be told how to place a key"* — a workflow gap that blocks wiring; or
+2. *"a fleet must learn an organization key without a human touching each host"* — a control-plane
+   problem, listed in the same breath as the Postgres control plane it needs.
+
+**This ADR decides which, and answers (1).** The phrase is read as **(2)**, and the reading is recorded
+here so a future reader cannot mistake the decision for the phrase.
+
+### The code already decides part of this — driven, not read
+
+| claim | measurement |
+|---|---|
+| `WISP_POLICY_PUBKEY` is a **path** | **FALSE.** It is **base64 key material**: `load_local(bundle_path, public_key_b64)` → `verify_bundle(bundle, sig, public_key_b64)` → `Ed25519PublicKey.from_public_bytes(base64.b64decode(public_key_b64))` (`bundle.py:112-113`). `cli.py:8` documents it as *"base64 org public key"* |
+| `WISP_POLICY_BUNDLE` is a **path** | **TRUE** — to `bundle.json`, with a `.sig` sibling read from `_sig_path()` |
+| verification needs a network or a chain | **FALSE.** `bundle.py`'s docstring: *"Verification needs only the org public key — fully offline/air-gap compatible"* |
+| the failure semantics must be invented | **FALSE — they are implemented.** bad/absent signature → `ValueError("policy bundle signature invalid")`; expired → `trim_expired()` (*"Never an error, never silent allow"*: every approval becomes `deny`, network `off`); no cached bundle → `FileNotFoundError`; a managed refresh failure → the cache is served |
+| a registration surface exists | **FALSE.** `generate_keypair()` returns `(private_key, base64_public_key)` and **nothing registers it** |
+
+The commissioning brief's own worked example said `WISP_POLICY_PUBKEY` *"names a file path containing
+the operator's Ed25519 public key"*. **Driven, that is false** — it carries the key itself. The
+distinction decides the workflow: *"export this value"*, not *"place a file here"*.
+
+### Decision
+
+> **The trust model is the operator-supplied organization public key.** `WISP_POLICY_PUBKEY` carries
+> the organization's Ed25519 **public key, base64** (raw 32 bytes); `WISP_POLICY_BUNDLE` carries the
+> **path** to a signed bundle (`bundle.json` plus its `.sig` sibling). The trust boundary is the
+> **operator's own out-of-band channel**: the key is *public*, so its confidentiality is not required —
+> its **integrity** is, and it reaches the host by the same ceremony that produced the bundle's
+> signature. The mode is the spec's **`local-only`**.
+>
+> **Absence is a configuration; invalidity is a refusal.** An unset `WISP_POLICY_BUNDLE` means *no
+> organization policy is configured*, and the runtime is exactly today's. A bundle that is named but
+> cannot be read, has no signature, or fails verification — **including a half-configuration** (a path
+> with no key, or a malformed one) — means the *expected* control cannot be applied, and the runtime
+> **refuses to boot**.
+>
+> **The key is shared, not per-device.** One organization key serves every host; the private half never
+> leaves the operator (spec §5: 0600 file or OS keychain).
+
+### Normative rules
+
+> **R1 — The trigger is `WISP_POLICY_BUNDLE`, not "both set".** The organization layer engages **iff
+> `WISP_POLICY_BUNDLE` is non-empty**. This refines §6's *"if both are set"* in the **stricter**
+> direction, and the refinement is the point: a half-configuration (a path, no key) must not be inert.
+> §6's condition remains *sufficient*; it is not the guard.
+
+> **R2 — Absence is inert, and inert means byte-for-byte today's behaviour.** With
+> `WISP_POLICY_BUNDLE` empty, no bundle is loaded, no `wisp.policy` code runs, `ToolExecutor.policy` is
+> `None`, and `authorize()` receives `effective_policy=None` exactly as before. `WISP_POLICY_PUBKEY`
+> alone is **inert** and named as such — there is no bundle for it to verify, so there is no control it
+> could apply.
+
+> **R3 — Invalidity refuses to boot.** A named bundle that cannot be read, whose `.sig` sibling is
+> missing, or whose signature does not verify, raises at composition time and the process **does not
+> start**. The loader already raises (`ValueError`); the rule this ADR adds is that **the composition
+> root propagates rather than swallows it.** An operator who mistypes the path gets a startup failure
+> naming the path — not a silent ungoverned fleet.
+
+> **R4 — Expiry narrows, it does not refuse.** A bundle that verifies but is past `expires_at` is
+> served **trimmed** (`trim_expired`): every approval in the matrix becomes `deny`, the network mode
+> becomes `off`. This is the loader's own rule and the spec's §3 `disconnected` semantics — *"never an
+> error, never silent allow"*. Refusing to boot on expiry would turn a stale-but-honest bundle into an
+> outage; trimming keeps the control applied while the operator re-issues.
+> *Measured precondition:* this holds for a bundle that **carries** `expires_at`, which §1's format
+> requires. A bundle that omits it reaches `merge_layers` with a falsy value and raises
+> `ValueError("min() iterable argument is empty")` — a separate, latent defect on the malformed-input
+> path, named in `PHASE_KEY_TRUST_WORKFLOW.md` §6 and **not** fixed here (the package is a
+> non-violation of this ADR).
+
+> **R5 — The key is shared.** One organization public key per deployment. Per-device keys are the
+> deferred ceremony's subject (see **Rejected**, third candidate) and are **not** what this decision
+> means by *"device registration"*.
+
+> **R6 — The workflow is offline by construction.** Both inputs are local; verification is
+> `Ed25519PublicKey.verify` over local bytes. No step of R1–R5 requires a network. `WISP_POLICY_CACHE`
+> and `load_managed` — the refresh-then-cache path, which *does* have a network story — are **not**
+> engaged by this decision and are named as a residual.
+
+> **R7 — The private key is never Wisp's to hold.** Wisp reads a **public** key. Generating, storing,
+> rotating and revoking the private half is the operator's, by spec §5's rule (0600 file or OS
+> keychain). No Wisp surface accepts a private key.
+
+> **R8 — Fail-closed here, fail-open there: the difference is what the absence costs.** ADR-0036 §5
+> chose fail-open for a broken *stagnation predicate*, and that remains right: the predicate's absence
+> is **benign** — the model cannot exploit a measurement that is not taken. A policy bundle's absence is
+> the opposite: an **expected** control is **silently** not applied, which is the **false-assurance**
+> failure mode `PHASE_10_M4_GOVERNANCE_UNWIRED.md` §4 names as this finding's whole harm — *"an operator
+> reads the M4 docs, runs `wisp policy dry-run`, sees `denied: run_bash (organization)`, and concludes
+> their fleet is governed."* **R2 is the one place absence is allowed, and it is allowed only when the
+> operator never claimed otherwise.**
+
+### Rejected
+
+| candidate | why not |
+|---|---|
+| **Trust on first use (TOFU)** | TOFU authenticates a channel that has **no prior authentication** — SSH host keys, where there is nothing else to check. Here the bundle is **already signed**, and the entire purpose is to verify it against a key obtained *out of band*. TOFU would pin whichever key arrives **first on a path an attacker may be able to write**, verify the attacker's bundle against the attacker's own key, and report governance. It is also **stateful** — a new trust store to persist, migrate and revoke — for no gain over a value the operator already has, and it makes the first run's semantics differ from every later run, which is the opposite of what a governance control needs |
+| **A signed-key file with a built-in root** | It moves the root of trust to a key **baked into Wisp**, which needs its own distribution and revocation story — and the spec never specified one. It adds a **second signature layer** over a format §0 fixed as *"canonical JSON + detached Ed25519"*. And it does not remove the original problem: someone still has to *place* the root. It relocates trust rather than establishing it |
+| **A registration ceremony** | **Not rejected as wrong — rejected as out of scope, and this is the reading R1–R8 depend on.** It presupposes a control plane, which §5 deferred **in the same sentence** (*"Postgres control plane"*), and it answers a **multi-device** question: *how does host N learn the organization key without the operator typing it?* A single operator on a single host has nothing to register, and the code has no registration surface at all — `generate_keypair()` returns a pair and nothing consumes it. **Recorded so a future reader cannot mistake the decision for the phrase** |
+
+**This is a decision, not a survey.** One candidate is chosen; the other three are rejected on their
+merits; and the scope boundary is stated rather than hedged. The deployment-specific input the brief
+allowed this ADR to stop on **is not needed**: the spec's own §3 `local-only` mode and §5 storage rule
+already describe a single-operator deployment, and that is the deployment the wiring serves.
+
+### Non-violations
+
+1. **`authorize()` is unchanged** — its parameter list, `AuthorizationDecision`'s fields, and the
+   `controlling_layer` vocabulary. L0 remains optional and remains inside `authorize()`.
+2. **`wisp/policy/` is unchanged** — `bundle.py`, `loader.py`, `explain.py`, `cli.py` and the package's
+   `__all__`. This ADR adds a **caller** for `load_local`; it does not change the module.
+3. **`ToolExecutor.__init__`'s `policy` parameter still defaults to `None`.** The tripwire
+   `test_no_tool_executor_is_constructed_with_a_policy` is **not** this deliverable's target; it is
+   inverted by `PHASE_M4_WIRING.md`.
+
+Asserted by `tests/reliability/test_key_trust_workflow.py`.
+
+### Residuals
+
+1. **The multi-device ceremony.** Deferred by the spec, read as such here. A control plane, a
+   key-distribution server and a registration UI remain unspecified.
+2. **`WISP_POLICY_CACHE` and `load_managed` are not engaged.** The managed/disconnected modes have a
+   network story and a cache; this decision wires the `local-only` path only.
+3. **REST does not receive L0.** `SecurityPolicy.check()` has **no organization layer** — driven, it
+   takes `(action, context)` and `dir()` shows no policy slot — while L0 lives inside `authorize()`,
+   which REST does not call for these actions (ADR-0055). Loading a bundle into `request_policy` would
+   be **dead data**, i.e. a new instance of the very pattern this finding diagnoses. `PHASE_M4_WIRING.md`
+   states this.
+4. **Private-key custody is not implemented by Wisp** (R7), by design.
+
+### Reversal condition
+
+If a deployment needs **per-device** keys — e.g. an audit requirement that a stolen host's key can be
+revoked without re-keying the fleet — then R5 is wrong and the deferred ceremony becomes this ADR's
+successor. The signal: a second consumer of `WISP_POLICY_PUBKEY` that expects a *different* value per
+host. Until then, one shared public key is the model, and the wiring in `PHASE_M4_WIRING.md` is
+consistent with it.
+
+---
+
+## ADR-0059 — The REST gate consults the M2 authority for its denial verdict, and only for that
+
+**Status:** ACCEPTED
+**Phase:** The REST gate's authorization composition (`PHASE_M4_WIRING.md` §4's residual 1;
+`PHASE_10_M4_GOVERNANCE_UNWIRED.md` §11 residual 1)
+**Evidence:** `wisp/server/deps.py` (`require_tool_allowed`, `organization_policy`, `_m2_denial`);
+`wisp/composition.py` (`load_organization_policy`, `self.organization_policy`);
+`tests/reliability/test_rest_authorization_composition.py`;
+`scripts/authorization_parity_measurement.py`; `tests/test_authorization_parity.py`.
+**Decides:** whether the REST gate consults `authorize()`, and for which of its verdicts. **Not** the
+approval composition (rejected on measurement, below), **not** a new flag, and **not** the publish
+route's held bundle (a named residual).
+
+### Context
+
+`PHASE_M4_WIRING.md` §4 pinned this as its own decision:
+
+> *"`require_tool_allowed` consumes `SecurityPolicy.check(action, context)`; **`SecurityPolicy` has no
+> organization slot** … L0 lives inside `authorize()`, which REST does **not** call for these actions.
+> Wiring L0 into REST means adding an `authorize()` call to the REST gate — a change to the gate
+> ADR-0055 measured and pinned — and that is its own decision."*
+
+ADR-0058 wired L0 into the composition root and passed it to `ToolExecutor`, which passes it to
+`authorize()` on the agent path. REST still sees nothing. This decides what REST should see.
+
+### Problem — ADR-0055's measurement does not cover the wired state
+
+ADR-0055 measured **0 path divergences of 36** and that measurement is still correct. It was taken
+with **no organization policy loaded**: `ToolExecutor.policy` was `None` at every construction site,
+so L0 was inert on both paths. ADR-0058 changed that condition.
+
+**Driven with a bundle denying `write_file`, `edit_file` and `run_bash`** — nine REST routes × four
+modes, the agent side run under REST's own condition (`approval_handler=None`):
+
+| route | mode | agent | REST (before) | diverges |
+|---|---|---|---|---|
+| `POST /api/files` | `auto_edit` | DENY (L0) | **ALLOW** | **yes** |
+| `POST /api/files` | `full` | DENY (L0) | **ALLOW** | **yes** |
+| `POST /api/files/edit` | `auto_edit` | DENY (L0) | **ALLOW** | **yes** |
+| `POST /api/files/edit` | `full` | DENY (L0) | **ALLOW** | **yes** |
+| `POST /api/bash` | `full` | DENY (L0) | **ALLOW** | **yes** |
+| … (the remaining rows of the 11) | | | | |
+
+**11 of 36 (route, mode) pairs diverge**, five of them in `auto_edit` — the **default** mode. A bundle
+an operator wrote to deny `write_file` was enforced on the agent path and **silently unenforced on
+REST**. That is the false-assurance shape the M4 finding exists to name (§4 of
+`PHASE_10_M4_GOVERNANCE_UNWIRED.md`), reintroduced by the landing that closed it.
+
+**The brief's Option D table is wrong on its central row.** It shows *"`auto_edit` / `hooks.create` /
+no agent op / ALLOW / ALLOW / none — L0 has no verdict on a non-agent name"*. Driven, `authorize()`
+**does** have a verdict: with `approval_matrix={"hooks.create": "deny"}` it returns
+`allowed=False, controlling_layer="local file"`. The verdict exists; nothing consulted it. D is
+therefore not "accept a harmless divergence" — it is "leave the operator's rule unenforced".
+
+### The measurement that decides it
+
+| question | answer, driven |
+|---|---|
+| do the two models ever disagree on `allowed`? | **No — 0 rows of 36**, with no bundle |
+| where do they disagree? | **`approval_required`, 6 rows of 36** |
+| which 6? | **exactly** `hooks.create` / `mcp.add_server` / `plugins.install` × {`auto_edit`, `ask_all`} |
+| and on agent tool names? | the two models **agree on both fields** in every mode |
+
+So the divergence between the models exists **exactly where the agent has no operation**, and nowhere
+else. Composing on `allowed` composes on the agreement; composing on `approval_required` composes on
+the divergence — and the divergence is not a gap, it is what keeps the client working.
+
+**Option A, driven with no bundle at all, moves 16 of 36 rows** — including `POST /api/hooks`,
+`POST /api/mcp/servers` and `POST /api/plugins/install` in `auto_edit` and `ask_all`, from ALLOW to
+`403(approval)`. `authorize()`'s `risk_for_tool` fail-closes to `EXEC` on those unknown names, so L5
+requires approval; honouring it 403s the shipped desktop client on three config routes in the default
+mode. That is ADR-0055 §Why-not-B, re-measured on the composed gate.
+
+### Decision
+
+> **The REST gate consults the M2 authority for its DENIAL verdict, and only for that.**
+> `require_tool_allowed` calls `authorize()` with the **same `effective_policy` the composition root
+> loaded** and refuses when it denies. It does **not** compose `authorize()`'s `approval_required`:
+> approval stays with `SecurityPolicy.check()`, which is where the mode engine and the hooks layer
+> live. The consult is **conditional on a bundle being loaded**, so with `WISP_POLICY_BUNDLE` unset
+> the gate is today's code **byte-for-byte** — status *and* detail, measured on 40 rows.
+
+**The rules.**
+
+- **R1 — the chain is guard → M2 → mode engine.** The protected-path guard stays first (its message
+  is pinned by `tests/test_protected_path_guard.py:330`); the M2 consult follows it; the mode engine
+  is last. All three narrow, so the denied set is their conjunction and the **order affects only the
+  message**. The M2 consult precedes the mode engine so the **higher authority's** reason is the one
+  reported: a hard denial must not be presented as an approval requirement.
+- **R2 — the consult is conditional.** `organization_policy(request)` returns `None` when no bundle is
+  configured, and `_m2_denial` returns before doing any work. Unset env vars ⇒ today's gate, proved
+  against HEAD's body as a differential (40/40 identical, status and detail) and structurally (the
+  change to `require_tool_allowed`'s body is an **insertion**; the old body is a subsequence of the
+  new one).
+- **R3 — denials only.** `_m2_denial` reads `allowed` and never `approval_required`; a guard parses
+  the function to keep it that way. Honouring the approval shape is Option A, rejected above.
+- **R4 — one principal.** REST authorizes as `executor_principal(root.tool_executor, …)` — the same
+  principal the agent path uses, through the same function that owns the precedence rule. Driven by
+  observing the argument the real call passes.
+- **R5 — one load site.** The policy is read from `root.organization_policy`, which
+  `CompositionRoot` now holds. `wisp/server/deps.py` does not import `wisp.policy` and does not call
+  `load_local`/`load_managed`; a guard asserts both. One load site (ADR-0006), two readers.
+- **R6 — the composition's rule, stated once.** *The two models agree on `allowed`; compose that.
+  They disagree on `approval_required`; leave it where it is.*
+- **R7 — no new flag.** `WISP_POLICY_BUNDLE` non-empty is the switch (ADR-0058 R1). ADR-0002's
+  one-flag-per-concern rule is not a licence to proliferate flags.
+- **R8 — what the gate governs, said plainly.** `require_tool_allowed`'s docstring now names three
+  checks and states which authority supplies each. It keeps ADR-0055's qualification, the sentence
+  *"approval-required verdicts deny"*, and the citation of the measurement instrument — all three are
+  pinned by `test_the_rest_gate_documents_the_approval_contract`.
+
+**Rejected, with reasons.**
+
+- **A — REST consults both in the agent's order.** **Rejected on measurement:** 16 of 36 rows move
+  with **no bundle**, including three config routes in the **default** mode, from ALLOW to 403. It is
+  not a parity fix; it is a client regression with no counterpart on the agent side.
+- **B — REST replaces `SecurityPolicy.check()` with `authorize()`.** **Rejected:** `authorize()` has
+  no mode engine and no hooks layer, so this discards two of the four things `check()` supplies while
+  changing the semantics of every gated route. It also changes what ADR-0055 §4's corrected docstring
+  says the gate does.
+- **C — a *partial* consult.** **Adopted, and this is the narrow form of it.** A consult filtered to
+  L0 alone would need either a stable marker for "this denial came from L0" — which does not exist,
+  because L0's `controlling_layer` is the *provenance value* (`"local file"`, or a managed layer's
+  name) and matching on it would be a fragile string rule — or two `authorize()` calls compared, a
+  derived predicate. Honouring the whole **denial** verdict needs neither: it is one call, it reads one
+  field, and measured it moves **zero** rows that the mode engine already refuses.
+- **D — accept the divergence and change the docstring.** **Rejected, refuted by measurement:** the
+  divergence is real (11 rows), it is in the default mode, and `authorize()` has a verdict on the
+  names the brief said it did not.
+
+### The four non-violations, asserted
+
+1. **`authorize()` is unchanged** — signature, `AuthorizationDecision` fields, the controlling-layer
+   vocabulary observed by driving a matrix wide enough to reach ≥ 2 layers.
+2. **`SecurityPolicy.check()` is unchanged** — `(self, action, context)`, and `dir(SecurityPolicy)`
+   still has **no** policy-shaped attribute. The route this ADR did **not** take is pinned as such: if
+   a slot ever appears, a second design has landed.
+3. **`ToolExecutor.execute`'s gate chain is unchanged** — `policy_hard_deny` → `authorize` →
+   `_get_write_tools`, **parsed, not scanned**.
+4. **`turn_succeeded`, `VerificationFloorGuard` and `goal.PRECEDENCE` are untouched** — `PRECEDENCE`
+   by content (8 rows; row 4 the fatal clause bounded by the no-P3-PASS escape).
+
+### Residuals, named
+
+1. **A bundle's `approve` level is inert on REST.** Measured: `{"write_file": "approve"}` leaves the
+   REST verdict identical to no bundle in every mode. Composing it is Option A, rejected above. The
+   agent path honours it; REST cannot, having no approver. Pinned as a property so that composing it
+   is a deliberate change.
+2. **REST's consult is conditional on a bundle**, so L1 (principal capabilities), L2 (workspace trust)
+   and L3 (sensitivity) are not consulted without one. L1 is unbounded for the local human, L3 needs a
+   `restricted` sensitivity REST never passes, and L2 is the default trust — but **workspace
+   quarantine** is a real pre-existing gap: a quarantined workspace denies non-read tools on the agent
+   path and does not on REST **unless a bundle is loaded**. That divergence predates this ADR and is
+   not created by it.
+3. **REST still reimplements L4.** `require_tool_allowed`'s protected-path guard is the same predicate
+   as `authorize()`'s L4, written inline. Pre-existing; kept because its message is pinned and because
+   removing it is a separate change.
+4. **Two bundle sources.** The env-var path is consumed; the publish route's held
+   `app.state.policy_bundle` (`wisp/server/routes/policy.py`) still has no decision reader. Named, not
+   merged — merging them is a distribution decision.
+5. **The three REST-only names now have an enforced rule and still have no agent operation.** L0's
+   verdict on them is REST's alone. That is the honest end state: the operator's rule fires, and there
+   is no agent path to be at parity with.
+
+### The brief's claims, driven
+
+| claim | result |
+|---|---|
+| *"the brief says ADR-0059"* | **correct this time** — 0058 is the last ADR, so 0059 was free |
+| *"`SecurityPolicy` has no organization slot"* | **TRUE** — `check(self, action, context)`; `dir()` has none |
+| *"`authorize()`'s verdict on those names is a fact about `authorize()`"* (the D table) | **TRUE, and it is the opposite of what the table concludes** — the verdict exists and was unconsulted |
+| *"Option D: none — L0 has no verdict on a non-agent name"* | **FALSE** — `DENY(controlling_layer="local file")` for a bundle that names it |
+| *"ADR-0055's 0/36"* | **TRUE for its condition, silent about this one** — it was measured with no bundle |
+| *"the parity ratchet currently fails on a new divergence, on one that silently disappears, and on the file/shell routes losing parity"* | **TRUE** — three properties, kept |
+| *"the §4 pin … asserts `SecurityPolicy` has no policy-shaped attribute"* | **TRUE**, and it still passes after this ADR — because the ADR does not take that route |
+
+---
+
+## ADR-0060 — Layer A is the driver and Layer B is a record; the boundary is permanent
+
+**Status:** ACCEPTED
+**Phase:** The Layer B boundary (M8 + M11)
+
+**Context.** Two residuals name one question from opposite sides.
+
+**M11's original wording** (P5 item 5; re-scoped by M9 to *node identity* in ADR-0033) is *"the graph does
+not drive execution"*, pinned by `test_the_graph_still_does_not_drive_execution`. The node identity landed
+(ADR-0033); the change of control did not, and the ledger's M11 row says so.
+
+**M8** (`PHASE_DAG_RETIREMENT.md` §3) is blocked on a measured semantic divergence: `wisp/graph/` requires
+a non-empty graph with every node reachable from the entrypoint, while `TaskDAG` is a general partial order
+that permits disconnected components — so re-pointing `orchestrate_dag` onto `validate_graph` would reject
+inputs it accepts today.
+
+They are not two decisions. If Layer B's executor drives the turn loop, `multi_agent/dag.py` must retire —
+there cannot be two executors on one path. If Layer A stays the driver, `dag.py`'s retirement is a
+**deprecation** and M11's tripwire is the permanent statement of the boundary. This ADR decides which.
+
+### The driver questions, answered by measurement
+
+Driven by an AST import-graph probe over `wisp/**`
+(`.workbuddy-ai/memory/post-m13-layer-b/reachability_probe.py`) that classifies every edge **module-level or
+function-level**, because the reachability here is **lazy** — a probe that did not separate them would
+report the same graph for a top-level import and a call-time one, and those mean different things.
+
+**Q1 — what does `wisp/graph/executor.py` call today, and from where?**
+
+| importer of a Layer B module | site | what it is |
+|---|---|---|
+| `wisp/core/doctor.py` | `_check_graph_integrity()` | a **diagnostic** — imports `GraphExecutor` to assert it is importable and `validate_graph` callable |
+| `wisp/graph/runner.py` | `default_executor()` | the constructor, and the only one |
+| `wisp/graph/cli.py` | `_main()` | `wisp graph run\|resume\|execute` |
+| `wisp/sdk.py` | `execute_proposal()` | the SDK path |
+| `wisp/coding.py` | `run_coding_template()` | the coding template path |
+
+`GraphExecutor` is imported **exactly once inside `wisp/`** — by `core/doctor.py`. Everything that
+*constructs* one goes through `graph/runner.py::default_executor`, which is reached from `graph/cli.py`,
+`sdk.py` and `coding.py`.
+
+**ADR-0019 and ADR-0021's claim.** Both say *"Layer B's executor has **zero** references from
+`core/runtime.py` or `core/stateless.py`."* Measured at HEAD: **true for `stateless.py`** — its import
+closure contains no `wisp.graph.*` module at all — and **false as literally worded for `runtime.py`**,
+which reaches `wisp.graph.executor` through `get_doctor_report()` → `core.doctor.last_report` →
+`_check_graph_integrity()`. That is a pre-flight report for UI layers, not the turn loop. **The substantive
+claim survives; the literal one does not**, and the difference is stated here so the next reader does not
+re-derive it (F103).
+
+**Q2 — what does the executor's `run()` produce, and does the message list come from it?**
+
+`GraphExecutor.run` is `async` and returns `_drive(...)` → `_final(...)`, a dict of
+`{run_id, graph_id, status, error, …}` (`executor.py:1046`). Parsed, the module contains **no identifier
+and no string literal** naming `messages`, `transcript`, `history` or `conversation` — only a comment at
+`:806` recording that inputs are *"explicit mapping + artifact refs, never whole transcripts"*. **The
+executor produces no message list.** ADR-0029's constraint is intact, re-driven rather than cited.
+
+**Q5 — is Layer A's graph the same object as Layer B's executor?**
+
+No. `core/task_graph.py` imports `wisp.graph.types` and nothing else from Layer B, and does not reference
+`GraphExecutor`. Layer A journals a `TaskGraph` through `UnifiedStore` (ADR-0019); Layer B drives a `Graph`
+through its own `GraphStore`. They share a **vocabulary** — `NodeStatus`, superset by ADR-0021 — and no
+mechanism.
+
+### The substantive question — the transition, named
+
+Position B says *"the turn loop becomes a graph node dispatcher; every tool call is a node transition."*
+Driven (`.workbuddy-ai/memory/post-m13-layer-b/transition_probe.py`):
+
+| | |
+|---|---|
+| `wisp.graph.types.Graph` is `frozen=True` | a node **cannot** be appended mid-run — `FrozenInstanceError` |
+| `GraphExecutor`'s public surface | `run`, `resume`, `cancel`, `register_function` — **no** growth API, by name or by AST |
+| `GraphExecutor.run(empty_graph)` | **refused** — `invalid graph: graph has no nodes`, before any work |
+| `TaskGraph → Graph` lowering in `wisp/` | **none.** `compat.py` lowers `TaskDAG → Graph`; there is no lowering from Layer A's graph |
+
+**The turn loop discovers its work as the model streams** — it cannot know which tools it will call before
+the model speaks. `GraphExecutor.run(graph, inputs)` requires the **complete, validated** graph up front,
+and `Graph` is immutable with no mid-run growth. So *"every tool call is a node transition"* requires an
+executor that grows a graph **while driving it**, and this tree does not have one.
+
+**This is a different blocker from ADR-0029's, and it is stronger.** ADR-0029 found the *strong reading*
+("the transcript projects from the graph") inexpressible because the graph carries no payload. This finds
+Position B inexpressible because **the graph cannot be known before the turn and cannot change during it**.
+ADR-0029's constraint is a second, independent reason — a naive B would also have to copy the transcript
+into the nodes — but the first reason is structural and does not mention payload at all.
+
+### Decision
+
+**R1 — Layer A is the driver.** The iteration belongs to `WispAgentCore.turn` /
+`AgentRuntime.run_turn`. Layer B's executor is not consulted for what to run, and no module on the turn
+path constructs one.
+
+**R2 — the boundary is permanent, not an open item.** *"The graph drives execution"* is **rejected as a
+target**, not deferred. `test_the_graph_still_does_not_drive_execution` stops being a tripwire on
+unfinished work and becomes the **contract**, and its reversal condition is stated in the test itself.
+
+**R3 — Layer B's executor has four callers, all named, and none is the turn loop.** `graph/cli.py` (the
+`graph` verb), `sdk.execute_proposal`, `coding.run_coding_template`, and `core.doctor`'s integrity check. A
+new caller that is not one of these is a decision, not an edit.
+
+**R4 — `multi_agent/dag.py` remains the deprecated legacy entry point**, as `PHASE_DAG_RETIREMENT.md`
+decided, and its divergence from `wisp/graph/` is an **accepted difference**: `empty` and `disconnected`
+inputs are legal for `orchestrate_dag` and illegal for a compiled single-entrypoint graph, because the two
+answer different questions. **The removal is not owed by this decision**, and the divergence is not a
+blocker to be reconciled. A future phase that wants one engine must decide **which definition of a valid
+DAG wins for `orchestrate_dag`** — a change to a live, model-callable tool, and therefore its own decision.
+
+**R5 — Layer C's disposition: the live symbols are RELOCATED; the dead part is retained as a disowned
+reference.** ADR-0001 named Layer C (`wisp/core/graph/`) *"disowned"*. It was not: the live turn path
+imported `OscillationTrap` and `diff_hash` from it — `core/stagnation.py` (wired at M13/ADR-0034) and
+`core/runtime.py`. So the corpus carried a **disowned-but-consumed** layer, the same claim-vs-code drift
+this repository keeps finding.
+
+`diff_hash` and `OscillationTrap` now live in **`wisp/core/oscillation.py`** (Layer A). `core/graph/loop.py`
+imports and re-exports them, so `wisp/core/graph/`'s public surface is unchanged and
+`wisp/core/graph/__init__.py` needs **no edit** — which matters, because that file carries the user's
+uncommitted WIP.
+
+**The normative rule is a direction: a disowned layer may import from Layer A; the live path may never
+import from a disowned layer.** `tests/reliability/test_layer_c_disposition.py` asserts exactly that.
+
+**The dead part is kept, not deleted**, and the reasons are stated rather than implied:
+`ExecutionGraph` and `phases.py` (`Phase`, `next_phase`, `is_terminal`) have **zero production callers**,
+so they are a *reference implementation*, not a live path. Deleting them was rejected because (i) it
+requires editing `wisp/core/graph/__init__.py`, which carries the user's uncommitted WIP, and (ii) the
+user's own note in that file's uncommitted docstring says *"Keep for reference; delete if no caller
+appears (history preserves it)"* — and a caller **did** appear for `OscillationTrap`, which is the
+condition that note names. The disposition is therefore: **Layer C is permanently disowned, and the
+retention is a decision with a named owner, not neglect.** A guard pins that it has no production caller,
+so a future wiring is a decision rather than a silent supersession.
+
+### Rationale — why B is rejected rather than deferred
+
+Three measured costs, each independent of the others:
+
+1. **The transition is not expressible.** B is not "more work" — it is a different executor. `GraphExecutor`
+   drives a frozen graph whose node set is fixed before the run; the turn loop's node set is produced by
+   the model during it.
+2. **It would need Layer A's mutation vocabulary inside Layer B.** Runtime growth lives in
+   `core/task_graph.py` (`create_node`/`expand`/`invalidate`/`supersede`) together with seven node states
+   ADR-0021 deliberately kept out of Layer B's `NodeStatus` — because `graph/scheduler.py::is_finished`
+   (`:132-134`) and `_predicates_satisfied` (`:103-106`) list the settled statuses **explicitly**, so a new
+   terminal status makes `is_finished` return `False` forever. Re-verified at HEAD; that hazard is real and
+   is unaffected by the correction in F102.
+3. **It would put a second durable record on the turn path.** `GraphExecutor.run` calls
+   `store.create_run(...)` (`executor.py:137`) into `GraphStore`'s **own** SQLite database
+   (`graph/store.py:112-127`), and enforces a workspace-containment check the tool does not have. ADR-0019
+   exists precisely to keep one append-only journal; B would re-open it.
+
+### Consequences
+
+- **M11 closes as *node identity* (ADR-0033), and its second half is decided rather than deferred.** The
+  ledger's *"the graph driving execution is still open"* becomes false and is corrected.
+- **M8's residual is re-scoped.** The removal is not blocked on a divergence; the divergence **is** the
+  boundary. `PHASE_DAG_RETIREMENT.md`'s three tripwires stay — they pin the current state, which is
+  unchanged — and the two behavioural residuals it names stay open as **its own** items.
+- **The four non-violations are asserted, not stated** (below).
+- **Layer C's disposition is decided** (R5): its live symbols moved to Layer A, its dead part is a
+  retained reference implementation, and the import direction is now guarded.
+- **No production behaviour moves.** Like ADR-0049, this is a **record update**: no flag, no gate, no code
+  path. The only `wisp/` changes are a docstring correction (F102) and the R5 relocation — which is a
+  **move**, proven by identity (`loop.OscillationTrap is oscillation.OscillationTrap`), not a rewrite.
+
+### The four non-violations, asserted
+
+1. **`turn_succeeded`, `VerificationFloorGuard` and `goal.PRECEDENCE` are untouched** — this ADR adds no
+   authority and no gate.
+2. **ADR-0029's constraint holds** — the graph carries no transcript payload, and the transcript projects
+   from the journal.
+3. **Every gate's authority is unchanged** — `ToolExecutor.execute`'s chain is `policy_hard_deny` →
+   `authorize()` → approval, in that order.
+4. **The four durable record kinds are unchanged** — `PROPOSAL`/`OUTCOME`/`VERDICT`/`TASK_GRAPH`/
+   `NODE_TRANSITION` remain audit-only; none appends to `messages`.
+
+Each is pinned in `tests/reliability/test_layer_b_boundary.py`, and each was checked by **breaking its
+property** and confirming the guard fails (`test_layer_b_boundary_nonvacuity.py`).
+
+### The brief's claims, driven
+
+| claim | result |
+|---|---|
+| *"ADR-0019 said Layer B's executor has zero references from `core/runtime.py` or `core/stateless.py` — is that still true?"* | **half true** — zero from `stateless.py`; `runtime.py` reaches it through the doctor's pre-flight report (F103) |
+| *"ADR-0029 measured that the graph cannot project the transcript"* | **TRUE**, re-driven: the executor holds no message/transcript identifier or literal |
+| *"`wisp/graph/` requires a non-empty graph and every node reachable from the entrypoint"* | **TRUE** — `validate_graph` refuses `graph has no nodes`; the `disconnected` case is pinned in `test_dag_retirement_contract.py` |
+| *"`multi_agent/dag.py` is on the live `fanout` path"* | **TRUE** — `subagent_orchestrator.py:1307` and `tools/orchestration.py:166` |
+| *"`test_the_graph_still_does_not_drive_execution` pins it"* | **TRUE, and narrower than the boundary** — it scans `runtime.py` for `.ready_ids`/`.ready_nodes` only |
+| *"the P4 graph is materialized **after** the turn"* | **TRUE** — `runtime.py:1077-1135`, comment *"RECORDED, not enforced"* |
+| *"Position B … requires the executor's reachability from every caller"* | **already true** — the executor is reachable from four production entry points; reachability was never what blocked B |
+| *"the next free ADR number"* | **0060** — verified: 0059 is the last heading. (ADR-0057, however, has **no index row** — F104) |
+| *"the plan's safety net for editing Layer B's `NodeStatus` does not exist"* (ADR-0021) | **FALSE, and it was false when written** — all three files are tracked, added 2026-09-10, 152 commits before the P5 landing (F102) |
+
+### Reversal condition
+
+The decision is that Layer A is the driver **given that no incremental executor exists**. It reverses if a
+phase builds one and wants it on the turn path: an executor that (a) accepts a graph that **grows during
+the drive**, (b) journals through `UnifiedStore` rather than `GraphStore`, and (c) is measured against the
+same gate chain. At that point M11's tripwire inverts and this ADR is superseded — and the tripwire's own
+failure message says so, so the reversal cannot be discovered by accident.
+
+---
+
+## ADR-0061 — The external input path: the approval frame is the clients' vocabulary, and a hook's `command` is not content-validated
+
+**Status:** ACCEPTED
+**Phase:** The external input path (W1 + G3)
+**Evidence:** `wisp/transport/websocket.py`; `wisp/server/routes/hooks.py`;
+`tests/reliability/test_external_input_path.py` (16 tests, **8/8 non-vacuity probes caught**, tree
+restored byte-identical); `PHASE_EXTERNAL_INPUT_PATH.md`.
+
+### Context — two residuals naming the same gap
+
+**W1** (`CONTEXT.md` §12; ADR-0057 residual 1):
+
+> *"The agent path's WebSocket approval prompt has never rendered. `approve()` sends a frame no client
+> reads, so it always timed out (60 s) and denied."*
+
+**G3** (Phase 10's R1b, unchanged through every subsequent phase):
+
+> *"`POST /api/hooks` still accepts an unvalidated `command`. The gate restricts *who* may register a
+> hook, not *what* it runs."*
+
+Both are *"external input reaches the runtime without a boundary"*, and both touch the same routes.
+
+### W1 — the frame, driven
+
+`WebSocketTransport.approve()` sent `{"type": "approval_request", "approval_id": …, "tool_call": {…}}`.
+Driven against a stub client (`.workbuddy-ai/memory/post-m13-external-input/w1_probe.py`):
+
+| | |
+|---|---|
+| the frame `approve()` sends | `approval_request` / `{approval_id, tool_call}` |
+| the frame the desktop renderer branches on | `tool_approval_request` / reads `call_id`, `name`, `arguments`, `reason` |
+| the frame the TUI branches on | `tool_approval_request` / the same four |
+| the frame the VS Code extension branches on | `tool_approval_request` / the same four |
+| a client that never answers | `approve()` → **False** at the bound |
+| no client at all | `approve()` → **False** |
+
+**All three clients mismatch.** The prompt has never rendered, and every request has hit the 60 s bound
+and denied.
+
+**One correction to the record, and it strengthens the decision.** ADR-0057 says *"both shipped
+clients"*. There are **three** — `vscode-extension/src/wispClient.ts` branches on the same frame and
+reads the same four fields. The decision (adopt the clients' vocabulary, client change zero) is
+unchanged; the count was low.
+
+**The correlation key is worse than mis-named.** The clients echo `call_id` back as `id`, and
+`server/routes/agents.py:239` resolves on `msg["id"]`. The old frame carried **no `call_id` at all**, so
+a client that somehow recognised it would still send back an empty id — the field the clients echo did
+not exist.
+
+### Decision
+
+> **R1 — the frame is the clients' vocabulary.** `tool_approval_request`, carrying `call_id`, `name`,
+> `arguments`, `reason`. Chosen because all three shipped clients already read exactly that, so the
+> client change is **zero** — ADR-0057 R1/R8's decision, applied to the path it deferred. Rejected: the
+> old `approval_request` / `{approval_id, tool_call}`, which no client reads (measured, above).
+>
+> **R2 — the correlation key is `call_id`, and it IS the `_approvals` key.** It is what the clients
+> echo as `id` and what the route resolves on, so it must equal the key `approve()` registered the
+> future under — `approval_id`, not the bare tool-call id. Anything else misses and falls back to
+> "single pending" (ADR-0057 residual 2), which crosses under concurrency. Pinned by a two-concurrent
+> -approval test that resolves the *second* by its own id and asserts the first stays pending.
+>
+> **R3 — the bound stays at 60 s, and the reason is the shape of the wait, not its length.**
+> ADR-0057 R6 bounded REST's approval at 30 s because a REST request is **holding an HTTP connection
+> open**. This path holds nothing open: it waits on a human reading a prompt over a persistent socket.
+> ADR-0036's bounded delay is the nearest *shape* — the delay is bounded and the fallback is deny,
+> never "assume yes" — not the nearest duration. A human prompt is a different kind of bound, and
+> shortening it would convert a slow human into a denial.
+>
+> **R4 — no client ⇒ DENY, with a named and distinguishable reason.** `NO_CLIENT_REASON` is a
+> module constant, so the decision is an artifact a guard pins rather than a log string. Rejected:
+> **waiting**, which holds the turn open on a condition that cannot change without a client — the "must
+> not hang" ADR-0057 R5 rejected for REST; and **failing closed silently**, which makes "nobody is
+> connected" indistinguishable from "the human said no", the one distinction an operator needs.
+> `WISP_WS_AUTO_APPROVE=true` remains the **one explicit opt-in**: default off, logged at warning
+> level, and the operator saying so — not a silent fall-through. No new flag is added (ADR-0002).
+>
+> **R5 — the `approve()` half of the round-trip is the change; the answer half is untouched.**
+> `resolve_approval`, `resolve_decision`, `disconnect`'s fail-closed sweep and `receive_message` keep
+> their behaviour. `receive_message`'s own `tool_approval` branch still resolves without an id — the
+> route intercepts first, and that branch is the old-protocol fallback ADR-0057 residual 2 names.
+
+### G3 — `command` is not validated, and that is the decision
+
+> **R6 — `POST /api/hooks` does not content-validate `command`, and the route's docstring says so.**
+>
+> **The gate restricts WHO may register a hook. It does not restrict WHAT the hook runs.**
+>
+> The reason is **G2's**, applied to the same kind of input: *a shell command's target is not
+> determinable from its text.* `$(...)`, pipes, `;`, variable expansion, aliases, `env`, an interpreter
+> argument or an absolute path all mean any check on the *string* is either bypassable or rejects
+> legitimate commands — which is exactly why `run_bash`'s verb scan is a separate, non-authoritative
+> mechanism. Rejected alternatives, each with its reason:
+>
+> | candidate | why rejected |
+> |---|---|
+> | **reject unknown executables** (a runnable check) | the target is not determinable from the text; the check would read the first token, which `env`, `$(…)`, an alias or an absolute path defeats |
+> | **reject shell metacharacters** | metacharacters *are* the feature — hooks exist to run arbitrary commands — and a syntax blocklist is both evadable and false-positive-prone |
+> | **allow-list** | not a validation but a **new policy surface**: a configured set of permitted commands with no owner, which would still have to define "the same command" (`rm  -rf` vs `rm -rf`). The controls that work are authorization, and they already exist: an API key, `require_tool_allowed`, and — with `WISP_REST_APPROVAL` on — a human |
+> | **no validation, and say so** | **CHOSEN** |
+>
+> `name` **is** validated (a path-traversal allowlist) and stays validated. The asymmetry is the
+> decision. **G3 closes by naming what the gate does not do, not by inventing a check.**
+
+### Are these one decision or two?
+
+**Two decisions, one shared principle, and the principle is not the one the brief offered.**
+
+The brief proposed *"the runtime does not execute what it has not validated"* as the possible shared
+boundary. **That principle is false for the hook path** — the runtime *does* execute a hook command it
+has not validated, and R6 decides that it must. So the two are not one boundary, and the ADR says why:
+
+* **W1** is a **broken authorization path**. A human *is* supposed to be asked, the mechanism exists,
+  and the frame prevented the question from ever being put. The fix is a wire protocol.
+* **G3** is an **absent content check**, decided to stay absent. The authorization for a hook is
+  already there and works; what does not exist, and cannot, is a check on the command's text.
+
+The principle they *do* share: **the runtime's control over external input is authorization-based, and
+it is not content-inspection-based.** W1 repairs the authorization path; G3 states that content
+inspection is not the mechanism and never was.
+
+### ADR-0059 residual 1 moves — its stated reason is no longer true
+
+Residual 1 read: *"A bundle's `approve` level is inert on REST. … The agent path honours it; **REST
+cannot, having no approver.**"*
+
+Driven over the six pinned pairs (ADR-0055 §1.3) — the three REST-only names × `{auto_edit, ask_all}`:
+
+| action | mode | `authorize()` | REST asks a human? |
+|---|---|---|---|
+| `hooks.create` | `auto_edit` / `ask_all` | ALLOW **+ approval** | **True** |
+| `mcp.add_server` | `auto_edit` / `ask_all` | ALLOW **+ approval** | **True** |
+| `plugins.install` | `auto_edit` / `ask_all` | ALLOW **+ approval** | **True** |
+
+**6 of 6.** ADR-0057's trigger set *is* the six pairs — `REST_APPROVAL_ACTIONS` is those three names
+and `REST_APPROVAL_MODES` is `{auto_edit, ask_all}` — and it does **not** over-fire in `read_only`
+(denies outright) or `full` (does not ask).
+
+So the residual's **reason** is now false: REST has an approver and consults it in exactly the six
+pairs. What does **not** move is the **mechanism** — REST reads a hand-written set, not
+`authorize().approval_required`, deliberately (ADR-0057 R4: the three names have no agent operation, so
+reading the agent's model would make REST's trigger a function of a model for actions only REST has).
+**The divergence is closed in effect, left un-composed in mechanism**, and that distinction is the
+residual's new statement. A guard asserts `approval_required` does not appear in `approval_bridge.py`,
+so composing it later is a deliberate change.
+
+The **bundle** half of residual 1 (`{"write_file": "approve"}` inert on REST) **stands** and is
+**cited, not re-measured**: it needs a verifiable bundle and `cryptography` is absent on this host
+(F88). The condition is named rather than left implicit (F94).
+
+### The four non-violations, asserted
+
+1. **`authorize()` is unchanged** — its first three parameters, from both `inspect` and the AST.
+2. **`SecurityPolicy.check()` is unchanged** — `(self, action, context)`, and no organization slot
+   (ADR-0059's structural pin).
+3. **`ToolExecutor.execute`'s chain is unchanged** — `policy_hard_deny` → `authorize` →
+   `_get_write_tools`, from the AST.
+4. **`turn_succeeded`, `VerificationFloorGuard` and `goal.PRECEDENCE` are untouched.**
+
+Each is pinned in `tests/reliability/test_external_input_path.py` and each was checked by breaking its
+property (8/8 caught).
+
+### Consequences
+
+- **The agent path's WebSocket approval prompt now renders.** That is a **live-path behaviour change**
+  and the point of the ADR: a turn that previously auto-denied at 60 s now waits for a human.
+- **Six tests that pinned the old frame are updated with reasoning** — `test_websocket.py` (5) and
+  `test_ws_control_plane.py` (1). The last one previously answered with a hard-coded `id: "x"` and
+  resolved only via the single-pending fallback; it now echoes the frame's own `call_id`, so it
+  exercises the real correlation.
+- **The gate-order corpus is NOT re-written RED-first.** The gate *chain* is unchanged (non-violation
+  3, asserted); this ADR changes a transport frame and a docstring, not a gate.
+- **No flag is added.** The existing env var (`WISP_WS_AUTO_APPROVE`) is the switch (ADR-0002).
+
+### The brief's claims, driven
+
+| claim | result |
+|---|---|
+| *"`approve()` sends a frame no client reads, so it always timed out (60 s) and denied"* | **TRUE**, driven: the frame type and all three clients' branch types mismatch; a silent client denies at the bound |
+| *"both shipped clients branch on `tool_approval_request`"* | **TRUE, and there are three** — the VS Code extension reads the same frame (the count was low, not the decision) |
+| *"the agent path's WS approval prompt has never rendered"* | **TRUE** |
+| *"`POST /api/hooks` still accepts an unvalidated `command`"* | **TRUE** — `HookCreateRequest.command` has only `min_length=1`; `name` has a traversal allowlist |
+| *"the gate restricts who may register a hook, not what it runs"* | **TRUE**, and it is now the route's docstring |
+| *"ADR-0059 residual 1: a bundle's `approve` level is inert on REST"* | **the EFFECT is closed (6/6); the MECHANISM is deliberately not composed** |
+| *"the timeout of 60 s is today's value"* | **TRUE** — `_APPROVAL_TIMEOUT = 60.0`, unchanged |
+| *"`G2`'s precedent: a shell command's target is not determinable from its text"* | **TRUE** — it is the reason R6 gives |
+
+### Residuals, named
+
+1. **The round-trip is pinned against a stub channel, not a live client.** No real desktop/TUI/VS Code
+   client runs on this host, so the *frame shape* and the *no-client behaviour* are driven and the
+   end-to-end render is not. The route-level round-trip **is** driven
+   (`test_ws_control_plane.py::test_approval_frame_resolves_mid_turn`), which is the strongest
+   available proxy.
+2. **`receive_message`'s own `tool_approval` branch still ignores `msg["id"]`** (it calls
+   `resolve_approval(approved)` with no id). The route intercepts first, so this is the old-protocol
+   fallback — ADR-0057 residual 2, unchanged here. R5 names it rather than silently fixing it.
+3. **A multi-client deployment still asks every registered channel** and takes the first response
+   (ADR-0057 residual 4), unchanged.
+4. **The bundle half of ADR-0059 residual 1 is un-measurable here** (`cryptography` absent, F88).
+
+### Reversal condition
+
+R1/R2 reverse if a client stops branching on `tool_approval_request` or stops echoing `call_id` — the
+guard fails in exactly that case, because it reads the branch out of each client's source rather than
+asserting the string once. R6 reverses if a phase finds a content check on `command` that is
+*determinable* — i.e. one that does not read the shell string. R3 reverses if the wait stops being a
+human prompt (a machine approver would need its own bound).
+
+---
+
+## ADR-0062 — The corpus's editorial decisions: one register, one vocabulary, one reading rule
+
+**Status:** ACCEPTED
+**Phase:** The corpus governance layer, II (`PHASE_CORPUS_GOVERNANCE.md` §3's findings F105–F114)
+**Decides the eight editorial findings the first corpus-governance mission reported and did not
+repair. Every decision is about the corpus's *artifacts* — a ledger, a vocabulary, a citation, a
+method — and none is about the product: no flag default, no gate, no authority's scope, no `wisp/`
+file. The ADR is append-only; the edits it authorises are applied separately and cite its sections.**
+**Evidence:** `PHASE_CORPUS_GOVERNANCE.md` §3 (the ten findings), §5.1 (the nine instrument defects);
+`CURRENT_FINDINGS.md`, `CURRENT_OPEN_ITEMS.md`, `CURRENT_FLAGS.md` (the three registers and their
+`§Findings`); `WISP_MIGRATION_STATUS.md:41` (the ledger's own vocabulary); `CONTEXT.md:215` (the `F77`
+citation); `PHASE_DAG_RETIREMENT.md` §7.1 and §9.
+
+### Context
+
+The corpus-governance mission built four derived registers and their guards. It also found **ten
+defects in the corpus's own artifacts** and **repaired none**, because each needs an editorial
+decision and a derived page may not decide. That was the right call and it left the corpus with a
+governance layer that is **built but not complete**: a register that cites three homes for one
+finding's status, two id namespaces sharing a letter, three state vocabularies, a paraphrased rule
+that would decide the wrong way, two flag names that exist nowhere, a measurement method that
+silently returns a wrong answer, and the pattern's founding page with no generator.
+
+**These are decisions about documents.** That is why they are one ADR rather than eight: they share
+one subject — *the corpus's own shape* — and one property: none of them changes what the product
+does. Stated separately they would each be a paragraph; stated together they are a policy.
+
+**What this ADR does not do.** It does not decide what `F77` was (that is a measurement, recorded
+in `PHASE_CORPUS_GOVERNANCE_II.md` §4). It does not give the ledger the thirty missing rows. It does
+not renumber or create a finding. It does not decide any production meaning.
+
+### Decision
+
+**R1 — `CURRENT_FINDINGS.md` is the canonical register for a finding's status; the ledger's split is
+historical. (`F106`)**
+
+The status of `Fn` is recorded in **one** place: `CURRENT_FINDINGS.md`, which already carries all 104
+rows, each pinned to a source with the source's own words quoted. `WISP_MIGRATION_STATUS.md` stays
+**append-only and un-backfilled** — its §23 table keeps `F1`–`F44` and `F64`–`F74`, its §0 keeps
+`F45`–`F63`, and `F75`–`F104` gain no ledger row — but its §23 note is **corrected** to name the
+register as canonical and to state its own actual range (`F64`–`F74`, not `F64`–`F71`).
+
+*Why not backfill.* Thirty rows would be duplicated across two append-only files, and a duplicate is
+a second producer of one fact — the defect class this corpus names most often. The register exists
+precisely so the ledger does not have to be total.
+
+*Reversal trigger.* A consumer that reads the ledger and cannot be pointed at the register — i.e. a
+tool that parses `WISP_MIGRATION_STATUS.md` for a finding's status. If one is built, the register's
+canonicity is re-decided, because a canonical source no consumer can reach is a citation, not a
+source.
+
+**R2 — A finding id and an open-item id are disambiguated by prefix; the collision is tolerated, not
+renamed. (`F107`)**
+
+`CONTEXT.md` §12's `F1`–`F5` are **open items** (Phase 10's defect ledger). The findings log's
+`F1`–`F104` are **findings**. They are different namespaces and both are historical records, so
+neither is renumbered. The rule is a **prefix in prose**: a citation writes `FIND-F7` for a finding
+and `ITEM-F1` for §12's rows, and `CURRENT_FINDINGS.md`'s §Findings records the collision once. The
+three meanings of `M4` — §12's *ADR-0004 revisited*, the **governance layer** (which §12 carries as
+row `E`), and `WISP_MIGRATION_STATUS.md:2041`'s row — are **annotated once** at §12, with the three
+meanings named and the row that carries each.
+
+*Why not rename.* Renaming either namespace rewrites a historical record and breaks every existing
+citation. A stated rule costs one paragraph and loses nothing.
+
+*Reversal trigger.* A tool or a test that must resolve an id mechanically rather than by reading the
+source — a prefix that only prose carries cannot be parsed. If one is needed, the namespaces are
+renamed and the citations updated in one change.
+
+**R3 — One state vocabulary and one reason column. `DECIDED` is a reason; `BLOCKED` is a state with
+no members. (`F108`)**
+
+The **ledger's six words govern**, verbatim from `WISP_MIGRATION_STATUS.md:41`:
+`NOT STARTED · IN PROGRESS · COMPLETE · BLOCKED · PARTIAL · SUPERSEDED`. Three rules follow:
+
+1. **A state word says *that*; a reason column says *why*.** `CONTEXT.md` §12's `DECIDED` values move
+   to a stated reason (the ADR that decided the item), and the state becomes `COMPLETE`. `DECIDED`
+   names *why* an item is finished — it is not a state, and a register that accepts it as one has two
+   vocabularies for one column.
+2. **`BLOCKED` is kept as a state**, and the fact that no item is currently in it is recorded as
+   **"no item is currently in this state"** — not as "the word is unused". A defined word with no
+   members is a vocabulary, not a defect; removing it would be the editorial change this corpus has
+   already declined, and it would make a future blocked item unrepresentable.
+3. **The reason column is `blocked_by`**, and it is where a blocker, a dependency and a decision
+   citation all go. A register may not coin a state word for any of them.
+
+*Reversal trigger.* A state that the six words cannot express and that is not a reason — if one is
+found, the vocabulary is extended by a superseding ADR rather than by a register's convenience.
+
+**R4 — The reading rule for a rollback flag is ADR-0002's, recorded verbatim; the paraphrase that
+has circulated is named as the defect. (`F109`)**
+
+> **The reading rule.** *A rollback flag is **read at the consumption site**, as
+> `getattr(config, name, <safe default>)`, and is resolvable from the environment (`WISP_*`) via
+> `get_setting`. One flag per concern.*
+
+The rule has **three** parts and ADR-0002 states all three. The paraphrase *"read once, at the
+composition point"* is **not** the rule and this ADR records it as a defect, so the next brief cannot
+inherit it. **Where the paraphrase came from, measured:** ADR-0056's Consequences says *"Both flags
+still default OFF, read once, independently"* — a **local** statement about the objective path, which
+reads both of *its* flags at one composition point. The paraphrase conflates that local description
+with ADR-0002's **general** rule. The distinction is load-bearing: under the paraphrase,
+`verification_loop`'s two read sites (`wisp/core/stateless.py:505`, `:1439`) and `turn_spans`'s two
+(`wisp/composition.py:310`, `wisp/core/runtime.py:1409`) each become a violation of a rule the corpus
+does not have.
+
+*Reversal trigger.* ADR-0002 is superseded by a later decision that changes the reading rule. Until
+then, any document that states the rule differently is wrong, and a citation of it resolves here.
+
+**R5 — `verification_gate` and `graph_mutation` are wrong names, not aliases and not deprecated
+names. (`F110`)**
+
+Neither string appears anywhere in `wisp/`. The flags are **`verification_loop`**
+(`WISP_VERIFICATION_LOOP`, default **ON**, read at `wisp/core/stateless.py:505` and `:1439`) and
+**`task_graph`** (`WISP_TASK_GRAPH`, default **OFF**, read at `wisp/core/runtime.py:676`). They are
+recorded as corrections so a future brief cannot re-introduce them. This ADR adds **no alias**: an
+alias for a name that was never real would create the second vocabulary R3 forbids.
+
+**R6 — No two pytest processes run concurrently against this repository, and the block is run with a
+private `--basetemp`. (`F112`)**
+
+Two concurrent pytest processes race on the shared base directory
+(`/private/var/folders/…/T/pytest-of-<user>`) and fail at fixture setup with
+`PermissionError: EEXIST: mkdir '…/T/pytest-of-philosopher'` — **869 errors from one overlapping
+run**, which reads as a code failure and is not. Two rules follow, and they live in `CONTEXT.md` §6
+and §11:
+
+1. **A measurement run is exclusive.** No second pytest process starts while the canonical block or a
+   two-run baseline is in flight. The rule is a **method rule**, not a code change.
+2. **A block run passes `--basetemp`** to a per-run directory. This is a change to the *method*, not
+   to the product: no `wisp/` file is touched and no test is modified. It removes the race rather
+   than relying on discipline alone, and the two rules together are why this decision is stated here
+   and not left to a gotcha row.
+
+*Why the corpus's own diagnosis is corrected.* `CONTEXT.md` §6 attributed the failure to *"the
+WorkBuddy shim blocks pytest's temp `mkdir`"*. The measured cause is **contention between
+processes**; the shim row stays (it is a real hazard for a single run) and the contention is stated
+separately, because a wrong cause makes the rule unlearnable.
+
+*Reversal trigger.* pytest gains a base directory that is safe under concurrency (a per-process
+default), or the corpus moves to a test runner that does not share one.
+
+**R7 — A phase report enters the document index in the change that creates it; the omission of
+`PHASE_EXTERNAL_INPUT_PATH.md` is recorded as `F104`'s class. (`F114`)**
+
+A report that exists and is not in `CONTEXT.md` §13 is unreachable from the index a reader is sent
+to. The row was added by the corpus-governance landing; this ADR states the **class** — the same one
+`F104` names (ADR-0057 had no decision-index row) and `F97` names (three stale range claims) — and
+makes the rule explicit: **a landing that creates a report adds its index row in the same commit.**
+A record that exists and is not listed is the same defect as a record that is listed and does not
+exist.
+
+*Reversal trigger.* §13 stops being the document index, or a generated index replaces it — in which
+case the rule attaches to the generator.
+
+**R8 — A derived page must have a committed generator. (`F113`, policy half)**
+
+A page that declares *"REGENERATE, DO NOT EDIT IN PLACE"* and whose regeneration is **by hand** has a
+rule it cannot honour — **F75**'s class, one level up. The rule: **every derived page has a committed
+generator, and its guard's reproducibility property asserts that regenerating reproduces the page
+byte-for-byte, modulo the commit it names.** `CURRENT_AUTHORITIES.md` is the current exception, and
+it is the exception this mission closes.
+
+*What the rule does not require.* It does not require every page to be *fully* generated. A page may
+carry a section that is **append-only and emitted unchanged** — `CURRENT_AUTHORITIES.md` §5, its own
+record of what it could not pin — provided the guard asserts that section is unchanged and the
+generator refuses to invent it.
+
+*Reversal trigger.* A derived page whose source cannot be read mechanically at all — in which case it
+is not a derived page but a document, and it must stop saying it is regenerated.
+
+### Consequences
+
+- **No production behaviour changes.** No `wisp/` file is touched by any rule here. R6 changes how a
+  measurement is *run*, not what it measures.
+- **The corpus's own artifacts are governed by the same discipline as its code**: a decision (this
+  ADR), an edit citing it, a guard asserting it, and a report.
+- **The four registers are regenerated** after their sources change, per R8. Their reproducibility
+  guards enforce it, so a hand edit fails rather than drifting.
+- **`F105`, `F111` and the `F113` build half are not decided here.** `F105` is a measurement
+  (`PHASE_CORPUS_GOVERNANCE_II.md` §4). `F111` is a *host condition*, not a corpus defect — its
+  disposition is the rule already in `CONTEXT.md` §11 (do not quote a count from a block run on a
+  starved host), and this ADR adds only R6's part of it. `F113`'s build half is the generator.
+- **One reversal is cheap and one is not.** R2 and R5 reverse by editing a paragraph; R1 and R3
+  reverse by rewriting rows. That asymmetry is the reason each is stated with its trigger rather than
+  left to a later reader's judgement.
+
+### The brief's claims, driven
+
+| claim | result |
+|---|---|
+| *"eight of the ten findings are editorial"* | **true** — `F106`–`F110`, `F112`, `F114`, and `F113`'s policy half |
+| *"`F77`'s referent is that report's §7.1"* | **not determinable** — the report contains **three** finding-shaped statements, not one. See `PHASE_CORPUS_GOVERNANCE_II.md` §4 |
+| *"the brief's paraphrase is the defect"* | **true, and it has a source**: ADR-0056's *"read once, independently"* (R4) |
+| *"`verification_gate` and `graph_mutation` are wrong names"* | **true** — neither string occurs in `wisp/` (R5) |
+| *"`BLOCKED` is defined and used by no source"* | **true**, and this ADR **keeps** it (R3.2) — the brief's own recommendation, adopted |
+
+### Reversal condition
+
+Each rule carries its own trigger, above. Collectively: if the corpus acquires a **tool** that
+resolves an id, a state or a citation mechanically, R2's prose prefixes and R1's canonical register
+are re-decided together — a machine-readable corpus wants different answers than a read one. Until
+then, the answers here are the ones a reader needs.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -4153,3 +6864,18 @@ derived state.*
 | 0045 | Convergence is an objective-level loop that consumes the turn-level authorities and re-implements none of them | NEXT | ACCEPTED (adds the loop the turn-level closure left missing; changes no existing contract) |
 | 0046 | Objective-relative progress is a second input to the recovery decision, not a re-classification of the failure | NEXT (progress-aware recovery) | ACCEPTED (widens one class's legal rungs on measurable progress; amends no earlier decision, and changes no caller that does not pass `progress`) |
 | 0047 | A failed turn is not a failed objective, and R5's unit is the strategy, not the rung | NEXT (multi-turn productive recovery) | ACCEPTED (amends ADR-0035 rows 3–6 — one input combination moves; refines ADR-0046's use of R5 under a new dedicated budget) |
+| 0048 | The acceptance criteria are host-derived from the objective's *stated* conditions; silence is not consent, and an undetermined requirement is `INCONCLUSIVE` | NEXT (criteria authority) | ACCEPTED (names what the host may infer from silence; authorises one additive record and one flag-gated behaviour defaulting to today; declares the objective-declared structured path viable without violating ADR-0045 R1) |
+| 0049 | The canonical precedence table is `goal.PRECEDENCE` (eight rows, 0–7); every older numbering is historical and is resolved by content | NEXT (precedence correction) | ACCEPTED (a record update — restates what the code already does; ratifies two cells ADR-0047 moved without stating; scopes ADR-0047 R3 to the no-`PASS` case; edits neither ADR-0035 nor ADR-0047) |
+| 0050 | The objective may carry a declared criteria block; the host validates it against the measurable surface and rejects rather than reinterprets | NEXT (structured criteria) | ACCEPTED (decides what ADR-0048 R6 deferred — the grammar, the validation surface, the rejection behaviour; extends ADR-0048 R1 by one outcome, `DECLARED`; closes MODE A and MODE B **on the declared path only**, flag-gated and defaulting OFF) |
+| 0051 | The acceptance gate's enablement contract is a non-redundancy precondition, not a rate; the `INCONCLUSIVE` rate is not a function of the gate | Gate enablement | ACCEPTED (amends ADR-0016's 3b *condition* — replaces "a measurement period showing how many turns become `INCONCLUSIVE`" with a precondition on the criteria set plus a declared-population `GOAL_MET` measure; measures that the turn path's verdict is a projection of `VerificationFloorGuard`, so the gate is redundant or harmful on today's criteria set; adds no flag, enables nothing, changes no authority) |
+| 0052 | A capability failure is published as a failure of the host, not as a denial; the denial taxonomy is unchanged | F8's published status | ACCEPTED (completes the half `PHASE_F8_ERROR_CLASSIFICATION.md` §4 left open; routes a `CAPABILITY_MISSING` validation failure through a system-failure envelope with the `kind` in `data`, so the attribution is correct where the failure is *published* as well as where it is *produced*; adds no denial status and edits no prompt, so it is not a behavioural change) |
+| 0053 | The turn path's required-criteria set carries the objective's declared criteria; the gate keys on a `FAIL` the floor guard does not enforce | The criteria source on the turn path | ACCEPTED (satisfies ADR-0051 R1's precondition by unioning the floor guard's criterion with the objective's declared criteria at `AgentRuntime.run_turn`'s verdict site, behind `WISP_TURN_CRITERIA_SOURCE` default OFF; the gate's condition is `FAIL` **and every named criterion is non-floor**, measured to differ from `rejection()` on two of six driven cases; adds no authority — the criteria flow through `acceptance.evaluate` and the verdict through `goal.derive_goal_state`, both unchanged; does not enable the acceptance gate, which remains ADR-0051's separate decision) |
+| 0054 | The acceptance gate consumes `verdict_keys_on_declared` at the engine's pre-`done` gate, bounded and defaulting OFF | Acceptance gate enablement | ACCEPTED (supplies the consumer ADR-0053 §10 recorded as missing: the engine asks a read-only callable — `DeclaredCriteriaGate` — at its pre-`done` gate, because a gate acting after `done` withholds nothing; the probe is taken there, cached, and reused at the verdict site; the withholding reuses ADR-0036's bounded replan model and **shares the turn's extension budget**; `WISP_ACCEPTANCE_GATE` defaults **OFF** and is **dependent** on `WISP_TURN_CRITERIA_SOURCE`; ADR-0051 R2–R6's contract is **NOT satisfied** — the population needs ≥ 2 capable models and the environment serves exactly **1** of 13, measured by a committed instrument; `turn_succeeded`, `VerificationFloorGuard` and `goal.PRECEDENCE` unchanged, asserted) |
+| 0055 | The REST gate is at parity with the agent path; the recorded divergence was between two *models*, not two *paths* | Authorization parity (G1) | ACCEPTED (drives the two production paths instead of the two models: **0 path divergences of 36**, **6 model divergences of 36** — the agent and `require_tool_allowed` reach the same outcome on every route in every mode when the agent runs under REST's condition, no approver. Chooses **Option A**: accept, and correct the record. Rejects **B** because it is not a parity fix — it would deny `hooks.create`/`mcp.add_server`/`plugins.install` in modes where the agent denies nothing (those three names are **not agent tools** and have **no `TOOL_RISK_TABLE` row**), i.e. REST stricter than the agent with no counterpart, and it would 403 the shipped client; rejects **C** for this decision as the fix for a *different* problem (REST cannot ask a human), deferred to its own ADR. Corrects `require_tool_allowed`'s docstring to state the control those routes actually have; keeps every ratchet property and **gains a real-path parity guard**; names four residuals (the approval authority is split three ways; three action names are in none of the three sets; REST cannot ask; five further gated routes are unmeasured). States the relationship to finding E without wiring L0. `authorize()`, `SecurityPolicy.check()` and `ToolExecutor.execute`'s gate chain unchanged, asserted by AST-parsed tests) |
+| 0056 | The two criteria flags are independent on the objective path; their interaction is derivation *order*, not flag coupling | Objective-path flag composition (ADR-0050 follow-up 1) | ACCEPTED (decides the last open ADR-0050 follow-up by driving the 2×2 flag matrix rather than reading it: `strict` **alone** withholds on the prose path (criteria 3→4), `use_declaration` **alone** collapses them to the declared set, and a valid declaration **pre-empts** `strict` — `undetermined` is empty either way, so `strict` is recorded and **inert**. Rejects **"dependent"** as measured-false (it would silently disable ADR-0048's fix for the measured false `GOAL_MET`); rejects **"composed"** (a declaration required) as a new policy no measurement supports, which would turn a silent-defect fix into a hard refusal for every objective written before ADR-0050 — and which is **not implemented** (`use_declaration=True` without a block is a no-op). Does not widen `explain_acceptance`'s parameters (ADR-0009): composition is a *policy* at the composition point, not a third parameter. Relates to ADR-0053 R8 — the *reason* does not transfer (one read site here, two parameters), the *decision* does. **No production change**: the measured behaviour already is the decision. Names one residual: `CriteriaDerivation.strict` records `True` when pre-empted) |
+| 0057 | A REST request for an executable-config action asks a human over the WebSocket channel; no client means deny | REST approval through the WebSocket channel (ADR-0055 §7's own decision) | ACCEPTED (drives the brief's premise and finds it **half true, with the false half deciding the shape**: the channel's **answer** path works and both shipped clients already send `tool_approval`/`{id, approved}`, but `WebSocketTransport.approve()` sends `approval_request`/`{approval_id, tool_call}` while **both clients branch on `tool_approval_request`** reading `call_id`/`name`/`arguments`/`reason` — so the agent path's prompt has never rendered. Adopts the **clients'** vocabulary, which makes the client change **zero** (ADR-0055 §Why-not-B's precedent). `ApprovalBridge` owns its own correlation map so `WebSocketTransport`, `approve()` and the agent path are untouched by construction. Trigger stated as a set: `REST_APPROVAL_ACTIONS` = the three executable-config names, `REST_APPROVAL_MODES` = `{auto_edit, ask_all}`; **no client ⇒ 403**, and `REST_APPROVAL_TIMEOUT_S = 30.0` bounded by ADR-0036's precedent with deny as the fallback. `require_rest_approval` is a separate async companion called **after** the policy gate, so a denying mode never prompts. Flag `WISP_REST_APPROVAL` default **OFF** — OFF, every caller sees today's behaviour exactly. **G3 deferred as its own ADR** (R9): *who may register* is not *what it runs*. Names four residuals, incl. **the agent path's own frame (W1)** and that `resolve_approval` still falls back to "first pending" on an id miss) | **MISSING UNTIL 2026-09-25 — see ADR-0060 F104.** This row did not exist; the index jumped 0056 → 0058 |
+| 0058 | The key-trust model is the operator-supplied organization public key; absence is a configuration, invalidity is a refusal | The key-trust workflow (M4 §6's precondition; `PHASE_10_M4_GOVERNANCE_UNWIRED.md` §9 option B) | ACCEPTED (decides the workflow M4 §5 deferred, grounded in the spec rather than in a general notion of key trust: §0 *"local bundle files remain the authority"*, §3's `local-only` mode — *"no socket use"* — and §5's own *"file perms 0600 + OS keychain for private keys **suffice for M4**"*, which already fixed the storage half. **Driven, the brief's worked example is false**: `WISP_POLICY_PUBKEY` is **base64 key material**, not a path — `load_local(bundle_path, public_key_b64)` → `Ed25519PublicKey.from_public_bytes(base64.b64decode(...))` — which decides the workflow (*"export this value"*, not *"place a file here"*); and **the failure semantics are already implemented** (bad/absent signature → `ValueError`; expired → `trim_expired`, *"never an error, never silent allow"*; no cache → `FileNotFoundError`). Reads the deferred phrase *"device registration + key distribution ceremony"* as the **multi-device / control-plane** item it is listed beside, and records the reading so it cannot be mistaken for the decision. **R1** the trigger is `WISP_POLICY_BUNDLE` non-empty — refining §6's *"both are set"* in the **stricter** direction, because a half-configuration must not be inert. **R2** absence is inert and byte-for-byte today's behaviour; `WISP_POLICY_PUBKEY` alone is inert. **R3** invalidity **refuses to boot** — the loader already raises; the rule added is that the composition root propagates rather than swallows. **R4** expiry **narrows** (`trim_expired`), it does not refuse — a stale-but-honest bundle must not become an outage. **R5** the key is **shared**, not per-device. **R6** offline by construction; `WISP_POLICY_CACHE`/`load_managed` are **not** engaged. **R7** the private key is never Wisp's to hold. **R8** fail-closed here vs ADR-0036 §5's fail-open there, with the difference stated: a missing stagnation predicate is **benign**, a missing policy is an **expected control silently unapplied** — the false-assurance mode §4 names. Rejects **TOFU** (it would pin the first key on a writable path and verify the attacker's bundle against the attacker's key; stateful; first-run semantics differ from every later run), a **signed-key file with a built-in root** (moves trust to a key baked into Wisp, needs a distribution and revocation story the spec never specified, adds a second signature layer, and still requires someone to place the root), and the **registration ceremony** as **out of scope rather than wrong** — it presupposes the control plane §5 deferred in the same sentence. Names four residuals, incl. that **REST does not receive L0** because `SecurityPolicy.check()` has no organization layer and L0 lives inside `authorize()`, so loading a bundle into `request_policy` would be dead data — a new instance of the pattern this finding diagnoses. **That residual is CLOSED by ADR-0059**, which reaches L0 through the composition root's loaded policy rather than through a `SecurityPolicy` slot — so the reason given here still stands and the gap does not) |
+| 0059 | The REST gate consults the M2 authority for its denial verdict, and only for that | The REST gate's authorization composition (`PHASE_M4_WIRING.md` §4 residual 1) | ACCEPTED (closes the divergence **ADR-0058 created**: ADR-0055's **0 path divergences of 36** was measured with **no organization policy loaded**, and once a bundle is loaded a denial is enforced on the agent path and was silently unenforced on REST — **driven, 11 (route, mode) pairs diverge**, five in the **default** `auto_edit` mode. Decides **Option C in its narrow form**: `require_tool_allowed` consults `authorize()` with the **same `effective_policy` the composition root loaded** and refuses when it **denies**, reading `allowed` and never `approval_required`. The reason is measured, not argued: **the two models agree on `allowed` in all 36 (route, mode) pairs** and disagree only on `approval_required` — in **exactly six** rows, the three REST-only action names × {`auto_edit`, `ask_all`}. So composing `allowed` composes the agreement; composing approval composes the divergence. Rejects **A** (driven with **no bundle**, 16 of 36 rows move, incl. three config routes in the default mode from ALLOW to 403 — ADR-0055 §Why-not-B re-measured on the composed gate); rejects **B** (`authorize()` has no mode engine and no hooks layer, so it discards two of the four things `check()` supplies); rejects **D** as **refuted by measurement** — the brief's D table says *"L0 has no verdict on a non-agent name"*, but `authorize()` returns `DENY(controlling_layer="local file")` for a bundle that names one, so D is not a harmless divergence but an unenforced operator rule. **Conditional on a bundle**, so with `WISP_POLICY_BUNDLE` unset the gate is today's code **byte-for-byte — status and detail**, proved against HEAD's body as a differential (**40/40 identical**) and structurally (the body change is an **insertion**). REST reads `root.organization_policy` — one load site (ADR-0006), two readers; `deps.py` imports no `wisp.policy` and calls no loader. The **§4 pin is inverted**: `SecurityPolicy` still has no policy slot, and its two assertions now say *which route was not taken*. `authorize()`, `SecurityPolicy.check()` and `ToolExecutor.execute`'s chain unchanged, asserted from the AST. Names five residuals, incl. that a bundle's **`approve` level is inert on REST** and that **workspace quarantine** is a pre-existing gap) |
+| 0060 | Layer A is the driver and Layer B is a record; the boundary is permanent | The Layer B boundary (M8 + M11) | ACCEPTED (decides the one question M11 and M8 name from opposite sides: *is Layer B's executor the driver, or a record?* **Driven, Position B is not expressible** — `wisp.graph.types.Graph` is `frozen=True` so a node cannot be appended mid-run, `GraphExecutor`'s whole public surface is `run`/`resume`/`cancel`/`register_function` with **no** growth API, `run()` refuses an empty graph before doing any work, and **no `TaskGraph → Graph` lowering exists** (`compat.py` lowers `TaskDAG`, not Layer A's graph). The turn loop discovers its work as the model streams, so *"every tool call is a node transition"* needs an executor that grows a graph **while driving it**. **This is a different blocker from ADR-0029's and does not mention payload**: ADR-0029 found the transcript-from-the-graph reading inexpressible; this finds the graph itself unknowable before the turn and immutable during it. **R1** Layer A is the driver. **R2** the boundary is **permanent, not an open item** — *"the graph drives execution"* is rejected as a target, and `test_the_graph_still_does_not_drive_execution` becomes the contract with its reversal condition stated in the test. **R3** the executor has four named callers and none is the turn loop. **R4** `multi_agent/dag.py` stays the deprecated legacy entry point and its `empty`/`disconnected` divergence is an **accepted difference** — the removal is not owed, and choosing which definition of a valid DAG wins is a change to a live model-callable tool, hence its own decision. Rejects B on three independent measured costs, incl. that it would put `GraphStore`'s **second** SQLite database on the turn path, which ADR-0019 exists to prevent. **A record update — no production behaviour moves**; the only `wisp/` change is a docstring correction. Corrects **four** corpus citations, incl. that ADR-0021's *"the safety net does not exist"* was **false when written** (all three files are tracked, added 152 commits before the P5 landing) and that **ADR-0057 had no index row**). **R5 — Layer C's disposition:** ADR-0001 named `wisp/core/graph/` *disowned* and it was **not** — the live turn path imported `OscillationTrap` and `diff_hash` from it via `core/stagnation.py` (M13) and `core/runtime.py`, the *disowned-but-consumed* drift. Both symbols are **relocated to `wisp/core/oscillation.py`** (Layer A) and re-exported from `loop.py`, so `wisp/core/graph/__init__.py` — which carries the user's uncommitted WIP — needs **no edit**. **The rule is a direction: a disowned layer may import from Layer A; the live path may never import from a disowned layer.** The dead part (`ExecutionGraph`, `phases.py`) is **kept as a reference implementation**, not deleted: deleting it would edit the WIP file, and the user's own uncommitted note there says *"Keep for reference; delete if no caller appears"* — and a caller **did** appear. Guarded so a future wiring is a decision, not a silent supersession) |
+| 0061 | The external input path: the approval frame is the clients' vocabulary, and a hook's `command` is not content-validated | The external input path (W1 + G3) | ACCEPTED (two decisions on one route family, sharing one principle. **W1, driven:** `approve()` sent `approval_request`/`{approval_id, tool_call}` while **all three** shipped clients — the desktop renderer, the TUI *and* the VS Code extension — branch on `tool_approval_request` and read `call_id`/`name`/`arguments`/`reason`; the prompt had never rendered, so every request hit the 60 s bound and denied. **R1** the frame is the clients' vocabulary (client change **zero**). **R2** the correlation key is `call_id` and it **IS** the `_approvals` key — the old frame carried no `call_id` at all, so a recognising client would still have echoed an empty id; pinned by a two-concurrent-approval test that resolves the **second** by its own id. **R3** the bound **stays 60 s** — ADR-0057's 30 s is REST's, because a REST request holds an HTTP connection open; this path holds nothing open, and ADR-0036's bounded delay is the nearest *shape*, not duration. **R4** no client ⇒ **DENY**, with `NO_CLIENT_REASON` a named constant so "nobody is connected" ≠ "the human said no"; *waiting* and *silent fail-closed* rejected; `WISP_WS_AUTO_APPROVE` stays the one explicit opt-in; no new flag. **G3:** `command` is **not** content-validated and the route's docstring now says so — **the gate restricts WHO may register a hook, it does not restrict WHAT the hook runs** — because a shell command's target is not determinable from its text (G2); a runnable check, a metacharacter blocklist and an allow-list are each rejected with reasons. **Two decisions, not one**, because the brief's candidate principle (*"does not execute what it has not validated"*) is **false** for the hook path. **ADR-0059 residual 1 moves**: driven over the six pinned pairs, **6 of 6** now ask a human — its stated *reason* ("REST cannot, having no approver") is no longer true — while the *mechanism* stays a hand-written set (**closed in effect, un-composed in mechanism**); the bundle half stands, cited, because `cryptography` is absent (F88, F94). Six tests that pinned the old frame are **updated with reasoning**, one of which previously resolved only via the single-pending fallback; 16-test guard, **8/8 probes caught**; the gate chain is unchanged, so the gate-order corpus is **not** re-written. Corrects ADR-0057's *"both shipped clients"* — there are **three**) |
+| 0062 | The corpus's editorial decisions: one register, one vocabulary, one reading rule | The corpus governance layer, II (F105–F114) | ACCEPTED (decides the eight **editorial** findings the first corpus-governance mission reported and did not repair. **Every decision is about an artifact**, not the product: no flag default, no gate, no authority's scope, no `wisp/` file. **R1 `CURRENT_FINDINGS.md` is the canonical register for a finding's status** (`F106`) — the ledger stays append-only and **un-backfilled**; its §23 note is corrected to name the register and to state its own actual range (`F64`–`F74`, not `F64`–`F71`); *why not backfill* — thirty rows duplicated across two append-only files is a second producer of one fact. **R2 the id namespaces are disambiguated by prose prefix** (`F107`) — `FIND-F7` vs `ITEM-F1`, and the three meanings of `M4` annotated once; *why not rename* — a rename rewrites a historical record and breaks every citation. **R3 the ledger's six words govern, with one reason column** (`F108`) — `DECIDED` is a **reason** and moves to it, the state becoming `COMPLETE`; **`BLOCKED` is kept as a state** and its emptiness is recorded as *"no item is currently in this state"*, because a defined word with no members is a vocabulary, not a defect. **R4 the reading rule is ADR-0002's, recorded verbatim** (`F109`) — *read at the **consumption site***, not the circulated paraphrase *"read once, at the composition point"*, and the ADR **names the paraphrase's source**: ADR-0056's local *"read once, independently"* about the objective path, conflated with ADR-0002's general rule; under the paraphrase `verification_loop`'s two read sites and `turn_spans`'s two become violations of a rule the corpus does not have. **R5 `verification_gate` and `graph_mutation` are wrong names, not aliases** (`F110`) — neither string occurs anywhere in `wisp/`; the flags are `verification_loop` and `task_graph`, and this ADR adds **no alias**, because an alias for a name that was never real is the second vocabulary R3 forbids. **R6 no two pytest processes run concurrently, and a block run passes `--basetemp`** (`F112`) — two concurrent processes race on the shared base dir and produce **869 `PermissionError: EEXIST` errors** from one overlapping run, which reads as a code failure and is not; a **method** rule and a method flag, not a code change, and it **corrects the corpus's own diagnosis** (§6 attributed it to the shim; the measured cause is contention). **R7 a phase report enters the document index in the change that creates it** (`F114`) — `F104`'s class, and a record that exists and is not listed is the same defect as one listed and not existing. **R8 a derived page must have a committed generator** (`F113`, policy half) — **F75**'s class one level up; a page may still carry an **append-only** section the generator emits unchanged, provided the guard asserts it. **`F105` is NOT decided here** — it is a measurement (`PHASE_CORPUS_GOVERNANCE_II.md` §4), and the report is that the referent is **not determinable**: `PHASE_DAG_RETIREMENT.md` contains **three** finding-shaped statements, not one. `F111` is a host condition whose rule already lives in `CONTEXT.md` §11) |

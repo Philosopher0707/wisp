@@ -387,6 +387,95 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "env_var": "WISP_STAGNATION_GATE",
     },
+    "turn_criteria_source": {
+        "type": bool,
+        "default": False,
+        "description": (
+            "ADR-0053: let the TURN path's required-criteria set carry the "
+            "objective's DECLARED criteria (ADR-0050) in addition to the "
+            "verification floor guard's own criterion. Satisfies ADR-0051 R1's "
+            "precondition — measured there, the turn's verdict was a pure "
+            "projection of the floor guard (verdict == FAIL agreed with "
+            "guard.rejection() 192/192 times), so an acceptance gate keyed on it "
+            "was redundant or harmful. With this ON and a declaration at the head "
+            "of the prompt, the verdict can be FAIL for a reason the floor guard "
+            "does not enforce, and a declared failure lands GOAL_FAILED (row 3) "
+            "where a floor-only verdict landed GOAL_UNVERIFIED. Defaults OFF, and "
+            "it is deliberately NOT coupled to "
+            "`WISP_CRITERIA_STRUCTURED_DECLARATION`, which gates the "
+            "objective-level derivation: one flag per concern (ADR-0002)."
+        ),
+        "env_var": "WISP_TURN_CRITERIA_SOURCE",
+    },
+    "rest_approval": {
+        "type": bool,
+        "default": False,
+        "description": (
+            "ADR-0057: route a REST request for an executable-config action "
+            "(`hooks.create`, `mcp.add_server`, `plugins.install`) through the "
+            "WebSocket channel for a human decision. ADR-0055 measured that the "
+            "agent has no operation for those three names and that REST and the "
+            "agent agree on every route today; what REST lacks is the ability to "
+            "ASK, so a REST caller got the agent's no-approver behaviour. With "
+            "this ON, those actions in `auto_edit`/`ask_all` send a "
+            "`tool_approval_request` frame to a connected client and wait, bounded "
+            "by `REST_APPROVAL_TIMEOUT_S`. With NO client connected the request is "
+            "DENIED — the brief's constraint is that it must not hang and must not "
+            "silently allow. `full` does not ask (it relaxes approval); `read_only` "
+            "denies outright. Defaults OFF, i.e. today's behaviour exactly."
+        ),
+        "env_var": "WISP_REST_APPROVAL",
+    },
+    "policy_bundle": {
+        "type": str,
+        "default": "",
+        "description": (
+            "ADR-0058: the path to a signed organization policy bundle "
+            "(`bundle.json`, with its `.sig` sibling beside it). Read together "
+            "with `policy_pubkey`, and the organization layer engages **iff this "
+            "is non-empty** (R1). Defaults empty — with it unset no `wisp.policy` "
+            "code runs and the runtime is byte-for-byte today's behaviour (R2). A "
+            "bundle that is named but cannot be read, has no signature, or fails "
+            "verification REFUSES TO BOOT (R3): an expected control that is "
+            "silently not applied is the false-assurance failure mode the M4 "
+            "finding names, so absence is a configuration and invalidity is an "
+            "error. An expired-but-verifying bundle is served TRIMMED, not "
+            "refused (R4)."
+        ),
+        "env_var": "WISP_POLICY_BUNDLE",
+    },
+    "policy_pubkey": {
+        "type": str,
+        "default": "",
+        "description": (
+            "ADR-0058: the organization's Ed25519 PUBLIC key, base64 (raw 32 "
+            "bytes) — the KEY ITSELF, not a path to it. "
+            "`wisp.policy.bundle.generate_keypair()` returns it; the private half "
+            "is never Wisp's to hold (0600 file or OS keychain, M4 spec §5). "
+            "Required by `policy_bundle`: a bundle named with no key, or a "
+            "malformed one, fails verification and refuses to boot. Inert on its "
+            "own — with `policy_bundle` empty there is no bundle for it to verify "
+            "(R2)."
+        ),
+        "env_var": "WISP_POLICY_PUBKEY",
+    },
+    "acceptance_gate": {
+        "type": bool,
+        "default": False,
+        "description": (
+            "ADR-0054: the ACCEPTANCE GATE. Withholds `done` at the engine's "
+            "pre-`done` gate — by ADR-0036's bounded delay-not-veto model — when "
+            "the objective's DECLARED criteria (ADR-0050) are not satisfied. This "
+            "is the consumer ADR-0053 §10 recorded as missing for "
+            "`verdict_keys_on_declared`. DEPENDENT on `turn_criteria_source`: "
+            "with the source off there are no declared criteria in the set, so the "
+            "gate would withhold on a verdict the record does not carry. Defaults "
+            "OFF, and ADR-0051 R2's measurement contract is NOT satisfied — the "
+            "population it requires needs >= 2 capable models and this environment "
+            "has exactly one (see ADR-0054)."
+        ),
+        "env_var": "WISP_ACCEPTANCE_GATE",
+    },
     "tool_pool_size": {
         "type": int,
         "default": 8,
@@ -690,6 +779,23 @@ class WispConfig:
     #: Migration POST-M13 (ADR-0036). Enforcement only — M13 keeps observing
     #: and recording when this is OFF; only the replan intervention stops.
     stagnation_gate: bool
+    #: ADR-0053. The turn path's criteria set gains the objective's declared
+    #: criteria. Defaults OFF: with it off the verdict site is today's code.
+    turn_criteria_source: bool
+    #: ADR-0054. The acceptance gate: withhold `done` on an unsatisfied declared
+    #: criterion. Dependent on `turn_criteria_source`; defaults OFF.
+    acceptance_gate: bool
+    #: ADR-0057. Route REST requests for executable-config actions through the
+    #: WebSocket channel for a human decision. Defaults OFF: with it off the REST
+    #: gate is today's code exactly.
+    rest_approval: bool
+    #: ADR-0058. The organization policy bundle: a path to `bundle.json` plus its
+    #: `.sig` sibling. The organization layer engages iff this is non-empty;
+    #: defaults empty, i.e. no bundle is loaded and the runtime is today's.
+    policy_bundle: str
+    #: ADR-0058. The organization's Ed25519 public key, base64 — the key itself,
+    #: not a path. Required by `policy_bundle`; inert on its own.
+    policy_pubkey: str
 
     # ── Modes & permissions ───────────────────────────────────────
     permission_mode: PermissionMode | str
@@ -981,6 +1087,17 @@ class WispConfig:
         object.__setattr__(self, "stagnation_gate",
             _parse_bool(get_setting("stagnation_gate", "false"), False)
         )
+        object.__setattr__(self, "turn_criteria_source",
+            _parse_bool(get_setting("turn_criteria_source", "false"), False)
+        )
+        object.__setattr__(self, "acceptance_gate",
+            _parse_bool(get_setting("acceptance_gate", "false"), False)
+        )
+        object.__setattr__(self, "rest_approval",
+            _parse_bool(get_setting("rest_approval", "false"), False)
+        )
+        object.__setattr__(self, "policy_bundle", get_setting("policy_bundle", ""))
+        object.__setattr__(self, "policy_pubkey", get_setting("policy_pubkey", ""))
 
     def load_context_files(self) -> str:
         """Load and concatenate context files from workspace root.

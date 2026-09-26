@@ -123,8 +123,36 @@ def merge_layers(higher: PolicyBundle, lower: PolicyBundle,
         approval_matrix=matrix, telemetry_policy=lower.telemetry_policy or higher.telemetry_policy,
         provenance=prov, org_id=higher.org_id or lower.org_id,
         bundle_version=max(higher.bundle_version, lower.bundle_version),
-        expires_at=min(h for h in (higher.expires_at, lower.expires_at) if h) or 0.0,
+        expires_at=_effective_expiry(higher.expires_at, lower.expires_at),
     )
+
+
+def _effective_expiry(*candidates: float) -> float:
+    """The earliest *stated* expiry, or a refusal that names the cause (F89).
+
+    `merge_layers` used `min(h for h in (...) if h) or 0.0`, which reads as
+    *"earliest stated, else 0.0"* and does not behave that way. The filter drops
+    every falsy candidate, so on an all-falsy input `min()` raises
+    `ValueError: min() iterable argument is empty` — a message naming neither the
+    bundle nor the cause — and the trailing `or 0.0` is **unreachable**, because
+    `min()` never returns a falsy value from a non-empty filtered sequence.
+
+    The **behaviour is kept**: a bundle that states no expiry is refused rather
+    than silently trimmed to deny-everything (`expires_at=0.0` makes
+    `PolicyBundle.is_expired()` true, and `trim_expired` then sets every approval
+    to `deny` and the network to `off`). That silent transformation is the
+    false-assurance shape ADR-0058 R3 refuses. Only the message changes, so a
+    reader is told what to set instead of being told that `min()` had nothing to
+    read.
+    """
+    stated = [c for c in candidates if c]
+    if not stated:
+        raise ValueError(
+            "policy bundle states no usable expiry: every merged layer carries a "
+            "falsy `expires_at` (the `PolicyBundle` default is 0.0). Set "
+            "`expires_at` on the bundle."
+        )
+    return min(stated)
 
 
 def merge_all(layers: list[tuple[str, PolicyBundle]]) -> EffectivePolicy:

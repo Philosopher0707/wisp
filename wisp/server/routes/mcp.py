@@ -8,7 +8,11 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from wisp.server.deps import require_tool_allowed, verify_api_key
+from wisp.server.deps import (
+    require_rest_approval,
+    require_tool_allowed,
+    verify_api_key,
+)
 from wisp.server.routes.workspace import WORKSPACE_ROOT
 
 logger = logging.getLogger(__name__)
@@ -82,11 +86,16 @@ async def add_mcp_server(req: MCPServerAddRequest, request: Request):
     # Authority: registering an MCP server persists a command that is later
     # spawned, so it is an executable-config mutation — the same authority
     # class as a hook. It passes the same policy gate as file writes;
-    # READ_ONLY sessions cannot register one. The desktop client keeps
-    # working because the policy allows this action in full / auto_edit /
-    # ask_all and denies only in read_only.
+    # READ_ONLY sessions cannot register one.
+    #
+    # ADR-0057: it ALSO asks a human over the WebSocket channel in
+    # `auto_edit`/`ask_all` (flag `WISP_REST_APPROVAL`, default OFF). With no
+    # client connected the request is DENIED — a REST caller must not silently
+    # get an executable-config mutation.
     require_tool_allowed(request, "mcp.add_server", {"name": req.name},
                          str(WORKSPACE_ROOT))
+    await require_rest_approval(request, "mcp.add_server", {"name": req.name},
+                                str(WORKSPACE_ROOT))
     from wisp.mcp import MCPAuthMethod, MCPServerConfig
     manager = _get_mcp_manager()
     configs = manager.load_server_configs()

@@ -684,6 +684,10 @@ class SubagentRunner:
         # the other one does not — the half-fix this migration keeps finding.
         if "principal" in session_dict:
             runtime_session["principal"] = session_dict["principal"]
+        # `contract.task` is written by the parent MODEL, so it may not drive a host-run
+        # criteria probe (ADR-0050 R6's premise is a caller-written objective).
+        from wisp.core.turn_criteria import MODEL_AUTHORED_PROMPT_KEY
+        runtime_session[MODEL_AUTHORED_PROMPT_KEY] = True
 
         output_text = ""
         engine_iterations = 0

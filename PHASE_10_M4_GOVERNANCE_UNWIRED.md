@@ -4,7 +4,9 @@
 **Found while:** closing G1 (authorization parity) — checking whether the REST gate
 applies the organization policy bundle the agent path has an L0 layer for
 **Severity:** high for an enterprise feature; **not a vulnerability**
-**Status:** documented and pinned; **wiring not implemented** (see §6)
+**Status:** **WIRED** behind `WISP_POLICY_BUNDLE`, **default OFF** — ADR-0058 decided the key-trust
+workflow and `PHASE_M4_WIRING.md` landed the wiring. **The finding is closed.** The tripwires in §7 now
+assert the *wired* state (inverted, not deleted). **REST still does not receive L0** — see §6.4.
 
 ---
 
@@ -48,6 +50,19 @@ gets.
 | `wisp/config.py` | **zero occurrences of "policy"** — there is no setting to point at a bundle |
 | Callers of `load_local` / `load_managed` / `merge_all` / `EffectivePolicy(...)` | `wisp/policy/cli.py` and `tests/test_policy_modes.py`. **Nothing in the runtime** |
 | `wisp.policy` importers | `wisp/__main__.py:493` (the `policy` subcommand), `wisp/server/routes/policy.py:40` (publish). **Not composition, not the executor, not the REPL** |
+
+> **ANNOTATED 2026-09-25 (corpus integrity II) — the first row is now wrong twice, and the record
+> keeps its number.** Driven, there are **three** `ToolExecutor(...)` construction sites, not two:
+> `composition.py:142`, `acp_session.py:208` and **`benchmark/runner.py:82`**. Two corrections:
+> the composition line number was stale (`:134` → `:142`), and the **third site was added by
+> `8a7e9ab`** (the autonomous-convergence chain) — **after** this document was written, and
+> **authorised** by ADR-0045's F54 fix, which wired an executor into
+> `benchmark/runner.py::make_ollama_core_factory` because `_execute_tool`'s no-executor fallback
+> permits `READ` tools only, so `wisp bench` was refusing every mutation and reporting FAIL for
+> tasks no agent could pass. The invariant this table exists for — *no site passes `policy=`* —
+> **still holds at all three**. The stale row is annotated rather than rewritten: a phase report
+> records what was measured **then**, and deleting its number would falsify history. See
+> `PHASE_CORPUS_INTEGRITY_II.md` §1.
 
 **The server routes hold a bundle and stop.** `POST /api/policy/publish`
 verifies a signature and stores the document on `request.app.state.policy_bundle`
@@ -136,6 +151,29 @@ which is precisely the assumption the brief forbids encoding as architecture.
 **It is a decision, and a genuinely unmade one.** It is also now the highest-value
 open item in the repository.
 
+> **DONE — 2026-09-25.** The decision is **ADR-0058** (`PHASE_KEY_TRUST_WORKFLOW.md`); the wiring is
+> `PHASE_M4_WIRING.md`. The four steps, as landed:
+>
+> | step | state |
+> |---|---|
+> | 1. `config.py` reads `WISP_POLICY_BUNDLE` / `WISP_POLICY_PUBKEY` | **DONE** — two string settings, both defaulting to `""` |
+> | 2. `composition.py` loads and passes `policy=` | **DONE** — `load_organization_policy(config)`, at the single construction site (ADR-0006). `None` when unset; **raises** when a bundle is named but unverifiable (ADR-0058 R3) |
+> | 3. `server/deps.py::request_policy` loads the same bundle for REST | **NOT DONE, and it should not be — §6.4 below** |
+> | 4. tests: no-op when unset, denial when set | **DONE** — `tests/reliability/test_m4_policy_wiring.py` (10 tests), **7/7 non-vacuity probes caught** |
+>
+> **§6.4 — why step 3 is not implemented.** `require_tool_allowed` consumes
+> `SecurityPolicy.check(action, context)`, and **`SecurityPolicy` has no organization slot** — driven,
+> `dir()` shows no policy-shaped attribute and `check` takes no bundle. L0 lives inside `authorize()`,
+> which REST does not call for these actions (ADR-0055). So loading a bundle into `request_policy`
+> would be **dead data**: a new instance of the exact pattern this document diagnoses. Wiring L0 into
+> REST means adding an `authorize()` call to the REST gate — a change to the gate ADR-0055 measured and
+> pinned — and that is its own decision. **Named as a residual, not silently done.**
+>
+> **One env var is the switch, not two.** ADR-0058 R1 engages on `WISP_POLICY_BUNDLE` alone; a bundle
+> named with no key **refuses to boot** rather than going inert. §6's *"if both are set"* is
+> sufficient but is not the guard — with it as the guard, an operator who set the path and forgot the
+> key would get an ungoverned runtime and no signal.
+
 ---
 
 ## 7. What was implemented: the gap is now visible and cannot be forgotten
@@ -156,6 +194,23 @@ open item in the repository.
 The third test is the important one: it is a **tripwire**, not an assertion that
 the current state is right. Wiring the layer without updating this document
 should be impossible to do accidentally.
+
+> **THE TRIPWIRES FIRED AND WERE REPLACED BY THEIR INVERSES — 2026-09-25.** The
+> layer is wired, so the four tests that asserted the *unwired* state now assert
+> the *wired* one, in the same change that recorded the decision (the P9/M15 and
+> M11/M13 precedent: **replace, never weaken, never delete**):
+>
+> | was | is now | the property it keeps |
+> |---|---|---|
+> | `test_no_tool_executor_is_constructed_with_a_policy` | `test_the_composition_root_passes_the_organization_policy` | **exactly one** site passes `policy=`, and it is the composition root; the other two are named |
+> | `test_the_runtime_never_imports_the_policy_package` | `test_only_the_composition_root_imports_the_policy_package` | exactly **one** runtime importer, so a second load site fails |
+> | `test_config_has_no_policy_bundle_setting` | `test_config_reads_the_policy_settings` | both settings **default to empty**, so an unconfigured runtime loads nothing |
+> | `test_the_loader_entry_points_have_no_runtime_caller` | *(same test, inverted assertion)* | the only runtime caller is the composition root |
+>
+> `test_the_agent_passes_its_none_policy_through`, `test_the_publish_route_holds_a_bundle_that_nothing_reads`,
+> `test_the_distribution_surface_is_unconfigured_in_production` and
+> `test_the_m4_spec_still_has_no_wiring_section` are **unchanged and still green** —
+> they pin things the wiring does not touch (§6.4 explains the second).
 
 ---
 
@@ -181,7 +236,9 @@ second in a row where the honest answer to *"which of these two is wrong?"* was
 | **C. Mark it clearly as unenforced** | Docs and CLI stop implying enforcement | **✅ IMPLEMENTED** (see §10) |
 | **D. Remove it** | Deletes a tested subsystem | Wasteful; M4 is the enterprise story |
 
-**Recommendation: B, with C immediately.** C is done. B remains the open decision.
+**Recommendation: B, with C immediately.** C is done. **B is now done too** — ADR-0058 decided the
+key-trust workflow and `PHASE_M4_WIRING.md` landed the wiring, default OFF. **A** is therefore the
+shape that landed: wire it, default-off, *after* the decision — which is what this row said to do.
 
 ---
 
@@ -212,4 +269,33 @@ a result, and the three docs each carry their qualifier. The CLI tests'
 golden-output assertions still pass unchanged — the notice is additive.
 
 **What C does not do:** it does not make the policy enforced. It removes the
-*claim* that it is. B is still required.
+*claim* that it is. B was still required — **and B is now done** (ADR-0058,
+`PHASE_M4_WIRING.md`).
+
+---
+
+## 11. Closed — 2026-09-25
+
+The finding is closed by two landings, in the order this document's §9 prescribed.
+
+| step | landing |
+|---|---|
+| **B — decide the key-trust workflow** | **ADR-0058**; `PHASE_KEY_TRUST_WORKFLOW.md`. The model is the operator-supplied organization public key; absence is a configuration, invalidity is a refusal. **The brief's own worked example was wrong and the error decided the workflow** — `WISP_POLICY_PUBKEY` is key material, not a path |
+| **A — wire it, default-off** | `PHASE_M4_WIRING.md`. `config.py` reads the two settings; `composition.py` loads and passes `policy=`; a named-but-unverifiable bundle refuses to boot |
+
+**What is still open, and named rather than implied:**
+
+1. **REST does not receive L0** (§6.4) — `SecurityPolicy` has no organization slot, and adding one to
+   the REST gate is a change to what ADR-0055 measured and pinned. Its own decision.
+   **CLOSED by ADR-0059** — and **not** by adding a slot: `require_tool_allowed` now consults
+   `authorize()` with the policy the composition root loaded, for its **denial** verdict only. The
+   reason this document gives still stands (a bundle loaded into `request_policy` *would* have been
+   dead data), and the gap it left was real: driven, **11 of 36 (route, mode) pairs diverged** once a
+   bundle was loaded, five in the default mode. See `PHASE_REST_AUTHORIZATION_COMPOSITION.md`.
+2. **`acp_session.py:208` and `benchmark/runner.py:82` do not receive the bundle** — the first is
+   reached only when there is no composition root, the second is a benchmark harness, not the runtime.
+3. **The M4 policy suite cannot run in this environment** — `cryptography` is declared but absent, so
+   `verify_bundle` returns `False` for everything and `load_local` always raises. Measured: 14 failed,
+   6 errors, 13 passed across the five `test_policy_*.py` files. Finding **F88**.
+4. **A bundle that omits `expires_at` raises `min() iterable argument is empty`** from `merge_layers`
+   instead of a named error. Fails closed; the message is wrong. Finding **F89**.

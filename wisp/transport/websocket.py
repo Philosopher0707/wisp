@@ -26,8 +26,22 @@ from .base import Transport
 
 logger = logging.getLogger(__name__)
 
-# Default timeout for approval responses from the WebSocket client
+# Default timeout for approval responses from the WebSocket client.
+#
+# ADR-0061 R3 — UNCHANGED from today's value, and the reason is the shape of the wait,
+# not its length. ADR-0057 R6 bounded REST's approval at 30 s because a REST request is
+# **holding an HTTP connection open**. This path holds nothing open: it waits on a human
+# reading a prompt over a persistent socket. ADR-0036's bounded delay is the nearest
+# *shape* — the delay is bounded and the fallback is deny, never "assume yes" — not the
+# nearest duration, and a human prompt is a different kind of bound.
 _APPROVAL_TIMEOUT = 60.0
+
+#: ADR-0061 R4 — the named reason a no-client approval is denied.
+#:
+#: A constant rather than a log string so the decision is an artifact a guard can pin.
+#: It is *distinguishable* on purpose: "nobody is connected" and "the human said no" are
+#: the two outcomes an operator most needs to tell apart, and they must not collapse.
+NO_CLIENT_REASON = "no websocket client connected to approve"
 
 # Active (session_id, ws) for the turn currently executing on this task.
 # stream_turn() sets it; approve() reads it so concurrent turns on distinct
@@ -116,9 +130,18 @@ class WebSocketTransport(Transport):
                     "(WISP_WS_AUTO_APPROVE=true)", tool_call.get("name", "unknown"),
                 )
                 return True
+            # ADR-0061 R4 — DENY, with a named and distinguishable reason.
+            #
+            # Rejected alternatives, each for a reason this corpus has already paid for:
+            # *waiting* holds the turn open on a condition that cannot change without a
+            # client — the "must not hang" ADR-0057 R5 rejected for REST; *failing closed
+            # silently* makes "nobody is connected" indistinguishable from "the human
+            # said no". `WISP_WS_AUTO_APPROVE=true` remains the one explicit opt-in: it
+            # is default off, it is logged at warning level, and it is the operator
+            # saying so — not a silent fall-through.
             logger.warning(
-                "Denying tool %s: no client connected to approve it",
-                tool_call.get("name", "unknown"),
+                "Denying tool %s: %s",
+                tool_call.get("name", "unknown"), NO_CLIENT_REASON,
             )
             return False
 
@@ -156,10 +179,26 @@ class WebSocketTransport(Transport):
             "tool_name": name,
         }
         try:
+            # ADR-0061 R1/R2 — the CLIENTS' vocabulary, correlated on `call_id`.
+            #
+            # This used to send `approval_request` / `{approval_id, tool_call}`, which
+            # **no client reads**: the desktop renderer, the TUI and the VS Code
+            # extension all branch on `tool_approval_request` and read `call_id`,
+            # `name`, `arguments`, `reason`. So the prompt never rendered, every
+            # request hit the 60 s bound, and the agent path denied (W1).
+            #
+            # `call_id` IS the correlation key: it is what the clients echo back as
+            # `id`, and `server/routes/agents.py` resolves on `msg["id"]`. It must
+            # therefore equal this transport's `_approvals` key — so it is
+            # `approval_id` itself, not the bare tool-call id. Sending anything else
+            # would miss the entry and fall back to "single pending"
+            # (ADR-0057 residual 2), which crosses under concurrency.
             await ws.send_json({
-                "type": "approval_request",
-                "approval_id": approval_id,
-                "tool_call": tool_call,
+                "type": "tool_approval_request",
+                "call_id": approval_id,
+                "name": name,
+                "arguments": tool_call.get("arguments") or {},
+                "reason": str(tool_call.get("reason") or ""),
             })
             return await asyncio.wait_for(future, timeout=_APPROVAL_TIMEOUT)
         except asyncio.TimeoutError:

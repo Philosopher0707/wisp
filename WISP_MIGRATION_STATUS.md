@@ -13,7 +13,7 @@
 
 ### Commits
 
-**35 commits** on top of `83b10af` (`git rev-list --count 83b10af..HEAD`). The full table is in
+**43 commits** on top of `83b10af` (`git rev-list --count 83b10af..HEAD`). The full table is in
 `CONTEXT.md` §3; the first three and the most recent three are listed here for orientation. This count is
 **prose and goes stale on the next commit** — §3 is the authority, and it is now complete.
 
@@ -39,6 +39,96 @@ It excludes the user's pre-existing WIP (`CONTEXT.md` §8) deliberately and file
 > migration did not make.
 
 **Status vocabulary:** `NOT STARTED` · `IN PROGRESS` · `COMPLETE` · `BLOCKED` · `PARTIAL` · `SUPERSEDED`
+
+---
+
+## 0. NEXT — structured criteria (2026-09-25)
+
+Landed as `3f9e639`. **ADR-0050**: the objective may carry a declared criteria block
+(`--- criteria ---` … `--- /criteria ---`, at the head), the host validates each spec against the
+measurable surface, and a declaration it cannot use is **rejected** — never reinterpreted, never a
+fallback to the prose grammar. `WISP_CRITERIA_STRUCTURED_DECLARATION`, default **OFF**.
+
+**Findings F72, F73, F74** — the rows are in **§23**; this section does not repeat them, because the
+duplication that already exists (F64–F71 appear in both this §0 and §23) is the navigability defect this
+chain was about and should not be extended.
+
+**What closes, and what does not:** MODE A and MODE B both close **on the declared path only**. An
+objective that declares nothing keeps today's behaviour and today's defects. **The declaration does not
+make the classifier better, it makes the *objective* complete.** Both `DEFECT-PIN` classes still pass,
+with docstrings updated to record the closure — not deleted.
+
+**Report:** `PHASE_STRUCTURED_CRITERIA.md`. **Guard:** `tests/reliability/test_structured_criteria.py`
+(53), which drives the real `converge_on_objective` rather than only the parser.
+
+**Doc-hygiene observation, recorded not repaired:** F64–F71 exist in **two** places — this file's §0
+mission sections and §23's table. Both copies agree, so nothing is wrong; but the log has two homes for
+the same rows, which is exactly the kind of split §23's own note already flags for F45–F63. A future
+editorial pass should give the findings one home (either move F45+ into §23, or keep §23 as the F1–F44
+record and say so). Not done here — it is a 25-row reorganization and this phase is about criteria.
+
+---
+
+## 0. NEXT — precedence correction (2026-09-25)
+
+Landed as `3298894`. **ADR-0049**: the canonical precedence table is `goal.PRECEDENCE` (eight rows, 0–7);
+older numbering is historical and is resolved **by content**. **A record update — no code change, no
+behaviour change.** It decides **F64** and **F65** (above), which `CURRENT_AUTHORITIES.md` §5 had recorded
+but was not authorised to decide.
+
+**Report:** `PHASE_PRECEDENCE_CORRECTION.md`. **Guard:**
+`tests/reliability/test_precedence_canonical.py` (27) — parses the ADR's restated table out of the
+markdown and compares it to `goal.PRECEDENCE` row for row, so neither can drift from the other.
+
+**Two process findings worth keeping, both from probes that did NOT falsify:**
+
+- **A check that can pass by finding nothing.** Two independent probes passed against a broken test: one
+  because a helper returned the **whole ADR section** rather than the named subsection (so deleting the
+  table's own location pin was invisible — the check matched a mention in a different subsection), and one
+  because a `+` regex group made an **emptied** disposition skip the finding entirely, leaving a `for` loop
+  over an empty list. Both are the same defect, and neither was found by reading the test.
+- **A guard that had pinned the OLD state.** `test_the_page_records_its_unpinnable_claims` asserted the
+  literal phrase *"could not pin"* — the page's state **before** this ADR — so it went red when the page was
+  correctly regenerated. It was **rewritten, not weakened**, to assert the property instead: every finding
+  in §5 is marked `DECIDED` (with an ADR cited) or `OPEN`, and §5 does not re-argue a decision.
+
+---
+
+## 0. NEXT — criteria authority & corpus navigability (2026-09-25)
+
+Three deliverables, landed as `802413a` → `7023af0` → `d7a55c2`. The full narrative is in `CONTEXT.md`
+§0.0.5 and the three phase reports; this section records the **findings**.
+
+| Artefact | What it is | Decision |
+|---|---|---|
+| `CURRENT_AUTHORITIES.md` + `tests/reliability/test_current_authorities_pins.py` | The current-state-of-the-authorities page (162 lines, six authorities, 37 pins) and its guard (28 tests) | **none** — a derived page. Found **F64**, **F65** |
+| **ADR-0048** + `tests/reliability/test_criteria_derivation_authority.py` | The authority over *"does this objective require a green suite?"* — the sole gate on `GOAL_MET` since ADR-0047 R5 | **DECIDED** (R1–R7). Found **F66**, **F67** |
+| `wisp/core/stateless.py` + `tests/reliability/test_f8_error_classification.py` | F8's second half — a missing validator is a system failure, not a schema verdict | mechanical. Found **F68**, **F69** |
+
+**Findings (numbered continuing F63 — see the §23 note about the split log):**
+
+| # | State | Statement |
+|---|---|---|
+| **F64** | **RECORDED, NOT DECIDED** | The goal arbitration drifted further than ADR-0047 states. A differential against `b9af5f0^` over all **48** input combinations finds **7 cells changed in three semantic classes**, of which **two are undocumented**: `INCOMPLETE`+`PASS` moved `GOAL_UNVERIFIED` → `GOAL_MET`, and `fatal`+`PASS`+`stagnating` moved `GOAL_FAILED` → `GOAL_STAGNATED`. R1 says *"Only one input combination moved."* Reachable: a turn that exhausts its budget without emitting `done` while the harness measures every criterion satisfied now reports `GOAL_MET` |
+| **F65** | **RECORDED, NOT DECIDED** | The precedence table is total only in the code, and **"row N" is ambiguous between two ADRs and the implementation.** ADR-0035's arbiter has rows 0–6 and no fall-through; the code has always had a row 7. ADR-0047 revised the table without restating it and renumbered against a numbering that exists only in `goal.PRECEDENCE`. The brief for Deliverable 1 inherited the ambiguity |
+| **F66** | **DECIDED — ADR-0048** | The acceptance criteria — the **sole** gate on `GOAL_MET` — are derived from prose by three regexes, with three measured failure modes. **MODE A:** the repo's **own benchmark task** `FIX_BUG` matches no suite word, so on a red baseline **a no-op satisfies the guards** — measured `pass` → **`goal_met`**, bug unfixed. **MODE B:** no negation awareness, so *"Do not make the tests pass"* promotes and fails an objective that never asked. **MODE C:** no criteria → `NO_REQUIRED_CRITERIA` → `goal_unverified`, **already honest**. A and C are opposite outcomes from the same state; the corpus had already decided which |
+| **F67** | **FIXED** | **The derivation's production wiring had no test, and a type error shipped green.** `explain_acceptance` returns a dataclass; `converge_on_objective` unpacked it as a tuple — **iterating a frozen dataclass**. **All 55 tests passed**, because every one calls `explain_acceptance` or the controller *directly*. `mypy` found it. `TestTheProductionWiring` now drives the real caller; probe W1 reintroduces the shipped line and 4 tests fail. **The F41/F54 defect class, recurring** |
+| **F68** | **RECORDED, NOT REMOVED** | The `write_file` retry block in `_validate_tool_args` is **reachable but inert**: it re-validates the same `args` against the same `schema`, so its `return None` is unreachable. Driven, not read — an instrumented validator counts 2 calls and the same failure |
+| **F69** | **RECORDED** | One condition, **two published classifications**: a schema failure is a non-retryable *denial* on the pre-dispatch path (`SCHEMA_INVALID` → `OutcomeClass.INVALID`) and a retryable *error* on the defense-in-depth path (`status: "error"` → `OutcomeClass.ERROR`) |
+| **F70** | **CORRECTED IN PLACE** | **The editable install is a NO-OP and `CONTEXT.md` §6's claim was inverted.** The finder's `MAPPING` points at the **pre-move** path, which does not exist, so it resolves nothing; `import wisp` fails from a foreign cwd and works with `PYTHONPATH` set. `PYTHONPATH` **can** override; the **cwd** is what actually resolves. The practical rule survives, its reason does not, and the real hazard (run from the wrong directory and `wisp` resolves to nothing) was unnamed |
+| **F71** | **CORRECTED IN PLACE** | **`CONTEXT.md` §11 was wrong twice.** Its canonical count was the pre-NEXT figure ("849"; before that "714"), and it listed *"Gates (both must be green)"* — measured at `d7a55c2`, `ruff` reports **11** errors and the pinned `mypy` reports **1844 in 228 files**. Every phase claiming a green lint/type criterion claimed something untrue. Both sets are unchanged by this chain (0 new, 0 gone). The 11 ruff and 1844 mypy errors are **not repaired** — unrelated modules, and repairing them would sweep a large diff into a documentation commit |
+
+**Residual, stated not hidden:** with `WISP_CRITERIA_STRICT_DERIVATION` **off** (the default), **MODE A
+remains reachable** — a measured false `GOAL_MET`. The flag closes it and makes such objectives
+uncompletable until clarified, which is why it defaults off; ADR-0048's reversal condition states the
+trade. And F8's **published denial status** is unchanged: the attribution is now correct where the failure
+is *produced* and still incorrect where it is *published*, because changing it touches a taxonomy consumed
+by the M12 classifier and quoted to the model — an ADR's question, with its surfaces enumerated in
+`PHASE_F8_ERROR_CLASSIFICATION.md` §4.
+
+**Regression, canonical set (37 files): 1115 tests — 1114 passed, 1 failed** (F38, pre-existing; failure
+set identical in both directions). Delta **+104** across the three deliverables (28 + 55 + 21), all new
+files. `ruff` and `mypy` error sets are each **identical to HEAD's**.
 
 ---
 
@@ -146,8 +236,11 @@ real executor reachable only from the interactive REPL.
 
 Critical path: **P0 → P1 → P2 → P4 → P5 → P6**. P8 is independent and may start at any time.
 The `M` rows are the plan's **deferred prerequisites**, worked after the phases. **M9, M11 and M13 are
-complete**; what remains is **M1** (its `jsonschema` blocker is gone — see PM-12) and **M8** (its blocker
-is *also* gone: the fanout suite is **green** after F8 provisioning — `test_13j1` 13→0, `test_13j` 5→0) —
+complete**; what remains is **M1** (**`BLOCKED`** — its `jsonschema` blocker is gone, and ADR-0051 R1's
+precondition is now satisfied by **ADR-0053**; what blocks enablement is the missing declared turn
+population) and **M8** (**`DEPRECATE`** decided — its blocker
+is *also* gone: the fanout suite is **green** after F8 provisioning — `test_13j1` 13→0, `test_13j` 5→0 —
+but the removal is blocked on a measured semantic divergence) —
 see §12 and `CONTEXT.md` §0.
 
 ---
@@ -459,7 +552,7 @@ recomputation.
 | 2 | Map each turn's work to `GraphNode`s, one `AGENT` node per iteration | `COMPLETE` | `build_turn_graph()`; the runtime materializes one node per **closed tool exchange** + one terminal node, and says so — iteration boundaries are not observable, so the count is a lower bound |
 | 3 | Materialize `READY` rather than recomputing it | `COMPLETE` | `ready` is a stored field; `divergences()` detects staleness; `apply_transition` re-materializes |
 | 4 | `NodeTransition` as the only write path for node state | `COMPLETE` | AST-pinned in-module **and** tree-wide |
-| 5 | Retire `multi_agent/dag.py` into `wisp/graph/` | `NOT DONE` | **deferred** — §7.4 |
+| 5 | Retire `multi_agent/dag.py` into `wisp/graph/` | `SCOPED` — see **M8** | **surveyed and decided 2026-09-25** (`PHASE_DAG_RETIREMENT.md`): **deprecate, do not remove** — the removal is blocked on a *measured semantic divergence* (which definition of a valid DAG wins), not on work. **Re-scoped by ADR-0060**: the divergence is the **boundary** between two tools, not a blocker, so the removal is **not owed**. §6.4 |
 
 ### 6.4 Item 5 deferred, with reason
 
@@ -468,6 +561,38 @@ executor — a change to a working, load-bearing path whose own regression suite
 (`test_13j1_fanout_contract_repair.py`, 13 failures) is **already red for environmental reasons**. Doing
 it now would make a regression the migration caused indistinguishable from one that was already there.
 Recorded as item **M8**, not silently dropped.
+
+**UPDATE 2026-09-25 — M8 is surveyed and DECIDED, and the answer is `DEPRECATE`, not remove.**
+The deferral's stated reason was resolved by the F8 provisioning (the fanout suite went green), so the
+retirement was attempted and **driven**. It is blocked on a *semantic* divergence, not on work:
+
+* The two implementations **disagree on what a valid DAG is.** `wisp/graph/` requires a non-empty graph
+  and every node reachable from the entrypoint; `TaskDAG` is a general partial order and permits
+  disconnected components. Re-pointing `orchestrate_dag` onto `validate_graph` would **reject inputs it
+  accepts today** — a behaviour change to a live, model-callable tool.
+* `TaskDAG.validate()` **mis-reports an unknown dependency as a cycle** (the unknown dep inflates the
+  in-degree count and can never be dequeued). The graph's validator names the real cause.
+* `wisp/graph/compat.py::dag_to_graph` — the intended lowering — is **test-only**; it has no production
+  caller.
+
+They **agree** on cycle detection and unknown-dependency detection, so the duplicate is real; they
+**diverge** on the entrypoint/reachability rule, so the duplicate is not interchangeable. Choosing which
+definition wins is its own decision.
+
+**UPDATE 2026-09-25 (2) — ADR-0060 answers the owed decision, and the answer is that neither definition
+"wins".** Layer A is the driver and Layer B is a record (`PHASE_LAYER_B_BOUNDARY.md`), so the divergence is
+**the boundary between two tools** — a general partial order for `orchestrate_dag`, and a compiled
+single-entrypoint graph for the engine — rather than a blocker awaiting reconciliation. **The removal is
+not owed by this decision**: choosing which definition of a valid DAG wins *for `orchestrate_dag`* is a
+change to a live, model-callable tool, and is therefore its own decision. The three tripwires stay (they
+pin the current state, which is unchanged); the two behavioural residuals above stay open as **M8's own**
+items, not as blockers. Guard: `tests/reliability/test_layer_b_boundary.py`.
+
+**What landed instead:** `wisp/multi_agent/dag.py`'s module docstring now declares the ownership boundary
+and names the blocker (a **prose-only** change — docstring-stripped AST byte-identical); the divergences,
+the shared property and the defect are pinned by `tests/reliability/test_dag_retirement_contract.py`
+(10 tests, 4 classes, incl. a DEFECT-PIN and three tripwires); the fanout safety net is green
+(107 passed). **The residual is open and tripwired**, not closed.
 
 ### 6.5 Completion criteria
 
@@ -532,6 +657,16 @@ projection of the graph) rather than before it. Recorded as item **M11**.
 **Resolved (M11, §21):** M9 re-scoped M11 to its precondition — **node identity** — and it is done
 (ADR-0033): a node now references its work unit. The change of *control* described above remains open
 and is pinned by a tripwire (`test_the_graph_still_does_not_drive_execution`).
+
+**CLOSED 2026-09-25 (ADR-0060).** The change of *control* is no longer open: it is **rejected as a
+target**, not deferred. Driven, Position B is not expressible in this tree — `wisp.graph.types.Graph` is
+`frozen=True` (a node cannot be appended mid-run), `GraphExecutor`'s public surface is
+`run`/`resume`/`cancel`/`register_function` with **no** growth API, `run()` refuses a graph that is not
+complete up front, and there is **no `TaskGraph → Graph` lowering** — while the turn loop discovers its
+work as the model streams. So `test_the_graph_still_does_not_drive_execution` becomes the **contract**
+(with its reversal condition stated in the test) and the wider property is pinned by
+`tests/reliability/test_layer_b_boundary.py` (16). This is a different blocker from ADR-0029's and does
+not mention payload. Report: `PHASE_LAYER_B_BOUNDARY.md`.
 
 ---
 
@@ -1578,8 +1713,8 @@ future engine that batches its tool events changes the node count visibly, not s
 | Item | Now needs |
 |---|---|
 | **M13** | the progress signal reads *which* nodes completed, not how many — now expressible |
-| **M1** | still blocked on a working tool path (`jsonschema`) — unchanged |
-| **M8** | **UNBLOCKED 2026-09-24** — it was waiting on a green fanout suite, and the F8 provisioning made the whole `tests/reliability/` directory green (`test_13j1` 13→0, `test_13j` 5→0). The deferral's stated reason no longer holds, so retiring `dag.py` can now be attempted and any regression will be attributable |
+| **M1** | **`PARTIAL`** — the precondition is satisfied **and** the mechanism is built and driven; only the population remains. (`PARTIAL`, not `IN_PROGRESS`: work has shipped and the remainder is blocked on an **external fact**, not on effort.) ADR-0051 R1's precondition was satisfied by **ADR-0053**; **ADR-0054** supplies the consumer ADR-0053 §10 named (the engine's pre-`done` gate asks a read-only callable and withholds `done` by ADR-0036's bounded model — **driven end to end through a real turn**). The flag `acceptance_gate` / `WISP_ACCEPTANCE_GATE` is added, **default OFF**, dependent on `turn_criteria_source`. **The reason it is not ON:** ADR-0051 R4 requires **≥ 2 capable models** and this environment serves exactly **1** of 13 (capable 1 · degenerate 2 · retired 5 · paywalled 5). Closing it needs a second capable model or a provider key — **not a code change**. Guards: `test_criteria_source_on_turn_path.py`, `test_acceptance_gate_enablement.py`. Instrument: `scripts/acceptance_gate_population.py`. Reports: `PHASE_GATE_ENABLEMENT.md`, `PHASE_CRITERIA_SOURCE.md`, `PHASE_GATE_ENABLEMENT_DECISION.md` |
+| **M8** | **SURVEYED AND DECIDED 2026-09-25 — `DEPRECATE`, not remove.** The fanout suite is green (`test_13j1` 13→0, `test_13j` 5→0; 107 passed here), so the retirement was attempted and driven. It is blocked on a **measured semantic divergence**, not on work: `wisp/graph/` requires a non-empty graph with every node reachable from the entrypoint, `TaskDAG` is a general partial order — so re-pointing `orchestrate_dag` onto `validate_graph` would **reject inputs it accepts today**. `dag_to_graph` is test-only; `TaskDAG.validate()` mis-reports an unknown dependency as a cycle. Choosing which definition wins is its own decision. Guard: `tests/reliability/test_dag_retirement_contract.py`. Report: `PHASE_DAG_RETIREMENT.md` |
 
 Only M13 depended on M11, and M11's precondition is now met. **The graph driving execution** — M11's
 original wording — remains open; ADR-0029 records that the strong reading is the wrong target.
@@ -1744,6 +1879,18 @@ prescribes rather than a single run.
 | **F42** | **A second canonicalizer exists and has drifted: `wisp.core.events.normalize_event` silently drops a `ToolCallBatch`'s entire payload.** It advertises accepting *"Provider objects with type/phase + attributes"* (`events.py:154`) but its `safe_fields` whitelist (14 entries) omits `calls` and `done_reason`, which `WispAgentCore._normalize_event` (16 entries) deliberately keeps. Measured: `events.normalize_event(ToolCallBatch(phase='tool_calls', calls=[…])).to_dict()` → `{'type': 'tool_calls', 'data': {}, …}` — **the tool calls vanish**. `StreamComplete.done_reason` is dropped the same way. **Two canonicalizers with divergent whitelists is a duplicated authority** (the repo's own discipline: two producers of one structure is a defect even when they agree today — these do not agree). **LATENT, not live:** both call sites (`runtime.py:793` else-branch, `headless.py:48`) receive engine output, which is always a flat dict, so the branch is unreachable today; it is **destructive if ever reached** | POST-M13 (F40 decision phase) | **NOT FIXED — reported.** Closed structurally by **ADR-0039 R2** (one canonicalization owner; `events.normalize_event` subordinated to `AgentEvent`/dict inputs only). Found while answering the ADR's Q3/Q12 ("where does normalization belong, and who owns it") — the decision phase found **two** owners where the recon had assumed one |
 | **F43** | **The empty-stream detection is representation-dependent: a bare typed `StreamComplete` counts as a meaningful response, a bare `{"type":"done"}` does not.** `_BOOKKEEPING_TYPES` re-spells two *terminal* spellings (`done`, `stream_complete`) and **omits `complete`**; the guard tests `ntype not in bookkeeping` **before** its terminal check, so a normalized `StreamComplete` (type `"complete"`) sets `got_meaningful=True` while an identical bare `done` does not. Measured: bare typed terminal → **1 provider call, no error**; bare dict terminal → **3 provider calls, then an explicit error**. So an empty Ollama response is accepted as a successful empty reply while the identical empty OpenAI response is retried and surfaced. **Pre-existing and NOT caused by ADR-0039** — the guard's input is byte-identical before/after the rewiring (`_normalize_event(raw)` == `passthrough_if_canonical(canonical_event(raw))` for every typed class) and `_BOOKKEEPING_TYPES` is untouched | POST-M13 (F40 implementation) | **CLOSED (PM-23) — ADR-0041.** The guard now classifies **terminal FIRST** and decides a terminal's meaningfulness **solely from its payload**, and `NON_PAYLOAD_TYPES` holds only the non-terminal payload-less types — so the two vocabularies are **disjoint** and the duplication is **eliminated**, not derived around. A bare typed `StreamComplete` now takes the **honest path** (3 calls → error) exactly like a bare `done`; a payload-carrying terminal is still meaningful. The ADR-0039 §5 fence was a fence for the *normalization* phase, and F43 was explicitly assigned its own decision. Pinned by `test_F43_bookkeeping_duplication_is_gone` and the representation-equivalence tests |
 | **F44** | **An iteration-budget-exhausted turn whose wrap-up succeeds is recorded `was_last_turn_complete == True`, so the runtime skips the incomplete-turn replay.** `was_last_turn_complete` is "the last persisted event is DONE"; with the wrap-up working the turn now ends `… content, done` → `True` (`runtime.py:588` then skips the replay). **NOT introduced by ADR-0039:** measured, the **dict** provider path — untouched by this phase — already yielded `True` and no error for the identical script, so the old `False` held **only for typed providers** and was an F40 artifact (the spurious error was the last persisted event). ADR-0039 removed that representation dependence, which is its purpose. Whether an exhausted-but-summarised turn *should* count as complete is a **completion-authority** question (ADR-0035 / recovery ladder), not a normalization one | POST-M13 (F40 implementation) | **CLOSED (PM-23) — ADR-0042.** Measured across ten scenarios: the five authorities (provider terminal → stream state → turn state → verification → goal state → routing) are **already distinct and correctly related**. An exhausted turn whose wrap-up succeeds is a **completed turn with an UNVERIFIED goal** — `turn_succeeded=True`, `goal_unverified`, **not** `goal_failed` and **not** `goal_met`. `was_last_turn_complete` is an **interrupted-turn / replay** signal, not a completion verdict; the next turn correctly does **not** replay. **No code change** — what was missing was the statement of the relation and tests that hold the authorities apart. Pinned by `test_post_m13_f43_f44_authority_convergence.py` (all ten rows + three non-collapse assertions) |
+| **F64** | **The goal arbitration drifted further than ADR-0047 states.** R1 says *"Only one input combination moved"* and `WISP_MIGRATION_STATUS.md` F60 repeats *"Exactly one input combination moved"*. A differential of `derive_goal_state` against `b9af5f0^` over all **48** input combinations finds **7 cells changed in three semantic classes**: (a) `fatal`+`PASS` → `GOAL_MET` (documented, R1); (b) `turn_succeeded=False` no longer blocking `PASS` (documented, R2); (c) **two undocumented** — **`INCOMPLETE`+`PASS` moved `GOAL_UNVERIFIED` → `GOAL_MET`** (the pre-ADR-0047 body ordered row 5's `outcome == INCOMPLETE` *before* row 6's `PASS`; ADR-0047 removed row 5's second term and moved `PASS` above the fall-through), and **`fatal`+`PASS`+`stagnating` moved `GOAL_FAILED` → `GOAL_STAGNATED`** (ADR-0047 R3's *"a fatal error must outrank stagnation"* is stated **without** a `PASS`, so this cell is outside R3's prose). Reachable: a turn that exhausts its budget without emitting `done` while the harness measures every criterion satisfied now reports `GOAL_MET` | criteria-authority mission (Deliverable 1) | **DECIDED — ADR-0049 (R2/R3), 2026-09-25.** **R2 RATIFIES** the `INCOMPLETE`+`PASS` cells on ADR-0047's own principle — the objective's evidence decides where it is decisive, applied to `INCOMPLETE` rather than `FAILED`; the alternative would let the *attempt's* budget veto the *objective's* evidence, which is the defect ADR-0047 removed. **R3 SCOPES** the `fatal`+`PASS`+`stagnating` cell: *"a fatal error must outrank stagnation"* holds for a fatal error **with no `PASS`** (the case R3's own test exercises); a fatal error **with** a `PASS` is not fatal, so the cell reduces to `PASS` + stagnation = canonical row 5. **ADR-0047 is not reopened.** No code change; the 48-combination differential is identical before and after (`bb8b54e6…`) |
+| **F65** | **The precedence table is total only in the code, and "row N" is ambiguous between two ADRs.** ADR-0035's arbiter table has rows **0–6** and **no fall-through**, so the combination `SUCCEEDED` with no acceptance verdict matches none of them — and ADR-0035's taxonomy gives `GOAL_UNVERIFIED` the requirement `P3 INCONCLUSIVE ∨ terminal INCOMPLETE`, which that combination does not satisfy. The implementation has **always** had a row 7 (the final `return`), so **the ADR's table was never total; the code's was.** ADR-0047 then revised the table **without restating it** and wrote *"Row 4 is now «fatal terminal error, and no P3 PASS»"* — but under ADR-0035's own numbering **row 4 is stagnation**. ADR-0047's numbering exists only in `goal.PRECEDENCE` (8 rows, 0–7). **Consequence:** an append-only corpus with two live numberings for one table, so "row 4" resolves to three different rows depending on which document you read. The brief for Deliverable 1 inherited the ambiguity — it asked for *"rows 0–6 … with the fatal-error clause qualified"*, a combination that exists in neither document | criteria-authority mission (Deliverable 1) | **DECIDED — ADR-0049 (R1), 2026-09-25.** `goal.PRECEDENCE` (`wisp/core/goal.py:108-117`, **eight rows 0–7**) is the **canonical table**; ADR-0035 §Precedence's rows 0–6 and ADR-0047's renumbering are **historical**, and any "row N" in either is resolved against the canonical table **by content**. The table is restated in full in the ADR. The driven mapping: ADR-0035's row 3 spans canonical 3/4/5/6, row 4 → **5**, row 5 → 6/7, row 6 → 6; and ADR-0035's table is **silent for 3 of 48 combinations** — the non-totality, quantified for the first time. **The brief that commissioned the ADR carried this mapping INVERTED** (it had ADR-0035's row 4 → canonical 4 and ADR-0047's → canonical 5); had it been adopted, R1 would have mapped the fatal clause to stagnation |
+| **F66** | **The acceptance criteria — the *sole* gate on `GOAL_MET` after ADR-0047 R5 — are derived from the objective's prose by three regexes, with three measured failure modes.** **MODE A (a false `GOAL_MET`):** this repository's **own benchmark task** `FIX_BUG` (*"totals.py defines `sum_to(n)` … **Fix the bug** in totals.py"*) matches no suite word, so on a red baseline the absolute criterion is **advisory** and an attempt that changes **nothing** satisfies the two guards — measured verdict `pass` → **`goal_met`**, bug unfixed, suite still failing (F37's shape, arriving through the criteria). **MODE B (a false exhaustion):** `_WANTS_FIX_RE` has **no negation awareness**, so *"**Do not** make the tests pass by editing them"* matches `'make the tests'`, the criterion is promoted, and an objective that never asked for a green suite ends `goal_failed`. **MODE C ("I cannot tell"):** no declared toolchain → no criteria → `inconclusive`/`NO_REQUIRED_CRITERIA` → `goal_unverified` — **already honest**, and it is the behaviour the corpus established (ADR-0035 inv 1, ADR-0042, ADR-0045 R4). **MODE A and MODE C are opposite outcomes from the same input state, and both cannot be right.** Survey of all eight objective shapes in use: the four live objectives promote; **none of the four benchmark tasks does** | criteria-authority mission (Deliverable 2) | **DECIDED — ADR-0048.** The objective is the authority; the host owns the derivation and the validation, never the invention. Three outcomes (`STATED`/`UNSTATED`/`UNDETERMINED`); `UNDETERMINED` never promotes and, where its absolute criterion is advisory, contributes a required **unevidenceable** criterion that `evaluate`'s existing rule 3 turns into `INCONCLUSIVE`. The derivation is recorded and journalled. `WISP_CRITERIA_STRICT_DERIVATION` defaults **OFF**, so **MODE A remains reachable** — the reversal condition states that residual. **R7: negation is not handled** (MODE B unchanged) |
+| **F67** | **The derivation's production wiring had no test, and a type error shipped green.** `explain_acceptance` returns a **`CriteriaDerivation` dataclass**, not the `(criteria, specs)` tuple its predecessor returned; `converge_on_objective` was written as `_, derived_specs = explain_acceptance(...)`, which **iterates a frozen dataclass** and raises `TypeError` on the first line of the production path. **All 55 tests passed** — every one calls `explain_acceptance` or the `ConvergenceController` *directly*, so `converge_on_objective` was covered by nothing and the first real `wisp converge` run would have crashed. `mypy` found it (`"CriteriaDerivation" object is not iterable`) — the toolchain the brief does not require and the tests could not substitute for | criteria-authority mission (Deliverable 3) | **FIXED** (all 11 new mypy errors removed; 0 new / 0 gone vs HEAD). `TestTheProductionWiring` now drives the real caller with a stub root — probe **W1** reintroduces the shipped line and **4 tests fail**. **The F41/F54 defect class** — a fixture that does not reproduce the production control flow — recurring, and the second time in this mission that the instrument, not the subject, was the defect |
+| **F68** | **The `write_file` retry block in `_validate_tool_args` is reachable but INERT.** It re-validates the **same `args`** against the **same `schema`** after the first `validate` raised. Nothing mutates `args` between the two calls — the salvage runs *before* the `try` — so a deterministic validator raises identically and the `return None` inside the retry is **unreachable**. **Driven, not read:** an instrumented `jsonschema.validate` counts **2** calls for an invalid `write_file` with a `path` and the same failure, so the block *is* reached and cannot change the answer. It doubles the validation cost of every invalid `write_file` call and reads as a fallback without being one | F8 error classification (Deliverable 3) | **RECORDED, NOT REMOVED.** Removing it is a behaviour-neutral simplification but a larger diff than the brief authorises, and the AST criterion asks for the surrounding function to be otherwise unchanged. Recorded in a comment at the site (comments are not AST nodes, so the AST pin is unaffected) |
+| **F69** | **One condition, two published classifications: a schema failure is a *denial* on the pre-dispatch path and an *error* on the defense-in-depth path.** The dry-run sites stamp `tc_event["_denial"] = "SCHEMA_INVALID"` → `denial_result()` → `OutcomeClass.INVALID` → **non-retryable** (`TERMINAL_OUTCOME_CLASSES`). `_execute_tool` (`stateless.py:2007`) reports the identical condition as `{"status": "error", "data": schema_error}` → `OutcomeClass.ERROR` → **retryable**. The two differ on the one axis the taxonomy exists to decide | F8 error classification (Deliverable 3) | **RECORDED.** Part of the same undecided question as the residual below — the evidence that the denial-status question is genuinely undecided rather than merely unimplemented |
+| **F70** | **The editable install is a NO-OP, and `CONTEXT.md` §6's claim about it was INVERTED.** The row read *"`__editable___wisp_0_1_0_finder` resolves `wisp` ahead of `sys.path`, so **`PYTHONPATH` cannot override which package is imported**."* Measured: the finder's `MAPPING` points at `/Users/philosopher/Documents/wisp/wisp` — the **pre-move** path — and **that directory does not exist**; from a foreign cwd with no `PYTHONPATH`, `import wisp` raises `ModuleNotFoundError`; with `PYTHONPATH` set to the repo root it imports. So the finder resolves **nothing**, `PYTHONPATH` **can** override, and what actually resolves `wisp` is the **cwd**. The practical rule (*change files in place*) is still right, but for a different reason, and the real hazard is the one the row did not name: **run from anywhere but the repo root and `wisp` resolves to nothing** — or to a foreign tree if one is on `PYTHONPATH` | criteria-authority mission (Deliverable 2) | **RECORDED, NOT REPAIRED** (repairing the venv is an environment change; §9 keeps F8's env work separate from architecture). **The §6 row is corrected in place**, since a wrong claim in the environment authority is what makes the error recur |
+| **F71** | **`CONTEXT.md` §11's verification authority was wrong in two ways.** (1) Its heading read *"849 tests (848 pass, 1 fails)"* and its command block omitted the four NEXT-mission files — the figure was the **pre-NEXT** count (it had said "714" before that). (2) It listed *"Gates (both must be green)"*. Measured at `d7a55c2`: `ruff check wisp/` reports **11 errors** (incl. `F821` undefined names in `wisp/auth/principal.py` and `wisp/context_assembler.py`) and the pinned `mypy` reports **1844 errors in 228 files** — not zero. **Every phase that claimed a green lint/type criterion claimed something untrue.** Both error sets are **unchanged** by the 2026-09-25 chain (set diff: 0 new, 0 gone) | criteria-authority mission (all three deliverables) | **CORRECTED IN PLACE** — §11 now states the measured counts and says neither gate is green; the canonical block is extended to the seven new files and reads **1115 / 1114 / 1**. The 11 ruff and 1844 mypy errors are **not repaired**: unrelated modules, and repairing them would sweep a large diff into a documentation commit |
+| **F72** | **The criteria classifier's error rate is not a single number — it is a function of `(objective, workspace)`.** Measured over a corpus of **every objective in the repository**, collected by AST (13 distinct, 11 hand-labelled decidable) and run on a **red** baseline, the only baseline on which the promotion decision exists: required-when-it-should **4**, required-when-it-should-not (MODE B) **1**, not-required-when-it-should (MODE A) **1**, correctly-not-required **5** — **accuracy 9/11 = 82%**. But a `symbol_defined` criterion is derivable only when the named file **exists**, so three objectives move `UNDETERMINED` → `UNSTATED` against a workspace containing their fixture file, and `UNSTATED` is the **correct** answer for all three. **Corrected for each objective's own workspace: 12/14 = 86%.** | structured-criteria mission (Deliverable 2) | **RECORDED; ADR-0050's Context carries it.** This is the measurement ADR-0048's reversal condition asked for, and it shows the condition is **under-specified**: *"an objective whose requirement was determinable from its own words"* is not a property of the words. Instrument committed at `.workbuddy-ai/memory/post-m13-structured/corpus.py` |
+| **F73** | **The ADR-0045 R1 no-model-channel tripwire was over-broad, in two successive forms.** It asserted **parameter set equality** on `explain_acceptance`, so adding `use_declaration: bool` (ADR-0050 R8) tripped it — though a boolean switch cannot carry criteria. Rewritten with an explicit allow-list, a probe showed a **harmless** `verbose: bool` also tripped it, which is worse than the first form: a check that fires on every innocuous addition trains the reader to extend the list without thinking, defeating the check. It checked *which* parameters exist, not *whether any can carry criteria* | structured-criteria mission (Deliverable 2) | **FIXED** — rewritten to test the two things that make a channel: a criteria-holding **annotation**, and a channel-shaped **name on a non-scalar**. Probe **T1** (`tuple[AcceptanceCriteria, …]`) and **T2** (`declared_specs`, unannotated) are caught; **T3** (`verbose: bool`) stays green. The residual — a parameter typed `Any` under an innocuous name — is stated in the test |
+| **F74** | **A declared-path test was vacuous with respect to the promotion it claimed to test.** The red baseline was keyed `verify:cmd0` while a declared spec's criteria id is `declared:cmd0`, so `criteria_for` saw `base is None` and made the absolute criterion **required regardless of `promote_absolute`** — un-promoting the declared criterion was invisible. **In production the baseline does cover the id** (the probe measures the declared specs), so the mutation would have **reopened MODE A with a green suite** | structured-criteria mission (Deliverable 2) | **FIXED** — the baseline's criteria id is now a parameter, and the declared-path tests are keyed to the id under test. Found by mutation probe **P2** *not falsifying*, not by reading. Same class as F63 and Deliverable 1's P5: **a check that can pass for a reason unrelated to its claim** |
+
 
 
 The findings are numbered in discovery order and sorted here for reference. Each one is a claim in a
@@ -1760,6 +1907,17 @@ a coercion. **F42** was found *by the ADR itself*, while answering "who owns nor
 **two** canonicalizers and `events.normalize_event` silently empties a `ToolCallBatch` (latent). **F41** was found while implementing F39: the 4xx body log had
 never worked, because a closed streamed response has no body and the test double raised from `post()`
 so the `with` block never ran — **the same defect class as F37**.)
+
+**The canonical register for a finding's status is `CURRENT_FINDINGS.md` (ADR-0062 R1)** — all 104, each
+pinned. This log is **append-only and not backfilled**, so it is split, historically: the table above runs
+**F1–F44** and **F64–F74**; **F45–F63 live in §0**, under the per-mission sections that introduced them
+(F45–F54 autonomous convergence, F55–F58 live recovery, F59–F61 progress-aware recovery, F62–F63 multi-turn
+productive recovery); **F75 onward have no row here** (F106). *(This note said "F64–F71 resume here" —
+undercounting its own table by three — until ADR-0062.)* `CONTEXT.md` §0 describes this file as
+*"the phase ledger, findings F1–F63"*, which is true of the **file** and false of **§23** — and the brief
+for the 2026-09-25 chain cited *"§23 (F60–F63)"*, landing on a table that stops 19 findings short.
+**Recorded, not reorganized:** moving 19 rows is an editorial decision, and the finding is that a reader
+following the obvious pointer arrives at the wrong place.
 
 ---
 
@@ -1886,6 +2044,7 @@ so the `with` block never ran — **the same defect class as F37**.)
 | 2026-09-25 | POST-M13 (ADR) | **Canonicalization ownership reconciled — `RATIFIED` as ADR-0040 (Option B).** ADR-0039 named `WispAgentCore._normalize_event` as the authority; its implementation put the single whitelist and projection in `wisp.core.events.canonical_event` (because `core/compaction.py` and `graph/planner.py` are outside the core and cannot hold a per-turn core) and declared that as its only deviation. **The deviation is ratified, not reverted:** authority is defined by *ownership of the schema and the provider projection*, not by which facade invokes it. `_normalize_event` becomes a **compatibility/delegation facade**; `events.normalize_event` a compatibility entry point that delegates provider objects and owns no whitelist (superseding ADR-0039 R2's "`AgentEvent`/dict inputs only" clause — rejecting would return `type="unknown"` and silently lose data, the F42 defect class). **Decisive evidence:** `wisp/core/events.py` is a **leaf module** (0 `wisp.*` imports) already depended on by **21 production modules**, while `stateless.py` has 14 `wisp.*` imports — Option A would invert the dependency direction and couple provider-neutral data shape to agent-runtime state. Facts A–H **8/8**; exactly **one** `CANONICAL_EVENT_FIELDS` and **one** provider-object mapping site in the whole tree. **`PRODUCTION/TEST/DEFAULT CHANGES: 0/0/0`** — the code already *is* Option B; no cosmetic change was made. ADR-0040 appended append-only (40 sections, 40 index rows, collision-checked); ADR-0039's text untouched, its R2 subject amended and named in the index row. Convention verified first: every ADR is `ACCEPTED` with no in-place `AMENDED BY`, and amendments are new sequential ADRs (0036→0035, 0037→0036) | `PHASE_POST-M13_F40_CANONICALIZATION_OWNERSHIP_RECONCILIATION.md` |
 | 2026-09-25 | POST-M13 (impl) | **F43 CLOSED + F44 SETTLED — ADR-0041 / ADR-0042.** **F43:** the guard classified `ntype not in bookkeeping` **before** the terminal check, and `_BOOKKEEPING_TYPES` re-spelled `done`/`stream_complete` while **omitting `complete`** — so a bare typed `StreamComplete` was a **silent empty success** in 1 call while a bare `{"type":"done"}` was retried and errored. Fixed by making classification **semantic and terminal-first** and reducing the bookkeeping set to `NON_PAYLOAD_TYPES` = {checkpoint, usage, stream_stats}: the two vocabularies are now **disjoint**, so the duplication is **eliminated** rather than derived around. All four terminal spellings now take the identical honest path; payload-carrying terminals stay meaningful; bookkeeping-only streams are still retried. **Three tests had pinned the defect as the contract** (`test_13h2` *"a silent empty success. Recorded, not fixed"*, `test_13h5` *"H5 does not reclassify provider semantics"*, `test_13h4` *"bookkeeping-set mismatch (H2)"*) — all rewritten, none deleted. **F44:** measured across **ten scenarios**; the five authorities are already distinct — `turn_succeeded=True` with `goal_unverified` (ordinary) and with `goal_failed` (failed verification) both occur, so no collapse. An exhausted turn whose wrap-up succeeds is a **completed turn with an unverified goal**: exhaustion is an *absence of evidence*, and ADR-0035 maps that to `GOAL_UNVERIFIED`, never `GOAL_FAILED`. `was_last_turn_complete` is an **interrupted-turn/replay** signal, not a verdict. **No code change** — the relation is now stated and held apart by tests. **`FALSIFICATION: 0 of 14`**; canonical set **848/1 (pre-existing F38)**, identical to baseline; **0 new failures**; `numpy` env failure pre-existing. **No migration** — the change is confined to the guard's in-memory classification; historical journals keep their recorded meaning. ADRs 0041/0042 appended append-only (42 sections, 42 index rows) | `PHASE_POST-M13_F43_F44_RECOVERY_COMPLETION_CONVERGENCE.md` |
 | 2026-09-25 | POST-M13 (closure) | **Final execution-semantics closure — `EXECUTION SEMANTICS: CLOSED`.** Two ADRs, both genuine choices. **ADR-0043:** ADR-0041 had fixed F43 by *shrinking* the vocabulary list, but the audit found the same defect through a second door — an **unrecognised, payload-less event** counted as output and could bless an empty attempt (`unknown + bare terminal → 1 call, no error`, where `bare terminal alone → 3 calls, error`). The mechanism is now **deleted**: meaningfulness is the payload question for **every** event type, so the classifier owns no vocabulary but `TERMINAL_TYPES`. `NON_PAYLOAD_TYPES`, `_BOOKKEEPING_TYPES`, `_terminal_has_payload` and the guard's `bookkeeping_types` parameter are gone. **ADR-0044:** `turn_succeeded` and `terminal_outcome` were **the same predicate implemented twice**, both fed to one arbiter, while `goal.py`'s docstring claimed they could never disagree — nothing enforced it. The flag is now a **projection** of the outcome, computed **once per turn**. A cross-layer name collision (`RecoveryLadder.terminal_outcome` returning a `GoalState`-shaped string) was renamed to `ladder_state`. **Follow-ups audited:** `final_content` retained as a deliberate dict-provider compatibility key (ADR-0043 R6); unknown payload-less events can no longer bless an empty attempt; a structured exhaustion reason is **not** needed — ADR-0035 already carries it as `failure_code`. **`FALSIFICATION: 0 of 22`**; canonical set **848/1 (pre-existing F38)**, identical to baseline; `tests/reliability/` **427 passed**; **0 new failures**. **No migration**, no default change. ADRs appended append-only (44 sections, 44 index rows) | `PHASE_POST-M13_FINAL_EXECUTION_SEMANTICS_CLOSURE.md` |
+| 2026-09-26 | Corpus governance II | **ADR-0062 — the corpus's editorial decisions, and their application.** R1 `CURRENT_FINDINGS.md` is the canonical register (this log is not backfilled); R2 prose id prefixes; R3 `DECIDED` is a reason; R4 ADR-0002's reading rule; R5 two wrong flag names; R6 no concurrent pytest, `--basetemp`; R7 index a report when it lands; R8 a derived page has a generator — `CURRENT_AUTHORITIES.md` gains one. `F77` pinned to `PHASE_DAG_RETIREMENT.md` §7.1 (F105). **No production change.** *(This log has no rows for the NEXT and corpus-governance missions between POST-M13 and this one; `CONTEXT.md` §0 carries them.)* | `test_current_authorities_pins.py` (45), `test_corpus_editorial_decisions.py` (27) · `PHASE_CORPUS_GOVERNANCE_II.md` |
 ### 24.1 Regression summary
 
 **The P0-era rows below are history and are NOT the current baseline.** Every number in them was measured

@@ -96,14 +96,35 @@ class TestStagnationDetected2Cycle:
 
     def test_the_detector_reuses_the_existing_trap(self):
         """A second 1-cycle/2-cycle implementation would be a second authority
-        for "is this a repeat?" — the defect class this migration removes."""
+        for "is this a repeat?" — the defect class this migration removes.
+
+        **Rewritten 2026-09-25 (ADR-0060 R5).** It asserted
+        `"from wisp.core.graph.loop import" in src` — a bare string scan that pinned the
+        *import path* rather than the property. When `OscillationTrap` moved to
+        `wisp/core/oscillation.py` the guard failed while its own claim still held: the
+        detector still reuses the one trap and still defines none of its own. The check is
+        now AST-based and path-agnostic — the *import of the name*, the *absence of a second
+        definition*, and *identity* with the object the live module exports.
+        """
         src = (REPO / "wisp" / "core" / "stagnation.py").read_text(encoding="utf-8")
-        assert "from wisp.core.graph.loop import" in src
-        assert "OscillationTrap" in src
         tree = ast.parse(src)
+        imported = {
+            alias.name
+            for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+            for alias in node.names
+        }
+        assert "OscillationTrap" in imported, (
+            "stagnation.py no longer imports OscillationTrap — the detector must reuse "
+            "the existing trap, not reimplement it"
+        )
         classes = [n.name for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]
         assert "OscillationTrap" not in classes, \
             "stagnation.py must not define its own trap"
+        from wisp.core import stagnation as _st
+        from wisp.core.oscillation import OscillationTrap as _relocated
+        assert _st.OscillationTrap is _relocated, (
+            "the trap this module uses is not the one wisp/core/oscillation.py exports"
+        )
 
     def test_the_digest_is_order_stable(self):
         """A frozenset's iteration order is not stable across processes, and an

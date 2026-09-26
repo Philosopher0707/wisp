@@ -30,8 +30,10 @@ from wisp.core.events import (
     CODE_TURN_TIMEOUT,
     CODE_PROVIDER_STREAM,
     CODE_ITERATION_BUDGET,
+    DENIAL_SCHEMA_INVALID,
     AgentEvent,
     canonical_event,
+    is_error_outcome,
     content as content_event,
     tool_result as tool_result_event,
     error as error_event,
@@ -150,11 +152,22 @@ def _tool_result_output(result: Any) -> Any | None:
     A value that is not an envelope is not tool output either: the executor's
     blocks (``[Blocked: …]``, ``[Denied: …]``) are plain strings on this same
     channel.
+
+    *"Is this envelope a success?"* is the taxonomy's question, not this
+    function's: the answer is delegated to ``core.events.is_error_outcome``,
+    the binary view of the one outcome classifier. Comparing
+    ``.get("status")`` to the literal ``"ok"`` here would be a second
+    classifier for a vocabulary this module does not own — and
+    ``test_no_module_reimplements_tool_result_status_classification`` exists
+    precisely to catch it. The ``"status" not in result`` guard above is
+    **not** redundant with the classifier: ``classify_result`` defaults a
+    missing status to ``"ok"`` (success), while this function must treat a
+    status-less dict as *not an envelope at all* and return None.
     """
     if isinstance(result, dict):
         if "status" not in result:
             return None
-        return result.get("data") if result.get("status") == "ok" else None
+        return result.get("data") if not is_error_outcome(result) else None
     if isinstance(result, str) and result.lstrip().startswith("{"):
         import json as _json
 
@@ -163,8 +176,91 @@ def _tool_result_output(result: Any) -> Any | None:
         except (ValueError, TypeError):
             return None
         if isinstance(parsed, dict) and "status" in parsed:
-            return parsed.get("data") if parsed.get("status") == "ok" else None
+            return parsed.get("data") if not is_error_outcome(parsed) else None
     return None
+
+
+# ── Argument-validation failure kinds (F8's second half) ────────────────
+#: The validator RAN and rejected the arguments. A failure of the DATA.
+VALIDATION_SCHEMA_INVALID = DENIAL_SCHEMA_INVALID
+#: The validator could not run — absent, unimportable, or broken. A failure of
+#: the SYSTEM, and the distinction F8 exists to make: when a missing capability
+#: is reported as a failure of the *input*, every test downstream becomes a test
+#: of the wrong thing. Measured: 24 failures attributed to "pre-existing" that
+#: were F8-caused, and six tests in `test_13h2_determinism.py` reporting the
+#: wrong thing for the life of the repository.
+VALIDATION_CAPABILITY_MISSING = "CAPABILITY_MISSING"
+
+
+class ValidationFailure(str):
+    """A validation failure that says *which kind* it is, without parsing prose.
+
+    A `str` subclass **on purpose**. `_validate_tool_args` returns
+    `Optional[str]`; three call sites interpolate the value into a message or an
+    event payload, and one puts it in a JSON-serializable `data` field — so the
+    value has to *be* a string for every existing consumer. Subclassing keeps all
+    of that working (`isinstance(x, str)` is true, `if x:` is true, f-strings
+    render the message) while adding the one thing F8's second half needs: a
+    caller can tell a *system* failure from a *data* failure **without reading the
+    message**, which is the difference between "your arguments are wrong" and
+    "we could not check your arguments".
+
+    A dataclass is the obvious shape and the wrong one: it would reach
+    `{"status": "error", "data": <object>}` and stop being serializable, and
+    `f"Blocked: {x}"` would render a repr instead of the message.
+    """
+
+    __slots__ = ("kind",)
+
+    #: Declared, not merely assigned in `__new__`: `__slots__` alone leaves the
+    #: attribute invisible to a type checker, and "the failure has no `kind`" is
+    #: precisely the claim this class exists to make.
+    kind: str
+
+    def __new__(cls, message: str, kind: str) -> "ValidationFailure":
+        self = super().__new__(cls, message)
+        self.kind = kind
+        return self
+
+
+def _schema_invalid(tool_name: str, exc: BaseException) -> ValidationFailure:
+    """The validator ran and rejected the arguments — a **data** failure.
+
+    Byte-identical to the message this site produced before F8's second half, so
+    a genuine rejection is unchanged.
+    """
+    return ValidationFailure(
+        f"Schema validation failed for tool '{tool_name}': {exc}",
+        VALIDATION_SCHEMA_INVALID)
+
+
+def _capability_missing(tool_name: str, exc: BaseException) -> ValidationFailure:
+    """The validator could not run — a **system** failure, not a verdict.
+
+    The message names the missing capability, says plainly that the arguments were
+    never checked, and does not blame the caller's input. It also states that
+    re-issuing the call unchanged will fail identically, because the model is the
+    reader and "retry" is otherwise the obvious response to a refusal.
+    """
+    return ValidationFailure(
+        f"Tool argument validation is UNAVAILABLE for '{tool_name}': the JSON "
+        f"Schema validator could not be loaded "
+        f"({type(exc).__name__}: {exc}). This is a failure of the host, NOT of "
+        f"the arguments — they were never checked. Install the declared "
+        f"`jsonschema` dependency (see pyproject.toml); re-issuing this call "
+        f"unchanged will fail identically.",
+        VALIDATION_CAPABILITY_MISSING)
+
+
+def _is_capability_failure(failure: object) -> bool:
+    """True when a validation failure is a failure of the **host** (ADR-0052).
+
+    Reads the `kind` the failure already carries, so no call site parses prose.
+    `getattr` rather than a cast: a plain `str` (an older caller, or a future one
+    that forgets) is a *data* failure, which is the safe default — it keeps today's
+    denial envelope rather than inventing a capability claim.
+    """
+    return getattr(failure, "kind", None) == VALIDATION_CAPABILITY_MISSING
 
 
 def _denial_display(status: str, tool_name: str, reason: str) -> str:
@@ -257,7 +353,7 @@ class WispAgentCore:
             if cb_config:
                 self._circuit_breaker = CircuitBreaker(cb_config)
 
-    async def turn(self, session: dict[str, Any], prompt: str, approval_handler: Any = None, steering_drain: Any = None, completion_gate: Any = None) -> AsyncIterator[dict[str, Any]]:
+    async def turn(self, session: dict[str, Any], prompt: str, approval_handler: Any = None, steering_drain: Any = None, completion_gate: Any = None, declared_gate: Any = None) -> AsyncIterator[dict[str, Any]]:
         """Run one turn, yielding events.
 
         Loops internally: provider → tool_calls → execute → append → provider
@@ -366,6 +462,7 @@ class WispAgentCore:
                     max_iterations, self._memoize_handler(approval_handler),
                     steering_drain=steering_drain,
                     completion_gate=completion_gate,
+                    declared_gate=declared_gate,
                 ):
                     yield event
         except _asyncio.TimeoutError:
@@ -381,6 +478,7 @@ class WispAgentCore:
         self, session: dict[str, Any], prompt: str, messages: list[dict[str, Any]], system_prompt: str, tools: list[dict[str, Any]] | None,
         max_iterations: int, approval_handler: Any, steering_drain: Any = None,
         completion_gate: Any = None,
+        declared_gate: Any = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Inner turn loop, separated for timeout wrapping."""
         streamed_any_content = False
@@ -558,7 +656,13 @@ class WispAgentCore:
                                         _dry_run=True)
                                     if _schema_error:
                                         tc_event["_blocked"] = _schema_error
-                                        tc_event["_denial"] = "SCHEMA_INVALID"
+                                        # ADR-0052: a host that cannot validate has
+                                        # not denied anything, so only a genuine
+                                        # schema rejection is stamped as a denial.
+                                        if _is_capability_failure(_schema_error):
+                                            tc_event["_capability"] = True
+                                        else:
+                                            tc_event["_denial"] = "SCHEMA_INVALID"
                                         pending_tool_calls.append(tc_event)
                                         tool_results_events_early.append(
                                             self._refusal_result_event(tc_event, session.get("workspace", ".")))
@@ -663,7 +767,11 @@ class WispAgentCore:
                             _dry_run=True)
                         if _schema_error2:
                             normalized["_blocked"] = _schema_error2
-                            normalized["_denial"] = "SCHEMA_INVALID"
+                            # ADR-0052 — same rule as the batch path above.
+                            if _is_capability_failure(_schema_error2):
+                                normalized["_capability"] = True
+                            else:
+                                normalized["_denial"] = "SCHEMA_INVALID"
                             pending_tool_calls.append(normalized)
                             tool_results_events_early.append(
                                 self._refusal_result_event(normalized, session.get("workspace", ".")))
@@ -902,6 +1010,40 @@ class WispAgentCore:
                             stagnation_interventions_used)
                         messages.append(nudge_message(replan))
                         yield _flatten_event(system(replan, level="warning"))
+                        continue
+                # Declared-criteria completion gate (ADR-0054): the objective's DECLARED
+                # criteria (ADR-0050) may withhold `done` for a bounded replan. Same
+                # delay-not-veto model as the two gates above, and it SHARES their
+                # per-turn extension budget because the bound is on the TURN, not on the
+                # concern — two gates spending from one pool keeps the total extension
+                # bounded, which is the property ADR-0036 §4 established.
+                #
+                # The engine receives a READ-ONLY callable and nothing else: the criteria,
+                # the specs and the probe live in the runtime's `DeclaredCriteriaGate`, so
+                # the engine keeps no criteria and gains no authority. It sits AFTER both
+                # gates so neither loses its exact behaviour and the turn is never
+                # double-nudged.
+                if (declared_gate is not None
+                        and stagnation_interventions_used
+                        < _MAX_STAGNATION_INTERVENTIONS
+                        and iteration + 1 < max_iterations):
+                    try:
+                        declared_ok = bool(declared_gate())
+                    except Exception:
+                        # Fail open, as above: a broken predicate must not become a
+                        # hung turn.
+                        logger.debug("declared-criteria gate failed", exc_info=True)
+                        declared_ok = True
+                    if not declared_ok:
+                        stagnation_interventions_used += 1
+                        # The prose comes from the criteria source's own module (GH#27),
+                        # so the intervention cannot drift from the signal.
+                        from wisp.core.turn_criteria import compose_declared_nudge
+
+                        nudge = compose_declared_nudge(
+                            stagnation_interventions_used)
+                        messages.append(nudge_message(nudge))
+                        yield _flatten_event(system(nudge, level="warning"))
                         continue
                 # RESOLVED (verified, not surrendered) → distill the trail
                 # into a permanent auto skill, best-effort, never blocking.
@@ -2371,7 +2513,29 @@ class WispAgentCore:
             import jsonschema
             jsonschema.validate(instance=args, schema=schema)
             return None
+        except ImportError as exc:
+            # F8's second half. The validator is absent, unimportable, or cannot
+            # import something it needs — a failure of the SYSTEM, not a verdict
+            # on the arguments. This clause must come FIRST: the broad handler
+            # below would otherwise launder it into a schema verdict, which is
+            # how a *valid* call came to be refused as `SCHEMA_INVALID` for the
+            # life of the repository.
+            #
+            # `ModuleNotFoundError` is an `ImportError`, so the original defect
+            # (`import jsonschema` raising) and a `jsonschema`-internal import
+            # failure (a `$ref` resolver, say) are both caught here — the brief's
+            # "absent, unimportable, or raises from its own code".
+            #
+            # A schema rejection cannot reach this clause: `ValidationError` and
+            # `SchemaError` are not `ImportError`s.
+            return _capability_missing(name, exc)
         except Exception as exc:
+            # A retry that re-validates the SAME `args` against the SAME `schema`.
+            # Kept as it was; note that it is **inert**: nothing mutates `args`
+            # between the two calls (the salvage above runs before the `try`), so
+            # a deterministic validator raises identically and the `return None`
+            # below is unreachable. Recorded, not removed — see
+            # `PHASE_F8_ERROR_CLASSIFICATION.md` F-1.
             if name == "write_file" and isinstance(args, dict) and "path" in args:
                 try:
                     import jsonschema as _js2
@@ -2380,7 +2544,7 @@ class WispAgentCore:
                     return None
                 except Exception:
                     pass
-            return f"Schema validation failed for tool '{name}': {exc}"
+            return _schema_invalid(name, exc)
 
     def _get_approval_gate(self) -> ApprovalGate:
         """Lazily create the approval gate from current security policy."""
@@ -2440,10 +2604,17 @@ class WispAgentCore:
         (user/timeout/cancel verdicts, role/extension blocks) is logged
         once via AuditLog, best-effort.
         """
-        from wisp.core.events import denial_result
+        from wisp.core.events import capability_failure_result, denial_result
         reason = str(tc.get("_blocked", "blocked"))
-        status = str(tc.get("_denial") or "POLICY_DENIED")
         name = tc.get("name", "")
+        # ADR-0052 — a capability failure is published as a failure of the HOST, not
+        # as a denial. The stamping sites set `_capability` instead of `_denial` for
+        # it, so `status` below is never read on that branch.
+        capability = bool(tc.get("_capability"))
+        status = str(tc.get("_denial") or "POLICY_DENIED")
+        audit_reason = (
+            f"{getattr(tc.get('_blocked'), 'kind', VALIDATION_CAPABILITY_MISSING)}: {reason}"
+            if capability else f"{status}: {reason}")
         if not (tc.get("_src") == "gate" and status == "POLICY_DENIED"):
             try:
                 from pathlib import Path as _Path
@@ -2453,16 +2624,26 @@ class WispAgentCore:
                 _mode = getattr(_mode, "value", _mode)
                 _AuditLog(_Path(str(workspace)).resolve() / ".wisp" / "audit.jsonl").log_blocked(
                     str(name), dict(tc.get("arguments", {}) or {}),
-                    str(workspace), f"{status}: {reason}", str(_mode))
+                    str(workspace), audit_reason, str(_mode))
             except Exception:
                 pass
-        ev = denial_result(
-            name,
-            status,
-            _denial_display(status, name, reason),
-            duration_ms=0,
-            tool_call_id=tc.get("id"),
-        )
+        if capability:
+            ev = capability_failure_result(
+                name,
+                reason,
+                str(getattr(tc.get("_blocked"), "kind", None)
+                    or VALIDATION_CAPABILITY_MISSING),
+                duration_ms=0,
+                tool_call_id=tc.get("id"),
+            )
+        else:
+            ev = denial_result(
+                name,
+                status,
+                _denial_display(status, name, reason),
+                duration_ms=0,
+                tool_call_id=tc.get("id"),
+            )
         flat = _flatten_event(ev)
         flat["tool_call_id"] = tc.get("id", "")
         # Migration M13 — the canonical action identity, on the refusal.

@@ -428,17 +428,27 @@ class TestTheFieldRatchet:
 
 class TestTheDeferralTripwires:
     def test_the_graph_still_does_not_drive_execution(self):
-        """M11 was recorded as *"the graph drives execution"*. **That is not
-        what landed**, and the ledger must not be read as though it did.
+        """**The permanent boundary — ADR-0060 R2, no longer a tripwire on open work.**
 
-        Node identity is the *precondition* M9 identified; flipping control is
-        the change ADR-0029 already recorded as the wrong strong reading (the
-        graph cannot project the transcript, so making it the driver means
-        copying the transcript into it). Pinned so the gap stays visible.
+        M11 was recorded as *"the graph drives execution"*. **That is not what landed**, and
+        ADR-0060 decided it is not what should land: Layer A (`WispAgentCore.turn` /
+        `AgentRuntime.run_turn`) is the driver and `wisp/graph/` is a record. The decision is
+        grounded in a measurement, not in ADR-0029 alone — `wisp.graph.types.Graph` is
+        `frozen=True`, `GraphExecutor` has no mid-run growth API, `run()` refuses a graph that
+        is not complete up front, and there is no `TaskGraph → Graph` lowering. A turn's node
+        set is produced by the model *during* the turn, so an executor that needs it in
+        advance cannot drive it.
 
-        AST, not a source grep: an explanatory comment naming the symbol would
-        make a whole-file grep match its own documentation — the P8 trap M12
-        hit.
+        **Reversal condition.** This assertion is meant to fail if a phase builds an executor
+        that (a) accepts a graph that **grows during the drive**, (b) journals through
+        `UnifiedStore` rather than `GraphStore`, and (c) is measured against the same gate
+        chain. At that point ADR-0060 is **superseded**, not patched — the message below says
+        so, so the reversal cannot be discovered by accident.
+
+        AST, not a source grep: an explanatory comment naming the symbol would make a
+        whole-file grep match its own documentation — the P8 trap M12 hit. The wider subject
+        (the turn engine too, and the import boundary itself) is in
+        `tests/reliability/test_layer_b_boundary.py`.
         """
         import ast
 
@@ -449,9 +459,10 @@ class TestTheDeferralTripwires:
             and n.attr in {"ready_ids", "ready_nodes"}
         ]
         assert not consulted, (
-            "the turn loop now asks the graph what to run — the graph drives "
-            "execution, which is M11's original wording and not what shipped. "
-            "If this is intended, it needs its own ADR and a report.")
+            "the turn loop now asks the graph what to run — the graph drives execution, "
+            "which ADR-0060 R2 rejected as a target. If this is intended, it needs a "
+            "SUPERSEDING ADR (and the three conditions in ADR-0060's reversal condition), "
+            "not an edit to this test.")
 
     def test_the_progress_signal_now_names_work_units(self):
         """**M11's tripwire fired, and this is its inverse.**

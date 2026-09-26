@@ -104,7 +104,14 @@ async def _finish(task: asyncio.Task, ws: _FakeWebSocket) -> None:
 
 @pytest.mark.asyncio
 async def test_approval_frame_resolves_mid_turn():
-    """approval_request → client approves → gate opens → turn completes."""
+    """The clients' frame → client approves by echoing `call_id` → gate opens → turn completes.
+
+    **Contract update, ADR-0061 R1/R2.** This waited for `approval_request` — the shape
+    no client reads — and answered with a hard-coded `id: "x"`, which only resolved
+    because the single-pending fallback caught it. It now waits for the frame the
+    clients actually branch on and echoes the frame's own correlation key, so the test
+    exercises the real round-trip rather than the fallback.
+    """
     seen_approved = []
 
     async def turn(session, prompt, approval_handler=None):
@@ -119,8 +126,9 @@ async def test_approval_frame_resolves_mid_turn():
     ws.send_client({"type": "prompt", "content": "do it"})
     task = asyncio.create_task(agent_websocket(ws))
 
-    await ws.wait_for_type("approval_request")
-    ws.send_client({"type": "tool_approval", "id": "x", "approved": True})
+    frame = await ws.wait_for_type("tool_approval_request")
+    assert frame["name"] == "run_bash"
+    ws.send_client({"type": "tool_approval", "id": frame["call_id"], "approved": True})
     await ws.wait_for_type("complete")
 
     await _finish(task, ws)

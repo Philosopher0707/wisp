@@ -9,7 +9,11 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from wisp.server.deps import require_tool_allowed, verify_api_key
+from wisp.server.deps import (
+    require_rest_approval,
+    require_tool_allowed,
+    verify_api_key,
+)
 from wisp.server.routes.workspace import WORKSPACE_ROOT
 
 logger = logging.getLogger(__name__)
@@ -69,11 +73,15 @@ async def plugin_marketplace():
 async def install_plugin(req: PluginInstallRequest, request: Request):
     # Authority: installing a plugin activates third-party code that runs
     # in-process, so it is an executable-config mutation. It passes the same
-    # policy gate as file writes; READ_ONLY sessions cannot install one. The
-    # desktop client keeps working because the policy allows this action in
-    # full / auto_edit / ask_all and denies only in read_only.
+    # policy gate as file writes; READ_ONLY sessions cannot install one.
+    #
+    # ADR-0057: it ALSO asks a human over the WebSocket channel in
+    # `auto_edit`/`ask_all` (flag `WISP_REST_APPROVAL`, default OFF). With no
+    # client connected the request is DENIED.
     require_tool_allowed(request, "plugins.install", {"path": req.path},
                          str(WORKSPACE_ROOT))
+    await require_rest_approval(request, "plugins.install", {"path": req.path},
+                                str(WORKSPACE_ROOT))
     registry = _get_plugin_registry()
     raw_path = Path(req.path).expanduser()
 

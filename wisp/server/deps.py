@@ -382,6 +382,56 @@ def request_policy(request: Request):
     return SecurityPolicy()
 
 
+def organization_policy(request: Request):
+    """The composition root's loaded organization policy, or `None` (ADR-0059 R5).
+
+    Read from the root's **single loaded instance** — REST does not load its own,
+    so the agent path and this gate cannot end up governed by two different
+    bundles. `None` when `WISP_POLICY_BUNDLE` is unset, which is R2's inert case:
+    with no policy loaded the gate is today's code byte-for-byte.
+    """
+    try:
+        return request.app.state.root.organization_policy
+    except Exception:
+        return None
+
+
+def _m2_denial(request: Request, action_name: str, args: dict,
+               workspace: str | Path):
+    """`authorize()`'s **denial** verdict, or `None` when it does not deny.
+
+    ADR-0059 R3: `approval_required` is deliberately **not** read. The two models
+    disagree on it in exactly six (route, mode) pairs — the three REST-only action
+    names in `auto_edit`/`ask_all` — and honouring that shape here would 403 the
+    shipped client on those routes with **no bundle loaded at all**.
+    """
+    policy = organization_policy(request)
+    if policy is None:
+        return None
+
+    from wisp.auth.decision import authorize
+    from wisp.auth.principal import executor_principal
+    from wisp.auth.workspace_trust import classify_workspace
+
+    root = getattr(getattr(request, "app", None), "state", None)
+    root = getattr(root, "root", None)
+    executor = getattr(root, "tool_executor", None)
+    # The same principal the agent path authorizes as. `executor_principal` owns
+    # the precedence rule (configured principal > unbounded local human), so the
+    # two paths cannot disagree about who an effect is attributed to.
+    principal = executor_principal(
+        executor, workspace=str(workspace),
+        profile=str(getattr(getattr(root, "config", None), "profile", None)
+                    or "default"),
+    )
+    decision = authorize(
+        principal, action_name, args, classify_workspace(str(workspace)),
+        permission_mode=configured_permission_mode(request),
+        effective_policy=policy,
+    )
+    return None if decision.allowed else decision
+
+
 def require_tool_allowed(request: Request, action_name: str, args: dict,
                          workspace: str | Path) -> None:
     """Fail-closed policy gate for REST tool execution. Raises 403.
@@ -389,7 +439,35 @@ def require_tool_allowed(request: Request, action_name: str, args: dict,
     REST has no human to approve, so approval-required verdicts deny —
     same as ApprovalGate with no handler. Call BEFORE any side effect.
 
-    Two checks, in order:
+    **What that sentence covers, and what it does not (ADR-0055).** It
+    describes the verdict this gate *consumes*: `SecurityPolicy.check()`.
+    For the executable-config routes (`hooks.create`, `mcp.add_server`,
+    `plugins.install`) `SecurityPolicy` reports no approval requirement in
+    any mode, so the clause cannot fire for them — and it does not need to,
+    because **the agent has no equivalent operation**: those three names are
+    not agent tools and have no row in `TOOL_RISK_TABLE`. Measured, the two
+    paths reach the same outcome on **every** route in **every** mode once
+    the agent is driven under REST's own condition (no approver); see
+    `scripts/authorization_parity_measurement.py`. The control on those
+    routes is therefore the API key, the `read_only` denial and the
+    protected-path guard below — **not** an approval prompt.
+
+    **ADR-0059 — the gate composes two authorities, on their DENIALS.**
+    ADR-0055's measurement was taken with **no organization policy loaded**.
+    ADR-0058 then wired one into the agent path, so a bundle denying an agent
+    tool name is enforced there and was **silently unenforced here** — driven,
+    11 (route, mode) pairs diverge once a bundle denies `write_file` /
+    `edit_file` / `run_bash`. So this gate also consults the M2 authority
+    (`authorize()`) with the **same `effective_policy` the composition root
+    loaded**, and refuses when it denies.
+
+    **What it does not compose is approval.** The two models agree on `allowed`
+    in all 36 (route, mode) pairs; they disagree only on `approval_required`,
+    and only on the three names the agent cannot reach. So the approval half
+    stays with `SecurityPolicy.check()`, and a bundle's `approve` level is inert
+    here (ADR-0059 residual 1).
+
+    Three checks, in order:
 
     1. **Protected-path guard** — a non-read action whose target lies in a
        directory Wisp itself executes from (`.wisp/hooks`) is refused. The
@@ -398,10 +476,15 @@ def require_tool_allowed(request: Request, action_name: str, args: dict,
        `POST /api/files` could write a hook that the equivalent
        `write_file` tool call was refused. The predicate is the canonical
        `wisp.pathsec.is_protected_path`, so all three paths agree.
-    2. **Policy verdict** — the session's permission mode.
+    2. **The M2 authority's denial verdict** — `authorize()` with the root's
+       loaded policy. Denials only: a hard denial must not be reported as an
+       approval requirement. Inert when no bundle is loaded (ADR-0059 R2).
+    3. **Policy verdict** — the session's permission mode.
 
-    Order matters only for the message: the guard is unconditional, so it
-    denies even in `full` mode.
+    Order matters for the message, not for the outcome: all three narrow, so
+    the denied set is their conjunction. The guard is unconditional — it denies
+    even in `full` mode — and the M2 consult precedes the mode engine so the
+    higher authority's reason is the one reported.
     """
     from wisp.core.contracts import ToolRisk, risk_for_tool
     from wisp.infra.security import Action, Context
@@ -421,6 +504,16 @@ def require_tool_allowed(request: Request, action_name: str, args: dict,
                    "directory Wisp executes from (.wisp/hooks)",
         )
 
+    m2 = _m2_denial(request, action_name, args, workspace)
+    if m2 is not None:
+        logger.warning("rest_tool_gate_m2_deny action=%s layer=%s reason=%s",
+                       action_name, m2.controlling_layer, (m2.reason or "")[:200])
+        raise HTTPException(
+            status_code=403,
+            detail=f"Blocked by the {m2.controlling_layer} policy layer: "
+                   f"{m2.reason or action_name}",
+        )
+
     policy = request_policy(request)
     decision = policy.check(
         Action(name=action_name, args=args),
@@ -434,6 +527,84 @@ def require_tool_allowed(request: Request, action_name: str, args: dict,
             status_code=403,
             detail=f"Blocked by server policy ({decision.reason or action_name}); "
                    f"no approver is present over REST",
+        )
+
+
+# ── REST approval through the WebSocket channel (ADR-0057) ───────────
+
+def configured_permission_mode(request: Request) -> str:
+    """The mode the REST gate is evaluating under — the same source as `request_policy`."""
+    try:
+        state = getattr(getattr(request, "app", None), "state", None)
+        mode = getattr(getattr(getattr(state, "root", None), "config", None),
+                       "permission_mode", None)
+        if mode is not None:
+            return str(getattr(mode, "value", mode))
+    except Exception:
+        pass
+    return "auto_edit"
+
+
+def rest_approval_enabled(request: Request) -> bool:
+    """True when `WISP_REST_APPROVAL` is on for this server root."""
+    try:
+        root = request.app.state.root
+    except Exception:
+        return False
+    return bool(getattr(getattr(root, "config", None), "rest_approval", False))
+
+
+def approval_bridge(request: Request):
+    """The root's `ApprovalBridge`, or None when the root has none (tests, embeddings)."""
+    try:
+        root = request.app.state.root
+    except Exception:
+        return None
+    return getattr(root, "approval_bridge", None)
+
+
+async def require_rest_approval(request: Request, action_name: str, args: dict,
+                                workspace: str | Path) -> None:
+    """Ask a connected client to approve an executable-config action. Raises 403 on deny.
+
+    **A separate, async companion to `require_tool_allowed`, which keeps its signature
+    and its behaviour.** Routes call this *after* the policy gate, so a mode that denies
+    outright (`read_only`) never prompts.
+
+    Flag-gated: with `WISP_REST_APPROVAL` **OFF** (the default) this returns immediately
+    and every caller sees today's behaviour exactly. ON, an action in
+    `approval_bridge.REST_APPROVAL_ACTIONS` in a mode in `REST_APPROVAL_MODES` is asked
+    over the WebSocket channel. **No connected client ⇒ 403** — the no-client case must
+    not hang and must not silently allow.
+    """
+    from wisp.server.approval_bridge import action_requires_rest_approval
+
+    if not rest_approval_enabled(request):
+        return
+    if not action_requires_rest_approval(action_name, configured_permission_mode(request)):
+        return
+
+    bridge = approval_bridge(request)
+    if bridge is None:
+        logger.warning("rest_approval_no_bridge action=%s", action_name)
+        raise HTTPException(
+            status_code=403,
+            detail="Blocked: this action requires approval over the WebSocket channel, "
+                   "and this server has no approval bridge",
+        )
+
+    approved = await bridge.request_approval(
+        name=action_name,
+        arguments=dict(args or {}),
+        reason=f"{action_name} registers something Wisp will execute",
+    )
+    logger.info("rest_approval action=%s approved=%s", action_name, approved)
+    if not approved:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Blocked: {action_name} requires a human approval and none was "
+                   f"given (no client connected, declined, or timed out after "
+                   f"{bridge.timeout_s:.0f}s)",
         )
 
 # Lazy exports for API_KEY compatibility

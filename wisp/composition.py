@@ -33,6 +33,32 @@ from wisp.multi_agent.subagent_orchestrator import SubagentOrchestrator
 logger = logging.getLogger(__name__)
 
 
+def load_organization_policy(config: Any) -> Any:
+    """ADR-0058 R1–R3. The organization policy bundle, or `None` when unconfigured.
+
+    **The single load site** (ADR-0006). `None` when `WISP_POLICY_BUNDLE` is
+    empty: absence is a configuration, and the runtime is then byte-for-byte
+    today's behaviour — `ToolExecutor.policy` is `None` and `authorize()`'s L0
+    receives nothing (R2). A bundle that is named but cannot be read, has no
+    `.sig` sibling, or fails verification **raises**, so the process does not
+    start with an expected control missing (R3). An expired-but-verifying bundle
+    is served *trimmed* by the loader, not refused (R4).
+
+    `policy_pubkey` is the key itself, base64 — not a path (ADR-0058 §Problem).
+    """
+    # Only a string is a configured path — `WispConfig` declares the setting as `str`. A config
+    # that does not declare it (a `MagicMock` or an older test double answers `getattr` with a
+    # truthy non-string) is ABSENT, R2's inert case; stringifying it would try to load a path
+    # named after the object's repr.
+    bundle_path = getattr(config, "policy_bundle", "")
+    if not isinstance(bundle_path, str) or not bundle_path:
+        return None
+    from wisp.policy.loader import load_local
+
+    pubkey = getattr(config, "policy_pubkey", "")
+    return load_local(bundle_path, pubkey if isinstance(pubkey, str) else "")
+
+
 @dataclass
 class CompositionRoot:
     """Creates and wires all services."""
@@ -138,7 +164,16 @@ class CompositionRoot:
         # Create ToolRegistry (shared state with module-level TOOL_SCHEMAS/TOOL_IMPLS)
         self.tool_registry = ToolRegistry()
 
-        # Create ToolExecutor first (subagent_orchestrator wired below)
+        # The organization policy layer, loaded ONCE, here — the single load site
+        # ADR-0006 names. `None` when unconfigured; raises when a bundle is named
+        # but unverifiable, which is ADR-0058 R3's refusal to boot.
+        #
+        # ADR-0059 R5: held on the root so the *second* consumer — the REST gate —
+        # reads this same instance instead of loading one of its own. One load
+        # site, two readers; not two authorities.
+        self.organization_policy = load_organization_policy(self.config)
+
+        # Create ToolExecutor first (subagent_orchestrator wired below).
         self.tool_executor = ToolExecutor(
             config=self.config,
             hook_manager=self._tool_hook_manager,
@@ -148,6 +183,7 @@ class CompositionRoot:
             subagent_orchestrator=None,
             extensions=self.extensions,
             run_store=self.run_store,
+            policy=self.organization_policy,
         )
 
         # Create Compactor for LLM-powered summarization
@@ -216,6 +252,17 @@ class CompositionRoot:
         # One shared ring set: blocking fanout children (orchestrator) and
         # background agents (manager) are visible in the same monitor (GH#10).
         self.subagent_orchestrator.worker_telemetry = self.background_agents.telemetry
+
+        # ADR-0057: the REST approval bridge. A REST request for an
+        # executable-config action (`hooks.create`, `mcp.add_server`,
+        # `plugins.install`) asks a human over the WebSocket channel, because
+        # ADR-0055 measured that REST otherwise gets the agent's *no-approver*
+        # behaviour. The bridge holds the connected channels; the WebSocket
+        # route registers one per connection. Flag-gated by
+        # `WISP_REST_APPROVAL` (default OFF), so with it off nothing consults
+        # this object.
+        from wisp.server.approval_bridge import ApprovalBridge
+        self.approval_bridge = ApprovalBridge()
 
         # Owned HTTP session registry (Phase 2.1, D4): pools acquired
         # through this registry are closed in shutdown(). Providers that

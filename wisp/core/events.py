@@ -501,9 +501,58 @@ def denial_result(name: str, status: str, reason: str, *,
     )
 
 
+#: The capability-failure envelope's status. Deliberately **not** a member of
+#: `_DENIAL_STATUSES` (ADR-0052): a host that cannot validate the arguments has
+#: not *denied* anything. `denial_result()`'s payload asserts three things about
+#: the ARGUMENTS — authorized=False, executed=False, retryable=False — and its
+#: hint says *"Denial is final for these arguments"*. None of that is true here:
+#: no authorization decision was made and the arguments were never examined.
+CAPABILITY_FAILURE_STATUS = "error"
+
+#: The key the failure's kind travels under, inside the envelope's `data`, so a
+#: caller at the published boundary distinguishes a system failure from a data
+#: failure **without parsing prose**.
+CAPABILITY_KIND_KEY = "kind"
+
+
+def capability_failure_result(name: str, reason: str, kind: str, *,
+                              duration_ms: float = 0,
+                              tool_call_id: Optional[str] = None) -> AgentEvent:
+    """A tool result for a failure of the **host**, not of the arguments (ADR-0052).
+
+    `_validate_tool_args` produces a `ValidationFailure` whose `kind` is
+    `CAPABILITY_MISSING` when the validator could not run at all. Publishing that
+    as a denial (`SCHEMA_INVALID`) told the model its arguments were rejected when
+    they had never been examined — the attribution was correct where the failure
+    was *produced* and wrong where it was *published*.
+
+    The status is `error` (`OutcomeClass.ERROR` — a system failure, and not in
+    `TERMINAL_OUTCOME_CLASSES`, so it is retryable in principle once the
+    environment is fixed) and the `kind` travels in `data`. `retryable` is `False`
+    because the *identical* call fails identically until the environment changes —
+    the same statement the failure's own text makes.
+
+    `authorized` is `None`, not `False`: no authorization decision was reached, and
+    recording "not authorized" would be a claim nothing made.
+    """
+    return tool_result(
+        name,
+        {"status": CAPABILITY_FAILURE_STATUS,
+         "capability": "tool_argument_validation",
+         CAPABILITY_KIND_KEY: kind,
+         "authorized": None, "executed": False, "retryable": False,
+         "reason": reason, "data": reason,
+         "hint": "The host could not validate these arguments, so they were never "
+                 "checked. This is not a verdict on them. Do not retry the "
+                 "identical call — it will fail the same way until the "
+                 "environment is fixed."},
+        duration_ms=duration_ms,
+        tool_call_id=tool_call_id,
+    )
+
+
 def content(text: str) -> AgentEvent:
     return _make_event(TYPE_CONTENT, {"text": text})
-
 
 # Error-code ranges (docs/repl-aesthetics.md §3): E11xx provider/stream,
 # E21xx tool execution, E31xx approval/permission, E41xx session/state,

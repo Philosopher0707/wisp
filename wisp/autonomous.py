@@ -34,8 +34,9 @@ from wisp.core.convergence import (
     Objective,
     TurnObservation,
     WorkspaceSnapshot,
+    CriteriaDeclarationRejected,
     criteria_for,
-    derive_acceptance,
+    explain_acceptance,
     read_journal_baseline,
 )
 from wisp.core.goal import TerminalOutcome, terminal_outcome_from_evidence
@@ -43,6 +44,69 @@ from wisp.core.goal import TerminalOutcome, terminal_outcome_from_evidence
 logger = logging.getLogger(__name__)
 
 MAX_TRACKED_FILES = 4000
+
+#: ADR-0048 R5 — strict criteria derivation. Read at this composition point, not
+#: inside the pure function, so `explain_acceptance` stays testable without env.
+#:
+#: **Default OFF**, i.e. today's behaviour: an `UNDETERMINED` requirement is
+#: recorded and not acted on. ON, it yields a required criterion the harness
+#: cannot evidence, which `acceptance.evaluate`'s rule 3 turns into
+#: `INCONCLUSIVE` — so an objective whose acceptance condition the host cannot
+#: determine stops completing on a no-op. That is the fix for the measured false
+#: `GOAL_MET` (ADR-0048 MODE A), and it is off by default because it also makes
+#: such objectives uncompletable until they are clarified.
+STRICT_DERIVATION_ENV = "WISP_CRITERIA_STRICT_DERIVATION"
+
+#: ADR-0050 R8 — the objective-declared structured criteria path. Read at this composition
+#: point for the same reason as the strict flag: the pure function stays testable without env.
+#:
+#: **Default OFF.** OFF, no declaration is parsed and every caller keeps ADR-0048's
+#: behaviour. ON, an objective carrying a `--- criteria ---` block is measured against the
+#: criteria it declares — and a malformed or unmeasurable declaration **raises**
+#: `CriteriaDeclarationRejected` rather than falling back to the prose grammar, because a
+#: silent downgrade is MODE A (ADR-0048 R6).
+STRUCTURED_DECLARATION_ENV = "WISP_CRITERIA_STRUCTURED_DECLARATION"
+
+
+def _env_truthy(name: str) -> bool:
+    """True when the named env var is set to a truthy spelling."""
+    import os
+    return str(os.environ.get(name, "")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _strict_derivation_enabled() -> bool:
+    """True when `WISP_CRITERIA_STRICT_DERIVATION` is set truthy."""
+    return _env_truthy(STRICT_DERIVATION_ENV)
+
+
+def _structured_declaration_enabled() -> bool:
+    """True when `WISP_CRITERIA_STRUCTURED_DECLARATION` is set truthy."""
+    return _env_truthy(STRUCTURED_DECLARATION_ENV)
+
+
+def _record_declaration_rejection(journal_path: Any, exc: Any) -> None:
+    """Journal a rejected declaration before it is raised (ADR-0050 R4).
+
+    Best-effort, and deliberately so: the rejection is **raised** either way, so a
+    journal that cannot be written must not replace the caller's error with an I/O
+    one. What it adds is the record — the run stops, and the reason survives it.
+    """
+    if not journal_path:
+        return
+    try:
+        import json as _json
+        from pathlib import Path as _Path
+        path = _Path(journal_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(_json.dumps({
+                "kind": "declaration_rejected",
+                "reason": getattr(exc, "reason", "unknown"),
+                "detail": getattr(exc, "detail", str(exc)),
+                "line": getattr(exc, "line", ""),
+            }) + "\n")
+    except Exception:
+        logger.debug("declaration-rejection journaling failed", exc_info=True)
 
 
 def _event_field(event: Any, key: str, default: Any = None) -> Any:
@@ -238,13 +302,37 @@ async def converge_on_objective(
     # already moved, so a fresh measurement would be a baseline of the mutated
     # state — a different exam for attempt N than attempt 0 was given.
     resumed_baseline = (read_journal_baseline(journal_path) if resume else None)
+    derivation = None
     if criteria is None:
-        _, derived_specs = derive_acceptance(objective_text, workspace)
-        specs = derived_specs if specs is None else specs
-        probe = CommandProbe(specs)
-        baseline = resumed_baseline or probe.measure(workspace)
-        criteria, _ = derive_acceptance(objective_text, workspace,
-                                        baseline=baseline)
+        strict = _strict_derivation_enabled()
+        use_declaration = _structured_declaration_enabled()
+        # ADR-0050 R4 — a rejected declaration STOPS the run. It is journalled first (so the
+        # record shows what was rejected and why) and then raised, because falling back to
+        # the prose grammar would measure something other than what the caller declared
+        # while appearing to measure it. A silent downgrade is MODE A.
+        try:
+            # The spec list is baseline-independent, so the first call produces it and
+            # the second closes the criteria over the baseline. `explain_acceptance`
+            # returns a `CriteriaDerivation`, NOT a `(criteria, specs)` tuple — read
+            # the field, do not unpack the object.
+            first = explain_acceptance(objective_text, workspace, strict=strict,
+                                       use_declaration=use_declaration)
+            specs = first.specs if specs is None else specs
+            probe = CommandProbe(specs)
+            baseline = resumed_baseline or probe.measure(workspace)
+            derivation = explain_acceptance(objective_text, workspace,
+                                            baseline=baseline, strict=strict,
+                                            use_declaration=use_declaration)
+        except CriteriaDeclarationRejected as exc:
+            _record_declaration_rejection(journal_path, exc)
+            raise
+        criteria = derivation.criteria
+        logger.info(
+            "criteria derivation (strict=%s, declaration=%s): %s", strict,
+            use_declaration,
+            ", ".join(f"{cid}={reason}"
+                      + (f" on {span!r}" if span else "")
+                      for cid, reason, span in derivation.reasons) or "none")
     else:
         probe = CommandProbe(specs or ())
         baseline = resumed_baseline or (probe.measure(workspace)
@@ -253,6 +341,7 @@ async def converge_on_objective(
         goal=objective_text, workspace=workspace,
         criteria=tuple(criteria or ()), max_attempts=max_attempts,
         allow_rollback=allow_rollback,
+        derivation=derivation.reasons if derivation is not None else (),
     )
 
     own_root = root is None

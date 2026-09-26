@@ -25,10 +25,11 @@ import pytest
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 
-#: Modules that build or execute a turn. If any of these imports `wisp.policy`,
-#: the seam has been connected. `wisp/__main__.py` is excluded on purpose: it
-#: imports `wisp.policy.cli` to expose the `policy` subcommand, which is a CLI
-#: surface rather than runtime enforcement.
+#: Modules that build or execute a turn. ADR-0058 wires the organization policy
+#: at exactly **one** of them — the composition root — so the seam is a single
+#: wire, not an empty space and not a mesh. `wisp/__main__.py` is excluded on
+#: purpose: it imports `wisp.policy.cli` to expose the `policy` subcommand, which
+#: is a CLI surface rather than runtime enforcement.
 RUNTIME_MODULES = (
     "wisp/composition.py",
     "wisp/tool_executor.py",
@@ -99,31 +100,73 @@ def _tool_executor_calls() -> list[tuple[str, int, bool]]:
 
 
 def test_tool_executor_construction_sites_are_known():
+    """**Three** sites. The count was 2 until `8a7e9ab` added the third.
+
+    `8a7e9ab` (the autonomous-convergence chain) wired an executor into
+    `benchmark/runner.py::make_ollama_core_factory`. That is **authorised** —
+    it is F54 in **ADR-0045**: `_execute_tool`'s no-executor fallback permits
+    `READ` tools only, so `wisp bench` was refusing every mutation and
+    reporting FAIL for tasks no agent could pass. The fix was deliberate and
+    measured (0 passed/2 failed/2 timeout → 3 passed/0 failed/1 timeout).
+
+    So this count is a **state**, and it went stale the moment a legitimate
+    site was authorised — which is exactly why the failure message says
+    *"check whether it passes a policy bundle"* rather than *"this must never
+    change"*. The property this file exists for is the tripwire **below**:
+    no site passes a policy bundle. This assertion only keeps the inventory
+    honest, and it names the files so that a fourth site cannot hide behind a
+    count that a swap would leave unchanged.
+    """
     sites = _tool_executor_calls()
-    assert len(sites) == 2, (
+    assert len(sites) == 3, (
         "a new ToolExecutor construction site appeared — check whether it "
         f"passes a policy bundle: {sites}"
     )
+    assert {rel for rel, _line, _passes in sites} == {
+        "wisp/composition.py",       # the composition root
+        "wisp/acp_session.py",       # the ACP session's config-driven fallback
+        "wisp/benchmark/runner.py",  # the benchmark factory — ADR-0045, F54
+    }, f"the construction-site inventory changed: {sites}"
 
 
-def test_no_tool_executor_is_constructed_with_a_policy():
-    """**TRIPWIRE.** Fails when the M4 layer is wired.
+def test_the_composition_root_passes_the_organization_policy():
+    """**The tripwire, inverted** (ADR-0058; the P9/M15 and M11/M13 precedent).
 
-    That is the point. Wiring it is a deliberate change that must be made
-    together with the decision recorded in PHASE_10_M4_GOVERNANCE_UNWIRED.md —
-    not a silent edit that leaves the document claiming the layer is inert.
+    It used to assert that *no* site passes `policy=`, and it was written to fail
+    the moment the layer was wired. The layer is now wired — deliberately, in the
+    same change that records the decision — so the assertion is its inverse:
+    **exactly one site passes it, and it is the composition root**, ADR-0006's
+    single construction site.
+
+    The other two sites are named and must **not** receive it:
+
+    * `wisp/acp_session.py:208` — reached only when there is **no** composition
+      root; an ACP-only deployment has no configured runtime to load from.
+      Named as a residual in `PHASE_M4_WIRING.md`.
+    * `wisp/benchmark/runner.py:82` — a benchmark **harness**, not the runtime.
+      Giving it a policy would change what it measures.
+
+    The *value* is `load_organization_policy(self.config)`, which is `None` when
+    `WISP_POLICY_BUNDLE` is unset — so the default is unchanged.
     """
-    wired = [s for s in _tool_executor_calls() if s[2]]
-    assert not wired, (
-        "a ToolExecutor now receives a policy bundle — the M4 governance layer "
-        "has been wired. Update PHASE_10_M4_GOVERNANCE_UNWIRED.md (and this "
-        f"test) to record the decision: {wired}"
+    wired = {rel for rel, _line, passes in _tool_executor_calls() if passes}
+    assert wired == {"wisp/composition.py"}, (
+        "the set of ToolExecutor sites receiving a policy changed. The wiring is "
+        "ADR-0058's and the two other sites are named in this docstring — "
+        f"re-read PHASE_M4_WIRING.md before changing it: {sorted(wired)}"
     )
 
 
-def test_the_runtime_never_imports_the_policy_package():
-    """The seam is empty, not merely unpopulated."""
-    offenders = {}
+def test_only_the_composition_root_imports_the_policy_package():
+    """**The tripwire, inverted.** The seam was empty; it is now exactly one wire.
+
+    It used to assert that *no* runtime module imports `wisp.policy`. The
+    composition root now does — that **is** the wiring. The inverse keeps the
+    property that made the test useful: **exactly one** runtime module, and it is
+    the composition root. A second importer would be a second load site, which
+    ADR-0006 forbids.
+    """
+    importers: dict[str, list[int]] = {}
     for rel in RUNTIME_MODULES:
         py = REPO / rel
         if not py.exists():
@@ -140,20 +183,35 @@ def test_the_runtime_never_imports_the_policy_package():
                 if m == "wisp.policy" or m.startswith("wisp.policy."):
                     hits.append(node.lineno)
         if hits:
-            offenders[rel] = hits
-    assert not offenders, (
-        "a runtime module now imports the policy package — update the M4 "
-        f"finding rather than leaving it stale: {offenders}"
+            importers[rel] = hits
+    assert set(importers) == {"wisp/composition.py"}, (
+        "the policy package's runtime importers changed — ADR-0058 wires it at "
+        f"exactly one site (ADR-0006): {sorted(importers)}"
     )
 
 
-def test_config_has_no_policy_bundle_setting():
-    """There is no way to configure a bundle today."""
+def test_config_reads_the_policy_settings(monkeypatch):
+    """**The tripwire, inverted.** The settings exist; the defaults are empty.
+
+    It used to assert that `config.py` mentions "policy" nowhere. It now reads
+    the two settings ADR-0058 names — and the property that matters is the
+    **default**: with neither env var set, both are empty, so nothing is loaded
+    and the runtime is today's.
+    """
+    monkeypatch.delenv("WISP_POLICY_BUNDLE", raising=False)
+    monkeypatch.delenv("WISP_POLICY_PUBKEY", raising=False)
+
+    from wisp.config import WispConfig
+
+    cfg = WispConfig()
+    assert (cfg.policy_bundle, cfg.policy_pubkey) == ("", ""), (
+        "the policy settings no longer default to empty — an unconfigured runtime "
+        f"would try to load a bundle: {cfg.policy_bundle!r}, {cfg.policy_pubkey!r}"
+    )
+
     src = (REPO / "wisp/config.py").read_text(encoding="utf-8")
-    assert "policy" not in src.lower(), (
-        "config.py now references a policy setting — the layer may be "
-        "configurable. Re-read PHASE_10_M4_GOVERNANCE_UNWIRED.md §6"
-    )
+    assert '"env_var": "WISP_POLICY_BUNDLE"' in src
+    assert '"env_var": "WISP_POLICY_PUBKEY"' in src
 
 
 def test_the_agent_passes_its_none_policy_through():
@@ -202,17 +260,26 @@ def test_the_repro_manifest_policy_field_is_never_populated():
 
 
 def test_the_distribution_surface_is_unconfigured_in_production():
-    """`policy_pubkey` is set by tests only, so the routes 503 in a real server."""
+    """The **route's** `app.state.policy_pubkey` is set by tests only.
+
+    **Scoped to `state.policy_pubkey`, not the bare name.** The scan used to match
+    `policy_pubkey=` anywhere, which conflates the route's attribute with an
+    unrelated, same-named **config setting**: ADR-0058 added
+    `WispConfig.policy_pubkey` (`WISP_POLICY_PUBKEY`), and a test passing it as a
+    keyword argument made this tripwire fire for the wrong reason — a *different*
+    thing from "the route is configured in production". The sibling test above
+    already scopes to `state.policy_bundle`; this one now matches it.
+    """
     setters = []
     for py in list((REPO / "wisp").rglob("*.py")) + list((REPO / "tests").rglob("*.py")):
         if "__pycache__" in py.parts or py.name == pathlib.Path(__file__).name:
             continue
         text = py.read_text(encoding="utf-8")
-        if "policy_pubkey =" in text or "policy_pubkey=" in text:
+        if "state.policy_pubkey =" in text or "state.policy_pubkey=" in text:
             setters.append(str(py.relative_to(REPO)))
     assert setters == ["tests/test_policy_routes.py"], (
-        "policy_pubkey is now set outside tests — the distribution surface may "
-        f"be configured in production. Re-read the finding: {setters}"
+        "the route's `app.state.policy_pubkey` is now set outside tests — the "
+        f"distribution surface may be configured in production: {setters}"
     )
 
 
@@ -241,7 +308,15 @@ def test_the_m4_spec_still_has_no_wiring_section():
 
 
 def test_the_loader_entry_points_have_no_runtime_caller():
-    """`load_local`/`load_managed` are reachable only from the CLI and tests."""
+    """`load_local`/`load_managed` are reachable only from the CLI and tests.
+
+    **The assertion is the property, not a file list.** It used to pin the exact
+    set `{wisp/policy/cli.py, tests/test_policy_modes.py}` — a *state*, and it
+    fired on the next legitimate addition: a second test file driving the loader
+    (`tests/reliability/test_key_trust_workflow.py`, ADR-0058's guard) is not
+    *"the layer may be wired"*, and the sentence above already says tests are
+    expected. Stated as a rule: **the CLI, and tests — nothing else.**
+    """
     callers = set()
     for base in ("wisp", "tests"):
         for py in (REPO / base).rglob("*.py"):
@@ -253,9 +328,17 @@ def test_the_loader_entry_points_have_no_runtime_caller():
                     name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
                     if name in ("load_local", "load_managed", "merge_all"):
                         callers.add(str(py.relative_to(REPO)))
-    assert callers == {"wisp/policy/cli.py", "tests/test_policy_modes.py"}, (
-        "a new caller of the bundle loaders appeared — the layer may be wired: "
-        f"{sorted(callers)}"
+    assert callers, "floor: the scan must reach the callers it already knows about"
+    assert "wisp/policy/cli.py" in callers, (
+        "the CLI no longer calls the bundle loaders — the scan or the CLI changed"
+    )
+    # **Inverted (ADR-0058).** This used to assert that nothing outside the CLI
+    # and tests called the loaders. The composition root now does — that is the
+    # wiring. Exactly one runtime caller, and it is ADR-0006's site.
+    outside = {c for c in callers if c != "wisp/policy/cli.py" and not c.startswith("tests/")}
+    assert outside == {"wisp/composition.py"}, (
+        "the runtime callers of the bundle loaders changed — ADR-0058 wires it at "
+        f"exactly one site (ADR-0006): {sorted(outside)}"
     )
 
 

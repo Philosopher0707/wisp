@@ -2,15 +2,22 @@
 
 Detects "working but not progressing", and routes it to the recovery ladder.
 
-**The detector already exists — it is orphaned, not missing.** `OscillationTrap`
-(`core/graph/loop.py:112`) detects exact 1-cycle repeats and 2-cycle oscillations of diff hashes, and
-it is a genuine progress signal. What is missing is a caller:
+**The detector already existed — it was orphaned, not missing.** `OscillationTrap` detects exact
+1-cycle repeats and 2-cycle oscillations of diff hashes, and it is a genuine progress signal. What was
+missing was a caller:
 
 | Piece | State before P7 |
 |---|---|
-| `OscillationTrap` | used **only** inside `ExecutionGraph.run` (`loop.py:142`) |
+| `OscillationTrap` | used **only** inside `ExecutionGraph.run` |
 | `ExecutionGraph` | **zero** production callers — referenced only by the package re-export and `tests/test_architectural_upgrade.py` |
 | `config.graph_oscillation_guard` | defined at `config.py:256/618/888` and **never read** by anything |
+
+*(ADR-0060 R5, 2026-09-25 — `OscillationTrap` and `diff_hash` have since **moved** to
+`wisp/core/oscillation.py`. This module is on the live turn path, and it was importing them from
+`wisp/core/graph/` — the layer ADR-0001 named *disowned*, which made that claim false. The trap is
+unchanged; only its module moved, and `core/graph/loop.py` re-exports both names so nothing that
+imported them from there breaks. The table above describes the state **before P7** and is kept as
+history.)*
 
 So the whole Layer C phase loop — trap, graph, ceiling — is a self-consistent mechanism with no
 production entry point. P7 does not reimplement the trap; it **uses** it, and supplies the progress
@@ -45,7 +52,7 @@ from typing import Any, Iterable
 # Reuse the existing, tested detector rather than reimplementing it. A second
 # 1-cycle/2-cycle implementation would be a second authority for "is this a
 # repeat?", which is the defect class this migration exists to remove.
-from wisp.core.graph.loop import OscillationTrap, diff_hash
+from wisp.core.oscillation import OscillationTrap, diff_hash
 
 
 class StagnationVerdict(StrEnum):

@@ -849,7 +849,15 @@ class ToolExecutor:
                         tool_call_id=tool_call_id,
                     )
                     return
-                # auto_approve=True + no handler + not forced = pass through
+                # No handler, and the approval is not forced: fall through and
+                # execute. The enclosing guard already required
+                # `not auto_approve` (or `not is_full_mode`), so this is NOT the
+                # auto_approve shortcut — it is the fall-through for an unforced
+                # approval. ADR-0055 §3 residual 3 measured the consequence: with
+                # `approval_handler=None` a `write_file` in `auto_edit` runs, which
+                # is why a REST caller gets the agent's *no-approver* behaviour.
+                # (This comment said "auto_approve=True + no handler + not forced",
+                # which described a branch this one is not in.)
             else:
                 reason = f"{func_name} modifies workspace state"
                 yield _approval_request_event(func_name, func_args, reason)
