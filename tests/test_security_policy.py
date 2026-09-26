@@ -75,10 +75,25 @@ class TestPermissionModes:
         result = auto_edit_policy.check(Action("edit_file", {"path": "x.py"}), _ctx("/tmp"))
         assert result.allowed is True
 
-    def test_auto_edit_blocks_bash(self, auto_edit_policy):
+    def test_auto_edit_allows_bash_through_the_tier_router(self, auto_edit_policy):
+        """`run_bash` left the hard-deny set on 2026-09-27.
+
+        It was the one member whose execution is **confinement-routed** (`tools/bash.py` -> the tier
+        router: Docker -> isolated PTY -> host), so the hard deny was blocking a command path that
+        is already bounded. The residual is stated at the set and warned about per call: the PTY
+        tier bounds RESOURCE USE and CREDENTIAL EXPOSURE, not FILESYSTEM REACH.
+        """
         from wisp.infra.security import Action
         result = auto_edit_policy.check(Action("run_bash", {"command": "ls"}), _ctx("/tmp"))
-        assert result.allowed is False
+        assert result.allowed is True
+
+    def test_auto_edit_still_blocks_the_remote_writes(self, auto_edit_policy):
+        """The half that did NOT move. git/gh writes mutate a shared remote, which no local sandbox
+        tier contains — so they stay hard-denied in AUTO_EDIT."""
+        from wisp.infra.security import Action
+        for tool in ("git_push", "git_commit", "gh_pr_create", "git_branch"):
+            result = auto_edit_policy.check(Action(tool, {}), _ctx("/tmp"))
+            assert result.allowed is False, f"{tool} must still be hard-denied in AUTO_EDIT"
 
 
 # ═══════════════════════════════════════════════════════════════════

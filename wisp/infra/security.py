@@ -52,7 +52,7 @@ _ASK_ALL_BLOCK_TOOLS = frozenset({
 
 # Tools that require approval in AUTO_EDIT (writes auto-approved, bash blocked)
 _AUTO_EDIT_BLOCK_TOOLS = frozenset({
-    "run_bash", "git_branch", "git_commit", "git_push", "gh_pr_create",
+    "git_branch", "git_commit", "git_push", "gh_pr_create",
     "spawn", "fanout",
 })
 
