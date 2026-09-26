@@ -75,3 +75,33 @@ shifted **2** lines stays **silent** — a heading added above a row is not drif
 | both generators, current tree | **refused** — 12 and 37 named, nothing written |
 | the guards | **4 failed** (the two stale-pin tests, and each register's existing "generator refuses an unsound table", which runs the same check), **64 passed** — incl. floor, moved-pin refused, in-window shift silent |
 | rows changed | **none** — Deliverables 2 and 3 are the re-pins |
+
+---
+
+## §3 — Deliverable 2: `CURRENT_FINDINGS.md` re-pinned
+
+**12 re-pinned = Deliverable 1's 12.** Every candidate line was listed, not just the nearest: nine
+rows had exactly one line carrying their quote; for three (`F79`, `F102`, `F103`) the quote begins at
+the end of one line and wraps onto the next, so no single line holds its first words, and each was
+read and pinned to the line where the quote **begins** — the same rule as the other nine.
+
+| row | was | now | | row | was | now |
+|---|---|---|---|---|---|---|
+| `F75` | `PHASE_GATE_ENABLEMENT.md:160` | `:175` | | `F89` | `PHASE_KEY_TRUST_WORKFLOW.md:136` | `:148` |
+| `F79` | `PHASE_AUTHORIZATION_PARITY.md:208` | `:211` | | `F97` | `PHASE_CORPUS_INTEGRITY_III.md:131` | `:134` |
+| `F80` | `PHASE_AUTHORIZATION_PARITY.md:214` | `:218` | | `F101` | `PHASE_LAYER_B_BOUNDARY.md:271` | `:276` |
+| `F82` | `PHASE_OBJECTIVE_FLAG_COMPOSITION.md:145` | `:156` | | `F102` | `PHASE_LAYER_B_BOUNDARY.md:281` | `:302` |
+| `F87` | `PHASE_CORPUS_INTEGRITY_II.md:123` | `:177` | | `F103` | `PHASE_LAYER_B_BOUNDARY.md:306` | `:309` |
+| `F88` | `PHASE_KEY_TRUST_WORKFLOW.md:118` | `:134` | | `F104` | `PHASE_LAYER_B_BOUNDARY.md:313` | `:317` |
+
+**Only line numbers moved.** The re-pin script asserted every curly-quoted string in the generator is
+byte-identical before and after; the regenerated page differs from `HEAD`'s in **13** lines — the 12
+rows and the header's commit — and in nothing but a line number or that commit. **No status
+changed**, and no quotation was inaccurate, so `§Findings` gains no entry.
+
+| check | result |
+|---|---|
+| the generator's content check | **passes** — 0 stale of 97 checkable |
+| `test_current_findings_pins.py` | **32 passed** |
+| reproducible | the page is the generator's output (its reproducibility test is in the 32) |
+| **falsification** | narrowing `WINDOW` to 0 → a valid wrapped pin **fails** (CAUGHT, and the in-window test fires too); reverting `F87` to `:123` → **CAUGHT**; widening, the stale `:123` pin is **rejected at ±3 and accepted at ±200** — the tolerance is what separates them. Tree restored byte-identical |
