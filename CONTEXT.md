@@ -2370,6 +2370,7 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_CORPUS_GOVERNANCE_II.md` | **Corpus governance II** — ADR-0062's eight editorial decisions, `CURRENT_AUTHORITIES.md`'s generator, `F77`'s disposition, and the decisions applied |
 | `PHASE_REGISTER_SOURCE_PINS.md` | **The register source pins** — `17130c7`'s content check applied to the findings and open-items generators (one rule, `scripts/register_pins.py`), and the stale pins it found re-pinned |
 | `PHASE_F57_DOTENV.md` | **F57** — `~/.config/wisp/.env` read at `main()`'s first statement; the semantics, the differential, and four bounded findings |
+| `PHASE_WORKSPACE_DOTENV.md` | **The workspace `.env`** — written by `_persist_env`, read by nothing; the measurement (a repository's `WISP_API_BASE` / `WISP_OLLAMA_URL` would carry the operator's key / prompt away), the decision (not read; writer removed), and its application |
 | `PHASE_EXTERNAL_INPUT_PATH.md` | **The external input path (ADR-0061)** — W1's frame driven, G3's boundary named, the two-decisions-or-one answer, and ADR-0059 residual 1 re-driven |
 | `PHASE_M13_REPORT.md` | The stagnation detector on the live turn path (ADR-0034) |
 
