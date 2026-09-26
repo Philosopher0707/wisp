@@ -19,6 +19,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history: the corpus guards check that a generated page's commit is an
+          # ancestor of HEAD and compare reports against git history since ADR-0062 — both
+          # fail on a depth-1 clone, where every earlier commit is absent.
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5

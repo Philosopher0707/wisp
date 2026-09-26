@@ -46,13 +46,17 @@ def load_organization_policy(config: Any) -> Any:
 
     `policy_pubkey` is the key itself, base64 — not a path (ADR-0058 §Problem).
     """
-    bundle_path = str(getattr(config, "policy_bundle", "") or "")
-    if not bundle_path:
+    # Only a string is a configured path — `WispConfig` declares the setting as `str`. A config
+    # that does not declare it (a `MagicMock` or an older test double answers `getattr` with a
+    # truthy non-string) is ABSENT, R2's inert case; stringifying it would try to load a path
+    # named after the object's repr.
+    bundle_path = getattr(config, "policy_bundle", "")
+    if not isinstance(bundle_path, str) or not bundle_path:
         return None
     from wisp.policy.loader import load_local
 
-    pubkey = str(getattr(config, "policy_pubkey", "") or "")
-    return load_local(bundle_path, pubkey)
+    pubkey = getattr(config, "policy_pubkey", "")
+    return load_local(bundle_path, pubkey if isinstance(pubkey, str) else "")
 
 
 @dataclass

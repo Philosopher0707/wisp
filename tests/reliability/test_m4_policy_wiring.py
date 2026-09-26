@@ -222,3 +222,29 @@ def test_non_violation_3_the_executor_policy_still_defaults_to_none():
     src = (REPO / "wisp/tool_executor.py").read_text(encoding="utf-8")
     assert "self.policy = policy" in src
     assert "effective_policy=self.policy," in src
+
+
+# ── A config that does not declare a bundle loads none (PR #30's CI) ────────
+
+def test_an_undeclared_bundle_setting_loads_nothing():
+    """A `MagicMock` config answers `getattr(config, "policy_bundle", "")` with a truthy mock,
+    and stringifying it tried to open a file named after the mock's repr — `CompositionRoot`
+    raised `FileNotFoundError` for every such caller. Only a `str` is a configured path."""
+    from unittest.mock import MagicMock
+
+    from wisp.composition import load_organization_policy
+
+    assert load_organization_policy(MagicMock()) is None
+
+
+def test_a_declared_but_missing_bundle_still_refuses_to_boot(tmp_path):
+    """The control: the type check must not turn ADR-0058 R3's refusal into silence."""
+    from types import SimpleNamespace
+
+    import pytest
+
+    from wisp.composition import load_organization_policy
+
+    with pytest.raises(Exception):
+        load_organization_policy(SimpleNamespace(policy_bundle=str(tmp_path / "absent.json"),
+                                                 policy_pubkey=""))
