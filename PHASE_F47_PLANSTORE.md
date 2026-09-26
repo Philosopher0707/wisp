@@ -11,7 +11,48 @@ untouched.
 
 ## §1 — In one page
 
-*Written when deliverable 2 lands (§3).*
+**What the model now sees:** after `mark_step_done` or `update_plan`, the tool's result is followed
+by the plan's current state:
+
+```
+✓ Marked task task-1 as done. Progress: 1/3
+
+## Active Plan: add a --json flag to the report command
+Progress: 1/3 tasks complete
+Next task: Add the flag and the serializer (complexity: medium)
+
+Tasks:
+  ✓ 1. Read report.py and its tests
+      Note: read it
+  ○ 2. Add the flag and the serializer [deps: task-1]
+  ○ 3. Document the flag [deps: task-2]
+```
+
+It is a tool result, at `TOOL_OUTPUT` trust. **The system prompt does not change**: the plan is in no
+round's system prompt, before or after. The operator sees the same view in the transcript's tool
+output. Nothing else changes. With no active plan, both tools return exactly what they did. The store on
+disk is byte-identical, and no other tool's code changed (`wisp/tools/plan.py` is the only
+production file).
+
+**Why not the system prompt** (§2, ADR-0063; all driven):
+
+- The assembler's `active_plan` slot is tagged **`OPERATOR`**, and the plan is model-authored.
+- The static prompt is **cached across plan writes**.
+- A plan **never leaves `active`**.
+- The store would re-serve a step written after reading injected repository text to **every future
+  session**.
+
+**Why not remove it:** the ledger's *"write-only"* is wrong. The model's own `mark_step_done` and
+`update_plan` read the store. What it never saw was the plan's **state**.
+
+**Verification:**
+
+- Guard `tests/test_plan_shown_as_tool_output.py` (8): **RED 5 failed / 3 passed**, then 8 passed.
+- 2/2 mutation probes caught.
+- Tool differential: 13 steps, **stores identical 13/13**. 4 results are unchanged, and 9 are the
+  old result plus the plan's state.
+- Test differential: 336/336 over 16 files, the same 2 pre-existing failures both sides.
+- ADR-0063 is appended.
 
 ---
 
@@ -152,3 +193,67 @@ without this reading.
 5. **The ledger's wording.** *"`PlanStore` is write-only"* is corrected in §2: the model's tools read
    it. The defect the finding points at is real, and it is precisely *"the plan's state is never
    shown"*.
+
+---
+
+## §3 — Deliverable 2: ADR-0063 applied
+
+### The change
+
+`wisp/tools/plan.py` is the only production file changed.
+
+- A helper, `_with_state(message, plan)`, returns `message` followed by `plan.format_for_prompt()`.
+  That is the formatter `Plan` already had for exactly this view; no second formatter.
+- It wraps every result of `tool_mark_step_done` and `tool_update_plan` that is produced after a plan
+  was loaded:
+  - `mark_step_done` success;
+  - `mark_step_done` *"Could not complete"*;
+  - `update_plan` *"not found"*;
+  - `update_plan` success.
+- The *"No active plan"* results are untouched, and so is `plan_task`: its result already lists the
+  plan.
+
+No flag. The concern's switch is the tool itself: a model that never calls the plan tools sees nothing
+new.
+
+### The guard — `tests/test_plan_shown_as_tool_output.py`
+
+| test | holds |
+|---|---|
+| `test_mark_step_done_shows_what_is_done_and_what_is_next` | **driven through `CompositionRoot`**: after `plan_task` then `mark_step_done`, the next round's last `role: "tool"` message carries `✓ 1.`, `○ 2.`, *"Next task: …"* and the progress |
+| `test_the_plan_is_in_no_system_prompt` | **driven**: after `plan_task` then `update_plan(in_progress)`, the goal and the task text are in **no** round's system prompt (R2), and the tool message carries `→ 1.` |
+| `test_update_plan_to_done`, `test_mark_step_done_on_a_finished_task_shows_the_plan`, `test_update_plan_on_an_unknown_task_shows_the_plan` | every path that loaded a plan shows it, including both failure paths |
+| `test_both_tools_return_exactly_the_old_message` | no plan → the old string, byte-for-byte |
+| `test_no_production_code_feeds_the_plan_slot` | **R2, static (AST, F73)**: no call outside `context_assembler.py` constructs `PlanState`, passes `active_plan=` / `plan_context=`, or passes `PromptContext(plan=…)` |
+| `test_the_prompt_builders_do_not_import_the_store` | `context_assembler.py` and `core/stateless.py` never import `wisp.planner` |
+
+**The T1 constraint is asserted, not inspected.** It is asserted twice: by driving (no system prompt
+carries the plan) and statically (nothing feeds the slot).
+
+- **Floors** (F81): the driven tests assert that the plan exists in the store and that 3 rounds ran.
+  The AST test asserts it found `ContextAssembler`'s own `PlanState(...)`.
+- **Observation point** (F96): the production stack. Only the LLM is scripted.
+- **F92:** the assertions are the markers the model reads, not the tool's string-building.
+
+### Verification — the sets
+
+| check | result |
+|---|---|
+| RED, before the change | **5 failed, 3 passed**. The 5 are R1: the driven one and three failure/success paths, plus the driven R2 test's `→ 1.` assertion. Its system-prompt assertions already held. The 3 hold already: no-plan byte-identity and the two static R2 checks. |
+| GREEN | **8 passed** |
+| **tool differential** | 13 plan-tool steps (both no-plan paths, `plan_task` good and bad, every `update_plan` status, both failure paths, a finished plan), run on a clean worktree of `b69fa04` and on this change. Masking timestamps and plan ids: **the store is identical at every step, 13/13**. **4 results are identical** (both no-plan paths, both `plan_task` calls), and **9 are exactly the old result + `"\n\n## Active Plan: …"`**. |
+| **test differential** | 16 committed files (the assembler suites, `test_prompt_section_trust`, `test_planner`, `test_progress`, `test_integration`, `test_tools_registry`, `test_permission_mode`, `test_toolchain_e2e`, `test_core_stateless`, the two executor suites), one pytest at a time with `--basetemp`, on a clean worktree of `b69fa04` and on this change. **Before: 336 passed, 2 failed. After: 336 passed, 2 failed.** The failure sets are **identical**: `test_core_stateless.py::TestMaxIterationsWrapUp::test_final_summary_replaces_error` and `test_tool_executor_shared_state.py::TestEnginePublishesIdentity::test_child_turn_publishes_its_own_depth`. Both are in `main`'s CI list of 27. *The first attempt ran nothing on the before side:* the list included the user's untracked WIP test `tests/reliability/test_13i1_capability_surface.py`, absent from the clean worktree, so pytest exited with "file not found" and the "differential" compared nothing with something. It was caught because the before side reported no summary, and re-run on the 16 committed files. A foreign pytest (another session's security suite) ran on the host during the after side; each run used its own `--basetemp`. |
+| **probes** | (1) `_with_state` returns the bare message → **CAUGHT** (5 failed). (2) `_build_system_prompt` passes `active_plan=` to the assembler → **CAUGHT** (the AST test). Both files restored **byte-identical** (sha256), `__pycache__` purged, no bytecode written. |
+| `ruff` | `wisp/tools/plan.py` and the guard: clean |
+
+### The records
+
+- `WISP_MIGRATION_STATUS.md:168`: F47's status cell is now `**FIXED 2026-09-26 (ADR-0063)** (was
+  *OPEN, recorded*)`, with the measured correction and a "Fixed:" sentence.
+- `CURRENT_FINDINGS.md`: `F47` regenerated `FIXED`, decision `ADR-0063`, re-pinned to that cell,
+  tripwire named. The open count went from 14 to 13.
+- `CONTEXT.md`: §0.0.22, the phase table, §3 and the `HEAD` line; §13 and the ADR range landed with
+  deliverable 1 (R7).
+- The ADR log and its index gained ADR-0063 with deliverable 1.
+- `CURRENT_OPEN_ITEMS.md`'s 38 `CONTEXT.md` §12 pins moved with §0.0.22 and were mapped through the
+  diff (`difflib`, equal blocks): 38 moved, 0 unmapped.

@@ -47,7 +47,7 @@ what their §Findings sections are for.
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is the workspace `.env`'s landing** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
+**HEAD is F47's landing** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
 on top of it and is the authority for the count — **F87**: it did not, until 2026-09-25. **Nine**
 "point the handoff" commits had never been listed, so the claim and the table disagreed; backfilled.
 The only exception is the handoff commit that carries *this* line, which the next landing lists.
@@ -281,9 +281,45 @@ quoting it; §11 says how.
 | register source pins | `COMPLETE` — **no ADR.** `17130c7`'s content check in both register generators (one rule, `scripts/register_pins.py`, ±3); measured **12** and **37** stale, re-pinned **12** and **37**; the brief's 55 was an over-count in corpus governance II's own measurement; `ITEM-F3`'s missing `…` marked | `PHASE_REGISTER_SOURCE_PINS.md` |
 | F57 — `~/.config/wisp/.env` is read | `COMPLETE` — **F57 FIXED**, no ADR: `wisp/user_env.py` loads it as `main()`'s first statement; environment wins, absence is a no-op, invalidity warns; 11-test guard, 2/2 probes, 374/374 differential | `PHASE_F57_DOTENV.md` |
 | the workspace `.env` | `COMPLETE` — **no ADR** (not read, so nothing a repository carries reaches the process): measured, a cloned repository's `WISP_API_BASE` / `WISP_OLLAMA_URL` would send the operator's key / prompt to its endpoint if the file were read; **the writer removed**; 7-test guard, RED 4, **2/2** probes, behaviour differential byte-identical, 425/425 | `PHASE_WORKSPACE_DOTENV.md` |
+| F47 — `PlanStore` | `COMPLETE` — **ADR-0063; F47 FIXED**: measured, the store is read by the model's own tools, and what it never saw was the plan's *state*; the plan is shown back as tool output (`mark_step_done` / `update_plan`), never in the system prompt (`active_plan` is `OPERATOR`-tagged, cached, cross-session); 8-test guard, RED 5, **2/2** probes, tool differential 13/13 stores identical, 336/336 over 16 files, the same 2 pre-existing failures both sides | `PHASE_F47_PLANSTORE.md` |
 
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log — **mind the §0/§23 split**, and note it has **no G1 or governance-layer row**: `CONTEXT.md` §12 is the live open-items table, **F99**).
 **Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0063**).
+
+### 0.0.22 F47 — THE PLAN IS SHOWN BACK AS TOOL OUTPUT (2026-09-26) — ADR-0063; F47 FIXED
+
+**The ledger's "write-only" was half right.** Driven through `CompositionRoot` with a recording
+scripted LLM (`scripts/planstore_measurement.py`):
+
+- The plan was in no system prompt.
+- `mark_step_done` and `update_plan` **read** the store, and `plan_task`'s listing stays in the
+  history.
+- What the model never saw was the plan's **state**: after `mark_step_done` it received
+  *"Progress: 1/3"*, and a fresh session received nothing.
+
+The assembler's `active_plan` slot is below instruction position (T1 passes it), but it is the
+wrong place:
+
+- It is **`OPERATOR`-tagged**, and the plan is model-authored.
+- The static prompt is **cached across plan writes** (driven: a cache hit).
+- A plan **never leaves `active`**.
+- The store would re-serve an injected step to **every future session**.
+
+**ADR-0063:** `mark_step_done` and `update_plan` now return the plan's current state after their
+result, at `TOOL_OUTPUT` trust, on every path that loaded a plan. `PlanStore` never enters the system
+prompt. Removal was refuted: the model's own tools read the store. **What the model sees changes:**
+those two tools' results grow by the plan view. Nothing else changes: with no plan, both results are
+byte-identical, and so is the store across 13 tool steps.
+
+Guard `tests/test_plan_shown_as_tool_output.py` (8): RED 5 failed / 3 passed, 2/2 probes,
+336/336 over 16 files, the same 2 pre-existing failures both sides. **Findings, not fixed:**
+
+- `wisp plan` / `wisp progress` query `"."` and never see an agent's (absolute-keyed) plan.
+- A plan never finishes.
+- Plan rotation is global: ten plans anywhere delete this workspace's plan.
+- The store bounds nothing.
+
+Report: `PHASE_F47_PLANSTORE.md`.
 
 ### 0.0.21 THE WORKSPACE `.env` IS NOT READ, AND NO LONGER WRITTEN (2026-09-26) — no ADR; F57's scope extended
 
@@ -1635,7 +1671,9 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `083ec71` | merge `corpus-governance-ii` (the re-pin) into `register-source-pins` |
 | `d1e5921` | merge `register-source-pins` into `f57-dotenv` |
 | `7a8fe8b` | `docs:` **the workspace `.env` — measured, and decided** (deliverable 1): `scripts/workspace_dotenv_measurement.py`; a repository's `WISP_API_BASE` / `WISP_OLLAMA_URL` would carry the operator's key / prompt away if the file were read; decided not read, writer to be removed, no ADR; `PHASE_WORKSPACE_DOTENV.md` §2, indexed in §13 (R7) |
-| *(this commit)* | `fix:` **the workspace `.env` is no longer written** (deliverable 2) — `_persist_env` writes `~/.config/wisp/.env` only; three `./.env` hints corrected; 7-test guard; the ledger's F57 row and `CURRENT_FINDINGS.md` §Findings record the extension; §0.0.21. Excludes the user's WIP (§8) — **the commit that carries §0's `HEAD` line** |
+| `aa39d23` | `fix:` **the workspace `.env` is no longer written** (deliverable 2) — `_persist_env` writes `~/.config/wisp/.env` only; three `./.env` hints corrected; 7-test guard; the ledger's F57 row and `CURRENT_FINDINGS.md` §Findings record the extension; §0.0.21. Excludes the user's WIP (§8) |
+| `b69fa04` | `docs:` **F47 measured, and decided — ADR-0063** (deliverable 1): `scripts/planstore_measurement.py`; the store is read by the model's tools, the plan's *state* is never shown; the `active_plan` slot is `OPERATOR`-tagged, cached, and cross-session; tool output, never the system prompt; `PHASE_F47_PLANSTORE.md` §2, indexed in §13 (R7) |
+| *(this commit)* | `fix:` **F47 — the plan is shown back as tool output** (deliverable 2) — `mark_step_done` / `update_plan` return the plan's current state; 8-test guard; the ledger's F47 status cell and the register; §0.0.22. Excludes the user's WIP (§8) — **the commit that carries §0's `HEAD` line** |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,

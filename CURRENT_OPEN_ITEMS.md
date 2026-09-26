@@ -13,7 +13,7 @@
 > `CURRENT_FINDINGS.md` (every recorded finding and its status), `CURRENT_FLAGS.md` (every
 > rollback flag and its default). All four are derived; none may decide.
 >
-> Generated 2026-09-25 at `aa39d23` · **102 items** · **64 open**, 38 closed (kept, in §The closed items).
+> Generated 2026-09-25 at `b69fa04` · **102 items** · **64 open**, 38 closed (kept, in §The closed items).
 
 ---
 
@@ -21,21 +21,21 @@
 
 | id | title | state | blocked_by | tripwire | source |
 |---|---|---|---|---|---|
-| **R10** | `useApi.ts:368` sends no `Authorization` header | `PARTIAL` | — | — | CONTEXT.md:2272 — “✅ **FIXED** (§0f) — the functional half. **What remains is a decision**” |
-| **F3** | `execute_tool(security_policy=…)` — no caller passes it | `NOT STARTED` | — | — | CONTEXT.md:2275 — “**Accepted (low)** — … annotate so nobody wires them without the missing checks” |
-| **F4** | `spawn_with_guards` is a dead duplicate | `NOT STARTED` | — | — | CONTEXT.md:2276 — “**Accepted** — deletion candidate” |
-| **F5** | event-replay `TOOL_CALL` — the referent is unidentifiable | `NOT STARTED` | — | — | CONTEXT.md:2277 — “**Unresolved, no action** — recorded as unidentified rather than guessed at” |
-| **G2** | The `run_bash` verb scan is a separate mechanism from the predicate | `NOT STARTED` | — | — | CONTEXT.md:2278 — “**Accepted** — a shell command's target is not determinable from its text” |
-| **R3** | Full provider-listing delegation | `NOT STARTED` | the 3 deltas (auth/timeout/degradation) must converge | tests/test_provider_listing_equivalence.py | CONTEXT.md:2279 — “Unsafe until the 3 deltas … converge; `test_provider_listing_equivalence.py` fails at that point” |
-| **R6** | `.venv` missing deps | `PARTIAL` | `httpx` and `cryptography` are absent from the venv **and** the uv cache | — | CONTEXT.md:2282 — “`jsonschema` is **fixed** (F8); `httpx`, `cryptography`, `numpy`, `tiktoken`, `aiohttp` remain absent” |
-| **R7** | `capability_filter.py` untracked but imported | `NOT STARTED` | the file is the user's untracked WIP (§8) | — | CONTEXT.md:2283 — “See §8” |
-| **R8** | 3 untracked test files abort collection | `NOT STARTED` | the files are the user's WIP | — | CONTEXT.md:2284 — “User's WIP” |
-| **R9** | `wisp/core/graph/__init__.py` modified, uncommitted | `NOT STARTED` | the edit is the user's pre-existing WIP | — | CONTEXT.md:2285 — “User's pre-existing edit” |
-| **M1** | P3 stage 3b — enable the acceptance gate | `IN PROGRESS` | ADR-0051 R4 requires **≥ 2 capable models** and this host serves exactly **1** of 13 — an environment fact, not a code change | tests/reliability/test_acceptance_gate_enablement.py | CONTEXT.md:2301 — “**`IN_PROGRESS`** — the precondition is satisfied **and** the mechanism is built and driven; what remains is the population” |
-| **M5** | Foreground-turn `RunRecord` lifecycle | `NOT STARTED` | — | — | CONTEXT.md:2305 — “**OPEN** — proven end-to-end for background runs only.” |
-| **M6** | `PolicyDecisionEnvelope` producer-less and consumer-less | `NOT STARTED` | — | — | CONTEXT.md:2306 — “**OPEN** — the last unwired contract.” |
-| **M7** | `change_tracker.py` not wired into evidence | `NOT STARTED` | deferred with stage 3b | — | CONTEXT.md:2307 — “**OPEN** — deferred with 3b.” |
-| **M10** | The materialized graph is a lower bound on iterations | `NOT STARTED` | — (by design: iteration boundaries are not observable) | — | CONTEXT.md:2309 — “**OPEN — by design.**” |
+| **R10** | `useApi.ts:368` sends no `Authorization` header | `PARTIAL` | — | — | CONTEXT.md:2310 — “✅ **FIXED** (§0f) — the functional half. **What remains is a decision**” |
+| **F3** | `execute_tool(security_policy=…)` — no caller passes it | `NOT STARTED` | — | — | CONTEXT.md:2313 — “**Accepted (low)** — … annotate so nobody wires them without the missing checks” |
+| **F4** | `spawn_with_guards` is a dead duplicate | `NOT STARTED` | — | — | CONTEXT.md:2314 — “**Accepted** — deletion candidate” |
+| **F5** | event-replay `TOOL_CALL` — the referent is unidentifiable | `NOT STARTED` | — | — | CONTEXT.md:2315 — “**Unresolved, no action** — recorded as unidentified rather than guessed at” |
+| **G2** | The `run_bash` verb scan is a separate mechanism from the predicate | `NOT STARTED` | — | — | CONTEXT.md:2316 — “**Accepted** — a shell command's target is not determinable from its text” |
+| **R3** | Full provider-listing delegation | `NOT STARTED` | the 3 deltas (auth/timeout/degradation) must converge | tests/test_provider_listing_equivalence.py | CONTEXT.md:2317 — “Unsafe until the 3 deltas … converge; `test_provider_listing_equivalence.py` fails at that point” |
+| **R6** | `.venv` missing deps | `PARTIAL` | `httpx` and `cryptography` are absent from the venv **and** the uv cache | — | CONTEXT.md:2320 — “`jsonschema` is **fixed** (F8); `httpx`, `cryptography`, `numpy`, `tiktoken`, `aiohttp` remain absent” |
+| **R7** | `capability_filter.py` untracked but imported | `NOT STARTED` | the file is the user's untracked WIP (§8) | — | CONTEXT.md:2321 — “See §8” |
+| **R8** | 3 untracked test files abort collection | `NOT STARTED` | the files are the user's WIP | — | CONTEXT.md:2322 — “User's WIP” |
+| **R9** | `wisp/core/graph/__init__.py` modified, uncommitted | `NOT STARTED` | the edit is the user's pre-existing WIP | — | CONTEXT.md:2323 — “User's pre-existing edit” |
+| **M1** | P3 stage 3b — enable the acceptance gate | `IN PROGRESS` | ADR-0051 R4 requires **≥ 2 capable models** and this host serves exactly **1** of 13 — an environment fact, not a code change | tests/reliability/test_acceptance_gate_enablement.py | CONTEXT.md:2339 — “**`IN_PROGRESS`** — the precondition is satisfied **and** the mechanism is built and driven; what remains is the population” |
+| **M5** | Foreground-turn `RunRecord` lifecycle | `NOT STARTED` | — | — | CONTEXT.md:2343 — “**OPEN** — proven end-to-end for background runs only.” |
+| **M6** | `PolicyDecisionEnvelope` producer-less and consumer-less | `NOT STARTED` | — | — | CONTEXT.md:2344 — “**OPEN** — the last unwired contract.” |
+| **M7** | `change_tracker.py` not wired into evidence | `NOT STARTED` | deferred with stage 3b | — | CONTEXT.md:2345 — “**OPEN** — deferred with 3b.” |
+| **M10** | The materialized graph is a lower bound on iterations | `NOT STARTED` | — (by design: iteration boundaries are not observable) | — | CONTEXT.md:2347 — “**OPEN — by design.**” |
 | **P3 · item 5** | Structural independence (L1/L2) | `PARTIAL` | — | — | WISP_MIGRATION_STATUS.md:511 — “`PARTIAL` … a second model (L3) is not implemented — the plan makes it preferred, not required” |
 | **P3 · item 6** | The completion rule requires non-invalidated evidence | `NOT STARTED` | it is stage 3b, which is M1 | — | WISP_MIGRATION_STATUS.md:512 — “`NOT DONE` — **that is stage 3b** — the plan's staging; `turn_succeeded` is unchanged” |
 | **P3 · item 7** | Wire `change_tracker.py` into evidence | `NOT STARTED` | deferred with 3b (M7) | — | WISP_MIGRATION_STATUS.md:513 — “`NOT DONE` — deferred with 3b” |
@@ -95,29 +95,29 @@ reopens would simply vanish from the open table with nothing to compare against.
 
 | id | title | state | blocked_by | tripwire | source |
 |---|---|---|---|---|---|
-| **R1** | REST gate — finish option B | `COMPLETE` | — | — | CONTEXT.md:2265 — “✅ **DONE** (§0)” |
-| **R2** | Correct the “breaks the client” claim | `COMPLETE` | — | — | CONTEXT.md:2266 — “✅ **DONE** (§5)” |
-| **G0** | REST bypass of the protected-path guard | `COMPLETE` | — | — | CONTEXT.md:2267 — “✅ **DONE** (§0b)” |
-| **E** | The M4 governance layer is not wired to the runtime | `COMPLETE` | — | tests/test_m4_governance_wiring.py | CONTEXT.md:2268 — “✅ **CLOSED 2026-09-25.** The key-trust decision is **ADR-0058** … and the wiring landed” |
-| **G1** | Authorization parity — the agent composes both models; REST consulted only `SecurityPolicy` | `COMPLETE` | — | tests/test_authorization_parity.py | CONTEXT.md:2269 — “✅ **CLOSED.** **ADR-0055** drove the real paths: **0 path divergences of 36**” |
-| **R1b** | `POST /api/hooks` still accepts an unvalidated `command` | `COMPLETE` | — | tests/reliability/test_external_input_path.py | CONTEXT.md:2270 — “✅ **CLOSED 2026-09-25 (ADR-0061 R6 / G3).**” |
-| **W1** | The agent path's WebSocket approval prompt had never rendered | `COMPLETE` | — | tests/reliability/test_external_input_path.py | CONTEXT.md:2271 — “✅ **CLOSED 2026-09-25 (ADR-0061).**” |
-| **F1** | `metadata["_budget"]` write-only | `COMPLETE` | — | — | CONTEXT.md:2273 — “✅ **FIXED** (§0e.2)” |
-| **F2** | `_SENSITIVE_ENV_KEYS` has no consumer | `COMPLETE` | — | — | CONTEXT.md:2274 — “✅ **FIXED** (§0e.1) — deleted as superseded” |
-| **R4** | `_is_transient` is a separate predicate | `COMPLETE` | — | — | CONTEXT.md:2280 — “**Not debt** — different axis (retryability, not outcome class)” |
-| **R5** | Two `RunStatus` enums remain | `COMPLETE` | — | — | CONTEXT.md:2281 — “**Resolved as a non-issue by the migration.** … **No shim needed** — ADR-0003” |
-| **M2** | Journal-first reconstruction | `COMPLETE` | — | tests/test_session_reconstruction.py | CONTEXT.md:2302 — “✅ **COMPLETE** … **Five consumers still read the blob** (a tripwire asserts it)” |
-| **M3** | Killpoint integration | `COMPLETE` | — | tests/reliability/test_killpoints.py | CONTEXT.md:2303 — “✅ **COMPLETE** — `test_kp_session_midtool_then_killed`. One window covered.” |
-| **M4** | ADR-0004 revisited | `COMPLETE` | — | — | CONTEXT.md:2304 — “✅ **COMPLETE** — **ADR-0027**. Found a live defect” |
-| **M8** | `multi_agent/dag.py` not retired into `wisp/graph/` | `COMPLETE` | — (re-scoped by ADR-0060: the divergence is the *boundary*, not a blocker; the removal is **not owed**) | tests/reliability/test_dag_retirement_contract.py | CONTEXT.md:2308 — “✅ **COMPLETE.** *Reason:* surveyed and decided 2026-09-25 — **`DEPRECATE`, not remove** — and **re-scoped by ADR-0060**” |
-| **M9** | The execution view | `COMPLETE` | — | — | CONTEXT.md:2294 — “✅ **COMPLETE** — ADR-0029.” |
-| **M11** | The graph does not drive execution | `COMPLETE` | — | tests/reliability/test_layer_b_boundary.py | CONTEXT.md:2295 — “✅ **COMPLETE.** *Reason:* **decided, not deferred** (ADR-0060; ADR-0062 R3). ADR-0033 … **ADR-0060 closes the second half**” |
-| **M12** | The failure path | `COMPLETE` | — | — | CONTEXT.md:2296 — “✅ **COMPLETE** — ADR-0032.” |
-| **M13** | The stagnation detector is not constructed by the turn loop | `COMPLETE` | — | tests/test_stagnation_live_wiring.py | CONTEXT.md:2297 — “✅ **COMPLETE** — ADR-0034. … **Enforcement deferred**: routing and goal-met gating are tripwired.” |
-| **M14** | The context trust boundary | `COMPLETE` | — | tests/test_prompt_section_trust.py | CONTEXT.md:2298 — “✅ **COMPLETE** — ADR-0031. … T2 fencing remains, deliberately staged.” |
-| **M15** | The subagent spawn site | `COMPLETE` | — | tests/test_child_principal_wired.py | CONTEXT.md:2299 — “✅ **COMPLETE** — ADR-0030.” |
-| **M16** | The `ESCALATION` record's loss is not fully addressed | `COMPLETE` | — | — | CONTEXT.md:2300 — “✅ **COMPLETE** — ADR-0028.” |
-| **Layer C** | `wisp/core/graph/` — named *disowned* and consumed by the live path | `COMPLETE` | — | tests/reliability/test_layer_c_disposition.py | CONTEXT.md:2310 — “✅ **COMPLETE.** *Reason:* decided 2026-09-25 by **ADR-0060 R5** (ADR-0062 R3). The live symbols **moved**” |
+| **R1** | REST gate — finish option B | `COMPLETE` | — | — | CONTEXT.md:2303 — “✅ **DONE** (§0)” |
+| **R2** | Correct the “breaks the client” claim | `COMPLETE` | — | — | CONTEXT.md:2304 — “✅ **DONE** (§5)” |
+| **G0** | REST bypass of the protected-path guard | `COMPLETE` | — | — | CONTEXT.md:2305 — “✅ **DONE** (§0b)” |
+| **E** | The M4 governance layer is not wired to the runtime | `COMPLETE` | — | tests/test_m4_governance_wiring.py | CONTEXT.md:2306 — “✅ **CLOSED 2026-09-25.** The key-trust decision is **ADR-0058** … and the wiring landed” |
+| **G1** | Authorization parity — the agent composes both models; REST consulted only `SecurityPolicy` | `COMPLETE` | — | tests/test_authorization_parity.py | CONTEXT.md:2307 — “✅ **CLOSED.** **ADR-0055** drove the real paths: **0 path divergences of 36**” |
+| **R1b** | `POST /api/hooks` still accepts an unvalidated `command` | `COMPLETE` | — | tests/reliability/test_external_input_path.py | CONTEXT.md:2308 — “✅ **CLOSED 2026-09-25 (ADR-0061 R6 / G3).**” |
+| **W1** | The agent path's WebSocket approval prompt had never rendered | `COMPLETE` | — | tests/reliability/test_external_input_path.py | CONTEXT.md:2309 — “✅ **CLOSED 2026-09-25 (ADR-0061).**” |
+| **F1** | `metadata["_budget"]` write-only | `COMPLETE` | — | — | CONTEXT.md:2311 — “✅ **FIXED** (§0e.2)” |
+| **F2** | `_SENSITIVE_ENV_KEYS` has no consumer | `COMPLETE` | — | — | CONTEXT.md:2312 — “✅ **FIXED** (§0e.1) — deleted as superseded” |
+| **R4** | `_is_transient` is a separate predicate | `COMPLETE` | — | — | CONTEXT.md:2318 — “**Not debt** — different axis (retryability, not outcome class)” |
+| **R5** | Two `RunStatus` enums remain | `COMPLETE` | — | — | CONTEXT.md:2319 — “**Resolved as a non-issue by the migration.** … **No shim needed** — ADR-0003” |
+| **M2** | Journal-first reconstruction | `COMPLETE` | — | tests/test_session_reconstruction.py | CONTEXT.md:2340 — “✅ **COMPLETE** … **Five consumers still read the blob** (a tripwire asserts it)” |
+| **M3** | Killpoint integration | `COMPLETE` | — | tests/reliability/test_killpoints.py | CONTEXT.md:2341 — “✅ **COMPLETE** — `test_kp_session_midtool_then_killed`. One window covered.” |
+| **M4** | ADR-0004 revisited | `COMPLETE` | — | — | CONTEXT.md:2342 — “✅ **COMPLETE** — **ADR-0027**. Found a live defect” |
+| **M8** | `multi_agent/dag.py` not retired into `wisp/graph/` | `COMPLETE` | — (re-scoped by ADR-0060: the divergence is the *boundary*, not a blocker; the removal is **not owed**) | tests/reliability/test_dag_retirement_contract.py | CONTEXT.md:2346 — “✅ **COMPLETE.** *Reason:* surveyed and decided 2026-09-25 — **`DEPRECATE`, not remove** — and **re-scoped by ADR-0060**” |
+| **M9** | The execution view | `COMPLETE` | — | — | CONTEXT.md:2332 — “✅ **COMPLETE** — ADR-0029.” |
+| **M11** | The graph does not drive execution | `COMPLETE` | — | tests/reliability/test_layer_b_boundary.py | CONTEXT.md:2333 — “✅ **COMPLETE.** *Reason:* **decided, not deferred** (ADR-0060; ADR-0062 R3). ADR-0033 … **ADR-0060 closes the second half**” |
+| **M12** | The failure path | `COMPLETE` | — | — | CONTEXT.md:2334 — “✅ **COMPLETE** — ADR-0032.” |
+| **M13** | The stagnation detector is not constructed by the turn loop | `COMPLETE` | — | tests/test_stagnation_live_wiring.py | CONTEXT.md:2335 — “✅ **COMPLETE** — ADR-0034. … **Enforcement deferred**: routing and goal-met gating are tripwired.” |
+| **M14** | The context trust boundary | `COMPLETE` | — | tests/test_prompt_section_trust.py | CONTEXT.md:2336 — “✅ **COMPLETE** — ADR-0031. … T2 fencing remains, deliberately staged.” |
+| **M15** | The subagent spawn site | `COMPLETE` | — | tests/test_child_principal_wired.py | CONTEXT.md:2337 — “✅ **COMPLETE** — ADR-0030.” |
+| **M16** | The `ESCALATION` record's loss is not fully addressed | `COMPLETE` | — | — | CONTEXT.md:2338 — “✅ **COMPLETE** — ADR-0028.” |
+| **Layer C** | `wisp/core/graph/` — named *disowned* and consumed by the live path | `COMPLETE` | — | tests/reliability/test_layer_c_disposition.py | CONTEXT.md:2348 — “✅ **COMPLETE.** *Reason:* decided 2026-09-25 by **ADR-0060 R5** (ADR-0062 R3). The live symbols **moved**” |
 | **P0 · item 6** | A normal turn creates a `RunRecord` row | `COMPLETE` | — | — | WISP_MIGRATION_STATUS.md:293 — “`DEFERRED to P1`”; P1 is `COMPLETE` (`:193`) |
 | **P1 · item 3** | Journal replaces the snapshot as the primary record | `COMPLETE` | — | — | WISP_MIGRATION_STATUS.md:380 — “`DEFERRED to P2`”; P2 is `COMPLETE` (`:194`) |
 | **P5 · item 5** | Extend the executor to accept a mid-run node | `COMPLETE` | — (ADR-0060 measured it inexpressible and rejected Position B) | — | WISP_MIGRATION_STATUS.md:635 — “`NOT DONE` — **deferred** — §7.5”; §7.5's target was **rejected** by ADR-0060 |
@@ -195,7 +195,7 @@ the brief's six (`OPEN`, `DECIDED`, `CLOSED`) are absent from it, and two of the
 
 ## (c) The open count, by state
 
-Measured 2026-09-25 at `aa39d23` over the 102 rows below. A count is canonical
+Measured 2026-09-25 at `b69fa04` over the 102 rows below. A count is canonical
 only if it is measured after the LAST change to any member (**F85**), which is why the
 generator recomputes it rather than the page stating it.
 

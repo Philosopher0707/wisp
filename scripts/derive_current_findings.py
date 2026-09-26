@@ -150,7 +150,7 @@ ROWS: list[tuple[str, str, str, str, str, str, str]] = [
     ("F46", "`acceptance.evaluate` had no producer of `AcceptanceCriteria` from a user objective",
      "FIXED", "unwired-control", "ADR-0045", "WISP_MIGRATION_STATUS.md:167 — “**REPAIRED (ADR-0045 R1)**”", "tests/reliability/test_next_autonomous_wiring.py"),
     ("F47", "`PlanStore` is write-only — a plan the model wrote is never shown to it again",
-     "OPEN", "unwired-control", "—", "WISP_MIGRATION_STATUS.md:168 — “**OPEN, recorded**”", "—"),
+     "FIXED", "unwired-control", "ADR-0063", "WISP_MIGRATION_STATUS.md:168 — “**FIXED 2026-09-26 (ADR-0063)** (was *OPEN, recorded*)”", "tests/test_plan_shown_as_tool_output.py"),
     ("F48", "The default `permission_mode` is `auto_edit`, in which `run_bash` is blocked, so the agent cannot run the project's own tests",
      "OPEN", "", "—", "WISP_MIGRATION_STATUS.md:169 — “**OPEN, recorded**”", "—"),
     ("F49", "A deterministic acceptance check that cannot be evaluated must not report `FAIL`",

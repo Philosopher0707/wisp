@@ -14,7 +14,7 @@
 > `CURRENT_OPEN_ITEMS.md` (what is open), `CURRENT_FLAGS.md` (every rollback flag and its
 > default). All four are derived; none may decide.
 >
-> Generated 2026-09-25 at `aa39d23` · **104 findings** (F1–F104) · **14 not closed** · vocabulary in §(a), classes in §(b).
+> Generated 2026-09-25 at `b69fa04` · **104 findings** (F1–F104) · **13 not closed** · vocabulary in §(a), classes in §(b).
 
 ---
 
@@ -68,7 +68,7 @@
 | **F44** | An iteration-budget-exhausted turn whose wrap-up succeeds was recorded `was_last_turn_complete == True` | `CLOSED` | — | ADR-0042 | WISP_MIGRATION_STATUS.md:1881 — “**CLOSED (PM-23) — ADR-0042.**” | tests/reliability/test_post_m13_completion_enforcement.py |
 | **F45** | No objective-level control loop existed; a failed turn simply ended | `FIXED` | unwired-control | ADR-0045 | WISP_MIGRATION_STATUS.md:166 — “**REPAIRED (ADR-0045)**” | tests/reliability/test_next_convergence_controller.py |
 | **F46** | `acceptance.evaluate` had no producer of `AcceptanceCriteria` from a user objective | `FIXED` | unwired-control | ADR-0045 | WISP_MIGRATION_STATUS.md:167 — “**REPAIRED (ADR-0045 R1)**” | tests/reliability/test_next_autonomous_wiring.py |
-| **F47** | `PlanStore` is write-only — a plan the model wrote is never shown to it again | `OPEN` | unwired-control | — | WISP_MIGRATION_STATUS.md:168 — “**OPEN, recorded**” | — |
+| **F47** | `PlanStore` is write-only — a plan the model wrote is never shown to it again | `FIXED` | unwired-control | ADR-0063 | WISP_MIGRATION_STATUS.md:168 — “**FIXED 2026-09-26 (ADR-0063)** (was *OPEN, recorded*)” | tests/test_plan_shown_as_tool_output.py |
 | **F48** | The default `permission_mode` is `auto_edit`, in which `run_bash` is blocked, so the agent cannot run the project's own tests | `OPEN` | — | — | WISP_MIGRATION_STATUS.md:169 — “**OPEN, recorded**” | — |
 | **F49** | A deterministic acceptance check that cannot be evaluated must not report `FAIL` | `FIXED` | false-success | ADR-0045 | WISP_MIGRATION_STATUS.md:170 — “**REPAIRED (ADR-0045 R4)**” | tests/reliability/test_next_convergence_controller.py |
 | **F50** | Stagnation was reported from an *empty* measurement and from an objective with no criteria | `FIXED` | false-success | ADR-0045 | WISP_MIGRATION_STATUS.md:171 — “**REPAIRED (ADR-0045 R7)**” | tests/reliability/test_next_convergence_controller.py |
@@ -226,8 +226,8 @@ below. A count is canonical only if it is measured after the LAST change to any 
 
 | status | count |
 |---|---|
-| `OPEN` | 14 |
-| `FIXED` | 51 |
+| `OPEN` | 13 |
+| `FIXED` | 52 |
 | `CLOSED` | 34 |
 | `SUPERSEDED` | 1 |
 | `DECIDED` | 3 |
@@ -237,7 +237,7 @@ below. A count is canonical only if it is measured after the LAST change to any 
 
 **`UNRESOLVED`** — no finding is currently in this state (ADR-0062 R3.2's rule).
 
-**Not closed** — `OPEN` + `UNRESOLVED` — **14** of 104. **6** of them are the **host**, not the architecture: `F11`, `F17`, `F36`, `F75`, `F80`, `F88`.
+**Not closed** — `OPEN` + `UNRESOLVED` — **13** of 104. **6** of them are the **host**, not the architecture: `F11`, `F17`, `F36`, `F75`, `F80`, `F88`.
 Each is a declared dependency that cannot be installed here (`F11`, `F80`, `F88`), a resource
 limit (`F36`), a flaky test (`F17`), or an instrument that cannot be committed (`F75`). The
 remaining `OPEN` findings are architectural and are the ones a decision would move.
