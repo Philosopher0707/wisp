@@ -47,7 +47,7 @@ what their §Findings sections are for.
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is `69d1580`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
+**HEAD is `242e90e`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
 on top of it and is the authority for the count — **F87**: it did not, until 2026-09-25. **Nine**
 "point the handoff" commits had never been listed, so the claim and the table disagreed; backfilled.
 The only exception is the handoff commit that carries *this* line, which the next landing lists.
@@ -278,9 +278,23 @@ quoting it; §11 says how.
 | corpus governance II — **D2** the authorities generator | `COMPLETE` — `scripts/derive_current_authorities.py`; guard 35 → 45, **7/7** probes; found the header stale again | `PHASE_CORPUS_GOVERNANCE_II.md` §3 |
 | corpus governance II — **D3** `F77`'s disposition | `COMPLETE` — **outcome 1**, measured and driven: F77 is §7.1's instrument defect; **F105 closed**; found the register's sources are range-checked only | `PHASE_CORPUS_GOVERNANCE_II.md` §4 |
 | corpus governance II — **D4** the decisions applied | `COMPLETE` — every edit cites its rule; 27-test guard, **10/10** caught, **3/3** legitimate additions silent; found R2's third `M4` never existed | `PHASE_CORPUS_GOVERNANCE_II.md` §5 |
+| register source pins | `COMPLETE` — **no ADR.** `17130c7`'s content check in both register generators (one rule, `scripts/register_pins.py`, ±3); measured **12** and **37** stale, re-pinned **12** and **37**; the brief's 55 was an over-count in corpus governance II's own measurement; `ITEM-F3`'s missing `…` marked | `PHASE_REGISTER_SOURCE_PINS.md` |
 
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log — **mind the §0/§23 split**, and note it has **no G1 or governance-layer row**: `CONTEXT.md` §12 is the live open-items table, **F99**).
 **Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0062**).
+
+### 0.0.19 THE REGISTER SOURCE PINS (2026-09-26) — no ADR; an instrument repaired
+
+**The two newer registers checked a source's line *range*, not its words** — the weakness `17130c7`
+closed for `CURRENT_AUTHORITIES.md`. `scripts/register_pins.py` is now the one rule for both: the
+quote directly after `path:line — ` must be within **±3** lines of the cited line (0 breaks on
+wrapped prose; a whole-file window passes a pin drifted onto another row with the same status words),
+with a source table's `|` read as the register's `—`. **Measured 12 stale findings and 37 stale open
+items; re-pinned 12 and 37**; both checks pass at 0. `CONTEXT.md` §12's rows are re-pinned **by id**,
+because their status phrases recur. `ITEM-F3`'s quote was never verbatim (a clause dropped with no
+`…`); its elision is marked, no word changed, recorded in the page's `§Findings`. **Every future edit
+above §12 now fails the build until its pins move** — which is the point. Report:
+`PHASE_REGISTER_SOURCE_PINS.md`.
 
 ### 0.0.18 THE CORPUS GOVERNANCE LAYER, II (2026-09-26) — ADR-0062; the ten findings closed or dispositioned
 
@@ -1575,7 +1589,11 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `dcad1f8` | `docs:` **F77 is `PHASE_DAG_RETIREMENT.md` §7.1's instrument defect** (D3, F105): decided by measuring — two records outside the report state its content, and the defect is driven; the reference made explicit; no number coined; two state-pinning guards repaired (F92); **NV4 missed** — a range-only source check, recorded; excludes the user's WIP (§8) |
 | `69d1580` | `docs:` **ADR-0062 applied to the artifacts, and guarded** (D4): §12, §6, §11, §13, `AGENTS.md`, the ledger's §23 note, the four registers; `tests/reliability/test_corpus_editorial_decisions.py` (27), **10/10** caught, **3/3** silent; excludes the user's WIP (§8) |
 | `fbca83f` | `docs:` point the handoff at `69d1580` — §0's `HEAD`, §0.0.18, the phase table, this table, and the ledger's change log; the three §12 open-item pins re-pinned after §0.0.18 moved them. Excludes the user's WIP (§8) |
-| *(this commit)* | `fix:` **the three defects PR #30's review found** — a TUI `decision` key bypassed the REST approval bridge and could approve an unrelated agent call; the verdict reused a probe taken before a withheld turn's fix; a subagent's model-written task could make the host run a declared command outside approval. RED-first, 11-test guard, **5/5** reverts caught; `PHASE_CORPUS_GOVERNANCE_II.md` §6. Excludes the user's WIP (§8) |
+| `3c606cd` | `fix:` **the three defects PR #30's review found** — a TUI `decision` key bypassed the REST approval bridge and could approve an unrelated agent call; the verdict reused a probe taken before a withheld turn's fix; a subagent's model-written task could make the host run a declared command outside approval. RED-first, 11-test guard, **5/5** reverts caught; `PHASE_CORPUS_GOVERNANCE_II.md` §6. Excludes the user's WIP (§8) |
+| `dbc6a39` | `test:` **the register generators check a source's quoted words**, not just its line range (register source pins, D1) — `scripts/register_pins.py`, ±3, floor 60; RED by design: **12** and **37** stale; excludes the user's WIP (§8) |
+| `d4afcd9` | `docs:` re-pin `CURRENT_FINDINGS.md`'s **12** stale sources (D2) — only line numbers moved, every quotation byte-identical; excludes the user's WIP (§8) |
+| `242e90e` | `docs:` re-pin `CURRENT_OPEN_ITEMS.md`'s **37** stale sources (D3) — §12 rows by id; `ITEM-F3`'s elision marked; a stale-`.pyc` defect in the probe harness found and fixed; excludes the user's WIP (§8) |
+| *(this commit)* | `docs:` point the handoff at `242e90e` — §0.0.19, the phase table, this table, the report's §1; the `CONTEXT.md` §12 pins re-pinned **by id** after §0.0.19 moved them, as the new check required. Excludes the user's WIP (§8) — **the handoff commit that carries §0's `HEAD` line** |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,

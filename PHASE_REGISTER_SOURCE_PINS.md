@@ -10,6 +10,34 @@ WIP in `CONTEXT.md` §8 — untouched.
 
 ---
 
+## §1 — The mission, in one page
+
+**Measured, then repaired.** The content check (`scripts/register_pins.py`, one rule for both
+registers, window ±3) found **12** stale pins in `CURRENT_FINDINGS.md` and **37** in
+`CURRENT_OPEN_ITEMS.md`; **12 and 37 were re-pinned**, and both checks now pass at **0 stale** (97
+and 101 checkable). The counts re-pinned equal the counts measured.
+
+| register | stale (measured) | re-pinned | quotations changed | statuses changed |
+|---|---|---|---|---|
+| `CURRENT_FINDINGS.md` | 12 | 12 | 0 | 0 |
+| `CURRENT_OPEN_ITEMS.md` | 37 | 37 | **1** — `ITEM-F3`'s missing `…` marked (no word changed; `§Findings` entry) | 0 |
+
+**Where the brief's numbers differ, and why.** The brief expected **55** for open items, from
+`PHASE_CORPUS_GOVERNANCE_II.md` §5. That count was **my own over-count**: its heuristic had no rule
+for a quote spanning two source table cells, so eleven correctly pinned ledger rows (and one with a
+nested quote) were called stale. The measurement is **37**.
+
+**Three instrument defects, all found by running:** the first cut of the check reproduced that
+over-count (49) until the cell-boundary and nested-quote rules were added; a quote *search* sent two
+rows to one line, so §12 rows are re-pinned **by id**; and the probe harness trusted **stale
+bytecode** after size-preserving, same-second mutations — twice — until it wrote none.
+
+**One departure from the brief's letter**, flagged in §4: `ITEM-F3`'s quote was never verbatim (not
+an amended source), and its elision is now marked rather than exempted. Revert it if you prefer the
+letter. **No ADR, no `wisp/` change, no status change.**
+
+---
+
 ## §2 — Deliverable 1: the content check, in both generators
 
 ### What was built
