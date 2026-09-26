@@ -5324,8 +5324,8 @@ the mechanism is demonstrated; only the *population* is missing.
    `command_succeeds` that is a real cost, and it is why the flag defaults OFF.
 3. **The gate shares the stagnation gate's budget**, so a stagnating turn can spend the declared gate's
    extensions. That is the intended reading of a turn-level bound, and it is stated rather than discovered.
-4. **`stagnation_gate` is untouched** (ADR-0037 forbids enabling it without a superseding ADR). The two
-   gates are now both wired and both default OFF, independently.
+4. **`stagnation_gate` is untouched** (ADR-0037 forbids enabling it without a superseding ADR) — **CLOSED
+   2026-09-27**: both gates are wired and default OFF *independently*, which is the disposition, not a gap.
 
 ### Reversal condition
 
@@ -5829,11 +5829,11 @@ the server's current frame would need one in both clients.
    `test_the_frame_is_the_one_both_clients_read`, which fails if either client changes.
 2. **`resolve_approval` still ignores the client's `id` when the transport resolves it** (the route
    passes it; `WebSocketTransport.resolve_approval` falls back to "first pending" when the id does not
-   match). The bridge correlates correctly; the transport's path is weaker. Not changed here — it is
-   the agent path's resolver.
+   match). **CLOSED 2026-09-27 by ADR-0066 R5** — kept, with its condition stated: the fallback is
+   unreachable for a correct client, and it goes when no shipped client sends an un-echoed id.
 3. **G3 remains open** (R9).
-4. **A multi-client deployment asks every registered channel** and takes the first response. Fine for
-   the shipped single-client desktop model; a per-client routing decision is its own ADR.
+4. **A multi-client deployment asks every registered channel** and takes the first response — **CLOSED
+   2026-09-27 by ADR-0066 R6**: per-client routing is *not owed*, having no client identity to route by.
 
 ### Reversal condition
 
@@ -5995,8 +5995,8 @@ Asserted by `tests/reliability/test_key_trust_workflow.py`.
 
 ### Residuals
 
-1. **The multi-device ceremony.** Deferred by the spec, read as such here. A control plane, a
-   key-distribution server and a registration UI remain unspecified.
+1. **The multi-device ceremony** — **CLOSED 2026-09-27**. Deferred by the M4 spec (§5), read as such: a
+   control plane, a key-distribution server and a registration UI are **not owed** — deferred, not omitted.
 2. **`WISP_POLICY_CACHE` and `load_managed` are not engaged.** The managed/disconnected modes have a
    network story and a cache; this decision wires the `local-only` path only.
 3. **REST does not receive L0.** `SecurityPolicy.check()` has **no organization layer** — driven, it
@@ -6160,22 +6160,23 @@ mode. That is ADR-0055 §Why-not-B, re-measured on the composed gate.
 
 ### Residuals, named
 
-1. **A bundle's `approve` level is inert on REST.** Measured: `{"write_file": "approve"}` leaves the
-   REST verdict identical to no bundle in every mode. Composing it is Option A, rejected above. The
-   agent path honours it; REST cannot, having no approver. Pinned as a property so that composing it
-   is a deliberate change.
-2. **REST's consult is conditional on a bundle**, so L1 (principal capabilities), L2 (workspace trust)
-   and L3 (sensitivity) are not consulted without one. L1 is unbounded for the local human, L3 needs a
-   `restricted` sensitivity REST never passes, and L2 is the default trust — but **workspace
-   quarantine** is a real pre-existing gap: a quarantined workspace denies non-read tools on the agent
-   path and does not on REST **unless a bundle is loaded**. That divergence predates this ADR and is
-   not created by it.
-3. **REST still reimplements L4.** `require_tool_allowed`'s protected-path guard is the same predicate
-   as `authorize()`'s L4, written inline. Pre-existing; kept because its message is pinned and because
-   removing it is a separate change.
-4. **Two bundle sources.** The env-var path is consumed; the publish route's held
-   `app.state.policy_bundle` (`wisp/server/routes/policy.py`) still has no decision reader. Named, not
-   merged — merging them is a distribution decision.
+1. **A bundle's `approve` level is inert on REST** — **CLOSED 2026-09-27.** Measured: `{"write_file":
+   "approve"}` leaves the REST verdict identical to no bundle in every mode; the agent path honours it
+   and REST cannot, having no approver. **Closed in effect and in mechanism** — the effect by ADR-0061,
+   re-derived over the **ten** pinned pairs, and the mechanism by **ADR-0066 R1**, which decided the
+   trigger is a *set* rather than a read of `approval_required`.
+2. **REST's consult is conditional on a bundle** — **CLOSED 2026-09-27 by ADR-0068.** L1, L2 and L3
+   were not consulted without one. L1 is unbounded for the local human, and L3 needs a `restricted`
+   sensitivity REST never passes, so neither was a gap. **L2 was**: a quarantined workspace denied
+   non-read tools on the agent path and **allowed them on REST** whenever no bundle was loaded. The
+   workspace layer is now applied unconditionally by `require_tool_allowed`, last; the bundle-gated
+   consult above is unchanged, which is why the byte-for-byte differential still holds.
+3. **REST no longer reimplements L4 — CLOSED 2026-09-27.** `require_tool_allowed`'s protected-path guard
+   was the same predicate as `authorize()`'s L4, written inline. The scan is now the canonical
+   `wisp.pathsec.touches_protected_path`, called by both sites; each keeps its own message.
+4. **Two bundle sources** — **CLOSED 2026-09-27.** The env-var path is consumed; the publish route's held
+   `app.state.policy_bundle` has no decision reader. **Named, not merged** — a disposition: merging them is
+   a distribution decision, and no deployment here has two sources to merge.
 5. **The three REST-only names now have an enforced rule and still have no agent operation.** L0's
    verdict on them is REST's alone. That is the honest end state: the operator's rule fires, and there
    is no agent path to be at parity with.
@@ -6592,10 +6593,10 @@ property (8/8 caught).
    available proxy.
 2. **`receive_message`'s own `tool_approval` branch still ignores `msg["id"]`** (it calls
    `resolve_approval(approved)` with no id). The route intercepts first, so this is the old-protocol
-   fallback — ADR-0057 residual 2, unchanged here. R5 names it rather than silently fixing it.
+   fallback — **CLOSED 2026-09-27 by ADR-0066 R5**, which keeps it as a stated back-compat shim.
 3. **A multi-client deployment still asks every registered channel** and takes the first response
    (ADR-0057 residual 4), unchanged.
-4. **The bundle half of ADR-0059 residual 1 is un-measurable here** (`cryptography` absent, F88).
+4. **The bundle half of ADR-0059 residual 1 is now measurable — CLOSED 2026-09-27.** `cryptography` is installed, so the `approve` level's effect on the REST verdict can be driven; residual 1's own divergence stays tracked by **ADR-0059 R1**.
 
 ### Reversal condition
 
@@ -6950,6 +6951,381 @@ It is re-keyed absolute when next saved.
 
 ---
 
+## ADR-0065 — A recorded disposition is a closure, and §(a)'s mapping row for it is corrected
+
+**Status:** ACCEPTED
+**Phase:** The corpus governance layer, III (the open register's closure triage —
+`PHASE_REGISTER_CLOSURE_TRIAGE.md`)
+**Evidence:** `scripts/derive_current_open_items.py` (`ROWS`, `_check`); `scripts/register_pins.py`;
+`CONTEXT.md` §12 and §(a); `WISP_ARCHITECTURE_DECISIONS.md:5996-6007`; the measured classification of
+all 64 open rows in `PHASE_REGISTER_CLOSURE_TRIAGE.md` §3
+
+### Context
+
+`CURRENT_OPEN_ITEMS.md` §(a) maps four of `CONTEXT.md` §12's words onto the ledger's vocabulary, and
+one of the mappings is:
+
+> | `Accepted (low)` · `Accepted` · `Unresolved, no action` | `NOT STARTED` | `CONTEXT.md` §12 |
+
+**Measured, that row contradicts the register's own closed table.** The same page carries `R4`
+(*"**Not debt** — different axis"*) and `R5` (*"Resolved as a non-issue by the migration"*) as
+`COMPLETE`, and `ADR-0058 R4` closed on the ground *"(R7), by design"*. `Accepted` is the same kind of
+statement as `Not debt`: each names a residual that was **acknowledged and resolved without a code
+change**. One is carried as `COMPLETE` and the other as `NOT STARTED`, and the difference is not the
+disposition's meaning — it is which row of the mapping table the transcriber reached for.
+
+This is the ambiguity **ADR-0062 R3** already removed for `DECIDED`: *"It names **why** the item is
+finished (an ADR decided it) rather than **that** it is"*, repaired to `COMPLETE` followed by
+*Reason:*. The reasoning transfers verbatim, and the mapping row was never updated with it.
+
+Ten open rows carry a disposition and are carried as open. The register's own rule forbids repairing
+that by transcription — §(a) is the authority the register cites for its states, so correcting it is
+an editorial decision about the vocabulary, which is exactly what ADR-0062 R2/R3 were required for.
+
+### Decision
+
+**R1 — A recorded disposition is a closure.** Where an item's source records a disposition that
+resolves it — *Accepted*, *Unresolved, no action*, *by design*, *a stated cost*, *compat is
+test-only* — the item is recorded `COMPLETE`, followed by *Reason:* and the disposition quoted from
+its source. The source cell keeps its existing pin; the *Reason:* is appended after the closing
+quotation mark, as the closed rows already do.
+
+**R2 — §(a)'s mapping row is corrected.** The row for `Accepted (low)` · `Accepted` · *Unresolved, no
+action* no longer maps to `NOT STARTED`; §(a) states that a disposition is a closure and is recorded
+per R1. `§(b)`'s rule — *a reason is not a state* — is unchanged and is what R1 applies: the
+disposition is the **reason**, and the state is `COMPLETE`.
+
+**R3 — A disposition that names work still owed is not a closure.** `ITEM-F3`'s disposition is
+*"Accepted (low) — … annotate so nobody wires them without the missing checks"*, and the annotation it
+names is **not** the prohibition the source specifies: measured, `wisp/tools/registry.py:911-912`
+*describes* that advanced features use `TOOL_IMPLS` directly, and does not forbid wiring them without
+the checks. `F3` is therefore recorded **`PARTIAL`** — decision taken, the named action not done — and
+**not** `COMPLETE`. An item is closed by its disposition only when the disposition names no work.
+
+**R4 — "Deferred" is not a disposition.** It names a future, and a future is not a closure. The `P9`
+rows, `M7` and every row whose obstacle reads *"deferred"* stay open. This is stated because it is the
+mapping a careless reader would extend R1 to, and it is wrong.
+
+**R5 — One item carried under two ids closes as `SUPERSEDED`.** Where two rows name the same item,
+the later id is recorded `SUPERSEDED` with the canonical id cited. Measured: `ADR-0061 R3` is
+`ADR-0057 R4` (its own `blocked_by` concedes *"— (ADR-0057 residual 4, unchanged)"*), and
+`PHASE_M4_WIRING R5` is `ADR-0058 R2`. The open count over-counted by two. `SUPERSEDED` is the
+vocabulary's word for this and had no members.
+
+### Consequences
+
+Nine rows move to `COMPLETE` under **R1**: `F4`, `F5`, `G2`, `M10`, `ADR-0053 R3`, `ADR-0054 R2`,
+`ADR-0054 R3`, `ADR-0058 R2`, `PHASE_DAG_RETIREMENT R2`. One moves to `PARTIAL` under **R3**: `F3`.
+Two move to `SUPERSEDED` under **R5**: `ADR-0061 R3`, `PHASE_M4_WIRING R5`. The open count falls from
+**64 to 52**; `COMPLETE` rises from 38 to 48 and `SUPERSEDED` takes its first two members.
+
+**`R9` closes under a pre-existing decision, not this one.** Its obstacle was recorded as *"the edit is
+the user's pre-existing WIP"*, but **ADR-0060 R5** already decided the disposition of exactly that
+file — *"`wisp/core/graph/__init__.py` needs **no edit**"*, the dead part *"kept, not deleted"* as a
+reference implementation, with the user's own uncommitted docstring quoted as the reason. Independently
+driven: the uncommitted diff is a module docstring only — docstring-stripped AST equality **True**,
+recursive `co_code` equality **True**, **prose-only, exit 0**. `R9` is recorded `COMPLETE` with ADR-0060
+R5 as its reason. `R7` and `R8` remain open: they carry behaviour, and their author's commit decision
+is not this ADR's to make.
+
+**`F4`'s tripwire citation is corrected in the same change.** The register carried `tripwire = "—"`;
+measured, `tests/test_unwired_controls_inventory.py:283` pins it
+(`assert src.count("spawn_with_guards") == 1`, *"it is no longer dead code"*). `CONTEXT.md` §12 calls
+`F4` a *"deletion candidate"*; the instrument disagrees, and deleting it would break the test. The
+instrument is the more recent artefact and is cited.
+
+### Rejected
+
+- **Closing the ten rows by transcription, with no decision.** §(a) is the register's own authority for
+  its states. Editing it to say something it does not say — and editing the register's rows to match —
+  is the drift the derived-page discipline exists to prevent, and ADR-0062 R2/R3 set the precedent that
+  a vocabulary repair is a decision.
+- **Closing the 38 rows whose obstacle is *"its own ADR"*.** They are awaiting **rulings**, not
+  dispositions. A closure citation for a decision never taken would be a false record, and
+  `register_pins.py`'s verbatim-quote check exists to make it fail loudly rather than pass quietly.
+  They are classified, not closed (`PHASE_REGISTER_CLOSURE_TRIAGE.md` §3.6).
+- **Extending R1 to *"deferred"*.** See R4.
+
+### Residuals, named
+
+1. **The register's generation date is a string literal** while its commit stamp is read live
+   (`scripts/derive_current_open_items.py:404`). Regenerating produces *"Generated 2026-09-25"* on a
+   later date. Corrected in this change to read the date from the clock, because the regeneration this
+   ADR requires would otherwise write a false statement.
+2. **A residual id cited in prose is not validated.** `PHASE_M4_WIRING R5`'s `blocked_by` cites
+   `ADR-0058 R6`, and ADR-0058's reversal condition cites *"R5"*; ADR-0058's `### Residuals`
+   (`WISP_ARCHITECTURE_DECISIONS.md:5996-6007`) has only **R1–R4**. `_check()` validates that a source
+   *file and line* exist, not that a residual *id* does. Its own decision.
+3. **Three of the 38 are defects, not decisions** — `PHASE_DAG_RETIREMENT R1`, `PHASE_LAYER_B_BOUNDARY
+   R2`, `ADR-0059 R3` — and are closeable by repair without an ADR. Not repaired here.
+4. **`F-T1`–`F-T8` are recorded in `PHASE_REGISTER_CLOSURE_TRIAGE.md` and not yet in
+   `CURRENT_FINDINGS.md`**, which has its own generator and its own decision.
+
+*Reversal trigger.* A row closed under R1 that is later found to require work reopens as
+`IN PROGRESS` with the work named, and the reopening is recorded as a finding — so that *"accepted"*
+and *"wrongly accepted"* stay distinguishable.
+
+---
+
+## ADR-0066 — The approval authority is three questions, and the executable-config set covers executing
+
+**Status:** ACCEPTED
+**Phase:** The approval authority (`PHASE_AUTHORIZATION_PARITY.md`, ADR-0057, ADR-0061)
+**Evidence:** the gate enumeration in `PHASE_DECISION_BRIEFS.md` §2 — every `require_tool_allowed`
+and `require_rest_approval` call in `wisp/server/routes/`, **14 policy-gated sites and 3
+human-gated**; `wisp/server/approval_bridge.py`; `wisp/transport/websocket.py:213`;
+`wisp/core/contracts.py:316`
+
+### Context
+
+`PHASE_AUTHORIZATION_PARITY`'s residual 1 calls the approval authority *"split three ways"* and defers
+unifying it to its own ADR. Residual 2 says three action names are *"in none of the three approval
+sets"*. Residual 4 names five further gated routes as unmeasured. Driven, residual 2 is **superseded**
+and residual 4 is **measured** — and the measurement exposes a gap in the set that both residuals were
+written before.
+
+The measurement, in full: **two gates exist and they cover different route sets.** The policy gate
+(`require_tool_allowed`) is called at 14 sites; the human gate (`require_rest_approval`) at 3, and
+those three are exactly `REST_APPROVAL_ACTIONS`. Between them sit five routes that pass the policy gate
+and never ask a human — including the two *test* verbs whose own source comments declare them the same
+authority class as the verbs that do ask.
+
+### Decision
+
+**R1 — The three mechanisms are three questions, and they stay three.** Measured, they are not three
+copies of one rule. `auth/decision.py`'s L5 answers *"does this permission mode require approval for
+this risk class?"* — the agent path's question. `SecurityPolicy.check()` answers *"does the loaded
+policy or mode require approval?"* — both paths. `REST_APPROVAL_ACTIONS` answers *"does this REST-only
+action persist or execute something?"* — and its names have **no agent operation at all**.
+
+Unifying them is **rejected** on ADR-0055's own measured ground: the only unification available is to
+give the REST-only names a `TOOL_RISK_TABLE` row, which would make REST stricter than the agent on
+routes where the agent denies nothing — with no counterpart to be at parity with. **Three mechanisms
+answering three questions is a composition, not a split.** The word "split" implied a defect; the
+measurement does not support one.
+
+**R2 — `PHASE_AUTHORIZATION_PARITY` residual 2 is superseded, not repaired.** It reads *"`hooks.create`,
+`mcp.add_server`, `plugins.install` … no approval model governs them on either path"*. That was true
+when written and is false now: those three **are** `REST_APPROVAL_ACTIONS`, which ADR-0057 created. The
+residual is recorded as superseded and its source is **not rewritten** — it is the historical record of
+what was true before ADR-0057, and ADR-0062 R2's rule (do not amend a historical record) applies.
+
+**R3 — The executable-config set covers executing, not only persisting.** `hooks.test` and
+`mcp.test_server` join `REST_APPROVAL_ACTIONS`. The ground is the routes' own comments, which say it
+better than this ADR can:
+
+- `hooks.py` — *"Testing a hook **EXECUTES its command** — the same authority class as creating one.
+  Gating only `create_hook` would leave this as a bypass."*
+- `mcp.py` — *"Health-checking an MCP server **SPAWNS** it — the same authority class as registering
+  one. Gating only `add_mcp_server` would leave this as a **spawn-by-other-means bypass**."*
+
+Both authors closed the **policy** half of that bypass and left the **approval** half. The set's own
+stated rationale — *"these persist something Wisp later executes"* — was **narrower than its purpose**:
+a route that executes immediately is at least as deserving as one that stores for later execution. The
+asymmetry shipped was that a human was asked to authorise a capability and never asked to exercise it.
+
+**The change is coherent with the authority it composes, not an addition to it.** `risk_for_tool`
+fails closed to `ToolRisk.EXEC` for a name with no table row (`contracts.py:316`), and `authorize()`
+already returns `approval_required=True` for `EXEC` in `auto_edit` and `ask_all`. So the M2 authority
+already said these two routes require approval; the REST gate simply did not ask. Driven over the
+pinned pairs, the count moves from **six to ten** and all ten satisfy `allowed and approval_required`.
+
+**R4 — Removal stays outside the set, and that is decided rather than left implicit.**
+`mcp.remove_server` and `plugins.uninstall` narrow what is installed rather than widening it, and a
+removal that requires an approval is one an operator may not be present to give. `plugins.uninstall` is
+the harder case — it deletes what an approval authorised — and it is **named here as the cost**: an
+operator who wants removal gated wants it for a different reason than this set exists for.
+`plugins.toggle` is neither installing nor removing and is in neither set.
+
+**R5 — An approval is correlated by its id, and the single-pending fallback is a stated shim.**
+`resolve_approval` (`websocket.py:213`) and `receive_message`'s `tool_approval` branch both fall back to
+*"resolve the single unresolved entry"* when the id is unknown or absent. That is **back-compatibility
+for a client that does not echo the id**, and it is safe only because a second concurrent approval makes
+the fallback a no-op (`len(pending) == 1`). It is **kept, with its condition stated**: the fallback is
+correct while it is unreachable for a correct client — which ADR-0061 R2 made true, since `call_id`
+**is** the `_approvals` key. It is removed when no shipped client sends an un-echoed id.
+
+**R6 — A multi-client deployment asks every channel and takes the first response; per-client routing is
+not owed.** Routing an approval to the client that issued the request presupposes a client identity the
+transport does not carry — `_approvals` is keyed by `call_id`, not by client. Adding one changes the
+frame vocabulary ADR-0061 had just fixed, and it is only meaningful in a deployment with more than one
+client, which this host does not have (ADR-0061 R1). The broadcast is the model until a multi-client
+deployment exists to route *for*.
+
+### Consequences
+
+Six rows close: `PHASE_AUTHORIZATION_PARITY R1` (R1), `R2` (R2), `R4` (R3/R4, now measured),
+`ADR-0057 R2` (R5), `ADR-0057 R4` (R6), `ADR-0061 R2` (R5).
+
+**R3 is implemented in the change that ratifies this ADR**, not deferred: the two names are in the set,
+both routes call `require_rest_approval` after their policy gate, and the pinned-pairs count moves six →
+ten. The behaviour change is behind `WISP_REST_APPROVAL`, which defaults **OFF**, so the default is
+unchanged — and a REST caller with no connected client is denied, not hung.
+
+**A guard was repaired as part of it.** `test_external_input_path.py` asserted the trigger is a set with
+`assert "approval_required" not in src` — a **bare string scan**, which failed on this ADR's own comment
+naming the attribute while a real read of it, split across lines or reached via `getattr`, would have
+passed. It is now AST-based and scans for a read. That is the same instrument class as
+`PHASE_LAYER_B_BOUNDARY R2` and `PHASE_DAG_RETIREMENT R1`; it was found by R3's change rather than by
+review, which is the argument for making these scans parse.
+
+### Rejected
+
+- *Unifying the three mechanisms* (R1) — three questions, not three copies; see above.
+- *A `TOOL_RISK_TABLE` row for the REST-only names* — ADR-0055 §Why-not-B, re-measured.
+- *Per-client routing now* (R6) — no client identity to route by and no multi-client deployment to
+  route for; building the mechanism before its precondition is the pattern this corpus keeps
+  diagnosing.
+- *Gating removal* (R4) — stated as a cost, not adopted.
+- *Leaving R3 as a decision without its implementation* — the asymmetry it removes is a live one, and
+  the change is two names and two call sites.
+
+### Residuals, named
+
+1. **`write_file`, `edit_file` and `run_bash` are outside the set** and are governed by the mode engine
+   instead. They are agent tools with an agent counterpart, so they belong to `SecurityPolicy`'s
+   question — but the consequence is that the two gates cover **disjoint** route sets, and a reader
+   asking "is this route gated?" must first know which question applies.
+2. **The set is still a hand-written literal.** R3 edited a `frozenset`. A route added without a
+   corresponding entry is **silent** — nothing enumerates the routes and asserts each is classified.
+   That guard is what would make this set self-maintaining, and it is not built here.
+3. **`ADR-0059 R1`'s pinned-pair count moved** from six to ten. Its "closed in effect" reading was
+   measured over six pairs and is now measured over ten; the measurement is owed again, and R3's
+   coherence argument (`authorize()` already returns `approval_required` for both) is the reason it is
+   expected to hold.
+
+*Reversal trigger.* A multi-client deployment (R6 reverses); a shipped client that sends an un-echoed id
+(R5's shim stops being unreachable and becomes load-bearing); or a route added to the family without an
+entry in the set, which residual 2 is the standing invitation to.
+
+---
+
+## ADR-0067 — A deployment without a composition root is ungoverned by construction, and says so
+
+**Status:** ACCEPTED
+**Phase:** The M4 wiring's second construction site (`PHASE_M4_WIRING.md` §4 residual 2)
+**Evidence:** `wisp/acp_session.py`'s `_get_tool_executor`; `wisp/composition.py:167` (the single load
+site); ADR-0058 R1; the fallback driven and its warning observed
+
+### Context
+
+`PHASE_M4_WIRING` residual 2 reads *"`acp_session.py:208` — an ACP-only deployment would need the same
+load; named, not done."* Driven, the site is a **fallback**: `_get_tool_executor` prefers the
+composition root's executor and, when there is no root, builds `ToolExecutor(self.config, …)` **without
+`policy=`**.
+
+The obvious repair — call `load_organization_policy` here — is **rejected by an earlier decision**.
+ADR-0058 R1 loads the organization policy *"ONCE, here — the single load site"* (`composition.py:167`),
+because one load site is what makes one authority. A second call site would make the governance layer's
+*presence* a function of which construction path happened to run.
+
+So residual 2 is not an unfinished wiring. It is a **conflict between a gap and a rule**, and the rule
+wins. This is the third construction site the same rule has decided — `composition.py` loads it,
+`benchmark/runner.py:82` does not receive it (named in `CONTEXT.md` §12's `E` row), and this ADR states
+the rule once for the ACP fallback.
+
+### Decision
+
+**R1 — A deployment with no composition root is ungoverned by construction, and the code says so.**
+The fallback keeps its behaviour and gains a **warning**: it names the missing layer, states that
+permission gating still applies, and points at the remedy. The gap is **made loud rather than closed**,
+because closing it is what ADR-0058 forbids.
+
+**R2 — The remedy is named, and it is not a second loader.** An ACP-only deployment that wants the
+organization layer constructs a `CompositionRoot`. One loader, one authority, whichever path ran.
+
+### Rejected
+
+- **Calling `load_organization_policy` in the fallback.** It is the second load site ADR-0058 R1
+  forbids, and it makes the layer's presence depend on the construction path.
+- **Leaving the fallback silent.** A control that is absent and unannounced is the false-assurance mode
+  `PHASE_10_M4_GOVERNANCE_UNWIRED.md` §4 names — the same failure ADR-0058 §8 distinguished from
+  ADR-0036's benign fail-open. Before this ADR the fallback was exactly that: ungoverned and quiet.
+
+### Residuals, named
+
+1. **The warning is the whole enforcement.** Nothing *fails* when a root-less deployment runs; it is
+   loud, not closed. A deployment that wants enforcement needs the root — and the warning says so,
+   which is the difference between a stated gap and a silent one.
+2. **The fallback still exists.** `_get_tool_executor`'s root-less branch is reachable, and its
+   permission gating is the reason it was added. Removing it would remove gating; keeping it keeps a
+   path with no organization layer. Both costs are now stated.
+
+*Reversal trigger.* A deployment that cannot construct a root — at which point the loader moves behind
+an interface both paths share, and that is its own decision.
+
+---
+
+## ADR-0068 — The workspace-trust layer is applied on REST unconditionally, and last
+
+**Status:** ACCEPTED
+**Phase:** ADR-0059's residual 2 (the L1/L2/L3 consult, and the quarantine gap it exposed)
+**Evidence:** driven — a `.wisp-quarantine` marker, no composition root, no bundle: `_m2_denial`
+returns `None` and the gate returns **403 `Blocked by the workspace trust layer: quarantined
+workspace: non-read tools denied`**; a read is still permitted; a `TRUSTED` workspace is unchanged;
+**109 tests** pass including `test_no_bundle_is_the_old_gate_byte_for_byte`
+
+### Context
+
+ADR-0059 residual 2 observed that REST's consult of the M2 authority is **conditional on a bundle**,
+so L1, L2 and L3 are not consulted without one. Driven, it is worse than "not consulted": `_m2_denial`
+**returned `None` immediately** when no organization policy was loaded, so `authorize()` was never
+called at all and **the workspace-trust layer was skipped entirely**. A `QUARANTINED` workspace denied
+non-read tools on the agent path and **allowed them over REST** on any bundle-less deployment — which
+is every deployment until an operator configures a bundle.
+
+Of the three layers, only L2 was a gap: L1 is unbounded for the local human, and L3 needs a
+`restricted` sensitivity that REST never passes. **Workspace trust is not a policy question** — it is
+classified from the *workspace* (`classify_workspace`), so making its enforcement depend on a bundle
+was a category error, and it made a security control's presence a function of an unrelated
+configuration.
+
+### Decision
+
+**R1 — The workspace-trust layer is applied on REST unconditionally.** `require_tool_allowed` applies
+it whether or not a bundle is loaded.
+
+**R2 — It is applied *last*, and that is load-bearing.** Every check above it already narrows, so a
+check appended after them can only **add** a denial — it can never reorder or replace a message an
+earlier decision pins. **Making `_m2_denial` unconditional instead was tried and rejected**: it
+changed the 403 detail for `write_file` in `read_only` with no bundle from *"Blocked by server policy
+(READ_ONLY mode blocks write_file)…"* to *"Blocked by the approval policy layer: read-only mode:
+mutation denied"*, and `test_no_bundle_is_the_old_gate_byte_for_byte` caught it. Same status, different
+message, and ADR-0059 R2 measures that message byte-for-byte. **The test found this, not review.**
+
+**R3 — One implementation of the refusal.** `wisp/auth/workspace_trust.refuses(trust, *, is_read)`
+returns the refusal reason or `None`, and **both** callers use it — `auth/decision`'s L2 and the REST
+gate. Two copies of "what a quarantined workspace refuses" is how a divergence starts, and this
+repository has the precedent: the L4 protected-path scan was duplicated until ADR-0066 R3. The helper
+takes `is_read` rather than a tool name so `workspace_trust` stays pure and does not acquire a
+dependency on the risk table.
+
+**R4 — The bundle-gated consult is unchanged.** L0/L1/L3 stay behind `_m2_denial`'s bundle gate, so
+ADR-0059's measured differential holds where it was measured: with no bundle and a `TRUSTED`
+workspace, the gate's behaviour and messages are exactly what they were.
+
+### Rejected
+
+- **Making `_m2_denial` unconditional.** Tried; it changed a pinned message. R2.
+- **Duplicating the L2 predicate in the REST gate.** It would be the second copy of a security rule
+  the corpus has already paid for once. R3.
+- **Leaving the gap and naming it.** It is a *quarantined* workspace — the state an operator reaches
+  for precisely when they do not trust the contents. A control that is absent there is the
+  false-assurance mode `PHASE_10_M4_GOVERNANCE_UNWIRED.md` §4 names.
+
+### Residuals, named
+
+1. **The gate now denies on a path that previously allowed**, for a quarantined or read-only workspace
+   with no bundle. That is the fix, and it is a **behaviour change** — behind no flag, because the
+   prior behaviour was the absence of a control rather than a configuration of one. A deployment that
+   needs to mutate a quarantined workspace has to unquarantine it, which is the point of the marker.
+2. **L1 and L3 remain bundle-gated** and are not gaps for the reasons given. They stay behind the gate
+   because their inputs (a configured principal, a `restricted` sensitivity) are policy inputs.
+
+*Reversal trigger.* REST acquires a principal or a sensitivity that is not the local human's default —
+at which point L1 or L3 stops being a non-question, and the whole consult moves out from behind the
+bundle gate together.
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -7018,3 +7394,7 @@ It is re-keyed absolute when next saved.
 | 0062 | The corpus's editorial decisions: one register, one vocabulary, one reading rule | The corpus governance layer, II (F105–F114) | ACCEPTED (decides the eight **editorial** findings the first corpus-governance mission reported and did not repair. **Every decision is about an artifact**, not the product: no flag default, no gate, no authority's scope, no `wisp/` file. **R1 `CURRENT_FINDINGS.md` is the canonical register for a finding's status** (`F106`) — the ledger stays append-only and **un-backfilled**; its §23 note is corrected to name the register and to state its own actual range (`F64`–`F74`, not `F64`–`F71`); *why not backfill* — thirty rows duplicated across two append-only files is a second producer of one fact. **R2 the id namespaces are disambiguated by prose prefix** (`F107`) — `FIND-F7` vs `ITEM-F1`, and the three meanings of `M4` annotated once; *why not rename* — a rename rewrites a historical record and breaks every citation. **R3 the ledger's six words govern, with one reason column** (`F108`) — `DECIDED` is a **reason** and moves to it, the state becoming `COMPLETE`; **`BLOCKED` is kept as a state** and its emptiness is recorded as *"no item is currently in this state"*, because a defined word with no members is a vocabulary, not a defect. **R4 the reading rule is ADR-0002's, recorded verbatim** (`F109`) — *read at the **consumption site***, not the circulated paraphrase *"read once, at the composition point"*, and the ADR **names the paraphrase's source**: ADR-0056's local *"read once, independently"* about the objective path, conflated with ADR-0002's general rule; under the paraphrase `verification_loop`'s two read sites and `turn_spans`'s two become violations of a rule the corpus does not have. **R5 `verification_gate` and `graph_mutation` are wrong names, not aliases** (`F110`) — neither string occurs anywhere in `wisp/`; the flags are `verification_loop` and `task_graph`, and this ADR adds **no alias**, because an alias for a name that was never real is the second vocabulary R3 forbids. **R6 no two pytest processes run concurrently, and a block run passes `--basetemp`** (`F112`) — two concurrent processes race on the shared base dir and produce **869 `PermissionError: EEXIST` errors** from one overlapping run, which reads as a code failure and is not; a **method** rule and a method flag, not a code change, and it **corrects the corpus's own diagnosis** (§6 attributed it to the shim; the measured cause is contention). **R7 a phase report enters the document index in the change that creates it** (`F114`) — `F104`'s class, and a record that exists and is not listed is the same defect as one listed and not existing. **R8 a derived page must have a committed generator** (`F113`, policy half) — **F75**'s class one level up; a page may still carry an **append-only** section the generator emits unchanged, provided the guard asserts it. **`F105` is NOT decided here** — it is a measurement (`PHASE_CORPUS_GOVERNANCE_II.md` §4), and the report is that the referent is **not determinable**: `PHASE_DAG_RETIREMENT.md` contains **three** finding-shaped statements, not one. `F111` is a host condition whose rule already lives in `CONTEXT.md` §11) |
 | 0063 | A model-authored plan is shown back as tool output, never as a system-prompt section | F47 — `PlanStore` | ACCEPTED (decides F47's shape by measurement, `PHASE_F47_PLANSTORE.md` §2. **R1** `mark_step_done` and `update_plan` return the plan's current state after their result, at `TOOL_OUTPUT` trust. **R2** `PlanStore` content never enters the system prompt: the `active_plan` slot is tagged `OPERATOR`, and feeding it model-authored text would launder the tag T1 trusts. Also driven: the static prompt is cached across plan writes, a plan never leaves `active`, and the store would carry an injected step into every future session. **R3** the view's lifetime is the conversation's. *Rejected:* removal, because the model's own tools read the store; and system-prompt wiring, for the four measured defects. *Reversal:* a cross-session requirement, which needs operator endorsement first) |
 | 0064 | A plan's workspace has one resolver, inside the store; rotation counts per workspace | The plan CLI | ACCEPTED (decides `PHASE_F47_PLANSTORE.md` §2's first finding by measurement, `PHASE_PLAN_CLI.md` §2. The agent's key is `session["workspace"]` **verbatim**: one directory had five keys under five spellings. The CLI's `"."` found the plan only when the key happened to be `"."`, and `wisp plan abort` too. Rotation kept the ten newest across all workspaces. **R1** `planner.workspace_key` (expanduser + resolve), applied by `PlanStore` to queries, stored keys, saves and rotation, so no caller normalizes. **R2** the CLI reads `WispConfig().workspace`, the agent's own source. **R3** rotation per workspace. **R4** stored keys are resolved when read, so old plans stay readable and none is rewritten. *Rejected:* removal (the commands have users); the CLI alone (ten plans elsewhere still delete the plan); per-workspace rotation on the raw key) |
+| 0065 | A recorded disposition is a closure, and §(a)'s mapping row for it is corrected | The corpus governance layer, III (the open register's closure triage) | ACCEPTED (decides the register's last editorial question by measurement rather than by transcription: §(a)'s mapping row for `Accepted` · `Accepted (low)` · `Unresolved, no action` contradicted the register's own closed table, where `R4` (*"Not debt"*), `R5` (*"Resolved as a non-issue"*) and `ADR-0058 R4` (*"by design"*) close on the same kind of statement. **R1** a recorded disposition is a closure — `COMPLETE` + *Reason:*, the pin kept and the reason appended after the closing quote, as the closed rows already do. **R2** §(a)'s row corrected; `§(b)`'s *"a reason is not a state"* unchanged, and it is what R1 applies. **R3** a disposition naming work still owed is **not** a closure: `ITEM-F3` moves to `PARTIAL`, because its named annotation is measured to *describe* rather than *prohibit* (`wisp/tools/registry.py:911-912`). **R4** *"deferred"* is not a disposition — the `P9` rows and `M7` stay open. **R5** one item under two ids closes as `SUPERSEDED`: `ADR-0061 R3` ≡ `ADR-0057 R4`, `PHASE_M4_WIRING R5` ≡ `ADR-0058 R2`. Nine rows to `COMPLETE`, one to `PARTIAL`, two to `SUPERSEDED` — open **64 → 52**, `SUPERSEDED` takes its first two members. **`R9` closes under ADR-0060 R5**, which had already decided that file *"needs no edit"* and quoted the uncommitted docstring as its reason; independently driven, the diff is prose-only by both instruments (docstring-stripped AST identical, recursive `co_code` identical). Corrects `F4`'s missing tripwire citation — `tests/test_unwired_controls_inventory.py:283` pins it as deliberately dead, so the *"deletion candidate"* reading in §12 is superseded by the instrument. Rejects closing the 38 rows whose obstacle is *"its own ADR"*: they await rulings, not dispositions, and `register_pins.py`'s verbatim-quote check exists to make a fabricated closure fail loudly. No `wisp/` production change; no flag, gate or authority touched) |
+| 0066 | The approval authority is three questions, and the executable-config set covers executing | The approval authority (`PHASE_AUTHORIZATION_PARITY.md`, ADR-0057, ADR-0061) | ACCEPTED (decides the residual ADR-0055 left open by **enumerating every gate call in `wisp/server/routes/`** — 14 policy-gated sites, 3 human-gated — rather than by argument. **R1** the three mechanisms are three *questions* and stay three: L5 answers the mode/risk question, `SecurityPolicy` the policy question, `REST_APPROVAL_ACTIONS` the REST-only question; unifying is rejected because the only unification available is a `TOOL_RISK_TABLE` row for names that are not agent tools, which ADR-0055 §Why-not-B already measured as making REST stricter with no counterpart — a composition, not a split. **R2** `PHASE_AUTHORIZATION_PARITY` residual 2 is **superseded, not repaired**: its three names *are* `REST_APPROVAL_ACTIONS` now, and the source is not rewritten (ADR-0062 R2). **R3** `hooks.test` and `mcp.test_server` join the set — each route's own comment declares it "the same authority class" as the sibling that does ask, and both authors closed the *policy* half of that bypass while leaving the *approval* half; coherent with the authority it composes, since `risk_for_tool` fails closed to `EXEC` (`contracts.py:316`) and `authorize()` already returns `approval_required` for both, so the pinned pairs move **six → ten** and all ten satisfy `allowed and approval_required`. Implemented in the ratifying change, behind `WISP_REST_APPROVAL` default **OFF**. **R4** removal stays outside the set, with `plugins.uninstall` named as the cost. **R5** id correlation kept, with the single-pending fallback stated as a back-compat shim that is safe only while unreachable for a correct client. **R6** per-client routing **not owed** — no client identity to route by, no multi-client deployment to route for. Repairs a bare string scan in `test_external_input_path.py` (the `PHASE_LAYER_B_BOUNDARY R2` instrument class) that R3's own comment tripped. No flag default changed; no gate reordered) |
+| 0067 | A deployment without a composition root is ungoverned by construction, and says so | The M4 wiring's second construction site (`PHASE_M4_WIRING.md` §4 residual 2) | ACCEPTED (resolves residual 2, which read *"named, not done"*, by driving the site rather than reading it: `acp_session.py`'s `_get_tool_executor` prefers the root's executor and otherwise builds `ToolExecutor(self.config, …)` **without `policy=`**. The obvious repair is **rejected by ADR-0058 R1** — the organization policy is loaded *"ONCE, here — the single load site"* (`composition.py:167`), because one load site is what makes one authority, so a second call site would make the layer's presence a function of which construction path ran. So residual 2 is a **conflict between a gap and a rule**, not an unfinished wiring. **R1** the fallback keeps its behaviour and gains a **warning** naming the missing layer, stating that permission gating still applies, and pointing at the remedy — the gap is **made loud rather than closed**, because closing it is what ADR-0058 forbids. **R2** the remedy is a `CompositionRoot`, not a second loader: one loader, one authority. Rejects *calling the loader in the fallback* (the forbidden second site) and *leaving it silent* — which is what it was, and is the false-assurance mode `PHASE_10_M4_GOVERNANCE_UNWIRED.md` §4 names and ADR-0058 §8 distinguishes from ADR-0036's benign fail-open. Third construction site the same rule has decided. No flag, no gate, no authority changed; **66 ACP tests pass**) |
+| 0068 | The workspace-trust layer is applied on REST unconditionally, and last | ADR-0059's residual 2 (the L1/L2/L3 consult, and the quarantine gap it exposed) | ACCEPTED (resolves ADR-0059 residual 2 by driving it: `_m2_denial` **returned `None` immediately** when no organization policy was loaded, so `authorize()` was never called and **L2 was skipped entirely** — a `QUARANTINED` workspace denied non-read tools on the agent path and **allowed them over REST** on every bundle-less deployment. Of the three layers only L2 was a gap (L1 is unbounded for the local human; L3 needs a `restricted` sensitivity REST never passes), and **workspace trust is not a policy question** — it is classified from the *workspace*, so gating its enforcement on a bundle made a security control's presence a function of an unrelated configuration. **R1** applied unconditionally. **R2** applied **last**, and that is load-bearing: a check appended after the narrowing ones can only *add* a denial, never reorder a pinned message — making `_m2_denial` unconditional instead was tried and **rejected because `test_no_bundle_is_the_old_gate_byte_for_byte` caught it** changing the `read_only` 403 detail for `write_file` (same status, different message, and ADR-0059 R2 measures that message byte-for-byte). **R3** one implementation: `wisp/auth/workspace_trust.refuses(trust, *, is_read)`, used by **both** `auth/decision`'s L2 and the REST gate — the second copy of a security rule this corpus has already paid for once (cf. ADR-0066 R3's L4 scan); it takes `is_read` not a tool name so `workspace_trust` stays pure. **R4** the bundle-gated consult is unchanged, so the measured differential holds where it was measured. Driven: quarantined + no root + no bundle → **403 by the workspace trust layer**; a read still permitted; a `TRUSTED` workspace unchanged; **109 tests pass**. Behaviour change on a path that previously allowed, deliberately behind **no flag** — the prior behaviour was the *absence* of a control, not a configuration of one) |

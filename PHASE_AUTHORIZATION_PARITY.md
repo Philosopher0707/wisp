@@ -117,12 +117,12 @@ correction.
 
 ## 3. Residuals, named
 
-1. **The approval authority is split three ways** (§1.3). Unifying it is its own ADR; this one touches
-   none of the three.
-2. **Three action names are in none of the three approval sets.** `hooks.create`, `mcp.add_server`,
-   `plugins.install` have no `TOOL_RISK_TABLE` row, so no approval model governs them on either path.
-   Their control over REST is the API key plus the `read_only` denial. Adding rows is inert today (no
-   consumer reads the table for a name that is not an agent tool) and is not this ADR's change.
+1. **The approval authority is split three ways** (§1.3) — **CLOSED 2026-09-27 by ADR-0066 R1**, which
+   measured that the three are three *questions*, not three copies, and rejected unifying them.
+2. **Three action names are in none of the three approval sets** — **SUPERSEDED 2026-09-27.** `hooks.create`,
+   `mcp.add_server` and `plugins.install` have no `TOOL_RISK_TABLE` row, so no risk-table model governs them.
+   They **are** `REST_APPROVAL_ACTIONS`, which ADR-0057 created, so an approval model does govern them on REST.
+   This residual is the record of what was true before ADR-0057 — not rewritten (ADR-0062 R2, ADR-0066 R2).
 3. **REST cannot ask a human.** A REST caller gets the agent's no-approver behaviour, including its
    permissive fall-through for `auto_edit` writes. Driven with `approval_handler=None`, a `write_file`
    in `auto_edit` **runs**: the approval branch is entered, the handler is absent, `forced_approval` is
@@ -130,10 +130,10 @@ correction.
    forced = pass through"*, but the enclosing guard is `not auto_approve`, so the comment does not
    describe the branch it sits in. **Not repaired here** — `ToolExecutor.execute`'s chain is one of the
    three non-violations (R8). Option C is the fix.
-4. **Five further gated routes are not in the parity table** — `hooks.test`, `mcp.test_server`,
-   `mcp.remove_server`, `plugins.toggle`, `plugins.uninstall`. They pass through the same gate, and
-   `mcp.test_server` **executes a server command**. They are unmeasured here and are named so the next
-   reader does not assume the table is exhaustive.
+4. **Five further gated routes are not in the parity table** — **MEASURED 2026-09-27.** `hooks.test`,
+   `mcp.test_server`, `mcp.remove_server`, `plugins.toggle` and `plugins.uninstall` all pass the policy
+   gate and **none asked a human**. **ADR-0066 R3** moved the two *executing* verbs into the set; the
+   removal and toggle verbs stay outside it, by ADR-0066 R4.
 
 ---
 

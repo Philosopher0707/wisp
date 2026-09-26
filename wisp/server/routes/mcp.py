@@ -144,6 +144,10 @@ async def test_mcp_server(name: str, request: Request):
     # spawn-by-other-means bypass.
     require_tool_allowed(request, "mcp.test_server", {"name": name},
                          str(WORKSPACE_ROOT))
+    # ADR-0066 R3 — the policy gate above was the half of the bypass that was closed;
+    # this is the other half. Spawning what add_mcp_server was approved to register.
+    await require_rest_approval(request, "mcp.test_server", {"name": name},
+                                str(WORKSPACE_ROOT))
     manager = _get_mcp_manager()
     configs = manager.load_server_configs()
     if not any(c.name == name for c in configs):

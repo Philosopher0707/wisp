@@ -219,8 +219,9 @@ is weaker than a two-run intersection and is stated as such.
   fixed.
 - **The bundle half of ADR-0059 residual 1 is un-measurable here** — `cryptography` is absent (F88), so
   `verify_bundle` returns False for everything.
-- **`vscode-extension/` is not a "shipped client" in ADR-0057's sense**, and this report does not claim
-  it is. It is named because it reads the same frame, which *strengthens* R1 (the client change is zero
-  for it too) rather than changing the decision. Whether it ships is not this ADR's question.
+- **`vscode-extension/` is not a "shipped client" in ADR-0057's sense** — **ANSWERED 2026-09-27: it is.**
+  ADR-0061's own text names **three** clients that branch on the frame — the desktop renderer, the TUI
+  *and* the VS Code extension — and corrects ADR-0057's *"both"*. It reads the same frame, so it ships
+  by the only test ADR-0057 states.
 - **`_validate_hook_name` was already correct and is not this ADR's work.** It is driven here only to
   pin the *asymmetry* that is the decision.

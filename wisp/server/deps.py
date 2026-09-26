@@ -404,6 +404,11 @@ def _m2_denial(request: Request, action_name: str, args: dict,
     disagree on it in exactly six (route, mode) pairs — the three REST-only action
     names in `auto_edit`/`ask_all` — and honouring that shape here would 403 the
     shipped client on those routes with **no bundle loaded at all**.
+
+    **Unchanged by ADR-0068.** This stays bundle-gated: L0/L1/L3 are policy questions and
+    the byte-for-byte differential (`test_no_bundle_is_the_old_gate_byte_for_byte`) pins
+    this path's messages. The *workspace* layer is not a policy question and is applied
+    separately, last, by `require_tool_allowed` — see ADR-0068 R1 there.
     """
     policy = organization_policy(request)
     if policy is None:
@@ -474,8 +479,10 @@ def require_tool_allowed(request: Request, action_name: str, args: dict,
        agent tool path has enforced this since M2, but REST did not: the
        policy engine is mode-based and has no argument scan, so
        `POST /api/files` could write a hook that the equivalent
-       `write_file` tool call was refused. The predicate is the canonical
-       `wisp.pathsec.is_protected_path`, so all three paths agree.
+       `write_file` tool call was refused. The predicate, the key set **and the scan** are all
+       canonical (`wisp.pathsec.is_protected_path` and `touches_protected_path`), so all three
+       paths agree **by construction** rather than by two copies happening to match — the scan
+       was the last copy, and ADR-0059 residual 3 closed it.
     2. **The M2 authority's denial verdict** — `authorize()` with the root's
        loaded policy. Denials only: a hard denial must not be reported as an
        approval requirement. Inert when no bundle is loaded (ADR-0059 R2).
@@ -486,16 +493,13 @@ def require_tool_allowed(request: Request, action_name: str, args: dict,
     even in `full` mode — and the M2 consult precedes the mode engine so the
     higher authority's reason is the one reported.
     """
+    from wisp.auth.workspace_trust import classify_workspace, refuses
     from wisp.core.contracts import ToolRisk, risk_for_tool
     from wisp.infra.security import Action, Context
-    from wisp.pathsec import PATH_BEARING_ARGS, is_protected_path
+    from wisp.pathsec import touches_protected_path
 
     args = dict(args or {})
-    if risk_for_tool(action_name) != ToolRisk.READ and any(
-        is_protected_path(str(value))
-        for key, value in args.items()
-        if key in PATH_BEARING_ARGS and value
-    ):
+    if risk_for_tool(action_name) != ToolRisk.READ and touches_protected_path(args):
         logger.warning("rest_tool_gate_protected_path action=%s args=%s",
                        action_name, sorted(args))
         raise HTTPException(
@@ -527,6 +531,28 @@ def require_tool_allowed(request: Request, action_name: str, args: dict,
             status_code=403,
             detail=f"Blocked by server policy ({decision.reason or action_name}); "
                    f"no approver is present over REST",
+        )
+
+    # ADR-0068 R1 — L2 (workspace trust), applied **last and unconditionally**.
+    #
+    # `_m2_denial` above is bundle-gated, so on a bundle-less deployment `authorize()` was
+    # never consulted and this layer was skipped: a QUARANTINED or READ_ONLY workspace denied
+    # non-read tools on the agent path and **allowed them over REST**. Workspace trust is
+    # classified from the *workspace*, not from a bundle, so it must not be conditional on one.
+    #
+    # **Last, deliberately.** Every check above already narrows, and running this after them
+    # means it can only *add* a denial — never reorder or replace a message the differential
+    # pins. Making `_m2_denial` unconditional instead was tried and rejected: it changed the
+    # 403 detail for `write_file` in `read_only` with no bundle, which ADR-0059 R2 measures
+    # byte-for-byte.
+    _trust_refusal = refuses(classify_workspace(str(workspace)),
+                             is_read=risk_for_tool(action_name) == ToolRisk.READ)
+    if _trust_refusal is not None:
+        logger.warning("rest_tool_gate_workspace_deny action=%s trust=%s",
+                       action_name, classify_workspace(str(workspace)))
+        raise HTTPException(
+            status_code=403,
+            detail=f"Blocked by the workspace trust layer: {_trust_refusal}",
         )
 
 

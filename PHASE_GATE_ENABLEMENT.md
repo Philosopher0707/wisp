@@ -203,9 +203,10 @@ was incomplete in a different way.
 
 - **The gate was never exercised.** It is not enabled, so there are no interventions or surrenders to
   count. Reporting those as zero would be manufacturing a metric; they are **NOT MEASURED**.
-- **The projection is proven over the guard's state space, not over all inputs.** The state space is the
-  guard's fields; a future guard field could in principle break the equivalence, which is why the guard
-  test re-derives it rather than asserting the count.
+- **The projection is proven over the guard's state space, not over all inputs** — **a reversal condition,
+  not an open item (2026-09-27).** The state space is the guard's fields; a future field could break the
+  equivalence, which is why the guard test **re-derives** it. A condition the test enforces is a tripwire,
+  and the register has a column for one.
 - **The population is the prior mission's, re-derived.** No new live turns were taken. The *instrument* is
   new and committed; the *data* is the recorded JSON, consolidated into `scripts/`. `n = 14` for the only
   informative model, and the point estimate is not a stable production rate.

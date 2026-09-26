@@ -14,6 +14,7 @@ used by the agent authorization layer (`auth/decision`), the filesystem tools
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 
 
 #: Path fragments whose contents are executed by Wisp itself. A hook script
@@ -63,6 +64,31 @@ def is_protected_path(candidate: str) -> bool:
         if after == "" or after.startswith("/"):
             return True
     return False
+
+
+def touches_protected_path(args: Mapping[str, object] | None) -> bool:
+    """True when any path-bearing argument in `args` names a protected target.
+
+    The **scan** the authorization paths need, kept beside the two things it composes:
+    `PATH_BEARING_ARGS` says which keys can name a target, `is_protected_path` says whether one
+    does, and this applies the second to the first.
+
+    **Why it lives here.** The scan was written out twice — `auth/decision`'s L4 and the REST
+    gate's protected-path guard — as the identical expression over `PATH_BEARING_ARGS`. The
+    predicate and the key set were already single-sourced, so both copies agreed on *what* is
+    protected and *which keys* to look at; what could still drift was the scan itself, and a
+    second copy of a guard is how this module's own divergence started (see
+    `tests/test_protected_path_guard.py`). ADR-0059 residual 3 named the duplication and
+    deferred the removal; this is that removal.
+
+    Falsy values are skipped, so an absent argument is not tested as the empty path. Callers
+    keep their own risk guard and their own refusal message — this decides only the predicate.
+    """
+    return any(
+        is_protected_path(str(value))
+        for key, value in (args or {}).items()
+        if key in PATH_BEARING_ARGS and value
+    )
 
 
 def resolve_contained(root: str, candidate: str, *, allow_absolute: bool = True) -> str:

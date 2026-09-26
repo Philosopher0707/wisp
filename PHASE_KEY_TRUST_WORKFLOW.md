@@ -231,9 +231,9 @@ Plus the premises (§3) and R3/R4/R6/R7, each mechanically.
    `request_policy` would be **dead data**. Deliverable 2 states this.
 4. **F88 — the M4 policy suite cannot run here** (`cryptography`).
 5. **F89 — the falsy-`expires_at` crash**, named not fixed.
-6. **The happy path of the key-trust workflow is not exercised by any test in this environment**: a real
-   signature round-trip needs `cryptography`, so R1/R5/R7's *acquisition* path is pinned by signature and
-   by pure function, not end to end.
+6. **The happy path of the key-trust workflow is now exercised — CLOSED 2026-09-27.** `cryptography` is
+   installed: `test_policy_bundle.py::test_sign_verify_round_trip` drives a real Ed25519 keypair through
+   `generate_keypair` → `sign_bundle` → `verify_bundle(...) is True`, with tamper and wrong-key rejected.
 
 ---
 

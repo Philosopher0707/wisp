@@ -1881,8 +1881,8 @@ env -u PYTHONPATH UV_OFFLINE=1 ~/.local/bin/uv pip install \
 **Re-attempted 2026-09-25** (the cache could have been populated since): **`httpx` and `cryptography`
 both still fail** with *"was not found in the cache … the network was disabled"*. The uv cache exists
 and is populated (`archive-v0`, `builds-v0`, `sdists-v9`, `simple-v24`, `wheels-v6`) and holds no
-`httpx` or `cryptography` entry of any kind. **Closing either needs network access, not a code change.**
-Until then the "not quotable" column stands.
+`httpx` or `cryptography` entry of any kind. **CLOSED 2026-09-27 — and this paragraph's diagnosis was wrong.**
+The obstacle was **TLS, not network**: pip failed with `SSLCertVerificationError` because the venv's OpenSSL default verify path does not exist and `certifi` was installed but unused. With `SSL_CERT_FILE` set, all five installed at their `uv.lock` pins, plus `wcwidth`. The "not quotable" column is retired — `PHASE_REGISTER_CLOSURE_TRIAGE.md` §4 F-T9.
 
 ---
 
@@ -2343,14 +2343,14 @@ the files to a path **outside the repo** first, then compare.
 | **R10** | ~~`useApi.ts:368` sends no `Authorization` header~~ | ✅ **FIXED** (§0f) — the functional half. **What remains is a decision:** the 32 pre-existing renderer errors (7 of them in `ErrorBoundary.test.tsx`, i.e. a test file being typechecked by the *build* config); the vacuous `typecheck` script; and whether to canonicalize the 26 re-implementations now that the ratchet records them |
 | **F1** | ~~`metadata["_budget"]` write-only~~ | ✅ **FIXED** (§0e.2) — completes `docs/audit-2026-08-24.md` item 11 |
 | **F2** | ~~`_SENSITIVE_ENV_KEYS` has no consumer~~ | ✅ **FIXED** (§0e.1) — deleted as superseded |
-| **F3** | `execute_tool(security_policy=…)` — no caller passes it; `ToolRegistry.execute` is production-unused and lacks truncation/security | **Accepted (low)** — the executor authorises per call; annotate so nobody wires them without the missing checks |
+| **F3** | `execute_tool(security_policy=…)` — no caller passes it; `ToolRegistry.execute` is production-unused and lacks truncation/security | ✅ **CLOSED 2026-09-27.** Accepted (low), and the owed annotation **landed** at `wisp/tools/registry.py:911` — it now **prohibits** wiring this entrypoint into a new production caller without the checks `ToolRegistry.execute` supplies, rather than only describing the parameter. Prose-only, proved by both instruments (docstring-stripped AST identical, recursive `co_code` identical). ADR-0065 R3 |
 | **F4** | `spawn_with_guards` is a dead duplicate (guards live at `:723`/`:1737`) | **Accepted** — deletion candidate |
 | **F5** | event-replay `TOOL_CALL` — the prior audit's referent is unidentifiable; both candidates are wired | **Unresolved, no action** — recorded as unidentified rather than guessed at |
 | G2 | The `run_bash` verb scan is a separate mechanism from the predicate | **Accepted** — a shell command's target is not determinable from its text |
 | R3 | Full provider-listing delegation | Unsafe until the 3 deltas (auth/timeout/degradation) converge; `test_provider_listing_equivalence.py` fails at that point and signals it |
 | R4 | `_is_transient` is a separate predicate | **Not debt** — different axis (retryability, not outcome class) |
 | R5 | Two `RunStatus` enums remain | **Resolved as a non-issue by the migration.** `RunStatus` (7 values, `graph/types.py:37`) is a **strict subset** of `RunState` (8, `runs/record.py:17`); the only asymmetry is `PLANNING`, which exists solely in `RunState`. Every `RunStatus` value coerces through `coerce_state()`. **No shim needed** — ADR-0003. Promote the `subset? True` assertion to a ratchet if a future phase adds a member. |
-| R6 | `.venv` missing deps | Environment — **one table now: §6.1.** `jsonschema` is **fixed** (F8); `httpx`, `cryptography`, `numpy`, `tiktoken`, `aiohttp` remain absent, each with its pin, its check, the files it blocks, and the counts it makes **un-quotable**. Re-attempted offline 2026-09-25: both `httpx` and `cryptography` still fail |
+| R6 | `.venv` missing deps | Environment — **one table now: §6.1.** ✅ **CLOSED 2026-09-27.** `jsonschema` was fixed (F8); **all five remaining deps are now installed at their `uv.lock` pins** — `httpx 0.28.1`, `cryptography 50.0.1`, `numpy 2.4.6`, `tiktoken 0.14.0`, `aiohttp 3.14.3` — plus a sixth never recorded in §6.1, `wcwidth>=0.2.5` (wisp's own declared requirement). The obstacle was **TLS, not network**: pip failed with `SSLCertVerificationError` because the venv's OpenSSL default verify path does not exist and `certifi` was installed but unused. See `PHASE_REGISTER_CLOSURE_TRIAGE.md` §4 F-T9 |
 | R7 | `capability_filter.py` untracked but imported | See §8 |
 | R8 | 3 untracked test files abort collection | User's WIP |
 | R9 | `wisp/core/graph/__init__.py` modified, uncommitted | User's pre-existing edit |
@@ -2374,7 +2374,7 @@ M9 was said to block are now complete** — M12, M14, M15, M11, M13.
 | **M3** | Killpoint integration | ✅ **COMPLETE** — `test_kp_session_midtool_then_killed`. One window covered. |
 | **M4** | ADR-0004 revisited | ✅ **COMPLETE** — **ADR-0027**. Found a live defect (M2's journal-first could return a provider-invalid transcript). |
 | **M5** | Foreground-turn `RunRecord` lifecycle | **OPEN** — proven end-to-end for background runs only. |
-| **M6** | `PolicyDecisionEnvelope` producer-less and consumer-less | **OPEN** — the last unwired contract. |
+| **M6** | `PolicyDecisionEnvelope` producer-less and consumer-less | ✅ **CLOSED 2026-09-27.** *Not* the last unwired contract — measured, **four of the six modules** in `wisp/contracts/` have no production importer (`envelope`, `manifest`, `policy`, `adapters`; only `run` and `tool` are imported). That is the **M1a design**: `docs/superpowers/specs/2026-09-04-enterprise-contracts-m1a-design.md` freezes five interfaces additively — *"Pure addition: no existing producer or consumer changes behavior."* Being unwired is the seam, not an oversight. **Do not delete it** |
 | **M7** | `change_tracker.py` not wired into evidence | **OPEN** — deferred with 3b. |
 | **M8** | `multi_agent/dag.py` not retired into `wisp/graph/` | ✅ **COMPLETE.** *Reason:* surveyed and decided 2026-09-25 — **`DEPRECATE`, not remove** — and **re-scoped by ADR-0060** (ADR-0062 R3): the divergence is no longer a blocker awaiting reconciliation but the **boundary** between two different tools. The fanout suite is green (107 passed), so the retirement was attempted and **driven**. The measured semantic divergence stands — `wisp/graph/` requires a non-empty graph with every node reachable from the entrypoint, `TaskDAG` is a general partial order — so re-pointing `orchestrate_dag` onto `validate_graph` would **reject inputs it accepts today** (a behaviour change to a live, model-callable tool). Also measured: `TaskDAG.validate()` mis-reports an unknown dependency as a cycle, and `compat.dag_to_graph` is test-only. **The removal is not owed**: choosing which definition of a valid DAG wins is a change to a live tool and is its own decision. **The residual stays open and tripwired** (3 tripwires). Guard: `tests/reliability/test_dag_retirement_contract.py`. Reports: `PHASE_DAG_RETIREMENT.md`, `PHASE_LAYER_B_BOUNDARY.md`. |
 | **M10** | The materialized graph is a **lower bound** on iterations | **OPEN — by design.** One node per closed tool exchange + one terminal; iteration boundaries are not observable. |
@@ -2431,7 +2431,7 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `WISP_SUBAGENT_ARCHITECTURE.md` | Structured delegation, transactional effects, one-graph |
 | `WISP_MIGRATION_PLAN.md` | **The plan of record** — phases P0–P9 with prerequisites, tests, risk, rollback |
 | `WISP_MIGRATION_STATUS.md` | **The ledger** — phase status, findings **F1–F44**, change log, regression summary |
-| `WISP_ARCHITECTURE_DECISIONS.md` | **ADR-0001 … ADR-0064** |
+| `WISP_ARCHITECTURE_DECISIONS.md` | **ADR-0001 … ADR-0068** |
 | `PHASE_P0_REPORT.md` | Wire the orphaned durable layer |
 | `PHASE_P1_REPORT.md` | Journal turn transitions |
 | `PHASE_P2_REPORT.md` | Introduce the proposal boundary |
@@ -2452,7 +2452,7 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_M12_REPORT.md` | The failure path reaches the taxonomy (ADR-0032) |
 | `PHASE_M11_REPORT.md` | A node references its work unit; the ratchet classifies fields, not names (ADR-0033) |
 | `PHASE_LAYER_B_BOUNDARY.md` | **The Layer B boundary (ADR-0060)** — the five driver questions by measurement, the transition named, Position A decided, and findings F101–F104 |
-| `PHASE_EXTERNAL_INPUT_PATH.md` | **The external input path (ADR-0061)** — W1 fixed (the frame is the clients' vocabulary) and G3 closed by naming the boundary; **was missing from this index** until the corpus-governance mission |
+| `PHASE_EXTERNAL_INPUT_PATH.md` | **The external input path (ADR-0061)** — W1's frame driven (the frame is the clients' vocabulary), G3's boundary named, the two-decisions-or-one answer, and ADR-0059 residual 1 re-driven; **was missing from this index** until the corpus-governance mission |
 | **The derived registers** | Four pages that answer the corpus's *current* state. **Regenerate, never edit** — see **The derived registers** above. |
 | `CURRENT_AUTHORITIES.md` | Each completion/recovery authority's current state, pinned to `ADR §Y` and `path:line` |
 | `CURRENT_FINDINGS.md` | Every finding `F1`–`F104` and its status, with the defect-class index; generator `scripts/derive_current_findings.py` |
@@ -2464,11 +2464,14 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_CORPUS_GOVERNANCE.md` | **Corpus governance D4** — the entry point, and the mission's report |
 | `PHASE_CORPUS_GOVERNANCE_II.md` | **Corpus governance II** — ADR-0062's eight editorial decisions, `CURRENT_AUTHORITIES.md`'s generator, `F77`'s disposition, and the decisions applied |
 | `PHASE_REGISTER_SOURCE_PINS.md` | **The register source pins** — `17130c7`'s content check applied to the findings and open-items generators (one rule, `scripts/register_pins.py`), and the stale pins it found re-pinned |
+| `PHASE_M4_WIRING.md` | **M4's wiring** — the governance layer loaded at the single composition site via `WISP_POLICY_BUNDLE`/`WISP_POLICY_PUBKEY`, and the two construction sites that still do not receive it; **ADR-0058**'s application. Cited by §12's `E` row and **absent from this index until now** |
+| `PHASE_KEY_TRUST_WORKFLOW.md` | **The key-trust workflow (ADR-0058)** — the operator-supplied organization public key; absence is a configuration and invalidity is a refusal. Cited by §12's `E` row and **absent from this index until now** |
 | `PHASE_F57_DOTENV.md` | **F57** — `~/.config/wisp/.env` read at `main()`'s first statement; the semantics, the differential, and four bounded findings |
 | `PHASE_WORKSPACE_DOTENV.md` | **The workspace `.env`** — written by `_persist_env`, read by nothing; the measurement (a repository's `WISP_API_BASE` / `WISP_OLLAMA_URL` would carry the operator's key / prompt away), the decision (not read; writer removed), and its application |
 | `PHASE_F47_PLANSTORE.md` | **F47** — `PlanStore`: the measurement (the store is read by the model's tools; the plan's *state* is never shown; the system-prompt slot is `OPERATOR`-tagged, cached, and would persist an injected step across sessions), ADR-0063 (tool output, never system prompt), and its application |
 | `PHASE_PLAN_CLI.md` | **The plan CLI** — `wisp plan` / `progress` / `plan list` / `plan abort` query `"."`, the agent keys by `session["workspace"]` verbatim; the measurement, ADR-0064 (one resolver inside the store, per-workspace rotation), and its application |
-| `PHASE_EXTERNAL_INPUT_PATH.md` | **The external input path (ADR-0061)** — W1's frame driven, G3's boundary named, the two-decisions-or-one answer, and ADR-0059 residual 1 re-driven |
+| `PHASE_REGISTER_CLOSURE_TRIAGE.md` | **The open register's closure triage** — all 64 open rows classified by what would close them, the six closure modes derived from the 38 closed rows, seven measured findings (**F-T1**–**F-T7**), and **ADR-0065** (a recorded disposition is a closure) |
+| `PHASE_DECISION_BRIEFS.md` | **The four decisions for the 44 open rows** — a gate enumeration of every route in `wisp/server/routes/` (**14 policy-gated sites, 3 human-gated**), the measured asymmetry it exposes (*the set gates persisting an executable, not executing one*), **ADR-0066** as a complete draft (the approval authority, the executable-config family, id correlation, per-client routing), and briefs for the structured-delegation, context-subsystem and singleton sets |
 | `PHASE_M13_REPORT.md` | The stagnation detector on the live turn path (ADR-0034) |
 
 **Guards added by the migration:**

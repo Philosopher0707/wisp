@@ -13,10 +13,12 @@ of assuming it, and pins the three things a retirement must not lose:
    `TaskDAG` is a general partial order and permits disconnected components. So a naive re-point
    would **reject legitimate `orchestrate_dag` inputs**. That is why M8's removal is blocked on a
    decision, and this test is the record of why.
-3. **A defect in `dag.py`, pinned.** An unknown dependency is reported as a *cycle*
-   (`Node 'a' depends on unknown 'nope'` **and** `Cycle detected involving: a`) — the Kahn
-   in-degree count is short by the unknown dep, so the node never reaches degree 0. The graph's
-   validator reports it correctly (`edge nope->a: unknown source`).
+3. **A defect in `dag.py`, repaired.** An unknown dependency *was* reported as a cycle as well
+   as itself: the Kahn in-degree counted the unknown dep, so the node never reached degree 0.
+   The in-degree now counts only edges whose source exists, so the unknown dep is reported
+   once and no false cycle follows. The verdict is unchanged — still non-empty, still
+   rejected. Class 3 below pins the corrected behaviour, replacing the pin that held the old
+   one, as that pin instructed.
 
 Non-vacuity: each class was checked by breaking it — a removed cycle check, a changed
 reachability rule, and a "fixed" unknown-dep message — and confirming the corresponding test fails.
@@ -80,6 +82,29 @@ def _graph_errors(spec: list[dict]) -> list[str]:
     return validate_graph(dag_to_graph("probe", spec))
 
 
+def _imports_from(rel_path: str, module_suffix: str, names: set[str]) -> set[str]:
+    """The subset of `names` that `rel_path` imports from a module ending in `module_suffix`.
+
+    **AST-based on purpose** — `PHASE_LAYER_B_BOUNDARY.md`'s instrument-defect class. A bare
+    string scan asserts *presence of a line*: it passes on a commented-out import, fails on an
+    equivalent one split across lines or reordered, and cannot tell an import from a mention in
+    a docstring. Only a real `ImportFrom` node counts here.
+
+    Relative imports resolve by their tail, so `from .dag import X` inside `wisp.multi_agent`
+    matches the suffix `dag`, and `from wisp.multi_agent.dag import X` matches `multi_agent.dag`.
+    """
+    tree = ast.parse((REPO / rel_path).read_text(encoding="utf-8"))
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        dotted = (node.module or "").lstrip(".")
+        if not (dotted == module_suffix or dotted.endswith("." + module_suffix)):
+            continue
+        found.update(alias.name for alias in node.names)
+    return found & names
+
+
 # ── 1. What the two agree on — the property a re-point may rely on ──────────
 
 
@@ -133,27 +158,53 @@ class TestTheMeasuredDivergences:
         assert any("no nodes" in e for e in graph_errs), graph_errs
 
 
-# ── 3. A defect in dag.py, pinned rather than repaired ─────────────────────
+# ── 3. A defect in dag.py, repaired — the pin now holds the corrected behaviour ─────
 
 
-class TestTheUnknownDependencyIsMisReportedAsACycle:
-    """DEFECT-PIN — `dag.py` reports an unknown dependency as a cycle.
+class TestTheUnknownDependencyIsReportedOnceAndNotAsACycle:
+    """FIXED-PIN — `dag.py` reports an unknown dependency, and no longer a cycle with it.
 
-    `validate()` computes `in_degree = len(dependencies_of(name))` from the *reverse* edge
-    map. An unknown dep never gets a node, so it contributes to the count but can never be
-    dequeued, so the node is left with degree > 0 and is reported as part of a cycle. The
-    graph's validator reports the real cause.
+    `validate()` computed `in_degree = len(dependencies_of(name))` from the *reverse* edge
+    map. An unknown dep never gets a node, so it contributed to the count but could never be
+    dequeued, leaving the node above degree 0 and reported as part of a cycle — a false
+    second diagnosis of a cause already named on the line above.
 
-    Pinned, not repaired: repairing it changes `orchestrate_dag`'s error text on a live path,
-    and M8's scope is the retirement, not a bug fix inside the module being retired.
+    Repaired: the in-degree counts only edges whose source exists. This class replaces the
+    DEFECT-PIN that held the old behaviour, which instructed exactly this update on repair.
+
+    Class 1 pins the *verdict* (both implementations reject an unknown dep); this class pins
+    the *message*, which is what changed.
     """
 
-    def test_dag_py_reports_a_cycle_for_an_unknown_dependency(self):
+    def test_dag_py_reports_the_unknown_dependency_and_not_a_cycle(self):
         errors = _dag_errors(AGREED_INVALID["unknown_dep"])
         assert any("unknown" in e for e in errors), errors
+        assert not any("Cycle detected" in e for e in errors), (
+            "dag.py reports a cycle for an unknown dependency again — the mis-report is back"
+        )
+
+    def test_the_verdict_is_unchanged_by_the_repair(self):
+        """The repair changes the message, not which graphs are valid."""
+        assert _dag_errors(AGREED_INVALID["unknown_dep"]) != [], (
+            "the repair made an unknown dependency acceptable — that would be a semantic change"
+        )
+
+    def test_a_real_cycle_is_still_reported_when_an_unknown_dep_is_also_present(self):
+        """The case that keeps the in-degree filter honest.
+
+        Filtering unknown deps must not filter *real* ones. Here `a` has an unknown dep and
+        `b`/`c` form a genuine cycle: both must be reported.
+        """
+        spec = [
+            {"name": "a", "task": "t", "depends_on": ["nope"]},
+            {"name": "b", "task": "t", "depends_on": ["c"]},
+            {"name": "c", "task": "t", "depends_on": ["b"]},
+        ]
+        errors = _dag_errors(spec)
+        assert any("unknown" in e for e in errors), errors
         assert any("Cycle detected" in e for e in errors), (
-            "dag.py no longer mis-reports the unknown dependency as a cycle — "
-            "the defect is fixed; update this DEFECT-PIN and re-check M8's premise"
+            f"the real cycle is no longer reported once an unknown dep is present — "
+            f"the in-degree filter is too broad: {errors}"
         )
 
     def test_the_graph_reports_the_real_cause(self):
@@ -176,16 +227,27 @@ class TestTheResidualIsPinned:
     """
 
     def test_the_orchestrator_still_imports_dag(self):
-        src = (REPO / "wisp/multi_agent/subagent_orchestrator.py").read_text()
-        assert "from .dag import DAGScheduler" in src, (
-            "the orchestrator no longer uses dag.DAGScheduler — if the execution path was "
-            "re-pointed onto wisp/graph, close M8's residual and update this tripwire"
+        """AST-based rather than a string scan (`PHASE_LAYER_B_BOUNDARY.md` R2).
+
+        The old form was `assert "from .dag import DAGScheduler" in src` — it asserted an
+        exact line, so it passed on a commented-out import and failed on an equivalent one
+        reordered or wrapped. Only a real import counts here.
+        """
+        found = _imports_from("wisp/multi_agent/subagent_orchestrator.py", "dag",
+                              {"DAGScheduler"})
+        assert found == {"DAGScheduler"}, (
+            f"the orchestrator no longer imports dag.DAGScheduler (found {found or 'nothing'})"
+            f" — if the execution path was re-pointed onto wisp/graph, close M8's residual and"
+            f" update this tripwire"
         )
 
     def test_the_orchestrate_dag_tool_still_imports_dag(self):
-        src = (REPO / "wisp/tools/orchestration.py").read_text()
-        assert "from wisp.multi_agent.dag import TaskDAG, TaskNode" in src, (
-            "orchestrate_dag no longer uses multi_agent.dag — see above"
+        """AST-based, for the same reason as above."""
+        found = _imports_from("wisp/tools/orchestration.py", "multi_agent.dag",
+                              {"TaskDAG", "TaskNode"})
+        assert found == {"TaskDAG", "TaskNode"}, (
+            f"orchestrate_dag no longer imports multi_agent.dag's TaskDAG/TaskNode "
+            f"(found {found or 'nothing'}) — see above"
         )
 
     def test_the_graph_lowering_has_no_production_caller(self):

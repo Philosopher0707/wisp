@@ -157,6 +157,10 @@ async def test_hook(name: str, request: dict, http_request: Request):
     # creating one. Gating only create_hook would leave this as a bypass.
     require_tool_allowed(http_request, "hooks.test", {"name": name},
                          str(WORKSPACE_ROOT))
+    # ADR-0066 R3 — the policy gate above was the half of the bypass that was closed;
+    # this is the other half. Executing what create_hook was approved to store.
+    await require_rest_approval(http_request, "hooks.test", {"name": name},
+                                str(WORKSPACE_ROOT))
     from wisp.infra.hook_types import HookManager, build_hook_context
 
     manager = HookManager(workspace=WORKSPACE_ROOT)

@@ -184,8 +184,8 @@ intact.
 ## 10. Residuals, open
 
 1. **REST does not receive L0** (§4) — its own decision, pinned so it cannot drift silently.
-2. **`acp_session.py:208`** — an ACP-only deployment would need the same load; named, not done.
-3. **The M4 policy suite cannot run here** (F88).
+2. **`acp_session.py:208`** — an ACP-only deployment would need the same load — **CLOSED 2026-09-27 by ADR-0067**: the fallback is ungoverned *by construction* and now **warns**, because loading it here is the second load site ADR-0058 R1 forbids.
+3. **The M4 policy suite could not run here** (F88) — **CLOSED 2026-09-27**: `cryptography` is installed, and the six files report **43 passed, 0 failed, 0 errors** (was 14 failed / 6 errors / 18 passed).
 4. **F89** — the falsy-`expires_at` message.
 5. **`WISP_POLICY_CACHE` / `load_managed`** — the managed/disconnected modes are not engaged (ADR-0058
    R6).

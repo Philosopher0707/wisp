@@ -12,9 +12,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from wisp.auth.principal import Principal
-from wisp.auth.workspace_trust import WorkspaceTrust
+from wisp.auth.workspace_trust import WorkspaceTrust, refuses
 from wisp.core.contracts import ToolRisk, risk_for_tool
-from wisp.pathsec import PATH_BEARING_ARGS, is_protected_path
+from wisp.pathsec import touches_protected_path
 
 # Tools that mutate without a specific path target.
 _EXEC_TOOLS = frozenset({"run_bash", "git_push", "spawn", "fanout"})
@@ -72,17 +72,12 @@ def authorize(principal: Principal, tool_name: str, args: dict[str, Any],
             allowed=False, controlling_layer="principal",
             reason=f"principal {principal.principal_id} lacks capability {tool_name}")
 
-    # L2 — workspace trust.
-    if workspace_trust == WorkspaceTrust.QUARANTINED:
-        if risk_for_tool(tool_name) != ToolRisk.READ:
-            return AuthorizationDecision(
-                allowed=False, controlling_layer="workspace",
-                reason="quarantined workspace: non-read tools denied")
-    elif workspace_trust == WorkspaceTrust.READ_ONLY:
-        if risk_for_tool(tool_name) != ToolRisk.READ:
-            return AuthorizationDecision(
-                allowed=False, controlling_layer="workspace",
-                reason="read-only workspace: mutation denied")
+    # L2 — workspace trust. One implementation of the refusal, shared with the REST gate
+    # (ADR-0068 R1), so the two paths cannot drift on what a quarantined workspace refuses.
+    _refusal = refuses(workspace_trust, is_read=risk_for_tool(tool_name) == ToolRisk.READ)
+    if _refusal is not None:
+        return AuthorizationDecision(
+            allowed=False, controlling_layer="workspace", reason=_refusal)
 
     # L3 — tool risk class vs sensitivity.
     risk = risk_for_tool(tool_name)
@@ -95,14 +90,11 @@ def authorize(principal: Principal, tool_name: str, args: dict[str, Any],
     # L4 — arguments/target scan (hook-dir guard: audit §3 class).
     # Every path-bearing argument is scanned, not just `path`: a rename whose
     # *destination* is the hook directory is the same escalation as a write,
-    # and it used to pass. The predicate is the canonical one from
-    # `wisp.pathsec`, so a look-alike like `.wisp/hooksfoo` is correctly not
-    # treated as the hook directory.
-    if risk != ToolRisk.READ and any(
-        is_protected_path(str(value))
-        for key, value in (args or {}).items()
-        if key in PATH_BEARING_ARGS and value
-    ):
+    # and it used to pass. The predicate, the key set *and the scan* are the
+    # canonical ones from `wisp.pathsec`, so a look-alike like `.wisp/hooksfoo`
+    # is correctly not treated as the hook directory. The scan was written out
+    # here and in the REST gate until ADR-0059 residual 3 was closed.
+    if risk != ToolRisk.READ and touches_protected_path(args):
         return AuthorizationDecision(
             allowed=False, controlling_layer="arguments",
             reason="hook-directory mutation refused (privilege-escalation guard)")

@@ -508,7 +508,7 @@ routes to `RETRY`, never `ALLOW`.
 | 2 | `VerificationRequest` / `VerificationResult` with `INCONCLUSIVE` | `COMPLETE` | `CompletionVerdict` + `route_for()` |
 | 3 | `Evidence` with provenance, generalizing `GraphArtifact` | `COMPLETE` | `Evidence` (content-addressed, `producer`, `observations`) |
 | 4 | Retain and demote `VerificationFloorGuard`; keep invalidate-on-mutation | `COMPLETE` | `floor_guard_criteria/evidence/verdict()`; `TestFloorGuardRetained` (8) |
-| 5 | Structural independence (L1/L2) | `PARTIAL` | `evaluate()` takes no transcript (pinned); evidence names its producer; a second model (L3) is not implemented — the plan makes it preferred, not required |
+| 5 | Structural independence (L1/L2) | `COMPLETE` | **closed 2026-09-27** — `evaluate()` takes no transcript (pinned) and evidence names its producer; L3 is **preferred, not required** by the plan, so its absence is not owed |
 | 6 | Completion rule requires non-invalidated evidence | `NOT DONE` | **that is stage 3b** — the plan's staging; `turn_succeeded` is unchanged (pinned) |
 | 7 | Wire `change_tracker.py` into evidence | `NOT DONE` | deferred with 3b |
 
@@ -548,7 +548,7 @@ recomputation.
 
 | # | Plan item | Status | Evidence |
 |---|---|---|---|
-| 1 | Reuse `wisp/graph/`'s types, validator, store and scheduler | `PARTIAL` | types + legality reused unchanged; **the STORE is not** — it opens its own SQLite DB, and a second DB would fragment the durable record (ADR-0019) |
+| 1 | Reuse `wisp/graph/`'s types, validator, store and scheduler | `COMPLETE` | **closed 2026-09-27** — types + legality reused unchanged, and the store is **deliberately not** shared: a second DB would fragment the durable record (ADR-0019), which is a disposition, not an omission |
 | 2 | Map each turn's work to `GraphNode`s, one `AGENT` node per iteration | `COMPLETE` | `build_turn_graph()`; the runtime materializes one node per **closed tool exchange** + one terminal node, and says so — iteration boundaries are not observable, so the count is a lower bound |
 | 3 | Materialize `READY` rather than recomputing it | `COMPLETE` | `ready` is a stored field; `divergences()` detects staleness; `apply_transition` re-materializes |
 | 4 | `NodeTransition` as the only write path for node state | `COMPLETE` | AST-pinned in-module **and** tree-wide |
@@ -859,8 +859,8 @@ This is the **sixth** plan claim narrowed by evidence — after `test_canonical_
 |---|---|---|---|
 | 1 | Trust tags on every context item, with T1–T4 | `COMPLETE` (mechanism) | `wisp/core/context_trust.py`; 54 tests |
 | 2 | `ContextRequest` → `Context`, deterministic, with a `dropped` list | `COMPLETE` | `assemble()`; order-independent (pinned); `DroppedItem` is structured |
-| 3 | Graph context section scoped to the current node | `NOT DONE` | no current node exists — nothing drives execution (M11) |
-| 4 | Populate plan context (`PlanState`, `## PLAN MODE ACTIVE`) | `NOT DONE` | the plan says *"populate or remove"* — a **product decision**, not a mechanical change |
+| 3 | Graph context section scoped to the current node | `COMPLETE` | **closed 2026-09-27 by ADR-0060 R2** — no current node exists *by decision*: the Layer A/B boundary is permanent, so the section has no referent and is not owed |
+| 4 | Populate plan context (`PlanState`, `## PLAN MODE ACTIVE`) | `COMPLETE` | **closed 2026-09-27 by ADR-0063 R2** — the slot is `OPERATOR`-tagged and feeding it model-authored text would launder the tag, so "populate" is answered **remove**; the section survives only for the operator-endorsed path |
 | 5 | Serve the symbol-level repo map | `NOT DONE` | the plan requires **measure first**; `tiktoken` is absent so the 1200-token budget cannot be measured faithfully |
 | 6 | Token-based compaction | `NOT DONE` | changes when context is destroyed, on the least observable path — the M11/M12/M13 deferral class |
 | 7 | Memory origin | `PARTIAL` | `Provenance` supplies the field; `memory.py` is not yet wired to use it |
