@@ -25,7 +25,6 @@ from __future__ import annotations
 import ast
 import pathlib
 import re
-import sys
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
@@ -143,7 +142,7 @@ def main() -> int:
         print(f"THE AUTHORISING SPEC — {M1A_SPEC}")
         print("=" * 100)
         print(f"  {m.group(0) if m else '<the quote was not found — re-read the spec>'}")
-        print(f"  (so an unconsumed symbol in wisp/contracts/ is a SEAM, not an oversight)")
+        print("  (so an unconsumed symbol in wisp/contracts/ is a SEAM, not an oversight)")
     else:
         print(f"\n⚠ {M1A_SPEC} not found — the freeze's authorisation cannot be quoted")
 
