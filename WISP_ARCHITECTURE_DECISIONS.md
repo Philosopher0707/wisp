@@ -6813,6 +6813,77 @@ then, the answers here are the ones a reader needs.
 
 ---
 
+## ADR-0063 — A model-authored plan is shown back as tool output, never as a system-prompt section
+
+**Status:** ACCEPTED
+**Phase:** F47 — `PlanStore` (the `unwired-control` class)
+**Evidence:** `scripts/planstore_measurement.py` (the production stack, a scripted LLM, a private
+`HOME`); `PHASE_F47_PLANSTORE.md` §2.
+
+### Context
+
+F47: *"a plan the model wrote with `plan_task` is never shown to it again."* Driven through
+`CompositionRoot` with a recording provider:
+
+- The plan is in **no** round's system prompt.
+- It **is** in the history of every later round of the same session, as `plan_task`'s
+  creation-time result.
+- After `mark_step_done`, the model receives only *"Progress: 1/3"*, **never the plan's state**.
+- A fresh session in the same workspace sees nothing, though `load_active` still serves the plan.
+- The store is not write-only: `mark_step_done` and `update_plan` read it.
+
+The assembler has a slot for a plan, `PlanState.active_plan`. Driven, a store plan passed through
+it lands at priority 1, below instruction position, so T1's predicate passes it. But:
+
+- The slot is tagged **`OPERATOR`**, and a `plan_task` plan is model-authored (`TOOL_OUTPUT`).
+- The static system prompt is **cached across plan writes** (driven: a cache hit).
+- A plan **never leaves `active`** once every task is done (driven).
+- The store would carry model-authored text into every future session in the workspace, including a
+  step written after reading injected repository text (driven: stored verbatim, served to a fresh
+  session).
+
+### Decision
+
+**R1 — The plan reaches the model as tool output.** `mark_step_done` and `update_plan` return their
+one-line result followed by the plan's current state (`Plan.format_for_prompt()`), on success and on
+every failure path that loaded a plan. The view is current at the call that produced it; the next
+call supersedes it. Its trust is `TOOL_OUTPUT`: planning influence only (T3).
+
+**R2 — `PlanStore` content never enters the system prompt.** No production caller passes
+`active_plan`, `plan_context` or a `PlanState` built from the store to `ContextAssembler`. The
+`active_plan` slot keeps its `OPERATOR` tag, for an operator-endorsed plan. Feeding it from the store
+would launder model-authored text into a trusted tag that T1's predicate then trusts.
+
+**R3 — The lifetime of what the model sees is the conversation's.** The view lives in history,
+subject to compaction like any tool result, and is bounded by the executor's tool-result cap. The
+store's own lifetime (global rotation of ten, `active` forever) is **not decided here**, because
+nothing the model sees depends on it after R1 and R2.
+
+### Rejected
+
+- **Remove `PlanStore` and `plan_task`.** Refuted by measurement: the model's own tools read the
+  store. Removal is a tool-surface change (three tools) with no evidence of harm.
+- **Wire the store into the system prompt.** The four defects above: a trusted tag on untrusted
+  text, a cached prompt, a plan that never finishes, and cross-session persistence of model-authored
+  text. Each is fixable, but together they place untrusted, durable text in the one part of the
+  prompt every future turn reads.
+
+### Consequences
+
+- The model sees which step is next, and what is done, at every plan update.
+- A new session does not see an old plan. That is the point of R2 and R3.
+- F47 is fixed within the conversation. Cross-session visibility is deliberately absent.
+
+### Reversal condition
+
+R2 reverses if an operator requirement makes a plan resume across sessions. The plan then needs an
+**operator endorsement** before it is shown outside the conversation that wrote it (the approved-plan
+path, `plan_context`, is where endorsed plans already go), and the tag follows the endorsement.
+R1/R3 are revisited if compaction is measured to drop the plan's state mid-task. The remedy is a
+re-emitted view at tool-output trust, not a system-prompt section.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -6879,3 +6950,4 @@ then, the answers here are the ones a reader needs.
 | 0060 | Layer A is the driver and Layer B is a record; the boundary is permanent | The Layer B boundary (M8 + M11) | ACCEPTED (decides the one question M11 and M8 name from opposite sides: *is Layer B's executor the driver, or a record?* **Driven, Position B is not expressible** — `wisp.graph.types.Graph` is `frozen=True` so a node cannot be appended mid-run, `GraphExecutor`'s whole public surface is `run`/`resume`/`cancel`/`register_function` with **no** growth API, `run()` refuses an empty graph before doing any work, and **no `TaskGraph → Graph` lowering exists** (`compat.py` lowers `TaskDAG`, not Layer A's graph). The turn loop discovers its work as the model streams, so *"every tool call is a node transition"* needs an executor that grows a graph **while driving it**. **This is a different blocker from ADR-0029's and does not mention payload**: ADR-0029 found the transcript-from-the-graph reading inexpressible; this finds the graph itself unknowable before the turn and immutable during it. **R1** Layer A is the driver. **R2** the boundary is **permanent, not an open item** — *"the graph drives execution"* is rejected as a target, and `test_the_graph_still_does_not_drive_execution` becomes the contract with its reversal condition stated in the test. **R3** the executor has four named callers and none is the turn loop. **R4** `multi_agent/dag.py` stays the deprecated legacy entry point and its `empty`/`disconnected` divergence is an **accepted difference** — the removal is not owed, and choosing which definition of a valid DAG wins is a change to a live model-callable tool, hence its own decision. Rejects B on three independent measured costs, incl. that it would put `GraphStore`'s **second** SQLite database on the turn path, which ADR-0019 exists to prevent. **A record update — no production behaviour moves**; the only `wisp/` change is a docstring correction. Corrects **four** corpus citations, incl. that ADR-0021's *"the safety net does not exist"* was **false when written** (all three files are tracked, added 152 commits before the P5 landing) and that **ADR-0057 had no index row**). **R5 — Layer C's disposition:** ADR-0001 named `wisp/core/graph/` *disowned* and it was **not** — the live turn path imported `OscillationTrap` and `diff_hash` from it via `core/stagnation.py` (M13) and `core/runtime.py`, the *disowned-but-consumed* drift. Both symbols are **relocated to `wisp/core/oscillation.py`** (Layer A) and re-exported from `loop.py`, so `wisp/core/graph/__init__.py` — which carries the user's uncommitted WIP — needs **no edit**. **The rule is a direction: a disowned layer may import from Layer A; the live path may never import from a disowned layer.** The dead part (`ExecutionGraph`, `phases.py`) is **kept as a reference implementation**, not deleted: deleting it would edit the WIP file, and the user's own uncommitted note there says *"Keep for reference; delete if no caller appears"* — and a caller **did** appear. Guarded so a future wiring is a decision, not a silent supersession) |
 | 0061 | The external input path: the approval frame is the clients' vocabulary, and a hook's `command` is not content-validated | The external input path (W1 + G3) | ACCEPTED (two decisions on one route family, sharing one principle. **W1, driven:** `approve()` sent `approval_request`/`{approval_id, tool_call}` while **all three** shipped clients — the desktop renderer, the TUI *and* the VS Code extension — branch on `tool_approval_request` and read `call_id`/`name`/`arguments`/`reason`; the prompt had never rendered, so every request hit the 60 s bound and denied. **R1** the frame is the clients' vocabulary (client change **zero**). **R2** the correlation key is `call_id` and it **IS** the `_approvals` key — the old frame carried no `call_id` at all, so a recognising client would still have echoed an empty id; pinned by a two-concurrent-approval test that resolves the **second** by its own id. **R3** the bound **stays 60 s** — ADR-0057's 30 s is REST's, because a REST request holds an HTTP connection open; this path holds nothing open, and ADR-0036's bounded delay is the nearest *shape*, not duration. **R4** no client ⇒ **DENY**, with `NO_CLIENT_REASON` a named constant so "nobody is connected" ≠ "the human said no"; *waiting* and *silent fail-closed* rejected; `WISP_WS_AUTO_APPROVE` stays the one explicit opt-in; no new flag. **G3:** `command` is **not** content-validated and the route's docstring now says so — **the gate restricts WHO may register a hook, it does not restrict WHAT the hook runs** — because a shell command's target is not determinable from its text (G2); a runnable check, a metacharacter blocklist and an allow-list are each rejected with reasons. **Two decisions, not one**, because the brief's candidate principle (*"does not execute what it has not validated"*) is **false** for the hook path. **ADR-0059 residual 1 moves**: driven over the six pinned pairs, **6 of 6** now ask a human — its stated *reason* ("REST cannot, having no approver") is no longer true — while the *mechanism* stays a hand-written set (**closed in effect, un-composed in mechanism**); the bundle half stands, cited, because `cryptography` is absent (F88, F94). Six tests that pinned the old frame are **updated with reasoning**, one of which previously resolved only via the single-pending fallback; 16-test guard, **8/8 probes caught**; the gate chain is unchanged, so the gate-order corpus is **not** re-written. Corrects ADR-0057's *"both shipped clients"* — there are **three**) |
 | 0062 | The corpus's editorial decisions: one register, one vocabulary, one reading rule | The corpus governance layer, II (F105–F114) | ACCEPTED (decides the eight **editorial** findings the first corpus-governance mission reported and did not repair. **Every decision is about an artifact**, not the product: no flag default, no gate, no authority's scope, no `wisp/` file. **R1 `CURRENT_FINDINGS.md` is the canonical register for a finding's status** (`F106`) — the ledger stays append-only and **un-backfilled**; its §23 note is corrected to name the register and to state its own actual range (`F64`–`F74`, not `F64`–`F71`); *why not backfill* — thirty rows duplicated across two append-only files is a second producer of one fact. **R2 the id namespaces are disambiguated by prose prefix** (`F107`) — `FIND-F7` vs `ITEM-F1`, and the three meanings of `M4` annotated once; *why not rename* — a rename rewrites a historical record and breaks every citation. **R3 the ledger's six words govern, with one reason column** (`F108`) — `DECIDED` is a **reason** and moves to it, the state becoming `COMPLETE`; **`BLOCKED` is kept as a state** and its emptiness is recorded as *"no item is currently in this state"*, because a defined word with no members is a vocabulary, not a defect. **R4 the reading rule is ADR-0002's, recorded verbatim** (`F109`) — *read at the **consumption site***, not the circulated paraphrase *"read once, at the composition point"*, and the ADR **names the paraphrase's source**: ADR-0056's local *"read once, independently"* about the objective path, conflated with ADR-0002's general rule; under the paraphrase `verification_loop`'s two read sites and `turn_spans`'s two become violations of a rule the corpus does not have. **R5 `verification_gate` and `graph_mutation` are wrong names, not aliases** (`F110`) — neither string occurs anywhere in `wisp/`; the flags are `verification_loop` and `task_graph`, and this ADR adds **no alias**, because an alias for a name that was never real is the second vocabulary R3 forbids. **R6 no two pytest processes run concurrently, and a block run passes `--basetemp`** (`F112`) — two concurrent processes race on the shared base dir and produce **869 `PermissionError: EEXIST` errors** from one overlapping run, which reads as a code failure and is not; a **method** rule and a method flag, not a code change, and it **corrects the corpus's own diagnosis** (§6 attributed it to the shim; the measured cause is contention). **R7 a phase report enters the document index in the change that creates it** (`F114`) — `F104`'s class, and a record that exists and is not listed is the same defect as one listed and not existing. **R8 a derived page must have a committed generator** (`F113`, policy half) — **F75**'s class one level up; a page may still carry an **append-only** section the generator emits unchanged, provided the guard asserts it. **`F105` is NOT decided here** — it is a measurement (`PHASE_CORPUS_GOVERNANCE_II.md` §4), and the report is that the referent is **not determinable**: `PHASE_DAG_RETIREMENT.md` contains **three** finding-shaped statements, not one. `F111` is a host condition whose rule already lives in `CONTEXT.md` §11) |
+| 0063 | A model-authored plan is shown back as tool output, never as a system-prompt section | F47 — `PlanStore` | ACCEPTED (decides F47's shape by measurement, `PHASE_F47_PLANSTORE.md` §2. **R1** `mark_step_done` and `update_plan` return the plan's current state after their result, at `TOOL_OUTPUT` trust. **R2** `PlanStore` content never enters the system prompt: the `active_plan` slot is tagged `OPERATOR`, and feeding it model-authored text would launder the tag T1 trusts. Also driven: the static prompt is cached across plan writes, a plan never leaves `active`, and the store would carry an injected step into every future session. **R3** the view's lifetime is the conversation's. *Rejected:* removal, because the model's own tools read the store; and system-prompt wiring, for the four measured defects. *Reversal:* a cross-session requirement, which needs operator endorsement first) |

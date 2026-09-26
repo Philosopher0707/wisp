@@ -283,7 +283,7 @@ quoting it; §11 says how.
 | the workspace `.env` | `COMPLETE` — **no ADR** (not read, so nothing a repository carries reaches the process): measured, a cloned repository's `WISP_API_BASE` / `WISP_OLLAMA_URL` would send the operator's key / prompt to its endpoint if the file were read; **the writer removed**; 7-test guard, RED 4, **2/2** probes, behaviour differential byte-identical, 425/425 | `PHASE_WORKSPACE_DOTENV.md` |
 
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log — **mind the §0/§23 split**, and note it has **no G1 or governance-layer row**: `CONTEXT.md` §12 is the live open-items table, **F99**).
-**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0062**).
+**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0063**).
 
 ### 0.0.21 THE WORKSPACE `.env` IS NOT READ, AND NO LONGER WRITTEN (2026-09-26) — no ADR; F57's scope extended
 
@@ -2360,7 +2360,7 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `WISP_SUBAGENT_ARCHITECTURE.md` | Structured delegation, transactional effects, one-graph |
 | `WISP_MIGRATION_PLAN.md` | **The plan of record** — phases P0–P9 with prerequisites, tests, risk, rollback |
 | `WISP_MIGRATION_STATUS.md` | **The ledger** — phase status, findings **F1–F44**, change log, regression summary |
-| `WISP_ARCHITECTURE_DECISIONS.md` | **ADR-0001 … ADR-0062** |
+| `WISP_ARCHITECTURE_DECISIONS.md` | **ADR-0001 … ADR-0063** |
 | `PHASE_P0_REPORT.md` | Wire the orphaned durable layer |
 | `PHASE_P1_REPORT.md` | Journal turn transitions |
 | `PHASE_P2_REPORT.md` | Introduce the proposal boundary |
@@ -2395,6 +2395,7 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_REGISTER_SOURCE_PINS.md` | **The register source pins** — `17130c7`'s content check applied to the findings and open-items generators (one rule, `scripts/register_pins.py`), and the stale pins it found re-pinned |
 | `PHASE_F57_DOTENV.md` | **F57** — `~/.config/wisp/.env` read at `main()`'s first statement; the semantics, the differential, and four bounded findings |
 | `PHASE_WORKSPACE_DOTENV.md` | **The workspace `.env`** — written by `_persist_env`, read by nothing; the measurement (a repository's `WISP_API_BASE` / `WISP_OLLAMA_URL` would carry the operator's key / prompt away), the decision (not read; writer removed), and its application |
+| `PHASE_F47_PLANSTORE.md` | **F47** — `PlanStore`: the measurement (the store is read by the model's tools; the plan's *state* is never shown; the system-prompt slot is `OPERATOR`-tagged, cached, and would persist an injected step across sessions), ADR-0063 (tool output, never system prompt), and its application |
 | `PHASE_EXTERNAL_INPUT_PATH.md` | **The external input path (ADR-0061)** — W1's frame driven, G3's boundary named, the two-decisions-or-one answer, and ADR-0059 residual 1 re-driven |
 | `PHASE_M13_REPORT.md` | The stagnation detector on the live turn path (ADR-0034) |
 
