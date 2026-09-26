@@ -32,7 +32,19 @@ def tool_search_symbols(query: str, workspace: str = ".", max_results: int = 20)
     results = search_symbols(index, query, max_results=max_results)
 
     if not results:
-        return f"(no symbols matching '{query}' — {index.total_symbols} symbols indexed)"
+        # **The index only sees the languages it scanned.** Reported rather than assumed: a
+        # session searching a Swift project for `searchContent` was told "(no symbols matching
+        # 'searchContent' — 150 symbols indexed)" and reasonably concluded the symbol did not
+        # exist — when in fact Swift is not an indexed language at all. `CodeIndex` has always
+        # carried `languages` and `files_scanned`; the message simply did not use them.
+        langs = ", ".join(sorted(index.languages)) or "none"
+        return (
+            f"(no symbols matching '{query}' — {index.total_symbols} symbol(s) indexed from "
+            f"{index.files_scanned} file(s); languages scanned: {langs}). "
+            f"search_symbols sees ONLY those languages, so a symbol in a file it did not scan is "
+            f"invisible to it rather than absent. Use search_codebase or read_file for anything "
+            f"outside them."
+        )
 
     lines = [f"Found {len(results)} symbol(s) matching '{query}':", ""]
     for sym in results:

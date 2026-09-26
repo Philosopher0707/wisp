@@ -126,10 +126,22 @@ def _apply_model_switch(agent, provider: str, new_model: str, switch_provider: b
     client = getattr(agent, "client", None)
     if client is not None:
         client.model = new_model
-        if provider == "ollama" and not getattr(agent.config, "_context_tokens_explicit", False):
+        # **Gate on CAPABILITY, not on the provider's name.** This read
+        # `provider == "ollama"`, which structurally excluded every other provider from
+        # negotiating its context length — the F39 shape ("sends `num_predict` without
+        # negotiating the model's real limit, so a class of models fails outright"), which
+        # ADR-0038 closed for Ollama alone. A client that can report its context should be
+        # asked, whoever it is; one that cannot is skipped by `hasattr`, not by identity.
+        #
+        # Honest limit: this is currently INERT for the OpenAI/OpenRouter provider, because
+        # `OpenAIProvider` has `get_model_info` (a hardcoded table, 128000 default for unknown
+        # models) and no `get_context_length`. So it does not fix a budget mismatch on its own —
+        # it removes the reason the path could never negotiate if it gained the method.
+        if not getattr(agent.config, "_context_tokens_explicit", False) and \
+                hasattr(client, "get_context_length"):
             try:
                 detected = client.get_context_length()
-                if detected != agent.config.max_context_tokens:
+                if detected and detected != agent.config.max_context_tokens:
                     agent.config = agent.config.replace(max_context_tokens=detected)
             except Exception:
                 pass
