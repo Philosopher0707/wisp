@@ -252,6 +252,31 @@ def _capability_missing(tool_name: str, exc: BaseException) -> ValidationFailure
         VALIDATION_CAPABILITY_MISSING)
 
 
+def _args_truncated(tool_name: str, raw: str) -> ValidationFailure:
+    """The arguments arrived **truncated** — a failure of the HOST (ADR-0052).
+
+    `providers/openai.py` substitutes `{"_raw": <the raw stream>}` when the accumulated
+    argument JSON will not parse. That shape is deliberate — `write_file` salvages it — but every
+    *other* tool sent it straight to `jsonschema.validate`, which rejected it with *"Additional
+    properties are not allowed ('_raw' was unexpected)"*. The model then reads a schema error and
+    concludes, correctly, that its call *"got mangled by the wrapper"* — diagnosing a symptom the
+    host should have named.
+
+    The cause is a stream that ended mid-JSON, which is the host's. So this carries the same
+    `kind` as a missing validator: **a capability failure is published as a failure of the host,
+    not as a denial** (ADR-0052), and it is not a verdict on arguments that were never checked.
+    """
+    shown = raw if len(raw) <= 80 else raw[:77] + "..."
+    return ValidationFailure(
+        f"Tool call '{tool_name}' arrived TRUNCATED: its arguments did not parse as JSON "
+        f"({len(raw)} characters received, starting {shown!r}). The stream ended mid-JSON, so "
+        f"the arguments were never checked against the schema — this is a failure of the HOST, "
+        f"not a schema violation. Re-issue the call; if it was large, send fewer or smaller "
+        f"items.",
+        VALIDATION_CAPABILITY_MISSING,
+    )
+
+
 def _is_capability_failure(failure: object) -> bool:
     """True when a validation failure is a failure of the **host** (ADR-0052).
 
@@ -2508,6 +2533,15 @@ class WispAgentCore:
                 content = str(args.get("content", ""))
                 default_path = "./output.md" if content.lstrip().startswith("#") or "##" in content[:500] else "./output.txt"
                 args["path"] = default_path
+
+        # A truncated call reaches here as `{"_raw": <raw stream>}` — the shape
+        # `providers/openai.py` substitutes when the arguments will not parse. `write_file`
+        # salvages it above; every other tool must be told what actually happened, because a
+        # schema verdict on the wrapper blames the wrapper. Named BEFORE validation, and
+        # published as a host failure (ADR-0052) — the stream ended mid-JSON, so the arguments
+        # were never checked.
+        if isinstance(args, dict) and len(args) == 1 and isinstance(args.get("_raw"), str):
+            return _args_truncated(name, args["_raw"])
 
         try:
             import jsonschema
