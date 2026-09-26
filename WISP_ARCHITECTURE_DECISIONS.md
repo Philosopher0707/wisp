@@ -6884,6 +6884,72 @@ re-emitted view at tool-output trust, not a system-prompt section.
 
 ---
 
+## ADR-0064 — A plan's workspace has one resolver, inside the store; rotation counts per workspace
+
+**Status:** ACCEPTED
+**Phase:** The plan CLI (`PHASE_F47_PLANSTORE.md` §2's first finding)
+**Evidence:** `scripts/plan_cli_measurement.py` (the production tool path and the real console entry
+point, a private `HOME`); `PHASE_PLAN_CLI.md` §2.
+
+### Context
+
+The agent keys a plan by `session["workspace"]` **verbatim**. Driven, one directory yields:
+
+- `<project>` by default;
+- `"."`, `"sub/.."`, `"<project>/"` or `"<link>"` under the matching `WISP_WORKSPACE`.
+
+`wisp plan`, `wisp progress`, `wisp plan list` and `wisp plan abort` query `"."`. So they show
+nothing in the default configuration and work only when the key happens to be `"."`. Rotation keeps
+the ten newest plans across **all** workspaces: driven, ten plans elsewhere delete this workspace's
+plan. ADR-0063 R3 left the store's identity and lifetime undecided. After ADR-0063, the model reads
+that store on every plan update.
+
+### Decision
+
+**R1 — One resolver.** `wisp.planner.workspace_key(ws) = str(Path(ws).expanduser().resolve())`.
+**`PlanStore` applies it**:
+
+- to the query in `load_active`;
+- to every stored key when matching and listing;
+- to `Plan.workspace` on `save`;
+- to the grouping in `_rotate`.
+
+No caller normalizes.
+
+**R2 — One source.** The CLI's workspace is `WispConfig().workspace`, the value the agent's session
+carries, not the literal `"."`.
+
+**R3 — Rotation is per workspace.** The ten newest plans of each resolved workspace are kept.
+
+**R4 — Old plans stay readable.** A stored key is resolved **when read**, so no file is rewritten. A
+legacy relative key resolves against the reader's cwd, exactly as the `"."` query matched it before.
+It is re-keyed absolute when next saved.
+
+### Rejected
+
+- **Removing the commands.** They read the agent's plans today (`WISP_WORKSPACE=.`), they have
+  tests, and they are the operator's only view of a store the model reads.
+- **The CLI switching to `safe_getcwd()` alone.** Driven: the operator sees the plan, and ten plans
+  elsewhere delete it, from the agent's tools too.
+- **Per-workspace rotation on the raw key.** It counts the same directory's spellings as different
+  workspaces.
+
+### Consequences
+
+- The operator's four commands see the agent's plan, under any spelling of the workspace.
+- A new session reached by a different spelling finds the plan through `mark_step_done` /
+  `update_plan`.
+- The store's bound becomes ten plans × workspaces used.
+
+### Reversal condition
+
+- **R1** reverses if a workspace identity stops being a local directory path (a remote or
+  containerized workspace); the resolver is the one place to change.
+- **R3** reverses if store growth under per-workspace rotation is measured to matter. The remedy is
+  an age bound, not the global count.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -6951,3 +7017,4 @@ re-emitted view at tool-output trust, not a system-prompt section.
 | 0061 | The external input path: the approval frame is the clients' vocabulary, and a hook's `command` is not content-validated | The external input path (W1 + G3) | ACCEPTED (two decisions on one route family, sharing one principle. **W1, driven:** `approve()` sent `approval_request`/`{approval_id, tool_call}` while **all three** shipped clients — the desktop renderer, the TUI *and* the VS Code extension — branch on `tool_approval_request` and read `call_id`/`name`/`arguments`/`reason`; the prompt had never rendered, so every request hit the 60 s bound and denied. **R1** the frame is the clients' vocabulary (client change **zero**). **R2** the correlation key is `call_id` and it **IS** the `_approvals` key — the old frame carried no `call_id` at all, so a recognising client would still have echoed an empty id; pinned by a two-concurrent-approval test that resolves the **second** by its own id. **R3** the bound **stays 60 s** — ADR-0057's 30 s is REST's, because a REST request holds an HTTP connection open; this path holds nothing open, and ADR-0036's bounded delay is the nearest *shape*, not duration. **R4** no client ⇒ **DENY**, with `NO_CLIENT_REASON` a named constant so "nobody is connected" ≠ "the human said no"; *waiting* and *silent fail-closed* rejected; `WISP_WS_AUTO_APPROVE` stays the one explicit opt-in; no new flag. **G3:** `command` is **not** content-validated and the route's docstring now says so — **the gate restricts WHO may register a hook, it does not restrict WHAT the hook runs** — because a shell command's target is not determinable from its text (G2); a runnable check, a metacharacter blocklist and an allow-list are each rejected with reasons. **Two decisions, not one**, because the brief's candidate principle (*"does not execute what it has not validated"*) is **false** for the hook path. **ADR-0059 residual 1 moves**: driven over the six pinned pairs, **6 of 6** now ask a human — its stated *reason* ("REST cannot, having no approver") is no longer true — while the *mechanism* stays a hand-written set (**closed in effect, un-composed in mechanism**); the bundle half stands, cited, because `cryptography` is absent (F88, F94). Six tests that pinned the old frame are **updated with reasoning**, one of which previously resolved only via the single-pending fallback; 16-test guard, **8/8 probes caught**; the gate chain is unchanged, so the gate-order corpus is **not** re-written. Corrects ADR-0057's *"both shipped clients"* — there are **three**) |
 | 0062 | The corpus's editorial decisions: one register, one vocabulary, one reading rule | The corpus governance layer, II (F105–F114) | ACCEPTED (decides the eight **editorial** findings the first corpus-governance mission reported and did not repair. **Every decision is about an artifact**, not the product: no flag default, no gate, no authority's scope, no `wisp/` file. **R1 `CURRENT_FINDINGS.md` is the canonical register for a finding's status** (`F106`) — the ledger stays append-only and **un-backfilled**; its §23 note is corrected to name the register and to state its own actual range (`F64`–`F74`, not `F64`–`F71`); *why not backfill* — thirty rows duplicated across two append-only files is a second producer of one fact. **R2 the id namespaces are disambiguated by prose prefix** (`F107`) — `FIND-F7` vs `ITEM-F1`, and the three meanings of `M4` annotated once; *why not rename* — a rename rewrites a historical record and breaks every citation. **R3 the ledger's six words govern, with one reason column** (`F108`) — `DECIDED` is a **reason** and moves to it, the state becoming `COMPLETE`; **`BLOCKED` is kept as a state** and its emptiness is recorded as *"no item is currently in this state"*, because a defined word with no members is a vocabulary, not a defect. **R4 the reading rule is ADR-0002's, recorded verbatim** (`F109`) — *read at the **consumption site***, not the circulated paraphrase *"read once, at the composition point"*, and the ADR **names the paraphrase's source**: ADR-0056's local *"read once, independently"* about the objective path, conflated with ADR-0002's general rule; under the paraphrase `verification_loop`'s two read sites and `turn_spans`'s two become violations of a rule the corpus does not have. **R5 `verification_gate` and `graph_mutation` are wrong names, not aliases** (`F110`) — neither string occurs anywhere in `wisp/`; the flags are `verification_loop` and `task_graph`, and this ADR adds **no alias**, because an alias for a name that was never real is the second vocabulary R3 forbids. **R6 no two pytest processes run concurrently, and a block run passes `--basetemp`** (`F112`) — two concurrent processes race on the shared base dir and produce **869 `PermissionError: EEXIST` errors** from one overlapping run, which reads as a code failure and is not; a **method** rule and a method flag, not a code change, and it **corrects the corpus's own diagnosis** (§6 attributed it to the shim; the measured cause is contention). **R7 a phase report enters the document index in the change that creates it** (`F114`) — `F104`'s class, and a record that exists and is not listed is the same defect as one listed and not existing. **R8 a derived page must have a committed generator** (`F113`, policy half) — **F75**'s class one level up; a page may still carry an **append-only** section the generator emits unchanged, provided the guard asserts it. **`F105` is NOT decided here** — it is a measurement (`PHASE_CORPUS_GOVERNANCE_II.md` §4), and the report is that the referent is **not determinable**: `PHASE_DAG_RETIREMENT.md` contains **three** finding-shaped statements, not one. `F111` is a host condition whose rule already lives in `CONTEXT.md` §11) |
 | 0063 | A model-authored plan is shown back as tool output, never as a system-prompt section | F47 — `PlanStore` | ACCEPTED (decides F47's shape by measurement, `PHASE_F47_PLANSTORE.md` §2. **R1** `mark_step_done` and `update_plan` return the plan's current state after their result, at `TOOL_OUTPUT` trust. **R2** `PlanStore` content never enters the system prompt: the `active_plan` slot is tagged `OPERATOR`, and feeding it model-authored text would launder the tag T1 trusts. Also driven: the static prompt is cached across plan writes, a plan never leaves `active`, and the store would carry an injected step into every future session. **R3** the view's lifetime is the conversation's. *Rejected:* removal, because the model's own tools read the store; and system-prompt wiring, for the four measured defects. *Reversal:* a cross-session requirement, which needs operator endorsement first) |
+| 0064 | A plan's workspace has one resolver, inside the store; rotation counts per workspace | The plan CLI | ACCEPTED (decides `PHASE_F47_PLANSTORE.md` §2's first finding by measurement, `PHASE_PLAN_CLI.md` §2. The agent's key is `session["workspace"]` **verbatim**: one directory had five keys under five spellings. The CLI's `"."` found the plan only when the key happened to be `"."`, and `wisp plan abort` too. Rotation kept the ten newest across all workspaces. **R1** `planner.workspace_key` (expanduser + resolve), applied by `PlanStore` to queries, stored keys, saves and rotation, so no caller normalizes. **R2** the CLI reads `WispConfig().workspace`, the agent's own source. **R3** rotation per workspace. **R4** stored keys are resolved when read, so old plans stay readable and none is rewritten. *Rejected:* removal (the commands have users); the CLI alone (ten plans elsewhere still delete the plan); per-workspace rotation on the raw key) |
