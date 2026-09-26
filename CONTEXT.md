@@ -1886,6 +1886,33 @@ The obstacle was **TLS, not network**: pip failed with `SSLCertVerificationError
 
 ---
 
+**The repo moved, and three path bindings broke silently — plus one real packaging defect
+(2026-09-27).** The repo now lives under `iCloud Drive (Archive)`; it was at `~/Documents/wisp`. Three
+bindings still pointed at the old location, and **each was masked by the one invocation that happened to
+work**:
+
+1. **`.venv/bin/*` console scripts — 26 of 31** had a shebang at the old path, so every one died with
+   *"bad interpreter"*. Fixed: `pip install -e . --no-deps`.
+2. **The venv's editable install pointed at the old path**, so `import wisp` failed from anywhere outside
+   the repo — and worked *inside* it, because the CWD was on `sys.path`. Fixed the same way.
+3. **The framework python's editable install did the same**
+   (`/Library/Frameworks/Python.framework/Versions/3.12`), which is what `wisp` on PATH resolves to —
+   `~/.zshrc:195` puts that bin first. `wisp repl` died with
+   `ModuleNotFoundError: No module named 'wisp'`.
+
+**And a fourth, which is a packaging defect and not a move artefact:** `pyproject.toml` shipped
+`include = ["wisp*"]`, but `wisp/composition.py` imports the top-level **`agent`** package at five sites
+(`agent.logger`, `agent.tools.runner`, `agent.tools.batch_reader`). **The distribution could not run its
+own entry point.** A console script puts the *script's* directory on `sys.path`, not the working
+directory — so running from the repo root does **not** mask it; only `python -m wisp` does, because `-m`
+adds the CWD. That is why it survived: the one invocation that works is not the one users run. Fixed by
+`include = ["wisp*", "agent*"]`.
+
+**The rule these share: if it works from one directory, you have not tested it.** Three of these four
+were invisible precisely because a single invocation path happened to be correct.
+
+---
+
 ## 7. Known failures — the environmental set (NOT regressions)
 
 **Measured on the full `tests/` tree with `--continue-on-collection-errors`:**
