@@ -246,9 +246,14 @@ class TestSessionStoreResolution:
 
 class TestCmdPlan:
     def test_list_no_plan(self, capsys, monkeypatch):
-        with patch("wisp.planner.PlanStore") as MockStore:
+        # `wisp.progress` binds its own `PlanStore` name at import, so patching only
+        # `wisp.planner.PlanStore` left `list_plans` reading the operator's real
+        # ~/.config/wisp/plans (masked until ADR-0064 by the "." filter).
+        with patch("wisp.planner.PlanStore") as MockStore, \
+                patch("wisp.progress.PlanStore", MockStore):
             instance = MagicMock()
             instance.load_active.return_value = None
+            instance.list_all.return_value = []
             MockStore.return_value = instance
             main_mod.cmd_plan(["list"])
         captured = capsys.readouterr()

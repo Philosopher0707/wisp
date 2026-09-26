@@ -684,13 +684,16 @@ def cmd_git(args: list[str]):
 
 def cmd_plan(args: list[str]):
     """Manage structured plans."""
+    from wisp.config import WispConfig
     from wisp.planner import PlanStore
     from wisp.progress import format_progress, list_plans
 
+    # ADR-0064 R2: the workspace the agent's session carries, not the literal ".".
+    workspace = WispConfig().workspace
     if not args:
         # Show active plan
         store = PlanStore()
-        plan = store.load_active(".")
+        plan = store.load_active(workspace)
         if plan:
             print(format_progress(plan))
         else:
@@ -699,12 +702,12 @@ def cmd_plan(args: list[str]):
         return
 
     if args[0] == "list":
-        print(list_plans("."))
+        print(list_plans(workspace))
         return
 
     if args[0] == "abort":
         store = PlanStore()
-        plan = store.load_active(".")
+        plan = store.load_active(workspace)
         if plan:
             plan.abort()
             store.save(plan)
@@ -726,11 +729,12 @@ def cmd_plan(args: list[str]):
 
 def cmd_progress(args: list[str]):
     """Show current plan progress."""
+    from wisp.config import WispConfig
     from wisp.planner import PlanStore
     from wisp.progress import format_progress
 
     store = PlanStore()
-    plan = store.load_active(".")
+    plan = store.load_active(WispConfig().workspace)
     if plan:
         print(format_progress(plan))
     else:

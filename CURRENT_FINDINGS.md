@@ -14,7 +14,7 @@
 > `CURRENT_OPEN_ITEMS.md` (what is open), `CURRENT_FLAGS.md` (every rollback flag and its
 > default). All four are derived; none may decide.
 >
-> Generated 2026-09-25 at `3c573de` · **104 findings** (F1–F104) · **13 not closed** · vocabulary in §(a), classes in §(b).
+> Generated 2026-09-25 at `f251ed4` · **104 findings** (F1–F104) · **13 not closed** · vocabulary in §(a), classes in §(b).
 
 ---
 
@@ -270,6 +270,7 @@ the *artifacts*, not a new finding — no `F`-number is coined here.
 ### Findings whose scope a later landing extended
 
 - **F57.** **The workspace `.env` — the same writer's other file, the same `unwired-control` class.** `_persist_env` also wrote `WISP_PROVIDER`, `WISP_MODEL`, `WISP_API_BASE` and `WISP_OLLAMA_URL` to `<workspace>/.env`, and nothing read it (`PHASE_F57_DOTENV.md` §2, finding 2). **Not the same decision:** a repository can carry that file. Driven (`PHASE_WORKSPACE_DOTENV.md` §2): read even after the operator's file, a cloned repository's `WISP_API_BASE` sends the operator's key to the repository's endpoint. Decided *not read*; **the writer was removed** (`FIXED` by removal, 2026-09-26), as `F47`'s artifact was. Recorded in the ledger's `F57` row, `WISP_MIGRATION_STATUS.md:178`. Tripwire: `tests/test_workspace_dotenv_not_written.py`.
+- **F47.** **The operator's side of the same store.** `wisp plan`, `wisp progress`, `wisp plan list` and `wisp plan abort` queried `"."`, while the agent keys a plan by `session["workspace"]` verbatim: one directory had five keys under five spellings (`PHASE_PLAN_CLI.md` §2, driven). Global rotation let ten plans elsewhere delete this workspace's plan. **Decided by ADR-0064, and `FIXED` 2026-09-26:** one resolver, `planner.workspace_key`, applied inside `PlanStore` to queries, stored keys, saves and rotation; the CLI reads `WispConfig().workspace`; rotation per workspace; stored keys resolved when read, so old plans stay readable. Recorded in the ledger's `F47` row, `WISP_MIGRATION_STATUS.md:168`. Tripwire: `tests/test_plan_cli_sees_agent_plan.py`.
 
 ### What this page did not do
 

@@ -314,6 +314,14 @@ EXTENDED: list[tuple[str, str]] = [
             "Decided *not read*; **the writer was removed** (`FIXED` by removal, 2026-09-26), as "
             "`F47`'s artifact was. Recorded in the ledger's `F57` row, `WISP_MIGRATION_STATUS.md:178`. "
             "Tripwire: `tests/test_workspace_dotenv_not_written.py`."),
+    ("F47", "**The operator's side of the same store.** `wisp plan`, `wisp progress`, `wisp plan list` and "
+            "`wisp plan abort` queried `\".\"`, while the agent keys a plan by `session[\"workspace\"]` "
+            "verbatim: one directory had five keys under five spellings (`PHASE_PLAN_CLI.md` §2, driven). "
+            "Global rotation let ten plans elsewhere delete this workspace's plan. **Decided by ADR-0064, and "
+            "`FIXED` 2026-09-26:** one resolver, `planner.workspace_key`, applied inside `PlanStore` to "
+            "queries, stored keys, saves and rotation; the CLI reads `WispConfig().workspace`; rotation per "
+            "workspace; stored keys resolved when read, so old plans stay readable. Recorded in the ledger's "
+            "`F47` row, `WISP_MIGRATION_STATUS.md:168`. Tripwire: `tests/test_plan_cli_sees_agent_plan.py`."),
 ]
 
 #: Claims in the artifacts that cannot be pinned. A finding, never a guess.

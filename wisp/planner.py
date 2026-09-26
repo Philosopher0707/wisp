@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import contextlib
 import threading
@@ -243,6 +244,22 @@ class Plan:
 
 # ── Persistence ────────────────────────────────────────────────────────
 
+def workspace_key(workspace: str) -> str:
+    """The one identity of a plan's workspace (ADR-0064 R1): the resolved absolute path.
+
+    The agent keys a plan by ``session["workspace"]`` verbatim, and one directory can be spelled
+    `"."`, `"sub/.."`, `"<dir>/"` or through a symlink. `PlanStore` applies this to every query,
+    every stored key, every save and the rotation grouping, so no caller normalizes. A stored
+    key is resolved **when read**, which keeps plans written before this rule readable (R4).
+    """
+    if not workspace:
+        return ""
+    try:
+        return str(Path(workspace).expanduser().resolve())
+    except (OSError, RuntimeError):
+        return os.path.abspath(os.path.expanduser(workspace))
+
+
 class PlanStore:
     """Persist and retrieve plans."""
 
@@ -250,6 +267,7 @@ class PlanStore:
         PLANS_DIR.mkdir(parents=True, exist_ok=True)
 
     def save(self, plan: Plan) -> None:
+        plan.workspace = workspace_key(plan.workspace)
         path = PLANS_DIR / f"{plan.id}.json"
         data = json.dumps(plan.to_dict(), indent=2, ensure_ascii=False)
         try:
@@ -282,15 +300,20 @@ class PlanStore:
 
     def load_active(self, workspace: str) -> Optional[Plan]:
         """Load the most recent active plan for a workspace."""
+        key = workspace_key(workspace)
         plans = self._list_plans()
         for p in sorted(plans, key=lambda x: x["updated_at"], reverse=True):
-            if p["workspace"] == workspace and p["status"] == "active":
+            if workspace_key(p["workspace"]) == key and p["status"] == "active":
                 return self.load(p["id"])
         return None
 
-    def list_all(self) -> list[dict]:
-        """List all plan metadata (no tasks)."""
-        return self._list_plans()
+    def list_all(self, workspace: str | None = None) -> list[dict]:
+        """List plan metadata (no tasks), optionally only one workspace's (by `workspace_key`)."""
+        plans = self._list_plans()
+        if workspace:
+            key = workspace_key(workspace)
+            plans = [p for p in plans if workspace_key(p["workspace"]) == key]
+        return plans
 
     def delete(self, plan_id: str) -> bool:
         path = PLANS_DIR / f"{plan_id}.json"
@@ -327,12 +350,28 @@ class PlanStore:
         return plans
 
     def _rotate(self) -> None:
+        """Keep the newest `_MAX_PLANS` plans **of each workspace** (ADR-0064 R3).
+
+        Counting across all workspaces let ten plans in one project delete another project's
+        active plan (`PHASE_F47_PLANSTORE.md` §2.1, driven). A file whose workspace cannot be
+        read is grouped on its own and never rotated away by another workspace's plans.
+        """
         # Already running inside _PLAN_LOCK from save(), but guard for callers
         # that might rotate directly (none currently exist).
         with _PLAN_LOCK:
-            plans = sorted(PLANS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-            if len(plans) > _MAX_PLANS:
-                for old in plans[_MAX_PLANS:]:
+            groups: dict[str, list[Path]] = {}
+            for path in PLANS_DIR.glob("*.json"):
+                try:
+                    ws = json.loads(path.read_text(encoding="utf-8")).get("workspace", "")
+                    key = workspace_key(ws if isinstance(ws, str) else "")
+                except (json.JSONDecodeError, OSError):
+                    key = f"\0unreadable:{path.name}"
+                groups.setdefault(key, []).append(path)
+            for paths in groups.values():
+                if len(paths) <= _MAX_PLANS:
+                    continue
+                newest_first = sorted(paths, key=lambda p: p.stat().st_mtime, reverse=True)
+                for old in newest_first[_MAX_PLANS:]:
                     try:
                         old.unlink()
                         logger.info("Rotated old plan: %s", old.stem)

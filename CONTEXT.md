@@ -47,7 +47,7 @@ what their §Findings sections are for.
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is F47's landing** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
+**HEAD is the plan CLI's landing** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
 on top of it and is the authority for the count — **F87**: it did not, until 2026-09-25. **Nine**
 "point the handoff" commits had never been listed, so the claim and the table disagreed; backfilled.
 The only exception is the handoff commit that carries *this* line, which the next landing lists.
@@ -282,9 +282,40 @@ quoting it; §11 says how.
 | F57 — `~/.config/wisp/.env` is read | `COMPLETE` — **F57 FIXED**, no ADR: `wisp/user_env.py` loads it as `main()`'s first statement; environment wins, absence is a no-op, invalidity warns; 11-test guard, 2/2 probes, 374/374 differential | `PHASE_F57_DOTENV.md` |
 | the workspace `.env` | `COMPLETE` — **no ADR** (not read, so nothing a repository carries reaches the process): measured, a cloned repository's `WISP_API_BASE` / `WISP_OLLAMA_URL` would send the operator's key / prompt to its endpoint if the file were read; **the writer removed**; 7-test guard, RED 4, **2/2** probes, behaviour differential byte-identical, 425/425 | `PHASE_WORKSPACE_DOTENV.md` |
 | F47 — `PlanStore` | `COMPLETE` — **ADR-0063; F47 FIXED**: measured, the store is read by the model's own tools, and what it never saw was the plan's *state*; the plan is shown back as tool output (`mark_step_done` / `update_plan`), never in the system prompt (`active_plan` is `OPERATOR`-tagged, cached, cross-session); 8-test guard, RED 5, **2/2** probes, tool differential 13/13 stores identical, 336/336 over 16 files, the same 2 pre-existing failures both sides | `PHASE_F47_PLANSTORE.md` |
+| the plan CLI | `COMPLETE` — **ADR-0064**: measured, the agent keys a plan by `session["workspace"]` verbatim (five keys for one directory) and the four CLI commands queried `"."`; one resolver inside `PlanStore`, the CLI reads `WispConfig().workspace`, rotation per workspace, old plans readable; 12-test guard, RED 7, **3/3** probes, tool results identical, 291/291 | `PHASE_PLAN_CLI.md` |
 
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log — **mind the §0/§23 split**, and note it has **no G1 or governance-layer row**: `CONTEXT.md` §12 is the live open-items table, **F99**).
 **Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0064**).
+
+### 0.0.23 THE PLAN CLI SEES THE AGENT'S PLAN (2026-09-26) — ADR-0064
+
+**`wisp plan`, `wisp progress`, `wisp plan list` and `wisp plan abort` showed nothing after an agent
+planned.** They queried `"."`. The agent keys a plan by `session["workspace"]` **verbatim**. Driven
+(`scripts/plan_cli_measurement.py`, a private `HOME`): one directory yields five keys under five
+spellings (default, `.`, relative, trailing slash, symlink), and the CLI worked only when the key
+happened to be `"."`. `plan abort` was a fourth mismatched reader, one F47's report missed. Rotation
+kept the ten newest plans across **all** workspaces, so ten plans elsewhere deleted this one.
+Removal was refuted, because the commands have users.
+
+**ADR-0064:**
+
+- One resolver, `planner.workspace_key` (expanduser + resolve), applied **inside `PlanStore`** to
+  queries, stored keys, saves and rotation.
+- The CLI reads `WispConfig().workspace`.
+- Rotation is per workspace.
+- Stored keys are resolved when read, so old plans stay readable and none is rewritten.
+
+**The operator now sees the agent's plan.** The tools' results are byte-identical under every
+spelling. The store differs only in the `workspace` field, which is now resolved. Guard
+`tests/test_plan_cli_sees_agent_plan.py` (12): RED 7 failed / 4 passed, **3/3** probes; **291/291**
+over 10 files.
+
+`test_main_cli.py::test_list_no_plan` had been reading **the operator's real plan store**: it
+patched `wisp.planner.PlanStore`, and `wisp.progress` binds its own. The `"."` filter had masked it;
+the test is now isolated.
+
+**Finding, not fixed:** the task parser truncates a description at its first hyphen (`"Use foo-bar
+module"` → `"Use foo"`). Report: `PHASE_PLAN_CLI.md`.
 
 ### 0.0.22 F47 — THE PLAN IS SHOWN BACK AS TOOL OUTPUT (2026-09-26) — ADR-0063; F47 FIXED
 
@@ -1673,7 +1704,9 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `7a8fe8b` | `docs:` **the workspace `.env` — measured, and decided** (deliverable 1): `scripts/workspace_dotenv_measurement.py`; a repository's `WISP_API_BASE` / `WISP_OLLAMA_URL` would carry the operator's key / prompt away if the file were read; decided not read, writer to be removed, no ADR; `PHASE_WORKSPACE_DOTENV.md` §2, indexed in §13 (R7) |
 | `aa39d23` | `fix:` **the workspace `.env` is no longer written** (deliverable 2) — `_persist_env` writes `~/.config/wisp/.env` only; three `./.env` hints corrected; 7-test guard; the ledger's F57 row and `CURRENT_FINDINGS.md` §Findings record the extension; §0.0.21. Excludes the user's WIP (§8) |
 | `b69fa04` | `docs:` **F47 measured, and decided — ADR-0063** (deliverable 1): `scripts/planstore_measurement.py`; the store is read by the model's tools, the plan's *state* is never shown; the `active_plan` slot is `OPERATOR`-tagged, cached, and cross-session; tool output, never the system prompt; `PHASE_F47_PLANSTORE.md` §2, indexed in §13 (R7) |
-| *(this commit)* | `fix:` **F47 — the plan is shown back as tool output** (deliverable 2) — `mark_step_done` / `update_plan` return the plan's current state; 8-test guard; the ledger's F47 status cell and the register; §0.0.22. Excludes the user's WIP (§8) — **the commit that carries §0's `HEAD` line** |
+| `3c573de` | `fix:` **F47 — the plan is shown back as tool output** (deliverable 2) — `mark_step_done` / `update_plan` return the plan's current state; 8-test guard; the ledger's F47 status cell and the register; §0.0.22. Excludes the user's WIP (§8) |
+| `f251ed4` | `docs:` **the plan CLI measured, and decided — ADR-0064** (deliverable 1): `scripts/plan_cli_measurement.py`; five keys for one directory; the CLI's `"."`; global rotation; one resolver inside the store; `PHASE_PLAN_CLI.md` §2, indexed in §13 (R7) |
+| *(this commit)* | `fix:` **the plan CLI sees the agent's plan** (deliverable 2, ADR-0064) — `planner.workspace_key` inside `PlanStore`, the CLI on `WispConfig().workspace`, per-workspace rotation; 12-test guard; `test_list_no_plan` isolated from the real store; §0.0.23. Excludes the user's WIP (§8) — **the commit that carries §0's `HEAD` line** |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
