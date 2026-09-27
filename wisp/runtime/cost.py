@@ -126,6 +126,17 @@ class CostMeter:
     version: str = PRICE_TABLE_VERSION
     spent_usd: float = 0.0
     charges: list[tuple[str, float]] = field(default_factory=list)
+    #: Calls the meter could NOT price, counted rather than raised.
+    #:
+    #: This exists because of a flaw found by WIRING, not by reading: `charge`
+    #: raises `UnknownModel` under FAIL_CLOSED, and `Telemetry.record_turn` calls
+    #: it — so a model the table had not seen would have **crashed the turn**.
+    #: That is the wrong severity for a telemetry call: refusing to CHARGE is not
+    #: refusing to RUN. But swallowing it silently makes the meter quietly wrong,
+    #: which is the failure `on_unknown` exists to prevent. So it is COUNTED —
+    #: visible in `summary()`, fatal to nothing.
+    uncharged_calls: int = 0
+    uncharged_models: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not isinstance(self.on_unknown, UnknownPolicy):
@@ -156,6 +167,25 @@ class CostMeter:
         self.charges.append((model, amount))
         return amount
 
+    def try_charge(self, model: str, *, input_tokens: int = 0,
+                   output_tokens: int = 0) -> float | None:
+        """Charge if the model can be priced; otherwise COUNT it and return None.
+
+        **For the telemetry path**, which must not break a turn. `charge` still
+        raises, because an explicit caller that can handle the failure should see
+        it; this one records the gap instead. The bound keeps holding for every
+        model that can be priced, and the models that could not are visible in
+        `summary()["uncharged_calls"]` rather than silent.
+        """
+        try:
+            return self.charge(model, input_tokens=input_tokens,
+                               output_tokens=output_tokens)
+        except UnknownModel:
+            self.uncharged_calls += 1
+            if model not in self.uncharged_models:
+                self.uncharged_models.append(model)
+            return None
+
     def exhausted(self, max_cost_usd: float) -> bool:
         """Whether the declared ceiling has been met. The meter's whole purpose.
 
@@ -172,7 +202,11 @@ class CostMeter:
         return {"spent_usd": round(self.spent_usd, 6),
                 "price_table_version": self.version,
                 "as_of": PRICE_TABLE_AS_OF,
-                "calls": len(self.charges)}
+                "calls": len(self.charges),
+                # A spend figure is only trustworthy if the calls it could NOT
+                # price are visible beside it.
+                "uncharged_calls": self.uncharged_calls,
+                "uncharged_models": list(self.uncharged_models)}
 
 
 __all__ = ["PRICE_TABLE", "PRICE_TABLE_VERSION", "PRICE_TABLE_AS_OF", "Price",
