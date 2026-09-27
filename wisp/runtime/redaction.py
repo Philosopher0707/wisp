@@ -1,40 +1,49 @@
-"""Redaction has exactly one legal point, and the two candidates are exclusive.
+"""Redaction happens on the TRACE, never on the PROMPT — and the trace pays for it.
 
-## The claim, and why it is not a preference
+## The decision
 
-    Redact the PROMPT  → the model sees `[REDACTED]`, and the trace records what the
-                         model saw. The trace is faithful. Replay verifies.
-    Redact the TRACE   → the model saw the real value and the trace holds something
-                         else. The trace is a LIE about the run, and replay raises
-                         `ReplayDivergence` (`wisp/core/replay_digest.py`).
+    Redact the TRACE, never the PROMPT.
 
-They cannot both be done, because they are the same edit at two different moments,
-and **only one of them leaves the record true**. Redacting the trace is not a
-redaction of the trace — it is a redaction of the *prompt* performed after the
-prompt has already been used, and the record then describes a run that did not
-happen.
+They are mutually exclusive: the same edit at two different moments, and whichever
+one you take, you lose the other property. **This module takes the trace side.**
+An earlier version of it took the prompt side; the inversion is recorded rather than
+quietly rewritten, because the two are close enough that a reader deserves to know
+which one is live and why.
 
-So the choice is not *whether* to redact but **where the record is taken relative to
-it**, and the answer is forced: **redact before the record**. That is `PROMPT`
-below, and it is the only point this module will construct.
+| | prompt redaction | **trace redaction (this)** |
+|---|---|---|
+| the model sees | `[REDACTED]` — it cannot use the value | the real value — it can work |
+| the stored trace | faithful, replayable | redacted, **not replayable** |
+| what you lose | the tool's function | replay |
 
-## What this costs, stated rather than discovered later
+**Why the trace side.** A coding agent is handed secrets it must *use* — a token to
+call a tool with, a connection string to run a command against. Redacting the prompt
+does not protect those; it disables them, and the agent then fails in a way that
+looks like a broken tool. The trace is read by humans and by retention policy, and
+it is the thing that must not hold the secret at rest.
 
-Redacting before the record means **the model does not see the real value either**.
-For a secret that is only *displayed* — an approval prompt, a tool-call preview —
-that is free. For a secret the model must *use* — a token to call an API with — it
-is not: redaction and function are then in direct conflict, and that conflict is a
-**product decision about the tool**, not something this module can resolve by
-choosing a cleverer point. The honest options are to give the tool a credential
-reference the model can name without holding (so the real value never enters the
-prompt), or to accept the value in the trace. There is no third.
+## The cost, and it is not hypothetical
 
-## Where this sits
+**A redacted trace is unrunnable.** `wisp/core/replay_digest.py` verifies that a
+replayed transcript digests to what the run recorded; a redacted trace cannot, by
+construction. So the trace must **declare** it and replay must refuse it **by name**
+(`REPLAY_UNAVAILABLE_REASON`) rather than raising a divergence that reads like a
+corruption bug. A trace that silently cannot be replayed is worse than one that says
+so.
 
-`redact_sensitive_tool_args` (`wisp/infra/security.py`) is the **authority for which
-fields are sensitive** and is applied today at three display sites — the CLI, the
-TUI and the approval prompt. Those are all *prompt-side*, which is why wisp is
-consistent today by accident rather than by rule. This module is the rule.
+## A second cost this decision carries, named because the table does not
+
+*Never redact the prompt* means the secret goes **into the prompt**, and therefore
+**to the provider** — a third party, over the network, into a request log that is
+not yours. Trace redaction protects the copy at rest and does nothing about the copy
+in transit. If the value must not leave the machine, the answer is not a redaction
+point: it is to give the tool a **credential reference** the model can name without
+holding, so the real value never enters the prompt.
+
+## Where the authority for *which* fields are sensitive lives
+
+`redact_sensitive_tool_args` (`wisp/infra/security.py`). This module decides **when**
+it is applied; it does not decide **what** it covers.
 """
 from __future__ import annotations
 
@@ -51,17 +60,27 @@ class RedactionPoint(StrEnum):
     message.
     """
 
-    #: Before the value enters the record. The model sees the redacted value and so
-    #: does the trace: one value, one truth, replay verifies.
+    #: Before the model sees it. **Refused** — see `redact`.
     PROMPT = "prompt"
-    #: After the model has seen it. The trace then disagrees with the run.
+    #: After the model has seen it, when the trace is written. The live choice.
     TRACE = "trace"
 
 
 class RedactionPointError(RuntimeError):
-    """A redaction was requested at a point that would falsify the record."""
+    """A redaction was requested at the point this project has decided against."""
 
     code = "redaction_point_invalid"
+
+
+#: The reason a redacted trace cannot be replayed. A **named constant**, so replay
+#: refuses it by name rather than by a `ReplayDivergence` — which would read as a
+#: corruption bug instead of a known, priced cost.
+REPLAY_UNAVAILABLE_REASON = (
+    "this trace was redacted at rest, so it cannot be replayed: the recorded "
+    "transcript deliberately differs from the one the run used. Replay requires "
+    "fidelity and redaction requires the opposite — the project chose redaction and "
+    "accepted this cost (see wisp/runtime/redaction.py)."
+)
 
 
 Redactor = Callable[[Any], Any]
@@ -75,28 +94,45 @@ def redact(value: Any, *, point: RedactionPoint,
     leave the policy to configuration — the same shape as the rest of this project:
     the core is generic, the capability is configuration.
     """
-    if point is RedactionPoint.TRACE:
+    if point is RedactionPoint.PROMPT:
         raise RedactionPointError(
-            "redacting the TRACE is not a redaction of the trace: it is a redaction "
-            "of the PROMPT applied after the prompt was already used, so the record "
-            "describes a run that did not happen and replay raises "
-            "ReplayDivergence (wisp/core/replay_digest.py). Redact before the "
-            "record instead — and if the model needs the real value, the tool needs "
-            "a credential reference rather than the value, which is a decision "
-            "about the tool, not about this function."
+            "the PROMPT is never redacted: the model is handed secrets it must USE, "
+            "and redacting them does not protect the value — it disables the tool, "
+            "and the failure looks like a broken tool rather than a policy. Redact "
+            "the TRACE instead and accept that it is not replayable; or, if the "
+            "value must not reach the provider either, give the tool a credential "
+            "reference it can name without holding."
         )
     return redactor(value) if redactor is not None else value
 
 
-def recorded_value(value: Any, *, redactor: Redactor | None = None) -> Any:
-    """The value as it must appear in the record: redacted once, before recording.
+def prompt_value(value: Any) -> Any:
+    """What the model sees: **the value, unredacted**.
 
-    A named helper rather than an inline call because this is the **one** place the
-    record's value is produced, and a second place is how a trace acquires a value
-    the model never saw.
+    A named function rather than an omission, so the decision is visible at the
+    place a reader would look for a redaction that is not there.
     """
-    return redact(value, point=RedactionPoint.PROMPT, redactor=redactor)
+    return value
 
 
-__all__ = ["RedactionPoint", "RedactionPointError", "Redactor", "redact",
-           "recorded_value"]
+def recorded_value(value: Any, *, redactor: Redactor | None = None) -> Any:
+    """What the trace stores: redacted once, at the one place a record is written.
+
+    A named helper rather than an inline call because a second place is how a trace
+    acquires an *unredacted* value — the failure this decision exists to prevent,
+    arriving by the back door.
+    """
+    return redact(value, point=RedactionPoint.TRACE, redactor=redactor)
+
+
+def is_replayable(*, redacted: bool) -> bool:
+    """Whether a trace may be replayed. **False the moment it was redacted.**
+
+    The whole cost of this decision, as one function: it cannot be true both ways,
+    and a caller that wants replay must not redact.
+    """
+    return not redacted
+
+
+__all__ = ["RedactionPoint", "RedactionPointError", "REPLAY_UNAVAILABLE_REASON",
+           "Redactor", "redact", "prompt_value", "recorded_value", "is_replayable"]

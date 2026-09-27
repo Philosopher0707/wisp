@@ -1,12 +1,12 @@
-"""Prompt vs trace redaction — mutually exclusive, proven rather than asserted.
+"""Redaction is on the TRACE, never the PROMPT — and the trace is not replayable.
 
-The claim: they are the same edit at two different moments, and only one of them
-leaves the record true. This file drives both and shows that the trace-side one is
-**caught by the replay digest** (`wisp/core/replay_digest.py`) rather than merely
-disapproved of.
+The decision (and its cost) as tests. Two things are load-bearing:
 
-That is the difference between a rule and a preference. A rule can be broken and
-noticed; a preference is a comment.
+1. The **refusal** is on the prompt side now. An earlier version refused the trace
+   side; the inversion is deliberate and this file is where it is visible.
+2. The **cost is mechanical, not a caveat**: a redacted trace genuinely cannot be
+   replayed, and the test drives that through `wisp/core/replay_digest.py` rather
+   than asserting it in prose.
 """
 from __future__ import annotations
 
@@ -14,8 +14,11 @@ import pytest
 
 from wisp.core.replay_digest import ReplayDivergence, projection_digest, verify
 from wisp.runtime.redaction import (
+    REPLAY_UNAVAILABLE_REASON,
     RedactionPoint,
     RedactionPointError,
+    is_replayable,
+    prompt_value,
     recorded_value,
     redact,
 )
@@ -25,7 +28,8 @@ MASK = "[REDACTED]"
 
 
 def _redactor(value):
-    """Stands in for `redact_sensitive_tool_args`, which is the real authority."""
+    """Stands in for `redact_sensitive_tool_args`, the real authority for *which*
+    fields are sensitive."""
     if isinstance(value, str):
         return value.replace(SECRET, MASK)
     if isinstance(value, dict):
@@ -33,94 +37,98 @@ def _redactor(value):
     return value
 
 
-def _transcript(value: str) -> list[dict]:
+def _transcript(value):
     return [{"role": "tool", "content": value, "tool_call_id": "c1"}]
 
 
 # ── The refused point ───────────────────────────────────────────────────
 
 
-class TestTheTracePointIsRefused:
-    def test_redacting_the_trace_raises(self):
+class TestThePromptPointIsRefused:
+    def test_redacting_the_prompt_raises(self):
         with pytest.raises(RedactionPointError):
-            redact(SECRET, point=RedactionPoint.TRACE, redactor=_redactor)
+            redact(SECRET, point=RedactionPoint.PROMPT, redactor=_redactor)
 
-    def test_the_refusal_explains_itself(self):
+    def test_the_refusal_names_the_alternative(self):
         with pytest.raises(RedactionPointError) as excinfo:
-            redact(SECRET, point=RedactionPoint.TRACE, redactor=_redactor)
+            redact(SECRET, point=RedactionPoint.PROMPT, redactor=_redactor)
         text = str(excinfo.value)
-        assert "ReplayDivergence" in text, "the failure does not name the consequence"
+        assert "TRACE" in text, "the refusal does not say where to redact instead"
+        assert "credential reference" in text, (
+            "the refusal does not name the option for a value that must not reach "
+            "the provider")
         assert excinfo.value.code == "redaction_point_invalid"
 
-    def test_the_prompt_point_is_allowed(self):
-        assert redact(SECRET, point=RedactionPoint.PROMPT,
-                      redactor=_redactor) == MASK
-
     def test_both_points_are_spelled_out_so_the_refusal_is_readable(self):
-        """`TRACE` exists only to be refused, and it is in the enum so the reason is
-        visible where a caller would reach for it — not only in a commit message."""
         assert {p.value for p in RedactionPoint} == {"prompt", "trace"}
 
 
-# ── The mutual exclusion, proven ────────────────────────────────────────
+# ── The live point ──────────────────────────────────────────────────────
 
 
-class TestTheExclusionIsMechanical:
-    def test_prompt_redaction_keeps_the_record_true(self):
-        """The legal shape. The model sees the masked value, the trace records the
-        masked value, and replay agrees — because there is only one value."""
-        seen = redact(SECRET, point=RedactionPoint.PROMPT, redactor=_redactor)
-        transcript = _transcript(seen)
-        recorded = projection_digest(transcript)
-        verify(transcript, recorded)              # must not raise
-        assert SECRET not in str(transcript)
+class TestTheTracePointIsTheLiveOne:
+    def test_the_model_sees_the_real_value(self):
+        """The reason for this side of the exclusion: a secret the agent must USE
+        cannot be redacted out of the prompt without disabling the tool."""
+        assert prompt_value(SECRET) == SECRET
+        assert prompt_value({"token": SECRET}) == {"token": SECRET}
 
-    def test_trace_only_redaction_is_caught_by_the_replay_digest(self):
-        """**The proof.** The model saw the real value; the trace holds the mask.
-
-        Nothing about this looks wrong at the call site — it looks like a redaction
-        that worked. It is caught because the transcript no longer digests to what
-        the run recorded.
-        """
-        live = _transcript(SECRET)                # what the model actually saw
-        recorded = projection_digest(live)        # what the run recorded
-
-        tampered = _transcript(MASK)              # what a trace-side redaction stores
-        with pytest.raises(ReplayDivergence):
-            verify(tampered, recorded)
-
-    def test_the_two_points_differ_exactly_when_the_record_is_involved(self):
-        """The exclusion, stated as a property rather than a story: the *returned*
-        value is the same either way — what differs is whether the record can still
-        be trusted. So the choice cannot be made by looking at the return value."""
-        legal = redact(SECRET, point=RedactionPoint.PROMPT, redactor=_redactor)
-        assert legal == MASK
-        with pytest.raises(RedactionPointError):
-            redact(SECRET, point=RedactionPoint.TRACE, redactor=_redactor)
-
-
-# ── The one place the record's value is produced ────────────────────────
-
-
-class TestRecordedValue:
-    def test_it_redacts_before_the_record(self):
+    def test_the_trace_holds_the_mask(self):
         assert recorded_value({"token": SECRET}, redactor=_redactor) == {"token": MASK}
 
-    def test_with_no_redactor_it_is_the_identity(self):
+    def test_the_trace_point_is_accepted_directly(self):
+        assert redact(SECRET, point=RedactionPoint.TRACE, redactor=_redactor) == MASK
+
+    def test_with_no_redactor_the_trace_is_the_identity(self):
         """The core is generic and the policy is configuration: wiring the point
         must not require a policy."""
         assert recorded_value(SECRET) == SECRET
-        assert redact(SECRET, point=RedactionPoint.PROMPT) == SECRET
 
-    def test_it_is_the_only_legal_route_to_a_recorded_value(self):
-        """A floor. If `recorded_value` were bypassed by a second inline
-        `redactor(...)` call, a trace would acquire a value the model never saw —
-        which is the defect, arriving by the back door."""
+
+# ── The cost, made mechanical ───────────────────────────────────────────
+
+
+class TestTheCostIsReal:
+    def test_a_redacted_trace_is_not_replayable(self):
+        assert is_replayable(redacted=False) is True
+        assert is_replayable(redacted=True) is False
+
+    def test_a_redacted_trace_genuinely_diverges_from_the_run(self):
+        """**The proof that the cost is real, not a caveat.** The run's transcript
+        held the secret; the redacted trace holds the mask; replay cannot reconcile
+        them. That is why the trace must declare itself unrunnable rather than let
+        replay discover it as a divergence."""
+        live = _transcript(SECRET)                    # what the run actually used
+        recorded = projection_digest(live)
+        redacted = _transcript(recorded_value(SECRET, redactor=_redactor))
+        with pytest.raises(ReplayDivergence):
+            verify(redacted, recorded)
+
+    def test_the_unrunnable_reason_is_named_not_improvised(self):
+        """A named constant, so replay refuses by name instead of raising a
+        divergence that reads like a corruption bug."""
+        assert "redacted at rest" in REPLAY_UNAVAILABLE_REASON
+        assert "cannot be replayed" in REPLAY_UNAVAILABLE_REASON
+
+    def test_an_unredacted_trace_still_replays(self):
+        """The decision must not break replay for the runs that did not redact."""
+        live = _transcript("ordinary tool output")
+        verify(live, projection_digest(live))          # must not raise
+
+
+# ── The floor ───────────────────────────────────────────────────────────
+
+
+class TestTheFloor:
+    def test_there_is_exactly_one_redaction_site(self):
+        """If `recorded_value` were bypassed by a second inline `redactor(...)`
+        call, a trace could acquire an UNREDACTED value by the back door — the
+        failure this decision exists to prevent."""
         import inspect
 
         from wisp.runtime import redaction
 
         source = inspect.getsource(redaction)
         assert source.count("redactor(value)") == 1, (
-            "more than one place applies the redactor; the record's value must be "
+            "more than one place applies the redactor; the trace's value must be "
             "produced in exactly one")

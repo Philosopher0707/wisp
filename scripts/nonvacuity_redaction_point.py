@@ -26,21 +26,26 @@ def _sub(t: str, old: str, new: str) -> str:
 def mutations() -> list[tuple[str, str, str]]:
     s = SRC.read_text(encoding="utf-8")
     return [
-        # 1 — the trace point becomes legal: the record may now lie.
-        ("trace-point-allowed",
-         _sub(s, "    if point is RedactionPoint.TRACE:", "    if False:"),
-         "TestTheTracePointIsRefused"),
-        # 2 — the record's value stops being redacted.
+        # 1 — the prompt point becomes legal: the model loses a value it must USE.
+        ("prompt-point-allowed",
+         _sub(s, "    if point is RedactionPoint.PROMPT:", "    if False:"),
+         "TestThePromptPointIsRefused"),
+        # 2 — the trace stops being redacted: the secret is written at rest, which
+        #     is the failure the whole decision exists to prevent.
         ("recorded-value-unredacted",
-         _sub(s, "    return redact(value, point=RedactionPoint.PROMPT, redactor=redactor)",
+         _sub(s, "    return redact(value, point=RedactionPoint.TRACE, redactor=redactor)",
               "    return value"),
-         "TestRecordedValue"),
-        # 3 — a SECOND place applies the redactor, so a trace can acquire a value
-        #     the model never saw by the back door.
+         "TestTheTracePointIsTheLiveOne"),
+        # 3 — a SECOND place applies the redactor, so a trace can acquire an
+        #     unredacted value by the back door.
         ("second-redaction-site",
          _sub(s, "def recorded_value(",
               "def _bypass(value, redactor=None):\n    return redactor(value) if redactor else value\n\n\ndef recorded_value("),
-         "TestRecordedValue"),
+         "TestTheFloor"),
+        # 4 — the cost is denied: a redacted trace claims to be replayable.
+        ("redacted-trace-claims-replayable",
+         _sub(s, "    return not redacted", "    return True"),
+         "TestTheCostIsReal"),
     ]
 
 
