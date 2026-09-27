@@ -47,7 +47,7 @@ what their §Findings sections are for.
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is the plan CLI's landing** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
+**HEAD is `fb5c1b7`** · branch **`plan-cli`** (not `main`). The baseline is Phase 10's `83b10af`; §3 lists every commit
 on top of it and is the authority for the count — **F87**: it did not, until 2026-09-25. **Nine**
 "point the handoff" commits had never been listed, so the claim and the table disagreed; backfilled.
 The only exception is the handoff commit that carries *this* line, which the next landing lists.
@@ -383,6 +383,47 @@ and after over 21 CLI/provider/config suites. **A real `~/.config/wisp/.env` on 
 supplies six variables to every `wisp` run** (see the report's §1). Findings, not fixed: the file now
 outranks `config.json`; the workspace `.env` is still write-only; F57 never had an open-items row.
 Report: `PHASE_F57_DOTENV.md`.
+
+### 0.0.20 THE BOUNDED-RUNTIME CONFORMANCE (2026-09-27) — no ADR; four invariants and the layer audit
+
+**The brief was a conformance list, not a build.** Measured first: `wisp/` already had all eight
+named capabilities, and **six of them were already forced by tests** — the bounded loop
+(`ConvergenceController(max_attempts)`, driven at `=1/2/3`), the four recovery budgets
+(`local_replans`/`global_replans`/`diagnostic_tasks`/`graph_growth_nodes`, each named in
+`tests/test_recovery_ladder.py`), the tiered trust guardrail (`core/context_trust.py` T1–T4, wired via
+`ContextItem.render()`), redaction (`redact_sensitive_tool_args`), the golden set, and CI. So the work
+was closing the two that were **weaker than the spec implied**, plus the invariants.
+
+| commit | what landed |
+|---|---|
+| `4560b92` | **Replay VERIFIES the transcript** (`wisp/core/replay_digest.py`). It was trusted; **F25** is the recorded instance. `ReplayDivergence` is a plain `RuntimeError` on purpose — the loop catches its own error type, and a divergence must *escape* rather than be reported as one more way a run can end. **Named limit:** the system prompt and tool descriptors are not journaled, so they are outside the digest. |
+| `0da70b4` | **Tool output is data, never instructions** (`wisp/core/injection_scan.py`). Tiered, fail-closed, with a **measured** FP rate: corpus `tests/fixtures/injection_corpus.py`, report `scripts/measure_injection_scan.py`, thresholds shared so report and tripwire cannot disagree. Measured after the evidence-driven fixes: **benign 0/14 = 0%**, **payload 10/10 = 100%**, quotes-a-payload 0 blocked / 3 withheld / 3 clean. The report's 36% origin is **reproduced as probe mutation 1**, so the mistake is demonstrated rather than cited. |
+| `ac880bd` | **The system prompt and the task are never shortened** — `ContextOverflow` (`code="context_overflow"`) replaces the silent `cut = rendered[:remaining * 4]`. `priority == 0` is **not** the same property: it is also the operator's memory block, where truncation is deliberate. Protection is two mechanisms for two cases (`PROTECTED_TAGS` for the system prompt, an explicit field for the task, which has no tag). |
+| `7c2810e` | **Four mandatory run bounds, no defaults** (`wisp/runtime/bounds.py`) + `wisp/configs/default.yaml`. A config missing any of `max_steps`/`max_tokens_total`/`max_wall_clock_s`/`max_cost_usd` **fails to load**. Countable bounds allow zero; consumption bounds reject it. |
+| `117d972` | **The idempotency guard** (`wisp/runtime/idempotency.py`) — the seven-row failure table, one test class per row. |
+| `fb5c1b7` | **A concurrent duplicate gets 409**, not 202. 202 is opt-in by supplying a `poll_url`; the async shape needs a handle to poll or it tells the caller nothing. |
+
+**The layer audit, measured** (the spec's seven layers against the tree): `providers/`, `tools/`,
+`trace/` and `eval/` **already exist**. `runtime/` was created here. `context/` and `configs/` do
+**not** exist — Context is `core/context_trust.py` + `context_assembler.py`, and Config is still
+`config.py` (a dataclass) with `configs/` added alongside. **A full directory restructure of a
+~200-module package is its own mission**, not a change to slip in.
+
+**The philosophical stance is substantially HELD, and it was measured rather than assumed:** exactly
+**one** capability branch in the whole package — `wisp/__main__.py:332`, `if config.provider ==
+"ollama":`, which only adds a print line to `wisp doctor`. **The core has none.**
+
+**Two probe lessons, both the instrument's, both found by running:** (1) **a mutation must break the
+PROPERTY, not decorate the code** — a mutation that merely *added* a redundant write left the guard
+correctly green, twice; (2) **a mutation must disable the whole property, not one of its sites** — the
+bool-check mutation disabled one of two check sites and the other caught it.
+
+**A real bug the tests found, not the reader:** the idempotency guard's fail-open path returned
+`EXECUTED` **without running the effect** — no protection *and* no work, reported as success.
+
+**None of it is wired.** No run path consumes `RunBounds`, `scan()`, or `IdempotencyGuard`; the
+invariants and their guards exist, and each needs a caller and a decision (the store, the per-domain
+outage policy, the response granularity). **Named, not implied.**
 
 ### 0.0.19 THE REGISTER SOURCE PINS (2026-09-26) — no ADR; an instrument repaired
 
@@ -2247,7 +2288,11 @@ env -u PYTHONPATH .venv/bin/python -m pytest \
   tests/reliability/test_m4_policy_wiring.py \
   tests/reliability/test_rest_authorization_composition.py \
   tests/test_m4_governance_wiring.py \
-  tests/reliability/test_replay_verification.py -q --basetemp="$TMPDIR/wisp-block-$$"   # alone — ADR-0062 R6
+  tests/reliability/test_replay_verification.py \
+  tests/reliability/test_context_protected.py \
+  tests/reliability/test_run_bounds.py \
+  tests/reliability/test_idempotency.py \
+  tests/reliability/test_injection_scan.py -q --basetemp="$TMPDIR/wisp-block-$$"   # alone — ADR-0062 R6
 ```
 
 **Measured 2026-09-25, after the F8 error-classification landing: 1115 tests — 1114 pass, 1 fails.** The
