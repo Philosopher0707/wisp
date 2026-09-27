@@ -16,7 +16,8 @@ permissions:
 jobs:
   qa:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # The full suite takes ~23 min on a hosted runner.
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -65,19 +66,24 @@ jobs:
 
       - name: Run QA (pytest fallback)
         if: steps.droid_install.outputs.available != 'true' || env.WISP_API_KEY == ''
-        timeout-minutes: 20
+        timeout-minutes: 35
         run: |
           mkdir -p qa-results
+          # One run feeds both the report and the exit status; the suite is too slow to run twice.
+          set +e
+          python -m pytest tests -q --tb=short -p no:cacheprovider 2>&1 | tee qa-results/pytest.txt
+          status=${PIPESTATUS[0]}
+          set -e
           {
             echo "## QA Report"
             echo
             echo "_AI reviewer unavailable (installer failed or no WISP_API_KEY) — ran the deterministic test suite instead._"
             echo
             echo '```'
-            python -m pytest tests -q --tb=short -p no:cacheprovider 2>&1 | tail -30
+            tail -30 qa-results/pytest.txt
             echo '```'
           } > qa-results/report.md
-          python -m pytest tests -q --tb=short -p no:cacheprovider
+          exit "$status"
 
       - name: Upload QA artifacts
         if: always()
