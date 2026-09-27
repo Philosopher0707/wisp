@@ -203,6 +203,20 @@ class AcpSession:
         root = self._composition_root
         if root is not None and getattr(root, "tool_executor", None) is not None:
             return root.tool_executor
+        # ADR-0067 R1 — the fallback is UNGOVERNED BY CONSTRUCTION, and says so.
+        #
+        # The organization policy is loaded once, at the composition root
+        # (`composition.py`'s single load site, ADR-0058 R1), so a session with no root
+        # cannot have one. Calling `load_organization_policy` here would create the second
+        # load site ADR-0058 forbids, so the gap is made **loud** rather than closed: a
+        # root-less ACP deployment has permission gating and **no organization layer**, and
+        # the remedy is to give it a root, not a second loader.
+        # (`PHASE_M4_WIRING R2`, which read *"named, not done"* until ADR-0067.)
+        logger.warning(
+            "ACP session has no CompositionRoot: the organization policy layer is NOT "
+            "loaded for this session (permission gating still applies). Construct a "
+            "CompositionRoot for the governance layer — ADR-0058, ADR-0067 R1."
+        )
         try:
             from wisp.tool_executor import ToolExecutor
             return ToolExecutor(self.config, file_lock=getattr(self, "file_lock", None))

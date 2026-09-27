@@ -77,7 +77,6 @@ from wisp.core.goal import (
     terminal_outcome_from_evidence,
 )
 from wisp.core.progress import (
-    ProgressReport,
     ProgressVerdict,
     evaluate_progress,
 )

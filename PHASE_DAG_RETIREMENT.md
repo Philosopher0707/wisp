@@ -65,12 +65,12 @@ tool.** Re-pointing `orchestrate_dag` onto `validate_graph` would reject inputs 
 
 Two further measured facts:
 
-- **`TaskDAG.validate()` mis-reports an unknown dependency as a cycle.** `in_degree` is computed from the
-  reverse-edge map, so an unknown dep inflates the count but can never be dequeued — the dependent never
-  reaches degree 0. Measured: `unknown_dep` yields **both** `Node 'a' depends on unknown 'nope'` **and**
-  `Cycle detected involving: a`. The graph reports only `edge nope->a: unknown source`. **A defect in the
-  module being retired**, pinned as a `DEFECT-PIN` and not repaired (repairing it changes a live error
-  string, and M8's scope is the retirement).
+- **`TaskDAG.validate()` mis-reported an unknown dependency as a cycle — REPAIRED 2026-09-27.** `in_degree`
+  was computed from the reverse-edge map, so an unknown dep inflated the count but could never be dequeued
+  — the dependent never reached degree 0, and `unknown_dep` yielded **both** `Node 'a' depends on unknown
+  'nope'` **and** `Cycle detected involving: a`. The in-degree now counts only edges whose source exists,
+  so the false second message is gone and the verdict is unchanged. The `DEFECT-PIN` became a `FIXED-PIN`
+  (`tests/reliability/test_dag_retirement_contract.py`), as that pin instructed.
 - **`wisp/graph/compat.py::dag_to_graph` is test-only.** No production caller (`git grep` over `wisp/`:
   only `tests/test_graph_engine.py`). The intended lowering path exists and is unwired — the same
   *written-but-unwired* pattern this repository has already diagnosed as its dominant pathology.
@@ -119,10 +119,10 @@ rule, and a "fixed" unknown-dep message each made the corresponding test fail):
 
 ## 6. The residual
 
-**M8 is not closed.** Open, and pinned by §5's tripwires:
+**M8 is not closed.** Two residuals remain open, pinned by §5's tripwires; the third was repaired:
 
 - the removal itself, blocked on **which definition of a valid DAG wins**;
-- `TaskDAG.validate()`'s unknown-dep-as-cycle mis-report;
+- `TaskDAG.validate()`'s unknown-dep-as-cycle mis-report — **REPAIRED 2026-09-27** (§3);
 - `dag_to_graph`'s lack of a production caller.
 
 Each tripwire fails the moment its condition changes, so the residual cannot be forgotten.

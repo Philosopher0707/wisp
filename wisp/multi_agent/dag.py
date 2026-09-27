@@ -103,7 +103,13 @@ class TaskDAG:
         return [name for name in self.nodes if not self.dependencies_of(name)]
 
     def validate(self) -> list[str]:
-        """Check for cycles. Returns list of errors (empty = valid)."""
+        """Check for unknown dependencies and cycles. Returns errors (empty = valid).
+
+        The two checks are independent: an unknown dependency is reported as itself and is
+        **not** additionally reported as a cycle. Counting an unknown dep in the in-degree
+        left its dependent permanently above zero, so Kahn's algorithm stranded the node and
+        emitted a second, false diagnosis of a cause already named on the line above.
+        """
         errors: list[str] = []
 
         # Check all referenced dependencies exist
@@ -112,8 +118,13 @@ class TaskDAG:
                 if dep not in self.nodes:
                     errors.append(f"Node '{node.name}' depends on unknown '{dep}'")
 
-        # Cycle detection via Kahn's algorithm
-        in_degree = {name: len(self.dependencies_of(name)) for name in self.nodes}
+        # Cycle detection via Kahn's algorithm. The in-degree counts only edges whose source
+        # exists: an unknown dependency is never dequeued, so counting it would strand its
+        # dependent and report a cycle that is not there.
+        in_degree = {
+            name: sum(1 for dep in self.dependencies_of(name) if dep in self.nodes)
+            for name in self.nodes
+        }
         q = deque([name for name, deg in in_degree.items() if deg == 0])
         visited = 0
 

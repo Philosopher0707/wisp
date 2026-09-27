@@ -5,6 +5,7 @@ and output size limits.
 """
 
 import asyncio
+import os
 import logging
 import time
 from pathlib import Path
@@ -20,6 +21,9 @@ from wisp.tools._utils import (
 )
 from wisp.auth.secrets import redact
 from wisp.sandbox import get_sandbox
+from wisp.sandbox.router import get_router  # the multi-tier router, not `get_sandbox`:
+# `get_sandbox` answers Docker-or-host and falls to raw host execution when the daemon
+# is missing; the router adds the isolated-PTY tier that works WITHOUT a daemon.
 
 logger = logging.getLogger(__name__)
 
@@ -75,9 +79,46 @@ async def async_tool_run_bash(command: str, workspace: str, timeout: int = 60) -
     # Confinement (GH#13): route through the sandbox provider — Docker when
     # available, host fallback otherwise. Validation above still applies
     # first so the tool contract (ToolError shapes) never changes.
-    sandbox = get_sandbox(str(cwd))
-    provider_name = getattr(sandbox, "name", "host") or "host"
-    if provider_name in _HOST_PROVIDER_NAMES and getattr(sandbox, "reason", "") != "explicit":
+    # GH#13 follow-up: route through the TIER ROUTER (Docker -> isolated PTY -> host) rather than
+    # `get_sandbox`, which knows only Docker-or-host. On a daemon-less host the router lands on
+    # `PtySandbox` — own session, rlimits, credential-stripped env — instead of unconfined host
+    # execution. `route()` is asked only for the name/reason the log lines report; the call itself
+    # goes through the router so failover stays inside it.
+    # `WISP_SANDBOX=off` is an OPERATOR'S EXPLICIT CHOICE and the router does not consult it —
+    # its tiers are Docker -> PTY -> host unconditionally. Swapping `get_sandbox` for the router
+    # without this branch silently overrode the setting (caught by
+    # `test_explicit_off_is_info_not_warning`, which asserts an explicit choice must not scream).
+    # So: explicit off -> `get_sandbox`, which returns the host provider with `reason="explicit"`;
+    # anything else -> the tier router.
+    if os.environ.get("WISP_SANDBOX", "").strip().lower() == "off":
+        sandbox = get_sandbox(str(cwd))
+        # It IS the provider — read name/reason from it directly. Going through `route()` here
+        # returned None (NoopSandbox has no `route`), which lost `reason="explicit"` and made an
+        # OPERATOR'S EXPLICIT CHOICE emit the UNCONFINED warning the contract says it must not.
+        _active = sandbox
+    else:
+        sandbox = get_router(str(cwd))
+        try:
+            _active = sandbox.route()
+        except Exception:
+            _active = None
+    provider_name = getattr(_active, "name", "host") or "host"
+    if provider_name == "pty":
+        # The router's middle tier. It bounds RESOURCE USE and CREDENTIAL EXPOSURE (own session,
+        # rlimits, credential-stripped env) but NOT FILESYSTEM REACH — a command here can still
+        # write anywhere the user can. Warning rather than going silent: before the router was
+        # wired this path shouted UNCONFINED, and a silent downgrade from "shouting" to "nothing"
+        # would overstate the confinement. `test_fallback_host_warns_at_tool_layer` asserts it.
+        # `UNCONFINED` is kept as the leading token ON PURPOSE: it is the word
+        # `test_fallback_host_warns_at_tool_layer` asserts and the word anyone greps for when
+        # auditing host execution. The qualifier is what changed — the command IS unconfined with
+        # respect to the filesystem, and saying only "UNCONFINED" would overstate the router's win
+        # just as saying nothing would.
+        logger.warning(
+            "run_bash UNCONFINED (filesystem): no Docker daemon — confined by an isolated PTY, so "
+            "resource use and credentials are bounded, but filesystem reach is NOT: %.100s",
+            redact(command))
+    elif provider_name in _HOST_PROVIDER_NAMES and getattr(_active, "reason", "") != "explicit":
         logger.warning(
             "run_bash UNCONFINED: no sandbox provider — executing on host: %.100s",
             redact(command),

@@ -9,8 +9,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import sys
-from pathlib import Path
 
 
 def _build_parser() -> argparse.ArgumentParser:

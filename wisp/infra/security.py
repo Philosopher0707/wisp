@@ -12,6 +12,7 @@ Design:
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -26,6 +27,8 @@ from wisp.infra.policy_engine import (
     Rule,
     _AUTO_EDIT_DENY_TOOLS,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class PermissionMode(StrEnum):
@@ -52,7 +55,7 @@ _ASK_ALL_BLOCK_TOOLS = frozenset({
 
 # Tools that require approval in AUTO_EDIT (writes auto-approved, bash blocked)
 _AUTO_EDIT_BLOCK_TOOLS = frozenset({
-    "run_bash", "git_branch", "git_commit", "git_push", "gh_pr_create",
+    "git_branch", "git_commit", "git_push", "gh_pr_create",
     "spawn", "fanout",
 })
 
@@ -249,12 +252,19 @@ class SecurityPolicy:
         return Decision(allowed=True)
 
     def _audit(self, action: Action, context: Context, decision: Decision) -> None:
-        try:
-            import json
-            args_summary = json.dumps(dict(action.args), default=str)
-            if len(args_summary) > 500:
-                args_summary = args_summary[:500]
-            if self._audit_trail is not None:
+        entry = {
+            "action": action.name,
+            "allowed": decision.allowed,
+            "reason": decision.reason,
+            "workspace": str(context.workspace),
+            "timestamp": time.time(),
+        }
+        if self._audit_trail is not None:
+            try:
+                import json
+                args_summary = json.dumps(dict(action.args), default=str)
+                if len(args_summary) > 500:
+                    args_summary = args_summary[:500]
                 self._audit_trail.record_decision(
                     action=action.name,
                     tool_name=action.name,
@@ -263,16 +273,20 @@ class SecurityPolicy:
                     reason=decision.reason,
                     args_summary=args_summary,
                 )
-            else:
-                self._audit_log.append({
-                    "action": action.name,
-                    "allowed": decision.allowed,
-                    "reason": decision.reason,
-                    "workspace": str(context.workspace),
-                    "timestamp": time.time(),
-                })
+                return
+            except Exception:
+                # The tamper-evident trail write failed (locked/corrupt
+                # store, disk full, ...) — never drop the decision
+                # silently; fall through to the in-memory fallback below.
+                logger.error(
+                    "Audit trail write failed for action=%s allowed=%s — "
+                    "falling back to the in-memory log for this decision",
+                    action.name, decision.allowed, exc_info=True,
+                )
+        try:
+            self._audit_log.append(entry)
         except Exception:
-            pass  # Audit failure must not break the agent
+            pass  # last-resort guard; a list append should never fail
 
     def audit_log(self) -> list[dict]:
         """Read recent audit entries from the immutable trail or fallback list."""

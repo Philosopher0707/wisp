@@ -100,6 +100,15 @@ class CompositionRoot:
             autonomous=bool(getattr(self.config, "autonomous", False)),
             _audit_trail=self.audit_trail,
         )
+        # autonomous=True silently relaxes AUTO_EDIT to FULL (see
+        # SecurityPolicy.effective_permission_mode) — nothing else reports
+        # that escalation, so it must be logged here or it is invisible.
+        if self.security.autonomous and self.security.permission_mode != self.security.effective_permission_mode:
+            logger.warning(
+                "WISP_AUTONOMOUS is relaxing permission_mode=%s to effective "
+                "%s — every write/bash/git tool now runs without approval",
+                self.security.permission_mode, self.security.effective_permission_mode,
+            )
         self.extensions = ExtensionHost()
         self.telemetry = Telemetry()
         # Durable run registry (migration P0). Built here — before its two

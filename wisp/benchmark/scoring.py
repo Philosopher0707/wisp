@@ -112,6 +112,9 @@ class ModelScorecard:
     failed: int = 0
     timed_out: int = 0
     surrendered: int = 0
+    # verify() couldn't determine an outcome (e.g. missing target-repo
+    # deps) — excluded from `total`/`pass_rate` below, never a model fault.
+    env_unavailable: int = 0
     total_duration_s: float = 0.0
     task_rows: list[dict[str, Any]] = field(default_factory=list)
 

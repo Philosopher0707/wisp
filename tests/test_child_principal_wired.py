@@ -203,17 +203,25 @@ class TestTheChildIsDeniedOutsideItsContract:
         """**The ordering fact**, pinned so a future reader does not conclude
         the principal layer is redundant.
 
-        `run_bash` is denied by the policy gate in `auto_edit` — *before*
-        `authorize()` runs — so that denial names no controlling layer. The
-        principal layer therefore catches what the mode permits but the
+        A hard-denied tool is refused by the policy gate in `auto_edit` —
+        *before* `authorize()` runs — so that denial names no controlling layer.
+        The principal layer therefore catches what the mode permits but the
         **contract** excludes. Two different questions, two different gates; the
         child inherits the parent's *mode* but not the parent's *contract*.
+
+        **The witness moved on 2026-09-27.** This used `run_bash`, which left
+        `_AUTO_EDIT_DENY_TOOLS` when it was routed through the sandbox tier
+        router — so the mode gate no longer denies it and the principal layer
+        correctly decides. That changed the ORDER this test observes, not the
+        fact it asserts. `git_push` is still hard-denied in `auto_edit` (it
+        mutates a shared remote, which no local sandbox tier contains), so it
+        witnesses the same ordering.
         """
         child = child_principal(_unbounded_parent(),
                                 SubagentContract(tools=["read_file"]))
         te = _executor(tmp_path)
         events = _collect(te.execute(
-            "run_bash", {"command": "echo hi"}, str(tmp_path),
+            "git_push", {}, str(tmp_path),
             tool_call_id="t1", principal=child))
         texts = _payloads(events)
         assert any("denied" in t.lower() for t in texts), texts

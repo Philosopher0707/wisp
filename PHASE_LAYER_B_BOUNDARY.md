@@ -383,16 +383,16 @@ causes: a stale-by-2 count (F85 instance, above) and this phase's +16.
 - **The transition probe's four claims are about *this* tree.** A future executor that grows a
   graph mid-drive would falsify them; the reversal-condition tests are written to fail in
   exactly that case rather than to be edited.
-- **`wisp/graph/api.py` has no importer.** Layer B's own typed SDK (`GraphHandle`:
-  run/wait/status/cancel/resume/trace) is reachable from nothing — another instance of the
-  written-but-unwired pattern this repository keeps diagnosing. **Named, not repaired**: it is
-  Layer B's surface, and whether it is a public API or dead code is not this decision's
-  question.
-- **`test_the_orchestrator_still_imports_dag` in `test_dag_retirement_contract.py` is a bare
-  string scan** (`assert "from .dag import DAGScheduler" in src`). It asserts *presence* of an
-  exact line, so it is far less hazardous than an absence-detecting string scan, and this
-  phase did not change it. Noted because it is the same instrument class this report's F101
-  belongs to.
+- **`wisp/graph/api.py` has no importer** — **CORRECTED 2026-09-27.** Measured, it has **six** import
+  sites in four files, including `wisp/__init__.py:48` (`from wisp.graph.api import GraphHandle,
+  run_graph`), so it is the **package's public surface**, not unreachable. What *is* true: `GraphHandle`
+  has **no consumer** — it is re-exported and never called. Public-and-unconsumed, not dead. The
+  premise above was wrong; the measurement is the record.
+- **`test_the_orchestrator_still_imports_dag` in `test_dag_retirement_contract.py` was a bare
+  string scan** (`assert "from .dag import DAGScheduler" in src`) — **REPAIRED 2026-09-27.** It
+  asserted *presence* of an exact line: it passed on a commented-out import and failed on an
+  equivalent one reordered or wrapped. Both tripwires in that class now parse the AST, as the
+  class's third test already did. The same instrument class this report's F101 belongs to.
 - **The divergence's other two costs were not re-driven** — that `GraphExecutor.run` creates a
   durable run per call (re-verified: `executor.py:137`) and enforces workspace containment
   (read), and that `validate_graph` returns more error classes. They come from

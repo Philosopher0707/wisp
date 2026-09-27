@@ -805,7 +805,11 @@ class SubagentRunner:
         workspace = str(getattr(self, "workspace", "") or "")
         parent = executor_principal(
             self._tool_executor, workspace=workspace,
-            profile=str(getattr(self._parent_config, "profile", None)
+            # `parent_config`, not `_parent_config`. The attribute is set as `self.parent_config`
+            # at :140 and read that way at :814, :815, :818, :836 and :837 — this one line was the
+            # only underscore, so EVERY subagent run via the runtime raised AttributeError and was
+            # retried three times before failing. One character, on the one path no test covers.
+            profile=str(getattr(self.parent_config, "profile", None)
                         or "default"))
         return child_principal(parent, contract, capabilities=effective_tools)
 

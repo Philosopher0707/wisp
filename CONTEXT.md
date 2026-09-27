@@ -47,7 +47,7 @@ what their §Findings sections are for.
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is `69d1580`** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
+**HEAD is the plan CLI's landing** · branch `main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
 on top of it and is the authority for the count — **F87**: it did not, until 2026-09-25. **Nine**
 "point the handoff" commits had never been listed, so the claim and the table disagreed; backfilled.
 The only exception is the handoff commit that carries *this* line, which the next landing lists.
@@ -278,9 +278,124 @@ quoting it; §11 says how.
 | corpus governance II — **D2** the authorities generator | `COMPLETE` — `scripts/derive_current_authorities.py`; guard 35 → 45, **7/7** probes; found the header stale again | `PHASE_CORPUS_GOVERNANCE_II.md` §3 |
 | corpus governance II — **D3** `F77`'s disposition | `COMPLETE` — **outcome 1**, measured and driven: F77 is §7.1's instrument defect; **F105 closed**; found the register's sources are range-checked only | `PHASE_CORPUS_GOVERNANCE_II.md` §4 |
 | corpus governance II — **D4** the decisions applied | `COMPLETE` — every edit cites its rule; 27-test guard, **10/10** caught, **3/3** legitimate additions silent; found R2's third `M4` never existed | `PHASE_CORPUS_GOVERNANCE_II.md` §5 |
+| register source pins | `COMPLETE` — **no ADR.** `17130c7`'s content check in both register generators (one rule, `scripts/register_pins.py`, ±3); measured **12** and **37** stale, re-pinned **12** and **37**; the brief's 55 was an over-count in corpus governance II's own measurement; `ITEM-F3`'s missing `…` marked | `PHASE_REGISTER_SOURCE_PINS.md` |
+| F57 — `~/.config/wisp/.env` is read | `COMPLETE` — **F57 FIXED**, no ADR: `wisp/user_env.py` loads it as `main()`'s first statement; environment wins, absence is a no-op, invalidity warns; 11-test guard, 2/2 probes, 374/374 differential | `PHASE_F57_DOTENV.md` |
+| the workspace `.env` | `COMPLETE` — **no ADR** (not read, so nothing a repository carries reaches the process): measured, a cloned repository's `WISP_API_BASE` / `WISP_OLLAMA_URL` would send the operator's key / prompt to its endpoint if the file were read; **the writer removed**; 7-test guard, RED 4, **2/2** probes, behaviour differential byte-identical, 425/425 | `PHASE_WORKSPACE_DOTENV.md` |
+| F47 — `PlanStore` | `COMPLETE` — **ADR-0063; F47 FIXED**: measured, the store is read by the model's own tools, and what it never saw was the plan's *state*; the plan is shown back as tool output (`mark_step_done` / `update_plan`), never in the system prompt (`active_plan` is `OPERATOR`-tagged, cached, cross-session); 8-test guard, RED 5, **2/2** probes, tool differential 13/13 stores identical, 336/336 over 16 files, the same 2 pre-existing failures both sides | `PHASE_F47_PLANSTORE.md` |
+| the plan CLI | `COMPLETE` — **ADR-0064**: measured, the agent keys a plan by `session["workspace"]` verbatim (five keys for one directory) and the four CLI commands queried `"."`; one resolver inside `PlanStore`, the CLI reads `WispConfig().workspace`, rotation per workspace, old plans readable; 12-test guard, RED 7, **3/3** probes, tool results identical, 291/291 | `PHASE_PLAN_CLI.md` |
 
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log — **mind the §0/§23 split**, and note it has **no G1 or governance-layer row**: `CONTEXT.md` §12 is the live open-items table, **F99**).
-**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0062**).
+**Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0064**).
+
+### 0.0.23 THE PLAN CLI SEES THE AGENT'S PLAN (2026-09-26) — ADR-0064
+
+**`wisp plan`, `wisp progress`, `wisp plan list` and `wisp plan abort` showed nothing after an agent
+planned.** They queried `"."`. The agent keys a plan by `session["workspace"]` **verbatim**. Driven
+(`scripts/plan_cli_measurement.py`, a private `HOME`): one directory yields five keys under five
+spellings (default, `.`, relative, trailing slash, symlink), and the CLI worked only when the key
+happened to be `"."`. `plan abort` was a fourth mismatched reader, one F47's report missed. Rotation
+kept the ten newest plans across **all** workspaces, so ten plans elsewhere deleted this one.
+Removal was refuted, because the commands have users.
+
+**ADR-0064:**
+
+- One resolver, `planner.workspace_key` (expanduser + resolve), applied **inside `PlanStore`** to
+  queries, stored keys, saves and rotation.
+- The CLI reads `WispConfig().workspace`.
+- Rotation is per workspace.
+- Stored keys are resolved when read, so old plans stay readable and none is rewritten.
+
+**The operator now sees the agent's plan.** The tools' results are byte-identical under every
+spelling. The store differs only in the `workspace` field, which is now resolved. Guard
+`tests/test_plan_cli_sees_agent_plan.py` (12): RED 7 failed / 4 passed, **3/3** probes; **291/291**
+over 10 files.
+
+`test_main_cli.py::test_list_no_plan` had been reading **the operator's real plan store**: it
+patched `wisp.planner.PlanStore`, and `wisp.progress` binds its own. The `"."` filter had masked it;
+the test is now isolated.
+
+**Finding, not fixed:** the task parser truncates a description at its first hyphen (`"Use foo-bar
+module"` → `"Use foo"`). Report: `PHASE_PLAN_CLI.md`.
+
+### 0.0.22 F47 — THE PLAN IS SHOWN BACK AS TOOL OUTPUT (2026-09-26) — ADR-0063; F47 FIXED
+
+**The ledger's "write-only" was half right.** Driven through `CompositionRoot` with a recording
+scripted LLM (`scripts/planstore_measurement.py`):
+
+- The plan was in no system prompt.
+- `mark_step_done` and `update_plan` **read** the store, and `plan_task`'s listing stays in the
+  history.
+- What the model never saw was the plan's **state**: after `mark_step_done` it received
+  *"Progress: 1/3"*, and a fresh session received nothing.
+
+The assembler's `active_plan` slot is below instruction position (T1 passes it), but it is the
+wrong place:
+
+- It is **`OPERATOR`-tagged**, and the plan is model-authored.
+- The static prompt is **cached across plan writes** (driven: a cache hit).
+- A plan **never leaves `active`**.
+- The store would re-serve an injected step to **every future session**.
+
+**ADR-0063:** `mark_step_done` and `update_plan` now return the plan's current state after their
+result, at `TOOL_OUTPUT` trust, on every path that loaded a plan. `PlanStore` never enters the system
+prompt. Removal was refuted: the model's own tools read the store. **What the model sees changes:**
+those two tools' results grow by the plan view. Nothing else changes: with no plan, both results are
+byte-identical, and so is the store across 13 tool steps.
+
+Guard `tests/test_plan_shown_as_tool_output.py` (8): RED 5 failed / 3 passed, 2/2 probes,
+336/336 over 16 files, the same 2 pre-existing failures both sides. **Findings, not fixed:**
+
+- `wisp plan` / `wisp progress` query `"."` and never see an agent's (absolute-keyed) plan.
+- A plan never finishes.
+- Plan rotation is global: ten plans anywhere delete this workspace's plan.
+- The store bounds nothing.
+
+Report: `PHASE_F47_PLANSTORE.md`.
+
+### 0.0.21 THE WORKSPACE `.env` IS NOT READ, AND NO LONGER WRITTEN (2026-09-26) — no ADR; F57's scope extended
+
+**`_persist_env` wrote `WISP_PROVIDER`, `WISP_MODEL`, `WISP_API_BASE` and `WISP_OLLAMA_URL` to
+`<workspace>/.env`, and nothing read that file.** F57's report named it as the same class and a
+different decision. **Measured first** (`scripts/workspace_dotenv_measurement.py`, a private `HOME`,
+local listeners): read even *after* the operator's own file, a cloned repository's `WISP_API_BASE`
+sends **the operator's API key** to the repository's endpoint, and its `WISP_OLLAMA_URL` sends **the
+prompt**. Both are "non-secret" keys, so **secret versus non-secret is the wrong line; a key that
+names where data goes is the vector.** Decided: **not read, and the writer removed.** No ADR, because
+nothing a repository carries reaches the process, before or after. `_persist_env` now writes
+`~/.config/wisp/.env` only, through F57's `user_env_path()`, and three hints that said `./.env` now
+name that file. **A bare `wisp` resolves the same provider and model** (behaviour differential over 6
+`persist`/`store_key` scenarios, byte-identical). Guard `tests/test_workspace_dotenv_not_written.py`
+(7): RED 4 failed / 3 passed, **2/2** probes; **425/425** over 24 files, the same 3 pre-existing
+sandbox failures both sides. **Existing workspace `.env` files are left alone.** One written before
+`b657e21` (2026-09-14) can hold keys, and this repository's does. Findings, not fixed: `store_key`'s
+`key_<provider>` makes `config.json`'s save fail. Report: `PHASE_WORKSPACE_DOTENV.md`.
+
+### 0.0.20 F57 — `~/.config/wisp/.env` IS READ (2026-09-26) — no ADR; F57 FIXED
+
+**The file `provider_select.store_key()` writes was never read**, so a key placed there did nothing
+(an operator's valid OpenRouter key got `401 User not found`). `wisp/user_env.py::load_user_env` now
+loads it as the **first statement of the console entry point** — before any `WispConfig` or provider
+reads the environment; measured, importing `wisp.__main__` reads none of the writer's variables.
+**Exported variables win; an absent file is a no-op; an unreadable file or a malformed line warns and
+never raises; no value is logged.** Two production files (the reader, the call site); the SDK does not
+load it. Guard `tests/test_dotenv_is_read.py` (11), RED-first, **2/2** probes, and **374/374** before
+and after over 21 CLI/provider/config suites. **A real `~/.config/wisp/.env` on this machine now
+supplies six variables to every `wisp` run** (see the report's §1). Findings, not fixed: the file now
+outranks `config.json`; the workspace `.env` is still write-only; F57 never had an open-items row.
+Report: `PHASE_F57_DOTENV.md`.
+
+### 0.0.19 THE REGISTER SOURCE PINS (2026-09-26) — no ADR; an instrument repaired
+
+**The two newer registers checked a source's line *range*, not its words** — the weakness `17130c7`
+closed for `CURRENT_AUTHORITIES.md`. `scripts/register_pins.py` is now the one rule for both: the
+quote directly after `path:line — ` must be within **±3** lines of the cited line (0 breaks on
+wrapped prose; a whole-file window passes a pin drifted onto another row with the same status words),
+with a source table's `|` read as the register's `—`. **Measured 12 stale findings and 37 stale open
+items; re-pinned 12 and 37**; both checks pass at 0. `CONTEXT.md` §12's rows are re-pinned **by id**,
+because their status phrases recur. `ITEM-F3`'s quote was never verbatim (a clause dropped with no
+`…`); its elision is marked, no word changed, recorded in the page's `§Findings`. **Every future edit
+above §12 now fails the build until its pins move** — which is the point. Report:
+`PHASE_REGISTER_SOURCE_PINS.md`.
 
 ### 0.0.18 THE CORPUS GOVERNANCE LAYER, II (2026-09-26) — ADR-0062; the ten findings closed or dispositioned
 
@@ -1575,7 +1690,23 @@ list.** A count written in prose goes stale on the next commit, so none is quote
 | `dcad1f8` | `docs:` **F77 is `PHASE_DAG_RETIREMENT.md` §7.1's instrument defect** (D3, F105): decided by measuring — two records outside the report state its content, and the defect is driven; the reference made explicit; no number coined; two state-pinning guards repaired (F92); **NV4 missed** — a range-only source check, recorded; excludes the user's WIP (§8) |
 | `69d1580` | `docs:` **ADR-0062 applied to the artifacts, and guarded** (D4): §12, §6, §11, §13, `AGENTS.md`, the ledger's §23 note, the four registers; `tests/reliability/test_corpus_editorial_decisions.py` (27), **10/10** caught, **3/3** silent; excludes the user's WIP (§8) |
 | `fbca83f` | `docs:` point the handoff at `69d1580` — §0's `HEAD`, §0.0.18, the phase table, this table, and the ledger's change log; the three §12 open-item pins re-pinned after §0.0.18 moved them. Excludes the user's WIP (§8) |
-| *(this commit)* | `fix:` **the three defects PR #30's review found** — a TUI `decision` key bypassed the REST approval bridge and could approve an unrelated agent call; the verdict reused a probe taken before a withheld turn's fix; a subagent's model-written task could make the host run a declared command outside approval. RED-first, 11-test guard, **5/5** reverts caught; `PHASE_CORPUS_GOVERNANCE_II.md` §6. Excludes the user's WIP (§8) |
+| `3c606cd` | `fix:` **the three defects PR #30's review found** — a TUI `decision` key bypassed the REST approval bridge and could approve an unrelated agent call; the verdict reused a probe taken before a withheld turn's fix; a subagent's model-written task could make the host run a declared command outside approval. RED-first, 11-test guard, **5/5** reverts caught; `PHASE_CORPUS_GOVERNANCE_II.md` §6. Excludes the user's WIP (§8) |
+| `dbc6a39` | `test:` **the register generators check a source's quoted words**, not just its line range (register source pins, D1) — `scripts/register_pins.py`, ±3, floor 60; RED by design: **12** and **37** stale; excludes the user's WIP (§8) |
+| `d4afcd9` | `docs:` re-pin `CURRENT_FINDINGS.md`'s **12** stale sources (D2) — only line numbers moved, every quotation byte-identical; excludes the user's WIP (§8) |
+| `242e90e` | `docs:` re-pin `CURRENT_OPEN_ITEMS.md`'s **37** stale sources (D3) — §12 rows by id; `ITEM-F3`'s elision marked; a stale-`.pyc` defect in the probe harness found and fixed; excludes the user's WIP (§8) |
+| `74e3ccf` | `docs:` point the handoff at `242e90e` — §0.0.19, the phase table, this table, the report's §1; the `CONTEXT.md` §12 pins re-pinned **by id** after §0.0.19 moved them, as the new check required. Excludes the user's WIP (§8) |
+| `db3baec` | `fix:` PR #30's CI — an undeclared policy bundle loads nothing (a `MagicMock` config made `CompositionRoot` open a file named after the mock), and `test-python` checks out full history for the corpus guards; excludes the user's WIP (§8) |
+| `9691614` | merge `corpus-governance-ii` (the CI fix) into `register-source-pins` |
+| `1c24a72` | `fix:` **F57 — `~/.config/wisp/.env` is read** — `wisp/user_env.py`, called first in `main()`; 11-test guard; the ledger's F57 status cell and the register re-pinned; `CONTEXT.md` §12 pins re-pinned by id after §0.0.20 moved them. Excludes the user's WIP (§8) |
+| `e97d22f` | `fix:` re-pin `CURRENT_FLAGS.md`'s two `composition.py` read sites that `db3baec` moved (PR #30's CI fix shifted them) |
+| `083ec71` | merge `corpus-governance-ii` (the re-pin) into `register-source-pins` |
+| `d1e5921` | merge `register-source-pins` into `f57-dotenv` |
+| `7a8fe8b` | `docs:` **the workspace `.env` — measured, and decided** (deliverable 1): `scripts/workspace_dotenv_measurement.py`; a repository's `WISP_API_BASE` / `WISP_OLLAMA_URL` would carry the operator's key / prompt away if the file were read; decided not read, writer to be removed, no ADR; `PHASE_WORKSPACE_DOTENV.md` §2, indexed in §13 (R7) |
+| `aa39d23` | `fix:` **the workspace `.env` is no longer written** (deliverable 2) — `_persist_env` writes `~/.config/wisp/.env` only; three `./.env` hints corrected; 7-test guard; the ledger's F57 row and `CURRENT_FINDINGS.md` §Findings record the extension; §0.0.21. Excludes the user's WIP (§8) |
+| `b69fa04` | `docs:` **F47 measured, and decided — ADR-0063** (deliverable 1): `scripts/planstore_measurement.py`; the store is read by the model's tools, the plan's *state* is never shown; the `active_plan` slot is `OPERATOR`-tagged, cached, and cross-session; tool output, never the system prompt; `PHASE_F47_PLANSTORE.md` §2, indexed in §13 (R7) |
+| `3c573de` | `fix:` **F47 — the plan is shown back as tool output** (deliverable 2) — `mark_step_done` / `update_plan` return the plan's current state; 8-test guard; the ledger's F47 status cell and the register; §0.0.22. Excludes the user's WIP (§8) |
+| `f251ed4` | `docs:` **the plan CLI measured, and decided — ADR-0064** (deliverable 1): `scripts/plan_cli_measurement.py`; five keys for one directory; the CLI's `"."`; global rotation; one resolver inside the store; `PHASE_PLAN_CLI.md` §2, indexed in §13 (R7) |
+| *(this commit)* | `fix:` **the plan CLI sees the agent's plan** (deliverable 2, ADR-0064) — `planner.workspace_key` inside `PlanStore`, the CLI on `WispConfig().workspace`, per-workspace rotation; 12-test guard; `test_list_no_plan` isolated from the real store; §0.0.23. Excludes the user's WIP (§8) — **the commit that carries §0's `HEAD` line** |
 
 > **Scope caveat.** `wisp/config.py`, `wisp/composition.py`, `wisp/core/runtime.py`,
 > `wisp/tool_executor.py`, `wisp/core/session.py`, `wisp/core/session_repo.py`, `wisp/auth/principal.py`,
@@ -1750,8 +1881,35 @@ env -u PYTHONPATH UV_OFFLINE=1 ~/.local/bin/uv pip install \
 **Re-attempted 2026-09-25** (the cache could have been populated since): **`httpx` and `cryptography`
 both still fail** with *"was not found in the cache … the network was disabled"*. The uv cache exists
 and is populated (`archive-v0`, `builds-v0`, `sdists-v9`, `simple-v24`, `wheels-v6`) and holds no
-`httpx` or `cryptography` entry of any kind. **Closing either needs network access, not a code change.**
-Until then the "not quotable" column stands.
+`httpx` or `cryptography` entry of any kind. **CLOSED 2026-09-27 — and this paragraph's diagnosis was wrong.**
+The obstacle was **TLS, not network**: pip failed with `SSLCertVerificationError` because the venv's OpenSSL default verify path does not exist and `certifi` was installed but unused. With `SSL_CERT_FILE` set, all five installed at their `uv.lock` pins, plus `wcwidth`. The "not quotable" column is retired — `PHASE_REGISTER_CLOSURE_TRIAGE.md` §4 F-T9.
+
+---
+
+**The repo moved, and three path bindings broke silently — plus one real packaging defect
+(2026-09-27).** The repo now lives under `iCloud Drive (Archive)`; it was at `~/Documents/wisp`. Three
+bindings still pointed at the old location, and **each was masked by the one invocation that happened to
+work**:
+
+1. **`.venv/bin/*` console scripts — 26 of 31** had a shebang at the old path, so every one died with
+   *"bad interpreter"*. Fixed: `pip install -e . --no-deps`.
+2. **The venv's editable install pointed at the old path**, so `import wisp` failed from anywhere outside
+   the repo — and worked *inside* it, because the CWD was on `sys.path`. Fixed the same way.
+3. **The framework python's editable install did the same**
+   (`/Library/Frameworks/Python.framework/Versions/3.12`), which is what `wisp` on PATH resolves to —
+   `~/.zshrc:195` puts that bin first. `wisp repl` died with
+   `ModuleNotFoundError: No module named 'wisp'`.
+
+**And a fourth, which is a packaging defect and not a move artefact:** `pyproject.toml` shipped
+`include = ["wisp*"]`, but `wisp/composition.py` imports the top-level **`agent`** package at five sites
+(`agent.logger`, `agent.tools.runner`, `agent.tools.batch_reader`). **The distribution could not run its
+own entry point.** A console script puts the *script's* directory on `sys.path`, not the working
+directory — so running from the repo root does **not** mask it; only `python -m wisp` does, because `-m`
+adds the CWD. That is why it survived: the one invocation that works is not the one users run. Fixed by
+`include = ["wisp*", "agent*"]`.
+
+**The rule these share: if it works from one directory, you have not tested it.** Three of these four
+were invisible precisely because a single invocation path happened to be correct.
 
 ---
 
@@ -1948,15 +2106,15 @@ what it observes is the production path, not a reconstruction beside it.
 ## 11. Verification commands that actually work
 
 ```bash
-# Gates — ⚠️ NEITHER IS GREEN AT HEAD, corrected 2026-09-25 (F71)
-/opt/anaconda3/envs/litllm/bin/ruff check wisp/          # 11 errors, all pre-existing
-uv run --no-project --with "mypy==2.3.1" mypy wisp/      # 1844 errors in 228 files
+# Gates — ✅ ruff is GREEN as of 2026-09-27; mypy is NOT (F71)
+/opt/anaconda3/envs/litllm/bin/ruff check wisp/          # ✅ All checks passed! (was 11 errors)
+uv run --no-project --with "mypy==2.3.1" mypy wisp/      # 1844 errors in 228 files — unchanged
 
-# This block used to say "Gates (both must be green)". Neither is. Measured at d7a55c2: ruff reports
-# 11 errors (incl. an F821 undefined name in wisp/auth/principal.py and wisp/context_assembler.py),
-# and the pinned mypy reports 1844 errors in 228 files — not zero. Every phase that claimed a green
-# lint/type criterion claimed something untrue. Both sets are UNCHANGED by the 2026-09-25 chain
-# (verified by set diff: 0 new, 0 gone), so the chain neither caused nor repaired them. Finding F71.
+# This block read "NEITHER IS GREEN AT HEAD" (F71, at d7a55c2); half of that is now false. ruff went
+# 11 → 0: the four F821s are fixed — `Any` used in three `auth/principal.py` signatures and never
+# imported, `TrustTag` named in `context_assembler.py`'s `SECTION_TRUST` annotation while its runtime
+# import stayed local (now a `TYPE_CHECKING` block). Neither was a runtime `NameError` — both use
+# `from __future__ import annotations` — but `get_type_hints(executor_principal)` raised before it.
 
 # Phase 10 tests — MEASURED, and the block had to be repaired to run at all.
 #
@@ -2212,14 +2370,14 @@ the files to a path **outside the repo** first, then compare.
 | **R10** | ~~`useApi.ts:368` sends no `Authorization` header~~ | ✅ **FIXED** (§0f) — the functional half. **What remains is a decision:** the 32 pre-existing renderer errors (7 of them in `ErrorBoundary.test.tsx`, i.e. a test file being typechecked by the *build* config); the vacuous `typecheck` script; and whether to canonicalize the 26 re-implementations now that the ratchet records them |
 | **F1** | ~~`metadata["_budget"]` write-only~~ | ✅ **FIXED** (§0e.2) — completes `docs/audit-2026-08-24.md` item 11 |
 | **F2** | ~~`_SENSITIVE_ENV_KEYS` has no consumer~~ | ✅ **FIXED** (§0e.1) — deleted as superseded |
-| **F3** | `execute_tool(security_policy=…)` — no caller passes it; `ToolRegistry.execute` is production-unused and lacks truncation/security | **Accepted (low)** — the executor authorises per call; annotate so nobody wires them without the missing checks |
+| **F3** | `execute_tool(security_policy=…)` — no caller passes it; `ToolRegistry.execute` is production-unused and lacks truncation/security | ✅ **CLOSED 2026-09-27.** Accepted (low), and the owed annotation **landed** at `wisp/tools/registry.py:911` — it now **prohibits** wiring this entrypoint into a new production caller without the checks `ToolRegistry.execute` supplies, rather than only describing the parameter. Prose-only, proved by both instruments (docstring-stripped AST identical, recursive `co_code` identical). ADR-0065 R3 |
 | **F4** | `spawn_with_guards` is a dead duplicate (guards live at `:723`/`:1737`) | **Accepted** — deletion candidate |
 | **F5** | event-replay `TOOL_CALL` — the prior audit's referent is unidentifiable; both candidates are wired | **Unresolved, no action** — recorded as unidentified rather than guessed at |
 | G2 | The `run_bash` verb scan is a separate mechanism from the predicate | **Accepted** — a shell command's target is not determinable from its text |
 | R3 | Full provider-listing delegation | Unsafe until the 3 deltas (auth/timeout/degradation) converge; `test_provider_listing_equivalence.py` fails at that point and signals it |
 | R4 | `_is_transient` is a separate predicate | **Not debt** — different axis (retryability, not outcome class) |
 | R5 | Two `RunStatus` enums remain | **Resolved as a non-issue by the migration.** `RunStatus` (7 values, `graph/types.py:37`) is a **strict subset** of `RunState` (8, `runs/record.py:17`); the only asymmetry is `PLANNING`, which exists solely in `RunState`. Every `RunStatus` value coerces through `coerce_state()`. **No shim needed** — ADR-0003. Promote the `subset? True` assertion to a ratchet if a future phase adds a member. |
-| R6 | `.venv` missing deps | Environment — **one table now: §6.1.** `jsonschema` is **fixed** (F8); `httpx`, `cryptography`, `numpy`, `tiktoken`, `aiohttp` remain absent, each with its pin, its check, the files it blocks, and the counts it makes **un-quotable**. Re-attempted offline 2026-09-25: both `httpx` and `cryptography` still fail |
+| R6 | `.venv` missing deps | Environment — **one table now: §6.1.** ✅ **CLOSED 2026-09-27.** `jsonschema` was fixed (F8); **all five remaining deps are now installed at their `uv.lock` pins** — `httpx 0.28.1`, `cryptography 50.0.1`, `numpy 2.4.6`, `tiktoken 0.14.0`, `aiohttp 3.14.3` — plus a sixth never recorded in §6.1, `wcwidth>=0.2.5` (wisp's own declared requirement). The obstacle was **TLS, not network**: pip failed with `SSLCertVerificationError` because the venv's OpenSSL default verify path does not exist and `certifi` was installed but unused. See `PHASE_REGISTER_CLOSURE_TRIAGE.md` §4 F-T9 |
 | R7 | `capability_filter.py` untracked but imported | See §8 |
 | R8 | 3 untracked test files abort collection | User's WIP |
 | R9 | `wisp/core/graph/__init__.py` modified, uncommitted | User's pre-existing edit |
@@ -2243,7 +2401,7 @@ M9 was said to block are now complete** — M12, M14, M15, M11, M13.
 | **M3** | Killpoint integration | ✅ **COMPLETE** — `test_kp_session_midtool_then_killed`. One window covered. |
 | **M4** | ADR-0004 revisited | ✅ **COMPLETE** — **ADR-0027**. Found a live defect (M2's journal-first could return a provider-invalid transcript). |
 | **M5** | Foreground-turn `RunRecord` lifecycle | **OPEN** — proven end-to-end for background runs only. |
-| **M6** | `PolicyDecisionEnvelope` producer-less and consumer-less | **OPEN** — the last unwired contract. |
+| **M6** | `PolicyDecisionEnvelope` producer-less and consumer-less | ✅ **CLOSED 2026-09-27.** *Not* the last unwired contract — measured, **four of the six modules** in `wisp/contracts/` have no production importer (`envelope`, `manifest`, `policy`, `adapters`; only `run` and `tool` are imported). That is the **M1a design**: `docs/superpowers/specs/2026-09-04-enterprise-contracts-m1a-design.md` freezes five interfaces additively — *"Pure addition: no existing producer or consumer changes behavior."* Being unwired is the seam, not an oversight. **Do not delete it** |
 | **M7** | `change_tracker.py` not wired into evidence | **OPEN** — deferred with 3b. |
 | **M8** | `multi_agent/dag.py` not retired into `wisp/graph/` | ✅ **COMPLETE.** *Reason:* surveyed and decided 2026-09-25 — **`DEPRECATE`, not remove** — and **re-scoped by ADR-0060** (ADR-0062 R3): the divergence is no longer a blocker awaiting reconciliation but the **boundary** between two different tools. The fanout suite is green (107 passed), so the retirement was attempted and **driven**. The measured semantic divergence stands — `wisp/graph/` requires a non-empty graph with every node reachable from the entrypoint, `TaskDAG` is a general partial order — so re-pointing `orchestrate_dag` onto `validate_graph` would **reject inputs it accepts today** (a behaviour change to a live, model-callable tool). Also measured: `TaskDAG.validate()` mis-reports an unknown dependency as a cycle, and `compat.dag_to_graph` is test-only. **The removal is not owed**: choosing which definition of a valid DAG wins is a change to a live tool and is its own decision. **The residual stays open and tripwired** (3 tripwires). Guard: `tests/reliability/test_dag_retirement_contract.py`. Reports: `PHASE_DAG_RETIREMENT.md`, `PHASE_LAYER_B_BOUNDARY.md`. |
 | **M10** | The materialized graph is a **lower bound** on iterations | **OPEN — by design.** One node per closed tool exchange + one terminal; iteration boundaries are not observable. |
@@ -2300,7 +2458,7 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `WISP_SUBAGENT_ARCHITECTURE.md` | Structured delegation, transactional effects, one-graph |
 | `WISP_MIGRATION_PLAN.md` | **The plan of record** — phases P0–P9 with prerequisites, tests, risk, rollback |
 | `WISP_MIGRATION_STATUS.md` | **The ledger** — phase status, findings **F1–F44**, change log, regression summary |
-| `WISP_ARCHITECTURE_DECISIONS.md` | **ADR-0001 … ADR-0062** |
+| `WISP_ARCHITECTURE_DECISIONS.md` | **ADR-0001 … ADR-0068** |
 | `PHASE_P0_REPORT.md` | Wire the orphaned durable layer |
 | `PHASE_P1_REPORT.md` | Journal turn transitions |
 | `PHASE_P2_REPORT.md` | Introduce the proposal boundary |
@@ -2321,7 +2479,7 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_M12_REPORT.md` | The failure path reaches the taxonomy (ADR-0032) |
 | `PHASE_M11_REPORT.md` | A node references its work unit; the ratchet classifies fields, not names (ADR-0033) |
 | `PHASE_LAYER_B_BOUNDARY.md` | **The Layer B boundary (ADR-0060)** — the five driver questions by measurement, the transition named, Position A decided, and findings F101–F104 |
-| `PHASE_EXTERNAL_INPUT_PATH.md` | **The external input path (ADR-0061)** — W1 fixed (the frame is the clients' vocabulary) and G3 closed by naming the boundary; **was missing from this index** until the corpus-governance mission |
+| `PHASE_EXTERNAL_INPUT_PATH.md` | **The external input path (ADR-0061)** — W1's frame driven (the frame is the clients' vocabulary), G3's boundary named, the two-decisions-or-one answer, and ADR-0059 residual 1 re-driven; **was missing from this index** until the corpus-governance mission |
 | **The derived registers** | Four pages that answer the corpus's *current* state. **Regenerate, never edit** — see **The derived registers** above. |
 | `CURRENT_AUTHORITIES.md` | Each completion/recovery authority's current state, pinned to `ADR §Y` and `path:line` |
 | `CURRENT_FINDINGS.md` | Every finding `F1`–`F104` and its status, with the defect-class index; generator `scripts/derive_current_findings.py` |
@@ -2332,7 +2490,23 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `PHASE_CURRENT_FLAGS.md` | **Corpus governance D3** — the flags register; the brief's ADR-0002 paraphrase is wrong |
 | `PHASE_CORPUS_GOVERNANCE.md` | **Corpus governance D4** — the entry point, and the mission's report |
 | `PHASE_CORPUS_GOVERNANCE_II.md` | **Corpus governance II** — ADR-0062's eight editorial decisions, `CURRENT_AUTHORITIES.md`'s generator, `F77`'s disposition, and the decisions applied |
-| `PHASE_EXTERNAL_INPUT_PATH.md` | **The external input path (ADR-0061)** — W1's frame driven, G3's boundary named, the two-decisions-or-one answer, and ADR-0059 residual 1 re-driven |
+| `PHASE_REGISTER_SOURCE_PINS.md` | **The register source pins** — `17130c7`'s content check applied to the findings and open-items generators (one rule, `scripts/register_pins.py`), and the stale pins it found re-pinned |
+| `PHASE_M4_WIRING.md` | **M4's wiring** — the governance layer loaded at the single composition site via `WISP_POLICY_BUNDLE`/`WISP_POLICY_PUBKEY`, and the two construction sites that still do not receive it; **ADR-0058**'s application. Cited by §12's `E` row and **absent from this index until now** |
+| `PHASE_KEY_TRUST_WORKFLOW.md` | **The key-trust workflow (ADR-0058)** — the operator-supplied organization public key; absence is a configuration and invalidity is a refusal. Cited by §12's `E` row and **absent from this index until now** |
+| `PHASE_F57_DOTENV.md` | **F57** — `~/.config/wisp/.env` read at `main()`'s first statement; the semantics, the differential, and four bounded findings |
+| `PHASE_WORKSPACE_DOTENV.md` | **The workspace `.env`** — written by `_persist_env`, read by nothing; the measurement (a repository's `WISP_API_BASE` / `WISP_OLLAMA_URL` would carry the operator's key / prompt away), the decision (not read; writer removed), and its application |
+| `PHASE_F47_PLANSTORE.md` | **F47** — `PlanStore`: the measurement (the store is read by the model's tools; the plan's *state* is never shown; the system-prompt slot is `OPERATOR`-tagged, cached, and would persist an injected step across sessions), ADR-0063 (tool output, never system prompt), and its application |
+| `PHASE_PLAN_CLI.md` | **The plan CLI** — `wisp plan` / `progress` / `plan list` / `plan abort` query `"."`, the agent keys by `session["workspace"]` verbatim; the measurement, ADR-0064 (one resolver inside the store, per-workspace rotation), and its application |
+| `PHASE_REGISTER_CLOSURE_TRIAGE.md` | **The open register's closure triage** — all 64 open rows classified by what would close them, the six closure modes derived from the 38 closed rows, seven measured findings (**F-T1**–**F-T7**), and **ADR-0065** (a recorded disposition is a closure) |
+| `PHASE_REPL_ON_WISP.md` | **The REPL driven against the wisp codebase itself** — `--workspace <the repo>`, three prompts, one session: **3 turns, exit 0, no budget error**. It counted `wisp/tools/` correctly (**21**, verified independently), summarised `cmd_swarm` **including the `ToolExecutor` fix made minutes earlier**, and **independently reproduced the `orchestrator.py` finding** — a different method from the AST scan that found it. Flagged its own non-recursive-listing limit **twice, unprompted** |
+| `PHASE_SUBAGENT_PROVENANCE.md` | **The subagent subsystem's wiring** — the `_parent_config` typo (one character, on the path nothing tested, breaking EVERY runtime subagent run); the **inbound wiring complete** (13 modules, 6,960 lines, all reached); and the finding: **`SwarmOrchestrator` has never existed** — `cli.py` has a documented fallback and `server/routes/swarm.py` returned 503 *"unavailable"* forever, now a 501 that names the missing module. Also records **my own too-narrow verification set** |
+| `PHASE_CONTRACT_PROVENANCE.md` | **Every contract symbol, its authoriser, and its consumers** — 28 symbols across 7 modules. `wisp/contracts/` (M1a): **3 of 10 consumed**, the other 7 are **seams, authorised by the spec's own *"Pure addition"***. `wisp/core/contracts.py`: **4 of 18 consumed** — 14 test-only with **no recorded authorisation**, so the open question is whether they are unwritten seams or the written-but-unwired pathology. Also records the **three ways the instrument itself lied first** |
+| `PHASE_REPL_SHAKEDOWN.md` | **The REPL driven hard, with a working model** — the turn-cancel branch **VERIFIED** (survived the press mid-tool-call, printed the notice, saved with a resume id, exit 0), the **coding loop** (8 calls: read → context → edit → **three** verification steps, only the broken file touched), and **slash commands** incl. a clean unknown-command error. Caveat: needs `HTTP(S)_PROXY` removed from wisp's env |
+| `PHASE_INTERRUPT_MANUAL_TEST.md` | **Ctrl+C driven for real** — idle SIGINT **verified** (exit 0, session saved, resume hint); turn SIGINT **not reached**, because **every turn dies in ~1.2 s** with `Prompt tokens limit exceeded: 17706 > 8517`. Measured: `TOOL_SCHEMAS` is **6,922 tokens = 81.3 % of the 8,517 budget**, and the conversation was `ctx 12` — so essentially the whole prompt is fixed per-turn overhead. **The F39 shape on a second provider** (ADR-0038 fixed Ollama; OpenRouter sends >2× its budget and surfaces the 402) |
+| `PHASE_INTERRUPT_HANDLING_AUDIT.md` | **Ctrl+C in the REPL** — the stated signal policy, the wiring traced end to end (**correct**: task set at `entry.py:559`, cleared and the handler **re-armed** in `finally`, both SIGINT-ignore windows bounded and restored), 21 tracked tests passing, and **the finding**: `tests/test_input_and_interrupts.py` is a **51-test suite that cannot collect** — it imports **12 names from `wisp/transport/cli.py`, 6 of which are gone**, three of them the *previous* cooperative handler's state. It is untracked WIP, so nothing noticed |
+| `PHASE_WISP_CODING_BENCHMARK.md` | **How wisp actually codes** — the first run as a coding agent rather than a read. `scripts/wisp_coding_benchmark.py` scores claim-vs-outcome (SOLVED / **GAMED** / FAILED / NO-OP), with the hidden test written *after* the run. First result: **0/3 capability, 3/3 honest**. Also: the **venv was path-broken twice** by the repo's move (26/31 console scripts + the editable install; fixed with `pip install -e .`), a **fourth population class — quota-exhausted** (`nemotron-3-ultra:cloud` is out of monthly usage, so this host has **0 usable capable models**, not 1), and the **default model is paywalled** |
+| `PHASE_STRING_SCAN_AUDIT.md` | **Every test assertion that reads a `.py` source file as text** — an AST audit finding **125** such assertions across **39 files** (plus 101 benign data reads), the rule that separates a hazardous *construct-as-text* match from a legitimate *prose* one, the ~60 hazardous estimate, the worst files, and the conversion order. Changes no test |
+| `PHASE_DECISION_BRIEFS.md` | **The four decisions for the 44 open rows** — a gate enumeration of every route in `wisp/server/routes/` (**14 policy-gated sites, 3 human-gated**), the measured asymmetry it exposes (*the set gates persisting an executable, not executing one*), **ADR-0066** as a complete draft (the approval authority, the executable-config family, id correlation, per-client routing), and briefs for the structured-delegation, context-subsystem and singleton sets |
 | `PHASE_M13_REPORT.md` | The stagnation detector on the live turn path (ADR-0034) |
 
 **Guards added by the migration:**
@@ -2349,6 +2523,7 @@ files are the user's pre-existing WIP (§8) plus foreign-session test files.
 | `tests/test_acceptance_verdict.py` | the verdict algebra; the floor guard is retained, not replaced; stage 3a does not gate |
 | `tests/test_task_graph_materialization.py` | readiness is **stored**, not recomputed; one transition API (AST, in-module and tree-wide); the graph is a projection of the log |
 | `tests/test_graph_mutation.py` | the extended vocabulary is a superset (ratchet); expansion is acyclic by construction; invalidation cascades; supersession retains history; the growth budget is **enforced**; insertion order does not change the graph |
+| `tests/reliability/test_route_gate_classification.py` | **every gated REST route is classified** — each `require_tool_allowed` action is human-gated or policy-only *with its reason*, and every member of `REST_APPROVAL_ACTIONS` has a route that really calls `require_rest_approval` (ADR-0066 residual 2; non-vacuity driven by planting an unclassified route and a non-literal action name) |
 | `tests/test_failure_signal_classification.py` | **engine refusals are denials** (they were retried); the runtime→taxonomy adapter is total; every error code has a class; the `TIMEOUT` naming trap |
 | `tests/test_prompt_section_trust.py` | every prompt section is classified (AST-ratcheted); **no untrusted section is in instruction position**; the predicate fails closed; the fix is a move, not a reshuffle |
 | `tests/test_child_principal_wired.py` | a child is **denied at the authorization layer** for a tool its contract excludes; the identity travels with the **call** (ratchet: no per-child executor); **both** child paths stamp it; the parent is resolved by the shared rule |

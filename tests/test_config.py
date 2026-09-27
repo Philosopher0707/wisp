@@ -2,7 +2,16 @@
 
 from pathlib import Path
 
-from wisp.config import WispConfig, get_setting, load_config, save_config, safe_getcwd
+import pytest
+
+from wisp.config import (
+    PermissionMode,
+    WispConfig,
+    get_setting,
+    load_config,
+    save_config,
+    safe_getcwd,
+)
 
 
 class TestGetSetting:
@@ -68,6 +77,32 @@ class TestWispConfig:
         assert cfg._context_tokens_explicit is False
         assert cfg.max_context_tokens == 256000
 
+    def test_bogus_permission_mode_env_falls_back(self, monkeypatch, caplog):
+        """A bad WISP_PERMISSION_MODE used to raise straight out of
+        WispConfig() for every subcommand that doesn't go through
+        entry.validate_env_config() (run/repl/tui only)."""
+        monkeypatch.setenv("WISP_PERMISSION_MODE", "bogus")
+        cfg = WispConfig()  # must not raise
+        assert cfg.permission_mode == PermissionMode.AUTO_EDIT
+        assert "Invalid permission_mode" in caplog.text
+
+    def test_valid_permission_mode_env_still_applies(self, monkeypatch):
+        monkeypatch.setenv("WISP_PERMISSION_MODE", "full")
+        assert WispConfig().permission_mode == PermissionMode.FULL
+
+
+class TestAutonomousFingerprint:
+    """autonomous silently relaxes AUTO_EDIT to FULL (SecurityPolicy.
+    effective_permission_mode) but fingerprint() never hashed it, so
+    nothing keyed on the fingerprint (e.g. core-cache invalidation) could
+    detect the flip."""
+
+    def test_autonomous_changes_fingerprint(self, isolated_wisp_env):
+        base = WispConfig()
+        a = base.replace(autonomous=False)
+        b = base.replace(autonomous=True)
+        assert a.fingerprint() != b.fingerprint()
+
 
 class TestConfigFile:
 
@@ -78,6 +113,73 @@ class TestConfigFile:
         save_config({"model": "saved-model"})
         loaded = load_config()
         assert loaded["model"] == "saved-model"
+
+
+class TestCorruptConfigFile:
+    """A config.json that EXISTS but fails to parse must raise, not
+    silently discard every persisted setting (permission_mode included)
+    back to defaults for every caller outside run/repl/tui — see
+    wisp.entry.check_config_file, which already refused this, but only
+    for that one path."""
+
+    def test_corrupt_json_raises(self, monkeypatch, tmp_path):
+        import wisp.config as cfg_mod
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text("{not valid json")
+        monkeypatch.setattr(cfg_mod, "get_config_path", lambda: cfg_path)
+        with pytest.raises(ValueError, match="corrupt"):
+            load_config()
+
+    def test_non_object_json_raises(self, monkeypatch, tmp_path):
+        import wisp.config as cfg_mod
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text("[1, 2, 3]")
+        monkeypatch.setattr(cfg_mod, "get_config_path", lambda: cfg_path)
+        with pytest.raises(ValueError, match="JSON object"):
+            load_config()
+
+    def test_missing_file_still_returns_empty(self, monkeypatch, tmp_path):
+        import wisp.config as cfg_mod
+        cfg_path = tmp_path / "does-not-exist.json"
+        monkeypatch.setattr(cfg_mod, "get_config_path", lambda: cfg_path)
+        assert load_config() == {}
+
+
+class TestContextFilesContainment:
+    """context_files entries must resolve inside the workspace. pathlib's
+    `/` operator discards the base when the right-hand side is absolute,
+    so an absolute or traversal entry used to be read verbatim and
+    injected into the system prompt sent to the provider."""
+
+    def test_absolute_entry_is_rejected(self, isolated_wisp_env, tmp_path, caplog):
+        outside = tmp_path / "outside_secret.txt"
+        outside.write_text("TOP-SECRET-CONTENT")
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        cfg = WispConfig().replace(workspace=str(ws), context_files=[str(outside)])
+        loaded = cfg.load_context_files()
+        assert "TOP-SECRET-CONTENT" not in loaded
+        assert "outside the workspace" in caplog.text
+
+    def test_traversal_entry_is_rejected(self, isolated_wisp_env, tmp_path):
+        outside = tmp_path / "outside_secret2.txt"
+        outside.write_text("TOP-SECRET-CONTENT-2")
+        ws = tmp_path / "ws2"
+        ws.mkdir()
+        cfg = WispConfig().replace(
+            workspace=str(ws), context_files=[f"../{outside.name}"]
+        )
+        loaded = cfg.load_context_files()
+        assert "TOP-SECRET-CONTENT-2" not in loaded
+
+    def test_normal_relative_entry_still_loads(self, isolated_wisp_env, tmp_path):
+        ws = tmp_path / "ws3"
+        ws.mkdir()
+        (ws / "CLAUDE.md").write_text("project rules here")
+        cfg = WispConfig().replace(workspace=str(ws), context_files=["CLAUDE.md"])
+        loaded = cfg.load_context_files()
+        assert "project rules here" in loaded
+
 
 class TestWorkspaceResilience:
     """Regression: os.getcwd() can raise PermissionError (deleted cwd or

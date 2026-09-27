@@ -130,7 +130,7 @@ ROWS: list[tuple[str, str, str, str, str, str, str]] = [
     ("F37", "A mutation followed by a *failing* verification was recorded P3 `PASS` / `GOAL_MET` — a false success",
      "FIXED", "false-success", "—", "WISP_MIGRATION_STATUS.md:1874 — headline “**NOT FIXED — newly exposed**”, root-caused there as *the evidence adapter*; **repaired** — `CONTEXT.md` §0 phase table records “**F37 evidence-adapter repair** — `COMPLETE` — **F37 FIXED**”", "tests/reliability/test_verification_evidence_adapter.py"),
     ("F38", "A test encoded the F8 environment as the contract",
-     "DEFECT-PIN", "", "—", "WISP_MIGRATION_STATUS.md:1875 — “**NOT FIXED — `TEST_ASSUMED_BROKEN_ENVIRONMENT`**”", "tests/test_node_identity.py::TestANodeReferencesItsWorkUnit::test_a_parallel_round_is_journaled_as_one_exchange_per_call"),
+     "CLOSED", "TEST_ASSUMED_BROKEN_ENVIRONMENT", "—", "WISP_MIGRATION_STATUS.md:1875 — “**CLOSED 2026-09-27 — `TEST_ASSUMED_BROKEN_ENVIRONMENT`.**”", "tests/test_node_identity.py::TestANodeReferencesItsWorkUnit::test_a_parallel_round_is_journaled_as_one_exchange_per_call"),
     ("F39", "The Ollama client sends `num_predict` without negotiating the model's real limit, so a class of models fails outright",
      "CLOSED", "unwired-control", "ADR-0038", "WISP_MIGRATION_STATUS.md:1876 — headline “**NOT FIXED**”, root-caused there as `ADR_REQUIRED: YES`; **decided** — `CONTEXT.md` §0 phase table records “F39 token-budget boundary (**ADR-0038**)” as `COMPLETE` / “**`RATIFIED`**”, then “**`ADR-0038 SATISFIED`**”", "—"),
     ("F40", "The iteration wrap-up loop consumes RAW provider events and assumes dicts, so the wrap-up summary is lost",
@@ -150,7 +150,7 @@ ROWS: list[tuple[str, str, str, str, str, str, str]] = [
     ("F46", "`acceptance.evaluate` had no producer of `AcceptanceCriteria` from a user objective",
      "FIXED", "unwired-control", "ADR-0045", "WISP_MIGRATION_STATUS.md:167 — “**REPAIRED (ADR-0045 R1)**”", "tests/reliability/test_next_autonomous_wiring.py"),
     ("F47", "`PlanStore` is write-only — a plan the model wrote is never shown to it again",
-     "OPEN", "unwired-control", "—", "WISP_MIGRATION_STATUS.md:168 — “**OPEN, recorded**”", "—"),
+     "FIXED", "unwired-control", "ADR-0063", "WISP_MIGRATION_STATUS.md:168 — “**FIXED 2026-09-26 (ADR-0063)** (was *OPEN, recorded*)”", "tests/test_plan_shown_as_tool_output.py"),
     ("F48", "The default `permission_mode` is `auto_edit`, in which `run_bash` is blocked, so the agent cannot run the project's own tests",
      "OPEN", "", "—", "WISP_MIGRATION_STATUS.md:169 — “**OPEN, recorded**”", "—"),
     ("F49", "A deterministic acceptance check that cannot be evaluated must not report `FAIL`",
@@ -170,7 +170,7 @@ ROWS: list[tuple[str, str, str, str, str, str, str]] = [
     ("F56", "Resume lost the recovery strategy — in two parts",
      "FIXED", "", "—", "WISP_MIGRATION_STATUS.md:177 — “**FIXED** … Tests: `test_resume_preserves_the_recovery_strategy`, `test_the_ladder_history_survives_a_resume`”", "tests/reliability/test_next_convergence_controller.py"),
     ("F57", "`~/.config/wisp/.env` is WRITE-ONLY — nothing in `wisp/` ever reads it",
-     "OPEN", "unwired-control", "—", "WISP_MIGRATION_STATUS.md:178 — “**OPEN, recorded**”", "—"),
+     "FIXED", "unwired-control", "—", "WISP_MIGRATION_STATUS.md:178 — “**FIXED 2026-09-26** (was *OPEN, recorded*)”", "tests/test_dotenv_is_read.py"),
     ("F58", "The acceptance criterion was tamperable: a live agent rewrote the contract and the loop reported `goal_met`",
      "FIXED", "false-success", "—", "WISP_MIGRATION_STATUS.md:179 — “**FIXED** … `verify:cmdN:inputs_unchanged` is a **required** criterion”", "tests/reliability/test_next_autonomous_wiring.py"),
     ("F59", "A timeout that made real progress had no recovery that could continue the work",
@@ -210,7 +210,7 @@ ROWS: list[tuple[str, str, str, str, str, str, str]] = [
 
     # ── F75–F104 — CONTEXT.md §0 and the phase reports (no ledger row) ───────
     ("F75", "The previous mission's instrument was never committed, so its measurement cannot be re-run",
-     "OPEN", "measurement-method", "—", "PHASE_GATE_ENABLEMENT.md:160 — “**Not repaired** (that is ADR-0050's record …)”", "—"),
+     "OPEN", "measurement-method", "—", "PHASE_GATE_ENABLEMENT.md:175 — “**Not repaired** (that is ADR-0050's record …)”", "—"),
     ("F76", "The brief's own framing assumed the `INCONCLUSIVE` rate was the question",
      "CLOSED", "model-vs-path", "ADR-0051", "PHASE_GATE_ENABLEMENT.md:181 — “Driven, that framing does not survive contact with the code”", "tests/reliability/test_gate_enablement_contract.py"),
     ("F77", "A bare string scan over a Python tree read a docstring as a caller — M8's `dag_to_graph` tripwire",
@@ -219,13 +219,13 @@ ROWS: list[tuple[str, str, str, str, str, str, str]] = [
     ("F78", "A model is not a path — the parity ratchet compared two decision models and concluded about two paths",
      "CLOSED", "model-vs-path", "ADR-0055", "PHASE_AUTHORIZATION_PARITY.md:201 — “**F78 — a model is not a path.**” corrected in place", "tests/test_authorization_parity.py"),
     ("F79", "A check that passes by finding nothing, again — none of the ratchet's seven properties compared the two paths",
-     "FIXED", "instrument-defect", "—", "PHASE_AUTHORIZATION_PARITY.md:208 — “The new guard parses the AST.”", "tests/test_authorization_parity.py"),
+     "FIXED", "instrument-defect", "—", "PHASE_AUTHORIZATION_PARITY.md:211 — “The new guard parses the AST.”", "tests/test_authorization_parity.py"),
     ("F80", "`tests/test_protected_path_guard.py` cannot run in this environment (`httpx` absent)",
-     "OPEN", "", "—", "PHASE_AUTHORIZATION_PARITY.md:214 — “Not repaired: installing a dependency is an environment change”", "—"),
+     "OPEN", "", "—", "PHASE_AUTHORIZATION_PARITY.md:218 — “Not repaired: installing a dependency is an environment change”", "—"),
     ("F81", "A derived page carries a superseded disposition (`CURRENT_AUTHORITIES.md` §4)",
      "CLOSED", "record-integrity", "—", "PHASE_AUTHORIZATION_PARITY.md:221 — “**Corrected in place**”", "tests/reliability/test_current_authorities_pins.py"),
     ("F82", "The two “canonical” test blocks listed different file sets",
-     "CLOSED", "count-canonicality", "—", "PHASE_OBJECTIVE_FLAG_COMPOSITION.md:145 — “**Both blocks now list the same 43 files**”", "tests/reliability/test_current_authorities_pins.py"),
+     "CLOSED", "count-canonicality", "—", "PHASE_OBJECTIVE_FLAG_COMPOSITION.md:156 — “**Both blocks now list the same 43 files**”", "tests/reliability/test_current_authorities_pins.py"),
     ("F83", "A capability claim about a path, measured against the path — the WebSocket question direction never reached a client",
      "FIXED", "model-vs-path", "ADR-0061", "PHASE_REST_APPROVAL.md:153 — “**F83 — a capability claim about a path, measured against the path.**”; **fixed** by ADR-0061 (`CONTEXT.md` §12 row W1: “✅ **CLOSED 2026-09-25 (ADR-0061)**”)", "tests/reliability/test_external_input_path.py"),
     ("F84", "The three routes' own comments described a design the flag now changes",
@@ -235,11 +235,11 @@ ROWS: list[tuple[str, str, str, str, str, str, str]] = [
     ("F86", "The corpus classified two unlike guards as one class",
      "CLOSED", "instrument-defect", "—", "PHASE_OUTCOME_CLASSIFICATION_VIOLATION.md:213 — added as `CONTEXT.md` §10's **fourth sub-case** row", "tests/test_outcome_classification_authority.py"),
     ("F87", "§3's commit table did not list every commit, and §0 said it did",
-     "FIXED", "record-integrity", "—", "PHASE_CORPUS_INTEGRITY_II.md:123 — “**§3's table backfilled with the nine missing handoff commits**”", "tests/test_doc_drift.py"),
+     "FIXED", "record-integrity", "—", "PHASE_CORPUS_INTEGRITY_II.md:177 — “**§3's table backfilled with the nine missing handoff commits**”", "tests/test_doc_drift.py"),
     ("F88", "The M4 policy suite is red in this environment (`cryptography` absent), and nothing in the corpus said so",
-     "OPEN", "", "—", "PHASE_KEY_TRUST_WORKFLOW.md:118 — “**not repaired** (it needs the dependency, not a code change)”", "—"),
+     "OPEN", "", "—", "PHASE_KEY_TRUST_WORKFLOW.md:134 — “**not repaired** (it needs the dependency, not a code change)”", "—"),
     ("F89", "A bundle that omits `expires_at` crashes the loader with an unrelated message",
-     "FIXED", "", "—", "PHASE_KEY_TRUST_WORKFLOW.md:136 — “**Named, not fixed**”; **CLOSED** by corpus integrity III (`CONTEXT.md` §0: “2.1 **CLOSED** (**F89**'s message; the trailing `or 0.0` was **unreachable**)”)", "tests/reliability/test_key_trust_workflow.py"),
+     "FIXED", "", "—", "PHASE_KEY_TRUST_WORKFLOW.md:148 — “**Named, not fixed**”; **CLOSED** by corpus integrity III (`CONTEXT.md` §0: “2.1 **CLOSED** (**F89**'s message; the trailing `or 0.0` was **unreachable**)”)", "tests/reliability/test_key_trust_workflow.py"),
     ("F90", "The brief's ADR number is wrong: 0059 is not the next free number; 0058 is",
      "CLOSED", "record-integrity", "ADR-0058", "PHASE_KEY_TRUST_WORKFLOW.md:151 — “**F90 — the brief's ADR number is wrong**”", "—"),
     ("F91", "The brief's worked example for `WISP_POLICY_PUBKEY` is wrong: it is key material, not a path",
@@ -255,7 +255,7 @@ ROWS: list[tuple[str, str, str, str, str, str, str]] = [
     ("F96", "A guard can pass by observing a copy of the code instead of the code",
      "FIXED", "instrument-defect", "—", "PHASE_REST_AUTHORIZATION_COMPOSITION.md:218 — “The non-vacuity probe caught it (NV4).”", "tests/reliability/test_rest_authorization_composition.py"),
     ("F97", "A live range claim can survive fourteen ADR landings",
-     "FIXED", "record-integrity", "—", "PHASE_CORPUS_INTEGRITY_III.md:131 — “Three stale claims of the F81 class … All three corrected.”", "tests/test_doc_drift.py"),
+     "FIXED", "record-integrity", "—", "PHASE_CORPUS_INTEGRITY_III.md:134 — “Three stale claims of the F81 class … All three corrected.”", "tests/test_doc_drift.py"),
     ("F98", "Two records of one finding's status disagreed, and the live one was stale",
      "CLOSED", "record-integrity", "—", "PHASE_REST_AUTHORIZATION_COMPOSITION.md:220 — recorded; §12's G1 row was corrected (F99's row notes §12 was the live target)", "—"),
     ("F99", "A brief cited two ledger rows that do not exist (`G1`, and a governance-layer row)",
@@ -263,13 +263,13 @@ ROWS: list[tuple[str, str, str, str, str, str, str]] = [
     ("F100", "A residual named in an ADR is not automatically a live item",
      "CLOSED", "record-integrity", "—", "PHASE_CORPUS_INTEGRITY_III.md:122 — “§12 gains row **W1**, marked **OPEN — needs its own ADR**”", "tests/reliability/test_external_input_path.py"),
     ("F101", "A probe that checked the wrong paths, and reported two present files as absent",
-     "CLOSED", "instrument-defect", "ADR-0060", "PHASE_LAYER_B_BOUNDARY.md:271 — “**The instrument's subject was wrong**”", "tests/reliability/test_layer_b_boundary.py"),
+     "CLOSED", "instrument-defect", "ADR-0060", "PHASE_LAYER_B_BOUNDARY.md:276 — “**The instrument's subject was wrong**”", "tests/reliability/test_layer_b_boundary.py"),
     ("F102", "ADR-0021's stated blocker was FALSE, and was false when it was written",
-     "CLOSED", "record-integrity", "ADR-0060", "PHASE_LAYER_B_BOUNDARY.md:281 — “ADR-0060 records the correction and the reason is restated in §3.”", "tests/reliability/test_layer_b_boundary.py"),
+     "CLOSED", "record-integrity", "ADR-0060", "PHASE_LAYER_B_BOUNDARY.md:302 — “ADR-0060 records the correction and the reason is restated in §3.”", "tests/reliability/test_layer_b_boundary.py"),
     ("F103", "“Zero references from `core/runtime.py`” is no longer literally true",
-     "CLOSED", "record-integrity", "ADR-0060", "PHASE_LAYER_B_BOUNDARY.md:306 — “The substantive claim holds; the literal one does not. The guard asserts both halves”", "tests/reliability/test_layer_b_boundary.py"),
+     "CLOSED", "record-integrity", "ADR-0060", "PHASE_LAYER_B_BOUNDARY.md:309 — “The substantive claim holds; the literal one does not. The guard asserts both halves”", "tests/reliability/test_layer_b_boundary.py"),
     ("F104", "ADR-0057 has no index row",
-     "FIXED", "record-integrity", "—", "PHASE_LAYER_B_BOUNDARY.md:313 — “**Corrected here**: the row is added”", "tests/test_doc_drift.py"),
+     "FIXED", "record-integrity", "—", "PHASE_LAYER_B_BOUNDARY.md:317 — “**Corrected here**: the row is added”", "tests/test_doc_drift.py"),
 ]
 
 #: Findings whose two sources disagree about the status. Recorded, never resolved.
@@ -300,6 +300,28 @@ RESOLVED: list[tuple[str, str]] = [
             "the mission's contemporaneous working notes state *“F77 — a string scan reads docstrings "
             "as code”*. The report's two other finding-shaped statements are open items, not F77 "
             "(`CURRENT_OPEN_ITEMS.md`'s `PHASE_DAG_RETIREMENT` R1/R2). No number was coined."),
+]
+
+#: A finding whose scope a later landing extended, without coining a number: the same defect, the
+#: same writer, a second file. The row keeps its first status and tripwire; the extension is here.
+EXTENDED: list[tuple[str, str]] = [
+    ("F57", "**The workspace `.env` — the same writer's other file, the same `unwired-control` class.** "
+            "`_persist_env` also wrote `WISP_PROVIDER`, `WISP_MODEL`, `WISP_API_BASE` and "
+            "`WISP_OLLAMA_URL` to `<workspace>/.env`, and nothing read it (`PHASE_F57_DOTENV.md` §2, "
+            "finding 2). **Not the same decision:** a repository can carry that file. Driven "
+            "(`PHASE_WORKSPACE_DOTENV.md` §2): read even after the operator's file, a cloned "
+            "repository's `WISP_API_BASE` sends the operator's key to the repository's endpoint. "
+            "Decided *not read*; **the writer was removed** (`FIXED` by removal, 2026-09-26), as "
+            "`F47`'s artifact was. Recorded in the ledger's `F57` row, `WISP_MIGRATION_STATUS.md:178`. "
+            "Tripwire: `tests/test_workspace_dotenv_not_written.py`."),
+    ("F47", "**The operator's side of the same store.** `wisp plan`, `wisp progress`, `wisp plan list` and "
+            "`wisp plan abort` queried `\".\"`, while the agent keys a plan by `session[\"workspace\"]` "
+            "verbatim: one directory had five keys under five spellings (`PHASE_PLAN_CLI.md` §2, driven). "
+            "Global rotation let ten plans elsewhere delete this workspace's plan. **Decided by ADR-0064, and "
+            "`FIXED` 2026-09-26:** one resolver, `planner.workspace_key`, applied inside `PlanStore` to "
+            "queries, stored keys, saves and rotation; the CLI reads `WispConfig().workspace`; rotation per "
+            "workspace; stored keys resolved when read, so old plans stay readable. Recorded in the ledger's "
+            "`F47` row, `WISP_MIGRATION_STATUS.md:168`. Tripwire: `tests/test_plan_cli_sees_agent_plan.py`."),
 ]
 
 #: Claims in the artifacts that cannot be pinned. A finding, never a guess.
@@ -371,7 +393,28 @@ def _check_sources() -> list[str]:
         lines = (REPO / path).read_text(encoding="utf-8").splitlines()
         if not (1 <= n <= len(lines)):
             broken.append(f"{fid}: {path}:{n} is out of range ({len(lines)} lines)")
-    return broken
+    return broken + _source_quote_problems()
+
+
+#: A check that found nothing to check has not run (F81). 97 of the 104 sources quote their
+#: line today; the floor sits well below that so a legitimate row without a quote cannot trip it.
+QUOTE_FLOOR = 60
+
+
+def _source_quote_problems() -> list[str]:
+    """The quoted words must be on the cited line, ±3 (`scripts/register_pins.py`).
+
+    Range was all `_check_sources` checked until the register-source-pins mission, so a pin
+    could drift onto unrelated text and pass — 12 had (`PHASE_REGISTER_SOURCE_PINS.md` §2).
+    """
+    sys.path.insert(0, str(REPO / "scripts"))
+    from register_pins import source_quote_problems
+
+    problems, checkable = source_quote_problems([(r[0], r[5]) for r in ROWS], REPO)
+    if checkable < QUOTE_FLOOR:
+        problems.append(f"only {checkable} sources carry a checkable quote (floor "
+                        f"{QUOTE_FLOOR}) — the quote grammar drifted and the check went vacuous")
+    return problems
 
 
 def _counts() -> dict[str, int]:
@@ -552,6 +595,11 @@ def render() -> str:
     A("### Claims pinned since")
     A("")
     for fid, text in RESOLVED:
+        A(f"- **{fid}.** {text}")
+    A("")
+    A("### Findings whose scope a later landing extended")
+    A("")
+    for fid, text in EXTENDED:
         A(f"- **{fid}.** {text}")
     A("")
     A("### What this page did not do")

@@ -162,7 +162,7 @@ def store_key(provider_name: str, key: str) -> None:
 
     Sets the per-provider env var AND the shared WISP_API_KEY in the
     process environment (so the very next turn works without restart),
-    then persists both to config.json + .env files via persist().
+    then persists both to config.json + ~/.config/wisp/.env via persist().
     """
     name = (provider_name or "").strip().lower()
     primary = KEY_ENV_VARS.get(name, [None])[0]
@@ -287,7 +287,7 @@ def apply_switch(runtime: Any, session: "dict[str, Any]", config: Any,
 
 
 def persist(update: dict[str, str]) -> bool:
-    """Merge keys into ~/.config/wisp/config.json and .env. Best-effort."""
+    """Merge keys into ~/.config/wisp/config.json and ~/.config/wisp/.env. Best-effort."""
     ok = True
     try:
         from wisp.config import load_config, save_config
@@ -297,9 +297,8 @@ def persist(update: dict[str, str]) -> bool:
     except Exception as exc:
         logger.warning("Could not persist provider choice: %s", exc)
         ok = False
-    # Also persist to .env in the workspace and home so `WISP_API_KEY`
-    # survives restarts without re-entering via /provider. The .env file
-    # is gitignored via .gitignore already.
+    # The operator's own ~/.config/wisp/.env, which F57's loader reads at startup. Never the
+    # workspace's: PHASE_WORKSPACE_DOTENV.md §2.
     try:
         _persist_env(update)
     except Exception as exc:
@@ -308,11 +307,15 @@ def persist(update: dict[str, str]) -> bool:
 
 
 def _persist_env(update: dict[str, str]) -> None:
-    """Write provider/model/api_key/api_base to .env files.
+    """Write provider/model/api_key/api_base to ``~/.config/wisp/.env``.
 
-    Writes to both the workspace's .env and ~/.config/wisp/.env for
-    durability. Only writes keys that are in `update` and non-empty.
+    Only writes keys that are in `update` and non-empty. **Never a workspace ``.env``**: nothing
+    reads one, and a repository can carry one, so reading it would let a cloned repository's
+    ``WISP_API_BASE`` send the operator's key to its own endpoint (``PHASE_WORKSPACE_DOTENV.md``
+    §2, driven). Writing it only mutated the operator's projects.
     """
+    from wisp.user_env import user_env_path
+
     # Map config keys to env vars
     env_map = {
         "provider": "WISP_PROVIDER",
@@ -337,38 +340,8 @@ def _persist_env(update: dict[str, str]) -> None:
             env_update[ev] = v
     if not env_update:
         return
-    # Secrets (*KEY vars) never touch the workspace .env — that file lives
-    # in the repo and gets committed, screenshared, and backed up. Keys
-    # persist via config.json (persist()) and the global ~/.config .env.
-    ws_update = {k: v for k, v in env_update.items() if "KEY" not in k}
-    # Workspace .env (project-local, so `taki baar baar change na karna pade`)
-    # Prefer the explicit workspace from the update (when /provider was called
-    # from a REPL with a non-default workspace), then WISP_WORKSPACE env,
-    # then the persisted config's workspace, then cwd.
     try:
-        ws = update.get("workspace") or os.environ.get("WISP_WORKSPACE") or ""
-        if not ws:
-            try:
-                from wisp.config import get_setting
-
-                ws = get_setting("workspace", "") or ""
-            except Exception:
-                ws = ""
-        if not ws:
-            try:
-                from wisp.config import safe_getcwd
-                ws = safe_getcwd()
-            except Exception:
-                ws = ""
-        ws_env = pathlib.Path(ws).resolve() / ".env"
-        if ws_update:
-            _upsert_env_file(ws_env, ws_update)
-    except Exception:
-        pass
-    # Global fallback
-    try:
-        global_env = pathlib.Path.home() / ".config" / "wisp" / ".env"
-        _upsert_env_file(global_env, env_update)
+        _upsert_env_file(user_env_path(), env_update)
     except Exception:
         pass
 

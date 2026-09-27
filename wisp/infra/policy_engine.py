@@ -243,7 +243,8 @@ class PriorityRuleEngine(PolicyEngine):
         engine.add_rule(Rule(
             name="mode.auto_edit_block",
             predicate=_make_block_rule(edit_block - _AUTO_EDIT_APPROVAL_TOOLS,
-                                       "AUTO_EDIT mode blocks", "auto_edit"),
+                                       "AUTO_EDIT mode blocks", "auto_edit",
+                                       suffix=f" — {_AUTO_EDIT_DENY_REMEDY}"),
             priority=30,
             description="AUTO_EDIT mode: bash and destructive tools blocked",
         ))
@@ -286,10 +287,32 @@ _DEFAULT_ASK_ALL_BLOCK = frozenset({
 # no mutation — children are independently mode-filtered
 # (filter_allowed_for_mode) — so it needs an operator's yes, not a ban.
 # Single source for the split; the legacy BLOCK union is derived.
+# `run_bash` was here. Removed 2026-09-27: it is the one member of this set whose execution is
+# CONFINEMENT-ROUTED (`tools/bash.py` -> the tier router: Docker -> isolated PTY -> host), so the
+# hard deny was blocking a command path that is already bounded. The four git/gh writes stay —
+# they mutate a shared remote, which no local sandbox tier contains.
+#
+# RESIDUAL, stated because it is not nothing: the PTY tier bounds RESOURCE USE and CREDENTIAL
+# EXPOSURE (own session, rlimits, credential-stripped env). It does NOT bound FILESYSTEM REACH —
+# a command in AUTO_EDIT can still write anywhere the user can. That is the trade this line makes.
 _AUTO_EDIT_DENY_TOOLS = frozenset({
-    "run_bash", "git_branch", "git_commit", "git_push", "gh_pr_create",
+    "git_branch", "git_commit", "git_push", "gh_pr_create",
 })
 _AUTO_EDIT_APPROVAL_TOOLS = frozenset({"spawn", "fanout"})
+
+#: What to do about an AUTO_EDIT denial. One string, both denial sites (`_make_block_rule` here and
+#: `auth/decision.py`), because a remedy stated twice drifts.
+#:
+#: `core/stateless.py`'s `_capability_missing` already holds the principle: *"It also states that
+#: re-issuing the call unchanged will fail identically, because the model is the reader and 'retry'
+#: is otherwise the obvious response to a refusal."* This denial did not say that. A live session
+#: burned a turn discovering it had to fall back to read-only tools, and a human reading
+#: *"AUTO_EDIT mode blocks run_bash"* has no idea what to change.
+_AUTO_EDIT_DENY_REMEDY = (
+    "execution is a hard deny in this mode and is never prompted — set "
+    "WISP_PERMISSION_MODE=ask_all (prompt before each command) or =full (unprompted) to run it. "
+    "`run_tests` IS allowed here. Re-issuing unchanged will fail identically."
+)
 
 _DEFAULT_AUTO_EDIT_BLOCK = _AUTO_EDIT_DENY_TOOLS | _AUTO_EDIT_APPROVAL_TOOLS
 
@@ -345,14 +368,15 @@ def _make_safe_read_rule(safe_tools: frozenset[str]) -> RulePredicate:
     return predicate
 
 
-def _make_block_rule(blocked: frozenset[str], reason_template: str, mode_name: str) -> RulePredicate:
+def _make_block_rule(blocked: frozenset[str], reason_template: str, mode_name: str,
+                     suffix: str = "") -> RulePredicate:
     def predicate(action: Action, ctx: EvalContext) -> Optional[PolicyDecision]:
         if ctx.permission_mode != mode_name:
             return None
         if action.name in blocked:
             return PolicyDecision.deny(
                 "mode.block",
-                f"{reason_template} {action.name}",
+                f"{reason_template} {action.name}{suffix}",
             )
         return None
     return predicate

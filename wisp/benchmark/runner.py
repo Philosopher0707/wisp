@@ -36,10 +36,16 @@ class BenchResult:
     model_patch: str = ""
     # Reverse-apply check (git apply --check -R) of model_patch.
     patch_applies: bool = False
+    # True when verify() could not determine an outcome (e.g. the target
+    # repo's own runtime deps aren't installed) — never a model fault, and
+    # must not be scored as one. See swebench.ENV_UNAVAILABLE_PREFIX.
+    env_unavailable: bool = False
 
     def status(self) -> str:
         if self.timed_out:
             return "TIMEOUT"
+        if self.env_unavailable:
+            return "ENV_UNAVAILABLE"
         return "PASS" if self.passed else "FAIL"
 
 
@@ -130,13 +136,17 @@ def _git_diff_patch(ws) -> str:
 
     Tool exhaust (__pycache__, .pytest_cache) is excluded: it is never
     model work, and binary hunks would corrupt the patch for
-    ``git apply --check`` downstream.
+    ``git apply --check`` downstream. ``.wisp/`` is wisp's own scratch
+    directory inside the workspace (audit.jsonl, repo_map.json, ...,
+    written by the runtime itself during the turn) — also never model
+    work, and including it was inflating a normally-small SWE-bench fix
+    to tens of KB and polluting the predictions file with non-repo content.
     """
     _git(["add", "-N", "."], ws)  # intent-to-add: new files enter the diff
     # NOTE: ':!...' short exclude magic is broken in some git builds
     # (fatal: Unimplemented pathspec magic); the long form is portable.
     rc, out = _git(["diff", "HEAD", "--", ".", ":(exclude)__pycache__",
-                    ":(exclude).pytest_cache"], ws)
+                    ":(exclude).pytest_cache", ":(exclude).wisp"], ws)
     if rc != 0 or not out:
         return ""
     # _git() strips output; a patch missing its final newline is corrupt
@@ -207,6 +217,9 @@ async def run_task(
             detail = f"events: {edetail}"
     result.passed = ok
     result.verify_detail = detail[:200]
+    if not ok:
+        from wisp.benchmark.swebench import ENV_UNAVAILABLE_PREFIX
+        result.env_unavailable = detail.startswith(ENV_UNAVAILABLE_PREFIX)
     # SWE-bench surface: capture the turn's workspace diff as the patch,
     # win or lose — a failing run's partial diff is still scorable data.
     result.model_patch = _git_diff_patch(ws)
@@ -259,6 +272,10 @@ def aggregate(models: list[str], results: list[BenchResult]) -> list[ModelScorec
             card.surrendered += 1
         if res.timed_out:
             card.timed_out += 1
+        elif res.env_unavailable:
+            # Unscorable, not failed — excluded from pass_rate's denominator
+            # so a missing dependency never drags down a model's score.
+            card.env_unavailable += 1
         elif res.passed:
             card.passed += 1
         else:

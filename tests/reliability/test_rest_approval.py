@@ -168,12 +168,18 @@ def test_the_timeout_is_bounded_and_named():
 
 # ── the trigger: per route, per mode ────────────────────────────────────────
 
-def test_the_trigger_is_the_three_executable_config_actions():
+def test_the_trigger_is_the_executable_config_actions():
+    """ADR-0066 R3 — the set covers *executing* as well as *persisting*.
+
+    `hooks.test` and `mcp.test_server` join it because each runs what its sibling only
+    stores; the routes' own comments name them "the same authority class". The set was
+    five names from ADR-0066; it was three from ADR-0057.
+    """
     from wisp.server.approval_bridge import (REST_APPROVAL_ACTIONS,
                                              REST_APPROVAL_MODES,
                                              action_requires_rest_approval)
-    assert REST_APPROVAL_ACTIONS == {"hooks.create", "mcp.add_server",
-                                     "plugins.install"}
+    assert REST_APPROVAL_ACTIONS == {"hooks.create", "hooks.test", "mcp.add_server",
+                                     "mcp.test_server", "plugins.install"}
     assert REST_APPROVAL_MODES == {"auto_edit", "ask_all"}
 
     for action in sorted(REST_APPROVAL_ACTIONS):

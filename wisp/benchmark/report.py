@@ -15,7 +15,8 @@ def _pad(text: str, width: int) -> str:
 
 def render_result_line(res: BenchResult, width: int = 72) -> str:
     """One line per (model, task) outcome, for live progress output."""
-    marker = {"PASS": "✓", "FAIL": "✗", "TIMEOUT": "⏱"}.get(res.status(), "?")
+    marker = {"PASS": "✓", "FAIL": "✗", "TIMEOUT": "⏱",
+              "ENV_UNAVAILABLE": "∅"}.get(res.status(), "?")
     detail = res.verify_detail or res.error
     suffix = f" — {detail}" if detail and not res.passed else ""
     stats = getattr(res, "stats", None)

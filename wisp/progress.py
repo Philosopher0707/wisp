@@ -34,11 +34,7 @@ def format_progress(plan: Plan) -> str:
 
 def list_plans(workspace: str = "") -> str:
     """List all plans, optionally filtered by workspace."""
-    store = PlanStore()
-    plans = store.list_all()
-
-    if workspace:
-        plans = [p for p in plans if p["workspace"] == workspace]
+    plans = PlanStore().list_all(workspace or None)
 
     if not plans:
         return "No plans found."

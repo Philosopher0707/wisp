@@ -34,7 +34,19 @@ dev = ["pytest>=7.0", "httpx>=0.27", "pytest-asyncio>=1.3.0", "ruff>=0.6", "mypy
 wisp = "wisp.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["wisp*"]
+# `agent*` is REQUIRED, not optional. `wisp/composition.py` imports the top-level `agent`
+# package at five sites (`agent.logger`, `agent.tools.runner`, `agent.tools.batch_reader`), so a
+# distribution that ships only `wisp*` cannot run its own entry point:
+#
+#     $ wisp repl
+#     File ".../wisp/composition.py", line 137, in __post_init__
+#         from agent.tools.batch_reader import BatchReaderExtension
+#     ModuleNotFoundError: No module named 'agent'
+#
+# A console script puts the *script's* directory on `sys.path`, not the working directory, so
+# running from the repo root does not mask this — only `python -m wisp` does, because `-m` adds
+# the CWD. That is why the defect survived: the one invocation that works is not the one users run.
+include = ["wisp*", "agent*"]
 
 [tool.pytest.ini_options]
 # Restrict collection to the test tree. wisp/test_distill.py and

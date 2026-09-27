@@ -51,12 +51,23 @@ REST_APPROVAL_RESPONSE_FRAME = "tool_approval"
 #: channel's own 60s because a REST request is holding an HTTP connection open.
 REST_APPROVAL_TIMEOUT_S = 30.0
 
-#: The executable-config actions. These persist something Wisp later *executes* — a hook
-#: command, an MCP server, a plugin — which is why they are the ones that ask. Stated as
-#: a set so the decision is readable, not inferred from a risk-table default.
+#: The executable-config actions. These *persist or immediately execute* something Wisp
+#: runs — a hook command, an MCP server, a plugin — which is why they are the ones that ask.
+#: Stated as a set so the decision is readable, not inferred from a risk-table default.
+#:
+#: **ADR-0066 R3 — the set covers executing, not only persisting.** `hooks.test` and
+#: `mcp.test_server` are here because each *runs* what its sibling only stores, and each
+#: route's own comment says so (`hooks.py` "Testing a hook EXECUTES its command — the same
+#: authority class as creating one"; `mcp.py` "Health-checking an MCP server SPAWNS it").
+#: Both already carry a policy gate; before ADR-0066 they did not ask a human, so a human
+#: authorised a capability and was never asked to exercise it. `authorize()` already returns
+#: `approval_required` for both — `risk_for_tool` fails closed to `EXEC` for a name with no
+#: table row — so this set now agrees with the authority it composes rather than lagging it.
 REST_APPROVAL_ACTIONS: frozenset[str] = frozenset({
     "hooks.create",
+    "hooks.test",
     "mcp.add_server",
+    "mcp.test_server",
     "plugins.install",
 })
 

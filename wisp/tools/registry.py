@@ -911,6 +911,14 @@ def execute_tool(name: str, args: dict, workspace: str, max_data_chars: int = 0,
     For advanced features (security_policy, lsp_manager, file_lock), uses
     the module-level TOOL_IMPLS directly.
 
+    **Do not wire this entrypoint — or `security_policy` — into a new production caller
+    without the checks `ToolRegistry.execute` supplies.** It authorises per call, but it does
+    **not** truncate (`max_data_chars` is accepted and unused on this path) and it does not
+    run the registry's own security consult, so a caller that reaches a tool through here
+    opts out of both. The two paths that may use it are named below; nothing else may, and
+    the annotation is a prohibition rather than a description of how the parameter works.
+    (`ITEM-F3`, closed by ADR-0065 R3 — this is the sentence that item owed.)
+
     Authority gate (M2): direct callers are untrusted by default, so this
     entrypoint consults authorize() and fails closed — hard denials AND
     approval-required outcomes are refused, because there is no approval

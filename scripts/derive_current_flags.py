@@ -83,13 +83,13 @@ ROWS: list[tuple[str, str, str, str, str, str, str, str]] = [
      "ADR-0054", "tests/reliability/test_acceptance_gate_enablement.py"),
 
     # ── The REST and WebSocket approval flags ───────────────────────────────
-    ("rest_approval", "WISP_REST_APPROVAL", "OFF", "`wisp/server/deps.py:554`",
+    ("rest_approval", "WISP_REST_APPROVAL", "OFF", "`wisp/server/deps.py:574`",
      "route a REST request for an executable-config action through the WebSocket channel for a human decision",
      "—", "ADR-0057", "tests/reliability/test_rest_approval.py"),
 
     # ── The verification loop ───────────────────────────────────────────────
     ("verification_loop", "WISP_VERIFICATION_LOOP", "ON",
-     "`wisp/core/stateless.py:505`, `wisp/core/stateless.py:1439`",
+     "`wisp/core/stateless.py:530`, `wisp/core/stateless.py:1464`",
      "require an exit-0 verification after code edits before a turn may complete",
      "—", "ADR-0016", "—"),
 
@@ -304,7 +304,7 @@ def render() -> str:
     A("   deviation**, not an accident — but the consequence stands: ADR-0002 part 2 does not")
     A("   apply to them, and a test double cannot opt out by setting an attribute.")
     A("2. **`verification_loop` has two consumption sites on the turn path**")
-    A("   (`wisp/core/stateless.py:505` and `:1439`) and `turn_spans` has two")
+    A("   (`wisp/core/stateless.py:530` and `:1464`) and `turn_spans` has two")
     A("   (`wisp/composition.py:314`, `wisp/core/runtime.py:1418`). ADR-0002 says *\"read at the")
     A("   consumption site\"* — **plural sites are consistent with the rule**, so this is")
     A("   recorded as a fact rather than a violation. It is worth stating because the brief for")

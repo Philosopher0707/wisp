@@ -1,5 +1,6 @@
 """CLI entry point for Wisp — the local Ollama-powered coding agent."""
 
+from wisp.user_env import load_user_env  # F57 — called first in main()
 import os
 
 # ── Early cwd recovery (before any import that calls getcwd) ──────────
@@ -310,6 +311,20 @@ def cmd_check(model=None):
     config = WispConfig()
     if model:
         config = config.replace(model=model)
+    if not config.model:
+        # Empty model is legal (provider_catalog resolves it to the first
+        # served model at core-build time — see test_factory_passes_
+        # empty_model_through_no_fallback) — but checking health against
+        # literally nothing produced a confusing "Model '' is available"
+        # false-positive. Resolve it first, the same way the composition
+        # root does, instead of teaching the provider to reject empty.
+        # Only intervene when a real model was actually found: an
+        # unreachable provider must fall through unchanged so check_health()
+        # below reports its own connection error, not a generic one.
+        from wisp.provider_catalog import resolve_selection
+        resolution = resolve_selection(config)
+        if resolution.suggested:
+            config = config.replace(model=resolution.suggested)
     client = get_provider(config)
     ok = client.check_health()
     if ok:
@@ -683,13 +698,16 @@ def cmd_git(args: list[str]):
 
 def cmd_plan(args: list[str]):
     """Manage structured plans."""
+    from wisp.config import WispConfig
     from wisp.planner import PlanStore
     from wisp.progress import format_progress, list_plans
 
+    # ADR-0064 R2: the workspace the agent's session carries, not the literal ".".
+    workspace = WispConfig().workspace
     if not args:
         # Show active plan
         store = PlanStore()
-        plan = store.load_active(".")
+        plan = store.load_active(workspace)
         if plan:
             print(format_progress(plan))
         else:
@@ -698,12 +716,12 @@ def cmd_plan(args: list[str]):
         return
 
     if args[0] == "list":
-        print(list_plans("."))
+        print(list_plans(workspace))
         return
 
     if args[0] == "abort":
         store = PlanStore()
-        plan = store.load_active(".")
+        plan = store.load_active(workspace)
         if plan:
             plan.abort()
             store.save(plan)
@@ -725,11 +743,12 @@ def cmd_plan(args: list[str]):
 
 def cmd_progress(args: list[str]):
     """Show current plan progress."""
+    from wisp.config import WispConfig
     from wisp.planner import PlanStore
     from wisp.progress import format_progress
 
     store = PlanStore()
-    plan = store.load_active(".")
+    plan = store.load_active(WispConfig().workspace)
     if plan:
         print(format_progress(plan))
     else:
@@ -1151,7 +1170,27 @@ def _convert_sigterm_to_interrupt() -> None:
         pass  # non-main thread or restricted environment
 
 
+def _run_with_config_error_handling(fn, *args, **kwargs):
+    """Run *fn*; turn a corrupt-config ValueError into a clean CLI error.
+
+    One reusable catch so every dispatch call site in main() gets the same
+    loud-refusal wisp.entry.check_config_file's own pre-flight already
+    gives the run/repl/tui path — without wrapping main() itself, which
+    would stop load_user_env() from being its literal first statement
+    (tests/test_dotenv_is_read.py pins that by AST).
+    """
+    try:
+        return fn(*args, **kwargs)
+    except ValueError as exc:
+        print(error(f"Invalid configuration: {exc}."), file=sys.stderr)
+        raise SystemExit(2)
+
+
 def main():
+    # F57: `~/.config/wisp/.env` is written by `provider_select.store_key()`; load it FIRST, before
+    # any `WispConfig` or provider reads the environment. Exported variables win; an absent file
+    # is a no-op. The one load site — `tests/test_dotenv_is_read.py` pins it.
+    load_user_env()
     _register_stack_dumper()
     _convert_sigterm_to_interrupt()
     argv = list(sys.argv[1:])
@@ -1457,7 +1496,7 @@ def main():
             "bench": _do_bench,
             "converge": _do_converge,
         }
-        return _SUBCOMMAND_TABLE[first]()
+        return _run_with_config_error_handling(_SUBCOMMAND_TABLE[first])
 
     else:
         # Implicit mode: wisp [flags] 'prompt'  OR  wisp --print "prompt"
@@ -1467,7 +1506,8 @@ def main():
         if flags_print is not None:
             if flags_quiet:
                 _setup_logging(verbose=False)
-            cmd_print(
+            _run_with_config_error_handling(
+                cmd_print,
                 prompt=flags_print,
                 model=flags_model,
                 session_id=flags_session,
@@ -1480,7 +1520,10 @@ def main():
             print(error("✗ Please provide a prompt."))
             print_help()
             return
-        cmd_run(" ".join(rest), flags_model, flags_skill, flags_workspace, flags_auto, flags_session, flags_show_thinking, flags_provider)
+        _run_with_config_error_handling(
+            cmd_run, " ".join(rest), flags_model, flags_skill, flags_workspace,
+            flags_auto, flags_session, flags_show_thinking, flags_provider,
+        )
 
 
 if __name__ == "__main__":

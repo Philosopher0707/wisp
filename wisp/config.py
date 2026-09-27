@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Optional
 from dataclasses import dataclass
 from wisp.infra.security import PermissionMode
+from wisp.pathsec import resolve_contained
 
 
 logger = logging.getLogger(__name__)
@@ -566,15 +567,31 @@ def get_config_path() -> Path:
 
 
 def load_config() -> dict[str, Any]:
-    """Load config from ~/.config/wisp/config.json."""
+    """Load config from ~/.config/wisp/config.json.
+
+    A missing file is first-boot and returns {} silently. A file that
+    EXISTS but fails to parse, or isn't a JSON object, raises ValueError
+    instead of silently discarding every persisted setting (permission_mode
+    included) back to defaults — every caller of get_setting()/WispConfig()
+    now gets the same loud-refusal wisp.entry.check_config_file already
+    gave the run/repl/tui path alone.
+    """
     cfg_path = get_config_path()
-    if cfg_path.exists():
-        try:
-            loaded: Any = json.loads(cfg_path.read_text())
-            return loaded if isinstance(loaded, dict) else {}
-        except (json.JSONDecodeError, OSError):
-            pass
-    return {}
+    if not cfg_path.exists():
+        return {}
+    try:
+        text = cfg_path.read_text()
+    except OSError as exc:
+        raise ValueError(f"Cannot read config file {cfg_path}: {exc}") from exc
+    try:
+        loaded: Any = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"Config file {cfg_path} is corrupt ({exc}); refusing to load it as empty"
+        ) from exc
+    if not isinstance(loaded, dict):
+        raise ValueError(f"Config file {cfg_path} must hold a JSON object")
+    return loaded
 
 
 def save_config(config: dict[str, Any]) -> None:
@@ -701,6 +718,26 @@ def _parse_float(value: Any, default: float, min_val: float | None = None, max_v
     if max_val is not None and result > max_val:
         return max_val
     return result
+
+
+def _parse_permission_mode(value: Any, default: "PermissionMode") -> "PermissionMode":
+    """Parse a permission_mode setting, falling back to default on error.
+
+    The one typed setting that wasn't already wrapped this way — a bad
+    WISP_PERMISSION_MODE used to raise straight out of WispConfig() for
+    every subcommand that doesn't go through entry.validate_env_config()
+    (run/repl/tui only). That pre-flight still catches it early there;
+    this makes every other subcommand degrade instead of crash.
+    """
+    if isinstance(value, PermissionMode):
+        return value
+    try:
+        return PermissionMode(value)
+    except ValueError:
+        logger.warning(
+            "Invalid permission_mode %r; falling back to %s", value, default.value
+        )
+        return default
 
 
 @dataclass(frozen=True, init=False)
@@ -923,7 +960,10 @@ class WispConfig:
         object.__setattr__(self, "_context_tokens_explicit", raw_ctx is not None)
         # Permissions: full (all allowed) | ask_all (ask for writes) | auto_edit (ask for bash only) | read_only (no writes)
         object.__setattr__(self, "permission_mode",
-            PermissionMode(get_setting("permission_mode", PermissionMode.AUTO_EDIT.value))
+            _parse_permission_mode(
+                get_setting("permission_mode", PermissionMode.AUTO_EDIT.value),
+                PermissionMode.AUTO_EDIT,
+            )
         )
         # Capability filtering (13-I2): host-owned visibility partition.
         # OFF preserves the exact legacy provider surface; ON filters
@@ -1131,9 +1171,20 @@ class WispConfig:
         found_files: list[Path] = []
         mtimes: dict[str, float] = {}
 
-        # 1. Search workspace root for each file in context_files list
+        # 1. Search workspace root for each file in context_files list.
+        # `context_files` is env/config-controlled (WISP_CONTEXT_FILES); an
+        # absolute or `..`-traversal entry would otherwise read arbitrary
+        # files and inject their content into the system prompt sent to the
+        # provider. resolve_contained rejects both before any read happens.
         for fname in self.context_files:
-            candidate = ws_path / fname
+            try:
+                contained = resolve_contained(str(ws_path), fname, allow_absolute=False)
+            except ValueError:
+                logger.warning(
+                    "context_files entry %r is outside the workspace; skipped", fname
+                )
+                continue
+            candidate = Path(contained)
             if candidate.is_file():
                 found_files.append(candidate)
 
@@ -1309,6 +1360,7 @@ class WispConfig:
             str(self.ollama_url),
             str(self.api_base or ""),
             str(self.permission_mode.value if hasattr(self.permission_mode, "value") else self.permission_mode),
+            str(self.autonomous),
             str(self.capability_filtering),
             str(self.show_thinking),
             str(self.workspace or ""),

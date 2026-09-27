@@ -21,6 +21,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from wisp.net_security import assert_ollama_host_safe, validate_api_base
+
 logger = logging.getLogger(__name__)
 
 # ── Model-listing TTL cache ──────────────────────────────────────────
@@ -118,6 +120,11 @@ def _list_models_impl(name: str, cfg: Any) -> list[str]:
         return ["mock-model"]
     if name == "ollama":
         base = _ollama_base(cfg)
+        try:
+            assert_ollama_host_safe(base)
+        except ValueError as exc:
+            logger.warning("Ollama model listing blocked: %s", exc)
+            return []
         models = _authed_get(f"{base}/api/tags", cfg)
         # Cloud models route through the same daemon listing already.
         return sorted(models)
@@ -125,6 +132,11 @@ def _list_models_impl(name: str, cfg: Any) -> list[str]:
         return sorted(_authed_get("https://openrouter.ai/api/v1/models", cfg))
     if name == "openai":
         base = str(getattr(cfg, "api_base", "") or "https://api.openai.com/v1")
+        try:
+            base = validate_api_base(base, "openai")
+        except ValueError as exc:
+            logger.warning("OpenAI model listing blocked: %s", exc)
+            return []
         return sorted(_authed_get(f"{base.rstrip('/')}/models", cfg))
     if name == "nvidia":
         live = _authed_get("https://integrate.api.nvidia.com/v1/models", cfg)
@@ -195,8 +207,13 @@ def _is_base_reachable(provider: str, cfg: Any, timeout: float = 2.0) -> bool:
         import requests
     except Exception:
         return True
+    base = _ollama_base(cfg)
     try:
-        requests.get(_ollama_base(cfg), timeout=timeout)
+        assert_ollama_host_safe(base)
+    except ValueError:
+        return False
+    try:
+        requests.get(base, timeout=timeout)
         return True
     except Exception:
         return False

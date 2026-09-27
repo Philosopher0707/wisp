@@ -9,6 +9,16 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _with_state(message: str, plan) -> str:
+    """The tool's result, followed by the plan's current state.
+
+    ADR-0063 R1: this is how the model sees its plan again, as tool output (`TOOL_OUTPUT` trust)
+    and current at this call. It is never a system-prompt section (R2).
+    """
+    state = plan.format_for_prompt()
+    return f"{message}\n\n{state}" if state else message
+
+
 def tool_plan_task(goal: str, tasks: str, workspace: str = ".") -> str:
     """Create a structured plan with subtasks.
 
@@ -47,8 +57,8 @@ def tool_mark_step_done(task_id: str, notes: str = "", workspace: str = ".") -> 
     if plan.complete_task(task_id, notes=notes):
         store.save(plan)
         done, total = plan.progress()
-        return f"✓ Marked task {task_id} as done. Progress: {done}/{total}"
-    return f"⚠ Could not complete task {task_id}. Is it in progress?"
+        return _with_state(f"✓ Marked task {task_id} as done. Progress: {done}/{total}", plan)
+    return _with_state(f"⚠ Could not complete task {task_id}. Is it in progress?", plan)
 
 
 def tool_update_plan(task_id: str, status: str, notes: str = "", workspace: str = ".") -> str:
@@ -62,7 +72,7 @@ def tool_update_plan(task_id: str, status: str, notes: str = "", workspace: str 
 
     task = plan.get_task(task_id)
     if not task:
-        return f"⚠ Task {task_id} not found."
+        return _with_state(f"⚠ Task {task_id} not found.", plan)
 
     if status == "in_progress":
         plan.start_task(task_id)
@@ -78,4 +88,4 @@ def tool_update_plan(task_id: str, status: str, notes: str = "", workspace: str 
 
     store.save(plan)
     done, total = plan.progress()
-    return f"✓ Updated task {task_id} to '{status}'. Progress: {done}/{total}"
+    return _with_state(f"✓ Updated task {task_id} to '{status}'. Progress: {done}/{total}", plan)

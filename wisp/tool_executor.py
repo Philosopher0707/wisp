@@ -35,7 +35,7 @@ from wisp.core.events import (
     subagent as _subagent_event,
     system as system_event,
 )
-from wisp.auth import authorize, classify_workspace, local_principal
+from wisp.auth import authorize, classify_workspace
 from wisp.exceptions import ApprovalCancelled, ApprovalTimeout
 from wisp.tools.errors import ToolError
 from wisp.tools._utils import check_dangerous_command

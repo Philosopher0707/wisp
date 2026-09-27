@@ -14,7 +14,7 @@
 > `CURRENT_OPEN_ITEMS.md` (what is open), `CURRENT_FLAGS.md` (every rollback flag and its
 > default). All four are derived; none may decide.
 >
-> Generated 2026-09-25 at `db3baec` · **104 findings** (F1–F104) · **15 not closed** · vocabulary in §(a), classes in §(b).
+> Generated 2026-09-25 at `f251ed4` · **104 findings** (F1–F104) · **13 not closed** · vocabulary in §(a), classes in §(b).
 
 ---
 
@@ -68,7 +68,7 @@
 | **F44** | An iteration-budget-exhausted turn whose wrap-up succeeds was recorded `was_last_turn_complete == True` | `CLOSED` | — | ADR-0042 | WISP_MIGRATION_STATUS.md:1881 — “**CLOSED (PM-23) — ADR-0042.**” | tests/reliability/test_post_m13_completion_enforcement.py |
 | **F45** | No objective-level control loop existed; a failed turn simply ended | `FIXED` | unwired-control | ADR-0045 | WISP_MIGRATION_STATUS.md:166 — “**REPAIRED (ADR-0045)**” | tests/reliability/test_next_convergence_controller.py |
 | **F46** | `acceptance.evaluate` had no producer of `AcceptanceCriteria` from a user objective | `FIXED` | unwired-control | ADR-0045 | WISP_MIGRATION_STATUS.md:167 — “**REPAIRED (ADR-0045 R1)**” | tests/reliability/test_next_autonomous_wiring.py |
-| **F47** | `PlanStore` is write-only — a plan the model wrote is never shown to it again | `OPEN` | unwired-control | — | WISP_MIGRATION_STATUS.md:168 — “**OPEN, recorded**” | — |
+| **F47** | `PlanStore` is write-only — a plan the model wrote is never shown to it again | `FIXED` | unwired-control | ADR-0063 | WISP_MIGRATION_STATUS.md:168 — “**FIXED 2026-09-26 (ADR-0063)** (was *OPEN, recorded*)” | tests/test_plan_shown_as_tool_output.py |
 | **F48** | The default `permission_mode` is `auto_edit`, in which `run_bash` is blocked, so the agent cannot run the project's own tests | `OPEN` | — | — | WISP_MIGRATION_STATUS.md:169 — “**OPEN, recorded**” | — |
 | **F49** | A deterministic acceptance check that cannot be evaluated must not report `FAIL` | `FIXED` | false-success | ADR-0045 | WISP_MIGRATION_STATUS.md:170 — “**REPAIRED (ADR-0045 R4)**” | tests/reliability/test_next_convergence_controller.py |
 | **F50** | Stagnation was reported from an *empty* measurement and from an objective with no criteria | `FIXED` | false-success | ADR-0045 | WISP_MIGRATION_STATUS.md:171 — “**REPAIRED (ADR-0045 R7)**” | tests/reliability/test_next_convergence_controller.py |
@@ -78,7 +78,7 @@
 | **F54** | The mutating tool surface is unreachable on any path that builds a `WispAgentCore` by hand | `FIXED` | instrument-defect | ADR-0045 | WISP_MIGRATION_STATUS.md:175 — “**FIXED** … One-line fix (wire a `ToolExecutor`) plus two tripwires” | tests/reliability/test_next_autonomous_wiring.py |
 | **F55** | `wisp converge` declared `--model`/`--workspace`, but those are global flags stripped before the handler runs | `FIXED` | — | — | WISP_MIGRATION_STATUS.md:176 — “**REPAIRED** … a test asserts the parser does not re-declare them” | tests/reliability/test_next_convergence_controller.py |
 | **F56** | Resume lost the recovery strategy — in two parts | `FIXED` | — | — | WISP_MIGRATION_STATUS.md:177 — “**FIXED** … Tests: `test_resume_preserves_the_recovery_strategy`, `test_the_ladder_history_survives_a_resume`” | tests/reliability/test_next_convergence_controller.py |
-| **F57** | `~/.config/wisp/.env` is WRITE-ONLY — nothing in `wisp/` ever reads it | `OPEN` | unwired-control | — | WISP_MIGRATION_STATUS.md:178 — “**OPEN, recorded**” | — |
+| **F57** | `~/.config/wisp/.env` is WRITE-ONLY — nothing in `wisp/` ever reads it | `FIXED` | unwired-control | — | WISP_MIGRATION_STATUS.md:178 — “**FIXED 2026-09-26** (was *OPEN, recorded*)” | tests/test_dotenv_is_read.py |
 | **F58** | The acceptance criterion was tamperable: a live agent rewrote the contract and the loop reported `goal_met` | `FIXED` | false-success | — | WISP_MIGRATION_STATUS.md:179 — “**FIXED** … `verify:cmdN:inputs_unchanged` is a **required** criterion” | tests/reliability/test_next_autonomous_wiring.py |
 | **F59** | A timeout that made real progress had no recovery that could continue the work | `FIXED` | — | ADR-0046 | WISP_MIGRATION_STATUS.md:180 — “**FIXED (ADR-0046)**” | tests/reliability/test_progress_aware_recovery.py |
 | **F60** | A run whose every acceptance criterion PASSES was reported `goal_failed` when its last turn was cut off | `FIXED` | — | ADR-0047 | WISP_MIGRATION_STATUS.md:181 — “**FIXED (ADR-0047)**” | tests/reliability/test_precedence_canonical.py |
@@ -96,21 +96,21 @@
 | **F72** | The criteria classifier's error rate is not a single number — it is a function of `(objective, workspace)` | `OPEN` | measurement-method | ADR-0050 | WISP_MIGRATION_STATUS.md:1890 — “**RECORDED; ADR-0050's Context carries it.**” | tests/reliability/test_structured_criteria.py |
 | **F73** | The ADR-0045 R1 no-model-channel tripwire was over-broad, in two successive forms | `FIXED` | instrument-defect | — | WISP_MIGRATION_STATUS.md:1891 — “**FIXED** — rewritten to test the two things that make a channel” | tests/reliability/test_structured_criteria.py |
 | **F74** | A declared-path test was vacuous with respect to the promotion it claimed to test | `FIXED` | instrument-defect | — | WISP_MIGRATION_STATUS.md:1892 — “**FIXED** — the baseline's criteria id is now a parameter” | tests/reliability/test_structured_criteria.py |
-| **F75** | The previous mission's instrument was never committed, so its measurement cannot be re-run | `OPEN` | measurement-method | — | PHASE_GATE_ENABLEMENT.md:160 — “**Not repaired** (that is ADR-0050's record …)” | — |
+| **F75** | The previous mission's instrument was never committed, so its measurement cannot be re-run | `OPEN` | measurement-method | — | PHASE_GATE_ENABLEMENT.md:175 — “**Not repaired** (that is ADR-0050's record …)” | — |
 | **F76** | The brief's own framing assumed the `INCONCLUSIVE` rate was the question | `CLOSED` | model-vs-path | ADR-0051 | PHASE_GATE_ENABLEMENT.md:181 — “Driven, that framing does not survive contact with the code” | tests/reliability/test_gate_enablement_contract.py |
 | **F77** | A bare string scan over a Python tree read a docstring as a caller — M8's `dag_to_graph` tripwire | `FIXED` | instrument-defect | — | PHASE_DAG_RETIREMENT.md:150 — “Rewritten with `ast`: only an `ImportFrom` of the name, or a `Call` to it, counts.” The report does not number it; the number is `tests/reliability/test_outcome_classification_delegation.py:61`'s (“F77's shape”), resolved by `PHASE_CORPUS_GOVERNANCE_II.md` §4 | tests/reliability/test_dag_retirement_contract.py |
 | **F78** | A model is not a path — the parity ratchet compared two decision models and concluded about two paths | `CLOSED` | model-vs-path | ADR-0055 | PHASE_AUTHORIZATION_PARITY.md:201 — “**F78 — a model is not a path.**” corrected in place | tests/test_authorization_parity.py |
-| **F79** | A check that passes by finding nothing, again — none of the ratchet's seven properties compared the two paths | `FIXED` | instrument-defect | — | PHASE_AUTHORIZATION_PARITY.md:208 — “The new guard parses the AST.” | tests/test_authorization_parity.py |
-| **F80** | `tests/test_protected_path_guard.py` cannot run in this environment (`httpx` absent) | `OPEN` | — | — | PHASE_AUTHORIZATION_PARITY.md:214 — “Not repaired: installing a dependency is an environment change” | — |
+| **F79** | A check that passes by finding nothing, again — none of the ratchet's seven properties compared the two paths | `FIXED` | instrument-defect | — | PHASE_AUTHORIZATION_PARITY.md:211 — “The new guard parses the AST.” | tests/test_authorization_parity.py |
+| **F80** | `tests/test_protected_path_guard.py` cannot run in this environment (`httpx` absent) | `OPEN` | — | — | PHASE_AUTHORIZATION_PARITY.md:218 — “Not repaired: installing a dependency is an environment change” | — |
 | **F81** | A derived page carries a superseded disposition (`CURRENT_AUTHORITIES.md` §4) | `CLOSED` | record-integrity | — | PHASE_AUTHORIZATION_PARITY.md:221 — “**Corrected in place**” | tests/reliability/test_current_authorities_pins.py |
-| **F82** | The two “canonical” test blocks listed different file sets | `CLOSED` | count-canonicality | — | PHASE_OBJECTIVE_FLAG_COMPOSITION.md:145 — “**Both blocks now list the same 43 files**” | tests/reliability/test_current_authorities_pins.py |
+| **F82** | The two “canonical” test blocks listed different file sets | `CLOSED` | count-canonicality | — | PHASE_OBJECTIVE_FLAG_COMPOSITION.md:156 — “**Both blocks now list the same 43 files**” | tests/reliability/test_current_authorities_pins.py |
 | **F83** | A capability claim about a path, measured against the path — the WebSocket question direction never reached a client | `FIXED` | model-vs-path | ADR-0061 | PHASE_REST_APPROVAL.md:153 — “**F83 — a capability claim about a path, measured against the path.**”; **fixed** by ADR-0061 (`CONTEXT.md` §12 row W1: “✅ **CLOSED 2026-09-25 (ADR-0061)**”) | tests/reliability/test_external_input_path.py |
 | **F84** | The three routes' own comments described a design the flag now changes | `CLOSED` | record-integrity | — | PHASE_REST_APPROVAL.md:166 — “They now state both readings.” | — |
 | **F85** | A count is canonical only if it is measured after the LAST change to any member | `CLOSED` | count-canonicality | — | PHASE_OUTCOME_CLASSIFICATION_VIOLATION.md:202 — recorded as a **discipline**; `CONTEXT.md` §10 carries it | — |
 | **F86** | The corpus classified two unlike guards as one class | `CLOSED` | instrument-defect | — | PHASE_OUTCOME_CLASSIFICATION_VIOLATION.md:213 — added as `CONTEXT.md` §10's **fourth sub-case** row | tests/test_outcome_classification_authority.py |
-| **F87** | §3's commit table did not list every commit, and §0 said it did | `FIXED` | record-integrity | — | PHASE_CORPUS_INTEGRITY_II.md:123 — “**§3's table backfilled with the nine missing handoff commits**” | tests/test_doc_drift.py |
-| **F88** | The M4 policy suite is red in this environment (`cryptography` absent), and nothing in the corpus said so | `OPEN` | — | — | PHASE_KEY_TRUST_WORKFLOW.md:118 — “**not repaired** (it needs the dependency, not a code change)” | — |
-| **F89** | A bundle that omits `expires_at` crashes the loader with an unrelated message | `FIXED` | — | — | PHASE_KEY_TRUST_WORKFLOW.md:136 — “**Named, not fixed**”; **CLOSED** by corpus integrity III (`CONTEXT.md` §0: “2.1 **CLOSED** (**F89**'s message; the trailing `or 0.0` was **unreachable**)”) | tests/reliability/test_key_trust_workflow.py |
+| **F87** | §3's commit table did not list every commit, and §0 said it did | `FIXED` | record-integrity | — | PHASE_CORPUS_INTEGRITY_II.md:177 — “**§3's table backfilled with the nine missing handoff commits**” | tests/test_doc_drift.py |
+| **F88** | The M4 policy suite is red in this environment (`cryptography` absent), and nothing in the corpus said so | `OPEN` | — | — | PHASE_KEY_TRUST_WORKFLOW.md:134 — “**not repaired** (it needs the dependency, not a code change)” | — |
+| **F89** | A bundle that omits `expires_at` crashes the loader with an unrelated message | `FIXED` | — | — | PHASE_KEY_TRUST_WORKFLOW.md:148 — “**Named, not fixed**”; **CLOSED** by corpus integrity III (`CONTEXT.md` §0: “2.1 **CLOSED** (**F89**'s message; the trailing `or 0.0` was **unreachable**)”) | tests/reliability/test_key_trust_workflow.py |
 | **F90** | The brief's ADR number is wrong: 0059 is not the next free number; 0058 is | `CLOSED` | record-integrity | ADR-0058 | PHASE_KEY_TRUST_WORKFLOW.md:151 — “**F90 — the brief's ADR number is wrong**” | — |
 | **F91** | The brief's worked example for `WISP_POLICY_PUBKEY` is wrong: it is key material, not a path | `CLOSED` | model-vs-path | ADR-0058 | PHASE_KEY_TRUST_WORKFLOW.md:153 — “**F91 — the brief's worked example … is wrong**” | — |
 | **F92** | Two M4 tripwires scanned for a bare name and pinned an exact set, so a legitimate addition fired them for the wrong reason | `FIXED` | instrument-defect | — | PHASE_M4_WIRING.md:154 — “Both repaired, both probed in both directions.” | tests/test_m4_governance_wiring.py |
@@ -118,14 +118,14 @@
 | **F94** | A measurement's condition is part of its result | `CLOSED` | measurement-method | ADR-0059 | PHASE_REST_AUTHORIZATION_COMPOSITION.md:216 — “The number was never wrong; its **scope** was.” | tests/reliability/test_rest_authorization_composition.py |
 | **F95** | A brief's worked example can be the thing that decides the wrong way | `CLOSED` | model-vs-path | ADR-0059 | PHASE_REST_AUTHORIZATION_COMPOSITION.md:217 — “The table was the argument for D, and the argument was false.” | tests/reliability/test_rest_authorization_composition.py |
 | **F96** | A guard can pass by observing a copy of the code instead of the code | `FIXED` | instrument-defect | — | PHASE_REST_AUTHORIZATION_COMPOSITION.md:218 — “The non-vacuity probe caught it (NV4).” | tests/reliability/test_rest_authorization_composition.py |
-| **F97** | A live range claim can survive fourteen ADR landings | `FIXED` | record-integrity | — | PHASE_CORPUS_INTEGRITY_III.md:131 — “Three stale claims of the F81 class … All three corrected.” | tests/test_doc_drift.py |
+| **F97** | A live range claim can survive fourteen ADR landings | `FIXED` | record-integrity | — | PHASE_CORPUS_INTEGRITY_III.md:134 — “Three stale claims of the F81 class … All three corrected.” | tests/test_doc_drift.py |
 | **F98** | Two records of one finding's status disagreed, and the live one was stale | `CLOSED` | record-integrity | — | PHASE_REST_AUTHORIZATION_COMPOSITION.md:220 — recorded; §12's G1 row was corrected (F99's row notes §12 was the live target) | — |
 | **F99** | A brief cited two ledger rows that do not exist (`G1`, and a governance-layer row) | `CLOSED` | record-integrity | — | PHASE_REST_AUTHORIZATION_COMPOSITION.md:221 — “The live target is `CONTEXT.md` §12's **E** and **G1** rows, which were updated instead.” | — |
 | **F100** | A residual named in an ADR is not automatically a live item | `CLOSED` | record-integrity | — | PHASE_CORPUS_INTEGRITY_III.md:122 — “§12 gains row **W1**, marked **OPEN — needs its own ADR**” | tests/reliability/test_external_input_path.py |
-| **F101** | A probe that checked the wrong paths, and reported two present files as absent | `CLOSED` | instrument-defect | ADR-0060 | PHASE_LAYER_B_BOUNDARY.md:271 — “**The instrument's subject was wrong**” | tests/reliability/test_layer_b_boundary.py |
-| **F102** | ADR-0021's stated blocker was FALSE, and was false when it was written | `CLOSED` | record-integrity | ADR-0060 | PHASE_LAYER_B_BOUNDARY.md:281 — “ADR-0060 records the correction and the reason is restated in §3.” | tests/reliability/test_layer_b_boundary.py |
-| **F103** | “Zero references from `core/runtime.py`” is no longer literally true | `CLOSED` | record-integrity | ADR-0060 | PHASE_LAYER_B_BOUNDARY.md:306 — “The substantive claim holds; the literal one does not. The guard asserts both halves” | tests/reliability/test_layer_b_boundary.py |
-| **F104** | ADR-0057 has no index row | `FIXED` | record-integrity | — | PHASE_LAYER_B_BOUNDARY.md:313 — “**Corrected here**: the row is added” | tests/test_doc_drift.py |
+| **F101** | A probe that checked the wrong paths, and reported two present files as absent | `CLOSED` | instrument-defect | ADR-0060 | PHASE_LAYER_B_BOUNDARY.md:276 — “**The instrument's subject was wrong**” | tests/reliability/test_layer_b_boundary.py |
+| **F102** | ADR-0021's stated blocker was FALSE, and was false when it was written | `CLOSED` | record-integrity | ADR-0060 | PHASE_LAYER_B_BOUNDARY.md:302 — “ADR-0060 records the correction and the reason is restated in §3.” | tests/reliability/test_layer_b_boundary.py |
+| **F103** | “Zero references from `core/runtime.py`” is no longer literally true | `CLOSED` | record-integrity | ADR-0060 | PHASE_LAYER_B_BOUNDARY.md:309 — “The substantive claim holds; the literal one does not. The guard asserts both halves” | tests/reliability/test_layer_b_boundary.py |
+| **F104** | ADR-0057 has no index row | `FIXED` | record-integrity | — | PHASE_LAYER_B_BOUNDARY.md:317 — “**Corrected here**: the row is added” | tests/test_doc_drift.py |
 
 ---
 
@@ -226,8 +226,8 @@ below. A count is canonical only if it is measured after the LAST change to any 
 
 | status | count |
 |---|---|
-| `OPEN` | 15 |
-| `FIXED` | 50 |
+| `OPEN` | 13 |
+| `FIXED` | 52 |
 | `CLOSED` | 34 |
 | `SUPERSEDED` | 1 |
 | `DECIDED` | 3 |
@@ -237,7 +237,7 @@ below. A count is canonical only if it is measured after the LAST change to any 
 
 **`UNRESOLVED`** — no finding is currently in this state (ADR-0062 R3.2's rule).
 
-**Not closed** — `OPEN` + `UNRESOLVED` — **15** of 104. **6** of them are the **host**, not the architecture: `F11`, `F17`, `F36`, `F75`, `F80`, `F88`.
+**Not closed** — `OPEN` + `UNRESOLVED` — **13** of 104. **6** of them are the **host**, not the architecture: `F11`, `F17`, `F36`, `F75`, `F80`, `F88`.
 Each is a declared dependency that cannot be installed here (`F11`, `F80`, `F88`), a resource
 limit (`F36`), a flaky test (`F17`), or an instrument that cannot be committed (`F75`). The
 remaining `OPEN` findings are architectural and are the ones a decision would move.
@@ -266,6 +266,11 @@ the *artifacts*, not a new finding — no `F`-number is coined here.
 ### Claims pinned since
 
 - **F77.** **Pinned by measurement** (`PHASE_CORPUS_GOVERNANCE_II.md` §4, closing **F105**). `CONTEXT.md`'s phase table cited F77 as found by `PHASE_DAG_RETIREMENT.md`, which never numbers it. Its content is §7.1's instrument defect: a committed test names that defect *“F77's shape”* (`tests/reliability/test_outcome_classification_delegation.py:61`), and the mission's contemporaneous working notes state *“F77 — a string scan reads docstrings as code”*. The report's two other finding-shaped statements are open items, not F77 (`CURRENT_OPEN_ITEMS.md`'s `PHASE_DAG_RETIREMENT` R1/R2). No number was coined.
+
+### Findings whose scope a later landing extended
+
+- **F57.** **The workspace `.env` — the same writer's other file, the same `unwired-control` class.** `_persist_env` also wrote `WISP_PROVIDER`, `WISP_MODEL`, `WISP_API_BASE` and `WISP_OLLAMA_URL` to `<workspace>/.env`, and nothing read it (`PHASE_F57_DOTENV.md` §2, finding 2). **Not the same decision:** a repository can carry that file. Driven (`PHASE_WORKSPACE_DOTENV.md` §2): read even after the operator's file, a cloned repository's `WISP_API_BASE` sends the operator's key to the repository's endpoint. Decided *not read*; **the writer was removed** (`FIXED` by removal, 2026-09-26), as `F47`'s artifact was. Recorded in the ledger's `F57` row, `WISP_MIGRATION_STATUS.md:178`. Tripwire: `tests/test_workspace_dotenv_not_written.py`.
+- **F47.** **The operator's side of the same store.** `wisp plan`, `wisp progress`, `wisp plan list` and `wisp plan abort` queried `"."`, while the agent keys a plan by `session["workspace"]` verbatim: one directory had five keys under five spellings (`PHASE_PLAN_CLI.md` §2, driven). Global rotation let ten plans elsewhere delete this workspace's plan. **Decided by ADR-0064, and `FIXED` 2026-09-26:** one resolver, `planner.workspace_key`, applied inside `PlanStore` to queries, stored keys, saves and rotation; the CLI reads `WispConfig().workspace`; rotation per workspace; stored keys resolved when read, so old plans stay readable. Recorded in the ledger's `F47` row, `WISP_MIGRATION_STATUS.md:168`. Tripwire: `tests/test_plan_cli_sees_agent_plan.py`.
 
 ### What this page did not do
 

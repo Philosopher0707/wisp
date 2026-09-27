@@ -329,8 +329,12 @@ class TestPersistEnvHelpers:
         hints = typing.get_type_hints(_upsert_env_file)
         assert hints["path"].__module__ == "pathlib"
 
-    def test_persist_env_writes_both_env_files(self, tmp_path, monkeypatch):
-        """End-to-end: workspace .env gets prefs, global .env gets prefs+keys."""
+    def test_persist_env_writes_only_the_operators_env_file(self, tmp_path, monkeypatch):
+        """End-to-end: ~/.config/wisp/.env gets prefs+keys; the workspace gets no .env.
+
+        PHASE_WORKSPACE_DOTENV.md §2: nothing reads a workspace .env, and reading one would let a
+        cloned repository redirect the operator's key — so wisp no longer writes one.
+        """
         from wisp import provider_select as psmod
 
         home = tmp_path / "home"
@@ -339,8 +343,7 @@ class TestPersistEnvHelpers:
         monkeypatch.setenv("WISP_WORKSPACE", str(tmp_path))
         monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
         psmod._persist_env({"api_key": "sk-test-123", "provider": "openai"})
-        ws_text = (tmp_path / ".env").read_text()
-        assert "WISP_PROVIDER=openai" in ws_text
-        assert "sk-test-123" not in ws_text  # secrets never touch the committable file
-        global_env = home / ".config" / "wisp" / ".env"
-        assert "WISP_API_KEY=sk-test-123" in global_env.read_text()
+        assert not (tmp_path / ".env").exists()
+        global_text = (home / ".config" / "wisp" / ".env").read_text()
+        assert "WISP_API_KEY=sk-test-123" in global_text
+        assert "WISP_PROVIDER=openai" in global_text

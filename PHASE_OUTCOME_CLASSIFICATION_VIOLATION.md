@@ -237,9 +237,9 @@ derived from **one**.
 ## 10. Residuals, open
 
 1. **The M4 count guard is still RED** — Deliverable 2, and it is the one that *is* a contract update.
-2. **`httpx` is still absent** — so `tests/test_protected_path_guard.py` and
-   `tests/test_server_policy_gate.py` remain un-runnable, and their counts remain unquotable.
-   Deliverable 2 re-attempts the offline install.
+2. **`httpx` is now installed — CLOSED 2026-09-27.** `tests/test_protected_path_guard.py` and
+   `tests/test_server_policy_gate.py` both run and pass, so the counts are quotable. The obstacle was
+   **TLS, not network** (F-T9), which is why "re-attempts the offline install" was the wrong remedy.
 3. **`CONTEXT.md` §11's Phase-10 note still says the third `ToolExecutor` site is `wisp/acp_session.py`
    from `cef3e90`.** Driven, that is wrong on both counts — Deliverable 2 corrects it.
 4. **`PHASE_CORPUS_INTEGRITY.md` §2.1's own text carries the same wrong claim** about the third site.

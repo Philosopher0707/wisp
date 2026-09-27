@@ -12,7 +12,7 @@
 > ADR superseding one it cites **refuses the derivation**. §5 is this page's own findings record —
 > **append-only**, emitted unchanged (ADR-0062 R8).
 >
-> Generated 2026-09-26 at `db3baec` · covers **ADR-0001 … ADR-0062** · supersession chains in §1.1–1.6.
+> Generated 2026-09-26 at `f251ed4` · covers **ADR-0001 … ADR-0064** · supersession chains in §1.1–1.6.
 > The commit, the date and the range are **read from `git` and the ADR log**, not written (F97).
 >
 > **Sibling registers:** `CURRENT_FINDINGS.md`, `CURRENT_OPEN_ITEMS.md`, `CURRENT_FLAGS.md` — all

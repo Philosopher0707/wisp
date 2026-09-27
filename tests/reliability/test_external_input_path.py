@@ -367,25 +367,43 @@ def test_adr_0059_residual_1_is_closed_in_effect_on_the_six_pairs():
 
     tmp = pathlib.Path(tempfile.mkdtemp())
     principal = local_principal(workspace=str(tmp), profile="local")
-    six = [(a, m) for a in sorted(REST_APPROVAL_ACTIONS)
-           for m in sorted(REST_APPROVAL_MODES)]
-    assert len(six) == 6, f"the pinned set is no longer six pairs: {six}"
+    pairs = [(a, m) for a in sorted(REST_APPROVAL_ACTIONS)
+             for m in sorted(REST_APPROVAL_MODES)]
+    # ADR-0066 R3 moved this from six to ten: the set went from three names to five.
+    # The count is pinned rather than derived because a *change* in it is the signal —
+    # it is what tells the next reader that ADR-0059 residual 1 must be re-derived.
+    assert len(pairs) == 10, (
+        f"the pinned set is no longer ten pairs ({len(pairs)}): {pairs} — re-derive "
+        f"ADR-0059 residual 1, and update ADR-0066 R3's consequence count"
+    )
 
-    for action, mode in six:
+    for action, mode in pairs:
         d = authorize(principal, action, {"name": "x"},
                       workspace_trust=WorkspaceTrust.TRUSTED, permission_mode=mode)
         assert d.allowed and d.approval_required, (
-            f"authorize() no longer requires approval for ({action}, {mode}) — the six "
-            f"pairs moved; re-derive ADR-0059 residual 1"
+            f"authorize() no longer requires approval for ({action}, {mode}) — the "
+            f"pinned pairs moved; re-derive ADR-0059 residual 1"
         )
         assert action_requires_rest_approval(action, mode) is True, (
-            f"REST no longer asks for ({action}, {mode}) — the six pairs diverged again"
+            f"REST no longer asks for ({action}, {mode}) — the pinned pairs diverged again"
         )
 
     # The mechanism is deliberately NOT `approval_required`: the trigger is a set.
-    src = (REPO / "wisp/server/approval_bridge.py").read_text(encoding="utf-8")
-    assert "approval_required" not in src, (
-        "REST's trigger now reads `approval_required` — if that is intended it is a "
-        "superseding ADR (ADR-0057 R4 rejected it: the three names have no agent "
-        "operation, so the trigger would become a function of the agent's model)"
+    #
+    # **AST-based, not a string scan** — the same instrument-defect class as ADR-0066 R3's
+    # own repair. The guard read `assert "approval_required" not in src`, which is satisfied
+    # by the *word* appearing anywhere in the file: it failed on a docstring that merely
+    # named the attribute (ADR-0066 R3's comment did exactly that), while a real read of it,
+    # split across lines or reached via `getattr`, would pass. Only a read counts here.
+    tree = ast.parse((REPO / "wisp/server/approval_bridge.py").read_text(encoding="utf-8"))
+    reads: list[int] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr == "approval_required":
+            reads.append(node.lineno)
+        elif isinstance(node, ast.Name) and node.id == "approval_required":
+            reads.append(node.lineno)
+    assert not reads, (
+        f"REST's trigger now reads `approval_required` (lines {reads}) — if that is "
+        "intended it is a superseding ADR (ADR-0057 R4 rejected it: the three names have "
+        "no agent operation, so the trigger would become a function of the agent's model)"
     )

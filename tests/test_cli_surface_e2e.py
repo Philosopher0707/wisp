@@ -269,6 +269,17 @@ class TestGroup2Diagnostics:
         assert proc.returncode == 0, proc.stderr
         assert "available" in proc.stdout
 
+    def test_check_resolves_empty_model_instead_of_reporting_it_blank(self, e2e) -> None:
+        """No model configured + a reachable provider with a real listing:
+        `wisp check` used to print "Model '' is available" — a false
+        positive, since nothing was ever actually checked against a real
+        model. It must resolve one first, the same way the composition
+        root does, and report that."""
+        proc = run_cli(["check"], e2e["home"], e2e["ws"])
+        assert proc.returncode == 0, proc.stderr
+        assert "Model 'mock-model' is available" in proc.stdout
+        assert "Model '' is available" not in proc.stdout
+
     def test_check_offline_port_diagnostic(self, e2e) -> None:
         proc = run_cli(["check"], e2e["home"], e2e["ws"],
                        extra_env={"WISP_PROVIDER": "ollama",
