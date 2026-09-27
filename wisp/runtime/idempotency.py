@@ -103,11 +103,36 @@ class StoreUnavailable(IdempotencyError):
 
 
 class Outcome(StrEnum):
-    """What the guard did. Returned, not inferred from side effects."""
+    """What the guard did. Returned, not inferred from side effects.
 
+    Each carries the HTTP status a service should answer with, so the mapping is
+    stated once here rather than re-derived at every route.
+    """
+
+    #: We ran it. 201 — a new resource.
     EXECUTED = "executed"
+    #: It had already completed; here is the recorded result. 200.
     REPLAYED = "replayed"
+    #: **A concurrent duplicate.** Another request holds this key and is running
+    #: right now. 409 — the caller must not treat this as success and must not
+    #: retry immediately, because the work is already in flight.
+    CONFLICT = "conflict"
+    #: The caller asked for an async story (it supplied a poll handle) and the
+    #: work is still running. 202 + the handle. This is **not** the default for a
+    #: duplicate — see `CONFLICT`.
     PENDING = "pending"
+
+    @property
+    def http_status(self) -> int:
+        return _STATUS[self]
+
+
+_STATUS: dict["Outcome", int] = {
+    Outcome.EXECUTED: 201,
+    Outcome.REPLAYED: 200,
+    Outcome.CONFLICT: 409,
+    Outcome.PENDING: 202,
+}
 
 
 @dataclass(frozen=True)
@@ -130,6 +155,11 @@ class GuardResult:
     @property
     def replayed(self) -> bool:
         return self.outcome is Outcome.REPLAYED
+
+    @property
+    def status_code(self) -> int:
+        """The HTTP status a service should answer with. Stated once, in `Outcome`."""
+        return self.outcome.http_status
 
     @property
     def poll_url(self) -> str:
@@ -270,9 +300,20 @@ class IdempotencyGuard:
                 # A recorded failure is a real outcome: replaying it is honest, and
                 # re-running would repeat a side effect the record says happened.
                 return GuardResult(Outcome.REPLAYED, record)
-            # Row 6 — still in progress. The caller answers 202 Accepted with a
-            # polling URL rather than blocking or re-running.
-            return GuardResult(Outcome.PENDING, replace(record, poll_url=poll_url))
+            # **A concurrent duplicate.** Another request holds this key and is
+            # running right now. The default answer is 409 CONFLICT: this caller
+            # must neither re-run the effect nor be told it succeeded. Reporting
+            # success here would be the double-execution the mechanism exists to
+            # prevent, just with a nicer status code.
+            #
+            # 202 is available, but only when the caller supplies a poll handle —
+            # that is the caller *declaring* it has an async story. Without one
+            # there is nothing to poll, and "pending" would be a status with no
+            # handle: the caller could never learn the outcome. So the async shape
+            # is opt-in, and the safe default is the conflict.
+            if poll_url:
+                return GuardResult(Outcome.PENDING, replace(record, poll_url=poll_url))
+            return GuardResult(Outcome.CONFLICT, record)
 
         # We won the race. Tripwire for row 5: has this exact request already run
         # under a different key? If so the caller is minting keys per attempt.

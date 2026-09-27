@@ -104,14 +104,31 @@ class TestRow2RacingRequests:
         assert calls == ["k1"], f"the effect ran {len(calls)} times"
         assert a.outcome is Outcome.EXECUTED and b.outcome is Outcome.REPLAYED
 
-    def test_a_second_caller_is_not_told_it_succeeded(self):
-        """The loser of the race must not get a success it did not earn — it gets
-        `PENDING`, which is the honest answer while someone else holds the key."""
+    def test_a_second_caller_gets_409_not_a_success(self):
+        """The loser of the race must not get a success it did not earn.
+
+        **409 Conflict**, not 202: the work is in flight right now, so the caller
+        must not treat this as done and must not retry immediately. Reporting
+        success here would be the double-execution the mechanism exists to prevent,
+        with a nicer status code.
+        """
         store = InMemoryStore()
         guard = _guard(store)
         guard.run("k1", "fp", lambda key: "ok")
         store._records["k1"] = Record("k1", "fp", RecordState.IN_PROGRESS)
-        assert guard.run("k1", "fp", lambda key: "ok").outcome is Outcome.PENDING
+        out = guard.run("k1", "fp", lambda key: "ok")
+        assert out.outcome is Outcome.CONFLICT
+        assert out.status_code == 409
+
+    def test_the_conflicting_caller_does_not_run_the_effect(self):
+        """The property behind the status code. A 409 that still executed would be
+        the worst possible answer."""
+        calls, effect = _counting_effect()
+        store = InMemoryStore()
+        guard = _guard(store)
+        store.begin("k1", "fp")
+        guard.run("k1", "fp", effect)
+        assert calls == [], "the duplicate ran the effect"
 
 
 # ── Row 3 ───────────────────────────────────────────────────────────────
@@ -209,14 +226,44 @@ class TestRow5UnstableKey:
 
 
 class TestRow6VeryLongRunningOperation:
-    def test_a_holder_in_progress_yields_PENDING_with_a_poll_url(self):
-        """The 202 Accepted shape: do not block, do not re-run — hand back a handle."""
+    def test_an_in_progress_holder_is_409_BY_DEFAULT(self):
+        """**The default is the conflict, not the 202.**
+
+        A concurrent duplicate is the common case and it has a safe answer: 409.
+        The async shape is opt-in, because a 202 is only meaningful if the caller
+        has a handle to poll — otherwise it is a status that tells the caller
+        nothing about when or whether the work finished.
+        """
         store = InMemoryStore()
-        guard = _guard(store)
         store.begin("k1", "fp")
-        out = guard.run("k1", "fp", lambda key: "never", poll_url="/ops/k1")
+        out = _guard(store).run("k1", "fp", lambda key: "never")
+        assert out.outcome is Outcome.CONFLICT
+        assert out.status_code == 409
+
+    def test_supplying_a_poll_handle_opts_into_202(self):
+        """The caller declares it has an async story by handing over a URL."""
+        store = InMemoryStore()
+        store.begin("k1", "fp")
+        out = _guard(store).run("k1", "fp", lambda key: "never", poll_url="/ops/k1")
         assert out.outcome is Outcome.PENDING
+        assert out.status_code == 202
         assert out.poll_url == "/ops/k1"
+
+    def test_the_async_shape_still_does_not_run_the_effect(self):
+        """202 and 409 differ in what they tell the caller, not in whether the work
+        happens twice. Neither runs it."""
+        calls, effect = _counting_effect()
+        store = InMemoryStore()
+        store.begin("k1", "fp")
+        _guard(store).run("k1", "fp", effect, poll_url="/ops/k1")
+        assert calls == []
+
+    def test_every_outcome_carries_its_status(self):
+        """Stated once, in `Outcome`, so a route does not re-derive the mapping."""
+        assert Outcome.EXECUTED.http_status == 201
+        assert Outcome.REPLAYED.http_status == 200
+        assert Outcome.CONFLICT.http_status == 409
+        assert Outcome.PENDING.http_status == 202
 
     def test_a_completed_record_carries_no_poll_url(self):
         guard = _guard()

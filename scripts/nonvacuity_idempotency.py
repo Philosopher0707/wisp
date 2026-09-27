@@ -58,10 +58,19 @@ def mutations() -> list[tuple[str, str, str]]:
                 _sub(s, "        if seen is not None and seen.key != key:",
                      "        if False:"),
                 "TestRow5UnstableKey"))
-    # 6 — a holder in progress is reported as a replay instead of PENDING.
-    out.append(("row6-pending-becomes-replay",
-                _sub(s, "            return GuardResult(Outcome.PENDING, replace(record, poll_url=poll_url))",
-                     "            return GuardResult(Outcome.REPLAYED, replace(record, poll_url=poll_url))"),
+    # 6 — a concurrent duplicate is reported as a REPLAY instead of a CONFLICT,
+    #     i.e. the caller is told it succeeded when the work is still in flight.
+    out.append(("row6-conflict-becomes-replay",
+                _sub(s, "            return GuardResult(Outcome.CONFLICT, record)",
+                     "            return GuardResult(Outcome.REPLAYED, record)"),
+                "TestRow2RacingRequests"))
+    # 6b — the async shape stops being opt-in: every duplicate answers 202, so a
+    #      caller with no handle is told "pending" and can never learn the outcome.
+    out.append(("row6-async-not-opt-in",
+                _sub(s, "            if poll_url:\n"
+                        "                return GuardResult(Outcome.PENDING, replace(record, poll_url=poll_url))",
+                     "            if True:\n"
+                        "                return GuardResult(Outcome.PENDING, replace(record, poll_url=poll_url))"),
                 "TestRow6VeryLongRunningOperation"))
     # 7 — redaction applied to the RETURNED value only, not before storing.
     out.append(("row7-redact-after-storing",
