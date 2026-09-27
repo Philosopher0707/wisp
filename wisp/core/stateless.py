@@ -645,133 +645,36 @@ class WispAgentCore:
                                         single["_index"] = func["index"]
                                     # Process each individually
                                     tc_event = _ensure_intake_id(dict(single))
-                                    # Role restriction: reject before any gating
-                                    if _allowed_set is not None and str(single.get("name", "")) not in _allowed_set:
-                                        _blocked_name = str(single.get("name", ""))
-                                        _hint = ""
-                                        if _blocked_name == "run_bash":
-                                            _hint = " — run_bash is blocked in auto_edit mode; use list_files/read_file instead, or switch to full mode"
-                                        elif _blocked_name in ("spawn", "fanout"):
-                                            _hint = " — subagent spawning is blocked in auto_edit; switch to full mode"
-                                        tc_event["_blocked"] = (
-                                            f"tool '{_blocked_name}' is not allowed "
-                                            f"for this agent's role{_hint}")
+                                    await self._gate_tool_call(
+                                        tc_event, session, approval_handler, _allowed_set)
+                                    if "_blocked" in tc_event:
                                         pending_tool_calls.append(tc_event)
                                         tool_results_events_early.append(
                                             self._refusal_result_event(tc_event, session.get("workspace", ".")))
                                         yield _flatten_event(
                                             error_event(
-                                                f"Blocked: tool '{_blocked_name}' is not allowed for this agent's role{_hint}",
+                                                f"Blocked: {tc_event['_blocked']}",
                                                 recoverable=True,
                                             )
                                         )
                                         continue
-                                    # Structural validation BEFORE approval
-                                    # (13-J1): an invalid proposal must never
-                                    # reach the human prompt. Dry-run: the
-                                    # write_file salvage below must not mutate
-                                    # the reviewed event (approval sees what
-                                    # was proposed; salvage markers survive
-                                    # for downstream refusal text). Mirrors
-                                    # the role-block shape so history/audit
-                                    # stay protocol-consistent.
-                                    _schema_error = self._validate_tool_args(
-                                        str(single.get("name", "")),
-                                        single.get("arguments", {}),
-                                        _dry_run=True)
-                                    if _schema_error:
-                                        tc_event["_blocked"] = _schema_error
-                                        # ADR-0052: a host that cannot validate has
-                                        # not denied anything, so only a genuine
-                                        # schema rejection is stamped as a denial.
-                                        if _is_capability_failure(_schema_error):
-                                            tc_event["_capability"] = True
-                                        else:
-                                            tc_event["_denial"] = "SCHEMA_INVALID"
-                                        pending_tool_calls.append(tc_event)
-                                        tool_results_events_early.append(
-                                            self._refusal_result_event(tc_event, session.get("workspace", ".")))
-                                        yield _flatten_event(
-                                            error_event(
-                                                f"Blocked: {_schema_error}",
-                                                recoverable=True,
-                                            )
-                                        )
-                                        continue
-                                    # Check security BEFORE yielding
-                                    gate = self._get_approval_gate()
-                                    _gdec = await gate.check_decision(
-                                        tc_event, session, approval_handler=approval_handler
-                                    )
-                                    if not _gdec.allowed:
-                                        tc_event["_blocked"] = _gdec.reason or "blocked"
-                                        tc_event["_denial"] = _gdec.denial or "POLICY_DENIED"
-                                        tc_event["_src"] = "gate"
-                                        pending_tool_calls.append(tc_event)
-                                        tool_results_events_early.append(
-                                            self._refusal_result_event(tc_event, session.get("workspace", ".")))
-                                        yield _flatten_event(
-                                            error_event(
-                                                f"Blocked: {_gdec.reason}",
-                                                recoverable=True,
-                                            )
-                                        )
-                                        continue
-
-                                    # Check extensions
-                                    if self.extensions is not None:
-                                        try:
-                                            ext_result = self.extensions.intercept(tc_event)
-                                            if ext_result.get("action") == "block":
-                                                tc_event["_blocked"] = (
-                                                    f"blocked by extension: "
-                                                    f"{ext_result.get('reason', 'unknown')}")
-                                                pending_tool_calls.append(tc_event)
-                                                tool_results_events_early.append(
-                                                    self._refusal_result_event(tc_event, session.get("workspace", ".")))
-                                                yield _flatten_event(
-                                                    error_event(
-                                                        f"Blocked: {ext_result.get('reason', 'by extension')}",
-                                                        recoverable=True,
-                                                    )
-                                                )
-                                                continue
-                                        except Exception as e:
-                                            logger.exception(
-                                                "Extension intercept failed — treating as deny: %s",
-                                                e,
-                                            )
-                                            tc_event["_blocked"] = (
-                                                f"extension intercept failed: {e}")
-                                            pending_tool_calls.append(tc_event)
-                                            tool_results_events_early.append(
-                                                self._refusal_result_event(tc_event, session.get("workspace", ".")))
-                                            yield _flatten_event(
-                                                error_event(
-                                                    f"Extension intercept failed: {e}. Tool call denied.",
-                                                    recoverable=True,
-                                                )
-                                            )
-                                            continue
 
                                     pending_tool_calls.append(tc_event)
                                     yield _flatten_event(tc_event)
                                 continue  # Skip the default yield below since we already yielded
                             continue
 
-                        # Role restriction: reject before any gating — but
-                        # keep protocol-consistent history (same replay
-                        # hazard as approval denial).
-                        if _allowed_set is not None and str(normalized.get("name", "")) not in _allowed_set:
-                            _blocked_name2 = str(normalized.get("name", ""))
-                            _hint2 = ""
-                            if _blocked_name2 == "run_bash":
-                                _hint2 = " — run_bash is blocked in auto_edit mode; use list_files/read_file instead, or switch to full mode"
-                            elif _blocked_name2 in ("spawn", "fanout"):
-                                _hint2 = " — subagent spawning is blocked in auto_edit; switch to full mode"
-                            normalized["_blocked"] = (
-                                f"tool '{_blocked_name2}' is not "
-                                f"allowed for this agent's role{_hint2}")
+                        # Role restriction, schema, approval gate, extension
+                        # intercept — same 4-stage check as the batch path
+                        # above, via _gate_tool_call. Refusal is registered
+                        # as a real tool result so history stays
+                        # protocol-consistent: the model emitted this call
+                        # and MUST see its outcome, otherwise it
+                        # deterministically replays the identical call
+                        # forever (live pty repro).
+                        await self._gate_tool_call(
+                            normalized, session, approval_handler, _allowed_set)
+                        if "_blocked" in normalized:
                             pending_tool_calls.append(normalized)
                             tool_results_events_early.append(
                                 self._refusal_result_event(normalized, session.get("workspace", ".")))
@@ -782,90 +685,6 @@ class WispAgentCore:
                                 )
                             )
                             continue
-
-                        # Structural validation BEFORE approval (13-J1):
-                        # same contract as the batch path above (dry-run:
-                        # no event mutation, salvage markers preserved).
-                        _schema_error2 = self._validate_tool_args(
-                            str(normalized.get("name", "")),
-                            normalized.get("arguments", {}),
-                            _dry_run=True)
-                        if _schema_error2:
-                            normalized["_blocked"] = _schema_error2
-                            # ADR-0052 — same rule as the batch path above.
-                            if _is_capability_failure(_schema_error2):
-                                normalized["_capability"] = True
-                            else:
-                                normalized["_denial"] = "SCHEMA_INVALID"
-                            pending_tool_calls.append(normalized)
-                            tool_results_events_early.append(
-                                self._refusal_result_event(normalized, session.get("workspace", ".")))
-                            yield _flatten_event(
-                                error_event(
-                                    f"Blocked: {_schema_error2}",
-                                    recoverable=True,
-                                )
-                            )
-                            continue
-
-                        # Check security BEFORE yielding
-                        gate = self._get_approval_gate()
-                        _gdec = await gate.check_decision(
-                            normalized, session, approval_handler=approval_handler)
-                        if not _gdec.allowed:
-                            # Register the refusal as a real tool result so
-                            # history stays protocol-consistent: the model
-                            # emitted this call and MUST see its outcome,
-                            # otherwise it deterministically replays the
-                            # identical call forever (live pty repro).
-                            normalized["_blocked"] = _gdec.reason or "blocked"
-                            normalized["_denial"] = _gdec.denial or "POLICY_DENIED"
-                            normalized["_src"] = "gate"
-                            pending_tool_calls.append(normalized)
-                            tool_results_events_early.append(
-                                self._refusal_result_event(normalized, session.get("workspace", ".")))
-                            yield _flatten_event(
-                                error_event(
-                                    f"Blocked: {_gdec.reason}",
-                                    recoverable=True,
-                                )
-                            )
-                            continue
-
-                        # Check extensions
-                        if self.extensions is not None:
-                            try:
-                                ext_result = self.extensions.intercept(normalized)
-                                if ext_result.get("action") == "block":
-                                    normalized["_blocked"] = (
-                                        f"blocked by extension: "
-                                        f"{ext_result.get('reason', 'unknown')}")
-                                    pending_tool_calls.append(normalized)
-                                    tool_results_events_early.append(
-                                        self._refusal_result_event(normalized, session.get("workspace", ".")))
-                                    yield _flatten_event(
-                                        error_event(
-                                            f"Blocked: {normalized['_blocked']}",
-                                            recoverable=True,
-                                        )
-                                    )
-                                    continue
-                            except Exception as e:
-                                logger.exception(
-                                    "Extension intercept failed — treating as deny: %s", e
-                                )
-                                normalized["_blocked"] = (
-                                    f"extension intercept failed: {e}")
-                                pending_tool_calls.append(normalized)
-                                tool_results_events_early.append(
-                                    self._refusal_result_event(normalized, session.get("workspace", ".")))
-                                yield _flatten_event(
-                                    error_event(
-                                        f"Extension intercept failed: {e}. Tool call denied.",
-                                        recoverable=True,
-                                    )
-                                )
-                                continue
 
                         pending_tool_calls.append(normalized)
 
@@ -2579,6 +2398,73 @@ class WispAgentCore:
                 except Exception:
                     pass
             return _schema_invalid(name, exc)
+
+    async def _gate_tool_call(
+        self, tc_event: dict[str, Any], session: dict[str, Any],
+        approval_handler: Any, allowed_set: set[str] | None,
+    ) -> None:
+        """Run the pre-execution gate on one tool_call event, in place.
+
+        Role restriction → schema dry-run validation → approval gate →
+        extension intercept — the single implementation shared by the
+        batched (ToolCallBatch) and singular tool_call paths in
+        _turn_inner, which used to duplicate this ~130 lines apart.
+
+        Mutates *tc_event*: on a block it stamps `_blocked` (plus
+        `_denial`/`_capability`/`_src`) so the caller can synthesize a
+        refusal instead of executing it. An extension failure is itself
+        treated as a deny, never raised.
+        """
+        name = str(tc_event.get("name", ""))
+
+        if allowed_set is not None and name not in allowed_set:
+            hint = ""
+            if name == "run_bash":
+                hint = " — run_bash is blocked in auto_edit mode; use list_files/read_file instead, or switch to full mode"
+            elif name in ("spawn", "fanout"):
+                hint = " — subagent spawning is blocked in auto_edit; switch to full mode"
+            tc_event["_blocked"] = (
+                f"tool '{name}' is not allowed for this agent's role{hint}")
+            return
+
+        # Structural validation BEFORE approval (13-J1): an invalid
+        # proposal must never reach the human prompt. Dry-run: no event
+        # mutation, so a write_file salvage below survives (approval
+        # sees what was proposed; salvage markers survive for downstream
+        # refusal text).
+        schema_error = self._validate_tool_args(
+            name, tc_event.get("arguments", {}), _dry_run=True)
+        if schema_error:
+            tc_event["_blocked"] = schema_error
+            # ADR-0052: a host that cannot validate has not denied
+            # anything, so only a genuine schema rejection is stamped as
+            # a denial.
+            if _is_capability_failure(schema_error):
+                tc_event["_capability"] = True
+            else:
+                tc_event["_denial"] = "SCHEMA_INVALID"
+            return
+
+        gate = self._get_approval_gate()
+        gdec = await gate.check_decision(
+            tc_event, session, approval_handler=approval_handler)
+        if not gdec.allowed:
+            tc_event["_blocked"] = gdec.reason or "blocked"
+            tc_event["_denial"] = gdec.denial or "POLICY_DENIED"
+            tc_event["_src"] = "gate"
+            return
+
+        if self.extensions is not None:
+            try:
+                ext_result = self.extensions.intercept(tc_event)
+                if ext_result.get("action") == "block":
+                    tc_event["_blocked"] = (
+                        f"blocked by extension: "
+                        f"{ext_result.get('reason', 'unknown')}")
+            except Exception as e:
+                logger.exception(
+                    "Extension intercept failed — treating as deny: %s", e)
+                tc_event["_blocked"] = f"extension intercept failed: {e}"
 
     def _get_approval_gate(self) -> ApprovalGate:
         """Lazily create the approval gate from current security policy."""

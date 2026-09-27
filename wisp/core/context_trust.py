@@ -71,6 +71,16 @@ MAY_INFLUENCE: dict[TrustTag, frozenset[Influence]] = {
 #: T1's set: only these may appear in instruction position.
 TRUSTED_TAGS = frozenset({TrustTag.SYSTEM, TrustTag.OPERATOR})
 
+#: Tags whose items are **never dropped and never truncated** — the assembler
+#: raises rather than send something shorter (see `ContextOverflow`).
+#:
+#: The system prompt is protected *by its tag*. The **task** has no tag of its
+#: own — it arrives as the user's instruction — so it is marked explicitly with
+#: `ContextItem.protected`. Two mechanisms for two cases, each with a stated
+#: reason; a tag-only rule could not express the task, and a field-only rule would
+#: rely on every caller remembering.
+PROTECTED_TAGS = frozenset({TrustTag.SYSTEM})
+
 
 def is_trusted(tag: TrustTag | str) -> bool:
     return TrustTag(tag) in TRUSTED_TAGS
@@ -89,6 +99,26 @@ class TrustViolation(RuntimeError):
     violations are invisible, and an invisible violation is indistinguishable
     from compliance.
     """
+
+
+class ContextOverflow(RuntimeError):
+    """A **protected** item does not fit, so nothing is sent.
+
+    The alternative — and what this replaces — is to truncate or drop it and send
+    a prompt that is *almost* the one intended. That is the worst failure in this
+    module, because it is silent and it is *semantically* destructive: drop the
+    task and the model does not stop, it invents a different goal from whatever
+    remains, and the run reports success. A truncation that removes the
+    instruction is not a smaller prompt; it is a different one.
+
+    So the assembler **raises**, and the caller decides: shrink the context, raise
+    the budget, or fail the turn. `code` carries the machine-readable name a
+    caller switches on, so nobody has to match on prose.
+    """
+
+    #: The stable name for this condition. A caller branches on this, not on the
+    #: message — a message is for a human and changes freely.
+    code = "context_overflow"
 
 
 # ── Items ───────────────────────────────────────────────────────────────
@@ -127,6 +157,12 @@ class ContextItem:
     content: str
     provenance: Provenance
     priority: int = 1        # lower is kept longer; 0 is never dropped
+    #: **Never dropped, never truncated.** The system prompt is protected by its
+    #: tag (`PROTECTED_TAGS`); the task is protected by this field, because it has
+    #: no tag of its own. If a protected item does not fit, `assemble` raises
+    #: `ContextOverflow` rather than sending a prompt that is almost the intended
+    #: one.
+    protected: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.tag, TrustTag):
@@ -265,11 +301,31 @@ def assemble(request: ContextRequest,
             parts.append(rendered)
             used += size
             continue
+        # ── Protected items: raise, never shorten ──
+        #
+        # Checked BEFORE the priority-0 truncation below, and that order is the
+        # whole point. Until this branch existed, a priority-0 item that did not
+        # fit was silently `cut = rendered[:remaining * 4]` — so a system prompt
+        # or a task could be replaced by its own first paragraph and the run would
+        # proceed on a prompt nobody wrote. `priority == 0` is not the same
+        # property: it is also used for an operator's remembered preferences, where
+        # keeping a truncated block is deliberate and correct.
+        if item.protected or item.tag in PROTECTED_TAGS:
+            raise ContextOverflow(
+                f"protected item {item.item_id!r} ({item.tag.value}) needs "
+                f"{size} tokens but only {max(0, request.max_tokens - used)} remain "
+                f"of {request.max_tokens} ({used} already used by "
+                f"{len(included)} item(s)). A protected item is never truncated and "
+                f"never dropped: sending a shorter prompt would silently change the "
+                f"task rather than fail it. Shrink the context, raise `max_tokens`, "
+                f"or fail the turn — do not send something else."
+            )
         if item.priority == 0:
-            # Priority 0 is never dropped: the plan's own assembler keeps a
-            # truncated memory block rather than losing the operator's
-            # remembered preferences, and the same rule applies here. Recorded
-            # as truncated, not dropped.
+            # Priority 0 is *kept longest* but is not protected: the plan's own
+            # assembler keeps a truncated memory block rather than losing the
+            # operator's remembered preferences, and the same rule applies here.
+            # Recorded as truncated, not dropped. This path is unreachable for a
+            # protected item — the branch above raises first.
             remaining = max(0, request.max_tokens - used)
             if remaining <= 0:
                 dropped.append(DroppedItem(item.item_id, item.tag,

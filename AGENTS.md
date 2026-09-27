@@ -529,7 +529,15 @@ python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_
   tests/reliability/test_key_trust_workflow.py \
   tests/reliability/test_m4_policy_wiring.py \
   tests/reliability/test_rest_authorization_composition.py \
-  tests/test_m4_governance_wiring.py -q --basetemp="$TMPDIR/wisp-block-$$"   # alone — ADR-0062 R6
+  tests/test_m4_governance_wiring.py \
+  tests/reliability/test_replay_verification.py \
+  tests/reliability/test_context_protected.py \
+  tests/reliability/test_run_bounds.py \
+  tests/reliability/test_idempotency.py \
+  tests/reliability/test_injection_scan.py \
+  tests/reliability/test_redaction_point.py \
+  tests/reliability/test_clock_injection.py \
+  tests/reliability/test_cost_meter.py -q --basetemp="$TMPDIR/wisp-block-$$"   # alone — ADR-0062 R6
 ```
 
 ### The environment will fight you
