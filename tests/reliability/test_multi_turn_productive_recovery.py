@@ -37,9 +37,7 @@ from wisp.core.convergence import (
     Measurement,
     Objective,
     TurnObservation,
-    _WANTS_FIX_RE,
     criteria_for,
-    derive_acceptance,
     read_journal_baseline,
 )
 from wisp.core.events import DENIAL_POLICY_DENIED

@@ -57,7 +57,7 @@ from wisp.infra.circuit_breaker import (
 )
 
 if TYPE_CHECKING:
-    from wisp.providers.protocol import Provider
+    from wisp.providers.protocol import Provider, ProviderEvent
     from wisp.infra.security import SecurityPolicy
     from wisp.infra.extensions import ExtensionHost
     from wisp.tool_executor import ToolExecutor
@@ -1108,7 +1108,7 @@ class WispAgentCore:
         system_prompt: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncIterator[ProviderEvent]:
         """Wrap a synchronous provider generator in an async iterator.
 
         Runs the blocking I/O in a thread to avoid blocking the event loop.
@@ -1131,7 +1131,7 @@ class WispAgentCore:
             logger.debug("Pruning in _stream_events_async failed", exc_info=True)
 
         # Define the streaming callable for circuit breaker
-        async def _call_provider() -> AsyncIterator[dict[str, Any]]:
+        async def _call_provider() -> AsyncIterator[ProviderEvent]:
             if hasattr(provider, "generate_stream_events_async"):
                 async for event in provider.generate_stream_events_async(
                     system_prompt=system_prompt,
@@ -1145,7 +1145,7 @@ class WispAgentCore:
             import threading
 
             loop = asyncio.get_running_loop()
-            queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+            queue: asyncio.Queue[ProviderEvent] = asyncio.Queue()
             done = object()  # sentinel
             producer_error: list[BaseException] = []
             cancelled = threading.Event()
@@ -1223,7 +1223,7 @@ class WispAgentCore:
         if self._circuit_breaker is not None:
             breaker = self._circuit_breaker
 
-            async def _emit_circuit_open() -> AsyncIterator[dict[str, Any]]:
+            async def _emit_circuit_open() -> AsyncIterator[ProviderEvent]:
                 retry = breaker.retry_after()
                 yield _flatten_event(provider_status_event(
                     "circuit_open",

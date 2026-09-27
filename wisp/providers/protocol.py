@@ -90,7 +90,7 @@ class Provider(ABC):
         )
 
         loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        queue: asyncio.Queue[ProviderEvent] = asyncio.Queue()
         done: object = object()
         producer_error: list[BaseException] = []
         cancelled = threading.Event()
@@ -127,7 +127,7 @@ class Provider(ABC):
         thread = threading.Thread(target=_sync_producer, daemon=True)
         thread.start()
 
-        async def _bridge() -> AsyncIterator[dict[str, Any]]:
+        async def _bridge() -> AsyncIterator[ProviderEvent]:
             try:
                 while True:
                     event = await queue.get()

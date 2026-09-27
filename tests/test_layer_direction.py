@@ -22,7 +22,6 @@ from __future__ import annotations
 import ast
 import pathlib
 
-import pytest
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 

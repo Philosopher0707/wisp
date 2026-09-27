@@ -16,7 +16,6 @@ from __future__ import annotations
 import pytest
 
 from wisp.runtime.idempotency import (
-    GuardResult,
     IdempotencyError,
     IdempotencyGuard,
     InMemoryStore,
@@ -327,7 +326,7 @@ class TestTheFloor:
         """A failure is an outcome. Re-running would repeat whatever part of the
         side effect did land."""
         calls, effect = _counting_effect()
-        store, guard = InMemoryStore(), _guard()
+        guard = _guard()
 
         def failing(key):
             calls.append(key)

@@ -888,7 +888,8 @@ class AgentRuntime:
                         # is "we have learned something new at some point", and
                         # a delta comparison would call an A→B→A oscillation
                         # progress on every step.
-                        if stagnation_detector is not None:
+                        if (stagnation_detector is not None
+                                and stagnation_signal is not None):
                             try:
                                 from wisp.core.action_key import action_key
                                 from wisp.core.oscillation import diff_hash
@@ -1100,7 +1101,7 @@ class AgentRuntime:
                     try:
                         from wisp.core.session import SessionEvent
                         from wisp.core.task_graph import (
-                            NodeStatus, NodeTransition, apply_transition,
+                            NodeTransition, TaskNodeState, apply_transition,
                             build_turn_graph, materialize, turn_work_units,
                         )
                         # Migration M11 — the nodes name the work units they
@@ -1117,8 +1118,8 @@ class AgentRuntime:
                         _seq = 0
                         for _i in range(len(_units)):
                             _seq += 1
-                            _to = (NodeStatus.SUCCESS if turn_succeeded
-                                   else NodeStatus.FAILURE)
+                            _to = (TaskNodeState.SUCCESS if turn_succeeded
+                                   else TaskNodeState.FAILURE)
                             _node = _graph.node(f"turn:{_i}")
                             if _node is None or _node.status is _to:
                                 continue
@@ -1134,7 +1135,7 @@ class AgentRuntime:
                                 SessionEvent.node_transition_event(
                                     0, NodeTransition(
                                         run_id=sid, node_id=f"turn:{_i}",
-                                        from_status=NodeStatus.PENDING,
+                                        from_status=TaskNodeState.PENDING,
                                         to_status=_to, seq=_seq,
                                         reason=("settled at turn end"
                                                 if turn_succeeded
@@ -1302,7 +1303,7 @@ class AgentRuntime:
                         if _decision is not None:
                             journal_events.append(
                                 _SEv.recovery_event(0, _decision.to_dict()))
-                        if _ladder.escalated:
+                        if _ladder.escalated and _ladder.escalation is not None:
                             _escalated = True
                             journal_events.append(_SEv.escalation_event(
                                 0, _ladder.escalation.to_dict()))

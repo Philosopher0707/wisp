@@ -18,10 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import pathlib
-import sys
-import tempfile
 
-import pytest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 
