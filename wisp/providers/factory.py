@@ -147,34 +147,29 @@ class ProviderFactory:
     def _validate_api_base(self, base_url: str, name: str) -> str:
         """Fail-closed endpoint check for key-bearing providers.
 
-        Empty passes through (provider falls back to its default base).
-        Non-empty must be http(s) with a hostname; plaintext http is
-        loopback-only unless WISP_ALLOW_INSECURE_BASE=true — a remote
-        http listener otherwise receives the Bearer key in cleartext.
+        Canonical implementation lives in wisp.net_security so
+        provider_catalog's model-listing path enforces the identical
+        policy instead of skipping it.
         """
-        import urllib.parse
+        from wisp.net_security import validate_api_base
 
-        if not base_url:
-            return ""
-        parsed = urllib.parse.urlparse(base_url)
-        hostname = (parsed.hostname or "").lower()
-        if parsed.scheme not in ("http", "https") or not hostname:
-            raise ValueError(f"Invalid api_base for provider '{name}': {base_url!r}")
-        if parsed.scheme == "http" and hostname not in ("localhost", "127.0.0.1", "::1"):
-            if os.environ.get("WISP_ALLOW_INSECURE_BASE", "").strip().lower() not in (
-                    "1", "true", "on", "yes"):
-                raise ValueError(
-                    f"Refusing plaintext http api_base for provider '{name}': "
-                    f"{base_url!r} (use https, loopback, or WISP_ALLOW_INSECURE_BASE=true)")
-        return base_url
+        return validate_api_base(base_url, name)
 
     def _validate_ollama_url(self, url: str) -> str:
         """Validate Ollama URL to prevent SSRF.
 
-        In production, rejects private IP ranges, metadata endpoints,
-        and any URL that does not point to an explicitly allowed host.
+        Always rejects cloud-metadata/link-local/reserved addresses via
+        wisp.net_security.assert_ollama_host_safe — unconditionally, not
+        gated behind WISP_PRODUCTION_MODE. Loopback and ordinary
+        private/LAN hosts stay allowed (a local or LAN-hosted Ollama
+        daemon is the normal case). WISP_PRODUCTION_MODE below adds a
+        STRICTER, opt-in allowlist on top of that baseline; it is not
+        what makes the baseline safe.
         """
         import urllib.parse
+        from wisp.net_security import assert_ollama_host_safe
+
+        assert_ollama_host_safe(url)
 
         allowed_hosts = os.environ.get("WISP_ALLOWED_OLLAMA_HOSTS", "localhost,127.0.0.1").split(",")
         allowed_hosts = [h.strip().lower() for h in allowed_hosts]

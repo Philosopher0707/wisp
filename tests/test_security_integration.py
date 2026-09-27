@@ -272,6 +272,76 @@ class TestOllamaUrlValidation:
         with pytest.raises(ValueError, match="metadata"):
             factory._validate_ollama_url("http://169.254.169.254/latest/meta-data/")
 
+    def test_metadata_endpoint_blocked_without_production_mode(self):
+        """The unconditional baseline (wisp.net_security.assert_ollama_host_safe)
+        — no WISP_PRODUCTION_MODE / WISP_ALLOWED_OLLAMA_HOSTS opt-in required.
+        This is what factory.py's own guard was missing before: it only
+        enforced anything when WISP_PRODUCTION_MODE=true, an undocumented
+        flag absent from SETTINGS_SCHEMA and never set by default."""
+        from wisp.providers.factory import ProviderFactory
+
+        factory = ProviderFactory()
+        with pytest.raises(ValueError, match="link-local"):
+            factory._validate_ollama_url("http://169.254.169.254/latest/meta-data/")
+
+
+class TestProviderCatalogSSRF:
+    """provider_catalog.py's model-listing path runs on every core
+    (re)build via resolve_selection() — before ProviderFactory.from_config
+    ever gets a chance to validate anything. It used to fire a raw,
+    unauthenticated requests.get straight at ollama_url/api_base with zero
+    validation, regardless of WISP_PRODUCTION_MODE."""
+
+    def test_ollama_metadata_url_never_reaches_requests(self, monkeypatch):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        from wisp.provider_catalog import list_models
+
+        mock_get = Mock()
+        monkeypatch.setattr("requests.get", mock_get)
+        cfg = SimpleNamespace(
+            provider="ollama", ollama_url="http://169.254.169.254/",
+            api_key="", api_base="",
+        )
+        result = list_models("ollama", cfg, force=True)
+        assert result == []
+        mock_get.assert_not_called()
+
+    def test_openai_insecure_base_never_reaches_requests(self, monkeypatch):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        from wisp.provider_catalog import list_models
+
+        mock_get = Mock()
+        monkeypatch.setattr("requests.get", mock_get)
+        cfg = SimpleNamespace(
+            provider="openai", api_base="http://example.com/v1",
+            api_key="sk-x", ollama_url="",
+        )
+        result = list_models("openai", cfg, force=True)
+        assert result == []
+        mock_get.assert_not_called()
+
+    def test_ollama_localhost_still_reaches_requests(self, monkeypatch):
+        """The fix must not collaterally break the normal case."""
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from wisp.provider_catalog import list_models
+
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.return_value = None
+        mock_resp.json.return_value = {"models": [{"name": "llama3"}]}
+        monkeypatch.setattr("requests.get", MagicMock(return_value=mock_resp))
+        cfg = SimpleNamespace(
+            provider="ollama", ollama_url="http://localhost:11434",
+            api_key="", api_base="",
+        )
+        result = list_models("ollama", cfg, force=True)
+        assert result == ["llama3"]
+
 
 # ════════════════════════════════════════════════════════════════════════════
 #  8. Hook Name Validation

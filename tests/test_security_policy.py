@@ -215,6 +215,61 @@ class TestLayerOrdering:
         assert "untrusted" in result.reason.lower()
 
 
+# ═══════════════════════════════════════════════════════════════════
+# 6. Audit trail failure (broken store must not crash or drop silently)
+# ═══════════════════════════════════════════════════════════════════
+
+class TestAuditTrailFailure:
+    """A broken audit-trail store must never crash the agent, but it must
+    also never silently drop the decision — mirrors tests/security/
+    test_graph_audit.py's TestAuditFailure.Dead double, applied to
+    SecurityPolicy directly."""
+
+    def test_broken_trail_never_crashes_and_falls_back_to_in_memory_log(self, caplog):
+        from wisp.infra.security import SecurityPolicy, PermissionMode, Action
+
+        class Dead:
+            def record_decision(self, **kw):
+                raise OSError("disk gone")
+
+        policy = SecurityPolicy(permission_mode=PermissionMode.FULL, _audit_trail=Dead())
+        result = policy.check(Action("read_file", {"path": "x.py"}), _ctx("/tmp"))
+        assert result.allowed is True  # never breaks the agent
+
+        assert "Audit trail write failed" in caplog.text  # never silent
+
+        audit = policy.audit_log()  # never dropped
+        assert len(audit) == 1
+        assert audit[0]["action"] == "read_file"
+        assert audit[0]["allowed"] is True
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 7. Autonomous escalation (must be visible on the property)
+# ═══════════════════════════════════════════════════════════════════
+
+class TestAutonomousEscalation:
+    """WISP_AUTONOMOUS relaxes AUTO_EDIT to FULL — every write/bash/git
+    tool then runs without approval. The escalation must be readable off
+    the policy itself since nothing else surfaces it."""
+
+    def test_autonomous_relaxes_auto_edit_to_full(self):
+        from wisp.infra.security import SecurityPolicy, PermissionMode
+        policy = SecurityPolicy(permission_mode=PermissionMode.AUTO_EDIT, autonomous=True)
+        assert policy.effective_permission_mode == PermissionMode.FULL
+        assert policy.permission_mode == PermissionMode.AUTO_EDIT  # configured value unchanged
+
+    def test_autonomous_does_not_relax_read_only(self):
+        from wisp.infra.security import SecurityPolicy, PermissionMode
+        policy = SecurityPolicy(permission_mode=PermissionMode.READ_ONLY, autonomous=True)
+        assert policy.effective_permission_mode == PermissionMode.READ_ONLY
+
+    def test_non_autonomous_reports_configured_mode(self):
+        from wisp.infra.security import SecurityPolicy, PermissionMode
+        policy = SecurityPolicy(permission_mode=PermissionMode.AUTO_EDIT, autonomous=False)
+        assert policy.effective_permission_mode == PermissionMode.AUTO_EDIT
+
+
 # ── helpers ────────────────────────────────────────────────────────
 
 def _ctx(workspace: str):
