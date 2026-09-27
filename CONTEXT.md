@@ -47,7 +47,7 @@ what their §Findings sections are for.
 
 ## 0. STATUS — Persistent Graph Loop migration: **the plan is fully traversed**
 
-**HEAD is `fb5c1b7`** · branch **`plan-cli`** (not `main`). The baseline is Phase 10's `83b10af`; §3 lists every commit
+**HEAD is `1722aa5`** · branch **`main`**. The `plan-cli` line was merged into `main` (`ee56772`) and pushed (`6e92349..ee56772`); the four commits after the merge — the cost wiring, the confirmation gate and their docs — are **local only**, `main` being 4 ahead of `origin/main`. The baseline is Phase 10's `83b10af`; §3 lists every commit
 on top of it and is the authority for the count — **F87**: it did not, until 2026-09-25. **Nine**
 "point the handoff" commits had never been listed, so the claim and the table disagreed; backfilled.
 The only exception is the handoff commit that carries *this* line, which the next landing lists.
@@ -286,6 +286,49 @@ quoting it; §11 says how.
 
 **Ledger:** `WISP_MIGRATION_STATUS.md` (phase ledger, findings **F1–F63**, change log — **mind the §0/§23 split**, and note it has **no G1 or governance-layer row**: `CONTEXT.md` §12 is the live open-items table, **F99**).
 **Decisions:** `WISP_ARCHITECTURE_DECISIONS.md` (**ADR-0001 … ADR-0064**).
+
+### 0.0.24 WIRING THE INVARIANTS, AND THE THREE LAYERS MEASURED (2026-09-27) — no ADR
+
+**The invariants existed and none was live.** This session wired two of them and measured the three
+layers that were still marked ⚠️. The pattern each wiring followed: **find the seam that already
+exists**, rather than inventing one — the gate went to `ToolExecutor.execute` (which already refuses
+calls) and the meter to `Telemetry.record_turn` (the one place token counts arrive).
+
+| commit | what |
+|---|---|
+| `8cd88be` | **The cost meter.** `max_cost_usd` was a ceiling with **no meter** — required, enforced as a number, and unable to fire. `wisp/runtime/cost.py`. The decision that matters is **the unknown model**: fail closed or charge an operator-declared price, and **never a silent zero** — that would make the bound unenforceable in exactly the case nobody tested. |
+| `e05afc4` | **The cost bound, WIRED.** The gate is at `ToolExecutor.execute`, before any other logic. **Decision: refuse the next tool call, not the turn** — the run can still finish and report, so it ends honestly instead of being cut mid-flight. `DENIAL_BUDGET_EXCEEDED`. Both a meter and a ceiling are required; neither alone. |
+| `a64fffc` | **The last link:** `runtime.py` already had `model` in scope and did not pass it. **⚠️ The counts come from `TokenCounter`, which ESTIMATES from characters** — the providers do not report usage — so a cost is an estimate of a cost and the bound is exactly as sharp as the estimate. |
+| `0c6bcf2` | **The confirmation gate is STRUCTURAL.** The approval branch used to **fall through and execute** with no handler, so `auto_edit` + `auto_approve=False` ⇒ a `write_file` **ran** (ADR-0055 §3 residual 3). Fixed with the corpus's own **ADR-0061 R4** (*no client ⇒ deny*), `DENIAL_NO_APPROVER` its own code. **⚠️ Behaviour change:** a subagent whose contract has `auto_approve=False` (the **default**) is now **DENIED** for a write — correct, but a subagent that must write needs `auto_approve=True`. |
+
+**THE THREE ⚠️ LAYERS, MEASURED — and one is DEAD.**
+
+- **Context: `wisp/context_assembler.py` has NO CALLERS.** The layer's problem is not its location; it
+  is that nothing calls it. **A `context/` package would be a directory move over unwired code**, and
+  `stateless.py` has no `build_system_prompt` either, so the live system prompt is built elsewhere.
+  **Renaming the package is the last step, not the first** — find the builder, route it through
+  `assemble()` so `ContextOverflow` and the scan have a home.
+- **Trace: two traces, two purposes.** `wisp/trace/` holds `span.py` (versioned, with
+  `to_dict`/`from_dict`), `store.py`, `export.py`, `otlp.py`; the **replayable journal is SQLite**
+  (`core/session_repo.py`) and has **no schema version**. Moving the journal to JSONL changes the
+  **durable record** — the riskiest of the three.
+- **Eval: the judge is ABSENT BY DECISION.** There is no judge, and the only two matches in the
+  codebase *decline* one (`benchmark/__init__.py:5` *"no LLM judge"*; `tasks.py:5` *"model to judge
+  another model"*). So *"the judge seam is unverified"* resolves to **there is nothing to verify**;
+  adding one is a product decision about whether a model may grade a model.
+
+**THE INSTRUMENT'S OWN LESSONS, from this session.** (1) **A mutation must break the PROPERTY, not
+decorate the code** — twice, a mutation that merely *added* a redundant write left the guard correctly
+green. (2) **A mutation must disable the whole property, not one of its sites.** (3) **A probe's
+restore set must cover every file it mutates** — a crash left a mutation in the tree; caught by
+grepping afterwards. (4) **A test double that predates a parameter is a real constraint** — passing
+`approval_handler=` to the subagent's `core.turn(...)` broke 17 tests, and the kwarg was unnecessary;
+the edit was reverted rather than widening 17 doubles. (5) **A threshold lowered to zero still
+passes** — the mutation has to shrink the *set* the floor is a floor on.
+
+**Also recorded:** the earlier `ADR-0062` tension table's row 4 — *"never redact prompt; trace-only"* —
+**inverted** the redaction decision (`4f52c74` reverses `d914a0e`), and the clock gap was closed by
+`18707f0` (`time.*` appears only in `wisp/runtime/clock.py`, enforced by AST).
 
 ### 0.0.23 THE PLAN CLI SEES THE AGENT'S PLAN (2026-09-26) — ADR-0064
 
