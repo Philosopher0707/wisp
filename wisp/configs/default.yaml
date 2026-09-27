@@ -1,0 +1,28 @@
+# The Config layer: the ONLY place capabilities are named.
+#
+# The core is generic. Nothing below this file may branch on a capability name —
+# there is no `if config == "email"` in `wisp/`, and this file is why it is not
+# needed. A capability is a set of values here, never a code path there.
+#
+# `bounds:` is mandatory and every one of its four keys is mandatory. A config
+# missing any of them FAILS TO LOAD (`wisp.runtime.bounds.BoundsError`). There are
+# no defaults on purpose: every default is a policy nobody chose, and a run that
+# cannot state its own ceiling does not start.
+#
+# Ranges, and why they differ:
+#   max_steps, max_tokens_total   countable — zero is a legitimate "start nothing",
+#                                 and it must terminate rather than hang (>= 0)
+#   max_wall_clock_s, max_cost_usd  rates of consumption — zero is not a small
+#                                 budget, it is a run that can never do anything (> 0)
+
+name: default
+description: >
+  A conservative interactive default. The ceilings are deliberately small: an
+  interactive turn that needs more than five minutes or two dollars is a turn the
+  operator should re-authorise, not one the agent should finish unattended.
+
+bounds:
+  max_steps: 40
+  max_tokens_total: 400000
+  max_wall_clock_s: 300
+  max_cost_usd: 2.00
