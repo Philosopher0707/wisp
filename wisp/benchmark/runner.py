@@ -83,6 +83,12 @@ def make_ollama_core_factory(config: Any):
             object.__setattr__(cfg, "model", model)
         except Exception:
             cfg.model = model
+        # A benchmark has no human to ask, so it AUTHORISES its writes
+        # explicitly rather than inheriting the old no-handler fall-through,
+        # which the confirmation gate removed. `full` is the honest
+        # description: an autonomous run that may write and execute.
+        from wisp.config import PermissionMode
+        cfg = cfg.replace(permission_mode=PermissionMode.FULL)
         provider = ProviderFactory().from_config(cfg)
         return WispAgentCore(config=cfg, provider=provider,
                              tool_executor=ToolExecutor(config=cfg))

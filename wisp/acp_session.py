@@ -188,7 +188,16 @@ class AcpSession:
     async def _collect_events(self, core, session_dict: dict, prompt: str) -> list[dict]:
         """Collect all events from one core.turn() call."""
         events: list[dict] = []
-        async for event in core.turn(session_dict, prompt):
+        # Explicit, not inherited: the old no-handler fall-through let an ACP
+        # session's writes run unapproved. The authorisation now comes from the
+        # session's own config, which is the caller's decision.
+        _allow = bool(getattr(self.config, "auto_approve", False))
+
+        async def _config_approver(_event, _allow=_allow):
+            return _allow
+
+        async for event in core.turn(session_dict, prompt,
+                                     approval_handler=_config_approver):
             events.append(event)
         return events
 

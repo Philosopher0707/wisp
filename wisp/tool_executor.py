@@ -869,25 +869,37 @@ class ToolExecutor:
         if needs_approval and (forced_approval or (
                 not is_full_mode and not getattr(self.config, "auto_approve", False))):
             if not approval_handler:
-                if forced_approval:
-                    from wisp.core.events import denial_result, DENIAL_POLICY_DENIED
-                    self._audit_denial(func_name, func_args, workspace, f"[Blocked: approval required for {func_name}, no handler]")
-                    yield denial_result(
-                        func_name, DENIAL_POLICY_DENIED,
-                        f"[Blocked: {getattr(self.config, 'permission_mode', 'auto_edit')} mode "
-                        f"requires approval for {func_name}, but no approval handler is available]",
-                        tool_call_id=tool_call_id,
-                    )
-                    return
-                # No handler, and the approval is not forced: fall through and
-                # execute. The enclosing guard already required
-                # `not auto_approve` (or `not is_full_mode`), so this is NOT the
-                # auto_approve shortcut — it is the fall-through for an unforced
-                # approval. ADR-0055 §3 residual 3 measured the consequence: with
-                # `approval_handler=None` a `write_file` in `auto_edit` runs, which
-                # is why a REST caller gets the agent's *no-approver* behaviour.
-                # (This comment said "auto_approve=True + no handler + not forced",
-                # which described a branch this one is not in.)
+                # ── No approver is not an approval ──
+                #
+                # This used to FALL THROUGH AND EXECUTE whenever the approval was
+                # not *forced*, so with `approval_handler=None` a `write_file` in
+                # `auto_edit` ran (ADR-0055 §3 residual 3 measured it). A mutating
+                # tool must be structurally unable to run unconfirmed: if nobody
+                # could be asked, nobody said yes.
+                #
+                # The reason is DISTINGUISHABLE from a human's "no" — ADR-0061 R4's
+                # rule for the WebSocket path, applied to the agent path. "Nobody
+                # could be asked" and "the human said no" are different facts.
+                #
+                # A caller that genuinely has no human — `wisp bench`, a subagent,
+                # an ACP session — authorises EXPLICITLY, by passing an approver or
+                # by `auto_approve`/`permission_mode=full`. That is a caller's
+                # decision, which is the point: the model does not authorise a side
+                # effect, and neither does an accident of wiring.
+                from wisp.core.events import denial_result, DENIAL_NO_APPROVER
+                self._audit_denial(
+                    func_name, func_args, workspace,
+                    f"[Blocked: approval required for {func_name}, no approver available]")
+                yield denial_result(
+                    func_name, DENIAL_NO_APPROVER,
+                    f"[Blocked: {getattr(self.config, 'permission_mode', 'auto_edit')} mode "
+                    f"requires approval for {func_name}, and no approver is available. "
+                    f"This is not a denial by a human — nobody could be asked. A caller "
+                    f"with no human authorises explicitly, by passing an approval "
+                    f"handler or by `auto_approve=True` / `permission_mode=full`.]",
+                    tool_call_id=tool_call_id,
+                )
+                return
             else:
                 reason = f"{func_name} modifies workspace state"
                 yield _approval_request_event(func_name, func_args, reason)

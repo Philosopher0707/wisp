@@ -529,6 +529,13 @@ class SubagentRunner:
                 child_start = time.monotonic()
                 last_event_at = child_start
                 first_event_seen = False
+                # The confirmation gate is structural now: a mutating tool with no
+                # approver is DENIED rather than executed. A subagent's
+                # authorisation is its contract's `auto_approve`, which
+                # `_build_child_config` already sets — so the child states its
+                # authorisation explicitly instead of inheriting a fall-through.
+                # A contract with `auto_approve=False` now gets DENIED for a
+                # write, which is the correct reading: it was never authorised.
                 stream = core.turn(session_dict, contract.task)
                 try:
                     # First-token deadline: wait_for cancels the pending
