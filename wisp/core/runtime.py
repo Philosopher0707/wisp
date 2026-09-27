@@ -1456,10 +1456,18 @@ class AgentRuntime:
                 model = getattr(self, "_model", None)
                 chars_per_token = getattr(self, "_chars_per_token", 4)
                 counter = TokenCounter(chars_per_token=chars_per_token)
+                # `model=` is what lets the wired cost meter charge. Without it the
+                # meter is inert and `max_cost_usd` cannot fire — the last link in
+                # the chain, and the reason it is named here rather than assumed.
+                #
+                # NOTE: the counts come from `TokenCounter`, which ESTIMATES from
+                # characters — the providers do not report usage. So a cost is an
+                # estimate of a cost, and the bound is as sharp as the estimate.
                 self.telemetry.record_turn(
                     latency_ms=latency_ms,
                     prompt_tokens=counter.count(prompt, model=model),
                     completion_tokens=counter.count("".join(assistant_content), model=model),
+                    model=model,
                 )
 
     # ── Mid-turn steering (M3) ─────────────────────────────────────
