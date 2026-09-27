@@ -889,6 +889,24 @@ class WispAgentCore:
                         messages.append(nudge_message(nudge))
                         yield _flatten_event(system(nudge, level="warning"))
                         continue
+                # Announced-step gate: "Let me reproduce the issue first." with no
+                # tool call is not a final answer, and with no code changed none of
+                # the gates above fires. Same bounded, shared extension budget, so a
+                # model that only ever announces still ends the turn.
+                from wisp.core.announced_step import (
+                    announces_next_step, compose_continue_nudge)
+
+                round_text = "".join(partial_content)
+                if (announces_next_step(round_text)
+                        and stagnation_interventions_used
+                        < _MAX_STAGNATION_INTERVENTIONS
+                        and iteration + 1 < max_iterations):
+                    stagnation_interventions_used += 1
+                    messages.append({"role": "assistant", "content": round_text})
+                    nudge = compose_continue_nudge(round_text)
+                    messages.append(nudge_message(nudge))
+                    yield _flatten_event(system(nudge, level="warning"))
+                    continue
                 # RESOLVED (verified, not surrendered) → distill the trail
                 # into a permanent auto skill, best-effort, never blocking.
                 if guard.resolved():
