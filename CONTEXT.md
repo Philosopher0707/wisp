@@ -2294,7 +2294,8 @@ env -u PYTHONPATH .venv/bin/python -m pytest \
   tests/reliability/test_idempotency.py \
   tests/reliability/test_injection_scan.py \
   tests/reliability/test_redaction_point.py \
-  tests/reliability/test_clock_injection.py -q --basetemp="$TMPDIR/wisp-block-$$"   # alone — ADR-0062 R6
+  tests/reliability/test_clock_injection.py \
+  tests/reliability/test_cost_meter.py -q --basetemp="$TMPDIR/wisp-block-$$"   # alone — ADR-0062 R6
 ```
 
 **Measured 2026-09-25, after the F8 error-classification landing: 1115 tests — 1114 pass, 1 fails.** The
