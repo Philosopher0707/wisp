@@ -941,6 +941,14 @@ class WispAgentCore:
                         # this same channel for live rendering but must
                         # never become role:tool messages (their ID is "").
                         if result_event.get("type") == "tool_result":
+                            # Tool output is DATA, never instructions. A result
+                            # carrying an instruction shape is WITHHELD —
+                            # fail-closed, and withheld rather than killing the
+                            # run. See wisp/core/tool_result_guard.py.
+                            from wisp.core.tool_result_guard import (
+                                withhold_if_injected,
+                            )
+                            result_event = withhold_if_injected(result_event)
                             tool_results_events.append(result_event)
                         yield result_event
                         # Verification-floor tracking: fold every tool outcome
