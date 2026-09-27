@@ -429,8 +429,15 @@ class ToolExecutor:
         policy: Any = None,
         run_store: Any = None,
         principal: Any = None,
+        cost_meter: Any | None = None,
+        max_cost_usd: float | None = None,
     ):
         self.config = config
+        # The cost bound, wired. BOTH are needed for the gate to be active: a meter
+        # with no ceiling measures without gating, and a ceiling with no meter
+        # cannot fire. Passing neither is exactly the pre-existing behaviour.
+        self._cost_meter = cost_meter
+        self._max_cost_usd = max_cost_usd
         self.extensions = extensions
         # Migration P9: the principal this executor authorizes AS. `None` keeps
         # today's behaviour exactly (the unbounded local human principal), so
@@ -707,6 +714,29 @@ class ToolExecutor:
         """
         func_name = tool_name
         func_args = dict(tool_args) if tool_args else {}
+
+        # ── The cost bound ──
+        #
+        # Refuse the NEXT TOOL CALL rather than killing the turn: the run can still
+        # finish and report what it did, so it ends honestly instead of being cut
+        # off mid-flight with a partial transcript. Same shape as the idempotency
+        # guard's CONFLICT — do not do the thing, and say why.
+        if (self._cost_meter is not None and self._max_cost_usd is not None
+                and self._cost_meter.exhausted(self._max_cost_usd)):
+            from wisp.core.events import denial_result, DENIAL_BUDGET_EXCEEDED
+            _spent = self._cost_meter.spent_usd
+            self._audit_denial(
+                func_name, func_args, workspace,
+                f"[Blocked: cost bound ${self._max_cost_usd} met (spent ${_spent:.4f})]")
+            yield denial_result(
+                func_name, DENIAL_BUDGET_EXCEEDED,
+                f"[Blocked: this run has spent ${_spent:.4f} of its "
+                f"${self._max_cost_usd} cost bound, so no further tool calls are made. "
+                f"This is not a judgement about this tool — the run is out of budget. "
+                f"Finish and report what has been done.]",
+                tool_call_id=tool_call_id,
+            )
+            return
         _principal = self._effective_principal(workspace, principal)
 
         # Dangerous commands are blocked before any mode/approval logic so

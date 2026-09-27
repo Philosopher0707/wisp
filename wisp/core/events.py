@@ -308,11 +308,17 @@ DENIAL_USER_DENIED = "USER_DENIED"
 DENIAL_APPROVAL_TIMEOUT = "APPROVAL_TIMEOUT"
 DENIAL_CANCELLED = "CANCELLED"
 DENIAL_SCHEMA_INVALID = "SCHEMA_INVALID"
+#: The run met its declared cost ceiling, so no further tool call is made.
+#: Distinct from POLICY_DENIED for the same reason a no-approver refusal is:
+#: "the run is out of budget" is a fact about the RUN, not a judgement about
+#: this tool or this call — and a caller that cannot tell them apart cannot
+#: decide whether to reconfigure or to ask a human.
+DENIAL_BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
 
 _DENIAL_STATUSES = frozenset({
     DENIAL_POLICY_DENIED, DENIAL_USER_DENIED,
     DENIAL_APPROVAL_TIMEOUT, DENIAL_CANCELLED,
-    DENIAL_SCHEMA_INVALID,
+    DENIAL_SCHEMA_INVALID, DENIAL_BUDGET_EXCEEDED,
 })
 
 
