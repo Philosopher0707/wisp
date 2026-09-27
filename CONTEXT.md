@@ -2246,7 +2246,8 @@ env -u PYTHONPATH .venv/bin/python -m pytest \
   tests/reliability/test_key_trust_workflow.py \
   tests/reliability/test_m4_policy_wiring.py \
   tests/reliability/test_rest_authorization_composition.py \
-  tests/test_m4_governance_wiring.py -q --basetemp="$TMPDIR/wisp-block-$$"   # alone — ADR-0062 R6
+  tests/test_m4_governance_wiring.py \
+  tests/reliability/test_replay_verification.py -q --basetemp="$TMPDIR/wisp-block-$$"   # alone — ADR-0062 R6
 ```
 
 **Measured 2026-09-25, after the F8 error-classification landing: 1115 tests — 1114 pass, 1 fails.** The

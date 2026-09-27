@@ -1377,6 +1377,23 @@ class AgentRuntime:
                 for ctx_msg in injected_context:
                     session["messages"].append(ctx_msg)
 
+                # The transcript's digest, recorded so that replay can CHECK the
+                # transcript it rebuilds rather than assume it — F25's defect
+                # class, where `Session.apply` produced a transcript the turn had
+                # not run on and nothing said so. Appended last, so it covers
+                # every message this turn added, and before stamping so it takes a
+                # sequence number with the rest of the turn's events.
+                #
+                # Gated on `journal_fidelity` alone: that is the flag that
+                # journals the transcript (assistant_message / tool_call /
+                # tool_result). With it off there is no transcript in the log to
+                # rebuild, so a digest would be a claim replay could never check.
+                if journal_fidelity and self.session_repo is not None:
+                    from wisp.core.replay_digest import projection_digest
+                    from wisp.core.session import SessionEvent
+                    journal_events.append(SessionEvent.replay_digest_event(
+                        0, projection_digest(session["messages"])))
+
                 # Stamp the journaled events into the session's sequence space
                 # BEFORE the terminal event, so the log stays gap-free and
                 # strictly increasing. Dropped entirely when the repository is

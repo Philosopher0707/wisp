@@ -55,6 +55,12 @@ class SessionEventType(StrEnum):
     # convenience, not the authority — replay re-derives it. What makes it
     # replayable is that it carries the INPUTS, not just the answer.
     GOAL_STATE = "goal_state"
+    # The transcript's digest, recorded at turn end and CHECKED on replay
+    # (`wisp/core/replay_digest.py`). AUDIT-ONLY in the transcript sense — it
+    # contributes no message — but it is the one event whose `apply` branch can
+    # RAISE, because its whole purpose is to fail loud when the replay it is
+    # part of produces something the turn did not run on.
+    REPLAY_DIGEST = "replay_digest"
     COMPACTED = "compacted"
     ERROR = "error"
     DONE = "done"
@@ -276,6 +282,19 @@ class SessionEvent:
         """
         return cls(SessionEventType.ESCALATION, seq,
                    {"intervention": intervention})
+
+    @classmethod
+    def replay_digest_event(cls, seq: int, digest: str) -> SessionEvent:
+        """The transcript's digest, recorded at turn end and verified on replay.
+
+        See `wisp/core/replay_digest.py` for what the digest covers and — stated
+        there rather than implied — what it does not. This factory exists so the
+        payload key appears once: `replay_digest.REPLAY_DIGEST_KEY` is the name,
+        and a second spelling would be a second way to write a record nothing
+        reads.
+        """
+        from wisp.core.replay_digest import REPLAY_DIGEST_KEY
+        return cls(SessionEventType.REPLAY_DIGEST, seq, {REPLAY_DIGEST_KEY: digest})
 
     @classmethod
     def compacted(cls, seq: int, before_count: int, after_count: int, summary: str = "") -> SessionEvent:
@@ -599,6 +618,27 @@ class Session:
 
             case SessionEventType.DONE:
                 pass  # terminal event, no state change
+
+            case SessionEventType.REPLAY_DIGEST:
+                # The one `apply` branch that can RAISE. Every other branch folds
+                # a record into state; this one checks that the state folded so
+                # far is the state the turn actually ran on. A failure is not a
+                # run outcome and must not be reconciled here — `ReplayDivergence`
+                # is a plain `RuntimeError` so it escapes the loop
+                # (`wisp/core/replay_digest.py` states why).
+                from wisp.core.replay_digest import (
+                    REPLAY_DIGEST_KEY, ReplayDivergence, verify,
+                )
+                recorded = event.payload.get(REPLAY_DIGEST_KEY)
+                if not isinstance(recorded, str) or not recorded:
+                    raise ReplayDivergence(
+                        f"session {self.session_id}: the REPLAY_DIGEST event at "
+                        f"sequence {event.sequence_num} carries no "
+                        f"{REPLAY_DIGEST_KEY!r} — the record is unreadable, so the "
+                        "replay it is part of cannot be trusted"
+                    )
+                verify(self.messages, recorded, session_id=self.session_id,
+                       sequence=event.sequence_num)
 
             case _:
                 # Fail loud, not silent (ADR-0005). A `match` with no
