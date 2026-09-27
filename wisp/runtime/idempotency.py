@@ -215,6 +215,54 @@ class InMemoryStore:
         return self._records.get(key) if key else None
 
 
+class SqliteStore:
+    """The guard's `Store`, over `UnifiedStore`'s idempotency table.
+
+    **Durable, which `InMemoryStore` is not** — and that difference is the whole
+    point of row 1. A crash loses every in-memory record, which is exactly the
+    condition "crash after the side effect, before storing the result" describes;
+    a durable store is what makes the `IN_PROGRESS` marker survive to be seen.
+
+    The table gained two columns for this (`state`, `fingerprint`) — the existing
+    one was a result memo with first-write-wins, and a memo cannot say *"this is
+    running"* or *"this key was first used for a different body"*.
+    """
+
+    def __init__(self, store: Any) -> None:
+        self._store = store
+
+    def _record(self, row: dict[str, Any]) -> Record:
+        raw = row.get("result") or ""
+        try:
+            import json as _json
+            result = _json.loads(raw) if raw else None
+        except Exception:
+            result = raw
+        try:
+            state = RecordState(row.get("state") or RecordState.IN_PROGRESS.value)
+        except ValueError:
+            state = RecordState.IN_PROGRESS
+        return Record(key=row["key"], fingerprint=row.get("fingerprint", ""),
+                      state=state, result=result,
+                      started_at=float(row.get("created_at") or 0.0))
+
+    def begin(self, key: str, fingerprint: str) -> tuple[Record, bool]:
+        row, created = self._store.idem_begin(key, fingerprint)
+        if created:
+            return (Record(key=key, fingerprint=fingerprint,
+                           state=RecordState.IN_PROGRESS), True)
+        return self._record(row), False
+
+    def finish(self, key: str, *, state: RecordState, result: Any = None) -> None:
+        import json as _json
+        payload = "" if result is None else _json.dumps(result, default=str)
+        self._store.idem_finish(key, state.value, payload)
+
+    def find_by_fingerprint(self, fingerprint: str) -> Record | None:
+        row = self._store.idem_find_by_fingerprint(fingerprint)
+        return None if row is None else self._record(row)
+
+
 def key_for(tool: str, args: Any) -> str:
     """The **stable** key for a request (row 5).
 
@@ -363,5 +411,5 @@ class IdempotencyGuard:
 __all__ = [
     "RecordState", "OutagePolicy", "IdempotencyError", "KeyReuse", "UnstableKey",
     "StoreUnavailable", "Outcome", "Record", "GuardResult", "Store", "InMemoryStore",
-    "IdempotencyGuard", "key_for",
+    "IdempotencyGuard", "key_for", "SqliteStore",
 ]

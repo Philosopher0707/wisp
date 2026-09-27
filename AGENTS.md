@@ -540,7 +540,8 @@ python3 -m pytest tests/test_durable_layer_reachable.py tests/test_turn_journal_
   tests/reliability/test_cost_meter.py \
   tests/reliability/test_cost_gate.py \
   tests/reliability/test_confirmation_gate.py \
-  tests/reliability/test_tool_result_guard.py -q --basetemp="$TMPDIR/wisp-block-$$"   # alone — ADR-0062 R6
+  tests/reliability/test_tool_result_guard.py \
+  tests/reliability/test_idempotency_store.py -q --basetemp="$TMPDIR/wisp-block-$$"   # alone — ADR-0062 R6
 ```
 
 ### The environment will fight you
