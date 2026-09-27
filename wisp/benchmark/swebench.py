@@ -29,13 +29,36 @@ _CLONE_TIMEOUT_S = 120
 _GIT_TIMEOUT_S = 30
 _VERIFY_TIMEOUT_S = 180
 
+# Prefix marking a verify() detail string as "couldn't determine the
+# outcome", never as "the patch is wrong" — see _verify_from_instance.
+ENV_UNAVAILABLE_PREFIX = "environment unavailable, cannot verify: "
 
-def _sh(args: list[str], cwd: Path, timeout: int) -> tuple[int, str]:
-    """Run one command; (rc, combined output tail). Never raises."""
+# Substring of CPython's ModuleNotFoundError message. pytest exit code 1
+# means "collection succeeded, tests ran, some failed" — a genuine model
+# fault. Every other nonzero exit code means pytest never got that far
+# (confirmed empirically: a node-id target — exactly SWE-bench's
+# FAIL_TO_PASS/PASS_TO_PASS shape — in an unimportable module exits 4,
+# "found no collectors"; a bare-file target exits 2, "error during
+# collection"). Combined with this marker in the output, that is the
+# signature of "the target repo's own runtime deps aren't installed in
+# whatever env is running pytest", not a wrong patch.
+_MISSING_DEP_MARKER = "No module named"
+_TESTS_RAN_RC = 1
+
+
+def _sh(args: list[str], cwd: Path, timeout: int,
+        full_output: bool = False) -> tuple[int, str]:
+    """Run one command; (rc, combined output tail, or full if requested).
+
+    Never raises.
+    """
     try:
         proc = subprocess.run(
             args, cwd=cwd, capture_output=True, text=True, timeout=timeout)
-        tail = ((proc.stdout or "") + (proc.stderr or "")).strip().splitlines()
+        combined = (proc.stdout or "") + (proc.stderr or "")
+        if full_output:
+            return proc.returncode, combined
+        tail = combined.strip().splitlines()
         return proc.returncode, tail[-1][:200] if tail else ""
     except subprocess.TimeoutExpired:
         return 1, f"timed out after {timeout}s: {' '.join(args[:3])}"
@@ -92,18 +115,36 @@ def _setup_from_instance(inst: dict[str, Any], ws: Path) -> None:
 
 
 def _verify_from_instance(inst: dict[str, Any], ws: Path) -> tuple[bool, str]:
-    """Pass iff every listed FAIL_TO_PASS (+ PASS_TO_PASS) test passes."""
+    """Pass iff every listed FAIL_TO_PASS (+ PASS_TO_PASS) test passes.
+
+    Runs under ``sys.executable`` — whatever env is running ``wisp bench``
+    itself, which for a real-world target repo (astropy, django, requests,
+    ...) never has that repo's own runtime dependencies installed. Without
+    detection, a missing dependency and a wrong model patch both produce a
+    plain pytest failure, so the scoreboard reports FAIL either way — a
+    false negative that conflates "couldn't check" with "wrong patch".
+    pytest's own exit code distinguishes them: 2 means collection was
+    interrupted (never even got to run the target tests), 1 means the
+    tests ran and genuinely failed. Combined with a ModuleNotFoundError in
+    the output, exit 2 is the missing-dependency signature.
+    """
     fail_to_pass = [t for t in (inst.get("FAIL_TO_PASS") or []) if t]
     pass_to_pass = [t for t in (inst.get("PASS_TO_PASS") or []) if t]
     targets = fail_to_pass + pass_to_pass
     if not targets:
         return False, "no FAIL_TO_PASS/PASS_TO_PASS specified — unscorable"
-    rc, detail = _sh(
+    rc, output = _sh(
         [sys.executable, "-m", "pytest", *targets, "-q", "-p", "no:cacheprovider"],
-        ws, _VERIFY_TIMEOUT_S)
+        ws, _VERIFY_TIMEOUT_S, full_output=True)
     if rc == 0:
         return True, f"{len(targets)} listed test(s) pass"
-    return False, f"pytest exit {rc}: {detail}"
+    lines = output.strip().splitlines()
+    if rc != _TESTS_RAN_RC and _MISSING_DEP_MARKER in output:
+        missing = next(
+            (ln.strip() for ln in reversed(lines) if _MISSING_DEP_MARKER in ln),
+            "missing dependency")
+        return False, f"{ENV_UNAVAILABLE_PREFIX}{missing[:160]}"
+    return False, f"pytest exit {rc}: {lines[-1][:200] if lines else ''}"
 
 
 def patch_applies_cleanly(ws: Path, patch_text: str) -> bool:
