@@ -31,12 +31,12 @@ choice is made by the domain that bears the cost rather than by this module.
 """
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any, Callable, Protocol
 
 from wisp.core.action_key import action_key
+from wisp.runtime.clock import Clock, SystemClock
 
 
 class RecordState(StrEnum):
@@ -188,7 +188,11 @@ class InMemoryStore:
     the process — the guard cannot check that, and does not pretend to.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, clock: Clock | None = None) -> None:
+        # A clock, never a direct wall-clock read: `started_at` is a fact about the
+        # run, and a fact read from the host's clock differs between a run and its
+        # replay. See `wisp/runtime/clock.py`.
+        self._clock: Clock = clock if clock is not None else SystemClock()
         self._records: dict[str, Record] = {}
         self._by_fingerprint: dict[str, str] = {}
 
@@ -197,7 +201,7 @@ class InMemoryStore:
         if existing is not None:
             return existing, False
         record = Record(key=key, fingerprint=fingerprint,
-                        state=RecordState.IN_PROGRESS, started_at=time.time())
+                        state=RecordState.IN_PROGRESS, started_at=self._clock.now())
         self._records[key] = record
         self._by_fingerprint.setdefault(fingerprint, key)
         return record, True
@@ -235,7 +239,8 @@ class IdempotencyGuard:
 
     def __init__(self, store: Store, *, on_outage: OutagePolicy,
                  redact: Callable[[Any], Any] | None = None,
-                 poll_after_s: float | None = None) -> None:
+                 poll_after_s: float | None = None,
+                 clock: Clock | None = None) -> None:
         # `on_outage` is required and has NO default: row 4 has no safe answer, so
         # the choice must be made by the domain that bears the cost.
         if not isinstance(on_outage, OutagePolicy):
@@ -249,6 +254,7 @@ class IdempotencyGuard:
         self._on_outage = on_outage
         self._redact = redact
         self._poll_after_s = poll_after_s
+        self._clock: Clock = clock if clock is not None else SystemClock()
 
     @property
     def on_outage(self) -> OutagePolicy:
@@ -350,7 +356,7 @@ class IdempotencyGuard:
         """
         if self._poll_after_s is None or record.state is not RecordState.IN_PROGRESS:
             return False
-        age = (now if now is not None else time.time()) - record.started_at
+        age = (now if now is not None else self._clock.now()) - record.started_at
         return age > self._poll_after_s
 
 
