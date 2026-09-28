@@ -581,20 +581,15 @@ class AgentRuntime:
                 pass
 
         async with session_lock:
-            # Crash recovery: if last event in session_events isn't DONE,
-            # replay from last UserMessage to rebuild state
+            # Crash recovery: the last turn did not reach DONE, so the saved
+            # transcript may lag the journal. Rebuild from the journal only when
+            # it can be trusted; otherwise keep the saved transcript, and say which.
             if self.session_repo is not None:
                 try:
                     if not self.session_repo.was_last_turn_complete(sid):
-                        logger.warning("Session %s has incomplete turn — replaying", sid)
-                        last_seq = self.session_repo.get_last_sequence(sid)
-                        if last_seq >= 0:
-                            replayed = self.session_repo.load_session(sid)
-                            if replayed is not None:
-                                session["messages"] = replayed.messages
-                                _stringify_tool_call_arguments(session["messages"])
+                        self._recover_unfinished_turn(sid, session)
                 except Exception:
-                    pass  # table might not exist
+                    logger.debug("Session %s: turn recovery skipped", sid, exc_info=True)
 
             # Auto-compact before turn to prevent context overflow
             await self.maybe_compact(session)
@@ -1815,6 +1810,39 @@ class AgentRuntime:
         """
         with self._core_lock:
             self._session_cores.clear()
+
+    def _recover_unfinished_turn(self, sid: str, session: dict[str, Any]) -> None:
+        """The last turn did not reach DONE: rebuild from the journal, but only a trustworthy one.
+
+        This used to log *"has incomplete turn — replaying"* and then assign whatever the journal
+        replayed to, inside `except Exception: pass`. Two failures followed. A journal whose replay
+        diverged from its recorded digest raised `ReplayDivergence`, which was swallowed, so the
+        log claimed a replay that never happened, on every resume. A journal with a GAP replayed
+        without error and REPLACED a good saved transcript with a provider-invalid one. The
+        journal is now used only when it replays consistently and has no gap (M4's rule in
+        `SessionRepository.reconstruction_source`). Otherwise the saved transcript stays, and the
+        log says which history the turn runs on and why. A journal holding only user messages is
+        still replayed, as before (`test_replay_holds_session_lock` depends on it).
+        """
+        from wisp.core.replay_digest import ReplayDivergence
+
+        assert self.session_repo is not None
+        try:
+            replayed = self.session_repo.load_session(sid)
+            unusable = ""
+        except ReplayDivergence as exc:
+            replayed, unusable = None, f"its journal does not replay consistently ({exc})"
+        if replayed is not None and replayed.gap_detected:
+            replayed, unusable = None, "its journal has a gap (a lost event)"
+        if replayed is None:
+            logger.warning(
+                "Session %s: the previous turn did not finish; keeping the saved transcript "
+                "because %s", sid, unusable or "its journal is empty")
+            return
+        session["messages"] = replayed.messages
+        _stringify_tool_call_arguments(session["messages"])
+        logger.info("Session %s: the previous turn did not finish; history rebuilt from the "
+                    "journal", sid)
 
     async def maybe_compact(self, session: dict[str, Any], max_messages: int | None = None, force: bool = False) -> dict[str, Any] | None:
         """Compact session if it exceeds max_messages.
