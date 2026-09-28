@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.*
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlin.math.min
 
 class WispWebSocketClient {
@@ -98,12 +99,9 @@ class WispWebSocketClient {
                     requestTimeoutMillis = 30000
                     connectTimeoutMillis = 10000
                 }
-                // Explicit TLS 1.2+ requirement (CIO default trusts system CA store)
-                engine {
-                    https {
-                        tlsVersion = io.ktor.network.tls.TLSVersion.TLS12
-                    }
-                }
+                // TLS: Ktor 2.3's CIO engine has no `tlsVersion` setting (the line that
+                // set one never compiled); its TLS client negotiates TLS 1.2 and trusts
+                // the system CA store.
             }
 
             client!!.webSocket(fullUrl) {
