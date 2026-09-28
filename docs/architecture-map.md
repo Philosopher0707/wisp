@@ -177,9 +177,11 @@ lazy-aware) → policy decision → intercept hooks → impl → envelope
 metrics. Fanout adds workspace-grounding preamble + progress callbacks + depth
 inheritance (`tool_executor.py:1566+`).
 
-**Approval matrix**: FULL=all allowed · AUTO_EDIT=bash/git/push/pr blocked,
-subagents blocked (`policy_engine.py:259`) · ASK_ALL=writes prompt · READ_ONLY=
-everything blocked. Interactive options `y Y a n N d c` with honest cancel.
+**Approval matrix**: FULL=all allowed · AUTO_EDIT=file edits free; bash, git/gh
+writes (commit/branch/push/pr) and spawn/fanout **ask every time**, and are
+blocked where no approval handler exists; subagent children never receive them
+(`policy_engine.py`, `_AUTO_EDIT_APPROVAL_TOOLS`) · ASK_ALL=writes prompt ·
+READ_ONLY=everything blocked. Interactive options `y Y a n N d c` with honest cancel.
 
 ## 6. Multi-agent system
 

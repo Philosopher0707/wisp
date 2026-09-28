@@ -199,7 +199,7 @@ class TestTheChildIsDeniedOutsideItsContract:
         assert child.parent_principal_id == parent.principal_id
         assert child.principal_id != parent.principal_id
 
-    def test_the_mode_gate_denies_before_the_principal_consult(self, tmp_path):
+    def test_the_mode_gate_denies_before_the_principal_consult(self, tmp_path, auto_edit_hard_deny_witness):
         """**The ordering fact**, pinned so a future reader does not conclude
         the principal layer is redundant.
 
@@ -213,9 +213,13 @@ class TestTheChildIsDeniedOutsideItsContract:
         `_AUTO_EDIT_DENY_TOOLS` when it was routed through the sandbox tier
         router — so the mode gate no longer denies it and the principal layer
         correctly decides. That changed the ORDER this test observes, not the
-        fact it asserts. `git_push` is still hard-denied in `auto_edit` (it
-        mutates a shared remote, which no local sandbox tier contains), so it
-        witnesses the same ordering.
+        fact it asserts. `git_push` was still hard-denied in `auto_edit`, so it
+        witnessed the same ordering.
+
+        **And again on 2026-09-28**, when the git/gh writes moved to
+        REQUIRE_APPROVAL and the default deny set became empty. The ordering fact
+        is about the mechanism, so the `auto_edit_hard_deny_witness` fixture
+        re-imposes the old deny on `git_push` for this test.
         """
         child = child_principal(_unbounded_parent(),
                                 SubagentContract(tools=["read_file"]))
