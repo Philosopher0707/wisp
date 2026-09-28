@@ -41,6 +41,7 @@ class TestProviderFactoryIntegration:
 
     def test_create_core_uses_factory_when_provider_set(self):
         from wisp.composition import CompositionRoot
+        from wisp.provider_catalog import Resolution
         from wisp.providers.factory import ProviderFactory
 
         config = MagicMock()
@@ -57,8 +58,13 @@ class TestProviderFactoryIntegration:
         config.max_subagent_branching = 3
 
         root = CompositionRoot(config)
+        # Pin the selection as reachable: otherwise it depends on a live Ollama
+        # daemon, and without one (as on CI) _create_core serves _NullProvider
+        # before the factory is consulted.
+        reachable = Resolution(provider="ollama", model="qwen2.5-coder", status="ok")
         try:
-            with patch.object(ProviderFactory, "from_config") as mock_from_config:
+            with patch.object(ProviderFactory, "from_config") as mock_from_config, \
+                    patch("wisp.provider_catalog.resolve_selection", return_value=reachable):
                 mock_provider = MagicMock()
                 mock_from_config.return_value = mock_provider
 
@@ -66,7 +72,7 @@ class TestProviderFactoryIntegration:
                 mock_from_config.assert_called_once_with(config)
         finally:
             root.shutdown()
-            assert core.provider == mock_provider
+        assert core.provider == mock_provider
 
     def test_create_core_falls_back_to_null_provider(self):
         from wisp.composition import CompositionRoot
