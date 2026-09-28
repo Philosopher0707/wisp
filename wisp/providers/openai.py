@@ -210,6 +210,15 @@ class OpenAIProvider(Provider):
                 hint = ""
                 if resp.status_code == 401:
                     hint = " — check WISP_API_KEY / provider API key. Run /provider <name> and enter the key when prompted; it will be verified and saved to ~/.config/wisp/.env"
+                # 402 is a BILLING refusal (out of credit, or the key's usage
+                # limit is below this prompt), not a transient failure: it was
+                # surfaced raw, so a resumed session just "did nothing".
+                elif resp.status_code == 402:
+                    hint = (" — the provider refused this request on billing: the account is out"
+                            " of credit or the API key's usage limit is below this prompt's size."
+                            " Retrying will fail the same way. Raise the key's limit or add"
+                            " credit with the provider, or shrink the prompt (/compact, or start"
+                            " a new session).")
                 # NVIDIA NIM gateway returns 404 with body
                 #   {"status":404,"title":"Not Found",
                 #    "detail":"Function '<uuid>': Not found for account '<id>'"}
