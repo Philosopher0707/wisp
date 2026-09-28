@@ -104,6 +104,33 @@ class MCPServer:
 # ── Config loading ───────────────────────────────────────────────────
 
 
+_untrusted_warned: set[str] = set()
+
+
+def _workspace_servers_allowed(workspace: str, config_path: Path) -> bool:
+    """Whether the workspace's own `.wisp/mcp.json` may be loaded at all.
+
+    Every entry in it is a command line wisp will run. A cloned repository can ship the
+    file, and the mere existence of `.wisp/` auto-trusts a workspace, so only an EXPLICIT
+    trust-file entry counts (`allow_auto=False`). This is the single gate: every path that
+    spawns a server gets its configs from `discover_mcp_configs` or `load_server_configs`.
+    """
+    if not config_path.exists():
+        return False
+    from wisp.trust import WorkspaceTrustManager
+
+    if WorkspaceTrustManager.is_workspace_trusted(workspace, allow_auto=False):
+        return True
+    key = str(Path(workspace).resolve())
+    if key not in _untrusted_warned:
+        _untrusted_warned.add(key)
+        logger.warning(
+            "Not loading %s: its MCP servers are commands, and this workspace is not explicitly trusted. "
+            "To trust it, add %s to %s.",
+            config_path, key, WorkspaceTrustManager.TRUST_FILE)
+    return False
+
+
 def discover_mcp_configs(workspace: str) -> list[MCPServerConfig]:
     """Discover MCP server configs from workspace and home directory.
 
@@ -114,19 +141,10 @@ def discover_mcp_configs(workspace: str) -> list[MCPServerConfig]:
     configs: list[MCPServerConfig] = []
     seen_names: set[str] = set()
 
-    from wisp.trust import WorkspaceTrustManager
-
     paths_to_check = []
     workspace_mcp_path = Path(workspace) / ".wisp" / "mcp.json"
-    if workspace_mcp_path.exists():
-        if WorkspaceTrustManager.is_workspace_trusted(workspace):
-            paths_to_check.append(workspace_mcp_path)
-        else:
-            logger.warning(
-                "Skipping loading workspace-local MCP server configuration because the workspace is untrusted: %s. "
-                "To trust this workspace, add its path to trusted_workspaces.json.",
-                workspace
-            )
+    if _workspace_servers_allowed(workspace, workspace_mcp_path):
+        paths_to_check.append(workspace_mcp_path)
 
     paths_to_check.append(Path.home() / ".config" / "wisp" / "mcp.json")
 
@@ -1150,11 +1168,11 @@ class MCPManager:
         configs: list[MCPServerConfig] = []
         seen_names: set[str] = set()
 
-        paths_to_check = [
-            Path.home() / ".config" / "wisp" / "mcp_servers.json",
-            Path(self.workspace) / ".wisp" / "mcp.json",
-            Path.home() / ".config" / "wisp" / "mcp.json",
-        ]
+        workspace_mcp_path = Path(self.workspace) / ".wisp" / "mcp.json"
+        paths_to_check = [Path.home() / ".config" / "wisp" / "mcp_servers.json"]
+        if _workspace_servers_allowed(self.workspace, workspace_mcp_path):
+            paths_to_check.append(workspace_mcp_path)
+        paths_to_check.append(Path.home() / ".config" / "wisp" / "mcp.json")
 
         for cfg_path in paths_to_check:
             if not cfg_path.exists():
