@@ -111,7 +111,8 @@ class TestTheTablesAreNonEmpty:
     """The floor — a check whose subject is a collection needs one."""
 
     def test_the_open_table_has_a_floor(self, open_rows):
-        assert len(open_rows) >= 50, (
+        # 50 until c556d0b closed the register from 64 to 23 (ADR-0065 … ADR-0068).
+        assert len(open_rows) >= 20, (
             f"only {len(open_rows)} open rows parsed — the corpus has far more; a register "
             "that can shrink without failing is not a register")
 
