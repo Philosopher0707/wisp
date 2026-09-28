@@ -4,8 +4,10 @@
 The platform is a separate process wisp reaches over MCP (ADR-0069). Wisp brings the agent: the turn
 loop, subagents, the gate chain, permission modes, the policy bundle and the audit log.
 
-**Status: N1 (sense and state) and N3 (safety). Still read-only.** Nothing here can change a network yet.
-N3 is the gate every future change must pass. Actuation (N4) is built behind it.
+**Status: N1 (sense and state), N3 (safety), N4 (actuation) and N5 (governance).** The platform can now
+change the lab. It only does so through `net_apply_change`, only for a change `net_what_if` verified,
+only when the change policy allows it (or an operator approved it in the cockpit), and always with a
+confirm window that rolls back automatically.
 
 ## Run it
 
@@ -34,6 +36,23 @@ explicitly trusted workspace.
 The N3 tools `net_what_if`, `net_acl_audit`, `net_segmentation_audit` and `net_change_policy` are also
 reads: `net_what_if` runs on clones and never touches the lab. Add them to `tool_risk` as `read` too.
 
+`net_approvals`, `net_ledger` and `net_explain` are reads too. **Never declare `net_apply_change` read.**
+Left undeclared, it stays `exec`, so wisp asks you before every apply, on top of the platform's own policy.
+
+### Operating changes
+
+```bash
+python -m wisp_net mcp --cockpit 8750 --ledger ~/.config/wisp-net/ledger.jsonl   # what wisp spawns
+python -m wisp_net cockpit approvals                                             # you, in another terminal
+python -m wisp_net cockpit grant R0001 --operator alice --reason "diff reviewed"
+python -m wisp_net cockpit kill --operator alice --reason "incident"             # passive monitoring
+python -m wisp_net cockpit rollback X0003 --operator alice                        # revert a confirmed change
+```
+
+The agent has no tool that grants an approval or touches the kill switch. On a single host, a process
+running as your user can still read the cockpit token. Real separation needs the cockpit on another
+host behind SSO.
+
 `tool_risk` is the operator's statement that these tools only read. Wisp does not trust a server's own
 `readOnlyHint`. Every tool left out stays `exec` and asks for approval. With the declaration, a
 `read_only` wisp session can run the whole diagnosis loop. Add `--lab-control` to expose fault
@@ -51,8 +70,8 @@ injection and the lab clock (`lab_*` tools). They change the simulated world and
 | Alerts | Stable-key alerts that open, escalate, resolve and reopen with occurrence counts: interface down, BGP down or flapping, FCS errors, rx power, egress congestion, CPU, device unreachable (`telemetry/alerts.py`) | — | predictive trends (N2) |
 | **3 Reasoning** | wisp's agent over the MCP tools | orchestrator + 4 domain agents | N2: domain subagents (TE, security, diagnostics, compliance) and intent schema |
 | **4 Safety** | Declarative change sets of gNMI updates and deletes, with intent, expected unreachability and confidence (`safety/change.py`). Atomic device-side Set (`sim/config.py`). Exact ACL header-space algebra: first-match, dead rules by union coverage (`acl.py`). Formal checks on twins: loop-free forwarding, no new blackholes, no BGP session lost as collateral, no new dead ACL rules, no new zone leaks with the exact leaking flow classes, no new congestion, no new major alerts, convergence (`safety/verify.py`). What-if on two clones of the live lab with their own telemetry pipelines, so the lab is never touched (`safety/whatif.py`). Policy arbiter for verification, blast radius, change windows and the confidence threshold, with rules as JSON (`safety/policy.py`, `policies/*.json`). | Batfish/Z3, Containerlab twin, OPA | Batfish and OPA adapters |
-| **5 Actuation** | — (the device-side Set exists; nothing calls it on the live lab) | gNMI Set commit-confirm, SDN, Ansible/Terraform | N4: apply only a change whose what-if passed and whose policy verdict allows, with commit-confirm and health-checked auto-rollback |
-| **6 Governance** | wisp's audit log and approvals | ledger, rationale, cockpit | N5: change ledger, operator cockpit, kill switch |
+| **5 Actuation** | `net_apply_change` checks, in order: kill switch, a fresh verification of *this* fingerprint with nothing committed since, the policy re-decided now, and a single-use operator grant when one is required. Applying twice is a no-op. Then checkpoint, commit, a confirm window of at most 60 s watched through telemetry (BGP flap rate > 5/min, loss > 0.05% on touched ports, management unreachable, undeclared reachability loss), and automatic rollback on any trigger (`actuation/engine.py`) | gNMI Set commit-confirm, SDN, Ansible/Terraform | real gNMI Set with device-side commit-confirm |
+| **6 Governance** | Append-only, SHA-256 hash-chained ledger of every verification, approval, commit, confirmation, rollback and refusal (`governance/ledger.py`). `net_explain` rationale reports. Approval queue and kill switch (`governance/control.py`). Operator cockpit on 127.0.0.1, bearer token in a 0600 file: approvals, kill switch, operator revert, ledger, what-if sandbox, WebSocket event feed (`governance/cockpit.py`, `python -m wisp_net cockpit ...`) | immutable ledger, rationale logger, cockpit (GraphQL + WS) | SSO in front of the cockpit on another host; GraphQL |
 | Closed loop | — | event-driven autonomy | N6: an alert starts a headless wisp turn, tiered autonomy |
 
 ## The simulated lab

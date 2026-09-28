@@ -33,6 +33,7 @@ class Tool:
     schema: dict[str, Any]
     handler: Callable[[NetService, dict[str, Any]], Any]
     read_only: bool = True
+    destructive: bool = False
 
 
 def _obj(props: dict[str, Any], required: tuple[str, ...] = ()) -> dict[str, Any]:
@@ -119,9 +120,32 @@ READ_TOOLS: tuple[Tool, ...] = (
     Tool("net_change_policy", "The change guardrails: blast-radius limit, prohibited change windows (and whether "
          "one is active now), and the confidence below which a human must approve.", _obj({}),
          lambda s, a: s.change_policy_view()),
+    Tool("net_approvals", "Approval requests for changes the policy will not apply without a human (status: "
+         "pending|granted|denied|expired|used). Only an operator, in the cockpit, can grant one.",
+         _obj({"status": _S}), lambda s, a: s.approval_list(a.get("status"))),
+    Tool("net_ledger", "The append-only, hash-chained change ledger: verifications, approvals, commits, "
+         "confirmations, rollbacks, refusals, kill-switch changes. `intact` is the chain check.",
+         _obj({"since_seq": _I, "fingerprint": _S, "limit": _I}),
+         lambda s, a: s.ledger_view(a.get("since_seq", 0), a.get("fingerprint"), a.get("limit", 50))),
+    Tool("net_explain", "The rationale report for one change, from the ledger: what was verified and decided, who "
+         "approved, what was applied, and how it ended.", _obj({"fingerprint": _S}, ("fingerprint",)),
+         lambda s, a: s.explain(a["fingerprint"])),
     Tool("net_changes", "What changed in the digital twin over the last since_s seconds: links, BGP sessions, "
          "routes, device reachability (added/removed/changed).",
          _obj({"since_s": _N}), lambda s, a: s.changes(a.get("since_s", 3600.0))),
+)
+
+ACT_TOOLS: tuple[Tool, ...] = (
+    Tool("net_apply_change", "CHANGES THE NETWORK. Apply a change that `net_what_if` verified, by its "
+         "`fingerprint`. Refused unless: the kill switch is off; that exact change passed verification recently "
+         "and nothing was committed since; the change policy allows it now (or an operator granted the approval "
+         "it requires — you cannot grant it). Commits with a confirm window (max 60s): the platform checkpoints "
+         "the running config, commits, and watches BGP flap rate, packet loss on the touched ports, management "
+         "reachability and undeclared reachability loss; any trigger rolls back automatically. Give the "
+         "`rationale`: the evidence that led you here. Applying the same change twice is a no-op.",
+         _obj({"fingerprint": _S, "confirm_window_s": _N, "rationale": _S}, ("fingerprint", "rationale")),
+         lambda s, a: s.apply_change(a["fingerprint"], a.get("confirm_window_s", 60.0), a["rationale"]),
+         read_only=False, destructive=True),
 )
 
 LAB_TOOLS: tuple[Tool, ...] = (
@@ -143,7 +167,7 @@ LAB_TOOLS: tuple[Tool, ...] = (
 class McpServer:
     def __init__(self, service: NetService, lab_control: bool = False) -> None:
         self.service = service
-        tools = READ_TOOLS + (LAB_TOOLS if lab_control else ())
+        tools = READ_TOOLS + ACT_TOOLS + (LAB_TOOLS if lab_control else ())
         self.tools = {t.name: t for t in tools}
 
     def handle(self, message: dict[str, Any]) -> dict[str, Any] | None:
@@ -173,7 +197,7 @@ class McpServer:
     @staticmethod
     def _describe(tool: Tool) -> dict[str, Any]:
         return {"name": tool.name, "description": tool.description, "inputSchema": tool.schema,
-                "annotations": {"readOnlyHint": tool.read_only, "destructiveHint": False,
+                "annotations": {"readOnlyHint": tool.read_only, "destructiveHint": tool.destructive,
                                 "idempotentHint": tool.read_only, "openWorldHint": False}}
 
     def _call(self, params: dict[str, Any]) -> dict[str, Any]:
