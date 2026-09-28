@@ -43,6 +43,7 @@ jobs:
       - name: Ruff (Pyflakes gate)
         run: |
           ruff check wisp/
+          ruff check wisp_net/
           ruff check tests/
 
       - name: Mypy on typed spine (hard gate)

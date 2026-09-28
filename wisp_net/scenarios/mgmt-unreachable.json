@@ -1,0 +1,2 @@
+{"description": "spine2's management plane stops answering at t=30s; its data plane keeps forwarding.",
+ "steps": [{"at": 30, "inject": "mgmt_unreachable", "target": "spine2", "name": "mgmt"}]}

@@ -7326,6 +7326,53 @@ workspace, the gate's behaviour and messages are exactly what they were.
 at which point L1 or L3 stops being a non-question, and the whole consult moves out from behind the
 bundle gate together.
 
+## ADR-0069 — wisp becomes a network agent through a separate platform it reaches over MCP; the lab is simulated first
+
+**Status:** ACCEPTED
+**Phase:** The network agent, N1 (sense and state) — blueprint `NET-AGENT-ARCH-v2.4`
+**Evidence:** driven — `python -m wisp_net demo` over the five bundled fault scenarios, and
+`tests/net/` (**64 tests**), including wisp's own MCP client talking to `python -m wisp_net mcp`
+over stdio
+
+### Context
+
+The operator's blueprint describes an autonomous network agent in six layers (perception, state,
+reasoning, safety, actuation, governance) plus a transport and three deployment tiers. Measured on
+this machine: 2.7 GB of free disk and no Docker daemon, so none of the blueprint's containers
+(Containerlab, Batfish, Kafka, Neo4j, ClickHouse, Milvus) can run here, and wisp had **no network
+code at all** (its `telemetry` is its own observability).
+
+Three facts shaped the decision. A language model cannot sit on a 10M-flows/s path, so collection,
+storage and analysis are services, not agent code. Wisp already owns the parts the blueprint needs
+from an agent (the turn loop, subagents, the 12-check gate chain, permission modes, a signed policy
+bundle, a hash-chained audit log). And an MCP server is a process boundary wisp already governs.
+
+### Decision
+
+**R1 — The network platform is its own package, `wisp_net/`, reached over MCP.** Wisp's core gains
+only general capabilities (MCP tools that reach the model, operator-declared MCP tool risk); nothing
+network-specific enters `wisp/`.
+
+**R2 — Simulated first, behind the interfaces the real systems will fill.** `SimNetwork` is the world;
+everything above it sees only a gNMI facade, RFC 5424 syslog and IPFIX-style flow records. The bus has
+Kafka semantics, the metric store has the blueprint's tiers, the twin is built from telemetry alone,
+the knowledge base is ranked retrieval. A real adapter (pygnmi, Kafka, ClickHouse, Neo4j, Qdrant)
+replaces one class without changing its callers.
+
+**R3 — Read-only first.** N1 exposes sense and state only. Nothing can change the network until the
+safety layer (verification on the twin, simulation on a clone, policy) exists to gate it (N3), and
+actuation (N4) is built behind that gate, never before it.
+
+**R4 — Lab control is not an agent capability by default.** Fault injection and the lab clock exist
+only with `--lab-control` and are never marked read-only.
+
+### Reversal condition
+
+If an MCP process boundary cannot carry the closed loop's latency or volume (measured, not assumed),
+the platform may be embedded in-process — the read API (`NetService`) is already the seam.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -7398,3 +7445,4 @@ bundle gate together.
 | 0066 | The approval authority is three questions, and the executable-config set covers executing | The approval authority (`PHASE_AUTHORIZATION_PARITY.md`, ADR-0057, ADR-0061) | ACCEPTED (decides the residual ADR-0055 left open by **enumerating every gate call in `wisp/server/routes/`** — 14 policy-gated sites, 3 human-gated — rather than by argument. **R1** the three mechanisms are three *questions* and stay three: L5 answers the mode/risk question, `SecurityPolicy` the policy question, `REST_APPROVAL_ACTIONS` the REST-only question; unifying is rejected because the only unification available is a `TOOL_RISK_TABLE` row for names that are not agent tools, which ADR-0055 §Why-not-B already measured as making REST stricter with no counterpart — a composition, not a split. **R2** `PHASE_AUTHORIZATION_PARITY` residual 2 is **superseded, not repaired**: its three names *are* `REST_APPROVAL_ACTIONS` now, and the source is not rewritten (ADR-0062 R2). **R3** `hooks.test` and `mcp.test_server` join the set — each route's own comment declares it "the same authority class" as the sibling that does ask, and both authors closed the *policy* half of that bypass while leaving the *approval* half; coherent with the authority it composes, since `risk_for_tool` fails closed to `EXEC` (`contracts.py:316`) and `authorize()` already returns `approval_required` for both, so the pinned pairs move **six → ten** and all ten satisfy `allowed and approval_required`. Implemented in the ratifying change, behind `WISP_REST_APPROVAL` default **OFF**. **R4** removal stays outside the set, with `plugins.uninstall` named as the cost. **R5** id correlation kept, with the single-pending fallback stated as a back-compat shim that is safe only while unreachable for a correct client. **R6** per-client routing **not owed** — no client identity to route by, no multi-client deployment to route for. Repairs a bare string scan in `test_external_input_path.py` (the `PHASE_LAYER_B_BOUNDARY R2` instrument class) that R3's own comment tripped. No flag default changed; no gate reordered) |
 | 0067 | A deployment without a composition root is ungoverned by construction, and says so | The M4 wiring's second construction site (`PHASE_M4_WIRING.md` §4 residual 2) | ACCEPTED (resolves residual 2, which read *"named, not done"*, by driving the site rather than reading it: `acp_session.py`'s `_get_tool_executor` prefers the root's executor and otherwise builds `ToolExecutor(self.config, …)` **without `policy=`**. The obvious repair is **rejected by ADR-0058 R1** — the organization policy is loaded *"ONCE, here — the single load site"* (`composition.py:167`), because one load site is what makes one authority, so a second call site would make the layer's presence a function of which construction path ran. So residual 2 is a **conflict between a gap and a rule**, not an unfinished wiring. **R1** the fallback keeps its behaviour and gains a **warning** naming the missing layer, stating that permission gating still applies, and pointing at the remedy — the gap is **made loud rather than closed**, because closing it is what ADR-0058 forbids. **R2** the remedy is a `CompositionRoot`, not a second loader: one loader, one authority. Rejects *calling the loader in the fallback* (the forbidden second site) and *leaving it silent* — which is what it was, and is the false-assurance mode `PHASE_10_M4_GOVERNANCE_UNWIRED.md` §4 names and ADR-0058 §8 distinguishes from ADR-0036's benign fail-open. Third construction site the same rule has decided. No flag, no gate, no authority changed; **66 ACP tests pass**) |
 | 0068 | The workspace-trust layer is applied on REST unconditionally, and last | ADR-0059's residual 2 (the L1/L2/L3 consult, and the quarantine gap it exposed) | ACCEPTED (resolves ADR-0059 residual 2 by driving it: `_m2_denial` **returned `None` immediately** when no organization policy was loaded, so `authorize()` was never called and **L2 was skipped entirely** — a `QUARANTINED` workspace denied non-read tools on the agent path and **allowed them over REST** on every bundle-less deployment. Of the three layers only L2 was a gap (L1 is unbounded for the local human; L3 needs a `restricted` sensitivity REST never passes), and **workspace trust is not a policy question** — it is classified from the *workspace*, so gating its enforcement on a bundle made a security control's presence a function of an unrelated configuration. **R1** applied unconditionally. **R2** applied **last**, and that is load-bearing: a check appended after the narrowing ones can only *add* a denial, never reorder a pinned message — making `_m2_denial` unconditional instead was tried and **rejected because `test_no_bundle_is_the_old_gate_byte_for_byte` caught it** changing the `read_only` 403 detail for `write_file` (same status, different message, and ADR-0059 R2 measures that message byte-for-byte). **R3** one implementation: `wisp/auth/workspace_trust.refuses(trust, *, is_read)`, used by **both** `auth/decision`'s L2 and the REST gate — the second copy of a security rule this corpus has already paid for once (cf. ADR-0066 R3's L4 scan); it takes `is_read` not a tool name so `workspace_trust` stays pure. **R4** the bundle-gated consult is unchanged, so the measured differential holds where it was measured. Driven: quarantined + no root + no bundle → **403 by the workspace trust layer**; a read still permitted; a `TRUSTED` workspace unchanged; **109 tests pass**. Behaviour change on a path that previously allowed, deliberately behind **no flag** — the prior behaviour was the *absence* of a control, not a configuration of one) |
+| 0069 | wisp becomes a network agent through a separate platform it reaches over MCP; the lab is simulated first | The network agent, N1 (sense and state) | ACCEPTED (**R1** the platform is `wisp_net/`, reached over MCP; wisp's core gains only general MCP capabilities. **R2** simulated first, behind the interfaces the real systems fill. **R3** read-only until the safety layer gates change. **R4** lab control is opt-in and never read-only.) |
