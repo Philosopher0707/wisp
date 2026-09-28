@@ -30,7 +30,7 @@ def _scenario(name: str | None) -> list[dict[str, Any]]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m wisp_net", description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
-    for name in ("mcp", "demo"):
+    for name in ("mcp", "demo", "serve"):
         p = sub.add_parser(name)
         p.add_argument("--scenario", help="bundled scenario name or path to a scenario JSON")
         p.add_argument("--seed", type=int, default=7)
@@ -44,6 +44,18 @@ def main(argv: list[str] | None = None) -> int:
                      help="serve the operator cockpit on 127.0.0.1:PORT (approvals, kill switch, ledger)")
     mcp.add_argument("--ledger", help="append the change ledger to this JSONL file (default: in memory)")
     mcp.add_argument("--change-policy", help="change policy JSON (default: the bundled policies/change-policy.json)")
+    mcp.add_argument("--connect", metavar="URL",
+                     help="proxy to a running `serve` platform (shared network) instead of a private lab")
+    serve = sub.choices["serve"]
+    serve.add_argument("--port", type=int, default=8750)
+    serve.add_argument("--speed", type=float, default=1.0)
+    serve.add_argument("--ledger")
+    serve.add_argument("--change-policy")
+    serve.add_argument("--autonomy", choices=["observe", "diagnose", "propose", "act"], default="diagnose")
+    serve.add_argument("--agent-cmd", default="wisp run {prompt} --skill net-orchestrator",
+                       help="command for one incident's agent turn; {prompt} is replaced")
+    serve.add_argument("--debounce", type=float, default=20.0, help="lab seconds to gather alerts into one incident")
+    serve.add_argument("--cooldown", type=float, default=600.0)
     demo = sub.choices["demo"]
     demo.add_argument("--seconds", type=float, default=300.0)
     sub.add_parser("scenarios")
@@ -68,10 +80,19 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{scenario.stem:20} {json.loads(scenario.read_text()).get('description', '')}")
         return 0
 
+    if args.cmd == "mcp" and args.connect:
+        from wisp_net.governance.cockpit import agent_token_path
+        from wisp_net.mcp_server import RemotePlatform, run_stdio
+
+        run_stdio(None, remote=RemotePlatform(args.connect, agent_token_path().read_text(encoding="utf-8").strip()))
+        return 0
+
     from wisp_net.service import NetService
 
     service = NetService(seed=args.seed, leaves=args.leaves, spines=args.spines, scenario=_scenario(args.scenario),
                          ledger_path=getattr(args, "ledger", None))
+    if args.cmd == "serve":
+        return _serve(service, args)
     if args.cmd == "mcp":
         if args.change_policy:
             from wisp_net.safety.policy import ChangePolicy
@@ -111,6 +132,38 @@ def main(argv: list[str] | None = None) -> int:
     for b in reach["broken"][:10]:
         print(f"  {b['source']} -> {b['prefix']}: {b['outcome']} {b['why']}")
     service.stop()
+    return 0
+
+
+def _serve(service: Any, args: argparse.Namespace) -> int:
+    import shlex
+
+    from wisp_net.governance.cockpit import CockpitServer, agent_token_path, token_path
+    from wisp_net.loop.watcher import Watcher, subprocess_runner
+
+    if args.change_policy:
+        from wisp_net.safety.policy import ChangePolicy
+
+        service.change_policy = ChangePolicy.from_dict(json.loads(Path(args.change_policy).read_text()))
+    cockpit = CockpitServer(service, args.port)
+    url = f"http://127.0.0.1:{args.port}"
+    runner = subprocess_runner(shlex.split(args.agent_cmd)) if args.autonomy != "observe" else None
+    service.watcher = Watcher(service, runner, args.autonomy, args.debounce, args.cooldown,
+                              env={"WISP_NET_URL": url, "WISP_NET_AGENT_TOKEN_FILE": str(agent_token_path())})
+    cockpit.start()
+    service.start_realtime(args.speed)
+    print(f"wisp-net platform on {url}  autonomy={args.autonomy}")
+    print(f"  operator token: {token_path()}   agent token: {agent_token_path()}")
+    print(f"  wisp connects with: python -m wisp_net mcp --connect {url}")
+    try:
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        service.watcher.join(5)
+        cockpit.stop()
+        service.stop()
     return 0
 
 

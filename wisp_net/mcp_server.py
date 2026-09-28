@@ -189,10 +189,34 @@ LAB_TOOLS: tuple[Tool, ...] = (
 )
 
 
+class RemotePlatform:
+    """A running `python -m wisp_net serve`, reached through its agent API (agent token only)."""
+
+    def __init__(self, url: str, token: str, timeout_s: float = 600.0) -> None:
+        self.url, self.token, self.timeout_s = url.rstrip("/"), token, timeout_s
+
+    def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        import httpx
+
+        try:
+            response = httpx.post(f"{self.url}/agent/tools/{name}", json={"arguments": arguments},
+                                  headers={"Authorization": f"Bearer {self.token}"}, timeout=self.timeout_s)
+        except httpx.HTTPError as exc:
+            return _tool_error(f"the network platform at {self.url} is unreachable: {exc}")
+        if response.status_code != 200:
+            return _tool_error(f"the network platform refused the call ({response.status_code}): {response.text[:200]}")
+        result: dict[str, Any] = response.json()
+        return result
+
+
 class McpServer:
-    def __init__(self, service: NetService, lab_control: bool = False) -> None:
+    def __init__(self, service: NetService | None, lab_control: bool = False,
+                 remote: RemotePlatform | None = None) -> None:
+        if (service is None) == (remote is None):
+            raise ValueError("serve either a local platform or a remote one")
         self.service = service
-        tools = READ_TOOLS + ACT_TOOLS + (LAB_TOOLS if lab_control else ())
+        self.remote = remote
+        tools = READ_TOOLS + ACT_TOOLS + (LAB_TOOLS if lab_control and remote is None else ())
         self.tools = {t.name: t for t in tools}
 
     def handle(self, message: dict[str, Any]) -> dict[str, Any] | None:
@@ -231,6 +255,8 @@ class McpServer:
         if tool is None:
             return _tool_error(f"unknown tool {name!r}")
         args = params.get("arguments") or {}
+        if self.remote is not None:
+            return self.remote.call(tool.name, args if isinstance(args, dict) else {})
         if not isinstance(args, dict):
             return _tool_error("arguments must be an object")
         missing = [r for r in tool.schema.get("required", []) if r not in args]
@@ -239,6 +265,7 @@ class McpServer:
         unknown = [k for k in args if k not in tool.schema["properties"]]
         if unknown:
             return _tool_error(f"unknown argument(s): {', '.join(unknown)}")
+        assert self.service is not None
         try:
             data = tool.handler(self.service, args)
         except (KeyError, ValueError, TypeError) as exc:
@@ -272,5 +299,5 @@ def _tool_error(message: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": message}], "isError": True}
 
 
-def run_stdio(service: NetService, lab_control: bool = False) -> None:
-    McpServer(service, lab_control).serve(sys.stdin, sys.stdout)
+def run_stdio(service: NetService | None, lab_control: bool = False, remote: RemotePlatform | None = None) -> None:
+    McpServer(service, lab_control, remote).serve(sys.stdin, sys.stdout)

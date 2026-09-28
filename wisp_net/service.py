@@ -61,6 +61,7 @@ class NetService:
         self.kill_switch = KillSwitch()
         self.config_epoch = 0
         self.actuator = Actuator(self)
+        self.watcher: Any = None
         self.collect_interval_s = collect_interval_s
         self.started = self.net.now
         self._next_collect = self.net.now
@@ -80,6 +81,8 @@ class NetService:
             self.collector.ingest_flows(self.net.drain_flows())
             self.collector.collect(self.net.now)
             self._next_collect = self.net.now + self.collect_interval_s
+            if self.watcher is not None:
+                self.watcher.poll()
 
     def advance(self, seconds: float, dt: float = 1.0) -> dict[str, Any]:
         if seconds < 0:
