@@ -41,13 +41,19 @@ class FakeBackend:
         if isinstance(outcome, tuple) and outcome[0] == "sleep":
             await asyncio.sleep(outcome[1])
             return 1, "too slow"
+        if isinstance(outcome, tuple) and outcome[0] == "slow_ok":
+            await asyncio.sleep(outcome[1])
+            return 0, "ok"
         code, text = outcome
         return code, text
 
     async def get_patch(self):
         if not self.files:
             return ""
-        body = "\n".join(f"+++ {k}\n+{v}" for k, v in self.files.items())
+        # Every line of a written file is an added line, as in a real unified diff: prefixing
+        # only the first made a 5-line and a 1-line patch the same size to `diff_delta`.
+        body = "\n".join(f"+++ {k}\n" + "\n".join(f"+{line}" for line in v.splitlines())
+                         for k, v in self.files.items())
         return f"{self.key}\n{body}"
 
     async def cleanup(self):
@@ -133,6 +139,17 @@ class TestOracle:
                  Candidate("small", {"a.py": "1\n"})]
         res = _run(engine.search(cands))
         assert res.winner is not None and res.winner.candidate_key == "small"
+
+    def test_smallest_diff_wins_even_when_a_bigger_one_is_faster(self):
+        """Size decides before speed. With both patches measured as one line (the fake used to
+        prefix only a file's first line), this was a race the faster candidate won."""
+        outcomes = {"big": (0, "ok"), "small": ("slow_ok", 0.2)}
+        engine = _engine_for({}, outcomes, ["big", "small"])
+        cands = [Candidate("big", {"a.py": "1\n2\n3\n4\n5\n"}),
+                 Candidate("small", {"a.py": "1\n"})]
+        res = _run(engine.search(cands))
+        assert res.winner is not None and res.winner.candidate_key == "small"
+        assert {t.candidate_key: t.diff_delta for t in res.trials} == {"big": 5, "small": 1}
 
     def test_trial_crash_isolated(self):
         outcomes = {"c1": "crash", "c2": (0, "ok")}
