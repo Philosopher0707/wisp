@@ -7455,6 +7455,33 @@ that holds against a compromised agent requires the cockpit on another host behi
 
 ---
 
+## ADR-0072 — The model states intents and reasons over deterministic instruments; the platform compiles intents into changes
+
+**Status:** ACCEPTED
+**Phase:** The network agent, N2 (the cognitive multi-agent reasoning core) — blueprint layer 3
+**Evidence:** driven on the lab.
+- An optic degrading at 1.5 dB/min is forecast after 300 s: slope near -90 dB/h, R² > 0.99, rated high/critical, before loss of signal.
+- The error correlation separates optic-driven FCS errors (errors only below the -12 dBm onset, below-onset ρ ≈ -0.98) from a CRC surge at steady power.
+- Drift finds exactly the three out-of-band commits of the `config-drift` scenario, with the committing user.
+- A 40× surge from leaf1's servers is a z ≈ 14 anomaly.
+- Every intent kind compiles to a change that verifies.
+
+`tests/net/test_net_reasoning.py` (**20 tests**; 8/8 mutation probes caught, two after adding synthetic series the lab does not produce: noise that is not a trend, and correlation at healthy power).
+
+### Decision
+
+**R1 — The model decides what; the platform decides how.** Domain agents output *intents* (drain_link, quarantine_host, guard_zone, …). `net_compile_intent` owns their translation to gNMI operations and refuses intents that do not fit the network as telemetry reports it: an access port named as a fabric link, a drain that would isolate a device, an unknown host or zone. Compiled changes still go through what-if, policy and apply; the compiler grants nothing.
+
+**R2 — Instruments are deterministic and report their own confidence.** Forecasts carry R²; correlations carry the statistic and the physical signature, and say "not yet conclusive" rather than guess. A model reasons over these; it does not compute them.
+
+**R3 — Correlation is not the verdict.** An optic is blamed only when errors appear below the error-onset power and grow as power falls. A strong correlation at healthy power is reported as not explained by optics.
+
+**R4 — Declared intent covers BGP too.** A change that disables a BGP neighbor takes that session down on purpose; its ports count as intended, like a drain.
+
+**R5 — Roles are wisp skills,** not new agent machinery: the orchestrator delegates to domain agents through wisp's existing subagent tools. Conflicts resolve by safety > availability > performance > efficiency; ties at the same rank, confidence below 0.85, repeated verification failure, stale telemetry and the kill switch escalate to a human.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -7530,3 +7557,4 @@ that holds against a compromised agent requires the cockpit on another host behi
 | 0069 | wisp becomes a network agent through a separate platform it reaches over MCP; the lab is simulated first | The network agent, N1 (sense and state) | ACCEPTED (**R1** the platform is `wisp_net/`, reached over MCP; wisp's core gains only general MCP capabilities. **R2** simulated first, behind the interfaces the real systems fill. **R3** read-only until the safety layer gates change. **R4** lab control is opt-in and never read-only.) |
 | 0070 | A change is verified on a copy of the network, fails only on regressions, and is judged by policy before it may touch a device | The network agent, N3 (safety) | ACCEPTED (**R1** what-if on two clones with their own telemetry, never the lab. **R2** checks fail on regressions; history is reported, not blamed. **R3** intent is declared (`expected_unreachable`, drained links); an ACL binding is not intent to drop a link. **R4** exact ACL header-space analysis, union coverage, concrete leaking flows. **R5** fixed policy order: verification, blast radius, windows, confidence.) |
 | 0071 | Only a verified, allowed change is applied, under a confirm window; only an operator can approve, and the ledger is hash-chained | The network agent, N4 + N5 | ACCEPTED (**R1** one path: kill switch, fresh verification of this fingerprint at the current config epoch, policy re-decided at apply, single-use operator grant, idempotence. **R2** commit-confirm, blueprint triggers plus undeclared reachability loss, automatic rollback. **R3** the agent can apply, never approve. **R4** hash-chained ledger. Known limit: same-user token access on one host.) |
+| 0072 | The model states intents and reasons over deterministic instruments; the platform compiles intents into changes | The network agent, N2 (reasoning) | ACCEPTED (**R1** intents in, gNMI ops out, refusing intents that do not fit; nothing bypasses what-if/policy/apply. **R2** instruments report their own confidence. **R3** an optic is blamed only on its physical signature. **R4** disabling a BGP neighbor is declared intent. **R5** roles are wisp skills; precedence safety > availability > performance > efficiency; escalation triggers.) |

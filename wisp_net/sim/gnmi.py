@@ -47,6 +47,7 @@ def render_device(net: SimNetwork, dev: SimDevice) -> dict[str, Any]:
         "/system/memory/state/physical": dev.mem_total,
         "/system/memory/state/used": dev.mem_used,
         "/system/ssh-server/config/enable": dev.config["system"]["ssh-server"]["enable"],
+        "/system/ssh-server/config/protocol-version": dev.config["system"]["ssh-server"]["protocol-version"],
         "/system/config/login-banner": dev.config["system"]["login-banner"],
     }
     for server in dev.config["system"]["ntp-servers"]:

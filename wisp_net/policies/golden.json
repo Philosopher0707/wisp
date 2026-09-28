@@ -1,0 +1,16 @@
+{
+  "description": "Golden configuration every lab device must match. Paths are gNMI paths as the devices report them; `*` matches any key value.",
+  "rules": [
+    {"id": "SEC-SSH-ENABLED", "class": "security", "path": "/system/ssh-server/config/enable", "equals": true},
+    {"id": "SEC-SSH-V2-ONLY", "class": "security", "path": "/system/ssh-server/config/protocol-version", "equals": "V2"},
+    {"id": "SEC-LOGIN-BANNER", "class": "security", "path": "/system/config/login-banner", "equals": "Authorized access only"},
+    {"id": "OPS-NTP-SERVERS", "class": "security", "path": "/system/ntp/servers/server[address=*]/config/address",
+     "set_equals": ["192.0.2.250", "192.0.2.251"]},
+    {"id": "RTE-BGP-NEIGHBORS-ENABLED", "class": "routing",
+     "path": "/network-instances/network-instance[name=default]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor[neighbor-address=*]/config/enabled",
+     "equals": true},
+    {"id": "RTE-NO-EXPORT-FILTERS", "class": "routing",
+     "path": "/network-instances/network-instance[name=default]/policy/export-deny[prefix=*]/config/prefix", "absent": true},
+    {"id": "IF-MTU-JUMBO", "class": "cosmetic", "path": "/interfaces/interface[name=*]/config/mtu", "equals": 9214}
+  ]
+}

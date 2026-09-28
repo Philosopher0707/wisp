@@ -4,7 +4,7 @@
 The platform is a separate process wisp reaches over MCP (ADR-0069). Wisp brings the agent: the turn
 loop, subagents, the gate chain, permission modes, the policy bundle and the audit log.
 
-**Status: N1 (sense and state), N3 (safety), N4 (actuation) and N5 (governance).** The platform can now
+**Status: N1 (sense and state), N2 (reasoning), N3 (safety), N4 (actuation) and N5 (governance).** The platform can now
 change the lab. It only does so through `net_apply_change`, only for a change `net_what_if` verified,
 only when the change policy allows it (or an operator approved it in the cockpit), and always with a
 confirm window that rolls back automatically.
@@ -36,7 +36,7 @@ explicitly trusted workspace.
 The N3 tools `net_what_if`, `net_acl_audit`, `net_segmentation_audit` and `net_change_policy` are also
 reads: `net_what_if` runs on clones and never touches the lab. Add them to `tool_risk` as `read` too.
 
-`net_approvals`, `net_ledger` and `net_explain` are reads too. **Never declare `net_apply_change` read.**
+`net_approvals`, `net_ledger`, `net_explain` and the N2 tools (`net_optics_forecast`, `net_error_correlation`, `net_config_drift`, `net_advisories`, `net_te_assess`, `net_flow_anomalies`, `net_compile_intent`) are reads too. **Never declare `net_apply_change` read.**
 Left undeclared, it stays `exec`, so wisp asks you before every apply, on top of the platform's own policy.
 
 ### Operating changes
@@ -68,7 +68,7 @@ injection and the lab clock (`lab_*` tools). They change the simulated world and
 | Time series | SQLite raw + 1-minute + 1-hour tiers, retention 7 d / 90 d / 365 d (`state/tsdb.py`) | ClickHouse / VictoriaMetrics | adapter |
 | Knowledge | BM25 over bundled runbooks (`knowledge/*.md`, `state/knowledge.py`) | Milvus / Qdrant RAG | embedding store |
 | Alerts | Stable-key alerts that open, escalate, resolve and reopen with occurrence counts: interface down, BGP down or flapping, FCS errors, rx power, egress congestion, CPU, device unreachable (`telemetry/alerts.py`) | — | predictive trends (N2) |
-| **3 Reasoning** | wisp's agent over the MCP tools | orchestrator + 4 domain agents | N2: domain subagents (TE, security, diagnostics, compliance) and intent schema |
+| **3 Reasoning** | Five wisp skills (`agents/`, installed with `python -m wisp_net install-skills`): the **orchestrator** (sense, triage, delegate, resolve conflicts by safety > availability > performance > efficiency, then compile, verify, apply or escalate) and four domain agents. Each has deterministic instruments: **predictive diagnostics** (`net_optics_forecast` least-squares slope, R² and time to errors/LOS; `net_error_correlation` Spearman plus the below-onset signature), **compliance** (`net_config_drift` against `policies/golden.json`, `net_advisories` from a lab feed), **traffic engineering** (`net_te_assess` with simulated drains), and **security** (`net_flow_anomalies` z-score against a source's own history). `net_compile_intent` turns a declared intent (drain/restore link, quarantine/release host, guard zone, BGP neighbor) into exact gNMI ops, refusing ones that do not fit the network (`reasoning/`) | orchestrator + 4 domain agents (PPO, CSP) | learned TE optimizer behind `te_assess` |
 | **4 Safety** | Declarative change sets of gNMI updates and deletes, with intent, expected unreachability and confidence (`safety/change.py`). Atomic device-side Set (`sim/config.py`). Exact ACL header-space algebra: first-match, dead rules by union coverage (`acl.py`). Formal checks on twins: loop-free forwarding, no new blackholes, no BGP session lost as collateral, no new dead ACL rules, no new zone leaks with the exact leaking flow classes, no new congestion, no new major alerts, convergence (`safety/verify.py`). What-if on two clones of the live lab with their own telemetry pipelines, so the lab is never touched (`safety/whatif.py`). Policy arbiter for verification, blast radius, change windows and the confidence threshold, with rules as JSON (`safety/policy.py`, `policies/*.json`). | Batfish/Z3, Containerlab twin, OPA | Batfish and OPA adapters |
 | **5 Actuation** | `net_apply_change` checks, in order: kill switch, a fresh verification of *this* fingerprint with nothing committed since, the policy re-decided now, and a single-use operator grant when one is required. Applying twice is a no-op. Then checkpoint, commit, a confirm window of at most 60 s watched through telemetry (BGP flap rate > 5/min, loss > 0.05% on touched ports, management unreachable, undeclared reachability loss), and automatic rollback on any trigger (`actuation/engine.py`) | gNMI Set commit-confirm, SDN, Ansible/Terraform | real gNMI Set with device-side commit-confirm |
 | **6 Governance** | Append-only, SHA-256 hash-chained ledger of every verification, approval, commit, confirmation, rollback and refusal (`governance/ledger.py`). `net_explain` rationale reports. Approval queue and kill switch (`governance/control.py`). Operator cockpit on 127.0.0.1, bearer token in a 0600 file: approvals, kill switch, operator revert, ledger, what-if sandbox, WebSocket event feed (`governance/cockpit.py`, `python -m wisp_net cockpit ...`) | immutable ledger, rationale logger, cockpit (GraphQL + WS) | SSO in front of the cockpit on another host; GraphQL |
