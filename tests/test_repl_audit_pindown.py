@@ -23,7 +23,7 @@ import pytest
 
 # ── Sandbox routing: run_bash never sees the PTY tier ─────────────────────
 
-def test_run_bash_uses_get_sandbox_not_router():
+def test_run_bash_uses_the_router_and_honours_explicit_off():
     import pathlib
 
     import wisp.tools.bash as bash_mod
@@ -34,9 +34,10 @@ def test_run_bash_uses_get_sandbox_not_router():
     # getsource on the attribute follows the wrapper. Files pin the code as
     # written, immune to runtime patching.
     src = pathlib.Path(bash_mod.__file__).read_text()
+    # d0d4bea: run_bash goes through the tier router (Docker→Pty→Noop), and
+    # falls back to get_sandbox only for an explicit WISP_SANDBOX=off.
+    assert "get_router(" in src
     assert "get_sandbox(" in src
-    assert "get_router(" not in src
-    # The router (Docker→Pty→Noop) is only wired to the thin-harness tool.
     assert "get_router(" in pathlib.Path(prim_mod.__file__).read_text()
 
 

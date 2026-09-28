@@ -41,13 +41,14 @@ def _flat(ev):
 # ── F1: policy denies fanout in AUTO_EDIT ──
 
 def test_f_policy_denies_fanout_auto_edit(tmp_path):
-    """13F.1: fanout is REQUIRE_APPROVAL (not hard DENY); run_bash is the
-    hard-DENY case — it never prompts and no `y` can run it."""
+    """13F.1: fanout is REQUIRE_APPROVAL (not hard DENY); git_push is the
+    hard-DENY case — it never prompts and no `y` can run it. (run_bash was,
+    until d0d4bea moved it to REQUIRE_APPROVAL.)"""
     d = _policy().check(Action(name="fanout", args={}), _ctx(tmp_path))
     assert d.allowed is True and d.approval_required is True
-    d2 = _policy().check(Action(name="run_bash", args={}), _ctx(tmp_path))
+    d2 = _policy().check(Action(name="git_push", args={}), _ctx(tmp_path))
     assert d2.allowed is False
-    assert "AUTO_EDIT mode blocks run_bash" in d2.reason
+    assert "AUTO_EDIT mode blocks git_push" in d2.reason
 
 
 # ── F2: gate refusal shape — plain string, no structured semantics ──
@@ -93,8 +94,8 @@ async def test_f_approval_overrides_policy_denial(tmp_path):
 
     session = {"workspace": str(tmp_path)}
     allowed, reason = await gate.check(
-        {"type": "tool_call", "name": "run_bash",
-         "arguments": {"command": "echo hi"}},
+        {"type": "tool_call", "name": "git_push",
+         "arguments": {"remote": "o", "branch": "b"}},
         session, approval_handler=approve)
     assert allowed is False
     assert prompted == []
@@ -119,7 +120,8 @@ def test_f_m2_layer_disagreement_on_fanout(tmp_path):
 @pytest.mark.parametrize("tool,expected", [
     ("read_file", (True, False)),
     ("write_file", (True, False)),      # executor-prompted, policy allows
-    ("run_bash", (False, False)),       # hard DENY
+    ("run_bash", (True, True)),         # REQUIRE_APPROVAL (d0d4bea)
+    ("git_push", (False, False)),       # hard DENY
     ("spawn", (True, True)),            # REQUIRE_APPROVAL (13F.1)
     ("fanout", (True, True)),           # REQUIRE_APPROVAL (13F.1)
     ("spawn_background", (True, False)),  # policy allows, executor prompts
@@ -314,14 +316,15 @@ async def test_f_denied_write_then_bash_still_blocked(tmp_path):
     assert ran == []  # user-denied write never executes
     assert any(d.get("type") == "tool_result" and
                d.get("tool_call_id") == "call_W" for d in yielded)
-    # model pivots to bash without fresh user intent: policy still blocks
+    # model pivots to bash without fresh user intent: still refused — bash
+    # needs an operator's yes in AUTO_EDIT, and there is no one to give it
     gate = ApprovalGate(_policy())
     session = {"workspace": str(tmp_path)}
     allowed_b, reason_b = await gate.check(
         {"type": "tool_call", "name": "run_bash",
          "arguments": {"command": "echo hi"}, "id": "call_B"},
         session, approval_handler=None)
-    assert allowed_b is False and "blocks" in (reason_b or "")
+    assert allowed_b is False and "approval" in (reason_b or "")
 
 
 # ── F11: resume after denial does not resurrect the denied call ──
