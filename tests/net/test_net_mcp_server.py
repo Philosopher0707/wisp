@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from wisp.mcp.manager import MCPServerConfig, call_tool, connect_server, disconnect_server
-from wisp_net.mcp_server import LAB_TOOLS, READ_TOOLS, McpServer
+from wisp_net.mcp_server import ACT_TOOLS, LAB_TOOLS, READ_TOOLS, McpServer
 from wisp_net.service import NetService
 
 REPO = str(Path(__file__).resolve().parents[2])
@@ -40,7 +40,7 @@ def _json(text: str):
 
 def test_wisp_client_lists_every_tool_with_hints(server):
     names = [t.name for t in server.tools]
-    assert names == [t.name for t in READ_TOOLS + LAB_TOOLS]
+    assert names == [t.name for t in READ_TOOLS + ACT_TOOLS + LAB_TOOLS]
     assert all(t.input_schema["type"] == "object" for t in server.tools)
 
 
@@ -86,7 +86,7 @@ class TestProtocolInProcess:
     def test_lab_tools_are_opt_in(self, mcp):
         listed = mcp.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})["result"]["tools"]
         assert not any(t["name"].startswith("lab_") for t in listed)
-        assert all(t["annotations"]["readOnlyHint"] is True for t in listed)
+        assert [t["name"] for t in listed if not t["annotations"]["readOnlyHint"]] == ["net_apply_change"]
 
     def test_lab_tools_are_never_read_only(self):
         assert all(t.read_only is False for t in LAB_TOOLS)
