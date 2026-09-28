@@ -61,6 +61,14 @@ class BackgroundAgentEntry:
     notified: bool = False
     """Cleared when a terminal state is reached; set when the parent's next
     turn surfaces it via drain_notifications()."""
+    run_id: str = ""
+    """The durable run row of the CURRENT turn. The agent id names the
+    conversation; each turn is its own run (`<id>` then `<id>-t2`, …), because a
+    terminal row cannot be reopened. Empty means the agent id itself."""
+
+    @property
+    def durable_id(self) -> str:
+        return self.run_id or self.id
 
     def elapsed(self) -> float:
         end = self.finished_at if self.finished_at is not None else time.monotonic()
@@ -167,48 +175,51 @@ class BackgroundAgentManager:
         try:
             from wisp.runs.record import RunRecord, RunState
             ws = getattr(contract, "workspace", ".") or "."
+            run_id = entry.durable_id
             self._run_store.create(RunRecord(
-                run_id=entry.id,
+                run_id=run_id,
                 prompt=getattr(contract, "task", "") or "",
                 workspace=str(ws),
                 status=RunState.QUEUED,
             ))
             self._run_store.transition(
-                entry.id, RunState.QUEUED, RunState.RUNNING, reason="launched")
-            self._run_store.claim_lease(entry.id, self._owner_id, _LEASE_TTL_S)
+                run_id, RunState.QUEUED, RunState.RUNNING, reason="launched")
+            self._run_store.claim_lease(run_id, self._owner_id, _LEASE_TTL_S)
         except Exception:
             self.persist_skipped_total += 1
             logger.warning("run persistence failed on create %s (reason=create, persist_skipped_total=%d)",
-                           entry.id, self.persist_skipped_total, exc_info=True)
+                           entry.durable_id, self.persist_skipped_total, exc_info=True)
 
     def _persist_status(self, entry: BackgroundAgentEntry) -> None:
-        """Best-effort status sync. Persistence must never break execution:
-        stale/illegal transitions are logged, not raised. Continuation
-        relaunches (send()) that revisit a terminal state are skipped."""
+        """Best-effort status sync of the current turn's run row. Persistence
+        must never break execution: stale/illegal transitions are logged, not
+        raised. A continuation has its own row (see `send()`), so settling it
+        never revisits the previous turn's terminal state."""
         if self._run_store is None:
             return
         try:
             from wisp.runs.record import RunRecord, RunState, coerce_state
+            run_id = entry.durable_id
             target = coerce_state(entry.status)
-            rec = self._run_store.get(entry.id)
+            rec = self._run_store.get(run_id)
             if rec is None:
                 self._run_store.create(RunRecord(
-                    run_id=entry.id,
+                    run_id=run_id,
                     prompt=getattr(entry.contract, "task", "") or "",
                     status=RunState.QUEUED))
-                rec = self._run_store.get(entry.id)
+                rec = self._run_store.get(run_id)
                 assert rec is not None
             if rec.status == target:
                 return
             self._run_store.transition(
-                entry.id, rec.status, target,
+                run_id, rec.status, target,
                 reason=f"settled:{entry.status}")
             if target in (RunState.SUCCEEDED, RunState.FAILED, RunState.CANCELLED):
-                self._run_store.release_lease(entry.id)
+                self._run_store.release_lease(run_id)
         except Exception:
             self.persist_skipped_total += 1
             logger.warning("run persistence failed on status %s (%s) (reason=status, persist_skipped_total=%d)",
-                           entry.id, entry.status, self.persist_skipped_total, exc_info=True)
+                           entry.durable_id, entry.status, self.persist_skipped_total, exc_info=True)
 
     def recover(self, lease_owner: str = "") -> dict[str, int]:
         """Park rows abandoned by dead processes. Stale RUNNING → PAUSED
@@ -241,7 +252,7 @@ class BackgroundAgentManager:
 
     # ── Launch ────────────────────────────────────────────────────────
 
-    def _admit(self, agent_id: str) -> str | None:
+    def _admit(self, run_id: str) -> str | None:
         """Refusal reason when the running bound is reached, else None.
 
         The ONE admission rule for every entry point into the running set.
@@ -253,7 +264,7 @@ class BackgroundAgentManager:
         if self._scheduler is not None:
             # Durable admission (M3 J2): store counts replace the
             # in-memory head-count so limits survive restarts.
-            admitted = self._scheduler.admit(agent_id)
+            admitted = self._scheduler.admit(run_id)
             return None if admitted.allowed else admitted.reason
         running = [e for e in self._entries.values() if e.status == STATUS_RUNNING]
         if len(running) >= self._max_running:
@@ -507,7 +518,11 @@ class BackgroundAgentManager:
         # A continuation is a new run of the same agent id, so it must clear
         # the same admission bar as launch(). Without this, resuming N
         # finished agents ran N concurrently past the configured bound.
-        refusal = self._admit(agent_id)
+        # It is admitted under its OWN run id: the previous turn's durable row
+        # is terminal and cannot be reopened, and admitting the agent id again
+        # refused every continuation with "duplicate run id".
+        run_id = f"{agent_id}-t{entry.turns + 1}"
+        refusal = self._admit(run_id)
         if refusal is not None:
             return {"ok": False, "error": refusal}
 
@@ -524,6 +539,7 @@ class BackgroundAgentManager:
 
         entry.label = entry.label or f"{getattr(original, 'role', 'generalist')}-{self._counter}"
         entry.contract = contract
+        entry.run_id = run_id
         entry.status = STATUS_RUNNING
         entry.result = None
         entry.error = None
@@ -531,6 +547,7 @@ class BackgroundAgentManager:
         entry.finished_at = None
         entry.notified = False
         entry.done.clear()
+        self._persist_create(entry, contract)
         entry.handle = asyncio.create_task(self._run_entry(entry))
         self._publish({
             "type": "agent_progress",
