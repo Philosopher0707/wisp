@@ -49,13 +49,13 @@ PIN_WINDOW = 2
 AUTHORITIES: list[tuple[str, str, str, str, str]] = [
     ("1.1 turn predicate",
      "`goal.terminal_outcome_from_evidence` (`wisp/core/goal.py:132`); `turn_succeeded` is a "
-     "**projection** of it, computed once per turn (`wisp/core/runtime.py:1000`)",
+     "**projection** of it, computed once per turn (`wisp/core/runtime.py:995`)",
      "goal state · recovery · verification",
      "**ADR-0035** §Decision 2 (turn level remains terminal evidence) → **ADR-0044** R1/R2 (the "
      "*only* implementation; the flag is a projection) → **ADR-0047** R2 (no longer an "
      "arbitration input; still recorded)",
-     "`terminal_outcome`, `turn_succeeded` — the goal-state record (`wisp/core/runtime.py:1343`, "
-     "`wisp/core/runtime.py:1358`); `terminal_outcome`, `turn_succeeded` — the attempt journal "
+     "`terminal_outcome`, `turn_succeeded` — the goal-state record (`wisp/core/runtime.py:1338`, "
+     "`wisp/core/runtime.py:1353`); `terminal_outcome`, `turn_succeeded` — the attempt journal "
      "line `{\"kind\":\"attempt\"}` (`wisp/core/convergence.py:1323`)"),
     ("1.2 stream state",
      "`guarded_provider_stream` (`wisp/core/provider_stream.py:117`); the two facts are "
@@ -77,7 +77,7 @@ AUTHORITIES: list[tuple[str, str, str, str, str]] = [
      "an *implication*) · **ADR-0018** (the engine publishes the guard; the runtime only reads "
      "it) · **ADR-0042** (the verdict is an **input**, not a second authority)",
      "`verdict` in the verdict envelope (ADR-0013, `wisp/core/acceptance.py:204`) · "
-     "`acceptance_verdict` in the goal-state record (`wisp/core/runtime.py:1344`) · `verdict`, "
+     "`acceptance_verdict` in the goal-state record (`wisp/core/runtime.py:1339`) · `verdict`, "
      "`unmet`, `evidence_ids` in the attempt journal (`wisp/core/convergence.py:1333-1334`)"),
     ("1.4 progress verdict",
      "`progress.evaluate_progress` (`wisp/core/progress.py:155`); verdicts `NO_PROGRESS` / "
@@ -100,10 +100,10 @@ AUTHORITIES: list[tuple[str, str, str, str, str]] = [
      "**ADR-0044** (removes the duplicated predicate) → **ADR-0047** R1–R5 (rows 3–6 revised) → "
      "**ADR-0049** (makes this table canonical at eight rows; resolves older numbering by "
      "content; ratifies two cells)",
-     "`SessionEvent.goal_state_event` (`wisp/core/runtime.py:1340`), 9 keys: `goal_state`, "
+     "`SessionEvent.goal_state_event` (`wisp/core/runtime.py:1335`), 9 keys: `goal_state`, "
      "`terminal_outcome`, `acceptance_verdict`, `stagnation_verdict`, "
      "`stagnation_allows_goal_met`, `turn_succeeded`, `cancelled`, `escalated`, `failure_code` "
-     "(`wisp/core/runtime.py:1342-1362`). **`stagnation_allows_goal_met` is the one replay must "
+     "(`wisp/core/runtime.py:1337-1362`). **`stagnation_allows_goal_met` is the one replay must "
      "read** — `stagnation_verdict` ignores `trap_fired` (F35, ADR-0036 §6)"),
     ("1.6 recovery ladder state",
      "`RecoveryLadder.ladder_state` (`wisp/core/recovery.py:742`) — **renamed** from "

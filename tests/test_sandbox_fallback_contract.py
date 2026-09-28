@@ -14,6 +14,25 @@ import logging
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _the_real_bash_tool():
+    """Test `wisp.tools.bash.async_tool_run_bash` itself, not a patch another test left behind.
+
+    Building a `CompositionRoot` calls `agent.tools.runner.install_sink()`, which replaces
+    `async_tool_run_bash` process-wide with a wrapper that never reaches the tier router, so it
+    emits no UNCONFINED warning. Whether this module saw the real tool depended on test order:
+    any earlier test that built a root (e.g. `test_plan_shown_as_tool_output`) broke
+    `test_fallback_host_warns_at_tool_layer` unless something in between undid the patch.
+    """
+    try:
+        from agent.tools.runner import uninstall_sink
+    except ImportError:
+        yield
+        return
+    uninstall_sink()
+    yield
+
+
 def _no_docker(monkeypatch):
     from wisp.sandbox import DockerSandbox
 
