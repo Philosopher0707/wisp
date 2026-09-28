@@ -321,9 +321,43 @@ TOOL_RISK_TABLE: dict[str, ToolRisk] = {
 }
 
 
+def canonical_tool_name(name: str) -> str:
+    """One name per tool: MCP tools called as ``mcp__server__tool`` become ``mcp:server/tool``.
+
+    MCP tools are advertised to the model as ``mcp__server__tool`` because provider APIs
+    accept only ``[a-zA-Z0-9_-]`` in function names; policy, risk and dispatch are keyed by
+    the canonical form, so every consumer normalizes before looking a tool up.
+    """
+    if name.startswith("mcp__") and name.count("__") >= 2:
+        _, server, tool = name.split("__", 2)
+        return f"mcp:{server}/{tool}"
+    return name
+
+
+# Risk the operator declared for MCP tools (`tool_risk` in mcp.json). Never consulted
+# for built-ins, whose row in TOOL_RISK_TABLE is fixed; absent means EXEC (fail-closed).
+_DECLARED_RISK: dict[str, ToolRisk] = {}
+
+
+def declare_tool_risk(name: str, risk: ToolRisk) -> None:
+    canonical = canonical_tool_name(name)
+    if not canonical.startswith("mcp:") or "/" not in canonical:
+        raise ValueError(f"only MCP tools take a declared risk; {name!r} is classified by TOOL_RISK_TABLE")
+    _DECLARED_RISK[canonical] = risk
+
+
+def forget_declared_risk(server: str) -> None:
+    for key in [k for k in _DECLARED_RISK if k.startswith(f"mcp:{server}/")]:
+        del _DECLARED_RISK[key]
+
+
 def risk_for_tool(name: str) -> ToolRisk:
     """Classify a tool name; unknown tools default to EXEC (fail-closed)."""
-    return TOOL_RISK_TABLE.get(name, ToolRisk.EXEC)
+    canonical = canonical_tool_name(name)
+    builtin = TOOL_RISK_TABLE.get(canonical)
+    if builtin is not None:
+        return builtin
+    return _DECLARED_RISK.get(canonical, ToolRisk.EXEC)
 
 
 # ── Turn / session budget (D1, D10) ────────────────────────────────────
@@ -333,8 +367,8 @@ def risk_for_tool(name: str) -> ToolRisk:
 class TurnBudget:
     """Wall-clock + iteration ceiling for one turn."""
 
-    max_iterations: int = 50
-    turn_timeout_s: float = 1800.0
+    max_iterations: int = 200
+    turn_timeout_s: float = 7200.0
 
     def validate(self) -> list[str]:
         errors: list[str] = []

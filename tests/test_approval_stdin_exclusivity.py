@@ -27,6 +27,14 @@ def _make_buffer(fd: int) -> TypeAheadBuffer:
     return tb
 
 
+#: How long a delivery may take before it counts as lost. The reader wakes
+#: within one `_SELECT_TICK` of resume, but the thread still has to be
+#: scheduled: a fixed sleep followed by `get_nowait()` failed on a loaded CI
+#: runner with the line late, not lost. A bounded wait returns as soon as the
+#: line arrives, and a genuinely dropped line still fails.
+_DELIVERY_TIMEOUT = 2.0
+
+
 @pytest.fixture()
 def pty_pair():
     # A pipe exercises the same select()+os.read() fd semantics as a tty;
@@ -62,8 +70,7 @@ class TestPauseSemantics:
             time.sleep(0.1)
             tb.resume()
             os.write(master, b"a\n")
-            time.sleep(0.2)
-            assert tb._queue.get_nowait() == "a"
+            assert tb._queue.get(timeout=_DELIVERY_TIMEOUT) == "a"
         finally:
             tb.stop_drain_for_test()
 
@@ -75,8 +82,7 @@ class TestPauseSemantics:
         thread.start()
         try:
             os.write(master, b"Y\n")
-            time.sleep(0.2)
-            assert tb._queue.get_nowait() == "Y"
+            assert tb._queue.get(timeout=_DELIVERY_TIMEOUT) == "Y"
         finally:
             tb.stop_drain_for_test()
 
@@ -91,10 +97,9 @@ class TestPauseSemantics:
             time.sleep(0.15)
             assert tb._queue.empty()  # nothing consumed while paused
             tb.resume()
-            time.sleep(0.15)
             # Bytes written while paused are still in the kernel queue;
             # the reader must pick them up after resume, not drop them.
-            assert tb._queue.get_nowait() == "before"
+            assert tb._queue.get(timeout=_DELIVERY_TIMEOUT) == "before"
         finally:
             tb.stop_drain_for_test()
 

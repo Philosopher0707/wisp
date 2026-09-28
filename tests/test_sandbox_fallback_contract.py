@@ -14,6 +14,26 @@ import logging
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _the_real_bash_tool():
+    """Test `wisp.tools.bash.async_tool_run_bash` itself, not a patch another test left behind.
+
+    Building a `CompositionRoot` calls `agent.tools.runner.install_sink()`, which replaces
+    `async_tool_run_bash` process-wide with a disk-sink wrapper. The wrapper once started the
+    command itself on the host, skipping the tier router and the UNCONFINED warning, so whether
+    this module saw the real tool depended on test order. The wrapper now runs through
+    `run_bash_confined` (pinned in `test_sink_keeps_sandbox.py`); this keeps the module on the
+    unwrapped tool so each file pins exactly one layer.
+    """
+    try:
+        from agent.tools.runner import uninstall_sink
+    except ImportError:
+        yield
+        return
+    uninstall_sink()
+    yield
+
+
 def _no_docker(monkeypatch):
     from wisp.sandbox import DockerSandbox
 
