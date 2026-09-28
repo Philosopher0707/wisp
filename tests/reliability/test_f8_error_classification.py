@@ -51,8 +51,12 @@ from wisp.tool_executor import ToolExecutor  # noqa: E402
 #: commit before this change. The F8 fix *is* that `Try`, so "the surrounding
 #: function is otherwise unchanged" has to be stated relative to it — and this
 #: digest is the statement. Recomputed and compared at HEAD and after the fix.
+#:
+#: Re-pinned after 32a0b20, which deliberately added the truncated-arguments check
+#: between the write_file salvage and the validation `Try`. `ast.dump` differs
+#: between Python versions, so the digest is CI's: Python 3.12.
 SURROUNDING_AST_SHA256 = (
-    "67eb511505d547b7aa6cb9c1a1472594a89732df4e8d8e9b195a8250949f76f9")
+    "df9cf0e42253e56e6cc492a28b8708682f324dc0e98f78ec0d16725665046e8a")
 
 
 @pytest.fixture

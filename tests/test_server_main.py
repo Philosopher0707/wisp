@@ -4,6 +4,7 @@ Tests that the new server main can be started.
 """
 
 from unittest.mock import patch
+from tests.route_paths import route_paths
 
 
 class TestServerMain:
@@ -20,7 +21,7 @@ class TestServerMain:
 
     def test_app_has_all_routes(self):
         from wisp.server.main import app
-        paths = [r.path for r in app.routes]
+        paths = route_paths(app.routes)
         assert "/api/health" in paths
         assert "/api/sessions" in paths
         assert "/api/files" in paths
