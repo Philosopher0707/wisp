@@ -401,7 +401,7 @@ class WispAgentCore:
         """
         import asyncio as _asyncio
         from wisp.tools import context as _exec_ctx
-        turn_timeout = getattr(self.config, "turn_timeout", 1800) if self.config else 1800
+        turn_timeout = getattr(self.config, "turn_timeout", 7200) if self.config else 7200
         # Publish the absolute deadline so nested consumers (subagent
         # orchestrator retries) can budget themselves against the same clock.
         # Overwritten by every turn; only read while a turn is live. Lives

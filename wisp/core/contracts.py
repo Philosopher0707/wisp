@@ -333,8 +333,8 @@ def risk_for_tool(name: str) -> ToolRisk:
 class TurnBudget:
     """Wall-clock + iteration ceiling for one turn."""
 
-    max_iterations: int = 50
-    turn_timeout_s: float = 1800.0
+    max_iterations: int = 200
+    turn_timeout_s: float = 7200.0
 
     def validate(self) -> list[str]:
         errors: list[str] = []

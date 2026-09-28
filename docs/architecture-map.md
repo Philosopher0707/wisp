@@ -94,10 +94,10 @@ steering_drain)` (`stateless.py:116`):
 
 ```
  1. wall clock: turn_deadline.set(monotonic()+turn_timeout)        (ContextVar in wisp/tools/context.py; read via get_turn_deadline())
-    turn_timeout default 1800s (config/env WISP_TURN_TIMEOUT)      :130
+    turn_timeout default 7200s (config/env WISP_TURN_TIMEOUT)      :130
  2. build messages (system prompt incl. skills/repo-map/memory/rules)
     + tool schemas filtered by session["allowed_tools"]            :150-162
-    max_iterations: schema default 50 (config.py:127); stateless
+    max_iterations: schema default 200 (config.py); stateless
     getattr-fallback 30 applies only to attr-less test configs      :164
  3. asyncio.timeout(turn_timeout) wraps _turn_inner                :167
  4. provider stream via _guarded_provider_stream                   :203→1345
@@ -117,7 +117,7 @@ a library helper without a core-loop consumer.
 
 **Guards**: `FIRST_TOKEN_DEADLINE_S = env WISP_FIRST_TOKEN_DEADLINE, default 90`
 (`:1339`); empty-stream retry ×`WISP_STREAM_ATTEMPTS`(3, jittered backoff;
-429/5xx scale 1.5×attempt); turn wall-clock 1800s; iteration budget 30 with
+429/5xx scale 1.5×attempt); turn wall-clock 7200s; iteration budget 30 with
 forced synthesis; child budget clamp ×1.5 on timeout retry.
 
 **Event vocabulary** (`core/events.py`, flat dicts at the transport boundary):
