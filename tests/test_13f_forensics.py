@@ -40,7 +40,7 @@ def _flat(ev):
 
 # ── F1: policy denies fanout in AUTO_EDIT ──
 
-def test_f_policy_denies_fanout_auto_edit(tmp_path):
+def test_f_policy_denies_fanout_auto_edit(tmp_path, auto_edit_hard_deny_witness):
     """13F.1: fanout is REQUIRE_APPROVAL (not hard DENY); git_push is the
     hard-DENY case — it never prompts and no `y` can run it. (run_bash was,
     until d0d4bea moved it to REQUIRE_APPROVAL.)"""
@@ -82,7 +82,7 @@ async def test_f_gate_refusal_is_structured_envelope(tmp_path):
 # ── F3: user approval FLIPS a policy denial at the gate (override proof) ──
 
 @pytest.mark.asyncio
-async def test_f_approval_overrides_policy_denial(tmp_path):
+async def test_f_approval_overrides_policy_denial(tmp_path, auto_edit_hard_deny_witness):
     """13F.1 INVERSION (S3): a hard policy DENY can no longer be overridden
     by user approval — the handler is never even consulted."""
     gate = ApprovalGate(_policy())
@@ -121,7 +121,7 @@ def test_f_m2_layer_disagreement_on_fanout(tmp_path):
     ("read_file", (True, False)),
     ("write_file", (True, False)),      # executor-prompted, policy allows
     ("run_bash", (True, True)),         # REQUIRE_APPROVAL (d0d4bea)
-    ("git_push", (False, False)),       # hard DENY
+    ("git_push", (True, True)),         # REQUIRE_APPROVAL (2026-09-28)
     ("spawn", (True, True)),            # REQUIRE_APPROVAL (13F.1)
     ("fanout", (True, True)),           # REQUIRE_APPROVAL (13F.1)
     ("spawn_background", (True, False)),  # policy allows, executor prompts
