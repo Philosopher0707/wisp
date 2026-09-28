@@ -4,8 +4,8 @@
 The platform is a separate process wisp reaches over MCP (ADR-0069). Wisp brings the agent: the turn
 loop, subagents, the gate chain, permission modes, the policy bundle and the audit log.
 
-**Status: N1, sense and state. It is read-only.** Nothing here can change a network yet. Actuation comes
-only after the safety layer that gates it.
+**Status: N1 (sense and state) and N3 (safety). Still read-only.** Nothing here can change a network yet.
+N3 is the gate every future change must pass. Actuation (N4) is built behind it.
 
 ## Run it
 
@@ -31,6 +31,9 @@ explicitly trusted workspace.
 }]}
 ```
 
+The N3 tools `net_what_if`, `net_acl_audit`, `net_segmentation_audit` and `net_change_policy` are also
+reads: `net_what_if` runs on clones and never touches the lab. Add them to `tool_risk` as `read` too.
+
 `tool_risk` is the operator's statement that these tools only read. Wisp does not trust a server's own
 `readOnlyHint`. Every tool left out stays `exec` and asks for approval. With the declaration, a
 `read_only` wisp session can run the whole diagnosis loop. Add `--lab-control` to expose fault
@@ -47,8 +50,8 @@ injection and the lab clock (`lab_*` tools). They change the simulated world and
 | Knowledge | BM25 over bundled runbooks (`knowledge/*.md`, `state/knowledge.py`) | Milvus / Qdrant RAG | embedding store |
 | Alerts | Stable-key alerts that open, escalate, resolve and reopen with occurrence counts: interface down, BGP down or flapping, FCS errors, rx power, egress congestion, CPU, device unreachable (`telemetry/alerts.py`) | — | predictive trends (N2) |
 | **3 Reasoning** | wisp's agent over the MCP tools | orchestrator + 4 domain agents | N2: domain subagents (TE, security, diagnostics, compliance) and intent schema |
-| **4 Safety** | — | Batfish/Z3, Containerlab twin, OPA | N3: invariant checks on the twin, what-if on `SimNetwork.clone()`, policy arbiter |
-| **5 Actuation** | — | gNMI Set commit-confirm, SDN, Ansible/Terraform | N4: idempotent diff-apply with health-checked auto-rollback |
+| **4 Safety** | Declarative change sets of gNMI updates and deletes, with intent, expected unreachability and confidence (`safety/change.py`). Atomic device-side Set (`sim/config.py`). Exact ACL header-space algebra: first-match, dead rules by union coverage (`acl.py`). Formal checks on twins: loop-free forwarding, no new blackholes, no BGP session lost as collateral, no new dead ACL rules, no new zone leaks with the exact leaking flow classes, no new congestion, no new major alerts, convergence (`safety/verify.py`). What-if on two clones of the live lab with their own telemetry pipelines, so the lab is never touched (`safety/whatif.py`). Policy arbiter for verification, blast radius, change windows and the confidence threshold, with rules as JSON (`safety/policy.py`, `policies/*.json`). | Batfish/Z3, Containerlab twin, OPA | Batfish and OPA adapters |
+| **5 Actuation** | — (the device-side Set exists; nothing calls it on the live lab) | gNMI Set commit-confirm, SDN, Ansible/Terraform | N4: apply only a change whose what-if passed and whose policy verdict allows, with commit-confirm and health-checked auto-rollback |
 | **6 Governance** | wisp's audit log and approvals | ledger, rationale, cockpit | N5: change ledger, operator cockpit, kill switch |
 | Closed loop | — | event-driven autonomy | N6: an alert starts a headless wisp turn, tiered autonomy |
 

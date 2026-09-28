@@ -1,0 +1,16 @@
+{
+  "description": "Lab segmentation: leaf1's servers are the cardholder-data zone (PCI DSS). General servers may reach it only on HTTPS; the internet may not reach it at all.",
+  "zones": [
+    {"name": "pci", "prefixes": ["10.1.0.0/24"],
+     "attachments": ["leaf1:Ethernet1", "leaf1:Ethernet2", "leaf1:Ethernet3", "leaf1:Ethernet4"]},
+    {"name": "general", "prefixes": ["10.2.0.0/24", "10.3.0.0/24", "10.4.0.0/24"],
+     "attachments": ["leaf2:Ethernet1", "leaf2:Ethernet2", "leaf2:Ethernet3", "leaf2:Ethernet4",
+                     "leaf3:Ethernet1", "leaf3:Ethernet2", "leaf3:Ethernet3", "leaf3:Ethernet4",
+                     "leaf4:Ethernet1", "leaf4:Ethernet2", "leaf4:Ethernet3", "leaf4:Ethernet4"]},
+    {"name": "internet", "prefixes": ["198.51.100.0/24"], "attachments": ["core1:Ethernet10", "core2:Ethernet10"]}
+  ],
+  "rules": [
+    {"from": "general", "to": "pci", "allow": [{"proto": "tcp", "dport": "443"}]},
+    {"from": "internet", "to": "pci", "allow": []}
+  ]
+}

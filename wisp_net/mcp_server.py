@@ -95,6 +95,30 @@ READ_TOOLS: tuple[Tool, ...] = (
          "`/interfaces/interface[name=Ethernet49]/state/counters`. Fails if the device does not answer.",
          _obj({"device": _S, "path": _S, "limit": _I}, ("device", "path")),
          lambda s, a: s.gnmi_get(a["device"], a["path"], a.get("limit", 100))),
+    Tool("net_what_if", "Verify a proposed change WITHOUT touching the network: it is committed on a copy of the "
+         "lab, both copies run `settle_s` seconds, and the outcome is checked — forwarding loops, pairs that lose "
+         "reachability, BGP sessions lost as collateral damage, new dead ACL rules, new leaks between security "
+         "zones, new congestion, new major alerts, convergence — then judged by the change policy (blast radius, "
+         "change windows, confidence threshold). `change` = {intent, confidence 0..1, expected_unreachable: "
+         "[[source_device, prefix]...], ops: [{device, op: update|delete, path, value}]}. Settable paths: "
+         "`/interfaces/interface[name=X]/config/{enabled,description,mtu}`; `/network-instances/network-instance"
+         "[name=default]/protocols/protocol[identifier=BGP][name=BGP]/bgp/neighbors/neighbor[neighbor-address=IP]"
+         "/config/{enabled,peer-as}`; `/network-instances/network-instance[name=default]/policy/export-deny"
+         "[prefix=P]/config/prefix` (value P); `/acl/acl-sets/acl-set[name=N][type=ACL_IPV4]/acl-entries/acl-entry"
+         "[sequence-id=S]/config` (value {action: permit|deny, src, dst, proto: tcp|udp|icmp|any, dport: 443|"
+         "1000-2000|any}); `/acl/interfaces/interface[id=X]/ingress-acl-sets/ingress-acl-set[set-name=N]"
+         "[type=ACL_IPV4]/config/set-name` (value N). ACLs are first-match with an implicit deny.",
+         _obj({"change": {"type": "object"}, "settle_s": _N}, ("change",)),
+         lambda s, a: s.what_if(a["change"], a.get("settle_s", 30.0))),
+    Tool("net_acl_audit", "Every ACL on every device (or one device) and its dead rules: rules no packet can reach "
+         "because earlier rules cover them (shadowed: an earlier rule with the opposite action wins; redundant: same "
+         "action). Exact header-space analysis.", _obj({"device": _S}), lambda s, a: s.acl_audit(a.get("device"))),
+    Tool("net_segmentation_audit", "Check the network against the segmentation policy (security zones and which "
+         "services may cross between them). Each violation names the entry port, the forwarding path and the "
+         "exact flow classes that leak.", _obj({}), lambda s, a: s.segmentation_audit()),
+    Tool("net_change_policy", "The change guardrails: blast-radius limit, prohibited change windows (and whether "
+         "one is active now), and the confidence below which a human must approve.", _obj({}),
+         lambda s, a: s.change_policy_view()),
     Tool("net_changes", "What changed in the digital twin over the last since_s seconds: links, BGP sessions, "
          "routes, device reachability (added/removed/changed).",
          _obj({"since_s": _N}), lambda s, a: s.changes(a.get("since_s", 3600.0))),
