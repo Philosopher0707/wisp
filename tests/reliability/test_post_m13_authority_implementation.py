@@ -471,9 +471,9 @@ class TestFlags:
         _session, repo, _ev = _run_turn(tmp_path, [_content_only("hi")],
                                         goal_state=False)
         assert _goal_records(repo) == []
-        out = repo.reconstruct("pma")
+        repo.reconstruct("pma")
         assert [str(e.event_type) for e in repo.load_events("pma")] == [
-            "user_message", "assistant_message", "done"]
+            "user_message", "assistant_message", "replay_digest", "done"]
 
     def test_the_default_config_writes_no_recovery_record(self, tmp_path):
         _session, repo, _ev = _run_turn(tmp_path, [_boom()],

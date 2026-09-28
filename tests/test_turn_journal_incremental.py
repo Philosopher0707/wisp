@@ -25,7 +25,6 @@ from __future__ import annotations
 import asyncio
 import json
 
-import pytest
 
 from wisp.config import WispConfig
 from wisp.core.engine import WispAgentCore

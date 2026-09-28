@@ -4,6 +4,7 @@ Tests that all domain routers are properly defined and mountable.
 """
 
 from fastapi import FastAPI
+from tests.route_paths import route_paths
 
 
 class TestAllRouters:
@@ -116,7 +117,7 @@ class TestServerMain:
 
     def test_all_routes_registered(self):
         from wisp.server.main import app
-        paths = [r.path for r in app.routes]
+        paths = route_paths(app.routes)
         assert "/api/sessions" in paths
         assert "/api/files" in paths
         assert "/api/health" in paths

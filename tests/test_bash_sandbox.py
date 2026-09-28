@@ -12,6 +12,7 @@ import logging
 
 import pytest
 
+from wisp.sandbox.router import SandboxRouter
 from wisp.tools import bash as bash_mod
 
 
@@ -31,11 +32,18 @@ class FakeSandbox:
         return (0, "canned-out", "canned-err")
 
 
+def _route_to(monkeypatch, provider) -> None:
+    """Make `provider` the only tier of the router `run_bash` goes through."""
+    monkeypatch.delenv("WISP_SANDBOX", raising=False)
+    monkeypatch.setattr(bash_mod, "get_router",
+                        lambda workspace: SandboxRouter(workspace, tiers=[provider]))
+
+
 @pytest.mark.asyncio
 async def test_available_provider_carries_command(tmp_path, monkeypatch) -> None:
     """RED today: the tool ignores providers and shells out on the host."""
     fake = FakeSandbox()
-    monkeypatch.setattr(bash_mod, "get_sandbox", lambda workspace: fake)
+    _route_to(monkeypatch, fake)
     marker = tmp_path / "host-touched.txt"
     out = await bash_mod.async_tool_run_bash(
         f"touch {marker} && echo hi", str(tmp_path), timeout=30)
@@ -53,7 +61,7 @@ async def test_provider_timeout_maps_to_tool_error(tmp_path, monkeypatch) -> Non
         async def run(self, command: str, cwd: str = "", timeout: int = 60):
             return (-1, "", f"Command timed out after {timeout}s")
 
-    monkeypatch.setattr(bash_mod, "get_sandbox", lambda workspace: SlowFake())
+    _route_to(monkeypatch, SlowFake())
     with pytest.raises(ToolError, match="timed out"):
         await bash_mod.async_tool_run_bash("sleep 5", str(tmp_path), timeout=5)
 

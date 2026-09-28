@@ -61,6 +61,11 @@ class SessionEventType(StrEnum):
     # RAISE, because its whole purpose is to fail loud when the replay it is
     # part of produces something the turn did not run on.
     REPLAY_DIGEST = "replay_digest"
+    # Context the runtime showed the model mid-turn (verification and stagnation
+    # nudges, steering notes). TRANSCRIPT-BEARING: it is provider-visible, so
+    # replay must rebuild it or REPLAY_DIGEST diverges. Not a USER_MESSAGE,
+    # because the user did not send it and it must not count as a turn.
+    INJECTED_CONTEXT = "injected_context"
     COMPACTED = "compacted"
     ERROR = "error"
     DONE = "done"
@@ -297,6 +302,13 @@ class SessionEvent:
         return cls(SessionEventType.REPLAY_DIGEST, seq, {REPLAY_DIGEST_KEY: digest})
 
     @classmethod
+    def injected_context_event(cls, seq: int, message: dict[str, Any]) -> SessionEvent:
+        """A message the runtime injected into the transcript mid-turn."""
+        return cls(SessionEventType.INJECTED_CONTEXT, seq,
+                   {"role": message.get("role", "user"),
+                    "content": message.get("content", "")})
+
+    @classmethod
     def compacted(cls, seq: int, before_count: int, after_count: int, summary: str = "") -> SessionEvent:
         return cls(SessionEventType.COMPACTED, seq, {"before_count": before_count, "after_count": after_count, "summary": summary})
 
@@ -460,6 +472,10 @@ class Session:
             case SessionEventType.USER_MESSAGE:
                 self.messages.append({"role": "user", "content": event.payload["content"]})
                 self.turn_count += 1
+
+            case SessionEventType.INJECTED_CONTEXT:
+                self.messages.append({"role": event.payload.get("role", "user"),
+                                      "content": event.payload["content"]})
 
             case SessionEventType.ASSISTANT_MESSAGE:
                 msg: dict[str, Any] = {"role": "assistant", "content": event.payload["content"]}

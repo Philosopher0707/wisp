@@ -209,9 +209,10 @@ class TestOutcomeMatrix:
         # Migration P0: the log now also journals the assistant turn body, so
         # replay can reconstruct the turn. Before P0 it held only
         # user_message/error/done and `load_session()` returned a
-        # user-message-only transcript.
+        # user-message-only transcript. REPLAY_DIGEST (4560b92) closes every
+        # turn's journal, just before its terminal row.
         assert _repo_types(repo, "a") == [
-            "user_message", "assistant_message", "done"]
+            "user_message", "assistant_message", "replay_digest", "done"]
         assistant = [e for e in repo.load_events("a")
                      if str(e.event_type) == "assistant_message"]
         assert assistant[0].payload["content"] == "answer"
@@ -224,7 +225,7 @@ class TestOutcomeMatrix:
         assert "done" not in _types(evs)
         assert _types(evs).count("error") == 1  # H3 terminal closure
         assert repo.was_last_turn_complete("b") is False
-        assert _repo_types(repo, "b") == ["user_message", "error"]
+        assert _repo_types(repo, "b") == ["user_message", "replay_digest", "error"]
 
     def test_c_timeout_repo_complete(self, tmp_path):
         runtime, repo, ws = _runtime(_DictProvider([_hang()]), tmp_path,
@@ -235,7 +236,7 @@ class TestOutcomeMatrix:
         assert _types(evs).count("done") == 1
         # H5 compatibility: fatal timeout error poisons the formal done.
         assert repo.was_last_turn_complete("c") is False
-        assert _repo_types(repo, "c") == ["user_message", "error"]
+        assert _repo_types(repo, "c") == ["user_message", "replay_digest", "error"]
 
     def test_d_cancel_repo_incomplete(self, tmp_path, monkeypatch):
         monkeypatch.setenv("WISP_STREAM_ATTEMPTS", "1")
@@ -264,7 +265,7 @@ class TestOutcomeMatrix:
         assert "done" not in _types(evs)
         # cancellation never reaches the exhaustion assignment …
         assert repo.was_last_turn_complete("d") is False
-        assert _repo_types(repo, "d") == ["user_message"]
+        assert _repo_types(repo, "d") == ["user_message", "replay_digest"]
 
     def test_e_malformed_repo_incomplete(self, tmp_path, monkeypatch):
         evs, _, repo, _ = self._row(
@@ -358,8 +359,8 @@ class TestOutcomeMatrix:
         # H5 compatibility: attempt 1 stays ERROR-marked (was DONE pre-fix).
         # Migration P0: attempt 2's assistant turn body is journaled too.
         assert _repo_types(repo, "j") == [
-            "user_message", "error", "user_message", "assistant_message",
-            "done"]
+            "user_message", "replay_digest", "error", "user_message",
+            "assistant_message", "replay_digest", "done"]
         errs = [e for e in repo.load_events("j")
                 if str(e.event_type) == "error"]
         dones = [e for e in repo.load_events("j")
@@ -497,8 +498,8 @@ class TestResumeAndReplay:
         _run_turn(runtime, session, prompt="second")
         log = repo.load_events("rp")
         assert [str(e.event_type) for e in log] == [
-            "user_message", "error", "user_message", "assistant_message",
-            "done"]
+            "user_message", "replay_digest", "error", "user_message",
+            "assistant_message", "replay_digest", "done"]
         assert not any("success" in e.payload or "outcome" in e.payload
                        for e in log)
         # Deterministic replay: the replayed transcript matches the live one.
@@ -580,7 +581,7 @@ class TestResurrectionAndIdentity:
         evs = _run_turn(runtime, session)
         assert _types(evs).count("error") == 1  # exactly one terminal …
         assert "done" not in _types(evs)  # … never followed by success …
-        assert _repo_types(repo, "t1") == ["user_message", "error"]
+        assert _repo_types(repo, "t1") == ["user_message", "replay_digest", "error"]
 
     def test_t5_t6_history_immutable_across_retry(self, tmp_path, monkeypatch):
         monkeypatch.setenv("WISP_STREAM_ATTEMPTS", "1")
@@ -593,8 +594,8 @@ class TestResurrectionAndIdentity:
         after = [(str(e.event_type), e.sequence_num) for e in repo.load_events("t56")]
         assert after[:len(before)] == before  # old rows untouched …
         assert [t for t, _ in after] == [
-            "user_message", "error", "user_message", "assistant_message",
-            "done"]  # failed stays failed
+            "user_message", "replay_digest", "error", "user_message",
+            "assistant_message", "replay_digest", "done"]  # failed stays failed
 
 
 # ── §17. Adversarial combinations ─────────────────────────────────────

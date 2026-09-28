@@ -196,7 +196,7 @@ class TestSuccessStillComplete:
         # log is replayable. The §9 intent below is unchanged — success still
         # writes exactly one DONE, and DONE is still the terminal row.
         assert _repo_types(repo, "s1") == [
-            "user_message", "assistant_message", "done"]
+            "user_message", "assistant_message", "replay_digest", "done"]
         assert _repo_types(repo, "s1").count("done") == 1
 
     def test_s2_tool_turn_clean_finish(self, tmp_path):

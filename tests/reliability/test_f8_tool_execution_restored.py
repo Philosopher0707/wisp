@@ -18,10 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import pathlib
-import sys
-import tempfile
 
-import pytest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 
@@ -177,16 +174,17 @@ class TestRealToolExecution:
             "path is not really executing")
         assert target.read_text() == "landed\n"
 
-    def test_authorization_still_hard_denies_in_the_default_mode(self, tmp_path):
-        """`run_bash` is hard-denied in AUTO_EDIT (13F.1). Restoring the
-        validator must not have softened authorization."""
+    def test_authorization_still_gates_shell_in_the_default_mode(self, tmp_path):
+        """`run_bash` needs approval in AUTO_EDIT (13F.1 made it a hard deny;
+        d0d4bea lifted that to REQUIRE_APPROVAL). Restoring the validator must
+        not have softened authorization: the shell runs only after a request."""
         events = _run(tmp_path,
                       [_tool_round("run_bash", {"command": "echo nope"}, "c0"),
                        _content_round()],
                       mode=PermissionMode.AUTO_EDIT)
-        results = _results(events)
-        assert results and "POLICY_DENIED" in results[0][1], (
-            f"AUTO_EDIT no longer denies shell: {results}")
+        asked = [ev for ev in events if ev.get("type") == "approval_request"
+                 and (ev.get("name") or ev.get("data", {}).get("name")) == "run_bash"]
+        assert asked, f"AUTO_EDIT ran shell without asking: {events}"
 
     def test_an_approved_command_really_executes(self, tmp_path):
         events = _run(tmp_path,
