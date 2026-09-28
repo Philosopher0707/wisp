@@ -13,7 +13,7 @@ from typing import Any
 
 from wisp.auth.principal import Principal
 from wisp.auth.workspace_trust import WorkspaceTrust, refuses
-from wisp.core.contracts import ToolRisk, risk_for_tool
+from wisp.core.contracts import ToolRisk, canonical_tool_name, risk_for_tool
 from wisp.pathsec import touches_protected_path
 
 # Tools that mutate without a specific path target.
@@ -48,9 +48,14 @@ def authorize(principal: Principal, tool_name: str, args: dict[str, Any],
     if effective_policy is not None:
         matrix = getattr(effective_policy, "approval_matrix", {}) or {}
         provenance = getattr(effective_policy, "provenance", {}) or {}
-        level = matrix.get(tool_name)
+        # An MCP tool reaches this gate under its advertised name (mcp__srv__tool) while
+        # a bundle names it canonically (mcp:srv/tool); consult both, the strictest wins.
+        canonical = canonical_tool_name(tool_name)
+        levels = [(n, matrix.get(n)) for n in dict.fromkeys((tool_name, canonical))]
+        denied = next((n for n, v in levels if v == "deny"), None)
+        level = "deny" if denied else next((v for _, v in levels if v), None)
         if level == "deny":
-            layer = provenance.get(f"approval:{tool_name}", "organization")
+            layer = provenance.get(f"approval:{denied}", "organization")
             return AuthorizationDecision(
                 allowed=False, controlling_layer=layer,
                 reason=f"Denied {tool_name}: approval level is 'deny', "

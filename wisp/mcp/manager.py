@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import stat
 import subprocess
 import threading
@@ -45,9 +46,26 @@ class MCPTool:
     description: str
     input_schema: dict[str, Any]
     server_name: str
+
     def prefixed_name(self) -> str:
         """Canonical prefixed name: mcp:server/name."""
         return f"mcp:{self.server_name}/{self.name}"
+
+    def wire_name(self) -> str | None:
+        """The name the model is shown and calls: ``mcp__server__tool``.
+
+        Provider APIs accept only ``[a-zA-Z0-9_-]{1,64}`` as a function name, so the
+        canonical ``mcp:server/tool`` cannot be advertised. None when this tool cannot be
+        named that way (an unsafe character, or a ``__`` in the server name that would make
+        the name ambiguous to split back).
+        """
+        name = f"mcp__{self.server_name}__{self.name}"
+        if "__" in self.server_name or not _WIRE_NAME.fullmatch(name):
+            return None
+        return name
+
+
+_WIRE_NAME = re.compile(r"[a-zA-Z0-9_-]{1,64}")
 
 
 # Set of built-in tool names that an MCP tool must NOT shadow.
@@ -85,6 +103,9 @@ class MCPServerConfig:
     headers: Optional[dict[str, str]] = None
     disabled_tools: Optional[list[str]] = None  # tools to exclude
     source: str = ""  # which file declared this server ("workspace"|"" global)
+    # Operator-declared risk per tool name ("read" | "write" | "exec" | "network" |
+    # "privileged"). The server's own annotations are hints it could fake; this is not.
+    tool_risk: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -129,6 +150,33 @@ def _workspace_servers_allowed(workspace: str, config_path: Path) -> bool:
             "To trust it, add %s to %s.",
             config_path, key, WorkspaceTrustManager.TRUST_FILE)
     return False
+
+
+def _tool_risk(entry: dict[str, Any]) -> dict[str, str]:
+    raw = entry.get("tool_risk", entry.get("toolRisk")) or {}
+    if not isinstance(raw, dict):
+        logger.warning("MCP server '%s': tool_risk must be an object; ignored", entry.get("name", "?"))
+        return {}
+    return {str(k): str(v) for k, v in raw.items()}
+
+
+def _declare_risks(server: "MCPServer") -> None:
+    """Apply the operator's `tool_risk` for tools this server actually lists."""
+    from wisp.core.contracts import ToolRisk, declare_tool_risk
+
+    listed = {t.name for t in server.tools}
+    for tool, level in server.config.tool_risk.items():
+        if tool not in listed:
+            logger.warning("MCP server '%s': tool_risk names %r, which it does not list; ignored",
+                           server.config.name, tool)
+            continue
+        try:
+            risk = ToolRisk(level.lower())
+        except ValueError:
+            logger.warning("MCP server '%s': tool_risk %r for %r is not one of %s; it stays exec",
+                           server.config.name, level, tool, ", ".join(r.value for r in ToolRisk))
+            continue
+        declare_tool_risk(f"mcp:{server.config.name}/{tool}", risk)
 
 
 def discover_mcp_configs(workspace: str) -> list[MCPServerConfig]:
@@ -187,6 +235,7 @@ def discover_mcp_configs(workspace: str) -> list[MCPServerConfig]:
                     timeout_seconds=s.get("timeout_seconds", s.get("timeoutSeconds", 30)),
                     headers=s.get("headers"),
                     disabled_tools=s.get("disabled_tools", s.get("disabledTools")),
+                    tool_risk=_tool_risk(s),
                 ))
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Failed to read MCP config %s: %s", cfg_path, e)
@@ -435,6 +484,7 @@ def connect_server(config: MCPServerConfig) -> MCPServer:
             server_name=config.name,
         ))
 
+    _declare_risks(server)
     logger.info(
         "Connected to MCP server '%s' (%d tools)",
         config.name, len(server.tools),
@@ -444,6 +494,9 @@ def connect_server(config: MCPServerConfig) -> MCPServer:
 
 def disconnect_server(server: MCPServer):
     """Disconnect from an MCP server."""
+    from wisp.core.contracts import forget_declared_risk
+
+    forget_declared_risk(server.config.name)
     if server.process:
         try:
             server.process.terminate()
@@ -719,7 +772,12 @@ class MCPManager:
             return
 
         configs = discover_mcp_configs(self.workspace)
+        connected = {s.config.name for s in self.servers}
         for config in configs:
+            if config.name in connected:
+                # Already connected (MCPExtension.start auto-loads always_load servers
+                # into this shared manager); a second connect spawned a duplicate process.
+                continue
             try:
                 server = connect_server(config)
                 self.servers.append(server)
@@ -1209,6 +1267,7 @@ class MCPManager:
                         timeout_seconds=s.get("timeout_seconds", s.get("timeoutSeconds", 30)),
                         headers=s.get("headers"),
                         disabled_tools=s.get("disabled_tools", s.get("disabledTools")),
+                    tool_risk=_tool_risk(s),
                         source=("workspace" if cfg_path == Path(self.workspace) / ".wisp" / "mcp.json"
                                 else ""),
                     )

@@ -825,11 +825,22 @@ class ToolExecutor:
 
         # ── Approval gating ──
         needs_approval = func_name in _get_write_tools(self.config)
+        approval_reason = f"{func_name} modifies workspace state"
+        # An MCP tool is external: wisp cannot know what it does, so it is gated by its
+        # risk class (operator-declared `tool_risk`, else EXEC) through the layered
+        # authority's approval requirement, which already follows the permission mode.
+        # Keying approval only on the built-in `write_tools` list let every MCP tool run
+        # unasked in auto_edit, even when the approver refused.
+        if not needs_approval and self._is_external_call(func_name) and _decision.approval_required:
+            needs_approval = True
+            from wisp.core.contracts import risk_for_tool
+            approval_reason = f"{func_name} is an MCP tool with {risk_for_tool(func_name).value} risk"
         forced_approval = self._needs_forced_approval(func_name)
         # Bundle-level "approve" forces the approval path even in full
         # mode (explicit, no ambiguity with session-layer requirements).
         _matrix = getattr(self.policy, "approval_matrix", None) or {}
-        if _matrix.get(func_name) == "approve":
+        from wisp.core.contracts import canonical_tool_name
+        if "approve" in (_matrix.get(func_name), _matrix.get(canonical_tool_name(func_name))):
             needs_approval = True
             forced_approval = True
         is_full_mode = getattr(self.config, "permission_mode", PermissionMode.AUTO_EDIT) == PermissionMode.FULL
@@ -859,7 +870,7 @@ class ToolExecutor:
                 # (This comment said "auto_approve=True + no handler + not forced",
                 # which described a branch this one is not in.)
             else:
-                reason = f"{func_name} modifies workspace state"
+                reason = approval_reason
                 yield _approval_request_event(func_name, func_args, reason)
                 try:
                     approved, modified = await approval_handler(func_name, func_args, reason)
