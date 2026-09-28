@@ -14,7 +14,7 @@
 > `CURRENT_OPEN_ITEMS.md` (what is open), `CURRENT_FLAGS.md` (every rollback flag and its
 > default). All four are derived; none may decide.
 >
-> Generated 2026-09-25 at `f251ed4` · **104 findings** (F1–F104) · **13 not closed** · vocabulary in §(a), classes in §(b).
+> Generated 2026-09-25 at `8eb781d` · **104 findings** (F1–F104) · **13 not closed** · vocabulary in §(a), classes in §(b).
 
 ---
 
@@ -59,7 +59,7 @@
 | **F35** | The goal arbiter and the goal record were computed from two different facts, so live and replay could disagree | `FIXED` | duplicated-authority | ADR-0036 | WISP_MIGRATION_STATUS.md:1872 — “**FIXED** (ADR-0036 §6 …): the goal record carries `stagnation_allows_goal_met`, taken from the **same computation**” | tests/reliability/test_post_m13_authority_implementation.py |
 | **F36** | The full suite cannot run in one process on a memory-starved host; the sandbox host fallback makes `run_bash` tests environment-dependent | `OPEN` | measurement-method | — | WISP_MIGRATION_STATUS.md:1873 — “Environment, **not** caused by the phase” | — |
 | **F37** | A mutation followed by a *failing* verification was recorded P3 `PASS` / `GOAL_MET` — a false success | `FIXED` | false-success | — | WISP_MIGRATION_STATUS.md:1874 — headline “**NOT FIXED — newly exposed**”, root-caused there as *the evidence adapter*; **repaired** — `CONTEXT.md` §0 phase table records “**F37 evidence-adapter repair** — `COMPLETE` — **F37 FIXED**” | tests/reliability/test_verification_evidence_adapter.py |
-| **F38** | A test encoded the F8 environment as the contract | `DEFECT-PIN` | — | — | WISP_MIGRATION_STATUS.md:1875 — “**NOT FIXED — `TEST_ASSUMED_BROKEN_ENVIRONMENT`**” | tests/test_node_identity.py::TestANodeReferencesItsWorkUnit::test_a_parallel_round_is_journaled_as_one_exchange_per_call |
+| **F38** | A test encoded the F8 environment as the contract | `CLOSED` | TEST_ASSUMED_BROKEN_ENVIRONMENT | — | WISP_MIGRATION_STATUS.md:1875 — “**CLOSED 2026-09-27 — `TEST_ASSUMED_BROKEN_ENVIRONMENT`.**” | tests/test_node_identity.py::TestANodeReferencesItsWorkUnit::test_a_parallel_round_is_journaled_as_one_exchange_per_call |
 | **F39** | The Ollama client sends `num_predict` without negotiating the model's real limit, so a class of models fails outright | `CLOSED` | unwired-control | ADR-0038 | WISP_MIGRATION_STATUS.md:1876 — headline “**NOT FIXED**”, root-caused there as `ADR_REQUIRED: YES`; **decided** — `CONTEXT.md` §0 phase table records “F39 token-budget boundary (**ADR-0038**)” as `COMPLETE` / “**`RATIFIED`**”, then “**`ADR-0038 SATISFIED`**” | — |
 | **F40** | The iteration wrap-up loop consumes RAW provider events and assumes dicts, so the wrap-up summary is lost | `CLOSED` | duplicated-authority | ADR-0039 | WISP_MIGRATION_STATUS.md:1877 — “**CLOSED (PM-21)** — ADR-0039 decided it (PM-20) and the normalization boundary implemented it” | tests/test_failure_signal_classification.py |
 | **F41** | The 4xx error-body log never logged a real body, and the unit tests could not notice | `FIXED` | instrument-defect | ADR-0038 | WISP_MIGRATION_STATUS.md:1878 — “**FIXED (PM-18)** … the body is now captured **inside** the `with`” | — |
@@ -228,12 +228,14 @@ below. A count is canonical only if it is measured after the LAST change to any 
 |---|---|
 | `OPEN` | 13 |
 | `FIXED` | 52 |
-| `CLOSED` | 34 |
+| `CLOSED` | 35 |
 | `SUPERSEDED` | 1 |
 | `DECIDED` | 3 |
-| `DEFECT-PIN` | 1 |
+| `DEFECT-PIN` | 0 |
 | `UNRESOLVED` | 0 |
 | **total** | **104** |
+
+**`DEFECT-PIN`** — no finding is currently in this state (ADR-0062 R3.2's rule).
 
 **`UNRESOLVED`** — no finding is currently in this state (ADR-0062 R3.2's rule).
 

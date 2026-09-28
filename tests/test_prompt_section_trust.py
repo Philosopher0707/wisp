@@ -80,7 +80,6 @@ def _sections(ctx: PromptContext | None = None):
     Reconstructed by calling the real builder with the budget off, so the test
     sees what production sees rather than a copy of it.
     """
-    from wisp.context_assembler import _DEFAULT_MAX_CONTEXT_TOKENS
     ctx = ctx or _full_context()
     a = ContextAssembler()
     captured: list[tuple[str, int, str]] = []

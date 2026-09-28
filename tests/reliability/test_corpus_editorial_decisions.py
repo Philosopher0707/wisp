@@ -258,9 +258,13 @@ class TestR5ThePhantomNamesAreNotFlags:
 # ── R6 ──────────────────────────────────────────────────────────────────────
 
 def _canonical_block(text: str) -> str:
-    """The fenced block whose command ends with the canonical block's last file."""
+    """The fenced block that runs both the first and the M4 file of the canonical set.
+
+    Matched by membership, not by which file ends the command: 69bdca0 appended the
+    runtime-conformance guards after `test_m4_governance_wiring.py`.
+    """
     blocks = re.findall(r"```bash\n(.*?)```", text, re.S)
-    hits = [b for b in blocks if "tests/test_m4_governance_wiring.py -q" in b
+    hits = [b for b in blocks if "tests/test_m4_governance_wiring.py" in b
             and "test_durable_layer_reachable.py" in b]
     assert len(hits) == 1, f"expected one canonical block, found {len(hits)}"
     return hits[0]

@@ -223,11 +223,14 @@ class TestScenarioBSandboxAndServerAuth:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Elevated commands raise ToolError and never reach any provider."""
+        from wisp.sandbox.router import SandboxRouter
         from wisp.tools import bash as bash_mod
         from wisp.tools._utils import ToolError
 
         fake = _RecordingSandbox()
-        monkeypatch.setattr(bash_mod, "get_sandbox", lambda ws: fake)
+        monkeypatch.delenv("WISP_SANDBOX", raising=False)
+        monkeypatch.setattr(bash_mod, "get_router",
+                            lambda ws: SandboxRouter(ws, tiers=[fake]))
         with pytest.raises(ToolError, match="[Pp]rivilege|Dangerous|blocked"):
             await bash_mod.async_tool_run_bash("sudo rm -rf /", str(tmp_path))
         assert fake.calls == [], "dangerous command reached the provider!"
@@ -236,10 +239,13 @@ class TestScenarioBSandboxAndServerAuth:
     async def test_benign_command_routes_strictly_through_provider(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        from wisp.sandbox.router import SandboxRouter
         from wisp.tools import bash as bash_mod
 
         fake = _RecordingSandbox()
-        monkeypatch.setattr(bash_mod, "get_sandbox", lambda ws: fake)
+        monkeypatch.delenv("WISP_SANDBOX", raising=False)
+        monkeypatch.setattr(bash_mod, "get_router",
+                            lambda ws: SandboxRouter(ws, tiers=[fake]))
         marker = tmp_path / "host-touched.txt"
         out = await bash_mod.async_tool_run_bash(
             f"touch {marker} && echo hi", str(tmp_path))
@@ -251,10 +257,13 @@ class TestScenarioBSandboxAndServerAuth:
     async def test_traversal_shaped_command_still_confined(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        from wisp.sandbox.router import SandboxRouter
         from wisp.tools import bash as bash_mod
 
         fake = _RecordingSandbox()
-        monkeypatch.setattr(bash_mod, "get_sandbox", lambda ws: fake)
+        monkeypatch.delenv("WISP_SANDBOX", raising=False)
+        monkeypatch.setattr(bash_mod, "get_router",
+                            lambda ws: SandboxRouter(ws, tiers=[fake]))
         await bash_mod.async_tool_run_bash("cat ../../etc/hostname",
                                            str(tmp_path))
         assert len(fake.calls) == 1, "command bypassed the sandbox provider"

@@ -27,9 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import pathlib
 
-import pytest
 
 from wisp.config import WispConfig
 from wisp.core.engine import WispAgentCore
@@ -86,7 +84,8 @@ class _Turn:
         return self.record.get("goal_state")
 
 
-def _run_turn(ws, rounds, *, mode=PermissionMode.ASK_ALL, sid="vea", goal_state=True):
+def _run_turn(ws, rounds, *, mode=PermissionMode.ASK_ALL, sid="vea", goal_state=True,
+              approve_calls=True):
     config = WispConfig().replace(workspace=str(ws), permission_mode=mode,
                                   goal_state=goal_state, max_iterations=6)
     store = UnifiedStore(ws / f"{sid}.db")
@@ -109,7 +108,7 @@ def _run_turn(ws, rounds, *, mode=PermissionMode.ASK_ALL, sid="vea", goal_state=
     session = {"id": sid, "model": "mock", "workspace": str(ws), "messages": []}
 
     async def approve(event, *a, **kw):
-        return True
+        return approve_calls
 
     async def _main():
         return [ev async for ev in runtime.run_turn(
@@ -218,9 +217,11 @@ class TestARefusedVerificationIsNotEvidence:
         assert turn.acceptance == "fail"
 
     def test_a_pre_dispatch_denial_keeps_its_existing_contract(self, tmp_path):
-        """AUTO_EDIT denies run_bash before dispatch — unchanged by this repair.
+        """A run_bash denied before dispatch — unchanged by this repair.
 
-        The call never reaches the evidence fold, so the guard has no
+        AUTO_EDIT asks before running bash (d0d4bea lifted the hard deny), so
+        the denial here is the user's. The call never reaches the evidence
+        fold, so the guard has no
         verification outcome at all. This is the contract the Non-OK rule is
         written to preserve, and it must stay exactly as it was.
         """
@@ -230,7 +231,7 @@ class TestARefusedVerificationIsNotEvidence:
                          {"path": str(tmp_path / "denied.txt"), "content": "x"}, "c0"),
              _tool_round("run_bash", {"command": "echo nope"}, "c1"),
              _content_round()],
-            mode=PermissionMode.AUTO_EDIT, sid="denied")
+            mode=PermissionMode.AUTO_EDIT, sid="denied", approve_calls=False)
         assert turn.guard.wrote_code is True
         assert turn.guard.verify_ok_after_edit is None, (
             "a denied verification must leave no verdict, as before")

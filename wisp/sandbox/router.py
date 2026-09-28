@@ -142,10 +142,11 @@ class PtySandbox(SandboxProvider):
                             raise
                     if not data:
                         break
-                    chunks.append(data)
+                    # Past the cap, keep draining and discard: the child must run
+                    # to completion or its exit status is never known.
+                    if size <= _MAX_BASH_OUTPUT + 65536:
+                        chunks.append(data)
                     size += len(data)
-                    if size > _MAX_BASH_OUTPUT + 65536:
-                        break
                 elif exited:
                     # No more output and the child is gone — drain once more.
                     ready2, _, _ = select.select([master], [], [], 0.05)
@@ -154,9 +155,21 @@ class PtySandbox(SandboxProvider):
             out = _clean_pty_output(b"".join(chunks))
             if len(out) > _MAX_BASH_OUTPUT:
                 out = out[:_MAX_BASH_OUTPUT] + "\n... [output truncated]"
+            # EOF on the pty does not reap the child: without this wait
+            # `returncode` is still None and a failing command reads as exit 0.
+            try:
+                returncode = proc.wait(
+                    timeout=max(deadline - time.monotonic(), 0.1))
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                proc.wait(timeout=5)
+                return (-1, out, f"Command timed out after {timeout}s")
             # NOTE: pty merges stderr into stdout by construction.
             # Empty stays empty: "(no output)" is the formatter's job.
-            return (proc.returncode or 0, out, "")
+            return (returncode, out, "")
         except Exception as exc:
             return (-1, "", str(exc))
         finally:

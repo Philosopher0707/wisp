@@ -100,7 +100,11 @@ def _tool_executor_calls() -> list[tuple[str, int, bool]]:
 
 
 def test_tool_executor_construction_sites_are_known():
-    """**Three** sites. The count was 2 until `8a7e9ab` added the third.
+    """**Four** sites. The count was 2 until `8a7e9ab` added the third, and
+    `d1ee3c9` added the fourth: `wisp swarm` ran its subagents with no executor
+    at all. Like the other non-root sites it receives no organization policy,
+    so with `WISP_POLICY_BUNDLE` set, swarm subagents are not governed by it —
+    closing that needs a second policy load site, which ADR-0006 forbids.
 
     `8a7e9ab` (the autonomous-convergence chain) wired an executor into
     `benchmark/runner.py::make_ollama_core_factory`. That is **authorised** —
@@ -118,7 +122,7 @@ def test_tool_executor_construction_sites_are_known():
     count that a swap would leave unchanged.
     """
     sites = _tool_executor_calls()
-    assert len(sites) == 3, (
+    assert len(sites) == 4, (
         "a new ToolExecutor construction site appeared — check whether it "
         f"passes a policy bundle: {sites}"
     )
@@ -126,6 +130,7 @@ def test_tool_executor_construction_sites_are_known():
         "wisp/composition.py",       # the composition root
         "wisp/acp_session.py",       # the ACP session's config-driven fallback
         "wisp/benchmark/runner.py",  # the benchmark factory — ADR-0045, F54
+        "wisp/multi_agent/cli.py",   # `wisp swarm` subagents — d1ee3c9
     }, f"the construction-site inventory changed: {sites}"
 
 

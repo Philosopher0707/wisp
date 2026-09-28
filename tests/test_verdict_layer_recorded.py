@@ -19,7 +19,6 @@ from __future__ import annotations
 import asyncio
 import json
 
-import pytest
 
 from wisp.config import PermissionMode, WispConfig
 from wisp.infra.audit import ImmutableAuditTrail

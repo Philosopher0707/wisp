@@ -38,7 +38,6 @@ import dataclasses
 import json
 from pathlib import Path
 
-import pytest
 
 from wisp.core.session import SessionEventType
 from wisp.core.task_graph import TaskNode

@@ -13,7 +13,7 @@
 > `CURRENT_FINDINGS.md` (every recorded finding and its status), `CURRENT_FLAGS.md` (every
 > rollback flag and its default). All four are derived; none may decide.
 >
-> Generated 2026-09-27 at `c556d0b` · **102 items** · **23 open**, 79 closed (kept, in §The closed items).
+> Generated 2026-09-28 at `8eb781d` · **102 items** · **23 open**, 79 closed (kept, in §The closed items).
 
 ---
 
@@ -21,13 +21,13 @@
 
 | id | title | state | blocked_by | tripwire | source |
 |---|---|---|---|---|---|
-| **R10** | `useApi.ts:368` sends no `Authorization` header | `PARTIAL` | — | — | CONTEXT.md:2343 — “✅ **FIXED** (§0f) — the functional half. **What remains is a decision**” |
-| **R3** | Full provider-listing delegation | `NOT STARTED` | the 3 deltas (auth/timeout/degradation) must converge | tests/test_provider_listing_equivalence.py | CONTEXT.md:2350 — “Unsafe until the 3 deltas … converge; `test_provider_listing_equivalence.py` fails at that point” |
-| **R7** | `capability_filter.py` untracked but imported | `NOT STARTED` | the file is the user's untracked WIP (§8) | — | CONTEXT.md:2354 — “See §8” |
-| **R8** | 3 untracked test files abort collection | `NOT STARTED` | the files are the user's WIP | — | CONTEXT.md:2355 — “User's WIP” |
-| **M1** | P3 stage 3b — enable the acceptance gate | `IN PROGRESS` | ADR-0051 R4 requires **≥ 2 capable models** and this host serves exactly **1** of 13 — an environment fact, not a code change | tests/reliability/test_acceptance_gate_enablement.py | CONTEXT.md:2372 — “**`IN_PROGRESS`** — the precondition is satisfied **and** the mechanism is built and driven; what remains is the population” |
-| **M5** | Foreground-turn `RunRecord` lifecycle | `NOT STARTED` | — | — | CONTEXT.md:2376 — “**OPEN** — proven end-to-end for background runs only.” |
-| **M7** | `change_tracker.py` not wired into evidence | `NOT STARTED` | deferred with stage 3b | — | CONTEXT.md:2378 — “**OPEN** — deferred with 3b.” |
+| **R10** | `useApi.ts:368` sends no `Authorization` header | `PARTIAL` | — | — | CONTEXT.md:2419 — “✅ **FIXED** (§0f) — the functional half. **What remains is a decision**” |
+| **R3** | Full provider-listing delegation | `NOT STARTED` | the 3 deltas (auth/timeout/degradation) must converge | tests/test_provider_listing_equivalence.py | CONTEXT.md:2426 — “Unsafe until the 3 deltas … converge; `test_provider_listing_equivalence.py` fails at that point” |
+| **R7** | `capability_filter.py` untracked but imported | `NOT STARTED` | the file is the user's untracked WIP (§8) | — | CONTEXT.md:2430 — “See §8” |
+| **R8** | 3 untracked test files abort collection | `NOT STARTED` | the files are the user's WIP | — | CONTEXT.md:2431 — “User's WIP” |
+| **M1** | P3 stage 3b — enable the acceptance gate | `IN PROGRESS` | ADR-0051 R4 requires **≥ 2 capable models** and this host serves exactly **1** of 13 — an environment fact, not a code change | tests/reliability/test_acceptance_gate_enablement.py | CONTEXT.md:2448 — “**`IN_PROGRESS`** — the precondition is satisfied **and** the mechanism is built and driven; what remains is the population” |
+| **M5** | Foreground-turn `RunRecord` lifecycle | `NOT STARTED` | — | — | CONTEXT.md:2452 — “**OPEN** — proven end-to-end for background runs only.” |
+| **M7** | `change_tracker.py` not wired into evidence | `NOT STARTED` | deferred with stage 3b | — | CONTEXT.md:2454 — “**OPEN** — deferred with 3b.” |
 | **P3 · item 6** | The completion rule requires non-invalidated evidence | `NOT STARTED` | it is stage 3b, which is M1 | — | WISP_MIGRATION_STATUS.md:512 — “`NOT DONE` — **that is stage 3b** — the plan's staging; `turn_succeeded` is unchanged” |
 | **P3 · item 7** | Wire `change_tracker.py` into evidence | `NOT STARTED` | deferred with 3b (M7) | — | WISP_MIGRATION_STATUS.md:513 — “`NOT DONE` — deferred with 3b” |
 | **P8 · item 5** | Serve the symbol-level repo map | `NOT STARTED` | `tiktoken` is installed, so the budget is now measurable — the item itself is not implemented | — | WISP_MIGRATION_STATUS.md:864 — “`NOT DONE` — the plan requires **measure first**” |
@@ -54,37 +54,37 @@ reopens would simply vanish from the open table with nothing to compare against.
 
 | id | title | state | blocked_by | tripwire | source |
 |---|---|---|---|---|---|
-| **R1** | REST gate — finish option B | `COMPLETE` | — | — | CONTEXT.md:2336 — “✅ **DONE** (§0)” |
-| **R2** | Correct the “breaks the client” claim | `COMPLETE` | — | — | CONTEXT.md:2337 — “✅ **DONE** (§5)” |
-| **G0** | REST bypass of the protected-path guard | `COMPLETE` | — | — | CONTEXT.md:2338 — “✅ **DONE** (§0b)” |
-| **E** | The M4 governance layer is not wired to the runtime | `COMPLETE` | — | tests/test_m4_governance_wiring.py | CONTEXT.md:2339 — “✅ **CLOSED 2026-09-25.** The key-trust decision is **ADR-0058** … and the wiring landed” |
-| **G1** | Authorization parity — the agent composes both models; REST consulted only `SecurityPolicy` | `COMPLETE` | — | tests/test_authorization_parity.py | CONTEXT.md:2340 — “✅ **CLOSED.** **ADR-0055** drove the real paths: **0 path divergences of 36**” |
-| **R1b** | `POST /api/hooks` still accepts an unvalidated `command` | `COMPLETE` | — | tests/reliability/test_external_input_path.py | CONTEXT.md:2341 — “✅ **CLOSED 2026-09-25 (ADR-0061 R6 / G3).**” |
-| **W1** | The agent path's WebSocket approval prompt had never rendered | `COMPLETE` | — | tests/reliability/test_external_input_path.py | CONTEXT.md:2342 — “✅ **CLOSED 2026-09-25 (ADR-0061).**” |
-| **F1** | `metadata["_budget"]` write-only | `COMPLETE` | — | — | CONTEXT.md:2344 — “✅ **FIXED** (§0e.2)” |
-| **F2** | `_SENSITIVE_ENV_KEYS` has no consumer | `COMPLETE` | — | — | CONTEXT.md:2345 — “✅ **FIXED** (§0e.1) — deleted as superseded” |
-| **F3** | `execute_tool(security_policy=…)` — no caller passes it | `COMPLETE` | — | wisp/tools/registry.py | CONTEXT.md:2346 — “✅ **CLOSED 2026-09-27.**” — the owed annotation **landed**: `registry.py:911` now *prohibits* wiring this entrypoint without the checks `ToolRegistry.execute` supplies. Prose-only, proved by both instruments — **ADR-0065 R3** satisfied |
-| **F4** | `spawn_with_guards` is a dead duplicate | `COMPLETE` | — | tests/test_unwired_controls_inventory.py | CONTEXT.md:2347 — “**Accepted** — deletion candidate”; *Reason:* accepted, and pinned as deliberately dead — `tests/test_unwired_controls_inventory.py:283` asserts the variant is still uncalled (*“it is no longer dead code”*), so *“deletion candidate”* is superseded by the instrument and the tripwire cell is corrected — **ADR-0065 R1** |
-| **F5** | event-replay `TOOL_CALL` — the referent is unidentifiable | `COMPLETE` | — | — | CONTEXT.md:2348 — “**Unresolved, no action** — recorded as unidentified rather than guessed at”; *Reason:* resolved as *no action* — recorded unidentified rather than guessed at, which is §12's own disposition — **ADR-0065 R1** |
-| **G2** | The `run_bash` verb scan is a separate mechanism from the predicate | `COMPLETE` | — | — | CONTEXT.md:2349 — “**Accepted** — a shell command's target is not determinable from its text”; *Reason:* accepted — the same ground ADR-0061 used to close R1b, and the reason a runnable check, a blocklist and an allow-list are each rejected — **ADR-0065 R1** |
-| **R4** | `_is_transient` is a separate predicate | `COMPLETE` | — | — | CONTEXT.md:2351 — “**Not debt** — different axis (retryability, not outcome class)” |
-| **R5** | Two `RunStatus` enums remain | `COMPLETE` | — | — | CONTEXT.md:2352 — “**Resolved as a non-issue by the migration.** … **No shim needed** — ADR-0003” |
-| **R6** | `.venv` missing deps | `COMPLETE` | — | — | CONTEXT.md:2353 — “✅ **CLOSED 2026-09-27.**”; *Reason:* all five deps installed at their `uv.lock` pins, plus `wcwidth`, so nothing is absent — the obstacle was TLS, not network (F-T9) |
-| **R9** | `wisp/core/graph/__init__.py` modified, uncommitted | `COMPLETE` | — | — | CONTEXT.md:2356 — “User's pre-existing edit”; *Reason:* decided by **ADR-0060 R5**, which holds that this file *“needs **no edit**”* and that the dead part is a retained reference implementation, quoting this file's own uncommitted docstring as the reason; independently driven, the diff is a module docstring only — docstring-stripped AST identical and recursive `co_code` identical, prose-only — **ADR-0065 R1** |
-| **M2** | Journal-first reconstruction | `COMPLETE` | — | tests/test_session_reconstruction.py | CONTEXT.md:2373 — “✅ **COMPLETE** … **Five consumers still read the blob** (a tripwire asserts it)” |
-| **M3** | Killpoint integration | `COMPLETE` | — | tests/reliability/test_killpoints.py | CONTEXT.md:2374 — “✅ **COMPLETE** — `test_kp_session_midtool_then_killed`. One window covered.” |
-| **M4** | ADR-0004 revisited | `COMPLETE` | — | — | CONTEXT.md:2375 — “✅ **COMPLETE** — **ADR-0027**. Found a live defect” |
-| **M6** | `PolicyDecisionEnvelope` producer-less and consumer-less | `COMPLETE` | — | tests/test_contracts_policy.py | CONTEXT.md:2377 — “✅ **CLOSED 2026-09-27.**” — measured, **four of six** `wisp/contracts/` modules have no production importer, so it is *not* the last; that is the M1a freeze, which the spec defines as additive (*“Pure addition: no existing producer or consumer changes behavior”*) — a disposition, and **not** a deletion candidate |
-| **M8** | `multi_agent/dag.py` not retired into `wisp/graph/` | `COMPLETE` | — (re-scoped by ADR-0060: the divergence is the *boundary*, not a blocker; the removal is **not owed**) | tests/reliability/test_dag_retirement_contract.py | CONTEXT.md:2379 — “✅ **COMPLETE.** *Reason:* surveyed and decided 2026-09-25 — **`DEPRECATE`, not remove** — and **re-scoped by ADR-0060**” |
-| **M9** | The execution view | `COMPLETE` | — | — | CONTEXT.md:2365 — “✅ **COMPLETE** — ADR-0029.” |
-| **M10** | The materialized graph is a lower bound on iterations | `COMPLETE` | — (by design: iteration boundaries are not observable) | — | CONTEXT.md:2380 — “**OPEN — by design.**”; *Reason:* by design — iteration boundaries are not observable, which is a disposition and not an obstacle — **ADR-0065 R1** |
-| **M11** | The graph does not drive execution | `COMPLETE` | — | tests/reliability/test_layer_b_boundary.py | CONTEXT.md:2366 — “✅ **COMPLETE.** *Reason:* **decided, not deferred** (ADR-0060; ADR-0062 R3). ADR-0033 … **ADR-0060 closes the second half**” |
-| **M12** | The failure path | `COMPLETE` | — | — | CONTEXT.md:2367 — “✅ **COMPLETE** — ADR-0032.” |
-| **M13** | The stagnation detector is not constructed by the turn loop | `COMPLETE` | — | tests/test_stagnation_live_wiring.py | CONTEXT.md:2368 — “✅ **COMPLETE** — ADR-0034. … **Enforcement deferred**: routing and goal-met gating are tripwired.” |
-| **M14** | The context trust boundary | `COMPLETE` | — | tests/test_prompt_section_trust.py | CONTEXT.md:2369 — “✅ **COMPLETE** — ADR-0031. … T2 fencing remains, deliberately staged.” |
-| **M15** | The subagent spawn site | `COMPLETE` | — | tests/test_child_principal_wired.py | CONTEXT.md:2370 — “✅ **COMPLETE** — ADR-0030.” |
-| **M16** | The `ESCALATION` record's loss is not fully addressed | `COMPLETE` | — | — | CONTEXT.md:2371 — “✅ **COMPLETE** — ADR-0028.” |
-| **Layer C** | `wisp/core/graph/` — named *disowned* and consumed by the live path | `COMPLETE` | — | tests/reliability/test_layer_c_disposition.py | CONTEXT.md:2381 — “✅ **COMPLETE.** *Reason:* decided 2026-09-25 by **ADR-0060 R5** (ADR-0062 R3). The live symbols **moved**” |
+| **R1** | REST gate — finish option B | `COMPLETE` | — | — | CONTEXT.md:2412 — “✅ **DONE** (§0)” |
+| **R2** | Correct the “breaks the client” claim | `COMPLETE` | — | — | CONTEXT.md:2413 — “✅ **DONE** (§5)” |
+| **G0** | REST bypass of the protected-path guard | `COMPLETE` | — | — | CONTEXT.md:2414 — “✅ **DONE** (§0b)” |
+| **E** | The M4 governance layer is not wired to the runtime | `COMPLETE` | — | tests/test_m4_governance_wiring.py | CONTEXT.md:2415 — “✅ **CLOSED 2026-09-25.** The key-trust decision is **ADR-0058** … and the wiring landed” |
+| **G1** | Authorization parity — the agent composes both models; REST consulted only `SecurityPolicy` | `COMPLETE` | — | tests/test_authorization_parity.py | CONTEXT.md:2416 — “✅ **CLOSED.** **ADR-0055** drove the real paths: **0 path divergences of 36**” |
+| **R1b** | `POST /api/hooks` still accepts an unvalidated `command` | `COMPLETE` | — | tests/reliability/test_external_input_path.py | CONTEXT.md:2417 — “✅ **CLOSED 2026-09-25 (ADR-0061 R6 / G3).**” |
+| **W1** | The agent path's WebSocket approval prompt had never rendered | `COMPLETE` | — | tests/reliability/test_external_input_path.py | CONTEXT.md:2417 — “✅ **CLOSED 2026-09-25 (ADR-0061).**” |
+| **F1** | `metadata["_budget"]` write-only | `COMPLETE` | — | — | CONTEXT.md:2420 — “✅ **FIXED** (§0e.2)” |
+| **F2** | `_SENSITIVE_ENV_KEYS` has no consumer | `COMPLETE` | — | — | CONTEXT.md:2421 — “✅ **FIXED** (§0e.1) — deleted as superseded” |
+| **F3** | `execute_tool(security_policy=…)` — no caller passes it | `COMPLETE` | — | wisp/tools/registry.py | CONTEXT.md:2422 — “✅ **CLOSED 2026-09-27.**” — the owed annotation **landed**: `registry.py:911` now *prohibits* wiring this entrypoint without the checks `ToolRegistry.execute` supplies. Prose-only, proved by both instruments — **ADR-0065 R3** satisfied |
+| **F4** | `spawn_with_guards` is a dead duplicate | `COMPLETE` | — | tests/test_unwired_controls_inventory.py | CONTEXT.md:2423 — “**Accepted** — deletion candidate”; *Reason:* accepted, and pinned as deliberately dead — `tests/test_unwired_controls_inventory.py:283` asserts the variant is still uncalled (*“it is no longer dead code”*), so *“deletion candidate”* is superseded by the instrument and the tripwire cell is corrected — **ADR-0065 R1** |
+| **F5** | event-replay `TOOL_CALL` — the referent is unidentifiable | `COMPLETE` | — | — | CONTEXT.md:2424 — “**Unresolved, no action** — recorded as unidentified rather than guessed at”; *Reason:* resolved as *no action* — recorded unidentified rather than guessed at, which is §12's own disposition — **ADR-0065 R1** |
+| **G2** | The `run_bash` verb scan is a separate mechanism from the predicate | `COMPLETE` | — | — | CONTEXT.md:2425 — “**Accepted** — a shell command's target is not determinable from its text”; *Reason:* accepted — the same ground ADR-0061 used to close R1b, and the reason a runnable check, a blocklist and an allow-list are each rejected — **ADR-0065 R1** |
+| **R4** | `_is_transient` is a separate predicate | `COMPLETE` | — | — | CONTEXT.md:2427 — “**Not debt** — different axis (retryability, not outcome class)” |
+| **R5** | Two `RunStatus` enums remain | `COMPLETE` | — | — | CONTEXT.md:2428 — “**Resolved as a non-issue by the migration.** … **No shim needed** — ADR-0003” |
+| **R6** | `.venv` missing deps | `COMPLETE` | — | — | CONTEXT.md:2422 — “✅ **CLOSED 2026-09-27.**”; *Reason:* all five deps installed at their `uv.lock` pins, plus `wcwidth`, so nothing is absent — the obstacle was TLS, not network (F-T9) |
+| **R9** | `wisp/core/graph/__init__.py` modified, uncommitted | `COMPLETE` | — | — | CONTEXT.md:2432 — “User's pre-existing edit”; *Reason:* decided by **ADR-0060 R5**, which holds that this file *“needs **no edit**”* and that the dead part is a retained reference implementation, quoting this file's own uncommitted docstring as the reason; independently driven, the diff is a module docstring only — docstring-stripped AST identical and recursive `co_code` identical, prose-only — **ADR-0065 R1** |
+| **M2** | Journal-first reconstruction | `COMPLETE` | — | tests/test_session_reconstruction.py | CONTEXT.md:2446 — “✅ **COMPLETE** … **Five consumers still read the blob** (a tripwire asserts it)” |
+| **M3** | Killpoint integration | `COMPLETE` | — | tests/reliability/test_killpoints.py | CONTEXT.md:2450 — “✅ **COMPLETE** — `test_kp_session_midtool_then_killed`. One window covered.” |
+| **M4** | ADR-0004 revisited | `COMPLETE` | — | — | CONTEXT.md:2451 — “✅ **COMPLETE** — **ADR-0027**. Found a live defect” |
+| **M6** | `PolicyDecisionEnvelope` producer-less and consumer-less | `COMPLETE` | — | tests/test_contracts_policy.py | CONTEXT.md:2422 — “✅ **CLOSED 2026-09-27.**” — measured, **four of six** `wisp/contracts/` modules have no production importer, so it is *not* the last; that is the M1a freeze, which the spec defines as additive (*“Pure addition: no existing producer or consumer changes behavior”*) — a disposition, and **not** a deletion candidate |
+| **M8** | `multi_agent/dag.py` not retired into `wisp/graph/` | `COMPLETE` | — (re-scoped by ADR-0060: the divergence is the *boundary*, not a blocker; the removal is **not owed**) | tests/reliability/test_dag_retirement_contract.py | CONTEXT.md:2455 — “✅ **COMPLETE.** *Reason:* surveyed and decided 2026-09-25 — **`DEPRECATE`, not remove** — and **re-scoped by ADR-0060**” |
+| **M9** | The execution view | `COMPLETE` | — | — | CONTEXT.md:2441 — “✅ **COMPLETE** — ADR-0029.” |
+| **M10** | The materialized graph is a lower bound on iterations | `COMPLETE` | — (by design: iteration boundaries are not observable) | — | CONTEXT.md:2456 — “**OPEN — by design.**”; *Reason:* by design — iteration boundaries are not observable, which is a disposition and not an obstacle — **ADR-0065 R1** |
+| **M11** | The graph does not drive execution | `COMPLETE` | — | tests/reliability/test_layer_b_boundary.py | CONTEXT.md:2442 — “✅ **COMPLETE.** *Reason:* **decided, not deferred** (ADR-0060; ADR-0062 R3). ADR-0033 … **ADR-0060 closes the second half**” |
+| **M12** | The failure path | `COMPLETE` | — | — | CONTEXT.md:2443 — “✅ **COMPLETE** — ADR-0032.” |
+| **M13** | The stagnation detector is not constructed by the turn loop | `COMPLETE` | — | tests/test_stagnation_live_wiring.py | CONTEXT.md:2444 — “✅ **COMPLETE** — ADR-0034. … **Enforcement deferred**: routing and goal-met gating are tripwired.” |
+| **M14** | The context trust boundary | `COMPLETE` | — | tests/test_prompt_section_trust.py | CONTEXT.md:2445 — “✅ **COMPLETE** — ADR-0031. … T2 fencing remains, deliberately staged.” |
+| **M15** | The subagent spawn site | `COMPLETE` | — | tests/test_child_principal_wired.py | CONTEXT.md:2446 — “✅ **COMPLETE** — ADR-0030.” |
+| **M16** | The `ESCALATION` record's loss is not fully addressed | `COMPLETE` | — | — | CONTEXT.md:2447 — “✅ **COMPLETE** — ADR-0028.” |
+| **Layer C** | `wisp/core/graph/` — named *disowned* and consumed by the live path | `COMPLETE` | — | tests/reliability/test_layer_c_disposition.py | CONTEXT.md:2457 — “✅ **COMPLETE.** *Reason:* decided 2026-09-25 by **ADR-0060 R5** (ADR-0062 R3). The live symbols **moved**” |
 | **P0 · item 6** | A normal turn creates a `RunRecord` row | `COMPLETE` | — | — | WISP_MIGRATION_STATUS.md:293 — “`DEFERRED to P1`”; P1 is `COMPLETE` (`:193`) |
 | **P1 · item 3** | Journal replaces the snapshot as the primary record | `COMPLETE` | — | — | WISP_MIGRATION_STATUS.md:380 — “`DEFERRED to P2`”; P2 is `COMPLETE` (`:194`) |
 | **P3 · item 5** | Structural independence (L1/L2) | `COMPLETE` | — | — | WISP_MIGRATION_STATUS.md:511 — “closed 2026-09-27” — L3 is *preferred, not required* by the plan, so its absence is not owed; L1/L2 are done and pinned |
@@ -203,7 +203,7 @@ the brief's six (`OPEN`, `DECIDED`, `CLOSED`) are absent from it, and two of the
 
 ## (c) The open count, by state
 
-Measured 2026-09-27 at `c556d0b` over the 102 rows below. A count is canonical
+Measured 2026-09-28 at `8eb781d` over the 102 rows below. A count is canonical
 only if it is measured after the LAST change to any member (**F85**), which is why the
 generator recomputes it rather than the page stating it.
 

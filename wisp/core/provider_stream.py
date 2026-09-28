@@ -78,7 +78,11 @@ def _event_has_payload(normalized: dict[str, Any]) -> bool:
             return True
         if isinstance(val, (list, tuple, dict)) and len(val) > 0:
             return True
-    return False
+    # A lone tool call arrives flat (`name`/`arguments`), not under `calls`; without
+    # this, a turn answered by exactly one tool call was retried as empty and then
+    # reported as a provider failure.
+    name = normalized.get("name")
+    return str(normalized.get("type", "")) == "tool_call" and isinstance(name, str) and bool(name)
 
 
 def _flatten_event(ev: Any) -> dict[str, Any]:

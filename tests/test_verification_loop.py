@@ -5,6 +5,8 @@ run_bash verification command has exited 0 *after* the last edit. The
 engine nudges the model (bounded) instead of emitting done.
 """
 
+import json
+
 import pytest
 
 from tests.test_core_stateless import _MockProvider
@@ -22,7 +24,12 @@ def _tool_call(name: str, args: dict | None = None, idx: int = 0) -> dict:
 
 
 def _mock_execute(core, results: dict[str, str]) -> None:
-    """Patch core._execute_tool to return canned results per tool name."""
+    """Patch core._execute_tool to return canned results per tool name.
+
+    Each result is wrapped in the executor's envelope, as on the live path: the
+    guard reads a verification tool's output only from a successful envelope
+    (F37), so a bare string is not evidence.
+    """
 
     async def _fake(tc, session, approval_handler=None):
         name = str(tc.get("name", ""))
@@ -30,7 +37,8 @@ def _mock_execute(core, results: dict[str, str]) -> None:
             "type": "tool_result",
             "name": name,
             "tool_call_id": tc.get("id", "call_0"),
-            "result": results.get(name, "(no output)"),
+            "result": json.dumps({"status": "ok", "tool": name,
+                                  "data": results.get(name, "(no output)")}),
         }
 
     core._execute_tool = _fake

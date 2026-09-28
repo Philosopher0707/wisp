@@ -115,9 +115,8 @@ class TestAutoEditMode:
 
     @pytest.mark.asyncio
     async def test_auto_edit_bash_goes_to_approval_handler_when_available(self):
-        """13F.1 INVERSION (R1/S3): auto_edit NEVER routes bash through
-        approval — hard DENY means no prompt and no override, even when
-        the user would approve."""
+        """auto_edit routes bash through approval even with auto_approve=True.
+        (13F.1 made it a hard DENY; d0d4bea lifted that to REQUIRE_APPROVAL.)"""
         executor = _make_executor("auto_edit", auto_approve=True)
         handler = AsyncMock(return_value=(True, None))
         events = []
@@ -129,15 +128,11 @@ class TestAutoEditMode:
         ):
             events.append(event)
 
-        # Hard DENY: no approval_request, handler never consulted,
-        # no execution — even though the handler would approve.
-        approval_events = [e for e in events if e.type == TYPE_APPROVAL_REQUEST]
-        assert approval_events == []
-        handler.assert_not_called()
+        handler.assert_called_once()
         results = [e for e in events if e.type == TYPE_TOOL_RESULT]
         assert len(results) == 1
         res = results[0].data.get("result", {})
-        assert isinstance(res, dict) and res.get("status") == "POLICY_DENIED"
+        assert not (isinstance(res, dict) and res.get("status") == "POLICY_DENIED")
 
 
 # ── ask_all mode ──────────────────────────────────────────────────────

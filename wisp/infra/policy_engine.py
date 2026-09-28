@@ -295,10 +295,14 @@ _DEFAULT_ASK_ALL_BLOCK = frozenset({
 # RESIDUAL, stated because it is not nothing: the PTY tier bounds RESOURCE USE and CREDENTIAL
 # EXPOSURE (own session, rlimits, credential-stripped env). It does NOT bound FILESYSTEM REACH —
 # a command in AUTO_EDIT can still write anywhere the user can. That is the trade this line makes.
+#
+# Lifting the deny moves `run_bash` to REQUIRE_APPROVAL, not to allowed: `authorize()` and the
+# executor's forced-approval gate already ask for exec in AUTO_EDIT. Dropping it from both sets
+# let the REST gate, which reads this engine, run shell unprompted in the default mode.
 _AUTO_EDIT_DENY_TOOLS = frozenset({
     "git_branch", "git_commit", "git_push", "gh_pr_create",
 })
-_AUTO_EDIT_APPROVAL_TOOLS = frozenset({"spawn", "fanout"})
+_AUTO_EDIT_APPROVAL_TOOLS = frozenset({"run_bash", "spawn", "fanout"})
 
 #: What to do about an AUTO_EDIT denial. One string, both denial sites (`_make_block_rule` here and
 #: `auth/decision.py`), because a remedy stated twice drifts.

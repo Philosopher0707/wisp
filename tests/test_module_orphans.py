@@ -133,6 +133,10 @@ KNOWN_UNREFERENCED = {
     "wisp.mcp_servers.vscode_server",
     # CLI command package namespace (holds doctor/model above).
     "wisp.cli.commands",
+    # The owner's WIP, tracked so CI can import its sibling capability_filter.
+    # A near-duplicate of the wired infra/circuit_breaker.py; P9 recommends
+    # deletion (see test_structured_delegation.py), which is the owner's call.
+    "wisp.multi_agent._circuit_breaker",
 }
 
 

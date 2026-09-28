@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -407,7 +408,7 @@ def test_ollama_protocol_has_no_tool_call_id():
     out = subprocess.run(
         ["grep", "-rn", "tool_call_id", "wisp/ollama_client.py",
          "wisp/providers/ollama.py"], capture_output=True, text=True,
-        cwd="/Users/philosopher/Documents/wisp").stdout
+        cwd=Path(__file__).resolve().parent.parent).stdout
     assert out.strip() == "", out
 
 
