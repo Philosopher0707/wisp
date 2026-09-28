@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 
-import pytest
 
 from wisp.core.acceptance import (
     AcceptanceCriteria,

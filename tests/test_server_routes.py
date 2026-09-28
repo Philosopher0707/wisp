@@ -3,6 +3,7 @@
 Tests that extracted routers work correctly.
 """
 
+from tests.route_paths import route_paths
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -106,7 +107,7 @@ class TestRouterIntegration:
         app.include_router(health_router)
         app.include_router(models_router)
 
-        paths = [r.path for r in app.routes]
+        paths = route_paths(app.routes)
         assert "/api/sessions" in paths
         assert "/api/files" in paths
         assert "/api/health" in paths

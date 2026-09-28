@@ -231,14 +231,20 @@ class TestTheStampingRuleIsShared:
     unconditionally would publish a capability failure as a denial again."""
 
     def test_both_dry_run_sites_use_the_predicate(self):
+        """c285e87 merged the batched and the lone-call paths into one
+        `_gate_tool_call`, so the rule now has ONE site that both paths call."""
         src = (REPO / "wisp/core/stateless.py").read_text()
-        assert src.count("_is_capability_failure(_schema_error") == 2, (
-            "the two dry-run stamping sites no longer both apply the predicate — "
-            "a site that always stamps `_denial` re-publishes a host failure as an "
+        assert src.count("await self._gate_tool_call(") == 2, (
+            "the batched and the lone-call paths no longer share the gate")
+        assert src.count("_is_capability_failure(schema_error)") == 1, (
+            "the dry-run stamping site no longer applies the predicate — a site "
+            "that always stamps `_denial` re-publishes a host failure as an "
             "argument verdict")
-        assert 'tc_event["_denial"] = "SCHEMA_INVALID"' not in src.replace(
-            'tc_event["_denial"] = "SCHEMA_INVALID"\n', "", 1), (
-            "an unconditional SCHEMA_INVALID stamp remains")
+        stamp = 'tc_event["_denial"] = "SCHEMA_INVALID"'
+        assert src.count(stamp) == 1, "a second SCHEMA_INVALID stamp appeared"
+        predicate_at = src.index("_is_capability_failure(schema_error)")
+        assert predicate_at < src.index(stamp) < predicate_at + 200, (
+            "the SCHEMA_INVALID stamp is no longer the predicate's else-branch")
 
     def test_the_refusal_helper_reads_the_capability_flag(self):
         src = (REPO / "wisp/core/stateless.py").read_text()

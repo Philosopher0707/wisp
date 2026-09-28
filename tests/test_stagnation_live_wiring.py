@@ -32,11 +32,8 @@ tree, where an empty signal is counted as flat.
 from __future__ import annotations
 
 import asyncio
-import dataclasses
-import json
 from pathlib import Path
 
-import pytest
 
 from wisp.core.session import (
     JOURNAL_ONLY_RECORDS,

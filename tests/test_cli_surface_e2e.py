@@ -453,12 +453,16 @@ class TestGroup4Interactive:
         pid, fd = pty_session(e2e["home"], e2e["ws"], ["repl"])
         try:
             pty_read_until(fd, b"wisp", PTY_TIMEOUT)
+            # Settle past prompt_toolkit's CPR probe: it re-renders the
+            # prompt after the probe times out, and a Ctrl+D sent inside
+            # that window is swallowed instead of raising EOF (CI: exit -9).
+            out = pty_drain(fd, total_s=6.0)
             os.write(fd, b"\x04")
-            out = pty_drain(fd, total_s=4.0)
+            out += pty_drain(fd, total_s=4.0)
         finally:
             code = pty_reap(pid, fd)
         text = strip_ansi(out)
-        assert code == 0, f"repl EOF exit code {code}"
+        assert code == 0, f"repl EOF exit code {code}; output tail: {text[-1500:]!r}"
         assert "Traceback" not in text
 
     def test_repl_session_resume(self, e2e) -> None:

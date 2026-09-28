@@ -39,7 +39,6 @@ from wisp.core.recovery import (
     RecoveryDecision,
     RecoveryLadder,
     RecoveryRung,
-    RollbackPlan,
     classify_failure,
     is_legal_rung,
     plan_rollback,
@@ -293,8 +292,8 @@ class TestDurableRollbackSurvivesCrash:
         # still see what it would have rolled back.
         ladder = RecoveryLadder()
         ladder.decide(FailureClass.IMPLEMENTATION, [record.path])  # REPAIR
-        d = ladder.decide(FailureClass.IMPLEMENTATION, [record.path],
-                          tool_name="git_push")
+        ladder.decide(FailureClass.IMPLEMENTATION, [record.path],
+                      tool_name="git_push")
         s.apply(SessionEvent.escalation_event(2, ladder.escalation.to_dict()))
         assert s.escalation["intervention_id"]
         assert len(s.escalation["ladder_history"]) == len(ladder.history)

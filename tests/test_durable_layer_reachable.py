@@ -28,7 +28,6 @@ import asyncio
 import threading
 from types import SimpleNamespace
 
-import pytest
 
 from wisp.config import WispConfig
 from wisp.core.engine import WispAgentCore

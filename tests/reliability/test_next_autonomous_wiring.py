@@ -13,7 +13,6 @@ shapes — flat dicts and typed `AgentEvent` objects — because reading one wit
 """
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest

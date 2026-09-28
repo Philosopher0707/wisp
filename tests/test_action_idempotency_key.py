@@ -13,7 +13,7 @@ repeat it.
 from __future__ import annotations
 
 from wisp.core.action_key import action_key
-from wisp.core.session import Session, SessionEvent, SessionEventType
+from wisp.core.session import Session, SessionEvent
 
 
 # ── Key stability ───────────────────────────────────────────────────────

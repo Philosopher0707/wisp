@@ -30,12 +30,18 @@ class TestProviderFactoryIntegration:
             mock_provider = MagicMock()
             mock_from_config.return_value = mock_provider
             root = CompositionRoot(config)
-            # The _create_core method should use the factory
-            core = root._create_core()
-            assert core is not None
+            try:
+                # The _create_core method should use the factory
+                core = root._create_core()
+                assert core is not None
+            finally:
+                # The root patches process-global tool and logging state;
+                # shutdown() restores it for every test after this one.
+                root.shutdown()
 
     def test_create_core_uses_factory_when_provider_set(self):
         from wisp.composition import CompositionRoot
+        from wisp.provider_catalog import Resolution
         from wisp.providers.factory import ProviderFactory
 
         config = MagicMock()
@@ -52,13 +58,21 @@ class TestProviderFactoryIntegration:
         config.max_subagent_branching = 3
 
         root = CompositionRoot(config)
-        with patch.object(ProviderFactory, "from_config") as mock_from_config:
-            mock_provider = MagicMock()
-            mock_from_config.return_value = mock_provider
+        # Pin the selection as reachable: otherwise it depends on a live Ollama
+        # daemon, and without one (as on CI) _create_core serves _NullProvider
+        # before the factory is consulted.
+        reachable = Resolution(provider="ollama", model="qwen2.5-coder", status="ok")
+        try:
+            with patch.object(ProviderFactory, "from_config") as mock_from_config, \
+                    patch("wisp.provider_catalog.resolve_selection", return_value=reachable):
+                mock_provider = MagicMock()
+                mock_from_config.return_value = mock_provider
 
-            core = root._create_core()
-            mock_from_config.assert_called_once_with(config)
-            assert core.provider == mock_provider
+                core = root._create_core()
+                mock_from_config.assert_called_once_with(config)
+        finally:
+            root.shutdown()
+        assert core.provider == mock_provider
 
     def test_create_core_falls_back_to_null_provider(self):
         from wisp.composition import CompositionRoot
@@ -75,7 +89,10 @@ class TestProviderFactoryIntegration:
         config.max_subagent_branching = 3
 
         root = CompositionRoot(config)
-        core = root._create_core()
-        assert core is not None
-        # Should use NullProvider when no provider configured
-        assert core.provider is not None
+        try:
+            core = root._create_core()
+            assert core is not None
+            # Should use NullProvider when no provider configured
+            assert core.provider is not None
+        finally:
+            root.shutdown()

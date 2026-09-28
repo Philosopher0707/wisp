@@ -21,7 +21,6 @@ import pytest
 
 from wisp.core.task_graph import (
     LEGAL_NODE_TRANSITIONS,
-    TERMINAL_NODE_STATUSES,
     NodeTransition,
     TaskGraph,
     TaskNode,
@@ -403,7 +402,6 @@ class TestTransitionPersisted:
         from wisp.config import WispConfig
         from wisp.core.engine import WispAgentCore
         from wisp.core.runtime import AgentRuntime
-        from wisp.core.session import SessionEventType
         from wisp.core.session_repo import SessionRepository
         from wisp.infra.extensions import ExtensionHost
         from wisp.infra.security import SecurityPolicy
