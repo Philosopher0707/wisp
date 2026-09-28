@@ -1375,8 +1375,17 @@ class AgentRuntime:
                 # providers require each tool reply to immediately follow
                 # its assistant tool_calls block, and splicing user
                 # messages between exchanges risks orphaning ids.
+                #
+                # Journaled beside the append, under the digest's gate: the model
+                # saw these, so a replay without them is a different transcript.
+                _journal_injected = (journal_fidelity
+                                     and self.session_repo is not None)
                 for ctx_msg in injected_context:
                     session["messages"].append(ctx_msg)
+                    if _journal_injected:
+                        from wisp.core.session import SessionEvent
+                        journal_events.append(
+                            SessionEvent.injected_context_event(0, ctx_msg))
 
                 # The transcript's digest, recorded so that replay can CHECK the
                 # transcript it rebuilds rather than assume it — F25's defect
