@@ -50,6 +50,10 @@ wisp = "wisp.__main__:main"
 # the CWD. That is why the defect survived: the one invocation that works is not the one users run.
 include = ["wisp*", "agent*"]
 
+[tool.setuptools.package-data]
+# The network platform's runbooks and fault scenarios are data, not modules.
+wisp_net = ["knowledge/*.md", "scenarios/*.json"]
+
 [tool.pytest.ini_options]
 # Restrict collection to the test tree. wisp/test_distill.py and
 # wisp/test_runner.py are PRODUCTION modules (traceback distiller, test

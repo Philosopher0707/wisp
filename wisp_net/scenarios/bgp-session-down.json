@@ -1,0 +1,2 @@
+{"description": "The BGP session between leaf3 and spine1 drops at t=30s while the link stays up (a control-plane fault, not a physical one).",
+ "steps": [{"at": 30, "inject": "bgp_down", "target": "leaf3:10.255.4.1", "name": "bgp"}]}
