@@ -148,7 +148,7 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
     },
     "max_iterations": {
         "type": int,
-        "default": 50,
+        "default": 200,
         "min": 1,
         "max": 200,
         "description": "Max agent loop iterations per user turn",
@@ -156,7 +156,7 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
     },
     "turn_timeout": {
         "type": int,
-        "default": 1800,
+        "default": 7200,
         "min": 10,
         "max": 7200,
         "description": "Max seconds for a single agent turn before timeout",
@@ -243,7 +243,7 @@ SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         "default": 5,
         "min": 1,
         "max": 200,
-        "description": "Max iterations for the agentic graph outer loop (spec default 5, reconciled with turn loop 50)",
+        "description": "Max iterations for the agentic graph outer loop (spec default 5, reconciled with turn loop 200)",
         "env_var": "WISP_GRAPH_MAX_ITERATIONS",
     },
     "graph_sandbox_timeout": {
@@ -931,11 +931,11 @@ class WispConfig:
         )
         # Max agent loop iterations per user turn
         object.__setattr__(self, "max_iterations",
-            _parse_int(get_setting("max_iterations", "50"), 50, 1, 200)
+            _parse_int(get_setting("max_iterations", "200"), 200, 1, 200)
         )
         # Max seconds for a single agent turn before timeout
         object.__setattr__(self, "turn_timeout",
-            _parse_int(get_setting("turn_timeout", "1800"), 1800, 10, 7200)
+            _parse_int(get_setting("turn_timeout", "7200"), 7200, 10, 7200)
         )
         # Session-wide subagent token ceiling; admission refuses new
         # children once spent (0 = unlimited)
@@ -1081,7 +1081,7 @@ class WispConfig:
         # Subagent depth/branch tracking for propagation
         object.__setattr__(self, "_subagent_depth", 0)
         object.__setattr__(self, "_subagent_branch_count", 0)
-        # Agentic graph loop (outer) — reconciles spec default 5 with turn loop 50
+        # Agentic graph loop (outer) — reconciles spec default 5 with turn loop 200
         object.__setattr__(self, "graph_max_iterations",
             _parse_int(get_setting("graph_max_iterations", "5"), 5, 1, 200)
         )

@@ -136,7 +136,7 @@ async def test_a3_policy_precedes_schema_validation(tmp_path):
 # ── A4: repetition is generic, not run_bash-specific ──
 
 @pytest.mark.asyncio
-async def test_a4_repetition_generic_across_denied_tools(tmp_path):
+async def test_a4_repetition_generic_across_denied_tools(tmp_path, auto_edit_hard_deny_witness):
     provider = MockProvider(
         responses=["", "", "", "done"],
         tool_calls=[[ _call("git_push", {"remote": "o", "branch": "b"}) ],

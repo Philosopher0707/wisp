@@ -88,6 +88,43 @@ def _budget_from_contract(contract: Any, deadline: float):
     return budget
 
 
+def _event_field(event: dict, key: str, default: Any = None) -> Any:
+    """Read an event field across flat and canonical ({type, data}) shapes."""
+    if key in event:
+        return event[key]
+    data = event.get("data")
+    if isinstance(data, dict) and key in data:
+        return data[key]
+    return default
+
+
+def _child_verdict(*, saw_done: bool, saw_fatal_error: bool, error_message: str,
+                   budget_error: str, output_text: str,
+                   last_nonempty_round: str) -> tuple[bool, str, str | None]:
+    """``(success, output, error)`` for a child's turn, from the turn's own terminal evidence.
+
+    The runner used to report success whenever the stream ended without an ``error`` event, so a
+    stream that stopped without ``done`` returned the narration written before its last tool call
+    ("Let me check the …") as a finished report, with ``ok: true``. ADR-0044's
+    ``terminal_outcome_from_evidence`` is the one authority for whether a turn succeeded;
+    exhausting the child's resource budget is a failure in its own right.
+    """
+    from wisp.core.goal import TerminalOutcome, terminal_outcome_from_evidence
+
+    if budget_error:
+        return False, f"[BUDGET EXHAUSTED] {budget_error}", budget_error
+    outcome = terminal_outcome_from_evidence(saw_done=saw_done, saw_fatal_error=saw_fatal_error)
+    if outcome is TerminalOutcome.SUCCEEDED:
+        # A child whose LAST action was a tool call (remember/save) never
+        # narrates afterwards — fall back to its last words.
+        return True, output_text if output_text.strip() else last_nonempty_round, None
+    if outcome is TerminalOutcome.FAILED:
+        error = error_message or "turn failed"
+        return False, error, error
+    error = error_message or "the turn ended without completing"
+    return False, f"[INCOMPLETE] {error}", error
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -518,6 +555,8 @@ class SubagentRunner:
             output_text = ""
             engine_iterations = 0
             last_nonempty_round = ""
+            saw_done = saw_fatal_error = False
+            error_message = budget_error = ""
 
             budget = _budget_from_contract(contract, deadline)
 
@@ -579,13 +618,12 @@ class SubagentRunner:
                         args = event.get("arguments", {})
                         arg_preview = self._compact_args(args)
                         tool_calls_log.append({"name": name, "args_preview": arg_preview})
-                        budget_error = budget.check()
+                        budget_error = budget.check() or ""
                         if budget_error:
                             logger.warning(
                                 "Subagent %s budget exhausted: %s",
                                 contract.name, budget_error,
                             )
-                            output_text = f"[BUDGET EXHAUSTED] {budget_error}"
                             break
                         # Content after a tool call belongs to the next
                         # round — pre-action narration is not the answer.
@@ -594,36 +632,31 @@ class SubagentRunner:
                         result_data = event.get("result", "")
                         if isinstance(result_data, str):
                             budget.record_tokens(len(result_data) // 4)
-                        budget_error = budget.check()
+                        budget_error = budget.check() or ""
                         if budget_error:
                             logger.warning(
                                 "Subagent %s budget exhausted: %s",
                                 contract.name, budget_error,
                             )
                             break
+                    elif etype == "done":
+                        saw_done = True
                     elif etype == "error":
-                        output_text = event.get("message", "")
-                        return {
-                            "success": False,
-                            "output": output_text,
-                            "error": output_text,
-                            "files_changed": [],
-                            "iterations_used": engine_iterations,
-                            "messages": session_dict.get("messages", []),
-                        }
+                        # Only a fatal error fails the turn (ADR-0044); a
+                        # recoverable one must not abandon the child mid-turn.
+                        error_message = str(_event_field(event, "message") or "turn failed")
+                        if not _event_field(event, "recoverable", True):
+                            saw_fatal_error = True
 
-            # A child whose LAST action was a tool call (remember/save)
-            # never narrates afterwards — fall back to its last words
-            # instead of returning an empty report.
-            if not output_text.strip():
-                output_text = last_nonempty_round
-
-            files_changed = self._extract_files_changed(output_text)
+            success, output_text, error = _child_verdict(
+                saw_done=saw_done, saw_fatal_error=saw_fatal_error,
+                error_message=error_message, budget_error=budget_error,
+                output_text=output_text, last_nonempty_round=last_nonempty_round)
             return {
-                "success": True,
+                "success": success,
                 "output": output_text,
-                "error": None,
-                "files_changed": files_changed,
+                "error": error,
+                "files_changed": self._extract_files_changed(output_text) if success else [],
                 "iterations_used": engine_iterations,
                 "messages": session_dict.get("messages", []),
             }
@@ -692,6 +725,8 @@ class SubagentRunner:
         output_text = ""
         engine_iterations = 0
         last_nonempty_round = ""
+        saw_done = saw_fatal_error = False
+        error_message = budget_error = ""
 
         budget = _budget_from_contract(contract, deadline)
 
@@ -715,13 +750,12 @@ class SubagentRunner:
                     args = event.get("arguments", {})
                     arg_preview = self._compact_args(args)
                     tool_calls_log.append({"name": name, "args_preview": arg_preview})
-                    budget_error = budget.check()
+                    budget_error = budget.check() or ""
                     if budget_error:
                         logger.warning(
                             "Subagent %s budget exhausted: %s",
                             contract.name, budget_error,
                         )
-                        output_text = f"[BUDGET EXHAUSTED] {budget_error}"
                         break
                     # Content after a tool call belongs to the next
                     # round — pre-action narration is not the answer.
@@ -730,36 +764,31 @@ class SubagentRunner:
                     result_data = event.get("result", "")
                     if isinstance(result_data, str):
                         budget.record_tokens(len(result_data) // 4)
-                    budget_error = budget.check()
+                    budget_error = budget.check() or ""
                     if budget_error:
                         logger.warning(
                             "Subagent %s budget exhausted: %s",
                             contract.name, budget_error,
                         )
                         break
+                elif etype == "done":
+                    saw_done = True
                 elif etype == "error":
-                    output_text = event.get("message", "")
-                    return {
-                        "success": False,
-                        "output": output_text,
-                        "error": output_text,
-                        "files_changed": [],
-                        "iterations_used": engine_iterations,
-                        "messages": runtime_session.get("messages", []),
-                    }
+                    # Only a fatal error fails the turn (ADR-0044); a
+                    # recoverable one must not abandon the child mid-turn.
+                    error_message = str(_event_field(event, "message") or "turn failed")
+                    if not _event_field(event, "recoverable", True):
+                        saw_fatal_error = True
 
-        # A child whose LAST action was a tool call (remember/save)
-        # never narrates afterwards — fall back to its last words
-        # instead of returning an empty report.
-        if not output_text.strip():
-            output_text = last_nonempty_round
-
-        files_changed = self._extract_files_changed(output_text)
+        success, output_text, error = _child_verdict(
+            saw_done=saw_done, saw_fatal_error=saw_fatal_error,
+            error_message=error_message, budget_error=budget_error,
+            output_text=output_text, last_nonempty_round=last_nonempty_round)
         return {
-            "success": True,
+            "success": success,
             "output": output_text,
-            "error": None,
-            "files_changed": files_changed,
+            "error": error,
+            "files_changed": self._extract_files_changed(output_text) if success else [],
             "iterations_used": engine_iterations,
             "messages": runtime_session.get("messages", []),
         }

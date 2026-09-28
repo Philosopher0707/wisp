@@ -236,10 +236,10 @@ class PriorityRuleEngine(PolicyEngine):
             description="ASK_ALL mode: blocked tools require approval",
         ))
 
-        # Priority 30: AUTO_EDIT — exec/git writes are hard DENY (never
-        # prompt, never overridable); delegation primitives (spawn/fanout)
-        # are REQUIRE_APPROVAL (13F.1: children are mode-filtered, so the
-        # fanout itself needs an operator's yes, not a ban).
+        # Priority 30: AUTO_EDIT — `_AUTO_EDIT_DENY_TOOLS` are hard DENY
+        # (never prompt, never overridable; empty since 2026-09-28); exec,
+        # git/gh writes and delegation primitives are REQUIRE_APPROVAL (an
+        # operator's yes each time, not a ban).
         engine.add_rule(Rule(
             name="mode.auto_edit_block",
             predicate=_make_block_rule(edit_block - _AUTO_EDIT_APPROVAL_TOOLS,
@@ -253,7 +253,7 @@ class PriorityRuleEngine(PolicyEngine):
             predicate=_make_approval_rule(_AUTO_EDIT_APPROVAL_TOOLS,
                                           "AUTO_EDIT mode requires approval for", "auto_edit"),
             priority=31,
-            description="AUTO_EDIT mode: delegation primitives require approval",
+            description="AUTO_EDIT mode: exec, git/gh writes and delegation require approval",
         ))
 
         # Priority 1000: catch-all — allow if mode matched, deny otherwise
@@ -299,10 +299,21 @@ _DEFAULT_ASK_ALL_BLOCK = frozenset({
 # Lifting the deny moves `run_bash` to REQUIRE_APPROVAL, not to allowed: `authorize()` and the
 # executor's forced-approval gate already ask for exec in AUTO_EDIT. Dropping it from both sets
 # let the REST gate, which reads this engine, run shell unprompted in the default mode.
-_AUTO_EDIT_DENY_TOOLS = frozenset({
+#
+# The four git/gh writes moved to REQUIRE_APPROVAL on 2026-09-28. Their reason for staying — they
+# mutate a shared remote, which no local sandbox tier contains — argues for a HUMAN'S YES before
+# each one, not for making them impossible: the default mode refused `git_push` outright, so an
+# operator could not push at all without switching the whole session to `ask_all` or `full`.
+# They are asked every time (the executor's AUTO_EDIT gate names all four, `authorize()` asks for
+# exec), never run unprompted, are still blocked where no approval handler exists (headless,
+# REST without a bridge), and stay out of subagent children (`filter_allowed_for_mode` drops the
+# whole AUTO_EDIT block union). The deny set is kept, empty, as the one place a future hard deny
+# goes.
+_AUTO_EDIT_DENY_TOOLS: frozenset[str] = frozenset()
+_AUTO_EDIT_APPROVAL_TOOLS = frozenset({
+    "run_bash", "spawn", "fanout",
     "git_branch", "git_commit", "git_push", "gh_pr_create",
 })
-_AUTO_EDIT_APPROVAL_TOOLS = frozenset({"run_bash", "spawn", "fanout"})
 
 #: What to do about an AUTO_EDIT denial. One string, both denial sites (`_make_block_rule` here and
 #: `auth/decision.py`), because a remedy stated twice drifts.

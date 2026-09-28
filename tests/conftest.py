@@ -123,6 +123,33 @@ def _neutralize_server_rate_limit():
 
 
 @pytest.fixture
+def auto_edit_hard_deny_witness(monkeypatch):
+    """Re-impose an AUTO_EDIT hard deny on the four git/gh writes, as a test witness.
+
+    The 13F.1 guarantee — *a hard DENY is never prompted, and no approval can run it* — is a
+    property of the mechanism, and `git_push` was its witness. On 2026-09-28 the default AUTO_EDIT
+    deny set became empty (the git/gh writes ask the operator each time instead), so the mechanism
+    has no default member to be observed through. This fixture restores the pre-change
+    classification for the duration of one test, at every place that reads it:
+
+    * `policy_engine._AUTO_EDIT_DENY_TOOLS` — read at call time by `auth/decision.py`;
+    * `policy_engine._AUTO_EDIT_APPROVAL_TOOLS` — read when a policy engine is built;
+    * `security._AUTO_EDIT_DENY_TOOLS` — the name `policy_hard_deny` (the executor's gate) reads.
+
+    Build any `SecurityPolicy` / `ToolExecutor` inside the test, after this fixture applies.
+    """
+    import wisp.infra.policy_engine as pe
+    import wisp.infra.security as sec
+
+    deny = frozenset({"git_branch", "git_commit", "git_push", "gh_pr_create"})
+    monkeypatch.setattr(pe, "_AUTO_EDIT_DENY_TOOLS", deny)
+    monkeypatch.setattr(pe, "_AUTO_EDIT_APPROVAL_TOOLS",
+                        frozenset({"run_bash", "spawn", "fanout"}))
+    monkeypatch.setattr(sec, "_AUTO_EDIT_DENY_TOOLS", deny)
+    return deny
+
+
+@pytest.fixture
 def temp_workspace():
     """Provide a temporary workspace directory for file operations."""
     tmp = Path(tempfile.mkdtemp())

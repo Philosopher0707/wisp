@@ -87,13 +87,15 @@ class TestPermissionModes:
         result = auto_edit_policy.check(Action("run_bash", {"command": "ls"}), _ctx("/tmp"))
         assert result.allowed is True
 
-    def test_auto_edit_still_blocks_the_remote_writes(self, auto_edit_policy):
-        """The half that did NOT move. git/gh writes mutate a shared remote, which no local sandbox
-        tier contains — so they stay hard-denied in AUTO_EDIT."""
+    def test_auto_edit_asks_before_the_remote_writes(self, auto_edit_policy):
+        """git/gh writes left the hard-deny set on 2026-09-28. They mutate a shared remote, which no
+        local sandbox tier contains — so they need an operator's yes EVERY time: allowed only with
+        approval, never unprompted. (Hard-denied, the default mode could not push at all.)"""
         from wisp.infra.security import Action
         for tool in ("git_push", "git_commit", "gh_pr_create", "git_branch"):
             result = auto_edit_policy.check(Action(tool, {}), _ctx("/tmp"))
-            assert result.allowed is False, f"{tool} must still be hard-denied in AUTO_EDIT"
+            assert result.allowed is True, f"{tool} must be reachable in AUTO_EDIT"
+            assert result.approval_required is True, f"{tool} must never run unprompted"
 
 
 # ═══════════════════════════════════════════════════════════════════

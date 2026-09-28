@@ -67,8 +67,8 @@ A command's string return value **is** a follow-up prompt and runs as one
 
 1. **The live session pointer is read at call time** (`adapter.session`
    inside `_turn()`), because commands like `/new` swap it mid-REPL.
-2. **Every turn is bounded**: `turn_timeout` wall clock (default 1800s,
-   schema range 10–7200) outside, `max_iterations` (default 50) inside;
+2. **Every turn is bounded**: `turn_timeout` wall clock (default 7200s,
+   schema range 10–7200) outside, `max_iterations` (default 200) inside;
    per-tool 300s, bash 60s, provider read-gap 60–120s, subagent role
    timeouts 90–180s nest beneath. Fallbacks must match schema defaults.
 3. **Cancellation persists.** Ctrl+C or approval `[c]` raises
