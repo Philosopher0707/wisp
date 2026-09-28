@@ -268,7 +268,11 @@ class TestThePageIsReproducibleFromItsGenerator:
         # The page names its commit twice: in the banner and in §(c)'s measurement line.
         # Normalising only the banner's made the guard fail on a page that was correct —
         # a real defect in this guard, found by running it after a commit moved HEAD.
-        norm = lambda t: re.sub(r"`[0-9a-f]{7,40}`", "`<sha>`", t)
+        # The date beside each stamp is live too (ADR-0065 residual 1: `_today()`), so it is
+        # normalised the same way — only where it stamps a commit. Normalising the sha alone
+        # failed this guard on every day after the page was generated.
+        norm = lambda t: re.sub(r"\d{4}-\d{2}-\d{2}(?= at `)", "<date>",
+                                re.sub(r"`[0-9a-f]{7,40}`", "`<sha>`", t))
         assert norm(fresh) == norm(page_text), (
             "CURRENT_OPEN_ITEMS.md does not match what its generator produces — the page has "
             "been hand-edited, or the data table moved without regenerating. Run:\n"
