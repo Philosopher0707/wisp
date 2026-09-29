@@ -76,7 +76,7 @@ class TestPauseSemantics:
         master, slave = pty_pair
         tb = _make_buffer(slave)
         tb.pause()
-        thread = _start_reader(tb)
+        _start_reader(tb)
         try:
             os.write(master, b"Y\n")
             time.sleep(0.2)
