@@ -18,6 +18,9 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from wisp_net.actuation.engine import Actuator
+from wisp_net.governance.control import ApprovalQueue, KillSwitch
+from wisp_net.governance.ledger import Ledger
 from wisp_net.safety.change import ChangeSet
 from wisp_net.safety.policy import ChangePolicy
 from wisp_net.safety.verify import SegmentationPolicy, acl_findings, segmentation_violations
@@ -38,7 +41,7 @@ MAX_ROWS = 200
 class NetService:
     def __init__(self, seed: int = 7, collect_interval_s: float = 5.0, leaves: int = 4, spines: int = 2,
                  cores: int = 2, tsdb_path: str = ":memory:", scenario: list[dict[str, Any]] | None = None,
-                 warmup_s: float = 60.0) -> None:
+                 warmup_s: float = 60.0, ledger_path: str | None = None) -> None:
         self._lock = threading.RLock()
         self.net = SimNetwork(build_lab(cores=cores, spines=spines, leaves=leaves), seed=seed)
         self.gnmi = SimGnmi(self.net)
@@ -51,6 +54,11 @@ class NetService:
         self.segmentation = SegmentationPolicy.bundled()
         self.change_policy = ChangePolicy.bundled()
         self.verifications: dict[str, dict[str, Any]] = {}
+        self.ledger = Ledger(ledger_path)
+        self.approvals = ApprovalQueue()
+        self.kill_switch = KillSwitch()
+        self.config_epoch = 0
+        self.actuator = Actuator(self)
         self.collect_interval_s = collect_interval_s
         self.started = self.net.now
         self._next_collect = self.net.now
@@ -322,7 +330,12 @@ class NetService:
             report = what_if(self.net, parsed, settle_s, self.segmentation, self.change_policy).to_dict()
             report["verified_at"] = rfc3339(self.net.now)
             self.verifications[parsed.fingerprint] = {"report": report, "change": parsed.to_dict(),
-                                                      "at": self.net.now}
+                                                      "at": self.net.now, "epoch": self.config_epoch}
+            self.ledger.append("change_verified", {
+                "fingerprint": parsed.fingerprint, "intent": parsed.intent, "confidence": parsed.confidence,
+                "verification_passed": report["verification_passed"],
+                "failed_checks": [c["name"] for c in report["checks"] if not c["passed"]],
+                "policy": report["policy"]}, self.net.now)
             while len(self.verifications) > 100:
                 self.verifications.pop(next(iter(self.verifications)))
             return report
@@ -349,6 +362,62 @@ class NetService:
                     "windows": [{"name": w.name, "weekdays": list(w.weekdays), "start": w.start, "end": w.end,
                                  "from_date": w.from_date, "to_date": w.to_date} for w in p.windows],
                     "lab_time": rfc3339(self.net.now), "windows_active_now": p.active_windows(self.net.now)}
+
+    # ── actuation and governance ─────────────────────────────────────────────
+
+    def apply_change(self, fingerprint: str, confirm_window_s: float = 60.0, rationale: str = "") -> dict[str, Any]:
+        return self.actuator.apply(fingerprint, confirm_window_s, rationale).to_dict()
+
+    def approval_list(self, status: str | None = None) -> list[dict[str, Any]]:
+        with self._lock:
+            return [r.to_dict() for r in self.approvals.list(status, self.net.now)]
+
+    def ledger_view(self, since_seq: int = 0, fingerprint: str | None = None, limit: int = 50) -> dict[str, Any]:
+        with self._lock:
+            return {"head": self.ledger.head, "length": len(self.ledger), "intact": not self.ledger.verify(),
+                    "records": [r.to_dict() for r in self.ledger.records(since_seq, None, fingerprint, _cap(limit))]}
+
+    def explain(self, fingerprint: str) -> dict[str, Any]:
+        """Human-readable rationale for one change: what triggered it, what was checked, who approved,
+        what was applied and what the network looked like afterwards — from the ledger."""
+        with self._lock:
+            records = self.ledger.records(0, None, fingerprint, 200)
+            if not records:
+                raise KeyError(f"no ledger record for change {fingerprint!r}")
+            lines = []
+            for r in records:
+                d = r.data
+                when = rfc3339(r.ts)
+                if r.kind == "change_verified":
+                    verdict = "passed" if d["verification_passed"] else f"failed ({', '.join(d['failed_checks'])})"
+                    lines.append(f"{when} verified: {d['intent']!r}, confidence {d['confidence']:.2f}; "
+                                 f"verification {verdict}; policy {d['policy']['verdict']}")
+                elif r.kind == "change_committed":
+                    ports = sum(len(v) for v in d["applied_diff"].values())
+                    who = (d.get("approval") or {}).get("decided_by")
+                    lines.append(f"{when} committed {ports} config change(s) on {', '.join(d['applied_diff'])}"
+                                 + (f", approved by {who}" if who else ", within autonomous policy")
+                                 + (f"; rationale: {d['rationale']}" if d.get("rationale") else ""))
+                else:
+                    lines.append(f"{when} {r.kind.replace('_', ' ')}: {'; '.join(d.get('reasons', []) + d.get('triggers', []))}")
+            return {"fingerprint": fingerprint, "narrative": lines, "records": [r.to_dict() for r in records]}
+
+    def operator_decide(self, request_id: str, grant: bool, operator: str, note: str = "") -> dict[str, Any]:
+        with self._lock:
+            req = self.approvals.decide(request_id, grant, operator, self.net.now, note)
+            self.ledger.append("approval_granted" if grant else "approval_denied",
+                               {"fingerprint": req.fingerprint, **req.to_dict()}, self.net.now)
+            return req.to_dict()
+
+    def operator_kill_switch(self, engaged: bool, operator: str, reason: str = "") -> dict[str, Any]:
+        with self._lock:
+            self.kill_switch.set(engaged, operator, reason, self.net.now)
+            self.ledger.append("kill_switch_engaged" if engaged else "kill_switch_released",
+                               {"operator": operator, "reason": reason}, self.net.now)
+            return {"engaged": engaged, "by": operator, "reason": reason, "at": rfc3339(self.net.now)}
+
+    def operator_rollback(self, apply_id: str, operator: str, reason: str = "") -> dict[str, Any]:
+        return self.actuator.rollback(apply_id, operator, reason)
 
     def _device(self, name: str) -> Any:
         st = self.twin.devices.get(name)

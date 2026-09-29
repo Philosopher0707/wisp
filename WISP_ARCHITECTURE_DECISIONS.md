@@ -7416,6 +7416,45 @@ windows, then confidence. Below the threshold is `require_approval`; the rest ar
 
 ---
 
+## ADR-0071 — Only a verified, allowed change is applied, under a confirm window; only an operator can approve, and the ledger is hash-chained
+
+**Status:** ACCEPTED
+**Phase:** The network agent, N4 (actuation) and N5 (governance) — blueprint layers 5 and 6
+**Evidence:** driven end to end across processes. Wisp's MCP client drove `python -m wisp_net mcp
+--cockpit`, and the agent's apply of a 0.6-confidence change returned `awaiting_approval`. The operator
+granted it with `python -m wisp_net cockpit grant` over HTTP, and the agent's next apply was
+`confirmed`, recorded as approved by the operator. The token file was 0600, the ledger intact, and the
+server wrote 0 bytes to stderr. `tests/net/test_net_act_govern.py` (**16 tests**; 9/9 mutation
+probes caught, including a stale verification accepted, a reusable grant, a rollback that does not
+restore, a policy not re-decided at apply time, and cockpit auth bypassed).
+
+### Decision
+
+**R1 — One path to the devices.** `net_apply_change` checks, in this order: the kill switch; a
+verification of *this* fingerprint that passed, is younger than 600 s, and was made at the current
+configuration epoch; the change policy **re-decided at apply time**; a single-use operator grant when
+the policy requires one. Then it checks idempotence, and only then commits.
+
+**R2 — Commit-confirm with automatic rollback.** The platform checkpoints, commits, and watches the
+blueprint's triggers through telemetry for a confirm window of at most 60 s: BGP flap rate above
+5/min, loss above 0.05% on touched ports, management plane unreachable. Any source/prefix pair that
+loses reachability without being declared is also a trigger. Any trigger restores the checkpoint. In the
+lab the window is lab time, fast-forwarded under the platform lock.
+
+**R3 — The agent can apply, never approve.** Approvals and the kill switch exist only in the operator
+cockpit. The MCP surface has exactly one non-read tool, `net_apply_change`, and it is destructive.
+Wisp's own approval gate still asks before every apply unless the operator declares otherwise.
+
+**R4 — The ledger is append-only and hash-chained.** An edited, deleted or reordered record is named on
+load and by `intact`.
+
+### Known limit
+
+On a single host, a process running as the operator's user can read the cockpit token. Separation
+that holds against a compromised agent requires the cockpit on another host behind real identity.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -7490,3 +7529,4 @@ windows, then confidence. Below the threshold is `require_approval`; the rest ar
 | 0068 | The workspace-trust layer is applied on REST unconditionally, and last | ADR-0059's residual 2 (the L1/L2/L3 consult, and the quarantine gap it exposed) | ACCEPTED (resolves ADR-0059 residual 2 by driving it: `_m2_denial` **returned `None` immediately** when no organization policy was loaded, so `authorize()` was never called and **L2 was skipped entirely** — a `QUARANTINED` workspace denied non-read tools on the agent path and **allowed them over REST** on every bundle-less deployment. Of the three layers only L2 was a gap (L1 is unbounded for the local human; L3 needs a `restricted` sensitivity REST never passes), and **workspace trust is not a policy question** — it is classified from the *workspace*, so gating its enforcement on a bundle made a security control's presence a function of an unrelated configuration. **R1** applied unconditionally. **R2** applied **last**, and that is load-bearing: a check appended after the narrowing ones can only *add* a denial, never reorder a pinned message — making `_m2_denial` unconditional instead was tried and **rejected because `test_no_bundle_is_the_old_gate_byte_for_byte` caught it** changing the `read_only` 403 detail for `write_file` (same status, different message, and ADR-0059 R2 measures that message byte-for-byte). **R3** one implementation: `wisp/auth/workspace_trust.refuses(trust, *, is_read)`, used by **both** `auth/decision`'s L2 and the REST gate — the second copy of a security rule this corpus has already paid for once (cf. ADR-0066 R3's L4 scan); it takes `is_read` not a tool name so `workspace_trust` stays pure. **R4** the bundle-gated consult is unchanged, so the measured differential holds where it was measured. Driven: quarantined + no root + no bundle → **403 by the workspace trust layer**; a read still permitted; a `TRUSTED` workspace unchanged; **109 tests pass**. Behaviour change on a path that previously allowed, deliberately behind **no flag** — the prior behaviour was the *absence* of a control, not a configuration of one) |
 | 0069 | wisp becomes a network agent through a separate platform it reaches over MCP; the lab is simulated first | The network agent, N1 (sense and state) | ACCEPTED (**R1** the platform is `wisp_net/`, reached over MCP; wisp's core gains only general MCP capabilities. **R2** simulated first, behind the interfaces the real systems fill. **R3** read-only until the safety layer gates change. **R4** lab control is opt-in and never read-only.) |
 | 0070 | A change is verified on a copy of the network, fails only on regressions, and is judged by policy before it may touch a device | The network agent, N3 (safety) | ACCEPTED (**R1** what-if on two clones with their own telemetry, never the lab. **R2** checks fail on regressions; history is reported, not blamed. **R3** intent is declared (`expected_unreachable`, drained links); an ACL binding is not intent to drop a link. **R4** exact ACL header-space analysis, union coverage, concrete leaking flows. **R5** fixed policy order: verification, blast radius, windows, confidence.) |
+| 0071 | Only a verified, allowed change is applied, under a confirm window; only an operator can approve, and the ledger is hash-chained | The network agent, N4 + N5 | ACCEPTED (**R1** one path: kill switch, fresh verification of this fingerprint at the current config epoch, policy re-decided at apply, single-use operator grant, idempotence. **R2** commit-confirm, blueprint triggers plus undeclared reachability loss, automatic rollback. **R3** the agent can apply, never approve. **R4** hash-chained ledger. Known limit: same-user token access on one host.) |

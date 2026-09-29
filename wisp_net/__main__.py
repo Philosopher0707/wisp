@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -39,10 +40,23 @@ def main(argv: list[str] | None = None) -> int:
     mcp.add_argument("--lab-control", action="store_true", help="expose fault-injection and clock tools")
     mcp.add_argument("--speed", type=float, default=1.0, help="lab seconds per wall-clock second")
     mcp.add_argument("--log", help="log file (the server never writes to stdout/stderr outside the protocol)")
+    mcp.add_argument("--cockpit", type=int, default=0, metavar="PORT",
+                     help="serve the operator cockpit on 127.0.0.1:PORT (approvals, kill switch, ledger)")
+    mcp.add_argument("--ledger", help="append the change ledger to this JSONL file (default: in memory)")
+    mcp.add_argument("--change-policy", help="change policy JSON (default: the bundled policies/change-policy.json)")
     demo = sub.choices["demo"]
     demo.add_argument("--seconds", type=float, default=300.0)
     sub.add_parser("scenarios")
+    op = sub.add_parser("cockpit", help="operator commands against a running cockpit")
+    op.add_argument("--port", type=int, default=8750)
+    op.add_argument("action", choices=["status", "approvals", "grant", "deny", "kill", "release", "rollback",
+                                       "ledger", "explain"])
+    op.add_argument("target", nargs="?", help="request id (grant/deny), apply id (rollback), fingerprint (explain)")
+    op.add_argument("--operator", default=os.environ.get("USER", ""))
+    op.add_argument("--reason", default="")
     args = parser.parse_args(argv)
+    if args.cmd == "cockpit":
+        return _cockpit(args)
 
     if args.cmd == "scenarios":
         for scenario in sorted(SCENARIOS.glob("*.json")):
@@ -51,17 +65,30 @@ def main(argv: list[str] | None = None) -> int:
 
     from wisp_net.service import NetService
 
-    service = NetService(seed=args.seed, leaves=args.leaves, spines=args.spines, scenario=_scenario(args.scenario))
+    service = NetService(seed=args.seed, leaves=args.leaves, spines=args.spines, scenario=_scenario(args.scenario),
+                         ledger_path=getattr(args, "ledger", None))
     if args.cmd == "mcp":
+        if args.change_policy:
+            from wisp_net.safety.policy import ChangePolicy
+
+            service.change_policy = ChangePolicy.from_dict(json.loads(Path(args.change_policy).read_text()))
         if args.log:
             logging.basicConfig(filename=args.log, level=logging.INFO,
                                 format="%(asctime)s %(levelname)s %(name)s %(message)s")
         from wisp_net.mcp_server import run_stdio
 
         service.start_realtime(args.speed)
+        cockpit = None
+        if args.cockpit:
+            from wisp_net.governance.cockpit import CockpitServer
+
+            cockpit = CockpitServer(service, args.cockpit)
+            cockpit.start()
         try:
             run_stdio(service, lab_control=args.lab_control)
         finally:
+            if cockpit is not None:
+                cockpit.stop()
             service.stop()
         return 0
 
@@ -80,6 +107,32 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {b['source']} -> {b['prefix']}: {b['outcome']} {b['why']}")
     service.stop()
     return 0
+
+
+def _cockpit(args: argparse.Namespace) -> int:
+    import httpx
+
+    from wisp_net.governance.cockpit import load_or_create_token
+
+    base = f"http://127.0.0.1:{args.port}"
+    headers = {"Authorization": f"Bearer {load_or_create_token()}"}
+    who = {"operator": args.operator, "note": args.reason, "reason": args.reason}
+    calls: dict[str, tuple[str, str, dict[str, Any] | None]] = {
+        "status": ("GET", "/status", None), "approvals": ("GET", "/approvals", None),
+        "ledger": ("GET", "/ledger", None),
+        "grant": ("POST", f"/approvals/{args.target}/grant", who),
+        "deny": ("POST", f"/approvals/{args.target}/deny", who),
+        "kill": ("POST", "/kill-switch", {**who, "engaged": True}),
+        "release": ("POST", "/kill-switch", {**who, "engaged": False}),
+        "rollback": ("POST", f"/changes/{args.target}/rollback", who),
+        "explain": ("GET", f"/changes/{args.target}/explain", None),
+    }
+    method, path, body = calls[args.action]
+    if args.action in ("grant", "deny", "rollback", "explain") and not args.target:
+        raise SystemExit(f"{args.action} needs a target id")
+    response = httpx.request(method, base + path, headers=headers, json=body, timeout=120)
+    print(json.dumps(response.json(), indent=2, default=str))
+    return 0 if response.is_success else 1
 
 
 if __name__ == "__main__":
