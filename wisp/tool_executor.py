@@ -205,6 +205,39 @@ _SUBAGENT_TOOLS: frozenset[str] = frozenset({
 })
 
 
+#: In `auto_edit`, the tools that go through the approver even when `auto_approve` is on.
+_AUTO_EDIT_FORCED = frozenset({
+    "run_bash", "git_branch", "git_commit", "git_push", "gh_pr_create",
+    "gh_pr_comment", "gh_pr_close", "gh_pr_merge", "git_sync_base",
+})
+
+
+def _forced_by_mode(config: Any, func_name: str) -> bool:
+    """True when the permission mode forces this built-in tool through the approver (auto_approve does not waive it)."""
+    mode = getattr(config, "permission_mode", PermissionMode.AUTO_EDIT)
+    if mode == PermissionMode.ASK_ALL:
+        return func_name in _get_write_tools(config)
+    if mode == PermissionMode.AUTO_EDIT:
+        return func_name in _AUTO_EDIT_FORCED
+    return False
+
+
+def approval_needed(config: Any, func_name: str) -> bool:
+    """Would the executor stop for an approver before running this built-in tool under `config`?
+
+    The one rule behind "no approver ⇒ deny" (ADR-0061 R4), shared by the agent path and the REST gate so
+    the two cannot drift: the tool is gated as a write, and either the mode forces it through the approver
+    or nobody authorised it (`full` mode, or `auto_approve`, is the caller's explicit decision). In
+    `read_only` writes are hard-blocked earlier, so no approver is ever asked and this is False. MCP tools
+    are not covered here; they are always asked (`_is_external_call`).
+    """
+    mode = getattr(config, "permission_mode", PermissionMode.AUTO_EDIT)
+    if mode == PermissionMode.READ_ONLY or func_name not in _get_write_tools(config):
+        return False
+    return _forced_by_mode(config, func_name) or (
+        mode != PermissionMode.FULL and not getattr(config, "auto_approve", False))
+
+
 def _get_write_tools(config: Any = None) -> set[str]:
     """Resolve write-classification tools from config (env: WISP_WRITE_TOOLS).
 
@@ -1395,7 +1428,8 @@ class ToolExecutor:
 
         This lets permission modes override the auto_approve shortcut:
           ask_all   -> all write tools need approval
-          auto_edit -> bash and git writes need approval (file ops are free)
+          auto_edit -> bash and git writes are forced through the approver even when
+                       auto_approve is on; file ops are gated too, but auto_approve waives it
           full      -> auto_approve governs normally
           read_only -> already caught by hard block above
 
@@ -1405,13 +1439,7 @@ class ToolExecutor:
         # MCP tools = external code = always require explicit approval.
         if self._is_external_call(func_name):
             return True
-        mode = getattr(self.config, "permission_mode", PermissionMode.AUTO_EDIT)
-        if mode == PermissionMode.ASK_ALL:
-            return func_name in _get_write_tools(self.config)
-        if mode == PermissionMode.AUTO_EDIT:
-            return func_name in ("run_bash", "git_branch", "git_commit", "git_push", "gh_pr_create",
-                                 "gh_pr_comment", "gh_pr_close", "gh_pr_merge", "git_sync_base")
-        return False
+        return _forced_by_mode(self.config, func_name)
 
     async def _run_bash_tool(self, func_args: dict, workspace: str) -> str:
         func_name = "run_bash"

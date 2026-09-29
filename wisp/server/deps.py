@@ -533,6 +533,21 @@ def require_tool_allowed(request: Request, action_name: str, args: dict,
                    f"no approver is present over REST",
         )
 
+    # No approver, no yes (ADR-0061 R4, applied to the agent path by 0c6bcf2): the executor denies a gated
+    # tool when nobody could be asked, so over REST, where nobody can, so does this gate. One predicate on
+    # both surfaces; a server that has authorised writes says so with `auto_approve` or `full`.
+    _config = getattr(getattr(getattr(getattr(request, "app", None), "state", None), "root", None), "config", None)
+    if _config is not None:
+        from wisp.tool_executor import approval_needed
+
+        if approval_needed(_config, action_name):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Blocked by server policy ({action_name} requires approval in "
+                       f"{configured_permission_mode(request)} mode); no approver is present over REST. "
+                       f"Authorise it on the server with auto_approve or permission_mode=full.",
+            )
+
     # ADR-0068 R1 — L2 (workspace trust), applied **last and unconditionally**.
     #
     # `_m2_denial` above is bundle-gated, so on a bundle-less deployment `authorize()` was

@@ -7510,6 +7510,38 @@ The agent in that run was a stub standing in for a live model turn, which needs 
 
 ---
 
+## ADR-0074 — No approver, no yes: REST follows the agent path, and the denial taxonomy gains NO_APPROVER and BUDGET_EXCEEDED by decision
+
+**Status:** ACCEPTED
+**Phase:** Repair of local `main` after the runtime-audit wiring (`e05afc4` the cost gate, `0c6bcf2` the confirmation gate)
+**Evidence:** measured on local `main` (`f07a1ac`), where 15 tests failed and one hung, every one passing on `origin/main`.
+- A bisect over the first-parent history put the first bad commit at `0c6bcf2`: good at its parent `a64fffc`, bad from `0c6bcf2` on.
+- With no approver, `write_file`, `edit_file` and `run_bash` in `auto_edit` return `NO_APPROVER` (default `auto_approve` is `False`, so file writes are gated there). REST allowed `POST /api/files`, `/api/files/edit`, `DELETE /api/files` and `/api/files/rename` in the same mode: four divergent (route, mode) pairs in `tests/test_authorization_parity.py`.
+- `classify_result` returned `unknown` for both `NO_APPROVER` and `BUDGET_EXCEEDED`. `unknown` is not in `TERMINAL_OUTCOME_CLASSES`, whose comment reads "a verdict that must never be auto-retried", so a result that can never succeed was not treated as final by the retry machinery.
+- After the change: parity has zero divergences, and `tests/test_no_approver_means_no_on_every_surface.py` (39) holds the predicate against the production executor over every mode × tool × `auto_approve`, with independent expected answers because the executor and REST now share the function. 5 mutation probes caught.
+
+### Decision
+
+**R1 — One rule, one predicate.** `tool_executor.approval_needed(config, tool)` answers "would the executor stop for an approver here?": the tool is gated as a write, and either the mode forces it through the approver or nobody authorised it (`full` mode or `auto_approve` is the caller's explicit decision). `read_only` hard-blocks writes earlier, so it never asks. The executor's forced-by-mode rule moved into `_forced_by_mode` so both surfaces read one definition. `require_tool_allowed` asks the predicate and refuses with the existing "no approver is present over REST" wording, adding how to authorise: `auto_approve` or `permission_mode=full` on the server. This is ADR-0061 R4 ("no client ⇒ deny") on the surface that still asked a different model.
+
+**R2 — The taxonomy grows by decision, not by drift.** `NO_APPROVER` and `BUDGET_EXCEEDED` join the five statuses of ADR-0052's time. Each states a fact about the caller or the run, not about the tool: "nobody could be asked" is not a human's "no", and "the run is out of budget" is not a judgement about this call. ADR-0052's Option B is untouched: a capability failure is still published as a failure of the host, not as a denial.
+
+**R3 — Every denial status is classified and final.** Both new statuses map to `POLICY_DENIAL`, which is terminal. The pin now requires that every status in the taxonomy appears in `OUTCOME_BY_STATUS` with a terminal class, so a status added without a class fails a test instead of being silently retryable.
+
+**R4 — The pin changes from "unchanged" to "changes only by a recorded decision".** `DENIAL_STATUSES_BEFORE` stays as the historic set; `DENIAL_STATUSES_ADDED_SINCE` lists the additions; a test requires this ADR to name each one.
+
+### Consequences
+
+- **REST file, edit, delete and rename routes now return 403 in the default `auto_edit` mode** unless the server is configured with `auto_approve` or `permission_mode=full`. That is a behaviour change for any deployment that relied on the old allow, and it is the point: the agent path already refused the same operation.
+- `_needs_forced_approval`'s docstring said file operations were free in `auto_edit`. They are gated unless `auto_approve` is on; the docstring now says so.
+
+### Known limits
+
+- The prompt's "DENIALS ARE FINAL" list still names the original five statuses. ADR-0052 treats a prompt change as needing the flag-and-measure treatment, and it was not done here. The envelope's own hint ("Denial is final for these arguments") and the terminal class carry the meaning to the retry machinery, but the model is not told the two new names.
+- REST approval through a connected client (ADR-0057) is unchanged and still covers only the executable-config routes.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -7587,3 +7619,4 @@ The agent in that run was a stub standing in for a live model turn, which needs 
 | 0071 | Only a verified, allowed change is applied, under a confirm window; only an operator can approve, and the ledger is hash-chained | The network agent, N4 + N5 | ACCEPTED (**R1** one path: kill switch, fresh verification of this fingerprint at the current config epoch, policy re-decided at apply, single-use operator grant, idempotence. **R2** commit-confirm, blueprint triggers plus undeclared reachability loss, automatic rollback. **R3** the agent can apply, never approve. **R4** hash-chained ledger. Known limit: same-user token access on one host.) |
 | 0072 | The model states intents and reasons over deterministic instruments; the platform compiles intents into changes | The network agent, N2 (reasoning) | ACCEPTED (**R1** intents in, gNMI ops out, refusing intents that do not fit; nothing bypasses what-if/policy/apply. **R2** instruments report their own confidence. **R3** an optic is blamed only on its physical signature. **R4** disabling a BGP neighbor is declared intent. **R5** roles are wisp skills; precedence safety > availability > performance > efficiency; escalation triggers.) |
 | 0073 | The platform is one daemon; alerts become incidents that dispatch headless agent turns by autonomy tier | The network agent, N6 (closed loop) | ACCEPTED (**R1** one `serve` platform, wisp via `mcp --connect`. **R2** separate agent and operator tokens. **R3** debounced incidents, adoption of open alerts, cooldown. **R4** observe / diagnose / propose (wisp read_only) / act; the platform's gates never move.) |
+| 0074 | No approver, no yes: REST follows the agent path; the denial taxonomy gains NO_APPROVER and BUDGET_EXCEEDED by decision | Repair of local main | ACCEPTED (**R1** one predicate `approval_needed` on the agent path and REST. **R2** two statuses added by decision; ADR-0052's envelope route unchanged. **R3** every denial status is classified and terminal. **R4** the pin changes only by a recorded decision. Known limit: the prompt's denial list is not updated.) |

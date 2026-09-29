@@ -362,6 +362,9 @@ OUTCOME_BY_STATUS: dict[str, OutcomeClass] = {
     DENIAL_APPROVAL_TIMEOUT: OutcomeClass.TIMEOUT,
     DENIAL_CANCELLED: OutcomeClass.CANCELLATION,
     DENIAL_SCHEMA_INVALID: OutcomeClass.INVALID,
+    # ADR-0074: both are facts about the caller or the run, and both are final.
+    DENIAL_BUDGET_EXCEEDED: OutcomeClass.POLICY_DENIAL,
+    DENIAL_NO_APPROVER: OutcomeClass.POLICY_DENIAL,
 }
 
 #: Classes that are terminal for automatic retry. A denial is a *verdict*,
