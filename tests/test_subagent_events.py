@@ -210,7 +210,7 @@ class TestExecutorStreaming:
             ],
             result=_fake_result(),
         )
-        executor = ToolExecutor(config=WispConfig(), subagent_orchestrator=orch)
+        executor = ToolExecutor(config=WispConfig().replace(permission_mode="full"), subagent_orchestrator=orch)
 
         stream = await self._collect(executor, "spawn", {"task": "do it"})
         kinds = [etype for etype, _ in stream]
@@ -224,7 +224,7 @@ class TestExecutorStreaming:
     @pytest.mark.asyncio
     async def test_result_payload_survives_streaming(self):
         orch = _StubOrchestrator(result=_fake_result())
-        executor = ToolExecutor(config=WispConfig(), subagent_orchestrator=orch)
+        executor = ToolExecutor(config=WispConfig().replace(permission_mode="full"), subagent_orchestrator=orch)
 
         stream = await self._collect(executor, "spawn", {"task": "x"})
         tool_results = [ev for etype, ev in stream if etype == EventType.TOOL_RESULT.value]
@@ -243,7 +243,7 @@ class TestExecutorStreaming:
                 captured.append([c.progress_callback for c in contracts])
                 return [SimpleNamespace(**_fake_result()) for _ in contracts]
 
-        executor = ToolExecutor(config=WispConfig(), subagent_orchestrator=_ParallelOrch())
+        executor = ToolExecutor(config=WispConfig().replace(permission_mode="full"), subagent_orchestrator=_ParallelOrch())
         args = {"tasks": [{"task": "a", "role": "coder"}, {"task": "b", "role": "tester"}],
                 "mode": "blocking"}
         stream = await self._collect(executor, "fanout", args)

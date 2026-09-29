@@ -107,11 +107,13 @@ class TestAutoEditMode:
         events = await _collect(executor, tool)
         result = _find_result(events)
         assert result is not None, f"Expected a result for {tool}"
-        # 13F.1: bash/git are hard DENY in auto_edit (no prompt even
-        # without a handler) — structured POLICY_DENIED envelope.
+        # bash/git are forced through the approver in auto_edit even with auto_approve. With no
+        # approver, nobody could be asked: NO_APPROVER (ADR-0074), which is not a human's "no"
+        # (USER_DENIED) and not a policy verdict on the tool (POLICY_DENIED). It never runs.
         res = result.data.get("result", {})
-        assert isinstance(res, dict) and res.get("status") == "POLICY_DENIED", \
-            f"{tool} should be hard-denied in auto_edit: {result.data}"
+        assert isinstance(res, dict) and res.get("status") == "NO_APPROVER" \
+            and res.get("executed") is False, \
+            f"{tool} must be refused in auto_edit with no approver: {result.data}"
 
     @pytest.mark.asyncio
     async def test_auto_edit_bash_goes_to_approval_handler_when_available(self):

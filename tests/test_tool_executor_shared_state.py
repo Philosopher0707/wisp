@@ -73,7 +73,7 @@ class TestStreamQueueTaskLocal:
         earlier one's channel.)
         """
         orch = _FakeOrchParallel()
-        ex = ToolExecutor(WispConfig(), subagent_orchestrator=orch)
+        ex = ToolExecutor(WispConfig().replace(permission_mode="full"), subagent_orchestrator=orch)
         results: dict[str, list[Any]] = {}
 
         async def drive(tag: str) -> None:
@@ -149,7 +149,7 @@ class TestRepeatKeyTaskLocal:
             )
 
         monkeypatch.setattr(te, "execute_tool", fake_execute)
-        ex = ToolExecutor(WispConfig())
+        ex = ToolExecutor(WispConfig().replace(permission_mode="full"))
 
         async def fetch(url: str) -> None:
             async for _ev in ex.execute("web_fetch", {"url": url}, "/tmp"):
@@ -415,7 +415,7 @@ class TestEnginePublishesIdentity:
                 return SubagentResult(task_id=contract.name, success=True,
                                       output="ok", elapsed_seconds=0.1)
 
-        ex = ToolExecutor(WispConfig(), subagent_orchestrator=FakeOrch())
+        ex = ToolExecutor(WispConfig().replace(permission_mode="full"), subagent_orchestrator=FakeOrch())
         core = _core_with_depth(2, SpawnProvider(), ex)
         session = {"id": "grandchild", "messages": [], "workspace": str(tmp_path)}
         async for _ev in core.turn(session, "spawn one"):
