@@ -18,13 +18,14 @@ from typing import Any
 
 from wisp.core.contracts import declared_read_names, is_declared_read
 
-# ponytail: literal 14-name allowlist (not derived at runtime) so the
+# ponytail: literal 20-name allowlist (not derived at runtime) so the
 # partition is auditable in one glance; equality with the enforcement
-# set is pinned by test. If a 15th safe tool lands, update this set
+# set is pinned by test. If another safe tool lands, update this set
 # AND the pin together.
 READ_ONLY_TOOLS: frozenset[str] = frozenset({
     "read_file", "list_files", "search_codebase", "search_symbols",
-    "git_status", "git_diff", "lsp_diagnostics", "lsp_definition",
+    "git_status", "git_diff", "git_log", "git_fetch", "gh_pr_view", "gh_pr_list",
+    "gh_pr_checks", "gh_run_failed_logs", "lsp_diagnostics", "lsp_definition",
     "lsp_references", "lsp_hover", "lsp_symbols", "web_fetch",
     "web_search", "recall",
 })

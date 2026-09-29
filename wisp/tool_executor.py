@@ -152,6 +152,10 @@ _DEFAULT_WRITE_TOOLS: set[str] = {
     "git_commit",
     "git_push",
     "gh_pr_create",
+    "gh_pr_comment",
+    "gh_pr_close",
+    "gh_pr_merge",
+    "git_sync_base",
     "plan_task",
     "mark_step_done",
     "update_plan",
@@ -1363,7 +1367,8 @@ class ToolExecutor:
         if mode == PermissionMode.ASK_ALL:
             return func_name in _get_write_tools(self.config)
         if mode == PermissionMode.AUTO_EDIT:
-            return func_name in ("run_bash", "git_branch", "git_commit", "git_push", "gh_pr_create")
+            return func_name in ("run_bash", "git_branch", "git_commit", "git_push", "gh_pr_create",
+                                 "gh_pr_comment", "gh_pr_close", "gh_pr_merge", "git_sync_base")
         return False
 
     async def _run_bash_tool(self, func_args: dict, workspace: str) -> str:

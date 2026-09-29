@@ -7,12 +7,13 @@ for files with pending changes.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +278,10 @@ def push(workspace: str, set_upstream: bool = False, force: bool = False) -> tup
     """Push current branch to remote. force=True blocked by tools.py guard."""
     if not _is_git_repo(workspace):
         return (1, "", "not a git repository")
+    code, out, _ = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], workspace)
+    branch = out.strip() if code == 0 else ""
+    if branch in PROTECTED_BRANCHES:
+        return (1, "", f"refusing to push {branch} directly — push a feature branch and open a PR")
     args = ["push"]
     if set_upstream:
         args.extend(["-u", "origin", "HEAD"])
@@ -291,3 +296,169 @@ def create_pr(title: str, body: str, workspace: str) -> tuple[int, str, str]:
         return (1, "", "not a git repository")
     args = ["pr", "create", "--title", title, "--body", body]
     return _run_git(args, workspace, command="gh")
+
+
+# ── GitHub workflow: reads, and writes that a policy stands in front of ──────
+#
+# Every call is a fixed argument list run in the workspace, never a shell string, and none takes a
+# repository: `gh` resolves it from the workspace's own remote, so a caller cannot aim a write at
+# another repository. A policy refusal returns REFUSED (a failed command returns 1), so the tool
+# layer can tell "I will not" from "it did not work".
+
+REFUSED = 2
+PROTECTED_BRANCHES = frozenset({"main", "master"})
+_BASE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
+_PR_STATES = frozenset({"open", "closed", "merged", "all"})
+_PR_FIELDS = ("number,title,state,isDraft,mergeable,reviewDecision,baseRefName,headRefName,"
+              "url,additions,deletions,changedFiles,body,statusCheckRollup")
+_MERGE_FIELDS = "state,isDraft,mergeable,reviewDecision,statusCheckRollup"
+_GREEN = frozenset({"SUCCESS", "SKIPPED", "NEUTRAL"})
+_NOT_A_NUMBER = (1, "", "number must be a positive integer")
+
+
+def positive_int(value: object) -> int | None:
+    """A positive int, or a string of ASCII digits for one; anything else is None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        n = value
+    elif isinstance(value, str) and value.strip().isascii() and value.strip().isdigit():
+        n = int(value.strip())
+    else:
+        return None
+    return n if n > 0 else None
+
+
+def _clamped(value: object, default: int, ceiling: int = 100) -> int:
+    n = positive_int(value)
+    return min(n, ceiling) if n is not None else default
+
+
+def _gh(args: list[str], workspace: str, timeout: int = 30) -> tuple[int, str, str]:
+    return _run_git(args, workspace, timeout=timeout, command="gh")
+
+
+def log(workspace: str, limit: object = 20, path: str = "") -> tuple[int, str, str]:
+    args = ["log", f"-{_clamped(limit, 20)}", "--oneline", "--decorate"]
+    if path:
+        args += ["--", path]
+    return _run_git(args, workspace)
+
+
+def fetch(workspace: str) -> tuple[int, str, str]:
+    return _run_git(["fetch", "origin"], workspace, timeout=60)
+
+
+def pr_view(number: object, workspace: str) -> tuple[int, str, str]:
+    n = positive_int(number)
+    if n is None:
+        return _NOT_A_NUMBER
+    return _gh(["pr", "view", str(n), "--json", _PR_FIELDS], workspace)
+
+
+def pr_list(workspace: str, state: str = "open", limit: object = 20) -> tuple[int, str, str]:
+    if state not in _PR_STATES:
+        return (1, "", f"state must be one of: {', '.join(sorted(_PR_STATES))}")
+    return _gh(["pr", "list", "--state", state, "--limit", str(_clamped(limit, 20))], workspace)
+
+
+def pr_checks(number: object, workspace: str) -> tuple[int, str, str]:
+    n = positive_int(number)
+    if n is None:
+        return _NOT_A_NUMBER
+    return _gh(["pr", "checks", str(n)], workspace)
+
+
+def run_failed_logs(run_id: object, workspace: str) -> tuple[int, str, str]:
+    n = positive_int(run_id)
+    if n is None:
+        return (1, "", "run_id must be a positive integer")
+    return _gh(["run", "view", str(n), "--log-failed"], workspace, timeout=60)
+
+
+def pr_comment(number: object, body: str, workspace: str) -> tuple[int, str, str]:
+    n = positive_int(number)
+    if n is None:
+        return _NOT_A_NUMBER
+    if not isinstance(body, str) or not body.strip():
+        return (1, "", "comment body cannot be empty")
+    return _gh(["pr", "comment", str(n), "--body", body], workspace)
+
+
+def pr_close(number: object, comment: str, workspace: str) -> tuple[int, str, str]:
+    n = positive_int(number)
+    if n is None:
+        return _NOT_A_NUMBER
+    args = ["pr", "close", str(n)]
+    if isinstance(comment, str) and comment.strip():
+        args += ["--comment", comment]
+    return _gh(args, workspace)
+
+
+def merge_blockers(pr: dict[str, Any]) -> list[str]:
+    """Why this PR may not be merged; empty means every proof is present."""
+    blockers: list[str] = []
+    if pr.get("state") != "OPEN":
+        blockers.append(f"the PR is {pr.get('state') or 'in an unknown state'}, not OPEN")
+    if pr.get("isDraft"):
+        blockers.append("the PR is a draft")
+    if pr.get("mergeable") != "MERGEABLE":
+        blockers.append(f"mergeable is {pr.get('mergeable') or 'unknown'}, not MERGEABLE")
+    if pr.get("reviewDecision") == "CHANGES_REQUESTED":
+        blockers.append("changes were requested")
+    checks = pr.get("statusCheckRollup") or []
+    if not checks:
+        blockers.append("no checks are reported, so nothing vouches for it")
+    for check in checks:
+        name = check.get("name") or check.get("context") or "a check"
+        status = str(check.get("status") or "").upper()
+        verdict = str(check.get("conclusion") or check.get("state") or "").upper()
+        if status and status != "COMPLETED":
+            blockers.append(f"{name} is still {status.lower()}")
+        elif verdict not in _GREEN:
+            blockers.append(f"{name}: {verdict.lower() or 'no result'}")
+    return blockers
+
+
+def pr_merge(number: object, workspace: str) -> tuple[int, str, str]:
+    """Merge (a plain merge commit) only when every proof is present. Never --admin/--auto."""
+    n = positive_int(number)
+    if n is None:
+        return _NOT_A_NUMBER
+    code, out, err = _gh(["pr", "view", str(n), "--json", _MERGE_FIELDS], workspace)
+    if code != 0:
+        return (1, out, err or "could not read the PR")
+    try:
+        pr = json.loads(out)
+    except ValueError:
+        return (1, "", "could not parse the PR from gh")
+    if not isinstance(pr, dict):
+        return (1, "", "could not parse the PR from gh")
+    blockers = merge_blockers(pr)
+    if blockers:
+        return (REFUSED, "", f"PR #{n} is not mergeable: " + "; ".join(blockers))
+    return _gh(["pr", "merge", str(n), "--merge"], workspace, timeout=60)
+
+
+def sync_base(base: str, workspace: str) -> tuple[int, str, str]:
+    """Merge origin/<base> into the current branch. Never rebases; conflicts are left to resolve."""
+    if (not isinstance(base, str) or not _BASE_RE.fullmatch(base)
+            or ".." in base or base.endswith(("/", ".lock"))):
+        return (1, "", f"invalid base branch: {base!r}")
+    code, out, err = _run_git(["status", "--porcelain", "--untracked-files=no"], workspace)
+    if code != 0:
+        return (code, out, err)
+    if out.strip():
+        return (REFUSED, "", "uncommitted changes to tracked files — commit or stash them first")
+    code, out, err = _run_git(["fetch", "origin", base], workspace, timeout=60)
+    if code != 0:
+        return (code, out, err)
+    code, out, err = _run_git(["merge", "--no-edit", f"origin/{base}"], workspace, timeout=60)
+    if code == 0:
+        return (0, out or f"already up to date with origin/{base}", "")
+    _, conflicted, _ = _run_git(["diff", "--name-only", "--diff-filter=U"], workspace)
+    files = [f for f in conflicted.splitlines() if f.strip()]
+    if files:
+        return (1, out, "merge stopped on conflicts (nothing was aborted); resolve, then git_commit: "
+                        + ", ".join(files))
+    return (code, out, err)
