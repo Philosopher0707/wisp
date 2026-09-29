@@ -1,0 +1,2 @@
+{"description": "leaf2's uplink optic to spine2 loses receive power at 1.5 dB/min from t=30s: rx-power alarm, then FCS errors, then loss of signal.",
+ "steps": [{"at": 30, "inject": "optic_degrade", "target": "leaf2:Ethernet50", "params": {"rate_db_per_min": 1.5}, "name": "optic"}]}
