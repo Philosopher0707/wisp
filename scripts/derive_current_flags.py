@@ -83,7 +83,7 @@ ROWS: list[tuple[str, str, str, str, str, str, str, str]] = [
      "ADR-0054", "tests/reliability/test_acceptance_gate_enablement.py"),
 
     # ── The REST and WebSocket approval flags ───────────────────────────────
-    ("rest_approval", "WISP_REST_APPROVAL", "OFF", "`wisp/server/deps.py:574`",
+    ("rest_approval", "WISP_REST_APPROVAL", "OFF", "`wisp/server/deps.py:595`",
      "route a REST request for an executable-config action through the WebSocket channel for a human decision",
      "—", "ADR-0057", "tests/reliability/test_rest_approval.py"),
 
