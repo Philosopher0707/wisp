@@ -66,12 +66,15 @@ host behind SSO.
 
 `tool_risk` is the operator's statement that these tools only read. Wisp does not trust a server's own
 `readOnlyHint`. Every tool left out stays `exec` and asks for approval. With the declaration, a
-`read_only` wisp session can run the whole diagnosis loop. Add `--lab-control` to expose fault
+`read_only` wisp session can run the whole diagnosis loop (this holds at all five places that enforce read-only by
+name: the policy rule, the mode hard-deny, the executor's MCP block, the subagent filter and the schema/menu filter;
+it was **not** true before the change that added `is_declared_read`, and the watcher's diagnose and propose tiers
+could not read the network). Add `--lab-control` to expose fault
 injection and the lab clock (`lab_*` tools). They change the simulated world and are never read-only.
 
 ## Evaluating a model
 
-Every other test here is deterministic. This is the one place a real model drives the real path (`wisp --print ... --skill net-orchestrator` over the MCP server, `read_only`, against a lab whose fault has already developed) and is scored against ground truth.
+Every other test here is deterministic. This is the one place a real model drives the real path (`wisp --print`, asking for the `net-orchestrator` skill, over the MCP server, in `read_only` via `WISP_PERMISSION_MODE`, against a lab whose fault has already developed) and is scored against ground truth.
 
 ```bash
 python -m wisp_net eval --model llama3.2:3b                                   # local, no key
@@ -85,7 +88,7 @@ A run **passes** only if it finished without errors, made at least one `mcp__net
 
 | Model | Result | What happened |
 |---|---|---|
-| `llama3.2:3b` (local) | **0/6** | Zero structured tool calls in every run. It describes the tools it would call, in prose and code fences, with placeholder arguments, and never calls them (`iterations: 0`, no errors). |
+| `llama3.2:3b` (local) | **0/6** | (Run before `--print` honoured `WISP_PERMISSION_MODE`, so it ran with full permissions; with zero tool calls nothing could have been actuated.) Zero structured tool calls in every run. It describes the tools it would call, in prose and code fences, with placeholder arguments, and never calls them (`iterations: 0`, no errors). |
 
 The control that separates the model from the setup: the same model, asked to use the built-in `list_files`, behaves the same way, so the MCP path is not the cause. And `tests/net/test_net_eval_pipeline.py` is the positive control: a scripted model that does emit a structured tool call passes through the real `wisp` CLI, the real MCP server (80 tools offered, 32 of them `mcp__net__*`) and the real lab, and its answer, built from the tool result alone, names `leaf2 Ethernet50` and `rx_power_low`.
 
