@@ -6,8 +6,10 @@ Contract §1.2:
   * No bytes dropped — disk holds original, context sees bounded preview
 
 Wires into wisp/tool_executor.py: ToolExecutor._run_bash_tool and
-wisp/tools/bash.py:async_tool_run_bash are wrapped; fallback runs
-subprocess directly if wisp not installed.
+wisp/tools/bash.py:async_tool_run_bash are wrapped. The wrapper runs the
+command through wisp.tools.bash.run_bash_confined (the sandbox tier router)
+and only sinks the result. `run_bash_with_sink` is the standalone runner for
+callers without wisp; it shells out on the host and is not the tool path.
 
 Uses agent/ui/formatter.collapse() for preview generation.
 """
@@ -96,15 +98,6 @@ async def run_bash_with_sink(
     cwd_p = Path(cwd).resolve()
     cwd_p.mkdir(parents=True, exist_ok=True)
 
-    # Resolve max lines from config/env like formatter
-    if max_preview_lines is None:
-        try:
-            max_preview_lines = int(os.getenv("WISP_MAX_TOOL_DISPLAY_LINES", "10"))
-        except Exception:
-            max_preview_lines = 10
-        if os.getenv("WISP_VERBOSE_TOOLS", "").lower() in ("1", "true", "yes"):
-            max_preview_lines = 10_000
-
     proc: Optional[asyncio.subprocess.Process] = None
     stdout = ""
     stderr = ""
@@ -145,8 +138,37 @@ async def run_bash_with_sink(
         exit_code = 1
 
     duration_ms = int((time.monotonic() - start) * 1000)
-    if timed_out and exit_code != 124:
-        exit_code = 124
+    return _sink(cmd, stdout, stderr, exit_code, duration_ms, timed_out, timeout_s,
+                 max_preview_lines)
+
+
+def _preview_lines(max_preview_lines: Optional[int]) -> int:
+    """Resolve max lines from config/env like the formatter does."""
+    if max_preview_lines is not None:
+        return max_preview_lines
+    try:
+        lines = int(os.getenv("WISP_MAX_TOOL_DISPLAY_LINES", "10"))
+    except Exception:
+        lines = 10
+    if os.getenv("WISP_VERBOSE_TOOLS", "").lower() in ("1", "true", "yes"):
+        lines = 10_000
+    return lines
+
+
+def _sink(
+    cmd: str,
+    stdout: str,
+    stderr: str,
+    exit_code: int,
+    duration_ms: int,
+    timed_out: bool,
+    timeout_s: float,
+    max_preview_lines: Optional[int] = None,
+) -> RunResult:
+    """Write a finished command's full output to disk, then build the bounded preview."""
+    if timed_out:
+        exit_code = 124  # timeout sentinel
+    max_preview_lines = _preview_lines(max_preview_lines)
 
     # ── Disk sink first (never lost) ──
     full = stdout + (f"\n--- stderr ---\n{stderr}" if stderr else "")
@@ -207,26 +229,17 @@ def install_sink() -> None:
                 **kw: object,
             ):
                 # Mirror the original contract exactly (F14b/F14c): same
-                # parameter names (the executor dispatches by keyword),
-                # same input validation, same danger gate — the sink only
-                # changes where output lands, never what may execute.
-                from wisp.tools._utils import (
-                    _MAX_CMD_LENGTH,
-                    _validate_int,
-                    _validate_string,
-                    check_dangerous_command,
-                )
-                from wisp.tools.errors import ToolError
-
-                _validate_string(command, "command", _MAX_CMD_LENGTH)
-                timeout_val = _validate_int(timeout, "timeout", 1, 3600)
-                if "\x00" in command:
-                    raise ToolError("Null bytes not allowed in command")
-                danger = check_dangerous_command(command)
-                if danger:
-                    raise ToolError(f"Dangerous command blocked: {danger}")
-                res = await run_bash_with_sink(
-                    command, cwd=workspace, timeout_s=float(timeout_val))
+                # parameter names (the executor dispatches by keyword).
+                # The sink only changes where output lands, never what may
+                # execute or where: the command runs through wisp's own
+                # `run_bash_confined` (validation, danger gate, sandbox tier
+                # router, UNCONFINED warning). Starting the process here
+                # instead ran every agent command on the host.
+                run = await _bash.run_bash_confined(command, workspace, timeout)
+                res = _sink(command, run.stdout, run.stderr, run.returncode,
+                            run.duration_ms, run.timed_out, float(timeout))
+                if run.timed_out:
+                    raise _bash.timeout_error(command, int(timeout))
                 # Return preview text for LLM history, but disk holds full
                 # Preserve original contract: caller expects str output
                 # We embed badge + link so UI shows preview; full stays on disk.
