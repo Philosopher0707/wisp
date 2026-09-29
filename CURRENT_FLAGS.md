@@ -14,7 +14,7 @@
 > `CURRENT_FINDINGS.md` (every recorded finding and its status), `CURRENT_OPEN_ITEMS.md`
 > (what is open). All four are derived; none may decide.
 >
-> Generated 2026-09-25 at `c77e1d5` · **26 switches** (23 `bool` settings in `WispConfig` + 3 read from the environment) · **11 ON**, 15 OFF.
+> Generated 2026-09-25 at `6fba929` · **26 switches** (23 `bool` settings in `WispConfig` + 3 read from the environment) · **11 ON**, 15 OFF.
 
 ---
 
@@ -35,7 +35,7 @@
 | `graph_oscillation_guard` | `WISP_GRAPH_OSCILLATION_GUARD` | **ON** | `wisp/core/stagnation.py:235` | construct the oscillation detector at all — the **recording** level of the stagnation concern | — | ADR-0034 | tests/test_stagnation_detection.py |
 | `turn_criteria_source` | `WISP_TURN_CRITERIA_SOURCE` | **OFF** | `wisp/core/runtime.py:707` | let the turn path's required-criteria set carry the objective's declared criteria | — | ADR-0053 | tests/reliability/test_criteria_source_on_turn_path.py |
 | `acceptance_gate` | `WISP_ACCEPTANCE_GATE` | **OFF** | `wisp/core/runtime.py:722` | withhold `done` at the engine's pre-`done` gate when the declared criteria are unsatisfied | **turn_criteria_source** — with the source off there are no declared criteria in the set | ADR-0054 | tests/reliability/test_acceptance_gate_enablement.py |
-| `rest_approval` | `WISP_REST_APPROVAL` | **OFF** | `wisp/server/deps.py:574` | route a REST request for an executable-config action through the WebSocket channel for a human decision | — | ADR-0057 | tests/reliability/test_rest_approval.py |
+| `rest_approval` | `WISP_REST_APPROVAL` | **OFF** | `wisp/server/deps.py:595` | route a REST request for an executable-config action through the WebSocket channel for a human decision | — | ADR-0057 | tests/reliability/test_rest_approval.py |
 | `verification_loop` | `WISP_VERIFICATION_LOOP` | **ON** | `wisp/core/stateless.py:530`, `wisp/core/stateless.py:1309` | require an exit-0 verification after code edits before a turn may complete | — | ADR-0016 | — |
 | `criteria_strict_derivation` | `WISP_CRITERIA_STRICT_DERIVATION` | **OFF** | `wisp/autonomous.py:58` | make an undeterminable acceptance requirement `INCONCLUSIVE` instead of promoting it — closes ADR-0048's MODE A on the derived path. Read by `_strict_derivation_enabled()` (`wisp/autonomous.py:77-79`), which names it through the `STRICT_DERIVATION_ENV` constant | — | ADR-0048 | tests/reliability/test_criteria_derivation_authority.py |
 | `criteria_structured_declaration` | `WISP_CRITERIA_STRUCTURED_DECLARATION` | **OFF** | `wisp/autonomous.py:68` | parse an objective's `--- criteria ---` block and measure against it, rejecting a declaration it cannot use rather than reinterpreting it. Read by `_structured_declaration_enabled()` (`wisp/autonomous.py:82-84`) | — | ADR-0050 | tests/reliability/test_structured_criteria.py |
