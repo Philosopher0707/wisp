@@ -117,6 +117,18 @@ class ChangeSet:
                 ports.add((op.device, str(path[1].key("name"))))
         return ports
 
+    def disabled_neighbors(self) -> set[tuple[str, str]]:
+        """(device, neighbor address) of BGP sessions the change administratively disables."""
+        out: set[tuple[str, str]] = set()
+        for op in self.ops:
+            path = parse_path(op.path)
+            if (not op.delete and op.value is False and path[-1].name == "enabled"
+                    and any(e.name == "neighbor" for e in path)):
+                neighbor = next(e for e in path if e.name == "neighbor").key("neighbor-address")
+                if neighbor:
+                    out.add((op.device, neighbor))
+        return out
+
     def touched_ports(self) -> set[tuple[str, str]]:
         """Interfaces whose forwarding behaviour the change can alter (admin state, MTU, ACL binding)."""
         ports: set[tuple[str, str]] = set()

@@ -131,10 +131,11 @@ def what_if(live: SimNetwork, change: ChangeSet, settle_s: float = 30.0,
                 "candidate": sum(1 for s in candidate.sessions.values() if s.state == "ESTABLISHED")},
         }
         segmentation = segmentation or SegmentationPolicy.bundled()
+        intended_ports = _intended_ports(base_pipe.twin, change)
         report.checks = [
             check_loops(cand_pipe.twin),
             check_blackholes(base_pipe.twin, cand_pipe.twin, change.expected_unreachable),
-            check_sessions(base_pipe.twin, cand_pipe.twin, change.drained_ports()),
+            check_sessions(base_pipe.twin, cand_pipe.twin, intended_ports),
             check_acl_hygiene(base_pipe.twin, cand_pipe.twin),
             check_segmentation(base_pipe.twin, cand_pipe.twin, segmentation),
             _check_capacity(base_pipe, cand_pipe, report),
@@ -143,7 +144,7 @@ def what_if(live: SimNetwork, change: ChangeSet, settle_s: float = 30.0,
             report.checks.append(Check("converges", False,
                                        f"routing still changing at the end of the {settle_s:.0f}s settle window"))
         base_open = {(a.rule, a.device, a.subject) for a in base_pipe.alerts.list("open")}
-        intended = _drained_link_ends(base_pipe.twin, change.drained_ports())
+        intended = _drained_link_ends(base_pipe.twin, intended_ports)
         report.new_alerts = [
             {"rule": a.rule, "device": a.device, "subject": a.subject, "severity": a.severity, "message": a.message,
              "intended": _alert_port(base_pipe.twin, a.device, a.subject) in intended}
@@ -158,6 +159,18 @@ def what_if(live: SimNetwork, change: ChangeSet, settle_s: float = 30.0,
         cand_pipe.close()
     report.decision = decide(change, live.now, report.passed, policy)
     return report
+
+
+def _intended_ports(twin: DigitalTwin, change: ChangeSet) -> set[tuple[str, str]]:
+    """Ports whose sessions the change means to take down: drained ports, and the ports that
+    carry BGP sessions it disables."""
+    ports = set(change.drained_ports())
+    for dev, neighbor in change.disabled_neighbors():
+        if dev in twin.devices:
+            port = session_port(twin, dev, neighbor)
+            if port:
+                ports.add((dev, port))
+    return ports
 
 
 def _drained_link_ends(twin: DigitalTwin, drained: set[tuple[str, str]]) -> set[tuple[str, str]]:

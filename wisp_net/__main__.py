@@ -47,6 +47,9 @@ def main(argv: list[str] | None = None) -> int:
     demo = sub.choices["demo"]
     demo.add_argument("--seconds", type=float, default=300.0)
     sub.add_parser("scenarios")
+    inst = sub.add_parser("install-skills", help="install the domain-agent skills where wisp discovers skills")
+    inst.add_argument("--dest", default=str(Path.home() / ".agents" / "skills"))
+    inst.add_argument("--force", action="store_true", help="replace skills that differ")
     op = sub.add_parser("cockpit", help="operator commands against a running cockpit")
     op.add_argument("--port", type=int, default=8750)
     op.add_argument("action", choices=["status", "approvals", "grant", "deny", "kill", "release", "rollback",
@@ -57,6 +60,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.cmd == "cockpit":
         return _cockpit(args)
+    if args.cmd == "install-skills":
+        return _install_skills(Path(args.dest), args.force)
 
     if args.cmd == "scenarios":
         for scenario in sorted(SCENARIOS.glob("*.json")):
@@ -107,6 +112,24 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {b['source']} -> {b['prefix']}: {b['outcome']} {b['why']}")
     service.stop()
     return 0
+
+
+AGENTS = Path(__file__).resolve().parent / "agents"
+
+
+def _install_skills(dest: Path, force: bool) -> int:
+    status = 0
+    for skill in sorted(AGENTS.glob("*/SKILL.md")):
+        target = dest / skill.parent.name / "SKILL.md"
+        text = skill.read_text(encoding="utf-8")
+        if target.exists() and target.read_text(encoding="utf-8") != text and not force:
+            print(f"kept    {target} (differs; --force to replace)")
+            status = 1
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+        print(f"installed {target}")
+    return status
 
 
 def _cockpit(args: argparse.Namespace) -> int:

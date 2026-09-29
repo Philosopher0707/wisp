@@ -120,6 +120,31 @@ READ_TOOLS: tuple[Tool, ...] = (
     Tool("net_change_policy", "The change guardrails: blast-radius limit, prohibited change windows (and whether "
          "one is active now), and the confidence below which a human must approve.", _obj({}),
          lambda s, a: s.change_policy_view()),
+    Tool("net_optics_forecast", "Predictive diagnostics: optics whose receive power is falling, with the "
+         "least-squares slope (dB/hour), fit (R²), and minutes until FCS errors begin and until loss of signal. "
+         "Risk: critical (LOS within an hour), high (errors within an hour), medium, low.",
+         _obj({"device": _S, "window_s": _N}), lambda s, a: s.optics_forecast(a.get("device"), a.get("window_s", 1800.0))),
+    Tool("net_error_correlation", "Do a port's FCS errors move with its receive power? Pearson r and a verdict: "
+         "optics, or something else (port, cable, far-end transmitter).",
+         _obj({"device": _S, "port": _S, "window_s": _N}, ("device", "port")),
+         lambda s, a: s.error_correlation(a["device"], a["port"], a.get("window_s", 1800.0))),
+    Tool("net_config_drift", "Compliance: every deviation of the running config (as devices report it) from the "
+         "golden config, classified security | routing | cosmetic.", _obj({"device": _S}),
+         lambda s, a: s.config_drift(a.get("device"))),
+    Tool("net_advisories", "Software advisories affecting the versions devices report (lab advisory feed).",
+         _obj({}), lambda s, a: s.advisories()),
+    Tool("net_te_assess", "Traffic engineering: ports ranked by egress utilization, the hot ones, the heaviest "
+         "flows, and for each hot fabric link a simulated drain with the resulting worst utilization.",
+         _obj({"limit": _N}), lambda s, a: s.te_assess(a.get("limit", 0.8))),
+    Tool("net_flow_anomalies", "Security: sources whose traffic in the latest window is far above their own recent "
+         "history (z-score), with where they enter the network.", _obj({"window_s": _N}),
+         lambda s, a: s.flow_anomalies(a.get("window_s", 60.0))),
+    Tool("net_compile_intent", "Turn an intent into the exact change set that achieves it, for net_what_if. "
+         "Kinds: drain_link {port}, restore_link {port}, quarantine_host {ip}, release_host {ip}, "
+         "guard_zone {zone, allow: [{proto, dport}], at: destination|source}, "
+         "set_bgp_neighbor {device, neighbor, enabled}. Add `reason`. Refuses intents that do not fit the network.",
+         _obj({"intent": {"type": "object"}, "confidence": _N}, ("intent",)),
+         lambda s, a: s.compile_intent(a["intent"], a.get("confidence", 0.9))),
     Tool("net_approvals", "Approval requests for changes the policy will not apply without a human (status: "
          "pending|granted|denied|expired|used). Only an operator, in the cockpit, can grant one.",
          _obj({"status": _S}), lambda s, a: s.approval_list(a.get("status"))),

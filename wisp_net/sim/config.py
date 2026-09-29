@@ -50,7 +50,9 @@ def _apply(cfg: dict[str, Any], path_text: str, value: Any, delete: bool) -> Non
     except ValueError as exc:
         raise SetError(str(exc)) from None
     names = _names(path)
-    if names[:3] == ("interfaces", "interface", "config") and len(names) == 4:
+    if names[0] == "system":
+        _apply_system(cfg["system"], path, names, value, delete, path_text)
+    elif names[:3] == ("interfaces", "interface", "config") and len(names) == 4:
         ifname = path[1].key("name") or ""
         if ifname not in cfg["interfaces"]:
             raise SetError(f"no interface {ifname!r}")
@@ -113,6 +115,33 @@ def _apply(cfg: dict[str, Any], path_text: str, value: Any, delete: bool) -> Non
             if acl not in cfg["acls"]:
                 raise SetError(f"cannot bind unknown ACL {acl!r}")
             cfg["acl-bindings"].setdefault(ifname, {})["ingress"] = acl
+    else:
+        raise SetError(f"path is not settable in the lab: {path_text}")
+
+
+def _apply_system(system: dict[str, Any], path: Path, names: tuple[str, ...], value: Any, delete: bool,
+                  path_text: str) -> None:
+    if names == ("system", "ssh-server", "config", "enable"):
+        if delete:
+            raise SetError("ssh-server enable can be updated, not deleted")
+        system["ssh-server"]["enable"] = _bool(value, path_text)
+    elif names == ("system", "ssh-server", "config", "protocol-version"):
+        if delete or value not in ("V2", "V1_V2"):
+            raise SetError(f"{path_text}: protocol-version is V2 or V1_V2")
+        system["ssh-server"]["protocol-version"] = value
+    elif names == ("system", "config", "login-banner"):
+        system["login-banner"] = "" if delete else str(value)
+    elif names == ("system", "ntp", "servers", "server", "config", "address"):
+        address = path[3].key("address") or ""
+        servers = system["ntp-servers"]
+        if delete:
+            if address in servers:
+                servers.remove(address)
+        else:
+            if value != address:
+                raise SetError(f"{path_text}: address {value!r} does not match the key {address!r}")
+            if address not in servers:
+                servers.append(address)
     else:
         raise SetError(f"path is not settable in the lab: {path_text}")
 

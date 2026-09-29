@@ -21,10 +21,12 @@ from typing import Any
 from wisp_net.actuation.engine import Actuator
 from wisp_net.governance.control import ApprovalQueue, KillSwitch
 from wisp_net.governance.ledger import Ledger
+from wisp_net.reasoning import compliance, diagnostics, intents, security, traffic
 from wisp_net.safety.change import ChangeSet
 from wisp_net.safety.policy import ChangePolicy
 from wisp_net.safety.verify import SegmentationPolicy, acl_findings, segmentation_violations
 from wisp_net.safety.whatif import what_if
+from wisp_net.sim.config import apply_set
 from wisp_net.sim.gnmi import SimGnmi
 from wisp_net.sim.network import FAULT_KINDS, SimNetwork, rfc3339
 from wisp_net.sim.topology import build_lab
@@ -101,6 +103,14 @@ class NetService:
                     self._scenario_ids[step["name"]] = fid
             elif "clear" in step:
                 self.net.clear(self._scenario_ids.get(step["clear"], step["clear"]))
+            elif "config" in step:
+                # An out-of-band commit (someone on the CLI): drift the compliance agent should find.
+                c = step["config"]
+                dev = c["device"]
+                updates = [(c["path"], c["value"])] if "value" in c else []
+                deletes = [] if "value" in c else [c["path"]]
+                self.net.apply_config(dev, apply_set(self.net.devices[dev].config, updates, deletes),
+                                      user=c.get("user", "unknown"))
 
     def start_realtime(self, speed: float = 1.0) -> None:
         """Advance the lab `speed` seconds per wall-clock second on a daemon thread."""
@@ -362,6 +372,37 @@ class NetService:
                     "windows": [{"name": w.name, "weekdays": list(w.weekdays), "start": w.start, "end": w.end,
                                  "from_date": w.from_date, "to_date": w.to_date} for w in p.windows],
                     "lab_time": rfc3339(self.net.now), "windows_active_now": p.active_windows(self.net.now)}
+
+    # ── domain analyses (the reasoning layer's instruments) ──────────────────
+
+    def optics_forecast(self, device: str | None = None, window_s: float = 1800.0) -> list[dict[str, Any]]:
+        with self._lock:
+            return diagnostics.optics_forecast(self.tsdb, self.net.now, device, window_s)
+
+    def error_correlation(self, device: str, port: str, window_s: float = 1800.0) -> dict[str, Any]:
+        with self._lock:
+            self._device(device)
+            return diagnostics.error_correlation(self.tsdb, self.net.now, device, port, window_s)
+
+    def config_drift(self, device: str | None = None) -> dict[str, Any]:
+        with self._lock:
+            return compliance.config_drift(self.gnmi, compliance.load("golden.json"), [device] if device else None)
+
+    def advisories(self) -> dict[str, Any]:
+        with self._lock:
+            return compliance.advisories(self.twin, compliance.load("advisories.json"))
+
+    def te_assess(self, limit: float = 0.8) -> dict[str, Any]:
+        with self._lock:
+            return traffic.te_assess(self, limit)
+
+    def flow_anomalies(self, window_s: float = 60.0) -> list[dict[str, Any]]:
+        with self._lock:
+            return security.flow_anomalies(list(self.collector.flows), self.net.now, window_s)
+
+    def compile_intent(self, intent: dict[str, Any], confidence: float = 0.9) -> dict[str, Any]:
+        with self._lock:
+            return intents.compile_intent(self, intent, confidence)
 
     # ── actuation and governance ─────────────────────────────────────────────
 
