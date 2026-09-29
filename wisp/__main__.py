@@ -222,22 +222,46 @@ def cmd_config(set_kv=None, validate=False):
     print(dim("Validate:     wisp config --validate"))
 
 
-def cmd_print(prompt, model=None, session_id=None, output_format="json", quiet=False):
+def _print_permission_mode() -> str:
+    """The permission mode for `--print`: `WISP_PERMISSION_MODE` if set, else `full` (the historic default).
+
+    An explicit value that is not a mode is refused rather than treated as `full`: a caller who asked for
+    a restriction and mistyped it must not get an unrestricted run.
+    """
+    from wisp.infra.security import PermissionMode
+
+    raw = os.environ.get("WISP_PERMISSION_MODE", "").strip().lower()
+    if not raw:
+        return "full"
+    allowed = [m.value for m in PermissionMode]
+    if raw not in allowed:
+        sys.stderr.write(f"✗ WISP_PERMISSION_MODE={raw!r} is not one of: {', '.join(allowed)}\n")
+        raise SystemExit(2)
+    return raw
+
+
+def cmd_print(prompt, model=None, session_id=None, output_format="json", quiet=False,
+              provider=None, workspace=None):
     """Headless mode: run prompt, print JSON result to stdout, exit.
 
-    First attempts to reach a local Wisp server at port 8000.
-    If unavailable, runs the agent directly in-process.
+    First attempts to reach a local Wisp server at port 8000, unless the caller set an override the
+    server would ignore (`--provider`, `--workspace`, `WISP_PERMISSION_MODE`). If unavailable, runs the
+    agent directly in-process.
     """
     import requests
 
     result = None
     exit_code = 0
+    permission_mode = _print_permission_mode()
+    delegate = not (provider or workspace or os.environ.get("WISP_PERMISSION_MODE", "").strip())
 
     # Try local server first — bounded: a listener that accepts but never
     # replies (stale server, port squatter) must not hang headless runs.
     # (connect 5s, read 15s); on timeout we fall through to in-process,
     # which returns the correct answer with at most duplicative server work.
     try:
+        if not delegate:
+            raise requests.ConnectionError("overrides set: run in-process")
         api_key = os.environ.get("WISP_API_KEY", "")
         headers = {}
         if api_key:
@@ -283,9 +307,10 @@ def cmd_print(prompt, model=None, session_id=None, output_format="json", quiet=F
             result = asyncio.run(run_headless(
                 prompt=prompt,
                 model=model,
-                workspace=safe_getcwd(),
+                workspace=workspace or safe_getcwd(),
                 session_id=session_id,
-                permission_mode="full",
+                permission_mode=permission_mode,
+                provider=provider,
             ))
         except Exception as e:
             result = {"ok": False, "error": str(e)}
@@ -1513,6 +1538,8 @@ def main():
                 session_id=flags_session,
                 output_format=flags_output_format,
                 quiet=flags_quiet,
+                provider=flags_provider,
+                workspace=flags_workspace,
             )
             return
 

@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from wisp.core.contracts import declared_read_names, is_declared_read
+
 # ponytail: literal 20-name allowlist (not derived at runtime) so the
 # partition is auditable in one glance; equality with the enforcement
 # set is pinned by test. If another safe tool lands, update this set
@@ -51,7 +53,8 @@ def filter_schemas_for_mode(schemas: list[dict[str, Any]],
     """
     if _mode_name(permission_mode) != "read_only":
         return list(schemas)
-    return [s for s in schemas if _schema_name(s) in READ_ONLY_TOOLS]
+    return [s for s in schemas
+            if _schema_name(s) in READ_ONLY_TOOLS or is_declared_read(_schema_name(s))]
 
 
 def visible_tool_names(allowed_set: set[str] | None,
@@ -67,6 +70,7 @@ def visible_tool_names(allowed_set: set[str] | None,
         return allowed_set
     if _mode_name(permission_mode) != "read_only":
         return allowed_set
+    permitted = set(READ_ONLY_TOOLS) | set(declared_read_names())
     if allowed_set is None:
-        return set(READ_ONLY_TOOLS)
-    return set(allowed_set) & set(READ_ONLY_TOOLS)
+        return permitted
+    return set(allowed_set) & permitted

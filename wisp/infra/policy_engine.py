@@ -21,6 +21,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from wisp.core.contracts import is_declared_read
+
 
 class RuleEffect(StrEnum):
     ALLOW = "allow"
@@ -349,7 +351,7 @@ def filter_allowed_for_mode(mode: str, tool_names) -> list[str]:
     if m == "full":
         return requested
     if m == "read_only":
-        return [t for t in requested if t in _DEFAULT_SAFE_READ_TOOLS]
+        return [t for t in requested if t in _DEFAULT_SAFE_READ_TOOLS or is_declared_read(t)]
     blocked = (
         _DEFAULT_ASK_ALL_BLOCK if m == "ask_all" else _DEFAULT_AUTO_EDIT_BLOCK
     )
@@ -372,6 +374,8 @@ def _make_readonly_rule(safe_tools: frozenset[str]) -> RulePredicate:
             return None
         if action.name in safe_tools:
             return PolicyDecision.allow("mode.read_only", f"safe read: {action.name}")
+        if is_declared_read(action.name):
+            return PolicyDecision.allow("mode.read_only", f"operator-declared read: {action.name}")
         return PolicyDecision.deny("mode.read_only", f"READ_ONLY mode blocks {action.name}")
     return predicate
 

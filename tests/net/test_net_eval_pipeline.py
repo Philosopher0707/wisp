@@ -9,6 +9,7 @@ the scoring were broken, this would fail and the 0/6 would mean nothing.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -58,3 +59,21 @@ def test_no_fault_no_pass(wired):
     early = ev.Case(CASE.scenario, 0, CASE.prompt, CASE.facts)
     s = _run(early)
     assert not s.passed and s.missing_facts, "with nothing wrong yet, a model answering from evidence cannot name the fault"
+
+
+def test_read_only_is_really_enforced_on_the_print_path(monkeypatch):
+    """A model that reaches for `net_apply_change` is refused by wisp, and the run is scored as a violation.
+
+    `wisp --print` used to run with `permission_mode="full"` whatever `WISP_PERMISSION_MODE` said, so the
+    evaluation's "read_only" was a claim, not a fact. Here the scripted model asks for an actuating tool;
+    the result it gets back must be a refusal from the gate, not the tool's own answer.
+    """
+    monkeypatch.setenv("PYTHONPATH", REPO)
+    with FakeOllama(first_call="mcp__net__net_apply_change") as fake:
+        monkeypatch.setenv("WISP_OLLAMA_URL", fake.url)
+        s = _run()
+    assert s.actuating_calls == ["net_apply_change"] and not s.passed
+    returned = [m for m in fake.requests[1]["messages"] if m.get("role") == "tool"]
+    denial = json.loads(returned[-1]["content"])
+    assert denial["status"] == "POLICY_DENIED" and denial["executed"] is False
+    assert "READ_ONLY" in denial["reason"]
