@@ -7482,6 +7482,34 @@ that holds against a compromised agent requires the cockpit on another host behi
 
 ---
 
+## ADR-0073 — The platform is one daemon; alerts become incidents that dispatch headless agent turns by autonomy tier
+
+**Status:** ACCEPTED
+**Phase:** The network agent, N6 (the closed loop)
+**Evidence:** driven end to end across processes, with `python -m wisp_net serve` running the `bgp-session-down` scenario at `--autonomy diagnose`.
+- The fault became incident I0001, grouping both `bgp_session_down` alerts.
+- The watcher dispatched the agent command with `WISP_PERMISSION_MODE=read_only`.
+- The agent, through wisp's real MCP client and `mcp --connect`, saw the incident's alerts and leaf3's IDLE neighbor on the **same** network, and was refused the lab-control tool.
+- The ledger recorded incident, dispatch and finish, intact.
+- The agent token got 401 on operator routes, and the operator token got 401 on the agent routes.
+
+The agent in that run was a stub standing in for a live model turn, which needs the operator's provider credentials. `tests/net/test_net_closed_loop.py` (**9 tests**; 8/8 mutation probes caught after two tests were added).
+
+### Decision
+
+**R1 — One platform, many clients.** A private lab per wisp session cannot close a loop: the turn an alert starts would look at a different network. `serve` runs the one platform, and wisp reaches it through `mcp --connect` (ADR-0069's reversal seam, taken).
+
+**R2 — Two credentials.** The agent token reaches the agent API: the MCP tool set, apply included, never lab control. The operator token reaches the operator routes. Neither opens the other's. (The single-host limit of ADR-0071 still holds.)
+
+**R3 — Incidents, not alerts, start agents.** Major-and-above openings are gathered for a debounce window into one incident. Alerts open when the watcher starts are adopted. A cooldown stops a recurring condition from re-dispatching.
+
+**R4 — Autonomy is a tier, and the gates do not move.**
+- `observe` records only.
+- `diagnose` and `propose` run wisp `read_only`, so `net_apply_change` is refused by wisp itself.
+- `act` lets the agent apply. Even then, verification, the change policy, change windows and operator approvals gate every change exactly as for a human-directed agent.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -7558,3 +7586,4 @@ that holds against a compromised agent requires the cockpit on another host behi
 | 0070 | A change is verified on a copy of the network, fails only on regressions, and is judged by policy before it may touch a device | The network agent, N3 (safety) | ACCEPTED (**R1** what-if on two clones with their own telemetry, never the lab. **R2** checks fail on regressions; history is reported, not blamed. **R3** intent is declared (`expected_unreachable`, drained links); an ACL binding is not intent to drop a link. **R4** exact ACL header-space analysis, union coverage, concrete leaking flows. **R5** fixed policy order: verification, blast radius, windows, confidence.) |
 | 0071 | Only a verified, allowed change is applied, under a confirm window; only an operator can approve, and the ledger is hash-chained | The network agent, N4 + N5 | ACCEPTED (**R1** one path: kill switch, fresh verification of this fingerprint at the current config epoch, policy re-decided at apply, single-use operator grant, idempotence. **R2** commit-confirm, blueprint triggers plus undeclared reachability loss, automatic rollback. **R3** the agent can apply, never approve. **R4** hash-chained ledger. Known limit: same-user token access on one host.) |
 | 0072 | The model states intents and reasons over deterministic instruments; the platform compiles intents into changes | The network agent, N2 (reasoning) | ACCEPTED (**R1** intents in, gNMI ops out, refusing intents that do not fit; nothing bypasses what-if/policy/apply. **R2** instruments report their own confidence. **R3** an optic is blamed only on its physical signature. **R4** disabling a BGP neighbor is declared intent. **R5** roles are wisp skills; precedence safety > availability > performance > efficiency; escalation triggers.) |
+| 0073 | The platform is one daemon; alerts become incidents that dispatch headless agent turns by autonomy tier | The network agent, N6 (closed loop) | ACCEPTED (**R1** one `serve` platform, wisp via `mcp --connect`. **R2** separate agent and operator tokens. **R3** debounced incidents, adoption of open alerts, cooldown. **R4** observe / diagnose / propose (wisp read_only) / act; the platform's gates never move.) |

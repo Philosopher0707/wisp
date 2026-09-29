@@ -4,7 +4,7 @@
 The platform is a separate process wisp reaches over MCP (ADR-0069). Wisp brings the agent: the turn
 loop, subagents, the gate chain, permission modes, the policy bundle and the audit log.
 
-**Status: N1 (sense and state), N2 (reasoning), N3 (safety), N4 (actuation) and N5 (governance).** The platform can now
+**Status: all six blueprint layers (N1–N5) plus the closed loop (N6).** The platform can now
 change the lab. It only does so through `net_apply_change`, only for a change `net_what_if` verified,
 only when the change policy allows it (or an operator approved it in the cockpit), and always with a
 confirm window that rolls back automatically.
@@ -39,6 +39,17 @@ reads: `net_what_if` runs on clones and never touches the lab. Add them to `tool
 `net_approvals`, `net_ledger`, `net_explain` and the N2 tools (`net_optics_forecast`, `net_error_correlation`, `net_config_drift`, `net_advisories`, `net_te_assess`, `net_flow_anomalies`, `net_compile_intent`) are reads too. **Never declare `net_apply_change` read.**
 Left undeclared, it stays `exec`, so wisp asks you before every apply, on top of the platform's own policy.
 
+### Closed loop (shared platform)
+
+```bash
+python -m wisp_net serve --port 8750 --autonomy diagnose        # the platform; watcher on
+# ~/.config/wisp/mcp.json then points wisp at it instead of a private lab:
+#   {"name": "net", "command": "python3", "args": ["-m", "wisp_net", "mcp", "--connect", "http://127.0.0.1:8750"], ...}
+```
+
+Every wisp session, and every incident-driven turn, then sees the same network. The watcher's agent
+command defaults to `wisp run {prompt} --skill net-orchestrator`. Change it with `--agent-cmd`.
+
 ### Operating changes
 
 ```bash
@@ -72,7 +83,7 @@ injection and the lab clock (`lab_*` tools). They change the simulated world and
 | **4 Safety** | Declarative change sets of gNMI updates and deletes, with intent, expected unreachability and confidence (`safety/change.py`). Atomic device-side Set (`sim/config.py`). Exact ACL header-space algebra: first-match, dead rules by union coverage (`acl.py`). Formal checks on twins: loop-free forwarding, no new blackholes, no BGP session lost as collateral, no new dead ACL rules, no new zone leaks with the exact leaking flow classes, no new congestion, no new major alerts, convergence (`safety/verify.py`). What-if on two clones of the live lab with their own telemetry pipelines, so the lab is never touched (`safety/whatif.py`). Policy arbiter for verification, blast radius, change windows and the confidence threshold, with rules as JSON (`safety/policy.py`, `policies/*.json`). | Batfish/Z3, Containerlab twin, OPA | Batfish and OPA adapters |
 | **5 Actuation** | `net_apply_change` checks, in order: kill switch, a fresh verification of *this* fingerprint with nothing committed since, the policy re-decided now, and a single-use operator grant when one is required. Applying twice is a no-op. Then checkpoint, commit, a confirm window of at most 60 s watched through telemetry (BGP flap rate > 5/min, loss > 0.05% on touched ports, management unreachable, undeclared reachability loss), and automatic rollback on any trigger (`actuation/engine.py`) | gNMI Set commit-confirm, SDN, Ansible/Terraform | real gNMI Set with device-side commit-confirm |
 | **6 Governance** | Append-only, SHA-256 hash-chained ledger of every verification, approval, commit, confirmation, rollback and refusal (`governance/ledger.py`). `net_explain` rationale reports. Approval queue and kill switch (`governance/control.py`). Operator cockpit on 127.0.0.1, bearer token in a 0600 file: approvals, kill switch, operator revert, ledger, what-if sandbox, WebSocket event feed (`governance/cockpit.py`, `python -m wisp_net cockpit ...`) | immutable ledger, rationale logger, cockpit (GraphQL + WS) | SSO in front of the cockpit on another host; GraphQL |
-| Closed loop | — | event-driven autonomy | N6: an alert starts a headless wisp turn, tiered autonomy |
+| Closed loop | `python -m wisp_net serve`: one long-running platform (lab, cockpit, watcher). The watcher debounces major alerts into incidents, adopts alerts already open at start, and applies a cooldown. Each incident dispatches a headless wisp turn with the orchestrator skill by autonomy tier: `observe` (record only), `diagnose` and `propose` (wisp runs read-only), or `act` (may apply; platform verification, policy and approvals still gate). The agent reaches the same network through `mcp --connect`, the agent API with its own token, which cannot reach operator routes or lab control (`loop/watcher.py`) | event-driven autonomy (TM Forum L4/L5) | live-model evaluation |
 
 ## The simulated lab
 

@@ -26,8 +26,17 @@ from pydantic import BaseModel, Field
 DEFAULT_PORT = 8750
 
 
+def home() -> Path:
+    return Path(os.environ.get("WISP_NET_HOME", Path.home() / ".config" / "wisp-net"))
+
+
 def token_path() -> Path:
-    return Path(os.environ.get("WISP_NET_HOME", Path.home() / ".config" / "wisp-net")) / "cockpit.token"
+    return home() / "cockpit.token"
+
+
+def agent_token_path() -> Path:
+    """The agent's credential: tool calls only, never operator actions."""
+    return home() / "agent.token"
 
 
 def load_or_create_token(path: Path | None = None) -> str:
@@ -63,7 +72,11 @@ class WhatIfBody(BaseModel):
     settle_s: float = 30.0
 
 
-def create_app(service: Any, token: str) -> FastAPI:
+class ToolCall(BaseModel):
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+def create_app(service: Any, token: str, agent_token: str | None = None) -> FastAPI:
     app = FastAPI(title="wisp-net cockpit", docs_url=None, redoc_url=None, openapi_url=None)
 
     def authorized(authorization: str = Header(default="")) -> None:
@@ -121,6 +134,24 @@ def create_app(service: Any, token: str) -> FastAPI:
     def what_if(body: WhatIfBody) -> dict[str, Any]:
         return dict(_call(service.what_if, body.change, body.settle_s))
 
+    def agent_authorized(authorization: str = Header(default="")) -> None:
+        scheme, _, presented = authorization.partition(" ")
+        if agent_token is None or scheme.lower() != "bearer" or not hmac.compare_digest(presented.strip(),
+                                                                                         agent_token):
+            raise HTTPException(status_code=401, detail="agent token required")
+
+    from wisp_net.mcp_server import McpServer
+
+    agent_surface = McpServer(service)  # reads + net_apply_change; never the lab-control tools
+
+    @app.get("/agent/tools", dependencies=[Depends(agent_authorized)])
+    def agent_tools() -> list[dict[str, Any]]:
+        return [agent_surface._describe(t) for t in agent_surface.tools.values()]
+
+    @app.post("/agent/tools/{name}", dependencies=[Depends(agent_authorized)])
+    def agent_call(name: str, body: ToolCall) -> dict[str, Any]:
+        return agent_surface._call({"name": name, "arguments": body.arguments})
+
     @app.websocket("/events")
     async def events(ws: WebSocket) -> None:
         if not hmac.compare_digest(ws.query_params.get("token", ""), token):
@@ -143,11 +174,15 @@ def create_app(service: Any, token: str) -> FastAPI:
 class CockpitServer:
     """Runs the cockpit on a daemon thread, silently (the MCP server's stdio is sacred)."""
 
-    def __init__(self, service: Any, port: int = DEFAULT_PORT, token: str | None = None) -> None:
+    def __init__(self, service: Any, port: int = DEFAULT_PORT, token: str | None = None,
+                 agent_token: str | None = None) -> None:
         import uvicorn
 
         self.token = token or load_or_create_token()
-        config = uvicorn.Config(create_app(service, self.token), host="127.0.0.1", port=port,
+        self.agent_token = agent_token or load_or_create_token(agent_token_path())
+        if self.agent_token == self.token:
+            raise ValueError("the agent token must differ from the operator token")
+        config = uvicorn.Config(create_app(service, self.token, self.agent_token), host="127.0.0.1", port=port,
                                 log_config=None, log_level="critical", access_log=False)
         self._server = uvicorn.Server(config)
         self._thread = threading.Thread(target=self._server.run, name="wisp-net-cockpit", daemon=True)
