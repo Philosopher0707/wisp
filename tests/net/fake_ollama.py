@@ -17,7 +17,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 class FakeOllama:
-    def __init__(self) -> None:
+    def __init__(self, first_call: str = "mcp__net__net_alerts") -> None:
+        self.first_call = first_call
         self.requests: list[dict] = []
         outer = self
 
@@ -50,7 +51,7 @@ class FakeOllama:
                 if not tool_messages:
                     return self._send([
                         {"model": "fake:1b", "message": {"role": "assistant", "content": "", "tool_calls": [
-                            {"function": {"name": "mcp__net__net_alerts", "arguments": {}}}]}, "done": False},
+                            {"function": {"name": outer.first_call, "arguments": {}}}]}, "done": False},
                         {"model": "fake:1b", "message": {"role": "assistant", "content": ""}, "done": True,
                          "done_reason": "stop"},
                     ])

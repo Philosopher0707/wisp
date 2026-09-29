@@ -32,7 +32,8 @@ async def run_headless(prompt: str, model: str | None = None,
                        workspace: str | None = None,
                        session_id: str | None = None,
                        permission_mode: str = "full",
-                       root: CompositionRoot | None = None) -> dict:
+                       root: CompositionRoot | None = None,
+                       provider: str | None = None) -> dict:
     """Run a prompt headlessly and return structured result.
 
     Uses CompositionRoot + HeadlessTransport for consistent
@@ -44,6 +45,7 @@ async def run_headless(prompt: str, model: str | None = None,
         workspace: Optional workspace override.
         session_id: Optional session ID.
         permission_mode: Permission mode for tool execution.
+        provider: Optional provider override (`--provider`).
         root: Optional existing CompositionRoot to reuse.
               If not provided, a cached headless root is used.
     """
@@ -54,6 +56,8 @@ async def run_headless(prompt: str, model: str | None = None,
     config = WispConfig()
     if model:
         config = config.replace(model=model)
+    if provider:
+        config = config.replace(provider=provider)
     if workspace:
         config = config.replace(workspace=workspace)
     config = config.replace(permission_mode=permission_mode, auto_approve=True, show_thinking=True)

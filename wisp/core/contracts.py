@@ -351,6 +351,27 @@ def forget_declared_risk(server: str) -> None:
         del _DECLARED_RISK[key]
 
 
+def is_declared_read(name: str) -> bool:
+    """True only for an MCP tool whose operator declared `tool_risk: read` (`mcp.json`).
+
+    Built-in tools never qualify (they are classified by TOOL_RISK_TABLE and the safe-read sets), and an
+    undeclared MCP tool is EXEC, so this fails closed. It is what lets a `read_only` session use a
+    network platform's reads without opening the mode to any other external tool.
+    """
+    canonical = canonical_tool_name(name)
+    return canonical.startswith("mcp:") and _DECLARED_RISK.get(canonical) == ToolRisk.READ
+
+
+def declared_read_names() -> frozenset[str]:
+    """Wire names (`mcp__server__tool`) of every MCP tool currently declared `read`."""
+    names = set()
+    for canonical, risk in _DECLARED_RISK.items():
+        if risk == ToolRisk.READ:
+            server, _, tool = canonical.removeprefix("mcp:").partition("/")
+            names.add(f"mcp__{server}__{tool}")
+    return frozenset(names)
+
+
 def risk_for_tool(name: str) -> ToolRisk:
     """Classify a tool name; unknown tools default to EXEC (fail-closed)."""
     canonical = canonical_tool_name(name)

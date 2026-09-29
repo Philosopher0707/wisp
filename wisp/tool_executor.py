@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 from wisp.config import WispConfig
+from wisp.core.contracts import is_declared_read
 from wisp.infra.security import PermissionMode, policy_hard_deny
 from wisp.core.events import (
     AgentEvent,
@@ -1335,8 +1336,10 @@ class ToolExecutor:
         mode = getattr(self.config, "permission_mode", PermissionMode.AUTO_EDIT)
         if mode == PermissionMode.READ_ONLY and func_name in _get_write_tools(self.config):
             return f"[Blocked: read_only mode - {func_name} is not allowed]"
-        # MCP tools are external code — always gated in READ_ONLY mode
-        if mode == PermissionMode.READ_ONLY and self._is_external_call(func_name):
+        # MCP tools are external code — gated in READ_ONLY mode unless the operator declared this one
+        # `tool_risk: read` in mcp.json (PR #47): that declaration is what lets a read-only session read.
+        if (mode == PermissionMode.READ_ONLY and self._is_external_call(func_name)
+                and not is_declared_read(func_name)):
             return f"[Blocked: read_only mode - MCP tool {func_name} is not allowed]"
         return None
 

@@ -19,6 +19,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from wisp.core.contracts import is_declared_read
 from wisp.infra.policy_engine import (
     Action as EngineAction,
     EvalContext,
@@ -75,7 +76,7 @@ def policy_hard_deny(tool_name: str, mode: Any) -> str | None:
     here — returns None for them.
     """
     m = str(getattr(mode, "value", mode) or "auto_edit").lower()
-    if m == "read_only" and tool_name not in _SAFE_READ_TOOLS:
+    if m == "read_only" and tool_name not in _SAFE_READ_TOOLS and not is_declared_read(tool_name):
         return f"READ_ONLY mode blocks {tool_name}"
     if m == "auto_edit" and tool_name in _AUTO_EDIT_DENY_TOOLS:
         return f"AUTO_EDIT mode blocks {tool_name}"
