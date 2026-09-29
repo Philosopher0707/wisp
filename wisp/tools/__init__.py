@@ -50,6 +50,16 @@ from wisp.tools.git import (
     tool_git_commit,
     tool_git_push,
     tool_gh_pr_create,
+    tool_git_log,
+    tool_git_fetch,
+    tool_gh_pr_view,
+    tool_gh_pr_list,
+    tool_gh_pr_checks,
+    tool_gh_run_failed_logs,
+    tool_gh_pr_comment,
+    tool_gh_pr_close,
+    tool_gh_pr_merge,
+    tool_git_sync_base,
 )
 from wisp.tools.lsp import (
     tool_lsp_diagnostics,

@@ -94,6 +94,49 @@ class SandboxProvider(abc.ABC):
 
 # ── Docker sandbox ─────────────────────────────────────────────────────
 
+#: Git metadata that the *host* later executes. `git_commit` / `git_push` /
+#: `gh_pr_create` run outside the sandbox, and git runs whatever these name (a hook
+#: script; `core.hooksPath`, `core.fsmonitor`, `core.sshCommand`, `alias.x = !cmd`).
+#: Read-write inside the container, sandboxed bash could plant code that the next host
+#: git call runs. Kept in step with `wisp.pathsec.PROTECTED_PATH_FRAGMENTS`.
+_GIT_METADATA_READ_ONLY: tuple[str, ...] = ("hooks", "config")
+
+
+def _git_metadata_overlays(workspace: str) -> list[str]:
+    """`-v` arguments mounting the executable git metadata read-only over the workspace.
+
+    Only what exists is overlaid (a bind mount needs its source), and only for a real `.git`
+    directory: a `.git` *file* (worktree, submodule) points at a gitdir outside the mount,
+    which the container cannot reach at all. Renaming over a read-only bind mount fails, so
+    `git config` (lockfile + rename) is refused as well as a direct write.
+    """
+    git_dir = os.path.join(workspace, ".git")
+    if not os.path.isdir(git_dir):
+        return []
+    args: list[str] = []
+    for name in _GIT_METADATA_READ_ONLY:
+        source = os.path.join(git_dir, name)
+        if os.path.exists(source):
+            args += ["-v", f"{source}:/workspace/.git/{name}:ro"]
+    return args
+
+
+def docker_run_args(container_name: str, workspace: str, image: str,
+                    memory: str, cpus: str) -> list[str]:
+    """The exact `docker run` argv for the sandbox container (pure, so it is testable)."""
+    return [
+        "docker", "run", "-d", "--name", container_name,
+        "--network", "none",
+        f"--memory={memory}",
+        f"--cpus={cpus}",
+        "-v", f"{workspace}:/workspace",
+        *_git_metadata_overlays(workspace),
+        "-w", "/workspace",
+        "--entrypoint", "sleep",
+        image, "infinity",
+    ]
+
+
 class DockerSandbox(SandboxProvider):
     """Runs commands inside a Docker container with resource limits.
 
@@ -145,16 +188,8 @@ class DockerSandbox(SandboxProvider):
         subprocess.run(["docker", "rm", "-f", self.container_name],
                        capture_output=True, timeout=10)
 
-        cmd = [
-            "docker", "run", "-d", "--name", self.container_name,
-            "--network", "none",
-            f"--memory={self.memory}",
-            f"--cpus={self.cpus}",
-            "-v", f"{self.workspace}:/workspace",
-            "-w", "/workspace",
-            "--entrypoint", "sleep",
-            self.image, "infinity",
-        ]
+        cmd = docker_run_args(self.container_name, self.workspace, self.image,
+                              self.memory, self.cpus)
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             if result.returncode != 0:

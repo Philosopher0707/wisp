@@ -272,6 +272,12 @@ TOOL_RISK_TABLE: dict[str, ToolRisk] = {
     "search_symbols": ToolRisk.READ,
     "git_status": ToolRisk.READ,
     "git_diff": ToolRisk.READ,
+    "git_log": ToolRisk.READ,
+    "git_fetch": ToolRisk.READ,
+    "gh_pr_view": ToolRisk.READ,
+    "gh_pr_list": ToolRisk.READ,
+    "gh_pr_checks": ToolRisk.READ,
+    "gh_run_failed_logs": ToolRisk.READ,
     "lsp_diagnostics": ToolRisk.READ,
     "lsp_definition": ToolRisk.READ,
     "lsp_references": ToolRisk.READ,
@@ -301,6 +307,10 @@ TOOL_RISK_TABLE: dict[str, ToolRisk] = {
     "git_commit": ToolRisk.EXEC,
     "git_push": ToolRisk.EXEC,
     "gh_pr_create": ToolRisk.EXEC,
+    "gh_pr_comment": ToolRisk.EXEC,
+    "gh_pr_close": ToolRisk.EXEC,
+    "gh_pr_merge": ToolRisk.EXEC,
+    "git_sync_base": ToolRisk.EXEC,
     "spawn": ToolRisk.EXEC,
     "fanout": ToolRisk.EXEC,
     "diagnose": ToolRisk.READ,
@@ -349,6 +359,27 @@ def declare_tool_risk(name: str, risk: ToolRisk) -> None:
 def forget_declared_risk(server: str) -> None:
     for key in [k for k in _DECLARED_RISK if k.startswith(f"mcp:{server}/")]:
         del _DECLARED_RISK[key]
+
+
+def is_declared_read(name: str) -> bool:
+    """True only for an MCP tool whose operator declared `tool_risk: read` (`mcp.json`).
+
+    Built-in tools never qualify (they are classified by TOOL_RISK_TABLE and the safe-read sets), and an
+    undeclared MCP tool is EXEC, so this fails closed. It is what lets a `read_only` session use a
+    network platform's reads without opening the mode to any other external tool.
+    """
+    canonical = canonical_tool_name(name)
+    return canonical.startswith("mcp:") and _DECLARED_RISK.get(canonical) == ToolRisk.READ
+
+
+def declared_read_names() -> frozenset[str]:
+    """Wire names (`mcp__server__tool`) of every MCP tool currently declared `read`."""
+    names = set()
+    for canonical, risk in _DECLARED_RISK.items():
+        if risk == ToolRisk.READ:
+            server, _, tool = canonical.removeprefix("mcp:").partition("/")
+            names.add(f"mcp__{server}__{tool}")
+    return frozenset(names)
 
 
 def risk_for_tool(name: str) -> ToolRisk:

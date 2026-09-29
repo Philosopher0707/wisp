@@ -77,6 +77,7 @@ _SHADOW_BUILTIN_TOOLS: frozenset[str] = frozenset({
     "spawn_subagent",
     "git_status", "git_diff", "git_branch", "git_commit", "git_push",
     "gh_pr_create",
+    "git_log", "git_fetch", "gh_pr_view", "gh_pr_list", "gh_pr_checks", "gh_run_failed_logs", "gh_pr_comment", "gh_pr_close", "gh_pr_merge", "git_sync_base",
     "lsp_diagnostics", "lsp_definition", "lsp_references",
     "lsp_hover", "lsp_symbols",
     "diagnose", "run_tests",

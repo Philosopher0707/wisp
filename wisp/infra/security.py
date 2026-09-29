@@ -19,6 +19,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from wisp.core.contracts import is_declared_read
 from wisp.infra.policy_engine import (
     Action as EngineAction,
     EvalContext,
@@ -41,7 +42,8 @@ class PermissionMode(StrEnum):
 # Tools that are "safe reads" — allowed in READ_ONLY and ASK_ALL
 _SAFE_READ_TOOLS = frozenset({
     "read_file", "list_files", "search_codebase", "search_symbols",
-    "git_status", "git_diff", "lsp_diagnostics", "lsp_definition",
+    "git_status", "git_diff", "git_log", "git_fetch", "gh_pr_view", "gh_pr_list", "gh_pr_checks", "gh_run_failed_logs",
+    "lsp_diagnostics", "lsp_definition",
     "lsp_references", "lsp_hover", "lsp_symbols", "web_fetch",
     "web_search", "recall",
 })
@@ -50,12 +52,14 @@ _SAFE_READ_TOOLS = frozenset({
 _ASK_ALL_BLOCK_TOOLS = frozenset({
     "write_file", "edit_file", "edit_file_multi", "run_bash",
     "git_branch", "git_commit", "git_push", "gh_pr_create",
+    "gh_pr_comment", "gh_pr_close", "gh_pr_merge", "git_sync_base",
     "spawn", "fanout", "plan_task", "mark_step_done", "update_plan",
 })
 
 # Tools that require approval in AUTO_EDIT (writes auto-approved, bash blocked)
 _AUTO_EDIT_BLOCK_TOOLS = frozenset({
     "run_bash", "git_branch", "git_commit", "git_push", "gh_pr_create",
+    "gh_pr_comment", "gh_pr_close", "gh_pr_merge", "git_sync_base",
     "spawn", "fanout",
 })
 
@@ -75,7 +79,7 @@ def policy_hard_deny(tool_name: str, mode: Any) -> str | None:
     here — returns None for them.
     """
     m = str(getattr(mode, "value", mode) or "auto_edit").lower()
-    if m == "read_only" and tool_name not in _SAFE_READ_TOOLS:
+    if m == "read_only" and tool_name not in _SAFE_READ_TOOLS and not is_declared_read(tool_name):
         return f"READ_ONLY mode blocks {tool_name}"
     if m == "auto_edit" and tool_name in _AUTO_EDIT_DENY_TOOLS:
         return f"AUTO_EDIT mode blocks {tool_name}"

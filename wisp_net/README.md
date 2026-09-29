@@ -66,8 +66,38 @@ host behind SSO.
 
 `tool_risk` is the operator's statement that these tools only read. Wisp does not trust a server's own
 `readOnlyHint`. Every tool left out stays `exec` and asks for approval. With the declaration, a
-`read_only` wisp session can run the whole diagnosis loop. Add `--lab-control` to expose fault
+`read_only` wisp session can run the whole diagnosis loop (this holds at all five places that enforce read-only by
+name: the policy rule, the mode hard-deny, the executor's MCP block, the subagent filter and the schema/menu filter;
+it was **not** true before the change that added `is_declared_read`, and the watcher's diagnose and propose tiers
+could not read the network). Add `--lab-control` to expose fault
 injection and the lab clock (`lab_*` tools). They change the simulated world and are never read-only.
+
+## Evaluating a model
+
+Every other test here is deterministic. This is the one place a real model drives the real path (`wisp --print`, asking for the `net-orchestrator` skill, over the MCP server, in `read_only` via `WISP_PERMISSION_MODE`, against a lab whose fault has already developed) and is scored against ground truth.
+
+```bash
+python -m wisp_net eval --model llama3.2:3b                                   # local, no key
+python -m wisp_net eval --provider openai --model <name> --pass-env OPENAI_API_KEY --json scores.json
+python -m wisp_net eval --model <name> --scenario optic-degradation --keep runs/   # one scenario, keep raw output
+```
+
+A run **passes** only if it finished without errors, made at least one `mcp__net__*` call (a right answer without evidence is a guess), named every ground-truth fact (device, interface or peer, cause), and never called an actuating tool. It also records placeholder arguments (`device1`, `port1`) and device names that do not exist in the lab. The environment is hermetic: a temporary HOME and workspace, no credentials unless you pass a variable with `--pass-env`, and an MCP server that declares only the read tools as read and has no `--lab-control`. `--warmup` (on `mcp`) starts the lab with the fault already developed so every run sees the same world.
+
+### Baseline, 2026-09-29
+
+| Model | Result | What happened |
+|---|---|---|
+| `llama3.2:3b` (local) | **0/6** | (Run before `--print` honoured `WISP_PERMISSION_MODE`, so it ran with full permissions; with zero tool calls nothing could have been actuated.) Zero structured tool calls in every run. It describes the tools it would call, in prose and code fences, with placeholder arguments, and never calls them (`iterations: 0`, no errors). |
+| `stealth/space-bunny-alpha` (OpenRouter) | **6/6** | 14–65 read calls per scenario (40–186 s). Every answer named the injected fault and cited the tool results behind it. None tried to change anything, and each declined to apply a fix itself (the change window, and confidence below the 0.85 policy threshold). |
+
+That second row is **one run per scenario of one model**, with unpinned sampling: it shows the loop works end to end with a capable model, not how often. The model is an unlisted OpenRouter "stealth" model, so others cannot reproduce it exactly; run the command above with a model you can name and add its row.
+
+**A gap this exposed:** `read_only` refuses the `skill__*` loader and every hand-off to other agents (`orchestrate_*`, `spawn`, `fanout`). The orchestrator skill tells a model to do both, so a read-only session (the watcher's diagnose and propose tiers) cannot load the skill's instructions or delegate to the domain agents. The capable model above improvised the same loop with the `mcp__net__*` tools, and the scorer records the refusals without failing the run, but the shipped skills are not actually reaching read-only sessions. Whether `skill__*` should be readable in `read_only` is a permission decision left to the operator.
+
+The control that separates the model from the setup: the same model, asked to use the built-in `list_files`, behaves the same way, so the MCP path is not the cause. And `tests/net/test_net_eval_pipeline.py` is the positive control: a scripted model that does emit a structured tool call passes through the real `wisp` CLI, the real MCP server (80 tools offered, 32 of them `mcp__net__*`) and the real lab, and its answer, built from the tool result alone, names `leaf2 Ethernet50` and `rx_power_low`.
+
+**Not measured:** any capable model. At the time of writing the Ollama cloud models on the operator's account were unavailable (retired, not in the free usage, or the monthly limit reached), and nothing was run that would cost money. The 0/6 says a 3B model cannot drive this loop; it says nothing yet about the orchestrator with a model that can. Run the command above with one and add its row here.
 
 ## Blueprint map
 
