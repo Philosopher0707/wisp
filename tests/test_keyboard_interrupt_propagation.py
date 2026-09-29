@@ -37,16 +37,32 @@ def _fake_generator_exit(*, command: str, workspace: str = ".", timeout: int = 6
 class TestKeyboardInterruptPropagates:
     """KeyboardInterrupt must NOT be swallowed by broad except handlers."""
 
-    def test_keyboard_interrupt_escapes_run_bash(self):
-        """tool_run_bash must re-raise KeyboardInterrupt, not bury it."""
+    def test_keyboard_interrupt_escapes_run_bash(self, monkeypatch):
+        """tool_run_bash must re-raise KeyboardInterrupt, not bury it.
 
-        async def fake_create_subprocess_shell(*args, **kwargs):
-            raise KeyboardInterrupt("Simulated Ctrl+C from subprocess")
+        Ctrl+C is raised by the sandbox tier that carries the command: since GH#13 run_bash
+        executes through the tier router, whose PTY tier uses `subprocess.Popen`. This test
+        used to patch `asyncio.create_subprocess_shell`, which only the host-executing
+        `agent.tools.runner` sink called — so it passed only when an earlier test had leaked
+        that sink, and alone it ran `sleep 100` to the 60 s timeout and failed.
+        """
+        from wisp.sandbox.router import SandboxRouter
+        from wisp.tools import bash as bash_mod
 
-        with patch("asyncio.create_subprocess_shell", side_effect=fake_create_subprocess_shell):
-            with pytest.raises(KeyboardInterrupt):
-                from wisp.tools.bash import tool_run_bash
-                tool_run_bash(command="sleep 100", workspace="/tmp")
+        class InterruptedTier:
+            name = "interrupted"
+
+            def is_available(self):
+                return True
+
+            async def run(self, command, cwd="", timeout=60):
+                raise KeyboardInterrupt("Simulated Ctrl+C from the sandbox")
+
+        monkeypatch.delenv("WISP_SANDBOX", raising=False)
+        monkeypatch.setattr(bash_mod, "get_router",
+                            lambda workspace: SandboxRouter(workspace, tiers=[InterruptedTier()]))
+        with pytest.raises(KeyboardInterrupt):
+            bash_mod.tool_run_bash(command="sleep 100", workspace="/tmp")
 
     def test_keyboard_interrupt_escapes_registry(self):
         """execute_tool must re-raise KeyboardInterrupt, not convert to JSON."""
