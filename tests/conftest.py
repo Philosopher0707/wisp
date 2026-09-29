@@ -56,6 +56,31 @@ def isolated_wisp_env(monkeypatch, tmp_path):
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _isolate_workspace_trust_file():
+    """Point the workspace-trust file at a throwaway for the whole session.
+
+    `WorkspaceTrustManager.TRUST_FILE` is computed from `Path.home()` at import
+    time, so patching HOME later never redirected it. Every test that called
+    `trust_workspace(tmp_path)` without `trust_file=` appended its temp dir to
+    the developer's real `~/.config/wisp/trusted_workspaces.json` (about 1,500
+    entries accumulated). Live E2E runs keep the ambient file.
+    """
+    if os.environ.get("WISP_E2E_LIVE") == "1":
+        yield
+        return
+    from wisp.trust import WorkspaceTrustManager
+
+    scratch = Path(tempfile.mkdtemp(prefix="wisp-trust-"))
+    saved = WorkspaceTrustManager.TRUST_FILE
+    WorkspaceTrustManager.TRUST_FILE = scratch / "trusted_workspaces.json"
+    try:
+        yield
+    finally:
+        WorkspaceTrustManager.TRUST_FILE = saved
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+@pytest.fixture(scope="session", autouse=True)
 def _neutralize_server_auth():
     """Force server dev-mode (no auth) for the unit-test session.
 
