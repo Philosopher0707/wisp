@@ -271,7 +271,8 @@ class PriorityRuleEngine(PolicyEngine):
 
 _DEFAULT_SAFE_READ_TOOLS = frozenset({
     "read_file", "list_files", "search_codebase", "search_symbols",
-    "git_status", "git_diff", "lsp_diagnostics", "lsp_definition",
+    "git_status", "git_diff", "git_log", "git_fetch", "gh_pr_view", "gh_pr_list", "gh_pr_checks", "gh_run_failed_logs",
+    "lsp_diagnostics", "lsp_definition",
     "lsp_references", "lsp_hover", "lsp_symbols", "web_fetch",
     "web_search", "recall",
 })
@@ -279,6 +280,7 @@ _DEFAULT_SAFE_READ_TOOLS = frozenset({
 _DEFAULT_ASK_ALL_BLOCK = frozenset({
     "write_file", "edit_file", "edit_file_multi", "run_bash",
     "git_branch", "git_commit", "git_push", "gh_pr_create",
+    "gh_pr_comment", "gh_pr_close", "gh_pr_merge", "git_sync_base",
     "spawn", "fanout", "plan_task", "mark_step_done", "update_plan",
 })
 
@@ -313,6 +315,7 @@ _AUTO_EDIT_DENY_TOOLS: frozenset[str] = frozenset()
 _AUTO_EDIT_APPROVAL_TOOLS = frozenset({
     "run_bash", "spawn", "fanout",
     "git_branch", "git_commit", "git_push", "gh_pr_create",
+    "gh_pr_comment", "gh_pr_close", "gh_pr_merge", "git_sync_base",
 })
 
 #: What to do about an AUTO_EDIT denial. One string, both denial sites (`_make_block_rule` here and
