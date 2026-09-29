@@ -446,6 +446,10 @@ def remote_and_clone(tmp_path):
     _git(seed, "push", "origin", "main")
     clone = tmp_path / "clone"
     _git(tmp_path, "clone", str(origin), str(clone))
+    # The tool runs git with the process environment, exactly as in a developer's clone, so the clone
+    # carries its own identity (CI runners have no global one; a merge needs a committer).
+    _git(clone, "config", "user.name", "t")
+    _git(clone, "config", "user.email", "t@t")
     _git(clone, "checkout", "-b", "feat/x")
     return seed, clone
 
@@ -504,3 +508,12 @@ def test_real_git_log_and_fetch(remote_and_clone):
     _advance_main(seed)
     assert tools.tool_git_fetch(workspace=str(clone)).startswith("✓")
     assert "add b.txt" in _git(clone, "log", "origin/main", "--oneline")
+
+
+# ── visibility in read_only mode (the capability filter is a separate list from the gate) ────────
+
+def test_read_only_sessions_see_the_reads_and_none_of_the_writes():
+    from wisp import capability_filter as C
+
+    assert set(READS) <= C.READ_ONLY_TOOLS
+    assert not set(WRITES) & C.READ_ONLY_TOOLS
