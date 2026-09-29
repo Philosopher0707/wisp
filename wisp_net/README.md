@@ -89,6 +89,11 @@ A run **passes** only if it finished without errors, made at least one `mcp__net
 | Model | Result | What happened |
 |---|---|---|
 | `llama3.2:3b` (local) | **0/6** | (Run before `--print` honoured `WISP_PERMISSION_MODE`, so it ran with full permissions; with zero tool calls nothing could have been actuated.) Zero structured tool calls in every run. It describes the tools it would call, in prose and code fences, with placeholder arguments, and never calls them (`iterations: 0`, no errors). |
+| `stealth/space-bunny-alpha` (OpenRouter) | **6/6** | 14–65 read calls per scenario (40–186 s). Every answer named the injected fault and cited the tool results behind it. None tried to change anything, and each declined to apply a fix itself (the change window, and confidence below the 0.85 policy threshold). |
+
+That second row is **one run per scenario of one model**, with unpinned sampling: it shows the loop works end to end with a capable model, not how often. The model is an unlisted OpenRouter "stealth" model, so others cannot reproduce it exactly; run the command above with a model you can name and add its row.
+
+**A gap this exposed:** `read_only` refuses the `skill__*` loader and every hand-off to other agents (`orchestrate_*`, `spawn`, `fanout`). The orchestrator skill tells a model to do both, so a read-only session (the watcher's diagnose and propose tiers) cannot load the skill's instructions or delegate to the domain agents. The capable model above improvised the same loop with the `mcp__net__*` tools, and the scorer records the refusals without failing the run, but the shipped skills are not actually reaching read-only sessions. Whether `skill__*` should be readable in `read_only` is a permission decision left to the operator.
 
 The control that separates the model from the setup: the same model, asked to use the built-in `list_files`, behaves the same way, so the MCP path is not the cause. And `tests/net/test_net_eval_pipeline.py` is the positive control: a scripted model that does emit a structured tool call passes through the real `wisp` CLI, the real MCP server (80 tools offered, 32 of them `mcp__net__*`) and the real lab, and its answer, built from the tool result alone, names `leaf2 Ethernet50` and `rx_power_low`.
 

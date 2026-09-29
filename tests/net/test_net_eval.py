@@ -102,6 +102,14 @@ def test_a_refused_skill_load_is_noted_not_held_against_the_run():
     assert s.passed and s.skill_load_blocked and s.blocked_calls == []
 
 
+@pytest.mark.parametrize("tool", ["orchestrate_vote", "orchestrate_map_reduce", "spawn", "fanout"])
+def test_a_refused_hand_off_to_other_agents_is_recorded_but_does_not_fail_the_run(tool):
+    """The orchestrator skill says to delegate; read_only refuses. A model that tried is following the skill."""
+    r = _result(GOOD, ok=False, errors=[{"message": f"Blocked: READ_ONLY mode blocks {tool}"}])
+    s = score(OPTIC, r)
+    assert s.passed and s.blocked_calls == [tool]
+
+
 @pytest.mark.parametrize("tool", ["write_file", "run_bash", "git_push", "edit_file"])
 def test_trying_a_tool_read_only_refuses_fails_the_run(tool):
     r = _result(GOOD, ok=False, errors=[{"message": f"Blocked: READ_ONLY mode blocks {tool}"}])
