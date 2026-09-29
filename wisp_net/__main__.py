@@ -39,6 +39,8 @@ def main(argv: list[str] | None = None) -> int:
     mcp = sub.choices["mcp"]
     mcp.add_argument("--lab-control", action="store_true", help="expose fault-injection and clock tools")
     mcp.add_argument("--speed", type=float, default=1.0, help="lab seconds per wall-clock second")
+    mcp.add_argument("--warmup", type=float, default=0.0, metavar="SECONDS",
+                     help="advance the lab this many simulated seconds before serving (a fault already developed)")
     mcp.add_argument("--log", help="log file (the server never writes to stdout/stderr outside the protocol)")
     mcp.add_argument("--cockpit", type=int, default=0, metavar="PORT",
                      help="serve the operator cockpit on 127.0.0.1:PORT (approvals, kill switch, ledger)")
@@ -62,6 +64,17 @@ def main(argv: list[str] | None = None) -> int:
     inst = sub.add_parser("install-skills", help="install the domain-agent skills where wisp discovers skills")
     inst.add_argument("--dest", default=str(Path.home() / ".agents" / "skills"))
     inst.add_argument("--force", action="store_true", help="replace skills that differ")
+    ev = sub.add_parser("eval", help="score a real model against the scenarios (read-only, hermetic)")
+    ev.add_argument("--model", required=True, help="model name as the provider knows it")
+    ev.add_argument("--provider", default="ollama")
+    ev.add_argument("--scenario", action="append", help="limit to this scenario (repeatable)")
+    ev.add_argument("--skill", default="net-orchestrator")
+    ev.add_argument("--timeout", type=float, default=600.0, help="seconds per scenario")
+    ev.add_argument("--pass-env", action="append", default=[], metavar="NAME",
+                    help="environment variable to forward to wisp, e.g. OPENAI_API_KEY (default: none)")
+    ev.add_argument("--wisp-cmd", default="wisp", help="how to start wisp")
+    ev.add_argument("--json", metavar="FILE", help="write the full scores as JSON")
+    ev.add_argument("--keep", metavar="DIR", help="keep each run's raw stdout/stderr here")
     op = sub.add_parser("cockpit", help="operator commands against a running cockpit")
     op.add_argument("--port", type=int, default=8750)
     op.add_argument("action", choices=["status", "approvals", "grant", "deny", "kill", "release", "rollback",
@@ -74,6 +87,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cockpit(args)
     if args.cmd == "install-skills":
         return _install_skills(Path(args.dest), args.force)
+    if args.cmd == "eval":
+        return _eval(args)
 
     if args.cmd == "scenarios":
         for scenario in sorted(SCENARIOS.glob("*.json")):
@@ -103,6 +118,8 @@ def main(argv: list[str] | None = None) -> int:
                                 format="%(asctime)s %(levelname)s %(name)s %(message)s")
         from wisp_net.mcp_server import run_stdio
 
+        if args.warmup > 0:
+            service.advance(args.warmup)
         service.start_realtime(args.speed)
         cockpit = None
         if args.cockpit:
@@ -183,6 +200,26 @@ def _install_skills(dest: Path, force: bool) -> int:
         target.write_text(text, encoding="utf-8")
         print(f"installed {target}")
     return status
+
+
+def _eval(args: argparse.Namespace) -> int:
+    import shlex
+
+    from wisp_net import evaluation
+
+    known = {c.scenario: c for c in evaluation.CASES}
+    wanted = args.scenario or list(known)
+    unknown = [name for name in wanted if name not in known]
+    if unknown:
+        print(f"unknown scenario(s): {', '.join(unknown)}; choose from {', '.join(known)}", file=sys.stderr)
+        return 2
+    scores = evaluation.run_eval([known[name] for name in wanted], model=args.model, provider=args.provider,
+                                 skill=args.skill, wisp_cmd=shlex.split(args.wisp_cmd), timeout_s=args.timeout,
+                                 passthrough=args.pass_env, keep=Path(args.keep) if args.keep else None)
+    print(evaluation.summarize(scores))
+    if args.json:
+        Path(args.json).write_text(evaluation.to_json(scores), encoding="utf-8")
+    return 0 if all(s.passed for s in scores) else 1
 
 
 def _cockpit(args: argparse.Namespace) -> int:

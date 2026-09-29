@@ -69,6 +69,28 @@ host behind SSO.
 `read_only` wisp session can run the whole diagnosis loop. Add `--lab-control` to expose fault
 injection and the lab clock (`lab_*` tools). They change the simulated world and are never read-only.
 
+## Evaluating a model
+
+Every other test here is deterministic. This is the one place a real model drives the real path (`wisp --print ... --skill net-orchestrator` over the MCP server, `read_only`, against a lab whose fault has already developed) and is scored against ground truth.
+
+```bash
+python -m wisp_net eval --model llama3.2:3b                                   # local, no key
+python -m wisp_net eval --provider openai --model <name> --pass-env OPENAI_API_KEY --json scores.json
+python -m wisp_net eval --model <name> --scenario optic-degradation --keep runs/   # one scenario, keep raw output
+```
+
+A run **passes** only if it finished without errors, made at least one `mcp__net__*` call (a right answer without evidence is a guess), named every ground-truth fact (device, interface or peer, cause), and never called an actuating tool. It also records placeholder arguments (`device1`, `port1`) and device names that do not exist in the lab. The environment is hermetic: a temporary HOME and workspace, no credentials unless you pass a variable with `--pass-env`, and an MCP server that declares only the read tools as read and has no `--lab-control`. `--warmup` (on `mcp`) starts the lab with the fault already developed so every run sees the same world.
+
+### Baseline, 2026-09-29
+
+| Model | Result | What happened |
+|---|---|---|
+| `llama3.2:3b` (local) | **0/6** | Zero structured tool calls in every run. It describes the tools it would call, in prose and code fences, with placeholder arguments, and never calls them (`iterations: 0`, no errors). |
+
+The control that separates the model from the setup: the same model, asked to use the built-in `list_files`, behaves the same way, so the MCP path is not the cause. And `tests/net/test_net_eval_pipeline.py` is the positive control: a scripted model that does emit a structured tool call passes through the real `wisp` CLI, the real MCP server (80 tools offered, 32 of them `mcp__net__*`) and the real lab, and its answer, built from the tool result alone, names `leaf2 Ethernet50` and `rx_power_low`.
+
+**Not measured:** any capable model. At the time of writing the Ollama cloud models on the operator's account were unavailable (retired, not in the free usage, or the monthly limit reached), and nothing was run that would cost money. The 0/6 says a 3B model cannot drive this loop; it says nothing yet about the orchestrator with a model that can. Run the command above with one and add its row here.
+
 ## Blueprint map
 
 | Blueprint layer | Built (N1) | Stand-in for | Next |
