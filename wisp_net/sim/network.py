@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from wisp_net.acl import Rule, evaluate, prefix_interval, volume
 from wisp_net.sim.topology import (
     EXTERNAL_PREFIX,
     LabSpec,
@@ -38,6 +39,10 @@ RX_LOS_DBM = -28.0
 MAX_HOPS = 16
 SYSLOG_ENTERPRISE = 32473  # RFC 5612: reserved for documentation
 FACILITY_LOCAL7 = 23
+# Share of each demand by destination port (TCP): what the flow export reports, and what
+# an ACL on the path is evaluated against.
+FLOW_MIX = ((0.6, 443), (0.25, 8443), (0.15, 5201))
+BGP_PORT = 179
 
 
 class DeviceUnreachable(RuntimeError):
@@ -149,6 +154,8 @@ class SimNetwork:
         self._fcs_window_start = self.now
         self._rx_alarm: set[tuple[str, str]] = set()
         self.drops: dict[str, float] = {}
+        self._acl_cache: dict[tuple[str, str], list[Rule] | None] = {}
+        self._acl_pass_cache: dict[tuple[str, str, str, str], float] = {}
         self._build()
         self._update_links()
         self._update_sessions(initial=True)
@@ -323,11 +330,58 @@ class SimNetwork:
             return False
         if not dev.interfaces[s.local_if].oper_up:
             return False
+        peer_port = dev.interfaces[s.local_if].peer
+        if not self._acl_permits_bgp(s.device, s.local_if, s.neighbor_ip, s.local_ip):
+            return False
+        if peer_port and not self._acl_permits_bgp(peer_port[0], peer_port[1], s.local_ip, s.neighbor_ip):
+            return False
         for f in self.active_faults("bgp_down"):
             fdev, _, fip = f.target.partition(":")
             if (fdev, fip) in ((s.device, s.neighbor_ip), (s.peer_device, s.local_ip)):
                 return False
         return True
+
+    def _ingress_rules(self, dev: str, ifname: str) -> list[Rule] | None:
+        key = (dev, ifname)
+        if key not in self._acl_cache:
+            from wisp_net.sim.config import ingress_rules
+
+            self._acl_cache[key] = ingress_rules(self.devices[dev].config, ifname)
+        return self._acl_cache[key]
+
+    def _acl_permits_bgp(self, dev: str, ifname: str, src_ip: str, dst_ip: str) -> bool:
+        rules = self._ingress_rules(dev, ifname)
+        if rules is None:
+            return True
+        box = (prefix_interval(f"{src_ip}/32"), prefix_interval(f"{dst_ip}/32"), (6, 6), (BGP_PORT, BGP_PORT))
+        return bool(evaluate(rules, box)[0])
+
+    def _acl_pass(self, dev: str, ifname: str, src_prefix: str, dst_prefix: str) -> float:
+        """Fraction of a demand's traffic mix the ingress ACL on `ifname` lets through."""
+        key = (dev, ifname, src_prefix, dst_prefix)
+        cached = self._acl_pass_cache.get(key)
+        if cached is not None:
+            return cached
+        rules = self._ingress_rules(dev, ifname)
+        passed = 1.0
+        if rules is not None:
+            src, dst = prefix_interval(src_prefix), prefix_interval(dst_prefix)
+            passed = 0.0
+            for share, port in FLOW_MIX:
+                box = (src, dst, (6, 6), (port, port))
+                permitted = sum(volume(b) for b in evaluate(rules, box)[0])
+                passed += share * permitted / volume(box)
+        self._acl_pass_cache[key] = passed
+        return passed
+
+    def apply_config(self, device: str, config: dict[str, Any], user: str = "wisp") -> None:
+        """Commit a new running config (the device side of a validated gNMI Set)."""
+        self.devices[device].config = config
+        self._acl_cache.clear()
+        self._acl_pass_cache.clear()
+        self._routes_dirty = True
+        self._log(device, 5, "mgmt", "CONFIG_COMMIT", f'[cfg@{SYSLOG_ENTERPRISE} user="{user}"]',
+                  f"Configuration committed by {user}")
 
     def _update_sessions(self, initial: bool = False) -> None:
         for s in self.sessions.values():
@@ -458,10 +512,12 @@ class SimNetwork:
         tx: dict[tuple[str, str], float] = {}
         rx: dict[tuple[str, str], float] = {}
         self.drops = {}
+        acl_drops: dict[tuple[str, str], float] = {}
         for dev, in_if, prefix, bps in self._demands():
             if in_if:
                 rx[(dev, in_if)] = rx.get((dev, in_if), 0.0) + bps
-            self._forward(dev, prefix, bps, 0, tx, rx)
+            src = self._origin_prefix(dev)
+            self._forward(dev, src, prefix, bps, 0, tx, rx, acl_drops, in_if or None)
             self._export_flows(dev, in_if, prefix, bps, dt)
         for device in self.devices.values():
             for iface in device.interfaces.values():
@@ -477,6 +533,7 @@ class SimNetwork:
                 in_pkts = int(r * dt / 8 / AVG_PACKET_BYTES)
                 c.in_octets += int(r * dt / 8)
                 c.in_pkts += in_pkts
+                c.in_discards += int(acl_drops.get((device.name, iface.name), 0.0) * dt / 8 / AVG_PACKET_BYTES)
                 iface.fcs_error_rate = self._fcs_rate(device.name, iface)
                 fcs = int(in_pkts * iface.fcs_error_rate)
                 c.in_fcs_errors += fcs
@@ -485,8 +542,24 @@ class SimNetwork:
                     key = (device.name, iface.name)
                     self._fcs_window[key] = self._fcs_window.get(key, 0) + fcs
 
-    def _forward(self, dev: str, prefix: str, bps: float, hops: int,
-                 tx: dict[tuple[str, str], float], rx: dict[tuple[str, str], float]) -> None:
+    def _origin_prefix(self, dev: str) -> str:
+        networks = self.devices[dev].config["bgp"]["networks"]
+        if self.devices[dev].role == "leaf" and networks:
+            return str(networks[0])
+        return EXTERNAL_PREFIX
+
+    def _forward(self, dev: str, src: str, prefix: str, bps: float, hops: int,
+                 tx: dict[tuple[str, str], float], rx: dict[tuple[str, str], float],
+                 acl_drops: dict[tuple[str, str], float], in_if: str | None = None) -> None:
+        if in_if is not None:
+            passed = self._acl_pass(dev, in_if, src, prefix)
+            if passed < 1.0:
+                dropped = bps * (1.0 - passed)
+                acl_drops[(dev, in_if)] = acl_drops.get((dev, in_if), 0.0) + dropped
+                self.drops[f"{dev}:acl"] = self.drops.get(f"{dev}:acl", 0.0) + dropped
+                bps -= dropped
+            if bps <= 0:
+                return
         if hops > MAX_HOPS:
             self.drops["ttl-expired"] = self.drops.get("ttl-expired", 0.0) + bps
             return
@@ -514,7 +587,8 @@ class SimNetwork:
             tx[(dev, local_if)] = tx.get((dev, local_if), 0.0) + share
             if peer_if is not None:
                 rx[peer_if] = rx.get(peer_if, 0.0) + share
-            self._forward(peer, prefix, share, hops + 1, tx, rx)
+            self._forward(peer, src, prefix, share, hops + 1, tx, rx, acl_drops,
+                          peer_if[1] if peer_if is not None else None)
 
     def _fcs_rate(self, dev: str, iface: SimInterface) -> float:
         rate = 0.0
@@ -531,7 +605,7 @@ class SimNetwork:
         src_host = next((h for h in self.spec.hosts if h.leaf == dev and h.port == in_if), None)
         src_ip = src_host.ip if src_host else f"198.51.100.{10 + sum(map(ord, dev + prefix)) % 200}"
         dst_ip = f"{dst_net}.{11 + sum(map(ord, in_if + dev)) % 4}"
-        for share, dport in ((0.6, 443), (0.25, 8443), (0.15, 5201)):
+        for share, dport in FLOW_MIX:
             key = (dev, in_if, src_ip, dst_ip, 6, dport)
             octets = int(bps * share * dt / 8)
             acc = self._flows.setdefault(key, [0, 0])

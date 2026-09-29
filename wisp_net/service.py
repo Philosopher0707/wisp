@@ -18,6 +18,10 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from wisp_net.safety.change import ChangeSet
+from wisp_net.safety.policy import ChangePolicy
+from wisp_net.safety.verify import SegmentationPolicy, acl_findings, segmentation_violations
+from wisp_net.safety.whatif import what_if
 from wisp_net.sim.gnmi import SimGnmi
 from wisp_net.sim.network import FAULT_KINDS, SimNetwork, rfc3339
 from wisp_net.sim.topology import build_lab
@@ -44,6 +48,9 @@ class NetService:
         self.alerts = AlertEngine()
         self.collector = Collector(self.gnmi, self.bus, self.tsdb, self.twin, self.alerts)
         self.kb = KnowledgeBase.bundled()
+        self.segmentation = SegmentationPolicy.bundled()
+        self.change_policy = ChangePolicy.bundled()
+        self.verifications: dict[str, dict[str, Any]] = {}
         self.collect_interval_s = collect_interval_s
         self.started = self.net.now
         self._next_collect = self.net.now
@@ -304,6 +311,44 @@ class NetService:
             diff["to"] = "now"
             diff["from_ts"], diff["to_ts"] = rfc3339(diff["from_ts"]), rfc3339(diff["to_ts"])
             return diff
+
+    # ── safety (analysis only: runs on clones and the twin, never on the lab) ──
+
+    def what_if(self, change: dict[str, Any], settle_s: float = 30.0) -> dict[str, Any]:
+        """Verify a proposed change on a copy of the network; the lab is not touched."""
+        parsed = ChangeSet.from_dict(change)
+        settle_s = max(5.0, min(float(settle_s), 300.0))
+        with self._lock:
+            report = what_if(self.net, parsed, settle_s, self.segmentation, self.change_policy).to_dict()
+            report["verified_at"] = rfc3339(self.net.now)
+            self.verifications[parsed.fingerprint] = {"report": report, "change": parsed.to_dict(),
+                                                      "at": self.net.now}
+            while len(self.verifications) > 100:
+                self.verifications.pop(next(iter(self.verifications)))
+            return report
+
+    def acl_audit(self, device: str | None = None) -> dict[str, Any]:
+        with self._lock:
+            findings = [f for f in acl_findings(self.twin) if not device or f["device"] == device]
+            acls = {dev: sorted(st.acls) for dev, st in sorted(self.twin.devices.items()) if st.acls}
+            return {"acls": acls, "dead_rules": findings}
+
+    def segmentation_audit(self) -> dict[str, Any]:
+        with self._lock:
+            violations = segmentation_violations(self.twin, self.segmentation)
+            return {"zones": {z.name: list(z.prefixes) for z in self.segmentation.zones.values()},
+                    "rules": [{"from": r.source, "to": r.destination, "allow": list(r.allow)}
+                              for r in self.segmentation.rules],
+                    "compliant": not violations, "violations": violations[:MAX_ROWS]}
+
+    def change_policy_view(self) -> dict[str, Any]:
+        with self._lock:
+            p = self.change_policy
+            return {"max_port_changes": p.max_port_changes, "hitl_confidence_threshold": p.hitl_confidence_threshold,
+                    "require_verification": p.require_verification,
+                    "windows": [{"name": w.name, "weekdays": list(w.weekdays), "start": w.start, "end": w.end,
+                                 "from_date": w.from_date, "to_date": w.to_date} for w in p.windows],
+                    "lab_time": rfc3339(self.net.now), "windows_active_now": p.active_windows(self.net.now)}
 
     def _device(self, name: str) -> Any:
         st = self.twin.devices.get(name)

@@ -1,0 +1,10 @@
+{
+  "description": "Guardrails every change passes before it may touch a device (blueprint layer 4, guardrail-policy-arbiter).",
+  "max_concurrent_port_modifications": 10,
+  "mandatory_hitl_confidence_threshold": 0.85,
+  "require_verification": true,
+  "prohibited_change_windows": [
+    {"name": "Peak Enterprise Hours", "weekdays": [0, 1, 2, 3, 4], "start": "09:00", "end": "18:00"},
+    {"name": "Black Friday / Cyber Week", "from_date": "2026-11-26", "to_date": "2026-12-01"}
+  ]
+}

@@ -52,7 +52,7 @@ include = ["wisp*", "agent*"]
 
 [tool.setuptools.package-data]
 # The network platform's runbooks and fault scenarios are data, not modules.
-wisp_net = ["knowledge/*.md", "scenarios/*.json"]
+wisp_net = ["knowledge/*.md", "scenarios/*.json", "policies/*.json"]
 
 [tool.pytest.ini_options]
 # Restrict collection to the test tree. wisp/test_distill.py and

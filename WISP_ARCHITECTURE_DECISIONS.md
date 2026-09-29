@@ -7373,6 +7373,49 @@ the platform may be embedded in-process — the read API (`NetService`) is alrea
 
 ---
 
+## ADR-0070 — A change is verified on a copy of the network, fails only on regressions, and is judged by policy before it may touch a device
+
+**Status:** ACCEPTED
+**Phase:** The network agent, N3 (safety, verification, simulation) — blueprint layer 4
+**Evidence:** driven — `net_what_if` on the live lab: a link drain verifies (its session losses and
+alerts are marked intended); an uplink ACL that permits only HTTPS is **rejected** because it takes
+BGP down (2 sessions, 2 major alerts, marked collateral); withdrawing a prefix is rejected as 5 lost
+pairs unless declared `expected_unreachable`; a PCI segmentation fix verifies, closes the
+`general -> pci` leaks (38 violations to 2), and is **denied by policy** for a 12-port blast radius
+and peak hours. `tests/net/test_net_safety.py` (**36 tests**; 8/8 mutation probes caught, including
+dead-rule detection by a single rule instead of the union, and segmentation ignoring ACLs along the path)
+
+### Context
+
+The blueprint requires that no change reach a live device "without mathematical reachability
+guarantees and simulated validation". Batfish, Z3, Containerlab and OPA are not available on the build
+host. The lab's twin, its clone-able simulator and exact header-space arithmetic cover the same
+questions for the modelled surface.
+
+### Decision
+
+**R1 — What-if runs on two clones, never on the lab.** The baseline and the candidate advance side
+by side from the same random state, each with its own telemetry pipeline, so every difference is the
+change's, and the candidate is judged by what its devices would report.
+
+**R2 — Checks fail on regressions, not on history.** A leak, dead rule or congestion the network already
+had is reported under `baseline`, not blamed on the change. Otherwise the first violation in a network
+blocks every later change, including the one that fixes it.
+
+**R3 — Intent is declared, not inferred.** Consequences the change states are not failures: reachability
+it lists in `expected_unreachable`, and sessions and alerts on links it administratively shuts.
+Anything else it breaks is collateral. **An ACL binding is not a statement of intent to drop a link**,
+which is exactly how the "web-only uplink ACL" is caught.
+
+**R4 — ACL analysis is exact.** First-match evaluation and dead-rule detection use box subtraction over
+(src, dst, proto, dport). A rule covered by the *union* of earlier rules is found, and leaks are
+reported as concrete flow classes.
+
+**R5 — Policy order is fixed and the first refusal is named:** verification, blast radius, change
+windows, then confidence. Below the threshold is `require_approval`; the rest are `deny`.
+
+---
+
 ## Decision index
 
 | ADR | Title | Phase | Status |
@@ -7446,3 +7489,4 @@ the platform may be embedded in-process — the read API (`NetService`) is alrea
 | 0067 | A deployment without a composition root is ungoverned by construction, and says so | The M4 wiring's second construction site (`PHASE_M4_WIRING.md` §4 residual 2) | ACCEPTED (resolves residual 2, which read *"named, not done"*, by driving the site rather than reading it: `acp_session.py`'s `_get_tool_executor` prefers the root's executor and otherwise builds `ToolExecutor(self.config, …)` **without `policy=`**. The obvious repair is **rejected by ADR-0058 R1** — the organization policy is loaded *"ONCE, here — the single load site"* (`composition.py:167`), because one load site is what makes one authority, so a second call site would make the layer's presence a function of which construction path ran. So residual 2 is a **conflict between a gap and a rule**, not an unfinished wiring. **R1** the fallback keeps its behaviour and gains a **warning** naming the missing layer, stating that permission gating still applies, and pointing at the remedy — the gap is **made loud rather than closed**, because closing it is what ADR-0058 forbids. **R2** the remedy is a `CompositionRoot`, not a second loader: one loader, one authority. Rejects *calling the loader in the fallback* (the forbidden second site) and *leaving it silent* — which is what it was, and is the false-assurance mode `PHASE_10_M4_GOVERNANCE_UNWIRED.md` §4 names and ADR-0058 §8 distinguishes from ADR-0036's benign fail-open. Third construction site the same rule has decided. No flag, no gate, no authority changed; **66 ACP tests pass**) |
 | 0068 | The workspace-trust layer is applied on REST unconditionally, and last | ADR-0059's residual 2 (the L1/L2/L3 consult, and the quarantine gap it exposed) | ACCEPTED (resolves ADR-0059 residual 2 by driving it: `_m2_denial` **returned `None` immediately** when no organization policy was loaded, so `authorize()` was never called and **L2 was skipped entirely** — a `QUARANTINED` workspace denied non-read tools on the agent path and **allowed them over REST** on every bundle-less deployment. Of the three layers only L2 was a gap (L1 is unbounded for the local human; L3 needs a `restricted` sensitivity REST never passes), and **workspace trust is not a policy question** — it is classified from the *workspace*, so gating its enforcement on a bundle made a security control's presence a function of an unrelated configuration. **R1** applied unconditionally. **R2** applied **last**, and that is load-bearing: a check appended after the narrowing ones can only *add* a denial, never reorder a pinned message — making `_m2_denial` unconditional instead was tried and **rejected because `test_no_bundle_is_the_old_gate_byte_for_byte` caught it** changing the `read_only` 403 detail for `write_file` (same status, different message, and ADR-0059 R2 measures that message byte-for-byte). **R3** one implementation: `wisp/auth/workspace_trust.refuses(trust, *, is_read)`, used by **both** `auth/decision`'s L2 and the REST gate — the second copy of a security rule this corpus has already paid for once (cf. ADR-0066 R3's L4 scan); it takes `is_read` not a tool name so `workspace_trust` stays pure. **R4** the bundle-gated consult is unchanged, so the measured differential holds where it was measured. Driven: quarantined + no root + no bundle → **403 by the workspace trust layer**; a read still permitted; a `TRUSTED` workspace unchanged; **109 tests pass**. Behaviour change on a path that previously allowed, deliberately behind **no flag** — the prior behaviour was the *absence* of a control, not a configuration of one) |
 | 0069 | wisp becomes a network agent through a separate platform it reaches over MCP; the lab is simulated first | The network agent, N1 (sense and state) | ACCEPTED (**R1** the platform is `wisp_net/`, reached over MCP; wisp's core gains only general MCP capabilities. **R2** simulated first, behind the interfaces the real systems fill. **R3** read-only until the safety layer gates change. **R4** lab control is opt-in and never read-only.) |
+| 0070 | A change is verified on a copy of the network, fails only on regressions, and is judged by policy before it may touch a device | The network agent, N3 (safety) | ACCEPTED (**R1** what-if on two clones with their own telemetry, never the lab. **R2** checks fail on regressions; history is reported, not blamed. **R3** intent is declared (`expected_unreachable`, drained links); an ACL binding is not intent to drop a link. **R4** exact ACL header-space analysis, union coverage, concrete leaking flows. **R5** fixed policy order: verification, blast radius, windows, confidence.) |
