@@ -169,15 +169,41 @@ SEQUENCE: list[tuple[str, str]] = [
 ]
 
 
+def _tracked() -> set[str] | None:
+    """The set of **tracked** paths, or `None` when git cannot answer.
+
+    **The derivation must read the committed tree.** Until this existed, `_files()` and
+    `_tripwires()` walked the working *directory*, so the page depended on files that are not in
+    the repository: the `tripwire` column, the "named by no test file" figure and its list all
+    moved when six untracked test files were present or absent. That made **R8's reproducibility
+    promise false for this register** — a page derived from a developer's uncommitted work cannot
+    be reproduced from a clone, and its guard failed on a page that was correct for the tree it
+    was generated from.
+
+    Found by running the guard with the untracked files temporarily set aside. `None` (git
+    missing, or not a repository) falls back to the old walk — the page is then
+    working-tree-dependent again, which is why `_check` reports it as a finding.
+    """
+    try:
+        out = subprocess.run(["git", "ls-files", "-z"], cwd=REPO,
+                             capture_output=True, text=True, check=True)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return {p for p in out.stdout.split("\0") if p}
+
+
 def _files() -> list[tuple[str, ast.Module]]:
     out: list[tuple[str, ast.Module]] = []
+    tracked = _tracked()
     for root in ROOTS:
         for path in (REPO / root).rglob("*.py"):
             if any(p in SKIP_DIRS for p in path.parts):
                 continue
+            rel = path.relative_to(REPO).as_posix()
+            if tracked is not None and rel not in tracked:
+                continue          # untracked: not part of the committed tree
             try:
-                out.append((path.relative_to(REPO).as_posix(),
-                            ast.parse(path.read_text(encoding="utf-8"))))
+                out.append((rel, ast.parse(path.read_text(encoding="utf-8"))))
             except (SyntaxError, UnicodeDecodeError, OSError):
                 continue
     return out
@@ -239,12 +265,17 @@ def _line_names(rel: str, line: int, name: str, *, kind: str) -> str | None:
 
 
 def _tripwires(names: list[str]) -> dict[str, str]:
-    """The first test file naming each exception. Derived, not declared.
+    """The first **tracked** test file naming each exception. Derived, not declared.
 
     A row with no tripwire is an exception nothing tests — a fact worth stating, so the
     column carries `—` rather than being omitted.
+
+    **Tracked only.** This used to walk `tests/` on disk, so an untracked test file could
+    supply a tripwire — and the page then disagreed with itself across checkouts. See `_tracked`.
     """
-    tests = sorted((REPO / "tests").rglob("*.py"))
+    tracked = _tracked()
+    tests = [p for p in sorted((REPO / "tests").rglob("*.py"))
+             if tracked is None or p.relative_to(REPO).as_posix() in tracked]
     text = {p: p.read_text(encoding="utf-8", errors="replace") for p in tests}
     out: dict[str, str] = {}
     for name in names:
@@ -317,6 +348,10 @@ def _check(defined, raises, catches) -> list[str]:
         broken.append(f"row phase(s) missing from the sequence section: {sorted(used - listed)}")
     if listed - used:
         broken.append(f"sequence phase(s) with no row: {sorted(listed - used)}")
+    if _tracked() is None:
+        broken.append(
+            "git could not list the tracked files, so this page was derived from the working "
+            "DIRECTORY and is not reproducible from a clone (R8). Run it inside the repository.")
     return broken
 
 

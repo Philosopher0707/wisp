@@ -212,8 +212,18 @@ class TestTheDerivationIsSound:
     def test_regenerating_reproduces_the_page(self, page_text):
         """R8's requirement, and the property that makes 'derived' true rather than aspirational.
 
-        The page names its commit in the banner, so the sha is normalised on both sides — a page
-        cannot record the commit that contains it. Everything else must match exactly.
+        **Only the commit is normalised** — a page cannot record the commit that contains it.
+        Everything else must match exactly, including the "named by no test file" figure and its
+        list.
+
+        **This test earned its place by failing.** Its first run, in a clean checkout, disagreed
+        with a page that was correct: `derive_register.py` walked the working *directory*, so the
+        `tripwire` column, the untested figure and its list all moved when six untracked test files
+        were present or absent. R8's promise — *regenerating reproduces the page* — was therefore
+        **false for this register**: a page derived from a developer's uncommitted work cannot be
+        reproduced from a clone, and CI would have failed on it. The generator now reads the
+        **tracked** tree (`_tracked()`, `git ls-files`), and this assertion is what keeps it that
+        way.
         """
         fresh = _generator().render()
         norm = lambda t: re.sub(r"`[0-9a-f]{7,40}`", "`<sha>`", t)  # noqa: E731
