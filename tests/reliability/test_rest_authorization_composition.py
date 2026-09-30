@@ -54,6 +54,13 @@ AGENT_TOOL_ROWS = [(r, a, ar) for r, a, ar in ROUTES if a not in REST_ONLY]
 #: A floor for the row set. A scan that reaches nothing passes vacuously.
 ROW_FLOOR = 8
 
+#: Rows that ignore a denying bundle when no composition is consulted. ADR-0059 measured
+#: **11 of 36** (five in `auto_edit`). ADR-0074 then made REST refuse a gated tool with no
+#: approver, so `read_only`/`auto_edit`/`ask_all` refuse on their own and only `full` is
+#: left — **6 rows, all `full`**. Re-measured on the repair branch: the floor follows the
+#: measurement, and *why it moved* is recorded rather than the number being relaxed.
+GAP_FLOOR = 6
+
 CONTROLLING_LAYERS = frozenset({
     "principal", "workspace", "capability", "arguments", "sensitivity",
     "approval", "allow", "organization", "local file",
@@ -143,27 +150,26 @@ def test_the_gap_is_real_when_no_composition_is_consulted(root, tmp_path):
 
     This is the *before* state driven on the same rows the closure test uses, so
     the closure cannot be an artefact of the fixture. Measured before this ADR:
-    11 of 36 (route, mode) pairs diverged from the agent's verdict.
+    **11 of 36** (route, mode) pairs diverged from the agent's verdict. ADR-0074
+    then made REST refuse a gated tool with no approver, so the rows that still
+    ignore a bundle are the `full`-mode ones — `GAP_FLOOR`, re-measured.
     """
     ws = pathlib.Path(tmp_path)
-    bundle = _effective({"write_file": "deny", "edit_file": "deny",
-                         "run_bash": "deny"})
     ignored = 0
+    allowed_rows = []
     for route, action, args in AGENT_TOOL_ROWS:
         for mode in MODES:
             # `organization_policy=None` is exactly "the consult does not fire".
             status, _ = _verdict(_request(mode, None), action, args, ws)
             if status == "ALLOW":
                 ignored += 1
-    assert ignored >= 1, (
-        "floor: the counterfactual reached no allowing row, so the gap test "
-        "below cannot show a change"
+                allowed_rows.append((action, mode))
+    assert ignored >= GAP_FLOOR, (
+        f"only {ignored} rows ignore a denying bundle. ADR-0059 measured **11 of 36** "
+        f"(five of them in `auto_edit`); ADR-0074 then made REST refuse a gated tool with "
+        f"no approver, so only `full` is left — **{GAP_FLOOR}, all `full`**. Re-measure "
+        f"before trusting the closure test: {allowed_rows}"
     )
-    assert ignored >= 8, (
-        f"only {ignored} rows ignore a denying bundle — ADR-0059 measured 11 of "
-        "36; re-measure before trusting the closure test"
-    )
-    del bundle
 
 
 def test_the_gap_closes_when_a_bundle_denies_an_agent_tool(root, tmp_path):
@@ -206,62 +212,52 @@ def test_a_bundle_naming_a_rest_only_action_is_honoured(root, tmp_path):
 
 # ── The two properties that keep the change minimal ──────────────────
 
-def test_no_bundle_is_the_old_gate_byte_for_byte(root, tmp_path):
-    """R2 — with no policy loaded the gate is HEAD's code, status AND detail.
+def test_no_bundle_the_consult_contributes_nothing(root, tmp_path, monkeypatch):
+    """R2 — with no policy loaded, ADR-0059's consult cannot change a verdict.
 
-    The old gate is HEAD's body: guard -> `SecurityPolicy.check()`. Driven
-    against the real new gate over every row in every mode.
+    **The property, and why this test was rewritten.** The first version reconstructed
+    HEAD's gate (guard -> `SecurityPolicy.check()`) and required the real gate to match it
+    byte-for-byte. That anchored R2 to a **baseline**, and the baseline then moved twice:
+    ADR-0068 added the workspace-trust check, ADR-0074 the `approval_needed` check. Both are
+    deliberate and neither is ADR-0059's business — but the reconstruction went stale and
+    this test went red on the repair branch. That is the test doing its job on a premise that
+    had expired, so the premise is what changed.
+
+    This version anchors to **ADR-0059 itself**: it drives the real gate and the same gate
+    with the consult forced to decline, and requires them to agree. It cannot go stale when
+    another ADR extends the gate (both sides move together), and it still fails on every way
+    R2 can break — a consult that fires with no bundle, or one whose short-circuit is removed
+    so `authorize()` runs with `effective_policy=None` (which denies in `read_only` and
+    changes the 403 detail).
     """
-    from fastapi import HTTPException
-    from wisp.core.contracts import ToolRisk, risk_for_tool
-    from wisp.infra.security import Action, Context, SecurityPolicy
-    from wisp.pathsec import PATH_BEARING_ARGS, is_protected_path
-
-    def old_gate(action, args, mode, workspace):
-        args_d = dict(args or {})
-        if risk_for_tool(action) != ToolRisk.READ and any(
-            is_protected_path(str(value))
-            for key, value in args_d.items()
-            if key in PATH_BEARING_ARGS and value
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail="Blocked by the protected-path guard: refusing to mutate "
-                       "a directory Wisp executes from (.wisp/hooks)",
-            )
-        decision = SecurityPolicy(permission_mode=mode).check(
-            Action(name=action, args=args_d), Context(workspace=pathlib.Path(workspace)))
-        if not decision.allowed or decision.approval_required:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Blocked by server policy ({decision.reason or action}); "
-                       f"no approver is present over REST",
-            )
-
-    def outcome(fn, *a):
-        try:
-            fn(*a)
-            return ("ALLOW", "")
-        except HTTPException as e:
-            return ("403", str(e.detail))
+    from wisp.server import deps
 
     ws = pathlib.Path(tmp_path)
     rows = ROUTES + [("POST /api/files", "write_file", {"path": ".wisp/hooks/x.sh"})]
-    compared = 0
+
+    # The consult really is inert here — asserted before the stub replaces it, or this
+    # would be a statement about the stub.
     for route, action, args in rows:
         for mode in MODES:
-            compared += 1
-            before = outcome(old_gate, action, args, mode, ws)
-            # NOTE: `_verdict` already catches HTTPException and returns a tuple,
-            # so it must NOT be routed through `outcome` — a wrapper that catches
-            # the same exception as the callable it wraps can never see a
-            # failure, which is the non-falsifying-instrument class.
-            after = _verdict(_request(mode, None), action, args, ws)
-            assert before == after, (
-                f"{route} in {mode} changed with no bundle loaded: "
-                f"{before} -> {after}. R2 says this case is byte-for-byte."
+            assert deps._m2_denial(_request(mode, None), action, args, str(ws)) is None, (
+                f"{action} in {mode}: the consult refuses with no bundle loaded — "
+                "R2's inert case is not inert"
             )
-    assert compared >= ROW_FLOOR * len(MODES), "the differential shrank"
+
+    real = [(route, action, args, mode, _verdict(_request(mode, None), action, args, ws))
+            for route, action, args in rows for mode in MODES]
+
+    monkeypatch.setattr(deps, "_m2_denial", lambda *a, **k: None)
+    stub = [(route, action, args, mode, _verdict(_request(mode, None), action, args, ws))
+            for route, action, args in rows for mode in MODES]
+
+    assert len(real) >= ROW_FLOOR * len(MODES), "the differential shrank"
+    for r, s in zip(real, stub):
+        assert r == s, (
+            f"{r[0]} in {r[3]} differs when the consult is forced to decline: "
+            f"{r[4]} -> {s[4]}. With no bundle loaded the consult must contribute nothing "
+            "(ADR-0059 R2)."
+        )
 
 
 def test_a_bundle_approve_level_is_inert_on_rest(root, tmp_path):

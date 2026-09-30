@@ -155,8 +155,26 @@ def test_non_violation_1_turn_authorities_are_untouched():
 
 
 def test_non_violation_2_the_taxonomy_public_surface_is_unchanged():
-    """`core.events`'s classifier signature, vocabulary and classification table."""
+    """`core.events`'s classifier signature, vocabulary and classification table.
+
+    **The status table now has ONE owner.** This test used to re-list the seven keys, so
+    the taxonomy had two records — and when ADR-0074 added `NO_APPROVER` and
+    `BUDGET_EXCEEDED` (R2: *"the taxonomy grows by decision, not by drift"*), the pin in
+    `test_f8_published_status.py` was updated and this one went red. It now **reads** that
+    pin rather than restating it — the same move the migration made for `_VERIFY_TOOLS`
+    (*"imported from the authority rather than re-listed"*) — so a taxonomy change cannot
+    update one record and miss the other.
+
+    What stays here is the part *this* file is about: the classifier's signature, the
+    class vocabulary the delegation leans on, and the two structural properties
+    (totality, and `ok` being the only success).
+    """
     from wisp.core import events as ev
+
+    from tests.reliability.test_f8_published_status import (
+        DENIAL_STATUSES_ADDED_SINCE,
+        DENIAL_STATUSES_BEFORE,
+    )
 
     assert list(inspect.signature(ev.classify_result).parameters) == ["result"], (
         "classify_result's signature moved"
@@ -165,10 +183,15 @@ def test_non_violation_2_the_taxonomy_public_surface_is_unchanged():
         "SUCCESS", "ERROR", "DENIAL", "POLICY_DENIAL",
         "TIMEOUT", "CANCELLATION", "INVALID", "UNKNOWN",
     }, "the OutcomeClass vocabulary moved"
-    assert set(ev.OUTCOME_BY_STATUS) == {
-        "ok", "error", "POLICY_DENIED", "USER_DENIED",
-        "APPROVAL_TIMEOUT", "CANCELLED", "SCHEMA_INVALID",
-    }, "the status -> class table moved"
+
+    assert set(ev.OUTCOME_BY_STATUS) == (
+        DENIAL_STATUSES_BEFORE | DENIAL_STATUSES_ADDED_SINCE | {"ok", "error"}
+    ), (
+        "the status -> class table disagrees with its owner in "
+        "test_f8_published_status.py. The taxonomy may grow, but only by ADR-0074 R4's "
+        "route: add the status to DENIAL_STATUSES_ADDED_SINCE and write an ADR that names "
+        "it — never by editing one of the two records."
+    )
 
     # Total by test: every class is either a mapped value or the fallback. A
     # class with no route to it is a class the classifier can never return.
