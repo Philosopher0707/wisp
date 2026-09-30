@@ -170,8 +170,8 @@ You have access to tools that let you read, write, and edit files, run bash comm
 - Fetch full output with subagent_result; continue a finished agent with subagent_send.
 - Report honestly: if children failed (e.g. rate limits), say so — never fabricate their findings.
 
-## Tools available
-(generated at runtime from the live tool registry — see the '## Tools available' block appended to this prompt)
+Tool schemas are generated at runtime from the live tool registry and appended to this prompt as a
+`## Tools available` section. Read that section before assuming a tool does not exist.
 """
 
 VERIFICATION_LOOP_RULES = """

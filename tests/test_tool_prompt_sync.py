@@ -93,3 +93,38 @@ class TestSystemPromptToolSync:
         block = core._build_tools_block()
         assert "- ext_demo_tool:" in block
         assert "provided by plugins/MCP servers" in block
+
+
+class TestTheToolsHeadingIsDeclaredOnce:
+    """`DEFAULT_BASE_SYSTEM` ended with a `## Tools available` heading and nothing under it but a
+    pointer, and `_build_system_prompt` appends the real generated block under the **same** heading.
+
+    So the prompt declared the section twice: the model read an empty `## Tools available`, and met
+    the real one ~4,500 characters later. The pointer is worth keeping — it tells the model the menu
+    exists — but the heading belongs to the block that fills it.
+
+    Found by building the real prompt and counting the headings. These pin it.
+    """
+
+    HEADING = re.compile(r"(?m)^## Tools available\s*$")
+
+    def test_the_base_prompt_declares_no_tools_heading(self):
+        from wisp.context_assembler import DEFAULT_BASE_SYSTEM
+
+        assert not self.HEADING.search(DEFAULT_BASE_SYSTEM), (
+            "the base prompt declares '## Tools available' but does not fill it; the generated "
+            "block owns that heading")
+
+    def test_the_prompt_declares_the_tools_heading_once(self):
+        core = WispAgentCore()
+        prompt = core._build_system_prompt({"workspace": "."})
+        found = len(self.HEADING.findall(prompt))
+        assert found == 1, (
+            f"the prompt declares '## Tools available' {found} times — one heading, one block")
+
+    def test_the_pointer_to_the_menu_survives(self):
+        """The de-duplication must not silently drop the notice that a tool menu exists at all."""
+        from wisp.context_assembler import DEFAULT_BASE_SYSTEM
+
+        assert "tool registry" in DEFAULT_BASE_SYSTEM, (
+            "the base prompt no longer mentions that tool schemas are generated at runtime")

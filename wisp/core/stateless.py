@@ -1525,19 +1525,14 @@ class WispAgentCore:
         if ws:
             lines.append(f"- workspace: {ws}")
 
-        # Dynamic environment grounding: cwd, OS, shell, git branch + commit
-        # hash, package managers, suggested verification commands. Computed
-        # per turn (not cached) so the commit hash never goes stale.
-        # Skipped when the session has no workspace — the block grounds the
-        # model in a *project* environment; bare sessions stay lean.
-        env_block = ""
-        if ws:
-            try:
-                from wisp.environment import collect_environment, format_environment_block
-                env_block = format_environment_block(collect_environment(ws))
-            except Exception:
-                logger.debug("Environment collection failed — continuing without it", exc_info=True)
-
+        # NOTE — the `## Environment` block is deliberately NOT built here.
+        #
+        # `_build_environment_block` owns that section and honours `config.env_context`. This method
+        # used to build a second copy of it, which did three things: it put the section in every
+        # prompt **twice** (byte-identical), it ran `collect_environment` twice per turn (that shells
+        # out to `git` and is not memoized), and it **defeated the switch** — `env_context` gates the
+        # other call site only, so turning it off still left a block in the prompt through here.
+        # Pinned by `tests/test_operating_context.py::TestTheEnvironmentSectionHasOneProducer`.
         sid = session.get("id", "")
         if sid:
             lines.append(f"- session: {sid}")
@@ -1566,14 +1561,9 @@ class WispAgentCore:
             except Exception:
                 pass  # inventory is advisory — never break prompt building
 
-        if not lines and not env_block:
+        if not lines:
             return ""
-        parts: list[str] = []
-        if env_block:
-            parts.append(env_block)
-        if lines:
-            parts.append("## Operating context\n" + "\n".join(lines))
-        return "\n\n".join(parts)
+        return "## Operating context\n" + "\n".join(lines)
 
     def invalidate_caches(self) -> None:
         """Invalidate all caches — call when workspace context changes."""
