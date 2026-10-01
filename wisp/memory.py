@@ -346,6 +346,59 @@ def list_all_facts() -> list[dict]:
     return results
 
 
+def facts_grouped_by_scope(workspace: Optional[str] = None) -> dict[str, list[dict]]:
+    """Facts bucketed by where they were recorded: ``here`` / ``global`` / ``elsewhere``.
+
+    `list_all_facts()` returns everything on purpose — *"memory works globally regardless of which
+    directory the agent is currently running in"*. That is right for **recall** and wrong for
+    **injection**, because the prompt gave the facts no provenance: a fact asserting an environment
+    property of one project was read by the model as a statement about the project it was actually
+    in, and it acted on it.
+
+    Observed: a fact reading *"run_bash runs in a container rooted at /workspace, NOT the macOS path;
+    `cd` to /Users/philosopher/... fails"* — true for the project it was recorded in — made the agent
+    run **every** tool against ``/workspace`` in a repository whose workspace is elsewhere. Each call
+    failed with *"outside workspace"* and the turn could not proceed.
+
+    Bucketing lets the caller keep the global recall and still tell the model which facts are about
+    *this* workspace. Duplicates collapse: one fact recorded in twenty workspaces is one fact.
+    """
+    memory = load_memory()
+    here_key = _resolve_workspace(workspace) if workspace else None
+    out: dict[str, list[dict]] = {"here": [], "global": [], "elsewhere": []}
+    seen: set[str] = set()
+
+    def _add(bucket: str, fact: dict) -> None:
+        key = _normalize(_fact_content(fact)).lower()
+        if not key or key in seen:
+            return
+        seen.add(key)
+        _touch(fact)
+        out[bucket].append(fact)
+
+    for fact in memory.get("global_facts", []):
+        _add("global", fact)
+    for ws_path, facts in memory.get("workspace_facts", {}).items():
+        if here_key and os.path.realpath(ws_path) == here_key:
+            for fact in facts:
+                _add("here", fact)
+        else:
+            # Carry the origin WITH the fact. A heading saying "these are from elsewhere" is a
+            # caveat the model can read past; `[from /path/to/other-project]` on the line itself is
+            # not, because it names the project the fact is about. Copy rather than mutate — this is
+            # the loaded memory, and `_save` must not persist an `_origin` key.
+            for fact in facts:
+                before = len(out["elsewhere"])
+                _add("elsewhere", fact)
+                if len(out["elsewhere"]) > before:
+                    out["elsewhere"][-1] = {**out["elsewhere"][-1], "_origin": ws_path}
+
+    for bucket in out.values():
+        bucket.sort(key=_sort_key, reverse=True)
+    _schedule_save(memory)
+    return out
+
+
 def set_importance(content: str, important: bool,
                    workspace: Optional[str] = None) -> bool:
     """Mark or unmark a fact as important. Returns True if found."""

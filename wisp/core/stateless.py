@@ -1600,12 +1600,20 @@ class WispAgentCore:
             return ""
 
     def _build_memory_block(self, workspace: str) -> str:
-        """Cross-session memory: remembered facts + recent summaries."""
+        """Cross-session memory: remembered facts + recent summaries.
+
+        Facts are **bucketed by scope** before rendering. `list_all_facts()` is global by design, so
+        a fact recorded in another project arrived here with no provenance — and one of them asserts
+        a container layout (`/workspace`) that is false for this repository. The model acted on it,
+        every tool call landed outside the workspace, and the turn stalled. See
+        `format_cross_session_block` for the failure and `wisp.memory.facts_grouped_by_scope` for the
+        bucketing.
+        """
         try:
             from wisp.agent_memory import get_agent_memory
-            from wisp.memory import list_all_facts
+            from wisp.memory import facts_grouped_by_scope
 
-            facts = list_all_facts()
+            buckets = facts_grouped_by_scope(workspace)
             mem = get_agent_memory()
             try:
                 all_summaries = mem.load_all()
@@ -1616,7 +1624,7 @@ class WispAgentCore:
             same_ws = [x for x in all_summaries if x.workspace == workspace]
             others = [x for x in all_summaries if x.workspace != workspace]
             summaries = (same_ws + others)[:3]
-            return format_cross_session_block(facts, summaries)
+            return format_cross_session_block(buckets, summaries, workspace)
         except Exception as e:
             logger.debug("Failed to build memory block: %s", e)
             return ""
@@ -2616,31 +2624,84 @@ class WispAgentCore:
 
         return Context(workspace=Path(session.get("workspace", ".")))
 def format_cross_session_block(
-    facts: list[Any], summaries: list[Any]
+    facts: Any, summaries: list[Any], workspace: str | None = None
 ) -> str:
     """Render remembered facts + past-session summaries for the prompt.
 
     Pure function so the injection contract is testable without disk.
+
+    *facts* is the scope-bucketed mapping from `wisp.memory.facts_grouped_by_scope` — ``here`` /
+    ``global`` / ``elsewhere``. A plain list is still accepted and rendered unscoped, which is what
+    an older caller passes.
+
+    **The provenance headings are the point.** Facts are recalled globally by design (*"memory works
+    regardless of which directory the agent is running in"*), so this block routinely carries facts
+    about *other* projects — including claims about their environment. With no provenance the model
+    read one such claim, *"run_bash runs in a container rooted at /workspace, NOT the macOS path"*,
+    as a statement about the repository it was actually in: it ran every tool against ``/workspace``,
+    each call failed with *"outside workspace"*, and the turn could not proceed. A fact is only
+    useful if the model knows what it is a fact **about**.
     """
     lines: list[str] = []
-    fact_items: list[str] = []
-    for fact in facts or []:
-        content = fact.get("content") if isinstance(fact, dict) else str(fact)
-        if content and content.strip():
-            fact_items.append(content.strip())
-    if fact_items:
-        important = [f for f in facts or [] if isinstance(f, dict) and f.get("important")]
-        important_contents = {
-            (f.get("content") or "").strip() for f in important
+
+    def _contents(items: Any) -> list[str]:
+        """Contents, **important facts first** — the ordering the block always had.
+
+        A fact carrying `_origin` (from `facts_grouped_by_scope`) is prefixed with the workspace it
+        came from, so the model can see *which project* it is a fact about rather than having to
+        infer it from a heading.
+        """
+        out: list[str] = []
+        for fact in items or []:
+            if isinstance(fact, dict):
+                content = fact.get("content")
+                origin = fact.get("_origin")
+            else:
+                content, origin = str(fact), None
+            if content and content.strip():
+                prefix = f"[from {origin}] " if origin else ""
+                out.append(prefix + content.strip())
+        important = {
+            (f.get("content") or "").strip()
+            for f in (items or []) if isinstance(f, dict) and f.get("important")
         }
-        ordered = (
-            [f for f in fact_items if f in important_contents]
-            + [f for f in fact_items if f not in important_contents]
-        )[:15]
+        return ([c for c in out if c.split("] ", 1)[-1] in important]
+                + [c for c in out if c.split("] ", 1)[-1] not in important])
+
+    buckets: dict[str, list[str]]
+    if isinstance(facts, dict):
+        buckets = {k: _contents(v) for k, v in facts.items()}
+    else:                                   # legacy: an unscoped list
+        buckets = {"here": _contents(facts)}
+
+    if any(buckets.values()):
         lines.append("## Cross-Session Memory")
-        lines.append(
-            "Facts the user asked you to remember across conversations:")
-        lines.extend(f"- {f}" for f in ordered)
+        lines.append("Facts the user asked you to remember across conversations.")
+
+        def _emit(title: str, items: list[str], cap: int = 15) -> None:
+            if not items:
+                return
+            lines.append("")
+            lines.append(title)
+            lines.extend(f"- {f}" for f in items[:cap])
+
+        # This workspace's facts go FIRST and the heading appears even when there are none: with
+        # nothing said about the workspace the model is actually in, the only facts it has are the
+        # foreign ones — and it used them. An anchor it can read past beats no anchor at all.
+        here = buckets.get("here", [])
+        lines.append("")
+        lines.append(f"**About this workspace** (`{workspace}`):" if workspace
+                     else "**About this workspace:**")
+        lines.extend(f"- {f}" for f in here[:15]) if here else lines.append(
+            "- (nothing remembered for this workspace yet)")
+
+        _emit("**Global — not specific to any workspace:**", buckets.get("global", []))
+        _emit(
+            "**From OTHER workspaces — each line names the project it came from. Some state how that "
+            "project's environment is laid out (paths, containers, toolchains), which is exactly the "
+            "kind of fact that is false here. Verify with a tool before acting on one:**",
+            buckets.get("elsewhere", []), cap=5,
+        )
 
     if summaries:
         if lines:

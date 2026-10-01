@@ -66,9 +66,13 @@ class TestFormatBlock:
 
 class TestEngineInjection:
     def test_future_session_system_prompt_contains_memory(self, monkeypatch):
+        # The seam moved: `_build_memory_block` now reads `facts_grouped_by_scope` (which carries the
+        # fact's provenance) instead of `list_all_facts` (which discards it). The behaviour under
+        # test — a remembered fact reaches a future session's prompt — is unchanged.
         monkeypatch.setattr(
-            "wisp.memory.list_all_facts",
-            lambda: [{"content": "User prefers tabs over spaces"}],
+            "wisp.memory.facts_grouped_by_scope",
+            lambda workspace=None: {"here": [{"content": "User prefers tabs over spaces"}],
+                                    "global": [], "elsewhere": []},
         )
         from wisp.core.engine import WispAgentCore
         from wisp.infra.security import PermissionMode, SecurityPolicy
@@ -168,8 +172,10 @@ class TestMemoryCacheInvalidation:
 
         ws = f"/tmp/mem-cache-{uuid.uuid4().hex[:8]}"
         facts = [[]]
-        monkeypatch.setattr("wisp.memory.list_all_facts",
-                            lambda: list(facts[0]))
+        # Same seam move as above: scope-bucketed read, behaviour unchanged.
+        monkeypatch.setattr("wisp.memory.facts_grouped_by_scope",
+                            lambda workspace=None: {"here": list(facts[0]),
+                                                    "global": [], "elsewhere": []})
 
         captured = []
 
@@ -205,3 +211,65 @@ class TestMemoryCacheInvalidation:
         assert "MARKER-Q" not in captured[0]
         assert "MARKER-Q" in captured[1], (
             "remembered fact invisible until restart — cache never busted")
+
+
+class TestFactsAreInjectedWithTheirProvenance:
+    """A fact recorded in one project was injected into every other project with no provenance.
+
+    Observed failure: a fact reading *"run_bash runs in a container rooted at /workspace, NOT the
+    macOS path"* — true for the project it was recorded in — was read by the model as a statement
+    about the repository it was actually in. It ran every tool against `/workspace`; each call failed
+    with *"outside workspace"* and the turn could not proceed. Facts are recalled globally **by
+    design** (`list_all_facts`), so the fix is not to stop recalling them — it is to say what each one
+    is a fact *about*.
+    """
+
+    @pytest.fixture
+    def memory(self, monkeypatch):
+        import wisp.memory as mem
+
+        monkeypatch.setattr(mem, "load_memory", lambda: {
+            "global_facts": [{"content": "global fact", "added": "2026-01-01T00:00:00+00:00"}],
+            "workspace_facts": {
+                "/tmp/here": [{"content": "fact about here", "added": "2026-01-01T00:00:00+00:00"}],
+                "/tmp/elsewhere": [{"content": "run_bash is rooted at /workspace",
+                                    "added": "2026-01-01T00:00:00+00:00"}],
+            },
+        })
+        monkeypatch.setattr(mem, "_schedule_save", lambda *a, **k: None)
+        return mem
+
+    def test_buckets_by_scope(self, memory):
+        b = memory.facts_grouped_by_scope("/tmp/here")
+        assert [f["content"] for f in b["here"]] == ["fact about here"]
+        assert [f["content"] for f in b["global"]] == ["global fact"]
+        assert [f["content"] for f in b["elsewhere"]] == ["run_bash is rooted at /workspace"]
+
+    def test_elsewhere_facts_carry_their_origin(self, memory):
+        b = memory.facts_grouped_by_scope("/tmp/here")
+        assert b["elsewhere"][0]["_origin"] == "/tmp/elsewhere"
+
+    def test_a_fact_in_many_workspaces_is_listed_once(self, memory, monkeypatch):
+        monkeypatch.setattr(memory, "load_memory", lambda: {
+            "global_facts": [],
+            "workspace_facts": {f"/tmp/ws{i}": [{"content": "the same fact"}] for i in range(20)},
+        })
+        b = memory.facts_grouped_by_scope("/tmp/nowhere")
+        assert len(b["elsewhere"]) == 1, "the same fact in twenty workspaces is one fact"
+
+    def test_the_rendered_block_names_the_origin_per_line(self):
+        out = format_cross_session_block(
+            {"here": [], "global": [],
+             "elsewhere": [{"content": "run_bash is rooted at /workspace",
+                            "_origin": "/tmp/other-project"}]},
+            [], "/tmp/here")
+        assert "[from /tmp/other-project]" in out
+
+    def test_the_block_anchors_this_workspace_even_when_it_has_no_facts(self):
+        """With nothing said about the workspace the model is *in*, the only facts it has are the
+        foreign ones — which is exactly how it came to act on them."""
+        out = format_cross_session_block(
+            {"here": [], "global": [], "elsewhere": [{"content": "x", "_origin": "/tmp/o"}]},
+            [], "/tmp/here")
+        assert "About this workspace" in out and "/tmp/here" in out
+        assert "nothing remembered for this workspace" in out
