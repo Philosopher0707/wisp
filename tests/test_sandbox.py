@@ -142,3 +142,40 @@ class TestTheAgentBashGetsTheProjectsInterpreter:
 
         env, stripped = credential_free_env(workspace=str(tmp_path))
         assert "WISP_API_KEY" not in env and stripped >= 1
+
+
+class TestTheSandboxRecipeKeepsItsThreeConstraints:
+    """The image recipe lives in the repo so it is reproducible, and it encodes three constraints.
+
+    A test on a Dockerfile is unusual, but each constraint was learned by a real failure and none of
+    them is visible from the Python side — the file is the only place they can be pinned without a
+    Docker daemon in CI.
+    """
+
+    RECIPE = Path(__file__).resolve().parents[1] / "docker" / "wisp-sandbox.Dockerfile"
+
+    def test_the_recipe_exists(self):
+        assert self.RECIPE.is_file(), "the sandbox image recipe must be reproducible from the repo"
+
+    def test_it_is_based_on_an_image_with_an_interpreter(self):
+        first_from = next(line for line in self.RECIPE.read_text().splitlines()
+                          if line.startswith("FROM "))
+        assert "python" in first_from, (
+            "a bare OS image has no interpreter, so the prompt's suggested command cannot run")
+
+    def test_it_reads_the_dependencies_from_pyproject(self):
+        text = self.RECIPE.read_text()
+        assert "pyproject.toml" in text, (
+            "retyping the dependency list lets it drift from the project's declared sets")
+
+    def test_it_does_not_bake_a_copy_of_the_source(self):
+        """`-v <workspace>:/workspace` wins on sys.path, so a baked copy is at best dead weight and at
+        worst a stale shadow of the real source.
+
+        Asserted over the **instructions**, not the file text — the header comment deliberately names
+        the thing it forbids, and the first version of this test failed on that comment rather than on
+        any instruction.
+        """
+        instructions = [line for line in self.RECIPE.read_text().splitlines()
+                        if line.strip() and not line.lstrip().startswith("#")]
+        assert not any("pip install -e ." in line for line in instructions)
