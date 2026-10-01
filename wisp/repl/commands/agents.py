@@ -16,11 +16,89 @@ def cmd_approve(agent, args: str):
     print(success(f"✓ Auto-approve: {state}"))
 
 
-@register("thinking", "Toggle reasoning trace display", aliases=("T",), usage="/thinking")
+@register("thinking", "Toggle reasoning trace display", aliases=("T",),
+          usage="/thinking [on|off]")
 def cmd_thinking(agent, args: str):
-    agent.config = agent.config.replace(show_thinking=not agent.config.show_thinking)
-    state = "ON" if agent.config.show_thinking else "OFF"
-    print(success(f"✓ Show thinking: {state}"))
+    """`/thinking` toggles; `/thinking on|off` sets it outright.
+
+    The bare toggle always worked — the command was simply **undiscoverable**. `/help` listed only
+    the built-in handlers, so `/thinking` was never mentioned, while the renderer's own hint
+    ("use /thinking to expand") pointed at a name the user had no way to find. Reported as
+    *"i cant toggle the tinking, there is no cmd to do this"* — there was, and `/help` hid it.
+
+    Accepting an explicit value also makes it scriptable, and removes the "which way does it
+    toggle?" question from the bare form.
+    """
+    want = (args or "").strip().lower()
+    if want in ("on", "true", "1", "yes"):
+        new = True
+    elif want in ("off", "false", "0", "no"):
+        new = False
+    elif want in ("", "toggle"):
+        new = not agent.config.show_thinking
+    else:
+        print(error("usage: /thinking [on|off]"))
+        return
+    agent.config = agent.config.replace(show_thinking=new)
+    print(success(f"✓ Show thinking: {'ON' if new else 'OFF'}"))
+    print(dim("  reasoning renders as a block before the answer, when the model emits any —"
+              " not every provider returns reasoning tokens."))
+
+
+@register("events", "Show engine diagnostics (retries, SSE, tool 404s) on the console",
+          usage="/events [on|off|log [n]]")
+def cmd_events(agent, args: str):
+    """Surface the events the interceptor deliberately hides, or show the log.
+
+    `agent/logger.py` routes the engine's diagnostics — provider retries, SSE reconnects, tool 404s,
+    truncation badges — to `.agent/runtime.log` and **suppresses them on the console**. That is the
+    right default; it is a bad one when something is misbehaving and you cannot see why, because
+    the events exist and are simply invisible.
+
+    `/events on` echoes them to **stderr** (never stdout, so a `--print` payload stays clean).
+    `/events log [n]` shows the tail of the file the interceptor writes.
+    """
+    import agent.logger as engine_log
+
+    arg = (args or "").strip()
+    verb, _, rest = arg.partition(" ")
+    verb = verb.lower()
+
+    if verb in ("log", "tail"):
+        path = engine_log.get_log_path()
+        try:
+            n = int(rest.strip() or 20)
+        except ValueError:
+            n = 20
+        if not path.exists():
+            print(dim(f"  no engine log yet at {path}"))
+            return
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError as exc:
+            print(error(f"  cannot read {path}: {exc}"))
+            return
+        print(dim(f"  {path} — last {min(n, len(lines))} of {len(lines)} lines:"))
+        for line in lines[-n:]:
+            print(dim("  " + line[:200]))
+        return
+
+    if verb in ("on", "true", "1", "yes"):
+        engine_log.set_console_echo(True)
+    elif verb in ("off", "false", "0", "no"):
+        engine_log.set_console_echo(False)
+    elif verb in ("", "status", "toggle"):
+        if verb == "toggle":
+            engine_log.set_console_echo(not engine_log.console_echo_enabled())
+    else:
+        print(error("usage: /events [on|off|log [n]]"))
+        return
+
+    on = engine_log.console_echo_enabled()
+    print(success(f"✓ Engine events on console: {'ON' if on else 'OFF'}"))
+    if on:
+        print(dim("  retries / SSE / tool-404s now echo to stderr as they happen."))
+    print(dim(f"  the full log is always at {engine_log.get_log_path()} — /events log"))
 
 
 # ── Shared subagent helpers ──────────────────────────────────────────

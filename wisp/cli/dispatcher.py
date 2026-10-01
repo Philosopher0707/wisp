@@ -80,6 +80,30 @@ class CommandSpec:
     usage: str = ""
 
 
+
+def _legacy_commands() -> dict:
+    """The legacy command registry, or `{}` if it cannot be imported.
+
+    Imported lazily: `wisp.repl.commands` pulls in every command module (and through them the
+    transport), and the dispatcher is constructed during REPL boot. A failure here must degrade to
+    "built-ins only" rather than take the REPL down.
+    """
+    try:
+        from wisp.repl.commands import _REGISTRY
+        return {name: cmd for name, cmd in _REGISTRY.items() if name == cmd.name}
+    except Exception:
+        return {}
+
+
+def _legacy_command(name: str):
+    """One legacy command by name or alias, or `None`."""
+    try:
+        from wisp.repl.commands import lookup
+        return lookup(name)
+    except Exception:
+        return None
+
+
 class Dispatcher:
     """Name → handler router with legacy-registry fallback."""
 
@@ -212,13 +236,43 @@ class Dispatcher:
     # ── Built-in commands (public interfaces only) ────────────────────
 
     def _register_builtins(self) -> None:
-        @self.register("help", "Show available commands", usage="/help")
+        @self.register("help", "Show every command (built-in and legacy)", usage="/help [name]")
         def _help(ctx: ReplContext, args: str) -> CommandResult:
-            lines = ["Available commands:"]
+            """Every command, built-in **and** legacy — and `/help <name>` for one of them.
+
+            This used to list only `self.names()` (the built-in handlers) and point at `/doctor`
+            for the rest, so the other 23 — `/thinking` among them — were **undiscoverable**.
+            The renderer even printed *"use /thinking to expand"* for a command `/help` never
+            mentioned. Reported by the user as *"i cant toggle the tinking, there is no cmd to do
+            this"*: there was one, and this hid it.
+            """
+            want = (args or "").strip().lstrip("/")
+            if want:
+                spec = self._specs.get(want)
+                if spec is not None:
+                    ctx.emit(f"/{spec.name} — {spec.description}"
+                             + (f"\n  usage: {spec.usage}" if spec.usage else ""))
+                    return CommandResult.CONSUMED
+                legacy = _legacy_command(want)
+                if legacy is not None:
+                    ctx.emit(f"/{legacy.name} — {legacy.description}"
+                             + (f"\n  usage: {legacy.usage}" if legacy.usage else ""))
+                    return CommandResult.CONSUMED
+                ctx.emit(f"no such command: /{want} — try /help")
+                return CommandResult.CONSUMED
+
+            lines = ["Built-in commands:"]
             for key in self.names():
                 spec = self._specs[key]
                 lines.append(f"  /{spec.name:<12} {spec.description}")
-            lines.append("  (more: /doctor reports legacy commands via fallback)")
+            legacy = _legacy_commands()
+            if legacy:
+                lines.append("")
+                lines.append("Legacy commands (same registry, via the adapter):")
+                for name in sorted(legacy):
+                    lines.append(f"  /{name:<12} {legacy[name].description}")
+            lines.append("")
+            lines.append("  /help <name> for one command's usage.")
             ctx.emit("\n".join(lines))
             return CommandResult.CONSUMED
 

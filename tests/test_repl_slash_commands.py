@@ -127,3 +127,119 @@ class TestCompactCommand:
         # Session with only a few messages — should skip compaction
         result = dispatch("/compact", adapter)
         assert result is True  # Consumed
+
+class TestHelpShowsEveryCommand:
+    """`/help` listed only the built-in handlers and pointed at `/doctor` for the rest.
+
+    The other 23 — `/thinking` among them — were therefore **undiscoverable**, and the renderer
+    printed *"use /thinking to expand"* for a command `/help` never mentioned. Reported by the user
+    as *"i cant toggle the tinking, there is no cmd to do this"*: there was one, and `/help` hid it.
+    """
+
+    def _help_text(self, cmd: str) -> str:
+        from wisp.cli.dispatcher import Dispatcher, ReplContext
+
+        adapter = _make_adapter()
+        ctx = ReplContext(runtime=FakeRuntime(), transport=MagicMock(), session=adapter.session,
+                          config=adapter.config, out=[], adapter=adapter)
+        Dispatcher(legacy_dispatch=dispatch).dispatch(ctx, cmd)
+        return "\n".join(ctx.out)
+
+    def test_lists_the_legacy_commands_too(self):
+        text = self._help_text("/help")
+        for name in ("thinking", "approve", "read", "ls", "spawn", "swarm"):
+            assert f"/{name}" in text, f"/help does not list /{name}"
+
+    def test_lists_the_built_ins(self):
+        text = self._help_text("/help")
+        for name in ("help", "model", "provider", "rewind"):
+            assert f"/{name}" in text
+
+    def test_explains_a_single_command(self):
+        text = self._help_text("/help thinking")
+        assert "/thinking" in text and "usage" in text.lower()
+
+    def test_unknown_command_says_so(self):
+        assert "no such command" in self._help_text("/help wibble").lower()
+
+
+class TestThinkingAcceptsAnExplicitValue:
+    """The bare toggle always worked; making the value explicit also makes it scriptable, and
+    removes the "which way does it toggle?" question."""
+
+    def test_off_then_on(self):
+        from wisp.repl.commands.agents import cmd_thinking
+
+        adapter = _make_adapter()
+        adapter.config = adapter.config.replace(show_thinking=True)
+        cmd_thinking(adapter, "off")
+        assert adapter.config.show_thinking is False
+        cmd_thinking(adapter, "on")
+        assert adapter.config.show_thinking is True
+
+    def test_bare_form_still_toggles(self):
+        from wisp.repl.commands.agents import cmd_thinking
+
+        adapter = _make_adapter()
+        adapter.config = adapter.config.replace(show_thinking=True)
+        cmd_thinking(adapter, "")
+        assert adapter.config.show_thinking is False
+
+    def test_a_bogus_argument_changes_nothing(self):
+        from wisp.repl.commands.agents import cmd_thinking
+
+        adapter = _make_adapter()
+        adapter.config = adapter.config.replace(show_thinking=True)
+        cmd_thinking(adapter, "purple")
+        assert adapter.config.show_thinking is True
+
+
+class TestEventsSurfacesTheEngineDiagnostics:
+    """The interceptor hides retries/SSE/tool-404s by design; `/events` is the opt-in that makes
+    them visible, and `/events log` reads the file it always writes."""
+
+    def test_toggles_the_console_echo(self):
+        import agent.logger as engine_log
+        from wisp.repl.commands.agents import cmd_events
+
+        adapter = _make_adapter()
+        was = engine_log.console_echo_enabled()
+        try:
+            cmd_events(adapter, "on")
+            assert engine_log.console_echo_enabled() is True
+            cmd_events(adapter, "off")
+            assert engine_log.console_echo_enabled() is False
+        finally:
+            engine_log.set_console_echo(was)
+
+    def test_log_reads_the_interceptors_file(self, tmp_path, monkeypatch):
+        import agent.logger as engine_log
+        from wisp.repl.commands.agents import cmd_events
+
+        log = tmp_path / "runtime.log"
+        log.write_text("alpha\nbravo\ncharlie\n")
+        monkeypatch.setattr(engine_log, "LOG_PATH", log)
+        monkeypatch.setattr(engine_log, "get_log_path", lambda: log)
+
+        adapter = _make_adapter()
+        cmd_events(adapter, "log 2")          # prints; the assertion is that it did not raise
+        cmd_events(adapter, "log")            # default count, and a missing-file path is separate
+
+    def test_log_on_a_missing_file_is_not_an_error(self, tmp_path, monkeypatch):
+        import agent.logger as engine_log
+        from wisp.repl.commands.agents import cmd_events
+
+        missing = tmp_path / "nope.log"
+        monkeypatch.setattr(engine_log, "get_log_path", lambda: missing)
+        cmd_events(_make_adapter(), "log 5")  # must not raise
+
+    def test_a_bogus_verb_is_rejected(self):
+        import agent.logger as engine_log
+        from wisp.repl.commands.agents import cmd_events
+
+        was = engine_log.console_echo_enabled()
+        try:
+            cmd_events(_make_adapter(), "sideways")
+            assert engine_log.console_echo_enabled() is was
+        finally:
+            engine_log.set_console_echo(was)

@@ -146,7 +146,11 @@ def build_status_card(data: BannerData, width: int = 100):
     for extra in left_lines[len(right_lines):] + right_lines[len(left_lines):]:
         grid.add_row(_cell(extra))
 
-    tray_cmds = Text(_join(["/help", "/doctor", "/provider", "/model", "/clear"], sep="  "),
+    # A curated shortlist for the tray — `/help` is the full list, and it now shows every command
+    # (built-in *and* legacy). `/thinking` earns its place here because it was previously
+    # undiscoverable: the renderer hints "use /thinking to expand" while `/help` never mentioned it.
+    tray_cmds = Text(_join(["/help", "/thinking", "/doctor", "/provider", "/model", "/clear"],
+                           sep="  "),
                      overflow="ellipsis", style="bold dim")
     tray_hints = Text("↑/↓ history · Tab complete · Ctrl+C exit",
                       overflow="ellipsis", style="dim")
